@@ -1706,7 +1706,7 @@ test("planning v1 reuses relevant decision audiences/pins and changes context wh
 	const all = f.store.addDecision(mission.id, "Mission invariant", {}, "all");
 	const coordinator = f.store.addDecision(mission.id, "Coordination policy", {}, "coordinator");
 	const pinned = f.store.addDecision(mission.id, "Relevant task choice", {}, "reference");
-	f.store.addDecision(mission.id, "Unrelated task choice", {}, "reference");
+	const unassociated = f.store.addDecision(mission.id, "Unrelated task choice", {}, "reference");
 	const task = f.store.addTask(mission.id, { title: "Relevant work", sessionId: member.id, decisionIds: [pinned.id] });
 	const context = f.service.context(member.id)!;
 	assert.equal(context.planningVersion, 1);
@@ -1717,7 +1717,7 @@ test("planning v1 reuses relevant decision audiences/pins and changes context wh
 	);
 	assert.deepEqual(
 		f.service.context(lead.id)?.decisionEntries?.map((entry) => entry.id),
-		[all.id, coordinator.id],
+		[all.id, coordinator.id, pinned.id, unassociated.id],
 	);
 	await f.service.call(lead.id, "task", { id: task.id, decisionIds: [] });
 	assert.notEqual(f.service.context(member.id)?.decisionVersion, context.decisionVersion);
@@ -1847,7 +1847,7 @@ test("agent authoring limits validate supplied writes without restricting legacy
 	f.store.writeBrief(mission.id, legacyBrief, 2);
 	assert.equal(((await call("get", { id: legacy.id })) as { body: string }).body, legacyBody);
 	assert.equal(((await call("brief", {})) as { markdown: string }).markdown, legacyBrief);
-	assert.ok(JSON.stringify(await call("decisions", {})).includes(decision.text));
+	assert.ok(JSON.stringify(await call("decisions", { filter: "all" })).includes(decision.text));
 	await call("task", { id: legacy.id, title: "Renamed", status: "blocked" });
 	assert.equal(f.store.task(mission.id, legacy.id).body, legacyBody);
 	await assert.rejects(call("task", { id: legacy.id, body: legacyBody }), /6000 characters; limit is 4000/);
@@ -1888,7 +1888,9 @@ test("oversized imported mission text survives tool and HTTP reads without rewri
 	const before = f.store.detail(mission.id);
 	assert.equal(((await f.service.call(lead.id, "get", { id: task.id })) as { body: string }).body, body);
 	assert.equal(((await f.service.call(lead.id, "brief", {})) as { markdown: string }).markdown, brief);
-	const decisions = (await f.service.call(lead.id, "decisions", {})) as { decisions: { text: string }[] };
+	const decisions = (await f.service.call(lead.id, "decisions", { filter: "all" })) as {
+		decisions: { text: string }[];
+	};
 	assert.equal(decisions.decisions[0]?.text, text);
 	const terminals = new TerminalManager();
 	const server = createDaemonServer(
@@ -2408,9 +2410,22 @@ test("coordinator replacement retires guidance, preserves historical pins and re
 	assert.deepEqual(f.service.context(lead.id)?.decisions, ["D2: Coordinator replacement text"]);
 	const pinned = (await f.service.call(worker.id, "get", { id: task.id })) as { decisions: MissionDecision[] };
 	assert.deepEqual(pinned.decisions, [
-		{ id: old.id, number: old.number, text: old.text, audience: old.audience, replacement: saved.replacement },
+		{
+			id: old.id,
+			number: old.number,
+			text: old.text,
+			audience: old.audience,
+			replacement: saved.replacement,
+			historical: true,
+			binding: false,
+		},
 	]);
-	const read = (await f.service.call(worker.id, "decisions", { _promptDecisions: before.decisionEntries })) as {
+	const currentOnly = await f.service.call(worker.id, "decisions", { _promptDecisions: before.decisionEntries });
+	assert.doesNotMatch(JSON.stringify(currentOnly), /Old rule/);
+	const read = (await f.service.call(worker.id, "decisions", {
+		filter: "all",
+		_promptDecisions: before.decisionEntries,
+	})) as {
 		decisions: MissionDecision[];
 	};
 	assert.deepEqual(
@@ -2493,6 +2508,77 @@ test("replacement IPC acknowledgement waits for durability and rejects inconsist
 		f.service.call(wrongProject.id, "supersede", { decisionId: "D1", replacementDecisionId: "D2" }),
 		/own project/,
 	);
+});
+
+test("revision reads recheck coordinator identity after durability and reject foreign project actors", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn(),
+		next = await f.spawn(),
+		foreign = await f.spawn(f.other.id);
+	const { id } = f.store.create({ projectId: f.project.id, title: "Revisit" });
+	f.store.join(lead.id, id);
+	f.store.join(next.id, id);
+	f.store.update(id, { coordinatorSessionId: lead.id });
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	t.after(() => release());
+	const wait = t.mock.method(f.store, "durable", () => gate);
+	const pending = f.service.call(lead.id, "revision-source", {});
+	f.store.update(id, { coordinatorSessionId: next.id });
+	release();
+	await assert.rejects(pending, /reader changed/);
+	wait.mock.restore();
+	f.store.join(foreign.id, id);
+	f.store.update(id, { coordinatorSessionId: foreign.id });
+	await assert.rejects(f.service.call(foreign.id, "revision-source", {}), /own project/);
+});
+
+test("local user revision route requires exact reviewed bytes and preserves history", async (t) => {
+	const f = await fixture(t);
+	const mission = f.store.create({ projectId: f.project.id, title: "Revisit", brief: "Original" });
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: f.home, host: "127.0.0.1", port: 0 },
+		f.sessions,
+		f.projects,
+		new ModelCatalog(f.home),
+		terminals,
+		{ service: f.service, store: f.store },
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/missions/${mission.id}/revisions`;
+	const post = (path: string, body: unknown) =>
+		fetch(`${base}${path}`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+		});
+	const source = (await fetch(base).then((r) => r.json())) as { source: string };
+	const request = {
+		operationId: "revisit-exact",
+		source: source.source,
+		summary: "Reviewed scope",
+		delta: { markdown: "Changed" },
+	};
+	const proposed = await post("", request);
+	assert.equal(proposed.status, 201);
+	const p = (await proposed.json()) as { id: string; digest: string };
+	assert.equal(f.store.brief(mission.id)?.markdown, "Original");
+	assert.equal((await post(`/${p.id}/confirm`, { digest: "stale", humanSource: "user:answer" })).status, 409);
+	const confirmed = await post(`/${p.id}/confirm`, { digest: p.digest, humanSource: "user:answer" });
+	assert.equal(confirmed.status, 200, await confirmed.text());
+	assert.equal(f.store.brief(mission.id)?.markdown, "Changed");
+	assert.equal(f.store.brief(mission.id, 1)?.markdown, "Original");
+	assert.equal((await fetch(`${base}/${p.id}`)).status, 200);
+	assert.equal((await post("", { ...request, summary: "Conflicting reuse" })).status, 409);
 });
 
 test("local user replacement route preserves text and rejects bad links and inputs", async (t) => {
@@ -2613,15 +2699,18 @@ test("withdrawal proposals retain guidance until user acceptance and IPC waits f
 	assert.deepEqual(after.decisions, []);
 	assert.deepEqual(after.decisionEntries, []);
 	assert.deepEqual(after.withdrawnDecisions, [{ number: 1 }]);
-	assert.equal(
-		f.service.context(lead.id)?.withdrawnDecisions,
-		undefined,
-		"unpinned reference is not selected for coordinator prompt",
-	);
+	assert.deepEqual(f.service.context(lead.id)?.withdrawnDecisions, [{ number: 1 }]);
 	assert.notEqual(after.decisionVersion, before.decisionVersion);
 	assert.deepEqual(f.store.task(mission.id, task.id).decisionIds, [old.id]);
 	assert.equal(f.store.sharedDefinitionRevision(task.id), definition);
-	const read = (await f.service.call(worker.id, "decisions", { _promptDecisions: before.decisionEntries })) as {
+	assert.doesNotMatch(
+		JSON.stringify(await f.service.call(worker.id, "decisions", { _promptDecisions: before.decisionEntries })),
+		/Original protected rule/,
+	);
+	const read = (await f.service.call(worker.id, "decisions", {
+		filter: "all",
+		_promptDecisions: before.decisionEntries,
+	})) as {
 		decisions: MissionDecision[];
 	};
 	assert.deepEqual(
@@ -2745,7 +2834,7 @@ test("decision audiences and task pins select prompts and avoid duplicate detail
 		{ id: all.id, number: 2, text: "Everyone", audience: "all", selected: true },
 		{ id: coordinator.id, number: 3, text: "Coordinate", audience: "coordinator", selected: false },
 	]);
-	assert.deepEqual(f.service.context(lead.id)?.decisions, ["D2: Everyone", "D3: Coordinate"]);
+	assert.deepEqual(f.service.context(lead.id)?.decisions, ["D1: Reference", "D2: Everyone", "D3: Coordinate"]);
 	await f.service.call(worker.id, "task", { id: "1", decisionIds: [reference.id, coordinator.id] });
 	assert.deepEqual(
 		new Set(f.service.context(worker.id)?.decisions),
@@ -2762,16 +2851,13 @@ test("decision audiences and task pins select prompts and avoid duplicate detail
 	f.store.removeDecision(mission.id, reference.id);
 	const result = (await f.service.call(worker.id, "decisions", { _promptDecisions: before })) as {
 		decisions: { text: string }[];
-		retired: { text: string }[];
+		retired: { id: string; historical: boolean; binding: boolean }[];
 	};
 	assert.deepEqual(
 		result.decisions.map((d) => d.text),
 		["Revised"],
 	);
-	assert.deepEqual(
-		result.retired.map((d) => d.text),
-		["Reference"],
-	);
+	assert.deepEqual(result.retired, [{ id: reference.id, historical: true, binding: false }]);
 	await f.service.call(worker.id, "task", { id: "1", decisionIds: [] });
 	assert.deepEqual(f.service.context(worker.id)?.decisions, ["D2: Revised"]);
 	const foreign = f.store.create({ projectId: f.project.id, title: "Other" });

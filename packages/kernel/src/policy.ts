@@ -73,6 +73,11 @@ export interface MissionContext {
 	planningVersion?: number;
 	/** Opted-in planning context uses existing brief and assignment revisions, not a second plan store. */
 	briefRevision?: number;
+	/** Current agreement only, never previous plans. Coordinator-only projection. */
+	agreement?: string;
+	revisionDelta?: { id: string; summary: string };
+	relevantTasks?: Array<{ number: number; title: string; status: string }>;
+	relevantTaskCount?: number;
 	/** This worker reads a local replica and cannot acquire canonical coordination authority. */
 	sharedContext?: boolean;
 	id: string;
@@ -98,7 +103,9 @@ export interface MissionContext {
 	decisionRoutes?: Record<string, "relevant" | "unknown" | "unrelated">;
 	/** Latest decision state for specific live notices, separate from the frozen prompt selection. */
 	decisionState?: Array<
-		Pick<MissionDecision, "id" | "number" | "text" | "audience" | "replacement" | "withdrawn"> & { selected: boolean }
+		Pick<MissionDecision, "id" | "number" | "text" | "audience" | "replacement" | "withdrawn"> & {
+			selected: boolean;
+		}
 	>;
 }
 
@@ -202,6 +209,18 @@ export function missionPrompt(
 	if (mission.tasks.length)
 		lines.push(
 			`- Your tasks: ${mission.tasks.map((task) => `#${task.number} ${task.title} (${task.status.replace("_", " ")})${task.assignmentRevision === undefined ? "" : `, assignment revision ${task.assignmentRevision}`}`).join("; ")}.`,
+		);
+	if (mission.agreement !== undefined)
+		lines.push(`- Current agreement (brief revision ${mission.briefRevision}):\n${mission.agreement}`);
+	if (mission.revisionDelta)
+		lines.push(`- Latest confirmed revision ${mission.revisionDelta.id}: ${mission.revisionDelta.summary}`);
+	if (mission.relevantTasks?.length)
+		lines.push(
+			`- Current work (${mission.relevantTasks.length}/${mission.relevantTaskCount} open tasks; read tasks for full scope): ${mission.relevantTasks.map((task) => `#${task.number} ${task.title} (${task.status})`).join("; ")}.`,
+		);
+	if (mission.coordinator === "self")
+		lines.push(
+			"- Default context is current-only. Historical reads are nonbinding. Filtering cannot erase earlier transcript text. Use existing explicit checkpoint/continuation controls for a fresh context; never reset or compact automatically.",
 		);
 	if (mission.decisions.length)
 		lines.push(

@@ -153,6 +153,30 @@ test("lost placement ACK retries the same frozen ID and bytes, without duplicate
 	assert.ok(await f.storage.submissionByRequest(f.conversation.id, frozen.requestId, context));
 });
 
+test("retirement strips queued bodies and quarantines exact uncertain placement bytes", async (t) => {
+	const f = await fixture(t);
+	await f.inbox.observe(empty, own, 0);
+	await f.inbox.observe(snapshot([rule]), own, 1);
+	const submit = t.mock.method(f.conversation, "submit", async () => {
+		throw new Error("Lost placement ACK");
+	});
+	await assert.rejects(f.inbox.flush(99_000), /Lost placement ACK/);
+	const frozen = (await f.harness.snapshot(DecisionInboxDoc, f.conversation.id, context))!.frozen!;
+	submit.mock.restore();
+	const retired = snapshot([
+		{ ...rule, text: "", withdrawn: { at: 2, reason: "No longer current", proposalId: "withdraw" } },
+	]);
+	await f.inbox.observe(retired, own, 2);
+	await f.inbox.flush(99_000);
+	const history = (await f.conversation.entries({}, 100, undefined, context)).items;
+	const quarantined = history.find((entry) => entry.kind === "pilot.decision-notice-quarantined");
+	assert.deepEqual(quarantined?.data, { frozen }, "exact uncertain bytes stay saved, not rewritten/replayed");
+	assert.equal(quarantined?.model, undefined);
+	assert.doesNotMatch(JSON.stringify(await f.entries()), /First/);
+	assert.match(JSON.stringify(await f.entries()), /no longer binding/);
+	assert.equal((await f.harness.snapshot(LiveDoc, f.conversation.id, context))?.run, undefined);
+});
+
 test("a resolved task association cancels pending unknown routing before delivery", async (t) => {
 	const f = await fixture(t);
 	await f.inbox.observe(empty, own, 0);
@@ -161,6 +185,31 @@ test("a resolved task association cancels pending unknown routing before deliver
 	await f.inbox.flush(99_000);
 	assert.equal((await f.entries()).length, 0);
 	assert.equal(await f.inbox.deadline(), undefined);
+});
+
+test("retired bodies waiting behind a question are kept out of automatic replay", async (t) => {
+	const f = await fixture(t);
+	await f.inbox.observe(empty, own, 0);
+	await f.harness.commit(async (tx) => {
+		(await tx.doc(HeldInputsDoc, f.conversation.id)).questionPending = true;
+	}, context);
+	await f.inbox.observe(snapshot([{ ...rule, audience: "all" }]), own, 1);
+	await f.inbox.flush(1);
+	assert.equal((await f.harness.snapshot(HeldInputsDoc, f.conversation.id, context))?.questionWrites?.length, 1);
+	await f.inbox.observe(
+		snapshot([{ ...rule, text: "", withdrawn: { at: 2, reason: "Obsolete", proposalId: "p" } }]),
+		own,
+		2,
+	);
+	await f.inbox.flush(2);
+	const held = await f.harness.snapshot(HeldInputsDoc, f.conversation.id, context);
+	assert.equal(held?.questionPending, true);
+	assert.doesNotMatch(JSON.stringify(held?.questionWrites), /First/);
+	const history = (await f.conversation.entries({}, 100, undefined, context)).items;
+	const quarantined = history.filter((entry) => entry.kind === "pilot.decision-notice-quarantined");
+	assert.equal(quarantined.length, 1);
+	assert.match(JSON.stringify(quarantined[0]?.data), /First/);
+	assert.equal(quarantined[0]?.model, undefined);
 });
 
 test("question deferral is durable and deduplicated without answering or waking the question", async (t) => {

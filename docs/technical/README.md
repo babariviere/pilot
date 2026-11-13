@@ -56,6 +56,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Proposed worker escalation and human handoff contract](mission-escalation-handoff.md)
 - [Mission grouping and contextual decisions](mission-grouping-context.md)
 - [Decision notice routing and durable batches](mission-decision-routing.md)
+- [Confirmed mission revisions and current-only context](mission-revisions.md)
 - [Authorized work continuation and current-policy source](mission-continuation.md)
 - [Mission Pause/Resume and versioned agent reports](mission-controls-reports.md)
 - [Mission results and failure visibility audit](day-results-visibility.md)

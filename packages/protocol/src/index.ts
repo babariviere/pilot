@@ -35,6 +35,7 @@ export type * from "./live-update.ts";
 export type * from "./mcp-setup.ts";
 export type * from "./mission-controls.ts";
 export type * from "./mission-reports.ts";
+export type * from "./mission-revision.ts";
 export type * from "./model-scope.ts";
 export type * from "./native-attention.ts";
 export type * from "./native-review.ts";
@@ -1073,9 +1074,9 @@ export interface MissionDecision {
 	audience: MissionDecisionAudience;
 	text: string;
 	/** Explicitly retired guidance. Target identity survives a later user removal; text is read separately. */
-	replacement?: { id: string; number: number; at: number };
+	replacement?: { id: string; number: number; at: number; reason?: string; revisionId?: string; humanSource?: string };
 	/** User-accepted withdrawal. Original text and historical pins remain readable. */
-	withdrawn?: { at: number; reason: string; proposalId: string };
+	withdrawn?: { at: number; reason: string; proposalId: string; revisionId?: string; humanSource?: string };
 	authorSessionId?: string;
 	createdAt: number;
 	updatedAt: number;

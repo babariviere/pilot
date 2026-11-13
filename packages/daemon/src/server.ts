@@ -1043,7 +1043,13 @@ export function createDaemonServer(
 	// Only registered idempotent handlers resume. An interrupted handler always retains the same target.
 	let operationRecovery: Promise<void> | undefined;
 	const recoverOperations = () => {
-		if (journal && !operationRecovery && !legacyAdmissionFrozen && !liveUpdate?.service.frozen && !globalUpdate?.frozen)
+		if (
+			journal &&
+			!operationRecovery &&
+			!legacyAdmissionFrozen &&
+			!liveUpdate?.service.frozen &&
+			!globalUpdate?.frozen
+		)
 			operationRecovery = journal
 				.recover(admitOperation, (op) => !isRetiredDevboxOperation(op.kind))
 				.catch((error) => console.warn("pilotd: operation recovery", error))
@@ -4210,6 +4216,45 @@ async function missionRoute(
 	}
 	const section = parts[3];
 	const item = parts[4];
+	if (section === "revisions") {
+		await store.durable();
+		if (parts.length === 4 && method === "GET")
+			return (
+				json(res, 200, {
+					source: store.revisions.source(id),
+					latestConfirmed: store.revisions.latestConfirmed(id),
+				}),
+				true
+			);
+		if (parts.length === 4 && method === "POST")
+			return (
+				json(
+					res,
+					201,
+					await store.revisions.propose(
+						id,
+						await readJson<Parameters<typeof store.revisions.propose>[1]>(req),
+						{},
+					),
+				),
+				true
+			);
+		if (parts.length === 5 && method === "GET") return (json(res, 200, store.revisions.get(id, item!)), true);
+		if (parts.length === 6 && parts[5] === "confirm" && method === "POST")
+			return (
+				json(
+					res,
+					200,
+					await store.revisions.confirm(
+						id,
+						item!,
+						await readJson<Parameters<typeof store.revisions.confirm>[2]>(req),
+					),
+				),
+				true
+			);
+		return false;
+	}
 	if (section === "coordinator" && item === "start" && parts.length === 5 && method === "POST")
 		return (
 			json(res, 201, await service.startCoordinator(id, await readJson<StartMissionCoordinatorRequest>(req))), true

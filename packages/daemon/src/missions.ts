@@ -46,6 +46,7 @@ import type {
 	SharedMissionSnapshot,
 	UpdateMissionRequest,
 } from "@pilot/protocol";
+import type { MissionRevisionDelta, MissionRevisionProposal } from "../../protocol/src/mission-revision.ts";
 import { ATTENTION_SCHEMA, AttentionStore } from "./attention-store.ts";
 import { CHANGE_LANDING_SCHEMA, ChangeLandingStore } from "./change-landing-store.ts";
 import { Conflict, NotFound } from "./errors.ts";
@@ -110,6 +111,7 @@ import {
 	reviewReferences,
 	reviewResultWrite,
 } from "./mission-review-contract.ts";
+import { MISSION_REVISION_SCHEMA, MissionRevisions, revisionText } from "./mission-revisions.ts";
 import { nativeReviewProfile, nativeReviewRecord } from "./native-review-records.ts";
 import { reasonLine } from "./needs-you-reason.ts";
 import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
@@ -731,6 +733,37 @@ export class MissionStore {
 		durable: () => this.durable(),
 	});
 
+	readonly revisions = new MissionRevisions({
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work),
+		durable: () => this.durable(),
+		source: (id) => ({
+			mission: this.require(id),
+			tasks: [...this.reportSourceTasks(id)],
+			context: this.allocationContextFence(id),
+			phases: this.phases(id),
+			owners: this.all(
+				"SELECT id FROM events WHERE mission_id=? AND kind IN ('member','coordinator') ORDER BY id DESC LIMIT 1",
+				id,
+			),
+			control: this.controls.current(id),
+			interview: this.interviews.latest(id),
+			plan: this.plans.get(id),
+		}),
+		assertPlanner: (id, actor) => {
+			this.assertPlanner(id, actor);
+			if (actor.sessionId && this.require(id).coordinatorSessionId !== actor.sessionId)
+				throw new Conflict("Only the coordinator can propose mission revisions");
+		},
+		validate: (id, delta) => this.validateRevision(id, delta),
+		apply: (id, proposal, humanSource) => this.applyRevision(id, proposal, humanSource),
+		changed: (id) => {
+			this.changed(id, this.members(id));
+			this.knowledgeChanged(id);
+		},
+	});
+
 	/** Pause controls and reported assessments share canonical storage, not task or approval rows. */
 	readonly controls = new MissionControlStore({
 		one: (sql, ...params) => this.one(sql, ...params),
@@ -926,6 +959,7 @@ export class MissionStore {
 		this.db.exec(ATTENTION_SCHEMA);
 		this.db.exec(USER_VERIFICATION_SCHEMA);
 		this.db.exec(MISSION_CONTROL_SCHEMA);
+		this.db.exec(MISSION_REVISION_SCHEMA);
 		this.db.exec(HUMAN_REVIEW_SCHEMA);
 		this.db.exec(CHANGE_LANDING_SCHEMA);
 		this.db.exec(RETAINED_PROJECTION_SCHEMA);
@@ -1714,6 +1748,7 @@ export class MissionStore {
 		return () => this.knowledgeListeners.delete(listener);
 	}
 	private knowledgeChanged(id: string): void {
+		if (this.referenceBatch === id) return;
 		const projectId = this.require(id).projectId;
 		for (const listener of this.knowledgeListeners) listener(projectId);
 	}
@@ -2658,6 +2693,18 @@ export class MissionStore {
 		);
 	}
 
+	coordinatorWork(id: string) {
+		return {
+			tasks: this.all(
+				"SELECT number,title,status FROM tasks WHERE mission_id=? AND status NOT IN ('done','dropped') ORDER BY sort,number LIMIT 100",
+				id,
+			).map((row) => ({ number: num(row.number!), title: str(row.title!), status: str(row.status!) })),
+			count: num(
+				this.one("SELECT COUNT(*) n FROM tasks WHERE mission_id=? AND status NOT IN ('done','dropped')", id)!.n!,
+			),
+		};
+	}
+
 	/** Prompt inputs only. Context fan-out must not reread every member's task bodies and artifact history. */
 	memberContext(sessionId: string) {
 		const id = this.missionOf(sessionId);
@@ -2987,6 +3034,110 @@ export class MissionStore {
 		this.knowledge.invalidateMission(id, "briefRevision", revision);
 		this.event(id, "brief", `Brief revision ${revision}`, actor, { at: now });
 		return { missionId: id, revision, markdown, ...optionalAuthor(actor.sessionId), createdAt: now };
+	}
+
+	private validateRevision(id: string, delta: MissionRevisionDelta): void {
+		if (!delta || typeof delta !== "object" || Array.isArray(delta)) throw new Error("Expected revision delta");
+		strictPlanningFields(delta, ["goal", "markdown", "tasks", "decisions", "corrections"]);
+		if (delta.goal !== undefined) revisionText(delta.goal, MAX_GOAL);
+		if (delta.markdown !== undefined) revisionText(delta.markdown, MAX_BRIEF);
+		for (const key of ["tasks", "decisions", "corrections"] as const)
+			if (delta[key] !== undefined && (!Array.isArray(delta[key]) || delta[key].length > 100))
+				throw new Error(`Revision ${key} must be an array of at most 100 entries`);
+		const seen = new Set<string>();
+		for (const edit of delta.tasks ?? []) {
+			strictPlanningFields(edit, ["id", "title", "body", "drop", "assignment", "dependsOn", "decisionIds"]);
+			const task = this.resolveTask(id, revisionText(edit.id, 128));
+			if (task.status === "done" || task.status === "dropped")
+				throw new Conflict("Completed or dropped tasks remain historical");
+			if (seen.has(task.id)) throw new Error("Duplicate revision task");
+			seen.add(task.id);
+			if (edit.title !== undefined) revisionText(edit.title, MAX_TITLE);
+			if (edit.body !== undefined) revisionText(edit.body, MAX_TEXT);
+			if (edit.drop !== undefined && edit.drop !== true) throw new Error("drop must be true");
+			if (edit.assignment !== undefined) this.validateAssignment(id, { assignment: edit.assignment }, task);
+			this.taskFields(id, edit, task.id);
+		}
+		seen.clear();
+		for (const edit of delta.decisions ?? []) {
+			strictPlanningFields(edit, ["id", "reason", "action", "text", "audience"]);
+			const decision = this.decision(id, revisionText(edit.id, 128));
+			if (decision.replacement || decision.withdrawn) throw new Conflict("Only active decisions can be revised");
+			if (
+				this.one(
+					"SELECT 1 FROM decision_proposals WHERE mission_id=? AND decision_id=? AND status='pending'",
+					id,
+					decision.id,
+				)
+			)
+				throw new Conflict("Resolve the pending decision proposal first");
+			if (seen.has(decision.id)) throw new Error("Duplicate revision decision");
+			seen.add(decision.id);
+			revisionText(edit.reason, 1000);
+			if (edit.action === "replace") {
+				revisionText(edit.text, 1000);
+				if (edit.audience !== undefined) decisionAudience(edit.audience);
+			} else if (edit.action !== "withdraw" || edit.text !== undefined || edit.audience !== undefined)
+				throw new Error("Expected replacement or withdrawal without replacement fields");
+		}
+		for (const correction of delta.corrections ?? []) {
+			strictPlanningFields(correction, ["kind", "text"]);
+			if (!["instruction", "permission"].includes(correction.kind)) throw new Error("Unknown correction kind");
+			revisionText(correction.text, 1000);
+		}
+	}
+
+	private applyRevision(id: string, proposal: MissionRevisionProposal, humanSource: string): void {
+		const mission = this.require(id);
+		if (mission.status !== "active") throw new Conflict("Mission is inactive");
+		// A confirmed Pause proves the existing checkpoint protocol reached safe boundaries.
+		// Never cancel/restart a worker here or treat idle/model ACK as process-exit proof.
+		if (
+			this.members(id).length ||
+			this.one(
+				"SELECT 1 FROM tasks WHERE mission_id=? AND session_id IS NOT NULL AND status NOT IN ('done','dropped') LIMIT 1",
+				id,
+			)
+		) {
+			const control = this.controls.fenceCurrent(id);
+			if (!control.held || control.state !== "paused")
+				throw new Conflict("Pause mission work safely before applying a revision");
+		}
+		if (this.referenceBatch) throw new Conflict("A mission batch is already active");
+		this.referenceBatch = id;
+		try {
+			const actor = { proposedBySessionId: proposal.authorSessionId ?? undefined };
+			const delta = proposal.delta;
+			if (delta.goal !== undefined) this.update(id, { goal: delta.goal }, actor);
+			if (delta.markdown !== undefined) this.writeBrief(id, delta.markdown, mission.briefRevision, actor);
+			for (const edit of delta.tasks ?? []) {
+				const { id: taskId, drop, ...write } = edit;
+				this.updateTask(id, taskId, { ...write, ...(drop ? { status: "dropped" as const } : {}) }, actor);
+			}
+			for (const edit of delta.decisions ?? []) {
+				const before = this.decision(id, edit.id);
+				const provenance = { reason: edit.reason, revisionId: proposal.id, humanSource };
+				if (edit.action === "replace") {
+					const next = this.addDecision(id, edit.text, actor, edit.audience ?? before.audience);
+					this.supersedeDecision(id, before.id, next.id, actor);
+					this.run(
+						"UPDATE decisions SET replacement=? WHERE id=?",
+						JSON.stringify({ ...this.decision(id, before.id).replacement, ...provenance }),
+						before.id,
+					);
+				} else {
+					this.recordWithdrawal(id, before, { at: Date.now(), ...provenance, proposalId: proposal.id }, actor);
+				}
+			}
+			this.event(
+				id,
+				"update",
+				`Confirmed mission revision ${proposal.id}: ${proposal.summary}. Human source: ${humanSource}. Instruction/permission corrections remain unapplied proposals; no runtime authority changed.`,
+				actor,
+			);
+		} finally {
+			this.referenceBatch = undefined;
+		}
 	}
 
 	// Tasks
@@ -5646,6 +5797,29 @@ export class MissionStore {
 		return proposal;
 	}
 
+	private recordWithdrawal(
+		id: string,
+		decision: MissionDecision,
+		withdrawal: NonNullable<MissionDecision["withdrawn"]>,
+		actor: MissionActor,
+	): void {
+		if (decision.replacement || decision.withdrawn) throw new Conflict("Only active decisions can be withdrawn");
+		this.run(
+			"UPDATE decisions SET withdrawn=?,updated_at=? WHERE id=?",
+			JSON.stringify(withdrawal),
+			withdrawal.at,
+			decision.id,
+		);
+		this.knowledge.invalidateMission(id, "decisionId", decision.id);
+		this.event(
+			id,
+			"decision",
+			`Decision D${decision.number} withdrawn${proposalAttribution(actor)}: ${withdrawal.reason}`,
+			actor,
+			{ at: withdrawal.at },
+		);
+	}
+
 	resolveProposal(
 		id: string,
 		proposalId: string,
@@ -5684,20 +5858,7 @@ export class MissionStore {
 					const user = { proposedBySessionId: proposal.authorSessionId };
 					if (proposal.kind === "withdraw") {
 						const at = Date.now();
-						this.run(
-							"UPDATE decisions SET withdrawn = ?, updated_at = ? WHERE id = ?",
-							JSON.stringify({ at, reason: proposal.reason, proposalId }),
-							at,
-							decision.id,
-						);
-						this.knowledge.invalidateMission(id, "decisionId", decision.id);
-						this.event(
-							id,
-							"decision",
-							`Decision D${decision.number} withdrawn${proposalAttribution(user)}: ${proposal.reason}`,
-							user,
-							{ at },
-						);
+						this.recordWithdrawal(id, decision, { at, reason: proposal.reason, proposalId }, user);
 					} else if (proposal.kind === "remove") this.removeDecision(id, decision.id, user);
 					else {
 						const applied = this.updateDecision(id, decision.id, replacement ?? proposal.text, user);

@@ -17,7 +17,7 @@ function context(decisionState: MissionContext["decisionState"]): MissionContext
 	};
 }
 
-test("decision notices show added, edited and removed decisions with full before/after content", () => {
+test("decision notices show current changes without retired bodies", () => {
 	const notice = decisionNotice(
 		context([decision, { ...decision, id: "two", number: 2, text: "Retired rule" }]),
 		context([
@@ -28,7 +28,8 @@ test("decision notices show added, edited and removed decisions with full before
 	assert.equal(notice.summary, "Mission decisions changed: D1 updated: Revised multiline rule (+2 more)");
 	assert.match(notice.detail, /D1 updated\n\nBefore:\n> Original rule\n\nAfter:\n> Revised\n> multiline rule/);
 	assert.match(notice.detail, /D3 added\n\n> New rule/);
-	assert.match(notice.detail, /D2 removed\n\n> Retired rule/);
+	assert.match(notice.detail, /D2 removed \(no longer binding\)/);
+	assert.doesNotMatch(notice.detail, /Retired rule/);
 });
 
 test("notices include reference decisions outside the prompt and audience and pin changes", () => {
@@ -82,7 +83,7 @@ test("replacement notices retire old guidance without copying replacement text o
 	const mixed = decisionNotice(before, context([replaced, { ...target, text: "Separate user update" }]), own)!;
 	assert.match(mixed.detail, /Separate user update/);
 	assert.doesNotMatch(mixed.detail, /D1 updated|D1 is no longer binding/);
-	assert.match(
+	assert.doesNotMatch(
 		decisionNotice(before, context([{ ...replaced, text: "User edited" }, target]), own)!.detail,
 		/User edited/,
 	);
@@ -117,7 +118,7 @@ test("withdrawal notices require exact acknowledged state and preserve external 
 		assert.ok(
 			decisionNotice(after, context([{ ...withdrawn, withdrawn: { ...withdrawn.withdrawn, ...metadata } }]), own),
 		);
-	assert.match(decisionNotice(after, context([{ ...withdrawn, text: "User edit" }]), own)!.detail, /User edit/);
+	assert.doesNotMatch(decisionNotice(after, context([{ ...withdrawn, text: "User edit" }]), own)!.detail, /User edit/);
 	assert.match(decisionNotice(after, context([{ ...withdrawn, audience: "reference" }]), own)!.detail, /Audience/);
 });
 

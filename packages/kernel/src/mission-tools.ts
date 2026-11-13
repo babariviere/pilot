@@ -33,6 +33,9 @@ const MEMBER_ACTIONS = [
 export const MISSION_ACTIONS = [
 	...MEMBER_ACTIONS,
 	"complete",
+	"revision-source",
+	"revision-propose",
+	"revision",
 	"claim",
 	"release",
 	"propose",
@@ -71,7 +74,7 @@ Workers report facts with report/log, never change canonical task status, comple
 - get: without id, compact goal/status/brief revision, tasks grouped by phase with progress, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, completion record if delivered, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
 - map: read the canonical Wayfinder overview for this chat's current mission, with source currentness and interview history. No arguments. Same map as the native planning page; no edits, grants or execution authority. Unavailable planning context refuses, never means an empty map.
 - links, artifacts: references, filtered by taskId and filter open (default), done or all.
-- decisions: decisions not already in your prompt. Changes arrive as short notices; re-read, as current decisions supersede old prompt text.
+- decisions: active decisions not already in your prompt. Use filter all for exact historical bodies, labeled nonbinding when replaced/withdrawn. Changes arrive as short notices; current decisions supersede old prompt text.
 - comments: read open questions and feedback; check for an existing discussion before posting.
 - activity: newest first; filter taskId, kind, since (ISO timestamp with timezone or numeric event ID, exclusive), limit (default 15, max 100). Returns recentActivity with event IDs and cursor (null at end); pass cursor with the same filters for older events. Unfiltered first-page reads also include an independent recentUserNotes window.
 - brief: read a revision, or replace the spec with markdown and expectedRevision (stale writes fail).
@@ -113,6 +116,7 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 - task model/thinking (coordinator only): set the task's preferred model and thinking for new chats, validated like start; model "" clears. User-set preferences cannot be changed.
 - start (coordinator only): start one chat for id or ids (IDs/numbers/ranges, like claim), optional message/model/thinking/artifacts/links. In planningVersion 1, role explorer|builder|reviewer (default builder) is fixed at admission. Explorer uses Ask read/search/web and session-local artifacts, never bash/write/edit or planning ownership; coordinator-authorized research may precede brief approval. Reviewer is metadata only, with existing permissions, not a review engine. Roles do not isolate hostile shells/loopback REST. All tasks must be unclaimed and unfinished; admission is all-or-none. Runs in dependency order, then given order; outside dependencies must be done. One PR per code task, stacked in that order. Supplied references attach to every task; artifacts must be linked or member-owned. The whole opening prompt (bodies, guidance, references) must fit 4000 characters or start rejects with its size. Durable context belongs in the brief, decisions or task links. Model defaults to the task's preferred model, then the project's (a user-set preference cannot be overridden); validation errors list allowed model IDs, prices and supported thinking levels. Pick cheaper models for small tasks, strongest allowed model for hard ones. Start only within current user authorization. Add a stable operationId to queue one authorized slice durably until dependencies and a worker slot clear (max 2, reviewers included); get shows waiting reasons. Exact retries are lookup only, including Unknown. Queue before parking when authorized work can continue. Dispatch also requires a qualified current host policy; unavailable gates stay blocked. This does not enable Autopilot or grant spend.
 - send (coordinator only): send message to member targetSessionId; wakes idle/paused chats, optional mode steer for corrections that change current work, followUp (default) for anything that can wait. Steer joins a running turn at its next step; either mode starts an idle chat. Returns delivery delivered/queued/rejected, mode and reason; restore archived chats first.
+- revision-source / revision-propose / revision (coordinator only): read the current source, save {operationId,source,summary,delta}, or read saved id. Revisit only when requested: compare current agreement/work, reuse settled answers and trusted planning skills, interview genuine gaps only. Age permits a suggestion, never automatic replanning. Proposals never apply themselves. Before previewing an applicable revision, use existing explicit Mission Pause to checkpoint work safely; never restart/reset/compact automatically. User confirmation of the exact saved digest uses the native/user route only, not an agent action. Completed tasks/history remain. Decisions replace/withdraw with reason and human source. Instruction/permission corrections remain separate unapplied proposals; confirmation changes no runtime grants or Stop/holds.
 - answer (coordinator only): answer a member's pending ordinary question using targetSessionId, questionId from status and message. Use approved mission scope and decisions; ask the user for missing decisions, scope changes or approvals. Never grants database access or other user-only permissions. Ordinary send/steer does not answer questions. After uncertain delivery, inspect status; never blindly replay.
 - archiveWorker / restoreWorker (coordinator only): targetSessionId in this mission/project. First establish that assigned work is delivered or explicitly resolved (tasks done/dropped); idle is not completion. Refuses unfinished assignments, assistance, queued inputs and live work. Archive preserves the workspace from automatic pruning/reclamation, history and artifacts; it does not approve completion or authorize deletion. Restore is passive; send/start a separately authorized follow-up explicitly. Repeats are harmless; returns committed archivedAt (null when restored). status includes archived workers. User archive/cleanup controls remain separate.
 - requestReview / retireReview (coordinator only): request supplies an exact optional retained-change suggestion or retires your own suggestion. Same-mission/project member custody only. Never requires human approval, resolves threads or waives gates. Reuse operationId and exact payload after a lost reply; retry returns the original effect, not current state.
@@ -126,6 +130,13 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 		annotations: { openWorldHint: false, destructiveHint: coordinator },
 		parameters: Type.Object({
 			action: StringEnum(coordinator ? MISSION_ACTIONS : MEMBER_ACTIONS),
+			...(coordinator
+				? {
+						source: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
+						summary: Type.Optional(Type.String({ minLength: 1, maxLength: 1000 })),
+						delta: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+					}
+				: {}),
 			reportId: Type.Optional(Type.String({ maxLength: 128 })),
 			report: Type.Optional(
 				Type.Object({

@@ -1287,6 +1287,7 @@ export class MissionService {
 		);
 		const relevant = detail.decisions.filter(
 			(decision) =>
+				mission.coordinatorSessionId === sessionId ||
 				decision.audience === "all" ||
 				(decision.audience === "coordinator" && mission.coordinatorSessionId === sessionId) ||
 				pins.has(decision.id),
@@ -1317,8 +1318,19 @@ export class MissionService {
 			]),
 		);
 		const role = this.store.membership(sessionId)?.role;
+		const currentWork =
+			mission.coordinatorSessionId === sessionId ? this.store.coordinatorWork(mission.id) : undefined;
 		return {
 			id: mission.id,
+			...(currentWork
+				? {
+						agreement: this.store.brief(mission.id)?.markdown ?? "",
+						briefRevision: mission.briefRevision,
+						revisionDelta: this.store.revisions.latestConfirmed(mission.id),
+						relevantTasks: currentWork.tasks,
+						relevantTaskCount: currentWork.count,
+					}
+				: {}),
 			...(role ? { role } : {}),
 			...(mission.planningVersion !== undefined
 				? { planningVersion: mission.planningVersion, briefRevision: mission.briefRevision }
@@ -1357,13 +1369,13 @@ export class MissionService {
 			decisionState: detail.decisions.map(({ id, number, text, audience, replacement, withdrawn }) => ({
 				id,
 				number,
-				text,
+				text: replacement || withdrawn ? "" : text,
 				audience,
 				...(replacement ? { replacement } : {}),
 				...(withdrawn ? { withdrawn } : {}),
 				selected: selectedIds.has(id),
 			})),
-			remainingDecisions: detail.decisions.length - selected.length,
+			remainingDecisions: detail.decisions.filter((d) => !d.replacement && !d.withdrawn).length - selected.length,
 			tickets: detail.resources
 				.filter(
 					(ref) =>
@@ -1380,7 +1392,7 @@ export class MissionService {
 					...(ref.taskId ? { task: owned.get(ref.taskId) } : {}),
 				})),
 			decisionVersion:
-				JSON.stringify(
+				deliveryDigest(
 					detail.decisions.map(({ id, text, audience, replacement, withdrawn }) =>
 						withdrawn
 							? [id, text, audience, null, withdrawn]
@@ -1875,6 +1887,9 @@ export class MissionService {
 		if (
 			([
 				"complete",
+				"revision-source",
+				"revision-propose",
+				"revision",
 				"claim",
 				"release",
 				"propose",
@@ -1906,6 +1921,14 @@ export class MissionService {
 		validateMissionWrite(action, args);
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
+		const assertRevisionContext = () => {
+			this.assertSameProject(sessionId, missionId);
+			if (
+				this.store.missionOf(sessionId) !== missionId ||
+				this.store.require(missionId).coordinatorSessionId !== sessionId
+			)
+				throw new Conflict("Mission revision reader changed");
+		};
 		switch (action) {
 			case "map": {
 				if (Object.keys(args).length) throw new Conflict("map takes no arguments");
@@ -2424,13 +2447,16 @@ export class MissionService {
 					? (args._promptDecisions as Array<{ id: string; text: string }>)
 					: (this.context(sessionId)?.decisionEntries ?? []);
 				return {
-					retired: prompt.filter((entry) => !detail.decisions.some((decision) => decision.id === entry.id)),
+					retired: prompt
+						.filter((entry) => !detail.decisions.some((decision) => decision.id === entry.id))
+						.map(({ id }) => ({ id, historical: true, binding: false })),
 					decisions: detail.decisions
 						.filter(
 							(decision) =>
-								decision.replacement ||
-								decision.withdrawn ||
-								!prompt.some((entry) => entry.id === decision.id && entry.text === decision.text),
+								args.filter === "all" ||
+								(!decision.replacement &&
+									!decision.withdrawn &&
+									!prompt.some((entry) => entry.id === decision.id && entry.text === decision.text)),
 						)
 						.map(({ id, number, text, audience, replacement, withdrawn }) => ({
 							id,
@@ -2439,9 +2465,33 @@ export class MissionService {
 							audience,
 							...(replacement ? { replacement } : {}),
 							...(withdrawn ? { withdrawn } : {}),
+							...(replacement || withdrawn ? { historical: true, binding: false } : {}),
 						})),
 				};
 			}
+			case "revision-source":
+				await this.store.durable();
+				assertRevisionContext();
+				return {
+					source: this.store.revisions.source(missionId),
+					latestConfirmed: this.store.revisions.latestConfirmed(missionId),
+				};
+			case "revision-propose":
+				assertRevisionContext();
+				return this.store.revisions.propose(
+					missionId,
+					{
+						operationId: str("operationId")!,
+						source: str("source")!,
+						summary: str("summary")!,
+						delta: args.delta as Parameters<typeof this.store.revisions.propose>[1]["delta"],
+					},
+					actor,
+				);
+			case "revision":
+				await this.store.durable();
+				assertRevisionContext();
+				return this.store.revisions.get(missionId, str("id")!);
 			case "activity": {
 				const query = readActivityQuery(args);
 				if (args.taskId !== undefined) query.taskId = this.store.resolveTask(missionId, args.taskId).id;
@@ -2476,7 +2526,12 @@ export class MissionService {
 				const revision = typeof args.revision === "number" ? args.revision : undefined;
 				const brief = this.store.brief(missionId, revision);
 				return brief
-					? { revision: brief.revision, markdown: brief.markdown, by: who(brief.authorSessionId) }
+					? {
+							revision: brief.revision,
+							markdown: brief.markdown,
+							by: who(brief.authorSessionId),
+							...(brief.revision !== mission.briefRevision ? { historical: true, binding: false } : {}),
+						}
 					: {
 							revision: 0,
 							markdown: "",
@@ -2841,6 +2896,7 @@ class MissionAgentView {
 								audience,
 								...(replacement ? { replacement } : {}),
 								...(withdrawn ? { withdrawn } : {}),
+								...(replacement || withdrawn ? { historical: true, binding: false } : {}),
 							})),
 					}
 				: {}),

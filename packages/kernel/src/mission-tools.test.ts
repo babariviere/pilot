@@ -84,6 +84,45 @@ test("versioned report schema reads owner context and forwards exact report byte
 	);
 });
 
+test("revision proposals are coordinator-only and have no agent confirmation action", async () => {
+	const calls: unknown[] = [];
+	const tool = createMissionTool(async (action, args) => {
+		calls.push([action, args]);
+		return {};
+	}, true);
+	const args = {
+		action: "revision-propose",
+		operationId: "revisit-one",
+		source: "a".repeat(64),
+		summary: "Narrow revised scope",
+		delta: { markdown: "Current agreement" },
+	};
+	validateToolArguments(tool, { type: "toolCall", id: "revision", name: "mission", arguments: args });
+	await tool.execute("revision", args as never, undefined, undefined, {} as never);
+	assert.deepEqual(calls, [
+		[
+			"revision-propose",
+			{ operationId: args.operationId, source: args.source, summary: args.summary, delta: args.delta },
+		],
+	]);
+	for (const action of ["revision-confirm", "revision-propose"]) {
+		assert.throws(() =>
+			validateToolArguments(
+				createMissionTool(async () => ({})),
+				{ type: "toolCall", id: "bad", name: "mission", arguments: { action } },
+			),
+		);
+	}
+	assert.throws(() =>
+		validateToolArguments(tool, {
+			type: "toolCall",
+			id: "bad",
+			name: "mission",
+			arguments: { action: "revision-confirm" },
+		}),
+	);
+});
+
 test("coordinator planning schema exposes only strict versioned assignment writes", () => {
 	const tool = createMissionTool(async () => ({}), true);
 	const args = {
@@ -257,8 +296,13 @@ test("ticket tool declarations expose explicit role upgrades and bounded local s
 	assert.match(lead.description, /No Linear sub-issues/);
 });
 
-for (const busy of [false, true]) {
-	test(`decision changes preserve the prompt and place one passive notice (${busy ? "busy" : "idle"})`, async (t) => {
+for (const [coordinator, busy] of [
+	["other", false],
+	["other", true],
+	["self", false],
+	["self", true],
+] as const) {
+	test(`decision changes keep workers stable and coordinators current (${coordinator}, ${busy ? "busy" : "idle"})`, async (t) => {
 		const f = await fixture(t);
 		const open = NativeAdapter.open;
 		let adapter!: NativeAdapter;
@@ -275,7 +319,7 @@ for (const busy of [false, true]) {
 			title: "Shared goal",
 			goal: "Ship",
 			status: "active",
-			coordinator: "other",
+			coordinator,
 			tasks: [],
 			decisions: ["Original binding rule"],
 			decisionEntries: [{ id: "rule", text: "Original binding rule" }],
@@ -343,10 +387,16 @@ for (const busy of [false, true]) {
 		assert.equal(prompts.length, 1, "a passive notice never starts generation");
 		await session.submit("second", "Continue", "followUp");
 		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-		assert.equal(prompts[0], prompts[1]);
-		assert.match(prompts[1]!, /Original binding rule/);
-		assert.match(prompts[1]!, /10 more decisions: mission decisions/);
-		assert.doesNotMatch(prompts[1]!, /Revised binding rule/);
+		if (coordinator === "self") {
+			assert.notEqual(prompts[0], prompts[1]);
+			assert.match(prompts[1]!, /Revised binding rule/);
+			assert.doesNotMatch(prompts[1]!, /Original binding rule/);
+		} else {
+			assert.equal(prompts[0], prompts[1]);
+			assert.match(prompts[1]!, /Original binding rule/);
+			assert.match(prompts[1]!, /10 more decisions: mission decisions/);
+			assert.doesNotMatch(prompts[1]!, /Revised binding rule/);
+		}
 		const entries = (await session.conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items;
 		assert.equal(entries.filter((entry) => entry.kind === "pilot.activity").length, 1);
 		const notice = entries.find((entry) => entry.kind === "pilot.activity")!;
@@ -372,7 +422,10 @@ for (const busy of [false, true]) {
 			undefined,
 		);
 		assert.ok(!result.isError);
-		assert.deepEqual(calls.at(-1), ["decisions", { _promptDecisions: mission.decisionEntries }]);
+		assert.deepEqual(calls.at(-1), [
+			"decisions",
+			{ _promptDecisions: coordinator === "self" ? changed.decisionEntries : mission.decisionEntries },
+		]);
 	});
 }
 
@@ -649,7 +702,8 @@ for (const origin of ["own", "external", "lost acknowledgement"] as const) {
 			origin === "own" ? 1 : 2,
 			"later external changes are never suppressed by coordinator role",
 		);
-		assert.ok(notices.some((notice) => /Later user edit/.test(JSON.stringify(notice.data))));
+		assert.ok(notices.some((notice) => /Historical body changed/.test(JSON.stringify(notice.data))));
+		assert.ok(notices.every((notice) => !/Later user edit/.test(JSON.stringify(notice.data))));
 	});
 }
 

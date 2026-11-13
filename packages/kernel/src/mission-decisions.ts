@@ -64,7 +64,7 @@ export function decisionNotice(
 		const own = ownAdditions.get(decision.id);
 		const acknowledged =
 			own?.number === decision.number &&
-			own.text === decision.text &&
+			(own.text === decision.text || (!decision.text && !!(decision.replacement || decision.withdrawn))) &&
 			own.audience === decision.audience &&
 			own.replacement?.id === decision.replacement?.id &&
 			own.replacement?.number === decision.replacement?.number &&
@@ -83,18 +83,20 @@ export function decisionNotice(
 					: decision.replacement
 						? `${label} replaced by D${decision.replacement.number} (no longer binding)`
 						: `${label} added: ${decision.text}`,
-				detail: `### ${label} ${decision.withdrawn ? `withdrawn (no longer binding)\n\nReason:\n${quote(decision.withdrawn.reason)}` : decision.replacement ? `replaced by D${decision.replacement.number} (no longer binding)` : "added"}\n\n${quote(decision.text)}`,
+				detail: `### ${label} ${decision.withdrawn ? `withdrawn (no longer binding)\n\nReason:\n${quote(decision.withdrawn.reason)}` : decision.replacement ? `replaced by D${decision.replacement.number} (no longer binding)` : `added\n\n${quote(decision.text)}`}`,
 			});
 			continue;
 		}
 		const details: string[] = [];
+		if (prior.text !== decision.text && decision.text && (decision.replacement || decision.withdrawn))
+			details.push("Historical body changed. Read explicit decision history; it is not binding guidance.");
 		const replaced = prior.replacement?.id !== decision.replacement?.id;
 		const withdrawn =
 			prior.withdrawn?.at !== decision.withdrawn?.at ||
 			prior.withdrawn?.reason !== decision.withdrawn?.reason ||
 			prior.withdrawn?.proposalId !== decision.withdrawn?.proposalId;
 		const ownRetirement = ((replaced && decision.replacement) || (withdrawn && decision.withdrawn)) && acknowledged;
-		if (prior.text !== decision.text)
+		if (prior.text !== decision.text && !decision.replacement && !decision.withdrawn)
 			details.push(`Before:\n${quote(prior.text)}\n\nAfter:\n${quote(decision.text)}`);
 		if (prior.audience !== decision.audience) details.push(`Audience: ${prior.audience} → ${decision.audience}`);
 		if (prior.selected !== decision.selected && !ownRetirement)
@@ -122,7 +124,7 @@ export function decisionNotice(
 					: decision.replacement
 						? `${label} replaced by D${decision.replacement.number} (no longer binding)`
 						: `${label} updated: ${decision.text}`,
-				detail: `### ${label} updated\n\n${prior.text === decision.text ? `${quote(decision.text)}\n\n` : ""}${details.join("\n\n")}`,
+				detail: `### ${label} updated\n\n${prior.text === decision.text && !decision.replacement && !decision.withdrawn ? `${quote(decision.text)}\n\n` : ""}${details.join("\n\n")}`,
 			});
 		}
 	}
@@ -133,8 +135,8 @@ export function decisionNotice(
 		urgent = true;
 		changes.push({
 			id: decision.id,
-			summary: `D${decision.number} removed: ${decision.text}`,
-			detail: `### D${decision.number} removed\n\n${quote(decision.text)}`,
+			summary: `D${decision.number} removed (no longer binding)`,
+			detail: `### D${decision.number} removed (no longer binding). Historical text is available only through explicit history reads.`,
 		});
 	}
 	if (!changes.length) return undefined;

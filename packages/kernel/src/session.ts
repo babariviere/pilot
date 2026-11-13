@@ -1410,7 +1410,7 @@ export class KernelSession {
 		const previous = this.#mission.current;
 		const own = new Map(this.#ownDecisionAdditions);
 		const noticeWrite = this.recordDecisions(context, own);
-		if (previous && context && previous.id === context.id && !coordinatorChanged) {
+		if (previous && context && previous.id === context.id && !coordinatorChanged && context.coordinator !== "self") {
 			for (const decision of context.decisionState ?? []) this.#ownDecisionAdditions.delete(decision.id);
 			// Keep the stable prompt, except explicitly retired guidance must stop being binding.
 			const retired = new Map(

@@ -43,6 +43,13 @@ until earlier phases finish, unless you explicitly override it.
 
 ## Work with a coordinator
 
+The backend now supports reviewed mission revisions. Proposed changes do nothing until you
+confirm the exact saved version. Completed work and earlier decisions stay in history.
+Coordinator context uses the current agreement, active decisions and current work, not old
+plans or retired decision bodies. History remains available on demand. This does not erase
+earlier chat text or reset chats. The native **Revisit mission** interview/preview is not yet
+connected. See [the backend contract](technical/mission-revisions.md) for its safety limits.
+
 In coordinator-owned planning, the coordinator maintains scope, assignments, and
 acceptance criteria. Workers report progress, evidence, and blockers and propose
 planning changes. Evidence alone is not acceptance or permission to expand scope.
