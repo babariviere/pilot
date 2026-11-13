@@ -49,6 +49,8 @@ fn view() -> SavedView {
             "export\ntopic-1\n  Exact words 日本語\nsecond line ".into(),
             "export\n\nA new thread".into(),
         ],
+        feedback_open: true,
+        feedback: "mission/export\n  Exact feedback 日本語\nsecond line ".into(),
     }
 }
 

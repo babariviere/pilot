@@ -9,6 +9,7 @@ import type { Decision, MissionPage, MissionRow, PlanPage, PlanRow, ReportLine, 
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
+import { openFeedback } from "./feedbackView";
 import { keepScroll, restoreScroll, scrollOf } from "./kept";
 import { glide } from "./motion";
 import { goHome } from "./nav";
@@ -481,6 +482,19 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage }) {
 							</View>
 						)}
 					</Each>
+				</View>
+			</If>
+
+			<If when={props.day.feedback}>
+				<View class="flex-row items-center gap-3 border-t border-border pt-4">
+					<Text class="flex-1 text-sm text-muted-foreground">Something about this mission Pilot should know?</Text>
+					<Action
+						label="Send feedback"
+						icon="notes"
+						testID="mission-feedback"
+						accessibilityLabel="Send feedback about this mission. This opens a page; nothing is sent yet."
+						onPress={() => openFeedback({ kind: "mission", missionId: row().id })}
+					/>
 				</View>
 			</If>
 		</View>

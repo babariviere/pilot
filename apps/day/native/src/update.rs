@@ -349,6 +349,14 @@ pub struct SavedView {
     /// nothing, and they stay with their own mission and thread.
     #[prop(default)]
     pub threads: Vec<String>,
+    /// Whether the feedback page was open. Showing it again only reads.
+    #[prop(default)]
+    pub feedback_open: bool,
+    /// Unsent feedback, exactly as typed, as "<origin>\n<text>", where the
+    /// origin is empty, "mission/<id>" or "chat/<id>". Empty for none.
+    /// Restoring it sends nothing, and it keeps its own origin.
+    #[prop(default)]
+    pub feedback: String,
 }
 
 impl SavedView {
@@ -378,6 +386,7 @@ impl SavedView {
             + self.linear.len()
             + self.today_project.len()
             + self.thread.len()
+            + self.feedback.len()
             + lists
     }
 
@@ -455,6 +464,18 @@ impl SavedView {
                     (parts.next(), parts.next(), parts.next()),
                     (Some(mission), Some(topic), Some(_)) if id(mission) && (topic.is_empty() || id(topic))
                 )
+            })
+    }
+
+    /// Whether `feedback` is empty, or names an empty, mission or chat origin
+    /// by a valid ID before its text.
+    pub fn feedback_valid(&self) -> bool {
+        let Some((origin, _)) = self.feedback.split_once('\n') else {
+            return self.feedback.is_empty();
+        };
+        origin.is_empty()
+            || origin.split_once('/').is_some_and(|(kind, id)| {
+                matches!(kind, "mission" | "chat") && crate::host::valid_id(id)
             })
     }
 }
@@ -944,7 +965,8 @@ impl UpdateDesk {
                 || !view.offsets_valid()
                 || !view.linear_valid()
                 || !view.preferences_valid()
-                || !view.threads_valid())
+                || !view.threads_valid()
+                || !view.feedback_valid())
         {
             self.bump();
             return Err(outcome(

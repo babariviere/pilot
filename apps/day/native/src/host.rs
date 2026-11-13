@@ -7,6 +7,7 @@ mod changes;
 pub(crate) mod delivery;
 pub(crate) mod delivery_artifact;
 mod enrollment;
+pub(crate) mod feedback;
 pub(crate) mod intake;
 mod inventory;
 mod journal;
@@ -707,7 +708,12 @@ impl NativeHost {
 fn publish_planning(shared: &Shared, record: &planning::PlanningRecord) {
     if matches!(
         record.operation["kind"].as_str(),
-        Some("native-chat-create" | "user-verification" | "project-preferences-update")
+        Some(
+            "native-chat-create"
+                | "user-verification"
+                | "project-preferences-update"
+                | "user-feedback"
+        )
     ) || record.operation["kind"]
         .as_str()
         .is_some_and(threads::is_thread_kind)

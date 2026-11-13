@@ -53,6 +53,7 @@ impl PlanningRecord {
                         | "native-chat-create"
                         | "user-verification"
                         | "project-preferences-update"
+                        | "user-feedback"
                         | "thread-create"
                         | "thread-disposition"
                         | "thread-reference"
@@ -83,6 +84,9 @@ impl PlanningRecord {
         }
         if o["kind"] == super::preferences::KIND {
             super::preferences::validate_record(&self.source, o)?;
+        }
+        if o["kind"] == super::feedback::KIND {
+            super::feedback::validate_record(o)?;
         }
         if o["kind"].as_str().is_some_and(super::threads::is_thread_kind) {
             super::threads::validate_record(o)?;
@@ -153,6 +157,7 @@ fn record_pinned(
                     | "native-chat-create"
                     | "user-verification"
                     | "project-preferences-update"
+                    | "user-feedback"
                     | "thread-create"
                     | "thread-disposition"
                     | "thread-reference"
@@ -171,6 +176,7 @@ fn record_pinned(
                     | "native-chat-create"
                     | "user-verification"
                     | "project-preferences-update"
+                    | "user-feedback"
                     | "thread-create"
                     | "thread-disposition"
                     | "thread-reference"
@@ -285,6 +291,9 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
     }
     if op["kind"] == super::preferences::KIND && r["state"] == "accepted" {
         super::preferences::exact_result(op, &r)?;
+    }
+    if op["kind"] == super::feedback::KIND && r["state"] == "accepted" {
+        super::feedback::exact_result(op, &r)?;
     }
     if op["kind"].as_str().is_some_and(super::threads::is_thread_kind) && r["state"] == "accepted" {
         super::threads::exact_result(op, &r)?;

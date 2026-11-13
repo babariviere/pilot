@@ -142,6 +142,7 @@ import { validatePatch } from "./tracked-items.ts";
 import { type ReservationReceipt, UpdateReservation } from "./update-reservation.ts";
 import { UsageQueryCapacityError } from "./usage-history.ts";
 import { usageAnalyticsQuery } from "./usage-history-validation.ts";
+import { UserFeedbackService } from "./user-feedback.ts";
 import { UserVerifications } from "./user-verification.ts";
 import { isWorkflowOperation, WorkflowConfirmations } from "./workflow-confirmations.ts";
 
@@ -796,6 +797,7 @@ export function createDaemonServer(
 	const nativeChat = journal ? new NativeChat({ journal, projects, sessions }) : undefined;
 	const userVerifications =
 		journal && missions ? new UserVerifications({ journal, store: missions.store, projects, sessions }) : undefined;
+	const userFeedback = missions ? new UserFeedbackService({ store: missions.store, projects, sessions }) : undefined;
 	const deliveredArtifacts =
 		userVerifications && missions
 			? new DeliveredArtifacts({ store: missions.store, projects, sessions, verifications: userVerifications })
@@ -924,6 +926,7 @@ export function createDaemonServer(
 			return missionThreads.admit(op, false);
 		}
 		if (op.kind === "project-preferences-update") throw new Error("Preference outcome is unknown; Check only");
+		if (op.kind === "user-feedback") throw new Error("Feedback outcome is unknown; Check only");
 		if (op.kind === "user-verification") throw new Error("Verification outcome is unknown; Check only");
 		if (op.kind === "attention-answer") {
 			if (!nativeAttention) throw new OperationRejected("Native attention unavailable");
@@ -1603,6 +1606,26 @@ export function createDaemonServer(
 						200,
 						await journal.execute(operation, (op, entry) =>
 							preferences.admitNative(op, journal, entry.firstEntry),
+						),
+					);
+				} finally {
+					end();
+				}
+			}
+			if (operation?.kind === "user-feedback") {
+				res.setHeader("cache-control", "no-store");
+				if (!githubSetup || !userFeedback) throw new ServiceUnavailable("User feedback unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				const saved = await journal.lookup(operation);
+				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					return json(
+						res,
+						200,
+						await journal.execute(operation, (op, entry) =>
+							userFeedback.admitNative(op, journal, entry.firstEntry),
 						),
 					);
 				} finally {
@@ -2653,6 +2676,21 @@ export function createDaemonServer(
 				throw error;
 			}
 			throw new HttpError(405, "Method not allowed");
+		}
+		// The user's own feedback, newest first. Native authority only; reading it routes or starts nothing.
+		if (parts[1] === "feedback" && parts.length === 2) {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+			if (!githubSetup || !userFeedback) throw new ServiceUnavailable("User feedback unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			return json(
+				res,
+				200,
+				await userFeedback.page(
+					url.searchParams.get("before") ?? undefined,
+					url.searchParams.get("limit") ?? undefined,
+				),
+			);
 		}
 		// Explicit project choices. User writes require native authority; never runtime permissions.
 		if (parts[1] === "projects" && parts[3] === "preferences" && parts.length <= 6) {

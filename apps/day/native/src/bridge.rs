@@ -28,6 +28,9 @@ pub const METHODS: &[&str] = &[
     "day.preferences.save",
     "day.preferences.check",
     "day.preferences.history",
+    "day.feedback.read",
+    "day.feedback.send",
+    "day.feedback.check",
     "day.threads.read",
     "day.threads.history",
     "day.threads.write",
@@ -194,6 +197,9 @@ pub(crate) enum Command {
     PreferencesSave(crate::host::preferences::Intent),
     PreferencesCheck(String),
     PreferencesHistory(crate::host::preferences::History),
+    FeedbackRead(crate::host::feedback::Read),
+    FeedbackSend(crate::host::feedback::Intent),
+    FeedbackCheck(String),
     ThreadsRead(String),
     ThreadsHistory(crate::host::threads::HistoryRequest),
     ThreadsWrite(crate::host::threads::Intent),
@@ -395,6 +401,26 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: crate::host::preferences::History = exact(args)?;
             r.validate()?;
             C::PreferencesHistory(r)
+        }
+        "day.feedback.read" => {
+            let r: crate::host::feedback::Read = exact(args)?;
+            r.validate()?;
+            C::FeedbackRead(r)
+        }
+        "day.feedback.send" => {
+            let r: crate::host::feedback::Intent = exact(args)?;
+            r.validate()?;
+            C::FeedbackSend(r)
+        }
+        "day.feedback.check" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Lookup {
+                operation_id: String,
+            }
+            let r: Lookup = exact(args)?;
+            mission(&r.operation_id)?;
+            C::FeedbackCheck(r.operation_id)
         }
         "day.threads.read" => {
             let r: crate::host::threads::ReadRequest = exact(args)?;
@@ -700,6 +726,7 @@ impl Command {
                     | Self::LinearRead
                     | Self::PreferencesRead
                     | Self::PreferencesHistory(_)
+                    | Self::FeedbackRead(_)
                     | Self::ThreadsRead(_)
                     | Self::ThreadsHistory(_)
                     | Self::DeliveryRead(_)

@@ -1,12 +1,13 @@
 // The window's one header: Pilot at the top left, which always goes to
 // Today; one Back that goes up a level; and the few places every screen can
-// reach: an update that needs the user, Changes, Settings and New. It stays put while
+// reach: an update that needs the user, Changes, Feedback, Settings and New. It stays put while
 // the screens below it change, so the way out is always in the same place.
 import { keymap, Text, View, windowSize } from "nsh";
 import { Button } from "nsh/base";
 import type { Changes } from "./changeFeed";
 import { showChanges } from "./changesView";
 import type { Day } from "./day";
+import { openFeedback } from "./feedbackView";
 import { type Back, backTarget, goHome, type Places, shown } from "./nav";
 import type { Plans } from "./planning";
 import { openNew } from "./planView";
@@ -40,6 +41,12 @@ function goChanges() {
 function goSettings() {
 	goHome();
 	openSettings();
+}
+
+/** Opens Feedback about Pilot in general from wherever the user is. Drafts stay where they are. */
+function goFeedback() {
+	goHome();
+	openFeedback(null);
 }
 
 /** Pilot's mark and name: the way home. */
@@ -121,6 +128,16 @@ export function AppHeader(props: { day: Day; plans?: Plans; changes?: Changes })
 			</If>
 			<If when={props.changes && at() !== "changes"}>
 				<ChangesPlace changes={props.changes as Changes} narrow={narrow()} />
+			</If>
+			<If when={props.day.feedback && at() !== "feedback"}>
+				<Action
+					label="Feedback"
+					icon="notes"
+					iconOnly={narrow()}
+					testID="feedback-open"
+					accessibilityLabel="Send feedback about Pilot"
+					onPress={goFeedback}
+				/>
 			</If>
 			<If when={props.day.preferences && at() !== "settings"}>
 				<Action

@@ -1,5 +1,5 @@
 // The app's one window: Today, one mission's overview, New, one mission's
-// planning, Changes, Settings, or the start or end of the day. No sidebar. One header
+// planning, Changes, Settings, Feedback, or the start or end of the day. No sidebar. One header
 // stays over every screen: Pilot goes to Today, Back goes up one level,
 // and Escape goes back too.
 
@@ -11,6 +11,8 @@ import { changesRoute } from "./changesView";
 import { DeliveryScreen } from "./DeliveryScreen";
 import type { Day } from "./day";
 import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
+import { FeedbackScreen } from "./FeedbackScreen";
+import { feedbackOpen } from "./feedbackView";
 import { LinearScreen } from "./LinearScreen";
 import { linearOpen } from "./linearView";
 import { MissionScreen } from "./MissionScreen";
@@ -113,7 +115,16 @@ function Screens(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: C
 	return (
 		<If
 			when={props.day.preferences && settingsOpen()}
-			else={<Results day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />}
+			else={
+				<If
+					when={props.day.feedback && feedbackOpen()}
+					else={<Results day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />}
+				>
+					<Arrive class="flex-1">
+						<FeedbackScreen day={props.day} />
+					</Arrive>
+				</If>
+			}
 		>
 			<Arrive class="flex-1">
 				<SettingsScreen day={props.day} />

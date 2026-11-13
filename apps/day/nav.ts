@@ -1,6 +1,7 @@
 // Where the window's one Back goes, and Pilot's way home. The app is a
 // tree: Today, then a mission's overview, then its interview and plan, a
-// thread or a result; Changes, Linear, Settings, New and the rituals hang off Today. Back goes up
+// thread or a result; Changes, Linear, Settings, Feedback, New and the rituals hang off Today.
+// Feedback opened from a mission lies over that mission. Back goes up
 // one level of that tree, Escape does the same, and Pilot at the top left
 // always goes to Today. Moving around only changes where the user is: it
 // never drops a draft, sends, saves or starts anything.
@@ -8,6 +9,7 @@ import type { Changes } from "./changeFeed";
 import { changesRoute } from "./changesView";
 import type { Day } from "./day";
 import { closeDelivery, deliveryRoute, hideInspection } from "./deliveryView";
+import { closeFeedback, feedbackOpen } from "./feedbackView";
 import { closeLinear, linearOpen } from "./linearView";
 import type { Plans } from "./planning";
 import { closePlanning, planRoute } from "./planView";
@@ -50,6 +52,7 @@ export type Shown =
 	| "update"
 	| "ritual"
 	| "settings"
+	| "feedback"
 	| "delivery"
 	| "linear"
 	| "change"
@@ -65,6 +68,7 @@ export function shown(places: Places): Shown {
 	if (updateEntry() && updateOpen()) return "update";
 	if (ritualRoute()) return "ritual";
 	if (places.day.preferences && settingsOpen()) return "settings";
+	if (places.day.feedback && feedbackOpen()) return "feedback";
 	if (places.day.delivery && deliveryRoute()) return "delivery";
 	if (places.day.linear && linearOpen()) return "linear";
 	const change = places.changes ? changesRoute() : null;
@@ -92,6 +96,13 @@ export function backTarget(places: Places): Back | null {
 		}
 		case "settings":
 			return to("Today", closeSettings);
+		case "feedback": {
+			// Feedback lies over the mission it was opened from, or over Today.
+			const id = route();
+			return id
+				? to(places.day.feed.mission(id)?.row.title || "Mission overview", closeFeedback)
+				: to("Today", closeFeedback);
+		}
 		case "delivery": {
 			const id = route();
 			if (!id) return to("Today", closeDelivery);
@@ -128,6 +139,7 @@ export function goHome() {
 	closeUpdate();
 	closeRitual();
 	closeSettings();
+	closeFeedback();
 	hideInspection();
 	if (deliveryRoute()) closeDelivery();
 	if (linearOpen()) closeLinear();

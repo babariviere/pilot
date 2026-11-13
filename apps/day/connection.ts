@@ -11,6 +11,7 @@ import { connectedUpdates } from "./connectedUpdates";
 import { type Day, mirrorDay } from "./day";
 import { ConnectedDelivery, deliveryKey, mirrorDelivery, type VerificationSubject } from "./deliveryFeed";
 import { deliveryTitles } from "./deliveryView";
+import { ConnectedFeedback, mirrorFeedback } from "./feedbackFeed";
 import { ConnectedIntake, mirrorIntake } from "./intakeFeed";
 import { ConnectedLinear, mirrorLinear } from "./linearFeed";
 import { flushAll } from "./planCommands";
@@ -208,7 +209,8 @@ async function connect() {
 		requests = now;
 		void intakeFeed.read();
 	});
-	// The saved Linear issues, the project's preferences and a mission's threads are read only when their page opens.
+	// The saved Linear issues, the project's preferences, a mission's threads and
+	// the user's feedback are read only when their page opens.
 	const day = mirrorDay(
 		today,
 		intake,
@@ -217,6 +219,7 @@ async function connect() {
 		mirrorScope(new ConnectedScope(window)),
 		mirrorPreferences(new ConnectedPreferences(window)),
 		mirrorThreads(new ConnectedThreads(window)),
+		mirrorFeedback(new ConnectedFeedback(window)),
 	);
 	// New's projects are read when New opens; reading sends nothing.
 	const plans = mirrorPlanning(planFeed, mirrorChats(new ConnectedChats(window)));

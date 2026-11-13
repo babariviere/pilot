@@ -4,6 +4,7 @@
 import { type Signal, signal } from "nsh";
 import { type Scenario, type Today, TodayFeed } from "pilot-day/native";
 import type { DeliveryMirror } from "./deliveryFeed";
+import type { FeedbackMirror } from "./feedbackFeed";
 import type { DayFeed } from "./feeds";
 import type { IntakeMirror } from "./intakeFeed";
 import type { LinearMirror } from "./linearFeed";
@@ -48,6 +49,11 @@ export type Day = {
 	 * mission's overview offers no threads.
 	 */
 	threads?: ThreadsMirror;
+	/**
+	 * The user's own feedback about Pilot, sent and kept by Pilot's service.
+	 * Without it the window offers no feedback page.
+	 */
+	feedback?: FeedbackMirror;
 	/** Stops listening and frees the feed. */
 	close: () => void;
 };
@@ -66,6 +72,7 @@ export function mirrorDay(
 	scope?: ScopeMirror,
 	preferences?: PreferencesMirror,
 	threads?: ThreadsMirror,
+	feedback?: FeedbackMirror,
 ): Day {
 	const today = signal(feed.snapshot());
 	const stop = feed.onChange((next) => {
@@ -83,6 +90,7 @@ export function mirrorDay(
 		scope,
 		preferences,
 		threads,
+		feedback,
 		close: () => {
 			stop();
 			feed.dispose();
@@ -91,6 +99,7 @@ export function mirrorDay(
 			linear?.close();
 			preferences?.close();
 			threads?.close();
+			feedback?.close();
 		},
 	};
 }
