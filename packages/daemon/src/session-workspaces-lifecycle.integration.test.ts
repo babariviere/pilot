@@ -2,10 +2,11 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
+import { ArtifactStore } from "@pilot/artifacts";
 import type { SessionSummary } from "@pilot/protocol";
 import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.ts";
 import { Conflict } from "./errors.ts";
@@ -84,6 +85,35 @@ test("manual reclaim is immediate, retains history/artifacts, and restart restor
 	assert.equal(restored.workspaceCleanupError, undefined);
 	assert.equal(f.workers.length, before, "restoration never starts a worker");
 	await f.assertSourceUnchanged();
+});
+
+test("NSH scratch survives archive and idle reclaim; explicit cleanup drains worker and keeps published revisions", async (t) => {
+	const f = await fixture(t);
+	const created = await f.spawn();
+	const directory = join(f.home, "sessions", created.id);
+	const scratch = join(directory, "scratch", "artifacts");
+	await mkdir(scratch, { recursive: true });
+	const path = join(scratch, "unpublished.tsx");
+	await writeFile(path, "export default () => null;");
+	const store = new ArtifactStore(directory, { sessionId: created.id, projectId: f.project.id });
+	const published = await store.create({
+		title: "Saved",
+		kind: "nsh",
+		source: "export default () => 'saved';",
+		entry: "published.tsx",
+	});
+	await f.sessions.archive(created.id);
+	assert.ok(existsSync(path), "archive is not scratch cleanup");
+	const meta = f.sessions["metas"].get(created.id)!;
+	meta.archivedAt = Date.now() - 31 * DAY;
+	await f.sessions["save"](meta);
+	await f.sessions.reclaimWorkspace(created.id, Date.now());
+	assert.ok(existsSync(path), "automatic retention reclaim does not remove source");
+	await f.sessions.reclaimWorkspace(created.id);
+	assert.equal(existsSync(scratch), false);
+	assert.equal(f.workers[0]?.closed, true);
+	assert.equal((await f.sessions.artifact(created.id, published.id, 1)).source, published.source);
+	assert.equal((await f.sessions.artifact(created.id, published.id, 1)).nsh?.rendering, "unsupported");
 });
 
 test("ignored files do not block reclamation, while tracked edits survive restore", async (t) => {

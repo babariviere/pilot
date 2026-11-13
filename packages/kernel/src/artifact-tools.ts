@@ -5,6 +5,7 @@ import {
 	ArtifactNotFound,
 	type ArtifactStore,
 	assertArtifactWriteKind,
+	captureNshSource,
 	imageSize,
 	loadArtifactImage,
 	MAX_IMAGE_SOURCE_BYTES,
@@ -23,8 +24,7 @@ import { StringEnum } from "./schema.ts";
 
 const MAX_SOURCE_BYTES = 512 * 1024;
 const library = StringEnum(["react", "react-dom", "mermaid", "echarts", "motion", "d3", "three"] as const);
-const kind = StringEnum(["html", "react", "image", "swiftui", "shader", "visual"] as const);
-const writeKind = StringEnum(["image", "shader"] as const);
+const kind = StringEnum(["html", "react", "image", "swiftui", "shader", "visual", "nsh"] as const);
 const visualWriteKind = StringEnum(["image", "shader", "visual"] as const);
 const writeProperties = {
 	title: Type.String({ minLength: 1, maxLength: 160, description: "Short human-readable artifact title." }),
@@ -79,6 +79,10 @@ export interface ArtifactToolOptions {
 	ask?: boolean;
 	/** Offer kind "visual" (native visuals), which the app renders. On by default; PILOT_VISUAL_ARTIFACTS=0 hides it. */
 	visuals?: boolean;
+	/** Trusted host session root, never a caller-supplied path. Not offered in Ask. */
+	nshSessionDirectory?: string;
+	/** Host-owned capture binding, never an executable/path selected by an artifact request. */
+	captureNsh?: (sourcePath: string, signal?: AbortSignal) => Promise<{ source: string; entry: string }>;
 }
 
 function checkSource(write: ArtifactWrite): void {
@@ -107,6 +111,10 @@ function dataResult<T extends JsonValue>(data: T): AgentToolResult<T> {
 export function createArtifactTools(options: ArtifactToolOptions): ToolDefinition[] {
 	const { store } = options;
 	const visuals = options.visuals ?? process.env.PILOT_VISUAL_ARTIFACTS !== "0";
+	const nsh = !!options.nshSessionDirectory && !options.ask;
+	const offeredKinds: ArtifactWrite["kind"][] = ["image", "shader"];
+	if (visuals) offeredKinds.push("visual");
+	if (nsh) offeredKinds.push("nsh");
 	const actions = ["create", "update", "get", "list"] as const;
 	const published = async (value: ArtifactRevision, warnings: string[] = []) => {
 		const artifact = {
@@ -154,7 +162,7 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 - update: replace the complete document by id, not a patch; expectedRevision rejects stale updates.
 - get: read source and metadata by id, optionally at a historical revision. Local artifacts read latest when revision is omitted. Linked mission/task references are read-only: omission uses the pinned revision, or latest for unpinned links; conflicting pins require an explicit linked revision.
 - list: list current session summaries without source.
-Source must be self-contained and offline. Text source: 512 KiB UTF-8 max; images: 16 MiB decoded max.
+${nsh ? `NSH: kind nsh captures one sourcePath (.tsx basename or absolute path in ${JSON.stringify(`${options.nshSessionDirectory}/scratch/artifacts`)}). Do not pass inline source. Saved UTF-8 bytes are immutable and survive scratch cleanup; this is source publication, not a compiled/accepted preview. No local/remote imports or assets are loaded at capture; runtime may refuse unsupported code.\n` : ""}Source must be self-contained and offline. Text source: 512 KiB UTF-8 max; images: 16 MiB decoded max.
 ${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Images accept local PNG, JPEG, GIF or WebP paths, or inline data URLs; never remote URLs."}
 HTML, React and SwiftUI are read-only historical kinds, not supported for publication or preview.
 Shaders are Shadertoy-style GLSL (mainImage); publication fails with line-numbered compile errors.
@@ -168,7 +176,19 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 				action: StringEnum(actions),
 				id: Type.Optional(Type.String({ description: "Artifact ID, required for get and update." })),
 				title: Type.Optional(writeProperties.title),
-				kind: Type.Optional(visuals ? visualWriteKind : writeKind),
+				kind: Type.Optional(StringEnum(offeredKinds)),
+				...(nsh
+					? {
+							sourcePath: Type.Optional(
+								Type.String({
+									minLength: 1,
+									maxLength: 4096,
+									description:
+										"NSH only: one .tsx in this session's scratch/artifacts. Captured, never live-linked.",
+								}),
+							),
+						}
+					: {}),
 				source: Type.Optional(
 					options.ask
 						? Type.String({
@@ -199,6 +219,16 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 						libraryVersions: Type.Optional(Type.Record(Type.String(), Type.String())),
 						data: Type.Optional(Type.Unknown()),
 						visual: Type.Optional(Type.Object({ api: Type.Integer(), engine: Type.String() })),
+						nsh: Type.Optional(
+							Type.Object({
+								api: Type.Literal(1),
+								runtime: Type.Literal("nsh 0.5.0"),
+								entry: Type.String(),
+								sourceSha256: Type.String(),
+								sourceBytes: Type.Integer(),
+								rendering: Type.Literal("unsupported"),
+							}),
+						),
 					}),
 				}),
 				Type.Object({ artifacts: Type.Array(Type.Object(summaryProperties)) }),
@@ -232,6 +262,7 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 								...(value.libraryVersions ? { libraryVersions: { ...value.libraryVersions } } : {}),
 								...(value.data !== undefined ? { data: value.data } : {}),
 								...(value.visual ? { visual: { api: value.visual.api, engine: value.visual.engine } } : {}),
+								...(value.nsh ? { nsh: { ...value.nsh } } : {}),
 							},
 						});
 					}
@@ -245,16 +276,30 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 							throw new Error(
 								"Visual artifacts require source: String(visual). Tool arguments are JSON, so a function passed directly arrives empty",
 							);
-						if (title === undefined || kind === undefined || source === undefined)
+						if (kind === "nsh" && (!nsh || options.ask))
+							throw new Error("NSH file capture is unavailable in this session");
+						if (kind !== "nsh" && "sourcePath" in params) throw new Error("Only NSH artifacts take sourcePath");
+						if (title === undefined || kind === undefined || (source === undefined && kind !== "nsh"))
 							throw new Error(`Artifact ${action} requires title, kind and source`);
 						if (libraries?.length) throw new Error("New artifacts do not use libraries");
 						const write: ArtifactWrite = {
 							title,
 							kind,
-							source,
+							source: source ?? "",
 							...(libraries === undefined ? {} : { libraries: [] }),
 							...("data" in params && params.data !== undefined ? { data: params.data as ArtifactData } : {}),
 						};
+						if (kind === "nsh") {
+							if (source !== undefined || params.data !== undefined || typeof params.sourcePath !== "string")
+								throw new Error("NSH artifacts require sourcePath only, not source or data");
+							if (action === "update" && params.expectedRevision === undefined)
+								throw new Error("NSH updates require expectedRevision");
+							const captured = options.captureNsh
+								? await options.captureNsh(params.sourcePath, signal)
+								: await captureNshSource(options.nshSessionDirectory!, params.sourcePath, signal);
+							write.source = captured.source;
+							write.entry = captured.entry;
+						}
 						if (write.kind === "image") {
 							// Check before any filesystem image loader, including forged direct/nested calls.
 							if (options.ask && !write.source.startsWith("data:image/"))
@@ -267,10 +312,22 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 
 						if (action === "create") {
 							const value = await store.create(write, signal);
-							return published(value);
+							return published(
+								value,
+								write.kind === "nsh"
+									? [
+											"Source captured. Compilation and interactive rendering are not qualified; preview remains unsupported.",
+										]
+									: [],
+							);
 						}
 						const value = await store.update(id!, write, params.expectedRevision, signal);
-						const warnings: string[] = [];
+						const warnings: string[] =
+							write.kind === "nsh"
+								? [
+										"Source captured. Compilation and interactive rendering are not qualified; preview remains unsupported.",
+									]
+								: [];
 						if (params.expectedRevision === undefined)
 							warnings.unshift(
 								`Updated without expectedRevision, so a concurrent change could have been replaced. Pass expectedRevision (${value.revision}) next time.`,

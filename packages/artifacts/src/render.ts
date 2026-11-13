@@ -1,21 +1,22 @@
-/** Publication accepts native visuals, images and the existing standalone shader contract only.
+/** Publication accepts native visuals, images, shaders and inert captured NSH source.
  * Historical kinds remain read DTOs; nothing here compiles or executes their source. */
-import type { ArtifactLibrary, ArtifactVisual, ArtifactWrite, ArtifactWriteKind } from "@pilot/protocol";
+import type { ArtifactLibrary, ArtifactNsh, ArtifactVisual, ArtifactWrite, ArtifactWriteKind } from "@pilot/protocol";
 import { MAX_IMAGE_SOURCE_BYTES, validateImageSource } from "./image.ts";
+import { nshSource } from "./nsh-source.ts";
 import { assertShaderCompiles, shaderDocumentBody, validateShaderSource } from "./shader.ts";
 import { checkVisual, VISUAL_FALLBACK_BODY, validateVisualWrite } from "./visual/index.ts";
 
 export function assertArtifactWriteKind(kind: unknown): asserts kind is ArtifactWriteKind {
-	if (kind !== "image" && kind !== "visual" && kind !== "shader")
+	if (kind !== "image" && kind !== "visual" && kind !== "shader" && kind !== "nsh")
 		throw new Error(
-			"Unsupported artifact kind. Supported kinds: image, visual, shader. Legacy HTML, React and SwiftUI artifacts are read-only",
+			"Unsupported artifact kind. Supported kinds: image, visual, shader, nsh. Legacy HTML, React and SwiftUI artifacts are read-only",
 		);
 }
 
 export const MAX_SOURCE_BYTES = 512 * 1024;
 
 type ValidatedWrite = ArtifactWrite & { libraries: ArtifactLibrary[] };
-type PreparedArtifact = { html: string; libraries: ArtifactLibrary[]; visual?: ArtifactVisual };
+type PreparedArtifact = { html: string; libraries: ArtifactLibrary[]; visual?: ArtifactVisual; nsh?: ArtifactNsh };
 
 export function validateArtifact(input: ArtifactWrite): ValidatedWrite {
 	return validateWrite(input).write;
@@ -36,6 +37,8 @@ function validateWrite(input: ArtifactWrite): { write: ValidatedWrite; dataJSON?
 		);
 	if (write.kind === "image") validateImageSource(write.source);
 	if (write.kind === "shader") validateShaderSource(write.source);
+	if (write.kind === "nsh") nshSource(write.source, write.entry ?? "");
+	else if (write.entry !== undefined) throw new Error("Only NSH artifacts take entry");
 	const dataJSON = write.kind === "visual" ? validateVisualWrite(write.source, write.data) : undefined;
 	if (write.kind !== "visual" && write.data !== undefined) throw new Error("Only visual artifacts take data");
 	if (write.libraries !== undefined && !Array.isArray(write.libraries))
@@ -67,6 +70,9 @@ export async function prepareArtifactWrite(
 ): Promise<{ write: ValidatedWrite; prepared: PreparedArtifact }> {
 	const { write, dataJSON } = validateWrite(input);
 	options.signal?.throwIfAborted();
+	// Saving source is independent of compilation/execution. Never synthesize HTML from authored TSX.
+	if (write.kind === "nsh")
+		return { write, prepared: { html: "", libraries: [], nsh: nshSource(write.source, write.entry ?? "") } };
 	// Keep existing shader checks; this does not enable shader rendering in Next.
 	if (write.kind === "shader") await assertShaderCompiles(write.source, options.signal);
 	const visual =

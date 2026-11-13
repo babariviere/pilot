@@ -4399,7 +4399,8 @@ ${run.excerpt}`,
 					if (!meta.workspace?.shared) throw new Conflict("Only shared jj workspaces can be reclaimed");
 					if (hasActivePullRequest(meta))
 						throw new Conflict("Workspaces with an open pull request cannot be reclaimed");
-					if (meta.workspaceRecovery?.phase === "reclaimed" && !existsSync(meta.cwd)) return this.summary(meta);
+					const alreadyReclaimed = meta.workspaceRecovery?.phase === "reclaimed" && !existsSync(meta.cwd);
+					if (alreadyReclaimed && staleBefore !== undefined) return this.summary(meta);
 					this.assertWorkspaceQuiescent(meta);
 					try {
 						const worker = this.workers.get(id);
@@ -4426,7 +4427,14 @@ ${run.excerpt}`,
 							await this.save(meta);
 						}
 						this.assertWorkspaceQuiescent(meta);
-						await this.sharedWorkspaces.remove(meta.cwd, meta.workspace.shared, meta.workspaceRecovery);
+						if (!alreadyReclaimed)
+							await this.sharedWorkspaces.remove(meta.cwd, meta.workspace.shared, meta.workspaceRecovery);
+						// Explicit workspace cleanup only, after worker/capture input release. No idle,
+						// archive or restart deletion. Published revisions are outside scratch.
+						if (staleBefore === undefined) {
+							this.assertWorkspaceQuiescent(meta);
+							await rm(join(this.dir(id), "scratch"), { recursive: true, force: true });
+						}
 						meta.workspaceRecovery.phase = "reclaimed";
 						meta.workspaceReclaimedAt ??= Date.now();
 						delete meta.workspaceCleanupError;
@@ -6736,7 +6744,6 @@ ${run.excerpt}`,
 					await this.missions?.whenDurable?.();
 				this.workspaceCleanupBackoff.delete(id);
 				this.workspaceAudits.delete(id);
-				if (archived) await rm(join(this.dir(id), "scratch"), { recursive: true, force: true });
 				this.emit(meta);
 				return this.summary(meta);
 			});

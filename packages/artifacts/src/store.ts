@@ -23,6 +23,7 @@ function artifactSummary(value: ArtifactRevision): ArtifactSummary {
 		libraryVersions: _versions,
 		data: _data,
 		visual: _visual,
+		nsh: _nsh,
 		...rest
 	} = value;
 	return rest;
@@ -115,6 +116,7 @@ export class ArtifactStore {
 			const latest = await this.summary(id);
 			if (revision !== undefined && revision > latest.revision)
 				throw new ArtifactNotFound("Unknown artifact revision");
+			if (latest.kind === "nsh") return (await this.readCapturedRevision(id, revision ?? latest.revision)).artifact;
 			const value = JSON.parse(
 				await readFile(join(this.directory, id, `${revision ?? latest.revision}.json`), "utf8"),
 			) as ArtifactRevision;
@@ -183,9 +185,13 @@ export class ArtifactStore {
 	): Promise<ArtifactRevision> {
 		return this.serialize(async () => {
 			assertArtifactWriteKind(write.kind);
+			if (write.kind === "nsh" && expectedRevision === undefined)
+				throw new Error("NSH updates require expectedRevision");
 			const previous = await this.get(id);
 			// Legacy identities stay read-only, even if an old caller changes the requested kind.
 			assertArtifactWriteKind(previous.kind);
+			if ((previous.kind === "nsh" || write.kind === "nsh") && previous.kind !== write.kind)
+				throw new Error("NSH artifact identity cannot change kind");
 			if (expectedRevision !== undefined && previous.revision !== expectedRevision)
 				throw new Error(`Artifact revision conflict: expected ${expectedRevision}, latest is ${previous.revision}`);
 			return this.publish(id, write, previous, signal);
@@ -222,6 +228,11 @@ export class ArtifactStore {
 			...(visual ? { data: write.data ?? null, visual } : {}),
 		};
 		const directory = join(this.directory, id);
+		if (
+			artifact.kind === "nsh" &&
+			Buffer.byteLength(JSON.stringify(artifact)) > STORED_REVISION_LIMITS.containerBytes
+		)
+			throw new Error("NSH revision exceeds the 1 MiB stored-container limit");
 		await mkdir(directory, { recursive: true, mode: 0o700 });
 		await atomicJson(
 			join(directory, `${artifact.revision}.json`),

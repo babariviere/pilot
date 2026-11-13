@@ -27,7 +27,7 @@ import {
 	type SubmissionId,
 	UsageDoc,
 } from "@earendil-works/pi-durable";
-import { ArtifactStore } from "@pilot/artifacts";
+import { ArtifactStore, artifactHostAvailable, ensureArtifactScratch } from "@pilot/artifacts";
 import type {
 	AgentEvent,
 	DeliveryMode,
@@ -644,8 +644,20 @@ export class KernelSession {
 				sessionId: spec.sessionId,
 				projectId: spec.projectId,
 			});
+			let nshAvailable = !spec.pilot?.ask && (process.platform === "linux" || (await artifactHostAvailable()));
+			if (nshAvailable) {
+				try {
+					await ensureArtifactScratch(dirname(spec.storageDir));
+				} catch {
+					nshAvailable = false;
+					console.warn(
+						"pilot: artifact source capture is unavailable; session continues without file publication",
+					);
+				}
+			}
 			const artifactOptions: ArtifactToolOptions = {
 				store: artifacts,
+				...(nshAvailable ? { nshSessionDirectory: dirname(spec.storageDir) } : {}),
 				readReference: hooks.readArtifactReference,
 				onArtifactsChanged: hooks.onArtifactsChanged,
 				onArtifactPublished: async (artifact, image) => {

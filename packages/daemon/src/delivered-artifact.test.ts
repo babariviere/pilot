@@ -183,7 +183,7 @@ test("missing, oversized, redacted and corrupt captured revisions never fall bac
 	assert.deepEqual((await (await f.read()).json()).content, { state: "unavailable", reason: "invalid" });
 });
 
-for (const kind of ["html", "react", "swiftui", "shader", "visual", "image"] as const) {
+for (const kind of ["html", "react", "swiftui", "shader", "visual", "image", "nsh"] as const) {
 	test(`saved ${kind} is inert text or honestly unavailable, never a rendered preview`, async (t) => {
 		const f = await fixture(t);
 		f.store.linkArtifact(f.mission.id, {
@@ -194,10 +194,34 @@ for (const kind of ["html", "react", "swiftui", "shader", "visual", "image"] as 
 			kind,
 			revision: 1,
 		});
-		await writeFile(join(f.directory, "1.json"), JSON.stringify({ ...f.artifact, kind }));
+		await writeFile(
+			join(f.directory, "1.json"),
+			JSON.stringify({
+				...f.artifact,
+				kind,
+				...(kind === "nsh"
+					? {
+							html: "",
+							nsh: {
+								api: 1,
+								runtime: "nsh 0.5.0",
+								entry: "Artifact.tsx",
+								sourceSha256: createHash("sha256").update(f.artifact.source).digest("hex"),
+								sourceBytes: Buffer.byteLength(f.artifact.source),
+								rendering: "unsupported",
+							},
+						}
+					: {}),
+			}),
+		);
+		const before = f.stats();
 		const value = await (await f.read()).json();
 		assert.equal(value.rendering, "unsupported");
 		assert.equal(value.metadata.kind, kind);
 		assert.equal(value.content.state, kind === "image" ? "unavailable" : "text");
+		if (kind === "nsh") {
+			assert.equal(value.content.source, f.artifact.source);
+			assert.deepEqual(f.stats(), before);
+		}
 	});
 }

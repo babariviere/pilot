@@ -17,6 +17,11 @@ name = "pilot-desktop"
 path = "src/main.rs"
 required-features = ["macos-host"]
 
+[[bin]]
+name = "pilot-artifact-host"
+path = "src/bin/artifact_host.rs"
+required-features = ["artifact-host"]
+
 [[test]]
 name = "application_owner"
 path = "tests/application_owner.rs"
@@ -28,6 +33,7 @@ required-features = ["macos-host"]
 # plain (macOS-only) dependency: the NSH CLI resolves every nsh crate's
 # source from Cargo's resolve, which leaves an inactive optional one out.
 macos-host = []
+artifact-host = []
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = "=0.3.1"
@@ -45,6 +51,8 @@ nsh-engine = "=0.5.0"
 # pins the archive checksums.
 nsh-core = "=0.5.0"
 nsh-base = "=0.5.0"
+nsh-bundler = { version = "=0.5.0", default-features = false }
+oxc = { version = "=0.153.0", features = ["ast_visit"] }
 nsh-updater = "=0.5.0"
 # The daemon's v1 Day contracts, read in Rust only. Same versions NSH locks.
 serde = { version = "1", features = ["derive"] }

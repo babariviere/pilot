@@ -839,7 +839,7 @@ export interface RemoteBranchList {
 
 /** Historical browser-library provenance. Not available for new publications. */
 export type ArtifactLibrary = "react" | "react-dom" | "mermaid" | "echarts" | "motion" | "d3" | "three";
-export type ArtifactKind = "html" | "react" | "image" | "swiftui" | "shader" | "visual";
+export type ArtifactKind = "html" | "react" | "image" | "swiftui" | "shader" | "visual" | "nsh";
 
 /** GET /api/artifacts/:id resolves an unpinned artifact link to its owning session and latest metadata. */
 export interface ArtifactSummary {
@@ -864,6 +864,17 @@ export interface ArtifactRevision extends ArtifactSummary {
 	data?: ArtifactData;
 	/** Visuals only: the engine and API the revision was checked with, and the pre-check report. */
 	visual?: ArtifactVisual;
+	/** Captured single-file NSH source. This metadata grants no execution capability. */
+	nsh?: ArtifactNsh;
+}
+
+export interface ArtifactNsh {
+	api: 1;
+	runtime: "nsh 0.5.0";
+	entry: string;
+	sourceSha256: string;
+	sourceBytes: number;
+	rendering: "unsupported";
 }
 
 /** A visual revision's runtime versions and publish-time check (docs/technical/native-visuals.md). */
@@ -904,7 +915,7 @@ export interface ArtifactVisualShader {
 }
 
 /** Authoring deliberately excludes legacy kinds retained by ArtifactKind for reads. */
-export type ArtifactWriteKind = "image" | "shader" | "visual";
+export type ArtifactWriteKind = "image" | "shader" | "visual" | "nsh";
 
 export interface ArtifactWrite {
 	title: string;
@@ -914,6 +925,8 @@ export interface ArtifactWrite {
 	libraries?: ArtifactLibrary[];
 	/** Visuals only: any JSON value up to 1 MiB, passed to the function as `data`. */
 	data?: ArtifactData;
+	/** Host-captured basename for NSH provenance. Source bytes remain in source. */
+	entry?: string;
 }
 
 /** A JSON value. */

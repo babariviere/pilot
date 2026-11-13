@@ -2,6 +2,7 @@
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import type { ArtifactRevision } from "@pilot/protocol";
+import { nshSource } from "./nsh-source.ts";
 
 export const STORED_REVISION_LIMITS = Object.freeze({ containerBytes: 1024 * 1024, pointerBytes: 4096 });
 export interface StoredVisualRevision {
@@ -74,7 +75,7 @@ export function parseStoredArtifactRevision(
 		artifact.projectId !== expected.projectId
 	)
 		throw new Error("Stored artifact identity or revision mismatch");
-	if (!["html", "react", "image", "swiftui", "shader", "visual"].includes(artifact.kind))
+	if (!["html", "react", "image", "swiftui", "shader", "visual", "nsh"].includes(artifact.kind))
 		throw new Error("Unsupported stored artifact kind");
 	if (
 		typeof artifact.source !== "string" ||
@@ -86,6 +87,18 @@ export function parseStoredArtifactRevision(
 		!Array.isArray(artifact.libraries)
 	)
 		throw new Error("Unsupported stored artifact representation");
+	if (artifact.kind === "nsh") {
+		const actual = nshSource(artifact.source, artifact.nsh?.entry ?? "");
+		if (
+			!artifact.nsh ||
+			Object.keys(actual).some(
+				(key) => actual[key as keyof typeof actual] !== artifact.nsh?.[key as keyof typeof actual],
+			) ||
+			artifact.html !== "" ||
+			artifact.libraries.length
+		)
+			throw new Error("Unsupported stored NSH representation");
+	}
 	return { bytes, artifact };
 }
 

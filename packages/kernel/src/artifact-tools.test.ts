@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { JsonValue } from "@earendil-works/chord";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
+import { ArtifactNotFound, ArtifactStore, captureNshSource, ensureArtifactScratch } from "@pilot/artifacts";
 import type { ArtifactRevision, ArtifactWrite } from "@pilot/protocol";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
@@ -538,4 +538,48 @@ test("updates without expectedRevision succeed with a warning", async () => {
 	assert.match(warnings[0] ?? "", /without expectedRevision.*\(3\)/);
 	const pinned = await f.call("update", { id: "artifact-1", expectedRevision: 2, ...write });
 	assert.ok(!("warnings" in (pinned.structuredContent as object)));
+});
+
+test("NSH tool captures only session scratch and keeps exact pins without executing source", {
+	skip:
+		process.platform === "darwin" && !process.env.NSH_ARTIFACT_TEST_HOST
+			? "Run the focused Day artifact-source wrapper"
+			: false,
+}, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "nsh-tool-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const host = process.env.NSH_ARTIFACT_TEST_HOST;
+	const directory = await ensureArtifactScratch(root, host);
+	await writeFile(join(directory, "view.tsx"), "throw Error('never executed at publication');\r\n");
+	const store = new ArtifactStore(root, { sessionId: "owner" });
+	const f = fixture({
+		store,
+		nshSessionDirectory: root,
+		captureNsh: (path, signal) => captureNshSource(root, path, signal, host),
+	});
+	const result = await f.call("create", { title: "Preview", kind: "nsh", sourcePath: "view.tsx" });
+	const data = result.structuredContent as { artifact: { id: string; revision: number }; warnings: string[] };
+	assert.equal(data.artifact.revision, 1);
+	assert.match(data.warnings.join(), /unsupported/);
+	assert.equal((await store.get(data.artifact.id)).source, "throw Error('never executed at publication');\r\n");
+	await assert.rejects(
+		f.call("update", { id: data.artifact.id, title: "Next", kind: "nsh", sourcePath: "view.tsx" }),
+		/expectedRevision/,
+	);
+	await assert.rejects(f.call("create", { title: "No", kind: "nsh", source: "inline" }), /sourcePath only/);
+	await assert.rejects(f.call("create", { title: "No", kind: "nsh", sourcePath: "../outside.tsx" }), /sourcePath/);
+	await assert.rejects(
+		fixture({ store, nshSessionDirectory: root, ask: true }).call("create", {
+			title: "No",
+			kind: "nsh",
+			sourcePath: "view.tsx",
+		}),
+		/unavailable/,
+	);
+	assert.equal((await store.list()).length, 1);
+	const read = await f.call("get", { id: data.artifact.id, revision: 1 });
+	assert.equal(
+		(read.structuredContent as { artifact: { nsh: { rendering: string } } }).artifact.nsh.rendering,
+		"unsupported",
+	);
 });

@@ -87,6 +87,7 @@ jobs:
           apps/day/scripts/cargo test --locked --manifest-path apps/day/native/Cargo.toml --features macos-host --test update_host official_root_ -- --test-threads=1
           # Private subprocess probes, not native acceptance or sandbox qualification.
           apps/day/scripts/cargo test --locked --manifest-path apps/day/native/Cargo.toml --test artifact_feasibility -- --test-threads=1
+          node apps/day/scripts/test-artifact-source.mjs
           # NSH accepts one path per invocation. Native.test.tsx needs a visible target.
           for file in App Plan Intake Update; do apps/day/nsh.sh test "$file.test.tsx"; done
       - name: Compile shared native helpers without the removed Swift GUI

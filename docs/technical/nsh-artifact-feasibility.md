@@ -1,8 +1,9 @@
 # Agent-authored NSH artifacts: bounded feasibility
 
 Status: source audit and isolated probes, **not a production artifact runtime**.
-No publication API, stored kind, schema, viewer, live effect or capability was
-added. The existing Day source reader stays inert. Focused local execution on
+Those checkpoints added no publication API, stored kind or viewer. The later
+[captured source foundation](nsh-artifact-source.md) keeps execution refused.
+The existing Day source reader stays inert. Focused local execution on
 macOS arm64 now supplies the limited observations below. Source findings and
 headless results are **not production isolation or native acceptance**.
 

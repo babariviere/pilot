@@ -93,7 +93,7 @@ pub(super) async fn read(t: &Transport, request: &Request) -> Result<Value, Erro
         .ok_or(Error::Invalid)?;
     if !matches!(
         kind,
-        "html" | "react" | "swiftui" | "shader" | "visual" | "image"
+        "html" | "react" | "swiftui" | "shader" | "visual" | "image" | "nsh"
     ) {
         return Err(Error::Invalid);
     }
