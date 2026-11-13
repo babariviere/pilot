@@ -31,8 +31,10 @@ impl Fixture {
                     daemon_id: "daemon-a".into(),
                     lineage_id: "lineage-a".into(),
                 },
-                project_id: "project-a".into(),
-                project_path: root.to_str().unwrap().into(),
+                project: Some(pilot_day_native::host::Project {
+                    project_id: "project-a".into(),
+                    project_path: root.to_str().unwrap().into(),
+                }),
             },
             root,
             clock: Arc::new(Mutex::new(Ok(LocalDay {

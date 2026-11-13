@@ -90,7 +90,7 @@ pub(super) async fn read(t: &Transport, shared: &Shared, epoch: u64) -> Result<(
     let result = async {
         t.gate(false).await?;
         let value = t.planning_inventory().await?;
-        if value["projectId"] != t.source.project_id {
+        if value["projectId"] != t.source.project()?.project_id {
             return Err(Error::Identity);
         }
         plan_host::inventory_rows(&value)?;

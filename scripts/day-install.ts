@@ -20,9 +20,10 @@ export interface Selection {
 	port: number;
 	daemonId: string;
 	lineageId: string;
-	projectId: string;
-	projectPath: string;
-	planningModel: string;
+	/** Historical selection fields are kept for exact install-attempt recovery, not launch authority. */
+	projectId?: string;
+	projectPath?: string;
+	planningModel?: string;
 	build: string;
 	operationId: string;
 	savedState: string;
@@ -205,8 +206,7 @@ export async function preflight(s: Selection, verify = verifyApp) {
 		typeof s.savedState === "string" && isAbsolute(s.savedState),
 		"Select the existing private saved GUI state file.",
 	);
-	for (const key of ["app", "trustFrom", "sourceProfile", "targetProfile", "projectPath"] as const)
-		await canonical(s[key]);
+	for (const key of ["app", "trustFrom", "sourceProfile", "targetProfile"] as const) await canonical(s[key]);
 	requireThat(
 		s.sourceProfile === s.targetProfile,
 		"Reuse the same canonical profile. Database copying/conversion is not supported.",
@@ -215,13 +215,9 @@ export async function preflight(s: Selection, verify = verifyApp) {
 		/^[a-f0-9]{40}$/.test(s.source) && /^[a-f0-9]{64}$/.test(s.binarySha256),
 		"Pin the full source commit and sealed executable SHA-256.",
 	);
-	for (const id of [s.daemonId, s.lineageId, s.projectId])
+	for (const id of [s.daemonId, s.lineageId])
 		requireThat(typeof id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(id), "Invalid native identity.");
 	requireThat(Number.isInteger(s.port) && s.port > 0 && s.port <= 65535, "Select the existing daemon port.");
-	requireThat(
-		typeof s.planningModel === "string" && s.planningModel.trim() && s.planningModel.length <= 256,
-		"Select a planning model for connected daily use.",
-	);
 	requireThat(
 		isAbsolute(s.installDirectory) && resolve(s.installDirectory) === s.installDirectory,
 		"Use an absolute installation directory.",
@@ -233,9 +229,9 @@ export async function preflight(s: Selection, verify = verifyApp) {
 		st.isDirectory() && st.uid === process.getuid?.() && !(st.mode & 0o022),
 		"Installation parent must be yours and not group/world writable.",
 	);
-	for (const protectedPath of [s.app, s.trustFrom, s.sourceProfile, s.projectPath]) {
+	for (const protectedPath of [s.app, s.trustFrom, s.sourceProfile]) {
 		const rel = relative(protectedPath, s.installDirectory);
-		requireThat(rel.startsWith("../"), "Install outside the app, data profile and project.");
+		requireThat(rel.startsWith("../"), "Install outside the app and data profile.");
 	}
 	await verify(s);
 	const hello = await get(s, "/api/hello");
@@ -247,11 +243,6 @@ export async function preflight(s: Selection, verify = verifyApp) {
 			hello.minimumClientProtocolVersion <= 1 &&
 			hello.capabilities?.independentExecution === true,
 		"Existing daemon lacks the base native protocol. Its supported migration path must be verified first.",
-	);
-	const project = await get(s, `/api/projects/${s.projectId}`);
-	requireThat(
-		project.id === s.projectId && project.path === s.projectPath,
-		"Connected project differs from selection.",
 	);
 	return s;
 }
@@ -268,14 +259,8 @@ export function launcher(s: Selection) {
 		s.daemonId,
 		"--lineage-id",
 		s.lineageId,
-		"--project-id",
-		s.projectId,
-		"--project-path",
-		s.projectPath,
 		"--journal",
 		join(s.installDirectory, "window-journal"),
-		"--planning-model",
-		s.planningModel,
 	];
 	return `#!/bin/bash\nset -euo pipefail\n# Native bootstrap rechecks trust, identity and credentials on every launch.\nexec ${args.map(quote).join(" ")}\n`;
 }

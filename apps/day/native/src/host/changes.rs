@@ -185,7 +185,7 @@ impl Record {
             || !valid_id(self.id())
             || !valid_id(self.snapshot())
             || !valid_id(&self.target.session_id)
-            || self.target.project_id != self.source.project_id
+            || self.target.project_id != self.source.project()?.project_id
             || !matches!(self.action.as_str(), "snooze" | "resume")
             || self.command["expectedRevision"]
                 .as_u64()
@@ -274,11 +274,14 @@ struct Inventory {
 
 async fn inventory(t: &Transport) -> Result<Inventory, Error> {
     let i: Inventory = serde_json::from_value(
-        t.get(&format!("/api/projects/{}/review", t.source.project_id))
-            .await?,
+        t.get(&format!(
+            "/api/projects/{}/review",
+            t.source.project()?.project_id
+        ))
+        .await?,
     )
     .map_err(|_| Error::Invalid)?;
-    if i.project_id != t.source.project_id {
+    if i.project_id != t.source.project()?.project_id {
         return Err(Error::Identity);
     }
     if i.more || i.chats.len() > MAX_CHATS {
@@ -302,7 +305,7 @@ async fn history(t: &Transport, row: &c::ChangeRow) -> Result<c::History, Error>
             "{}/{}/history?expectedProjectId={}",
             root(t, &row.target.session_id),
             row.target.snapshot_id,
-            t.source.project_id
+            t.source.project()?.project_id
         ))
         .await?;
     let snapshot = &raw["snapshot"];
@@ -377,7 +380,7 @@ async fn read(t: &Transport, shared: &Shared, epoch: u64) -> Result<(), Error> {
                 .get(&format!(
                     "{}?view=changes&expectedProjectId={}&after={after}",
                     root(t, &chat.id),
-                    t.source.project_id
+                    t.source.project()?.project_id
                 ))
                 .await?;
             budget(&v, &mut bytes, &mut count)?;
@@ -393,7 +396,7 @@ async fn read(t: &Transport, shared: &Shared, epoch: u64) -> Result<(), Error> {
             }
             for entry in &page.changes {
                 if let c::PageEntry::Row(r) = entry
-                    && (r.target.project_id != t.source.project_id
+                    && (r.target.project_id != t.source.project()?.project_id
                         || r.target.session_id != chat.id
                         || r.target.snapshot_id != r.comparison.snapshot_id
                         || !valid_id(&r.target.snapshot_id)
@@ -439,7 +442,7 @@ async fn read(t: &Transport, shared: &Shared, epoch: u64) -> Result<(), Error> {
             }
             for entry in &page.requests {
                 if let c::RequestEntry::Row(r) = entry
-                    && (r.session_id != chat.id || r.project_id != t.source.project_id)
+                    && (r.session_id != chat.id || r.project_id != t.source.project()?.project_id)
                 {
                     return Err(Error::Identity);
                 }
@@ -545,7 +548,7 @@ async fn open(t: &Transport, shared: &Shared, epoch: u64, snapshot: &str) -> Res
         .get(&format!(
             "{}/{snapshot}/patch?expectedProjectId={}",
             root(t, &row.target.session_id),
-            t.source.project_id
+            t.source.project()?.project_id
         ))
         .await
         .and_then(|v| serde_json::from_value::<c::RetainedPatch>(v).map_err(|_| Error::Invalid));

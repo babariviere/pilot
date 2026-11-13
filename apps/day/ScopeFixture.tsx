@@ -4,9 +4,12 @@
 // unreadable until the script says otherwise. Save and reopen restores only
 // the window's screen state, as an update or a close would.
 import { mount, Scroll, Text, View } from "nsh";
-import { TodayFeed } from "pilot-day/native";
+import { PlanFeed, TodayFeed } from "pilot-day/native";
+import { ScriptedChats } from "./chatDemo";
+import { mirrorChats } from "./chatFeed";
 import { mirrorDay } from "./day";
-import { MockDayScreen, openPlanning } from "./mockFeeds";
+import { MockDayScreen } from "./mockFeeds";
+import { mirrorPlanning } from "./planning";
 import { ScriptedScope } from "./scopeDemo";
 import { mirrorScope } from "./todayScope";
 import { Action } from "./ui";
@@ -15,7 +18,8 @@ import { captureView, restoreView, startFresh } from "./updateView";
 const feed = new TodayFeed("decisions");
 const scope = new ScriptedScope(() => feed.snapshot());
 const day = mirrorDay(feed, undefined, undefined, undefined, mirrorScope(scope));
-const plans = openPlanning();
+const chats = new ScriptedChats();
+const plans = mirrorPlanning(new PlanFeed(), mirrorChats(chats));
 
 mount(() => (
 	<View class="flex-1 bg-background">
@@ -26,6 +30,13 @@ mount(() => (
 			<View class="gap-1 px-6 py-3">
 				<Text testID="reads">{`Reads: ${scope.reads()} · Sent: ${day.today().notes.length}`}</Text>
 				<View class="flex-row flex-wrap gap-1">
+					<Action
+						label="Global window"
+						onPress={() => {
+							chats.current = null;
+							chats.publish();
+						}}
+					/>
 					<Action label="Scope unavailable" onPress={() => (scope.script.unavailable = true)} />
 					<Action label="Hold reads" onPress={() => (scope.script.hold = true)} />
 					<Action

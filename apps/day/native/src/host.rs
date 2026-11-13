@@ -1,8 +1,8 @@
 //! Trusted native Today host. Owns sockets, journal and admission outside the VM.
 //! Selection is explicit and immutable. Retire and join this host before replacing
 //! a profile/project; old replies can never populate the replacement's Desk.
-pub mod attention;
 pub(crate) mod artifacts;
+pub mod attention;
 mod bridge;
 mod changes;
 pub(crate) mod delivery;
@@ -57,8 +57,22 @@ pub struct Source {
     pub profile: PathBuf,
     pub port: u16,
     pub home: c::Home,
+    #[serde(flatten)]
+    pub project: Option<Project>,
+}
+
+/// Legacy project-bound windows keep their exact serialized source identity.
+/// A profile-only dashboard has no project, not an arbitrary placeholder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Project {
     pub project_id: String,
     pub project_path: String,
+}
+
+impl Source {
+    pub(crate) fn project(&self) -> Result<&Project, Error> {
+        self.project.as_ref().ok_or(Error::Unavailable)
+    }
 }
 
 /// Optional native root bindings. They share one journal and one close drain.
@@ -387,10 +401,11 @@ impl NativeHost {
         if source.port == 0
             || !source.profile.is_absolute()
             || !ledger.is_absolute()
-            || !std::path::Path::new(&source.project_path).is_absolute()
             || !valid_id(&source.home.daemon_id)
             || !valid_id(&source.home.lineage_id)
-            || !valid_id(&source.project_id)
+            || source.project.as_ref().is_some_and(|p| {
+                !valid_id(&p.project_id) || !std::path::Path::new(&p.project_path).is_absolute()
+            })
         {
             return Err(Error::Identity);
         }
@@ -1027,6 +1042,14 @@ async fn refresh(
     epoch: u64,
     detail: Option<&str>,
 ) -> Result<(), Error> {
+    if t.source.project.is_none() {
+        // The global dashboard reads project sections through TodayScope.
+        // Keep the profile stream and invalidations independent of any project.
+        t.profile_gate().await?;
+        shared.current(epoch)?;
+        shared.change(|_| ());
+        return Ok(());
+    }
     let selected = detail.map(str::to_owned).or_else(|| {
         shared
             .detail
@@ -1324,7 +1347,7 @@ async fn handle(
                 version: 1,
                 operation_id: uuid::Uuid::new_v4().to_string(),
                 home: t.source.home.clone(),
-                project_id: t.source.project_id.clone(),
+                project_id: t.source.project()?.project_id.clone(),
                 coordinator_session_id: coordinator,
                 expected_revision: before.revision,
                 action,
@@ -1489,7 +1512,7 @@ async fn watch(source: Source, shared: Arc<Shared>, invalidated: Sender<()>) {
     // No mutation frames, session subscriptions, focus or worker admission.
     let result = async {
         let t = Transport::new(source)?;
-        t.gate(false).await?;
+        t.profile_gate().await?;
         let stream = tokio::time::timeout(
             Duration::from_secs(5),
             tokio::net::TcpStream::connect(("127.0.0.1", t.source.port)),
@@ -1508,7 +1531,7 @@ async fn watch(source: Source, shared: Arc<Shared>, invalidated: Sender<()>) {
         .await
         .map_err(|_| Error::Offline)?
         .map_err(|_| Error::Offline)?;
-        t.gate(false).await?;
+        t.profile_gate().await?;
         shared.connected.store(true, Ordering::SeqCst);
         shared.invalidate(FreshnessState::Stale);
         let _ = invalidated.try_send(());

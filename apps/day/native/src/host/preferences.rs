@@ -82,8 +82,8 @@ pub(super) fn validate_record(source: &super::Source, op: &Value) -> Result<(), 
     if p.as_object().is_none_or(|o| o.len() != 5)
         || p["purpose"] != KIND
         || op["kind"] != KIND
-        || p["projectId"] != source.project_id
-        || op["targetId"] != source.project_id
+        || p["projectId"] != source.project()?.project_id
+        || op["targetId"] != source.project()?.project_id
         || op["bindingGeneration"] != 1
         || p["reason"] != REASON
         || p["expectedRevision"]
@@ -152,7 +152,7 @@ fn valid_list(v: &Value, project: &str) -> bool {
 /// The root's project's list and its name. A list for another project is never shown.
 pub(super) async fn read(t: &Transport) -> Result<Value, Error> {
     t.gate(false).await?;
-    let project = &t.source.project_id;
+    let project = &t.source.project()?.project_id;
     let list = t
         .get(&format!("/api/projects/{project}/preferences"))
         .await?;
@@ -224,7 +224,7 @@ fn valid_history(v: &Value, project: &str, before: Option<u64>) -> bool {
 async fn history(t: &Transport, request: &History) -> Result<Value, Error> {
     request.validate()?;
     t.gate(false).await?;
-    let project = &t.source.project_id;
+    let project = &t.source.project()?.project_id;
     let after = request
         .before
         .map(|n| format!("&before={n}"))
@@ -267,7 +267,7 @@ pub(super) async fn handle(
         Command::PreferencesSave(intent) => {
             intent.validate()?;
             // A draft for another project is refused, never saved to this one.
-            if intent.project_id != t.source.project_id {
+            if intent.project_id != t.source.project()?.project_id {
                 return Err(Error::Stale);
             }
             if journal
@@ -292,11 +292,15 @@ pub(super) async fn handle(
                     json!({"id":id,"text":e.text})
                 })
                 .collect();
-            let request = json!({"purpose":KIND,"projectId":t.source.project_id,
+            let request = json!({"purpose":KIND,"projectId":t.source.project()?.project_id,
                 "expectedRevision":intent.expected_revision,"entries":entries,"reason":REASON});
             let digest = planning::hash(&current["preferences"].to_string());
-            let mut record =
-                planning::record(&t.source, t.source.project_id.clone(), digest, request)?;
+            let mut record = planning::record(
+                &t.source,
+                t.source.project()?.project_id.clone(),
+                digest,
+                request,
+            )?;
             journal.save_planning(record.clone())?;
             if let Err(e) = t.local().and_then(|_| check()) {
                 record.not_sent = true;

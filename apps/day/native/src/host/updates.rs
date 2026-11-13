@@ -1315,8 +1315,10 @@ mod tests {
                 daemon_id: "daemon".into(),
                 lineage_id: "lineage".into(),
             },
-            project_id: "project".into(),
-            project_path: path.display().to_string(),
+            project: Some(crate::host::Project {
+                project_id: "project".into(),
+                project_path: path.display().to_string(),
+            }),
         };
         let mut record = Record {
             order: 1,

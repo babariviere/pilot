@@ -105,8 +105,9 @@ fn two_project_creation_saved_draft_lost_ack_and_exact_cold_lookup_never_retarge
     close(b);
     // Another Today project in the same home must still see/block this uncertainty.
     let mut source: Source = serde_json::from_value(f.info["source"].clone()).unwrap();
-    source.project_id = choice_b["projectId"].as_str().unwrap().into();
-    source.project_path = choice_b["projectPath"].as_str().unwrap().into();
+    source.project.as_mut().unwrap().project_id = choice_b["projectId"].as_str().unwrap().into();
+    source.project.as_mut().unwrap().project_path =
+        choice_b["projectPath"].as_str().unwrap().into();
     let b = Bridge::new(DayRoot::new(f.host_for(source)));
     let read = f.call(&b, "day.projects.read", json!({}));
     assert!(

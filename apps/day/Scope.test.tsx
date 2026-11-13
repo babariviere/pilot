@@ -25,7 +25,7 @@ test("Today starts on All projects: other projects' rows name their project, and
 	expect(app.shows("website · read only here")).toBe(true);
 	expect(app.shows("id:scope-needs-demo-website")).toBe(true);
 	expect(app.shows("Across your projects. Pilot could not read billing.")).toBe(true);
-	expect(app.shows("billing: Pilot could not reach billing's coordinator.")).toBe(true);
+	expect(app.shows("text:billing: Pilot could not reach billing's coordinator.")).toBe(true);
 	expect(app.shows("Landing page copy")).toBe(true);
 	expect(app.shows("Read only here. Open this project's window to check its results.")).toBe(true);
 	expect(sent(app)).toContain("Sent: 0");
@@ -74,5 +74,20 @@ test("the window keeps its scope across save and reopen, and sends nothing", asy
 	await app.waitFor("Showing pilot.");
 	await app.press("Save and reopen");
 	await app.waitFor("Showing pilot.");
+	expect(sent(app)).toContain("Sent: 0");
+});
+
+test("a profile-only window filters every project's rows without selecting work", async () => {
+	const app = await ready();
+	await app.press("Global window");
+	await app.waitFor("id:scope-needs-demo-pilot");
+	expect(app.shows("pilot · this window")).toBe(false);
+	expect(app.shows("id:scope-needs-demo-website")).toBe(true);
+	await choose(app, "website");
+	await app.waitFor("Showing website. Project actions are not connected in this dashboard yet.");
+	expect(app.shows("id:scope-needs-demo-pilot")).toBe(false);
+	expect(app.shows("Pilot could not count what needs you in other projects.")).toBe(true);
+	await app.press("Save and reopen");
+	await app.waitFor("Showing website. Project actions are not connected in this dashboard yet.");
 	expect(sent(app)).toContain("Sent: 0");
 });

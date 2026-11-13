@@ -619,7 +619,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 			}}
 		>
 			<View class="w-full max-w-2xl self-center gap-12 px-6 pb-24 pt-10">
-				<If when={today().freshness.state !== "unreadable"} else={<Unreadable day={props.day} />}>
+				<If when={ctx.on() || today().freshness.state !== "unreadable"} else={<Unreadable day={props.day} />}>
 					<View class="gap-12">
 						<View class="gap-3">
 							<View class="flex-row items-start gap-3">

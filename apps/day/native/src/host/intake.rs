@@ -46,7 +46,7 @@ fn is_intake(r: &planning::PlanningRecord) -> bool {
 pub(super) fn validate_record(source: &super::Source, op: &Value) -> Result<(), Error> {
     let p: Value = serde_json::from_str(op["payload"].as_str().ok_or(Error::Storage)?)
         .map_err(|_| Error::Storage)?;
-    if p["projectId"] != source.project_id
+    if p["projectId"] != source.project()?.project_id
         || p["itemId"] != op["targetId"]
         || p["purpose"] != op["kind"]
         || p["contextDigest"] != op["bindingId"]
@@ -90,25 +90,26 @@ fn summaries(t: &Transport, journal: &Journal) -> Vec<Value> {
         .collect()
 }
 async fn read_linear(t: &Transport) -> Result<Value, Error> {
+    let project = t.source.project()?;
     t.gate(false).await?;
     let v = t
         .get(&format!(
             "/api/projects/{}/saved-linear",
-            t.source.project_id
+            t.source.project()?.project_id
         ))
         .await?;
     let items = v["items"].as_array().ok_or(Error::Invalid)?;
     let total = v["total"].as_u64().ok_or(Error::Invalid)?;
     let current = v["configurationCurrent"].as_bool().ok_or(Error::Invalid)?;
     if v["version"] != 1
-        || v["projectId"] != t.source.project_id
+        || v["projectId"] != t.source.project()?.project_id
         || v["scope"] != "saved-own-issues"
         || v["contextDigest"]
             .as_str()
             .is_none_or(|s| s.len() != 64 || !s.bytes().all(|c| c.is_ascii_hexdigit()))
-        || v["source"]["projectId"] != t.source.project_id
+        || v["source"]["projectId"] != t.source.project()?.project_id
         || v["source"]["kind"] != "linear"
-        || v["source"]["id"] != format!("{}:linear", t.source.project_id)
+        || v["source"]["id"] != format!("{}:linear", t.source.project()?.project_id)
         || v["source"]["configured"].as_bool().is_none()
         || !matches!(
             v["source"]["status"].as_str(),
@@ -124,7 +125,7 @@ async fn read_linear(t: &Transport) -> Result<Value, Error> {
         || v["more"] != total - items.len() as u64
         || (!current && (total != 0 || !v["source"]["linear"].is_null()))
         || items.iter().any(|i| {
-            i["projectId"] != t.source.project_id
+            i["projectId"] != project.project_id
                 || i["kind"] != "linear"
                 || i["id"].as_str().is_none_or(|s| !valid_id(s))
         })
@@ -137,12 +138,16 @@ async fn read_linear(t: &Transport) -> Result<Value, Error> {
 }
 
 pub(super) async fn read(t: &Transport) -> Result<Value, Error> {
+    let project = t.source.project()?;
     t.gate(false).await?;
     let mut v = t
-        .get(&format!("/api/projects/{}/intake", t.source.project_id))
+        .get(&format!(
+            "/api/projects/{}/intake",
+            t.source.project()?.project_id
+        ))
         .await?;
     if v["version"] != 1
-        || v["projectId"] != t.source.project_id
+        || v["projectId"] != t.source.project()?.project_id
         || v["contextDigest"]
             .as_str()
             .is_none_or(|s| s.len() != 64 || !s.bytes().all(|c| c.is_ascii_hexdigit()))
@@ -163,7 +168,7 @@ pub(super) async fn read(t: &Transport) -> Result<Value, Error> {
             || total < items.len() as u64
             || source["complete"] != (total == items.len() as u64)
             || items.iter().any(|item| {
-                item["projectId"] != t.source.project_id
+                item["projectId"] != project.project_id
                     || item["kind"] != kind
                     || item["id"].as_str().is_none_or(|s| !valid_id(s))
                     || item["revision"].as_u64().is_none_or(|n| n == 0)
@@ -273,7 +278,7 @@ pub(super) async fn handle(
                 return Err(Error::Stale);
             }
             let mut request = json!({"purpose":if start {"intake-start"} else {"intake-triage"},
-                "projectId":t.source.project_id,"itemId":intent.item_id,"revision":intent.revision,"contextDigest":intent.context_digest});
+                "projectId":t.source.project()?.project_id,"itemId":intent.item_id,"revision":intent.revision,"contextDigest":intent.context_digest});
             if start {
                 request["sessionId"] = json!(uuid::Uuid::new_v4().to_string());
                 if let Some(mission) = &intent.mission_id {

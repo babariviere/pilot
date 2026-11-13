@@ -80,7 +80,7 @@ impl Record {
         if self.attention_version != 1
             || !valid_id(&self.id)
             || r["version"] != 1
-            || r["projectId"] != self.source.project_id
+            || r["projectId"] != self.source.project()?.project_id
             || r["home"] != home(&self.source)
             || serde_json::to_vec(r).map_err(|_| Error::Invalid)?.len() > 65536
         {
@@ -359,10 +359,10 @@ pub(super) async fn snapshot(t: &Transport) -> Result<Value, Error> {
     if t.get("/api/hello").await?["capabilities"]["nativeAttention"] != 1 {
         return Err(Error::Unavailable);
     }
-    let reply = t.attention_call(&json!({"version":1,"home":home(&t.source),"projectId":t.source.project_id,"kind":"read"}),false).await?;
+    let reply = t.attention_call(&json!({"version":1,"home":home(&t.source),"projectId":t.source.project()?.project_id,"kind":"read"}),false).await?;
     if reply["ok"] != true
         || reply["value"]["version"] != 1
-        || reply["value"]["projectId"] != t.source.project_id
+        || reply["value"]["projectId"] != t.source.project()?.project_id
         || !reply["value"]["questions"].is_array()
         || !reply["value"]["actions"].is_array()
     {
@@ -469,7 +469,7 @@ pub(super) async fn handle(
             let id = uuid::Uuid::new_v4().to_string();
             request["version"] = json!(1);
             request["home"] = home(&t.source);
-            request["projectId"] = json!(t.source.project_id);
+            request["projectId"] = json!(t.source.project()?.project_id);
             match request["kind"].as_str() {
                 Some("action") => request["command"]["operationId"] = json!(id),
                 Some("help") => request["request"]["requestId"] = json!(id),
@@ -479,7 +479,7 @@ pub(super) async fn handle(
                     }
                 }
                 Some("answer") => {
-                    let payload = json!({"projectId":t.source.project_id,"scope":request["scope"],"message":request["message"]});
+                    let payload = json!({"projectId":t.source.project()?.project_id,"scope":request["scope"],"message":request["message"]});
                     let payload = serde_json::to_string(&payload).map_err(|_| Error::Invalid)?;
                     // bindingId uses canonical sorted JSON, not feature-dependent serde map order.
                     let scope = canonical(&request["scope"]);
@@ -646,8 +646,10 @@ mod tests {
                 daemon_id: "daemon".into(),
                 lineage_id: "lineage".into(),
             },
-            project_id: "project".into(),
-            project_path: "/project".into(),
+            project: Some(crate::host::Project {
+                project_id: "project".into(),
+                project_path: "/project".into(),
+            }),
         };
         let mut journal = super::super::Journal::open(path.clone()).unwrap();
         let mut first = None;

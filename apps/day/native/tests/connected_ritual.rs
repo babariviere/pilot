@@ -86,8 +86,10 @@ impl Root {
                 daemon_id: "synthetic-daemon".into(),
                 lineage_id: "synthetic-lineage".into(),
             },
-            project_id: "synthetic-project".into(),
-            project_path: self.path.display().to_string(),
+            project: Some(pilot_day_native::host::Project {
+                project_id: "synthetic-project".into(),
+                project_path: self.path.display().to_string(),
+            }),
         }
     }
     fn ledger(&self) -> PathBuf {

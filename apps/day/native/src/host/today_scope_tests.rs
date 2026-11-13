@@ -155,8 +155,10 @@ fn project_transport_shares_identity_but_never_retains_model_or_action_selection
             daemon_id: "daemon".into(),
             lineage_id: "lineage".into(),
         },
-        project_id: "one".into(),
-        project_path: "/one".into(),
+        project: Some(crate::host::Project {
+            project_id: "one".into(),
+            project_path: "/one".into(),
+        }),
     };
     let mut root = Transport::new(source.clone()).unwrap();
     root.planning_model = Some("never-select-this".into());
@@ -164,7 +166,7 @@ fn project_transport_shares_identity_but_never_retains_model_or_action_selection
     let selected =
         selected_transport(&root, &json!({"projectId":"two","projectPath":"/two"})).unwrap();
     assert_eq!(root.source, source, "scope cannot retarget the root");
-    assert_eq!(selected.source.project_id, "two");
+    assert_eq!(selected.source.project().unwrap().project_id, "two");
     assert_eq!(selected.source.profile, source.profile);
     assert_eq!(selected.source.port, source.port);
     assert_eq!(selected.source.home, source.home);
@@ -300,8 +302,10 @@ impl Peer {
                 daemon_id: "daemon".into(),
                 lineage_id: "lineage".into(),
             },
-            project_id: "one".into(),
-            project_path: "/one".into(),
+            project: Some(crate::host::Project {
+                project_id: "one".into(),
+                project_path: "/one".into(),
+            }),
         })
         .unwrap();
         Self {
@@ -411,6 +415,106 @@ async fn scope_read_checks_configured_access_and_never_sends_work_or_changes_sou
     })
     .await;
     assert_eq!(result, Err(Error::Stale));
+}
+
+#[tokio::test]
+async fn global_startup_reads_catalog_without_choosing_a_project_or_model() {
+    let mut peer = Peer::new(false, false);
+    peer.transport.source.project = None;
+    let source = peer.transport.source.clone();
+    let journal = Journal::open(peer.path.join("journal")).unwrap();
+    peer.transport.profile_gate().await.unwrap();
+    assert_eq!(peer.transport.gate(false).await, Err(Error::Unavailable));
+    assert_eq!(
+        peer.transport.planning_profile().await,
+        Err(Error::Unavailable)
+    );
+    let read = read_projects(&peer.transport, &journal, &request("all", 1), true, || {
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        read["projects"][0]["today"]["unreported"][0]["id"],
+        "mission-one"
+    );
+    assert_eq!(
+        read["projects"][1]["today"]["unreported"][0]["id"],
+        "mission-two"
+    );
+    assert!(
+        read["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["selected"] == true && p["canAct"] == false)
+    );
+    assert_eq!(source, peer.transport.source);
+    assert!(peer.transport.planning_model.is_none());
+    assert!(
+        peer.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(path, body)| path.starts_with("GET ")
+                || (path == "POST /api/native-attention" && body["kind"] == "read"))
+    );
+}
+
+#[test]
+fn optional_project_keeps_legacy_source_bytes_and_global_window_identity() {
+    let old = json!({"profile":"/profile","port":1234,"home":{"daemonId":"daemon","lineageId":"lineage"},
+        "project_id":"one","project_path":"/one"});
+    let selected: Source = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&selected).unwrap(), old);
+    assert_eq!(
+        serde_json::to_string(&selected).unwrap(),
+        r#"{"profile":"/profile","port":1234,"home":{"daemonId":"daemon","lineageId":"lineage"},"project_id":"one","project_path":"/one"}"#,
+        "existing saved-window hashes and operation sources must keep their bytes"
+    );
+    let mut global = selected.clone();
+    global.project = None;
+    let value = serde_json::to_value(&global).unwrap();
+    assert!(value.get("project_id").is_none());
+    assert_eq!(serde_json::from_value::<Source>(value).unwrap(), global);
+    assert_eq!(global.project(), Err(Error::Unavailable));
+    assert_ne!(
+        super::super::window::SavedWindow::key(&global).unwrap(),
+        super::super::window::SavedWindow::key(&selected).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn global_saved_chat_results_follow_the_explicit_effect_project() {
+    let peer = Peer::new(false, false);
+    let mut global = peer.transport.source.clone();
+    global.project = None;
+    let draft = uuid::Uuid::new_v4().to_string();
+    let mut record = super::super::planning::record(&global, draft.clone(), "b".repeat(64),
+        json!({"purpose":"native-chat-create","draftId":draft,"projectId":"two","projectPath":"/two",
+            "contextDigest":"b".repeat(64),"mode":"build","model":"faux/faux","thinking":"medium","message":"Draft"})).unwrap();
+    // The subject projection only consumes these fields. Journal receipt
+    // validation has its own exact-envelope coverage before production reads.
+    record.receipt = Some(json!({"state":"accepted","result":{"sessionId":"global-chat"}}));
+    let mut journal = Journal::open(peer.path.join("journal")).unwrap();
+    journal.planning.insert(record.id().into(), record);
+    let one = results(&peer.transport, &journal).await;
+    assert_eq!(one["items"].as_array().unwrap().len(), 0);
+    let two = selected_transport(
+        &peer.transport,
+        &json!({"projectId":"two","projectPath":"/two"}),
+    )
+    .unwrap();
+    let two = results(&two, &journal).await;
+    assert_eq!(
+        two["items"][0]["subject"],
+        json!({"kind":"chat","projectId":"two","sessionId":"global-chat"})
+    );
+    assert_eq!(
+        two["complete"], false,
+        "unreadable saved delivery is kept as unknown"
+    );
+    assert_eq!(two["items"][0]["currentness"], "unavailable");
 }
 
 #[tokio::test]

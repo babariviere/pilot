@@ -90,7 +90,11 @@ impl Transport {
             .map_err(|_| Error::Offline)?;
         if matches!(r.status().as_u16(), 401 | 403)
             || (r.status().as_u16() == 404
-                && path == format!("/api/projects/{}", self.source.project_id))
+                && self
+                    .source
+                    .project
+                    .as_ref()
+                    .is_some_and(|p| path == format!("/api/projects/{}", p.project_id)))
         {
             return Err(Error::Identity);
         }
@@ -106,13 +110,13 @@ impl Transport {
             .client
             .get(self.url(&format!(
                 "/api/projects/{}/planning-inventory",
-                self.source.project_id
+                self.source.project()?.project_id
             )))
             .header("x-pilot-github-capability", header)
             .send()
             .await
             .map_err(|_| Error::Offline)?;
-        let result = inventory_body(r, &self.source.project_id).await;
+        let result = inventory_body(r, &self.source.project()?.project_id).await;
         self.local()?;
         result
     }
@@ -141,6 +145,7 @@ impl Transport {
     }
 
     pub async fn gate(&self, controls: bool) -> Result<(), Error> {
+        self.source.project()?;
         let v = self.get("/api/hello").await?;
         self.controls
             .store(v["capabilities"]["missionControls"] == 1, Ordering::SeqCst);
@@ -152,19 +157,28 @@ impl Transport {
         }
         // Selected project must exist here. No cwd, replica or home fallback.
         let p = self
-            .get(&format!("/api/projects/{}", self.source.project_id))
+            .get(&format!(
+                "/api/projects/{}",
+                self.source.project()?.project_id
+            ))
             .await?;
-        if p["id"] != self.source.project_id || p["path"] != self.source.project_path {
+        if p["id"] != self.source.project()?.project_id
+            || p["path"] != self.source.project()?.project_path
+        {
             return Err(Error::Identity);
         }
         Ok(())
     }
 
     pub async fn overview(&self) -> Result<DayOverview, Error> {
+        let project = self.source.project()?;
         let v = self
-            .get(&format!("/api/projects/{}/day", self.source.project_id))
+            .get(&format!(
+                "/api/projects/{}/day",
+                self.source.project()?.project_id
+            ))
             .await?;
-        if v["dashboard"]["projectId"] != self.source.project_id {
+        if v["dashboard"]["projectId"] != self.source.project()?.project_id {
             return Err(Error::Identity);
         }
         let overview: DayOverview = serde_json::from_value(v).map_err(|_| Error::Invalid)?;
@@ -184,13 +198,13 @@ impl Transport {
         {
             return Err(Error::Invalid);
         }
-        if overview.project_id != self.source.project_id
+        if overview.project_id != self.source.project()?.project_id
             || overview.dashboard.missions.total as usize != overview.dashboard.missions.items.len()
             || overview.dashboard.working.total as usize != overview.dashboard.working.items.len()
             || overview
                 .reports
                 .iter()
-                .any(|r| r.report.project_id != self.source.project_id)
+                .any(|r| r.report.project_id != project.project_id)
         {
             return Err(Error::Invalid);
         }
@@ -199,7 +213,9 @@ impl Transport {
 
     pub async fn detail(&self, id: &str) -> Result<MissionDetail, Error> {
         let v = self.get(&format!("/api/missions/{id}")).await?;
-        if v["mission"]["id"] != id || v["mission"]["projectId"] != self.source.project_id {
+        if v["mission"]["id"] != id
+            || v["mission"]["projectId"] != self.source.project()?.project_id
+        {
             return Err(Error::Identity);
         }
         serde_json::from_value(v).map_err(|_| Error::Invalid)
@@ -216,11 +232,11 @@ impl Transport {
         let v = self
             .get(&format!(
                 "/api/projects/{}/missions/{id}/planning",
-                self.source.project_id
+                self.source.project()?.project_id
             ))
             .await?;
         if v["version"] == 1
-            && v["projectId"] == self.source.project_id
+            && v["projectId"] == self.source.project()?.project_id
             && v["missionId"] == id
             && matches!(v["status"].as_str(), Some("not-enrolled" | "preparing"))
             && v["view"].is_null()
@@ -229,7 +245,7 @@ impl Transport {
             return Ok(v);
         }
         if v["version"] != 1
-            || v["projectId"] != self.source.project_id
+            || v["projectId"] != self.source.project()?.project_id
             || v["missionId"] != id
             || v["status"] != "available"
             || v["view"]["interview"]["fence"]["missionId"] != id
@@ -253,10 +269,10 @@ impl Transport {
         let v = self
             .get(&format!(
                 "/api/projects/{}/planning-profile",
-                self.source.project_id
+                self.source.project()?.project_id
             ))
             .await?;
-        super::enrollment::profile(&v, &self.source.project_id)?;
+        super::enrollment::profile(&v, &self.source.project()?.project_id)?;
         self.gate(false).await?;
         Ok(v)
     }

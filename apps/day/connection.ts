@@ -21,7 +21,7 @@ import { answerDrafts, answerPicks } from "./planView";
 import { ConnectedPreferences, mirrorPreferences } from "./preferencesFeed";
 import { mirrorRituals, type Rituals, rootRecap } from "./ritualFeed";
 import { ConnectedThreads, mirrorThreads } from "./threadFeed";
-import { ConnectedScope, mirrorScope } from "./todayScope";
+import { ConnectedScope, mirrorScope, todayProject } from "./todayScope";
 import type { Update } from "./updateFeed";
 import { captureView, restoreView, saveForms } from "./updateView";
 
@@ -87,6 +87,25 @@ let ritualFeed: ConnectedRituals | null = null;
 let todayFeed: ConnectedToday | null = null;
 let planFeed: ConnectedPlans | null = null;
 let pendingFlush: number | null = null;
+let scopeReading = false;
+let scopeAgain = false;
+
+/** Coalesce stream invalidations. No timer or service polling. */
+async function refreshScope() {
+	scopeAgain = true;
+	if (scopeReading) return;
+	scopeReading = true;
+	try {
+		while (scopeAgain) {
+			scopeAgain = false;
+			const open = connection();
+			if (open.state !== "open" || !current()) return;
+			await open.day.scope?.read(todayProject());
+		}
+	} finally {
+		scopeReading = false;
+	}
+}
 
 function current(): boolean {
 	if (window && windowId() === window) return true;
@@ -100,6 +119,7 @@ function refresh() {
 	void Promise.all([todayFeed?.refresh(), planFeed?.refresh(), ritualFeed?.sync()]).catch((error: unknown) => {
 		console.error("Pilot could not read this window again:", error);
 	});
+	void refreshScope().catch((error: unknown) => console.error("Pilot could not read its project scope:", error));
 }
 
 function flushPending() {

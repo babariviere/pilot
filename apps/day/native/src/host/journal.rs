@@ -355,7 +355,7 @@ impl Journal {
                 || !super::valid_id(&record.mission)
                 || record.command.version != 1
                 || record.command.home != record.source.home
-                || record.command.project_id != record.source.project_id
+                || record.command.project_id != record.source.project()?.project_id
             {
                 return Err(Error::Storage);
             }
@@ -613,7 +613,7 @@ impl Journal {
         let cache: Cache = serde_json::from_slice(&bytes).ok()?;
         (cache.version == 1
             && cache.source == *source
-            && cache.overview.project_id == source.project_id
+            && cache.overview.project_id == source.project().ok()?.project_id
             && crate::contract::check_overview(&cache.overview).is_ok())
         .then_some(cache)
     }

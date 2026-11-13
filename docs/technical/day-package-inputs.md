@@ -272,15 +272,22 @@ candidate directory, still with the required `Pilot Next.app` bundle name.
 "$candidate/Pilot Next.app/Contents/MacOS/pilot-desktop" \
   --profile "$profile" --port "$port" \
   --daemon-id "$daemon_id" --lineage-id "$lineage_id" \
-  --project-id "$project_id" --project-path "$project_path" \
-  --journal "$candidate/window-journal" \
-  --planning-model "$explicit_model_id"
+  --journal "$candidate/window-journal"
 ```
 
 Every value is an explicit native selection, not a TSX field or credential.
-Keep the same journal for close/reopen. `--planning-model` is optional for
-reading existing work; omitting it leaves new mission planning unavailable.
-Selecting a model does not invoke it. New, final interview submission and
+Keep the same journal for close/reopen. The dashboard starts on All projects;
+its header filter is saved with this window's drafts. Filtering reads only and
+never selects New's project or retargets work. New starts with no project chosen;
+a saved draft keeps its explicit project choice.
+
+Legacy project-bound launches may still supply the complete `--project-id` and
+`--project-path` pair, with optional `--planning-model` for their existing mission
+enrollment path. Profile-only dashboards currently show cross-project sections
+read only; project-specific mission enrollment still needs that legacy binding.
+Standalone chat creation uses New's explicit project and current access instead.
+No model or project is inferred just to open the dashboard.
+New, final interview submission and
 Start retain their separate confirmation, permission and durable-operation gates.
 Successor/update launch does not infer a new planning model.
 
@@ -288,8 +295,9 @@ Bootstrap verifies the native code seal on a joined worker before loading
 trusted bytecode. The native verifier refuses AppKit's main thread. It never
 falls back to mocks or a weaker signature check.
 
-The selected existing daemon must advertise `dayOverview: 1`, and its exact
-daemon/lineage/project/path must match. Mission controls, planning, intake and
+The selected existing daemon's exact daemon/lineage and base protocol must match.
+Each project's dashboard requires `dayOverview: 1` and its current project/path
+and access checks. Mission controls, planning, intake and
 verification also require their existing versioned contracts. A daemon without
 these capabilities is unavailable, not an empty Today. Do not start a second
 daemon or bypass that check. A compatible daemon update requires separate

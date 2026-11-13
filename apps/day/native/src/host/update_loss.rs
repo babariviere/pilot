@@ -250,8 +250,10 @@ mod tests {
                     daemon_id: "daemon".into(),
                     lineage_id: "lineage".into(),
                 },
-                project_id: "project".into(),
-                project_path: "/project".into(),
+                project: Some(crate::host::Project {
+                    project_id: "project".into(),
+                    project_path: "/project".into(),
+                }),
             },
             uuid::Uuid::new_v4().to_string(),
             json!({"source":"a".repeat(40),"build":build}),

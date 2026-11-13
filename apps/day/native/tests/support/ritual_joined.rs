@@ -103,8 +103,10 @@ impl Joined {
                     daemon_id: "synthetic-daemon".into(),
                     lineage_id: "synthetic-lineage".into(),
                 },
-                project_id: "synthetic-project".into(),
-                project_path: path.display().to_string(),
+                project: Some(pilot_day_native::host::Project {
+                    project_id: "synthetic-project".into(),
+                    project_path: path.display().to_string(),
+                }),
             },
             path,
             clock: Arc::new(Mutex::new(Ok(morning()))),
@@ -458,7 +460,7 @@ fn replacement_joins_old_root_preserves_project_progress_and_separates_profile()
     let old = f.host().clone();
     let old_context = old.ritual_snapshot().context;
     drop(app);
-    f.source.project_id = "other-project".into();
+    f.source.project()?.project_id = "other-project".into();
     f.reopen();
     f.read_clock();
     assert_eq!(

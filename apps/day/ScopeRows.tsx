@@ -48,8 +48,8 @@ export function todayScope(day: Day, plans?: Plans): TodayScope {
 		void plans.chats.source.read();
 	}
 	const own = () => chats()?.current ?? null;
-	// Without knowing its own project, the window cannot tell its rows from others': it offers no scope.
-	const on = () => !!day.scope && !!plans && own() !== null;
+	// A profile-only window has no own-project rows. Its catalog still scopes Today.
+	const on = () => !!day.scope;
 	const scope = () => (on() ? todayProject() : "all");
 	const snapshot = () => {
 		const s = day.scope?.view().snapshot;
@@ -59,7 +59,7 @@ export function todayScope(day: Day, plans?: Plans): TodayScope {
 		snapshot()?.projects.find((p) => p.id === id)?.name ??
 		chats()?.projects.find((p) => p.projectId === id)?.name ??
 		"a project";
-	const showsOwn = () => !on() || scope() === "all" || own() === null || scope() === own();
+	const showsOwn = () => !on() || (own() !== null && (scope() === "all" || scope() === own()));
 	const others = () => (snapshot()?.projects ?? []).filter((p) => p.selected && p.id !== own());
 	const projects = () => {
 		const read = day.scope?.catalog() ?? [];
@@ -77,10 +77,8 @@ export function todayScope(day: Day, plans?: Plans): TodayScope {
 		projects,
 		offReason: () => {
 			const c = chats();
-			if (!day.scope || !c || own() !== null || c.availability === "reading") return "";
-			return c.availability === "unavailable"
-				? `Showing this window's project only. ${c.reason}`
-				: "Showing this window's project only. Pilot did not say which project it is.";
+			if (day.scope || !c || c.availability !== "unavailable") return "";
+			return `Showing this window's project only. ${c.reason}`;
 		},
 	};
 }
@@ -173,7 +171,8 @@ export function ScopeNote(props: { day: Day; ctx: TodayScope }) {
 		const v = view();
 		if (all()) {
 			if (!v || v.state === "reading") return "Reading your projects…";
-			if (!snapshot()) return `Showing ${ownName()} only. ${v.reason}`;
+			if (!snapshot()) return props.ctx.own() ? `Showing ${ownName()} only. ${v.reason}` : v.reason;
+			if (snapshot()?.catalogComplete && snapshot()?.projects.length === 0) return "No accessible projects.";
 			const missing = unreadable().map((p) => p.name);
 			if (missing.length > 0) return `Across your projects. Pilot could not read ${missing.join(", ")}.`;
 			return "Across all your projects. Each section names its project.";
@@ -182,7 +181,9 @@ export function ScopeNote(props: { day: Day; ctx: TodayScope }) {
 		if (props.ctx.showsOwn()) return `Showing ${name}.`;
 		if (!v || v.state === "reading") return `Reading ${name}…`;
 		if (!snapshot()) return `Pilot cannot show ${name} here. ${v.reason}`;
-		return `Showing ${name}, read only here. Act on it from its own window.`;
+		return props.ctx.own()
+			? `Showing ${name}, read only here. Act on it from its own window.`
+			: `Showing ${name}. Project actions are not connected in this dashboard yet.`;
 	};
 	const elsewhere = () => {
 		if (all()) return "";
@@ -531,6 +532,14 @@ export function OtherNotShown(props: { ctx: TodayScope }) {
 
 /** Today's headline when it shows another project, from that project's read. */
 export function scopedHeadline(ctx: TodayScope): string {
+	if (ctx.scope() === "all") {
+		const projects = ctx.others();
+		if (projects.length === 0) return "Your projects.";
+		if (projects.some((p) => p.needsYou.count === null || !complete(p, "needsYou")))
+			return "What needs you is not fully known.";
+		const n = projects.reduce((sum, p) => sum + (p.needsYou.count ?? 0), 0);
+		return n === 0 ? "Nothing needs you." : needsWords(n, "across your projects");
+	}
 	const p = ctx.others()[0];
 	if (!p) return `${ctx.name(ctx.scope())} is not shown.`;
 	if (!p.today) return `${p.name} could not be read.`;

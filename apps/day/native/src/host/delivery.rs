@@ -56,7 +56,7 @@ impl Subject {
             Err(Error::Invalid)
         }
     }
-    fn project(&self) -> &str {
+    pub(super) fn project(&self) -> &str {
         match self {
             Self::Task { project, .. } | Self::Chat { project, .. } => project,
         }
@@ -193,7 +193,7 @@ pub(super) fn validate_record(r: &planning::PlanningRecord) -> Result<(), Error>
     subject.validate().map_err(|_| Error::Storage)?;
     if p.as_object().is_none_or(|o| o.len() != 6)
         || p["purpose"] != "user-verification"
-        || subject.project() != r.source.project_id
+        || subject.project() != r.source.project()?.project_id
         || p["deliveryId"] != r.operation["bindingId"]
         || r.operation["bindingGeneration"] != 1
         || p["deliveryId"].as_str().is_none_or(|s| !digest(s))
@@ -282,7 +282,11 @@ fn selected(r: &planning::PlanningRecord, source: &Source) -> bool {
     // exact project/subject. It can never send the old envelope again.
     r.source.profile == source.profile
         && r.source.home == source.home
-        && r.source.project_id == source.project_id
+        && r.source
+            .project
+            .as_ref()
+            .zip(source.project.as_ref())
+            .is_some_and(|(a, b)| a.project_id == b.project_id)
         && r.operation["kind"] == "user-verification"
 }
 fn summary(r: &planning::PlanningRecord) -> Value {
@@ -304,7 +308,7 @@ fn operations(t: &Transport, journal: &Journal) -> Vec<Value> {
 }
 pub(super) async fn read(t: &Transport, s: &Subject) -> Result<Value, Error> {
     s.validate()?;
-    if s.project() != t.source.project_id {
+    if s.project() != t.source.project()?.project_id {
         return Err(Error::Identity);
     }
     t.gate(false).await?;
@@ -349,14 +353,14 @@ pub(super) async fn list(t: &Transport, request: &List) -> Result<Value, Error> 
     t.gate(false).await?;
     let path = format!(
         "/api/projects/{}/delivered-work{}",
-        t.source.project_id,
+        t.source.project()?.project_id,
         request
             .after
             .map(|n| format!("?after={n}"))
             .unwrap_or_default()
     );
     let v = t.get(&path).await?;
-    validate_list(&v, &t.source.project_id)?;
+    validate_list(&v, &t.source.project()?.project_id)?;
     if request.after.is_some_and(|after| {
         v["more"] == true && v["nextCursor"].as_u64().is_none_or(|next| next <= after)
     }) {
@@ -439,9 +443,11 @@ pub(super) async fn handle(
             // The journal's saved commands only: no HTTP, Check, or read of any
             // delivery. The project is the root's own choice, echoed, never chosen.
             check()?;
-            return Ok(json!({"snapshot":{"projectId":t.source.project_id},
+            return Ok(
+                json!({"snapshot":{"projectId":t.source.project()?.project_id},
                 "operations":operations(t,journal),"outcome":null,
-                "outputCapabilities":output_capabilities(shared)}));
+                "outputCapabilities":output_capabilities(shared)}),
+            );
         }
         Command::DeliveryOpen(r) => {
             r.validate()?;
@@ -463,7 +469,7 @@ pub(super) async fn handle(
         }
         Command::DeliveryWrite(w) => {
             w.validate()?;
-            if w.subject.project() != t.source.project_id {
+            if w.subject.project() != t.source.project()?.project_id {
                 return Err(Error::Identity);
             }
             let subject = serde_json::to_value(&w.subject).map_err(|_| Error::Invalid)?;

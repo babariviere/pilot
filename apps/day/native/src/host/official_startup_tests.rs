@@ -89,8 +89,10 @@ impl Fixture {
                 daemon_id: "daemon".into(),
                 lineage_id: "lineage".into(),
             },
-            project_id: "project".into(),
-            project_path: dir.path().to_str().unwrap().into(),
+            project: Some(crate::host::Project {
+                project_id: "project".into(),
+                project_path: dir.path().to_str().unwrap().into(),
+            }),
         };
         let selection = Selection {
             connection: Connection::new(

@@ -61,11 +61,13 @@ impl Request {
 
 fn selected_transport(t: &Transport, project: &Value) -> Result<Transport, Error> {
     let mut source = t.source.clone();
-    source.project_id = project["projectId"].as_str().ok_or(Error::Invalid)?.into();
-    source.project_path = project["projectPath"]
-        .as_str()
-        .ok_or(Error::Invalid)?
-        .into();
+    source.project = Some(super::Project {
+        project_id: project["projectId"].as_str().ok_or(Error::Invalid)?.into(),
+        project_path: project["projectPath"]
+            .as_str()
+            .ok_or(Error::Invalid)?
+            .into(),
+    });
     Ok(Transport {
         client: t.client.clone(),
         source,
@@ -75,7 +77,12 @@ fn selected_transport(t: &Transport, project: &Value) -> Result<Transport, Error
 }
 
 fn same_project(a: &Source, b: &Source) -> bool {
-    a.profile == b.profile && a.home == b.home && a.project_id == b.project_id
+    a.profile == b.profile
+        && a.home == b.home
+        && a.project
+            .as_ref()
+            .zip(b.project.as_ref())
+            .is_some_and(|(a, b)| a.project_id == b.project_id)
 }
 
 fn scoped_attention(mut read: Value, project: &str, live: bool) -> Result<Value, Error> {
@@ -243,7 +250,7 @@ async fn results(t: &Transport, journal: &Journal) -> Value {
     for r in journal
         .planning
         .values()
-        .filter(|r| same_project(&r.source, &t.source))
+        .filter(|r| r.source.profile == t.source.profile && r.source.home == t.source.home)
     {
         let p: Value = serde_json::from_str(r.operation["payload"].as_str().unwrap_or(""))
             .unwrap_or(Value::Null);
@@ -252,11 +259,20 @@ async fn results(t: &Transport, journal: &Journal) -> Value {
             Some("intake-start" | "native-chat-create")
                 if r.receipt.as_ref().is_some_and(|r| r["state"] == "accepted") =>
             {
-                json!({"kind":"chat","projectId":t.source.project_id,"sessionId":r.receipt.as_ref().map(|r| &r["result"]["sessionId"])})
+                // New's explicit project is part of the saved effect, not the
+                // window source (which may be global or another project).
+                json!({"kind":"chat","projectId":p["projectId"],"sessionId":r.receipt.as_ref().map(|r| &r["result"]["sessionId"])})
             }
             _ => continue,
         };
         if let Ok(s) = serde_json::from_value::<super::delivery::Subject>(subject.clone()) {
+            if t.source
+                .project
+                .as_ref()
+                .is_none_or(|p| s.project() != p.project_id)
+            {
+                continue;
+            }
             if r.operation["kind"] == "user-verification" && r.pending() {
                 uncertain.insert(subject.to_string());
             }
@@ -364,7 +380,7 @@ async fn read_projects(
         .await;
         let attention = attention::snapshot(&pt)
             .await
-            .and_then(|v| scoped_attention(v, &pt.source.project_id, live));
+            .and_then(|v| scoped_attention(v, &pt.source.project()?.project_id, live));
         check()?;
         let today = projection(
             &pt,
@@ -374,7 +390,7 @@ async fn read_projects(
             live,
         );
         let planning = pt.planning_inventory().await.and_then(|v| {
-            if v["projectId"] != pt.source.project_id {
+            if v["projectId"] != pt.source.project()?.project_id {
                 return Err(Error::Identity);
             }
             Ok(Planning {

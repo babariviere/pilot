@@ -78,7 +78,7 @@ fn summary(a: &Value, project: &str) -> Option<Value> {
 pub(super) async fn list(t: &Transport, r: &List) -> Result<Value, Error> {
     r.validate()?;
     t.gate(false).await?;
-    let project = &t.source.project_id;
+    let project = &t.source.project()?.project_id;
     let all = t.get(&format!("/api/projects/{project}/artifacts")).await?;
     let all: Vec<Value> = all
         .as_array()
@@ -142,7 +142,7 @@ pub(super) async fn list(t: &Transport, r: &List) -> Result<Value, Error> {
 pub(super) async fn source(t: &Transport, r: &Request) -> Result<Value, Error> {
     r.validate()?;
     t.gate(false).await?;
-    let project = &t.source.project_id;
+    let project = &t.source.project()?.project_id;
     let v = t
         .get(&format!(
             "/api/projects/{project}/artifacts/{}/{}?revision={}",

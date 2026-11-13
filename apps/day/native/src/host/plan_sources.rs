@@ -90,7 +90,7 @@ pub(super) async fn read(t: &Transport, r: &Request) -> Result<Value, Error> {
     let (title, body, currentness, check) = if r.kind == "decision" {
         let detail = t.get(&format!("/api/missions/{}", r.mission_id)).await?;
         if detail["mission"]["id"] != r.mission_id
-            || detail["mission"]["projectId"] != t.source.project_id
+            || detail["mission"]["projectId"] != t.source.project()?.project_id
         {
             return Err(Error::Identity);
         }
@@ -152,11 +152,12 @@ pub(super) async fn read(t: &Transport, r: &Request) -> Result<Value, Error> {
         let d = t
             .get(&format!(
                 "/api/projects/{}/knowledge/{}?revision={revision}",
-                t.source.project_id, r.id
+                t.source.project()?.project_id,
+                r.id
             ))
             .await?;
         if d["entry"]["id"] != r.id
-            || d["entry"]["projectId"] != t.source.project_id
+            || d["entry"]["projectId"] != t.source.project()?.project_id
             || d["revision"]["knowledgeId"] != r.id
             || d["revision"]["revision"] != revision
             || !d["revision"]["body"].is_string()

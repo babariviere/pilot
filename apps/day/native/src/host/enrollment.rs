@@ -32,7 +32,7 @@ pub(super) fn validate_record(
     let r: PlanningEnrollment =
         serde_json::from_str(operation["payload"].as_str().ok_or(Error::Storage)?)
             .map_err(|_| Error::Storage)?;
-    if r.project_id != source.project_id
+    if r.project_id != source.project()?.project_id
         || operation["bindingId"] != r.configuration_digest
         || operation["bindingGeneration"] != 1
         || setup.is_none_or(|s| !hex(s, 64))
@@ -46,7 +46,7 @@ pub(super) fn validate_record(
     {
         return Err(Error::Storage);
     }
-    profile(&json!({"version":1,"projectId":r.project_id,"profile":r.profile,"configurationDigest":r.configuration_digest}), &source.project_id)
+    profile(&json!({"version":1,"projectId":r.project_id,"profile":r.profile,"configurationDigest":r.configuration_digest}), &source.project()?.project_id)
         .map_err(|_| Error::Storage)
 }
 
@@ -92,7 +92,7 @@ fn hex(s: &str, len: usize) -> bool {
 
 impl Prepared {
     pub fn new(source: &Source, model: &str, profile: Value) -> Result<Self, Error> {
-        self::profile(&profile, &source.project_id)?;
+        self::profile(&profile, &source.project()?.project_id)?;
         let enrollment = uuid::Uuid::new_v4().to_string();
         let owner = uuid::Uuid::new_v4().to_string();
         let bytes = serde_json::to_vec(&json!({"source":source,"model":model,"profile":profile,
@@ -143,7 +143,7 @@ impl Prepared {
             &self.setup.digest,
             serde_json::to_value(PlanningEnrollment {
                 purpose: Purpose::Enroll,
-                project_id: source.project_id.clone(),
+                project_id: source.project()?.project_id.clone(),
                 owner_session_id: self.owner.clone(),
                 title,
                 goal: intent.goal.clone(),

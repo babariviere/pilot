@@ -1113,8 +1113,10 @@ mod tests {
                     daemon_id: "daemon".into(),
                     lineage_id: "lineage".into(),
                 },
-                project_id: "project".into(),
-                project_path: "/project".into(),
+                project: Some(crate::host::Project {
+                    project_id: "project".into(),
+                    project_path: "/project".into(),
+                }),
             },
             uuid::Uuid::new_v4().to_string(),
             json!({"source":"a".repeat(40),"build":"2.0","version":"2.0.0",
@@ -1183,8 +1185,8 @@ mod tests {
                 "port" => source.port += 1,
                 "daemon" => source.home.daemon_id.push('2'),
                 "lineage" => source.home.lineage_id.push('2'),
-                "project" => source.project_id.push('2'),
-                "path" => source.project_path.push('2'),
+                "project" => source.project.as_mut().unwrap().project_id.push('2'),
+                "path" => source.project.as_mut().unwrap().project_path.push('2'),
                 _ => ledger = scratch.0.join("other-journal"),
             }
             assert!(
@@ -1245,7 +1247,13 @@ mod tests {
         for field in ["source", "window", "generation", "invalid-view"] {
             let mut changed = capture.clone();
             match field {
-                "source" => changed.source.project_id.push('2'),
+                "source" => changed
+                    .source
+                    .project
+                    .as_mut()
+                    .unwrap()
+                    .project_id
+                    .push('2'),
                 "window" => changed.window = uuid::Uuid::new_v4().to_string(),
                 "generation" => changed.generation += 1,
                 _ => changed.view = Value::Null,

@@ -6,6 +6,10 @@ The upcoming interface can be prepared locally as a [connected candidate](techni
 Connected Day keeps earlier reads marked as older while it refreshes. An
 unavailable attention read never means that nothing needs you. Read again only
 reads; it does not resend an answer or start work.
+Day opens the global dashboard without a project or model selection. Today's
+header defaults to All projects and saves its filter per window. A project filter
+still counts attention elsewhere and never retargets work or New's draft. New
+requires an explicit project choice; saved choices stay with their drafts.
 Today To check discovers new mission deliveries from a saved first-use cutoff.
 Older work stays in missions, without being accepted or deleted. Your saved
 checks stay available. Other projects' results are read-only in this window.

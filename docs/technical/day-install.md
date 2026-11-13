@@ -27,7 +27,7 @@ installed app. Never replay GPUI pending sends or clear uncertain Day operations
 
 Native credentials stay in the existing profile, outside TSX. Read-only
 preflight checks the private capability and makes two authenticated loopback GET
-requests (hello/project). The selection, launcher and output contain no token.
+requests (hello). The selection, launcher and output contain no token.
 
 ## Bundle and driver prerequisites
 
@@ -71,18 +71,16 @@ the digest is the sealed executable's `shasum -a 256` result.
   "installDirectory": "/Users/you/Applications/Pilot",
   "port": 24680,
   "daemonId": "EXACT_DAEMON_ID",
-  "lineageId": "EXACT_STORAGE_LINEAGE",
-  "projectId": "EXACT_PROJECT_ID",
-  "projectPath": "/absolute/project",
-  "planningModel": "EXPLICIT_PROVIDER_MODEL_ID"
+  "lineageId": "EXACT_STORAGE_LINEAGE"
 }
 ```
 
 Use the existing profile's `daemon-id` and `storage-lineage` values and actual
-configured port (the example port is illustrative). Choose an existing project
-and an explicit model. Model selection does not run it. The installation parent
+configured port (the example port is illustrative). Opening the global dashboard
+requires no project or planning model. Choose a project explicitly when starting
+new work. The installation parent
 must exist, belong to you and not be writable by others. Choose a fresh directory
-outside the profile, project and both apps.
+outside the profile and both apps.
 
 Keep the same operation UUID across retry/inspection. `savedState` must be the
 caller's already saved private GUI state, not a fabricated empty capture. The
@@ -110,8 +108,13 @@ app's native driver, not a GPUI updater or another service manager. The existing
 daemon is fenced/paused, known work canceled, handed off and selectively released.
 
 After success, open `Pilot/Launch Day.command` when separately ready to launch.
-Always use that launcher on reopen: it supplies the exact profile/project/model
+Always use that launcher on reopen: it supplies the exact profile/service identity
 and same Day journal. Do not double-click the bare app without native selection.
+
+Historical selection files may still contain project/model fields. The installer
+keeps those bytes in its exact selection binding for recovery but does not use
+them for launch or preflight. Do not edit an entered installation's selection or
+operation UUID to retry it. Inspect its original operation instead.
 
 After a failed/lost reply, inspect the **same** operation:
 

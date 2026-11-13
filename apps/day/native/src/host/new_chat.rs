@@ -135,8 +135,10 @@ pub(super) async fn handle(
             check()?;
             // `current` is this window's own project (Today's and new missions').
             // It is not a selection, and New never defaults to it.
-            Ok(json!({"snapshot":snapshot,"current":t.source.project_id,
-                "operations":operations(t,journal),"outcome":null}))
+            Ok(
+                json!({"snapshot":snapshot,"current":t.source.project.as_ref().map(|p| &p.project_id),
+                "operations":operations(t,journal),"outcome":null}),
+            )
         }
         Command::ChatSelect(request) => {
             *shared

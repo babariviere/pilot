@@ -137,8 +137,10 @@ fn an_unreadable_service_shows_its_state_and_forms_save_before_close() {
                 daemon_id: "synthetic-daemon".into(),
                 lineage_id: "synthetic-lineage".into(),
             },
-            project_id: "synthetic-project".into(),
-            project_path: dir.display().to_string(),
+            project: Some(pilot_day_native::host::Project {
+                project_id: "synthetic-project".into(),
+                project_path: dir.display().to_string(),
+            }),
         },
         dir.join("journal"),
     )
@@ -710,13 +712,19 @@ impl FakeRoot {
                     .as_str()
                     .unwrap_or_default()
                     .to_owned();
-                let reply = by_mission
+                let mut reply = by_mission
                     .lock()
                     .unwrap()
                     .get(&(name.to_owned(), mission))
                     .cloned()
                     .or_else(|| replies.lock().unwrap().get(name).cloned())
                     .unwrap_or(json!({"version":1,"error":"unavailable"}));
+                if name == "day.today.scope"
+                    && let Some(snapshot) = reply.pointer_mut("/value/snapshot")
+                {
+                    snapshot["generation"] = data["args"]["generation"].clone();
+                    snapshot["scope"] = data["args"]["scope"].clone();
+                }
                 if name == "day.plan.inventory" {
                     // The root keeps what it read, or nothing current after a refusal.
                     let cached = if reply.get("value").is_some() {
@@ -819,6 +827,57 @@ impl FakeRoot {
             )
             .unwrap();
     }
+}
+
+/// Global startup uses the scope catalog, not the legacy root's own-project setup.
+#[test]
+fn global_dashboard_opens_without_project_setup_and_refreshes_from_events() {
+    let root = FakeRoot::new();
+    root.reply(
+        "day.today.read",
+        serde_json::to_value(Desk::new(Scenario::Unreadable).today()).unwrap(),
+    );
+    root.reply(
+        "day.today.scope",
+        json!({"version":1,"scope":"all","generation":0,"catalogComplete":true,"complete":false,
+        "outsideNeedsYou":{"count":0,"complete":true},"projects":[{
+            "id":"one","name":"One","selected":true,"currentness":"live","observedAt":"",
+            "needsYou":{"count":0,"complete":true},"today":Desk::new(Scenario::Quiet).today(),
+            "planning":null,"results":null,"errors":{}}]}),
+    );
+    let entry = entry();
+    let mut app = open_on(&entry, root.channel.clone());
+    wait(
+        &mut app,
+        "Across all your projects. Each section names its project.",
+    );
+    assert!(app.shows("All projects"));
+    assert!(app.shows("One · read only here"));
+    app.wait(Duration::from_millis(300)).unwrap();
+    let before = root.count("day.today.scope");
+    root.replies
+        .lock()
+        .unwrap()
+        .get_mut("day.today.scope")
+        .unwrap()["value"]["snapshot"]["projects"][0]["name"] = json!("Renamed");
+    root.changed();
+    wait(&mut app, "Renamed · read only here");
+    assert!(root.count("day.today.scope") > before);
+    for name in [
+        "day.plan.create",
+        "day.chat.create",
+        "day.attention.reply",
+        "day.mission.pause",
+        "day.mission.resume",
+    ] {
+        assert_eq!(
+            root.count(name),
+            0,
+            "passive startup/invalidation must not send work"
+        );
+    }
+    drop(app);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }
 
 /// A complete, current inventory read, as the root projects it.

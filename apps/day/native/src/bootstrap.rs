@@ -59,18 +59,26 @@ fn selection(args: Vec<OsString>) -> Result<(Source, PathBuf), Error> {
     let lineage_id = take("--lineage-id")?
         .into_string()
         .map_err(|_| Error::Invalid)?;
-    let project_id = take("--project-id")?
-        .into_string()
-        .map_err(|_| Error::Invalid)?;
-    let project_path = take("--project-path")?
-        .into_string()
-        .map_err(|_| Error::Invalid)?;
     let journal = PathBuf::from(take("--journal")?);
-    if port == 0
-        || !profile.is_absolute()
-        || !Path::new(&project_path).is_absolute()
-        || !journal.is_absolute()
-    {
+    let project = match (
+        values.remove("--project-id"),
+        values.remove("--project-path"),
+    ) {
+        (None, None) => None,
+        (Some(id), Some(path)) => {
+            let project_id = id.into_string().map_err(|_| Error::Invalid)?;
+            let project_path = path.into_string().map_err(|_| Error::Invalid)?;
+            if !super::host::valid_id(&project_id) || !Path::new(&project_path).is_absolute() {
+                return Err(Error::Invalid);
+            }
+            Some(crate::host::Project {
+                project_id,
+                project_path,
+            })
+        }
+        _ => return Err(Error::Invalid),
+    };
+    if port == 0 || !profile.is_absolute() || !journal.is_absolute() {
         return Err(Error::Invalid);
     }
     Ok((
@@ -81,8 +89,7 @@ fn selection(args: Vec<OsString>) -> Result<(Source, PathBuf), Error> {
                 daemon_id,
                 lineage_id,
             },
-            project_id,
-            project_path,
+            project,
         },
         journal,
     ))
@@ -427,6 +434,39 @@ mod tests {
             args.extend([flag.into(), value.into()]);
             assert!(matches!(launch(args), Err(Error::Unavailable)));
         }
+    }
+
+    #[test]
+    fn global_launch_needs_profile_identity_not_a_project_or_model() {
+        let args: Vec<_> = selected_args()
+            .chunks(2)
+            .filter(|p| p[0] != "--project-id" && p[0] != "--project-path")
+            .flatten()
+            .cloned()
+            .collect();
+        let Launch::Selected(selected) = launch(args.clone()).unwrap() else {
+            panic!("selected launch")
+        };
+        assert!(selected.source.project.is_none());
+        assert!(selected.planning_model.is_none());
+        assert_eq!(selected.source.profile, PathBuf::from("/tmp/profile"));
+        for (key, value) in [
+            ("--project-id", "project"),
+            ("--project-path", "/tmp/project"),
+        ] {
+            let mut partial = args.clone();
+            partial.extend([key.into(), value.into()]);
+            assert!(
+                launch(partial).is_err(),
+                "legacy selection must be a complete pair"
+            );
+        }
+        let Launch::Selected(legacy) = launch(selected_args()).unwrap() else {
+            panic!("selected launch")
+        };
+        let project = legacy.source.project().unwrap();
+        assert_eq!(project.project_id, "project");
+        assert_eq!(project.project_path, "/tmp/project");
     }
 
     #[test]

@@ -369,7 +369,7 @@ fn catalog(detail: &Value, mission: &str) -> Value {
 /// The mission's topics and whether discussion is open now. A preview, never an admission.
 pub(super) async fn read(t: &Transport, mission: &str) -> Result<Value, Error> {
     capability(t).await?;
-    let project = &t.source.project_id;
+    let project = &t.source.project()?.project_id;
     let view = get(t, &format!("/api/projects/{project}/missions/{mission}/threads")).await?;
     if !valid_view(&view, mission, project) {
         return Err(Error::Invalid);
@@ -489,7 +489,7 @@ fn entry(e: &Value, topic: &Value, owner: &str) -> Option<Value> {
 pub(super) async fn history(t: &Transport, r: &HistoryRequest) -> Result<Value, Error> {
     r.validate()?;
     capability(t).await?;
-    let project = &t.source.project_id;
+    let project = &t.source.project()?.project_id;
     let before = r
         .before
         .map(|b| format!("&before={b}"))

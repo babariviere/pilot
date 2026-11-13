@@ -117,8 +117,10 @@ mount(()=><View class="flex-1"><Input multiline value={text()} onChange={({value
                     daemon_id: "synthetic".into(),
                     lineage_id: "synthetic".into(),
                 },
-                project_id: "synthetic".into(),
-                project_path: directory.display().to_string(),
+                project: Some(pilot_day_native::host::Project {
+                    project_id: "synthetic".into(),
+                    project_path: directory.display().to_string(),
+                }),
             };
             let updates = app_update.then(|| {
                 use pilot_desktop_updater::{app_update::Connection, coordination::Location, manifest::Trust};

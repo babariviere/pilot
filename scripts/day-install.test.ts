@@ -65,9 +65,6 @@ async function fixture() {
 		port: address.port,
 		daemonId: "daemon",
 		lineageId: "lineage",
-		projectId: "project",
-		projectPath: project,
-		planningModel: "provider/model",
 		build: "1.2.3",
 		operationId: "8817ea02-15c3-4931-8800-65d359f13001",
 		savedState: join(profile, "drafts.json"),
@@ -117,10 +114,11 @@ test("preflight is read-only; install/repeat preserve all profile bytes and Day 
 		assert.match(await install(s, f.verify), /Already installed/);
 		assert.equal(await readFile(join(s.installDirectory, "window-journal"), "utf8"), "Day saved draft 👩‍💻");
 		assert.equal(await readFile(join(s.installDirectory, "Launch Day.command"), "utf8"), launcher(s));
-		assert.ok(launcher(s).includes("'\\''"));
+		assert.ok(!launcher(s).includes("--project"));
+		assert.ok(!launcher(s).includes("--planning-model"));
 		for (const [name, bytes] of Object.entries(f.files))
 			assert.equal(await readFile(join(f.profile, name), "utf8"), bytes);
-		assert.ok(f.requests.every((r) => r === "GET /api/hello" || r === "GET /api/projects/project"));
+		assert.ok(f.requests.every((r) => r === "GET /api/hello"));
 		await assert.rejects(install({ ...s, planningModel: "different" }, f.verify), /another selection/);
 	} finally {
 		await f.close();
@@ -144,11 +142,29 @@ test("failed staged verification leaves no installation and retry succeeds", asy
 	}
 });
 
+test("historical project/model fields neither gate startup nor reach the launcher", async () => {
+	const f = await fixture();
+	try {
+		const old = {
+			...f.selection,
+			projectId: "removed-project",
+			projectPath: "/no-longer-present",
+			planningModel: "",
+		};
+		await preflight(old, f.verify);
+		assert.equal(launcher(old), launcher(f.selection));
+		assert.deepEqual(f.requests, ["GET /api/hello"]);
+		assert.equal(old.operationId, f.selection.operationId);
+	} finally {
+		await f.close();
+	}
+});
+
 test("rejects a different profile, incompatible daemon, and changed bundle without writes", async () => {
 	const f = await fixture();
 	try {
 		await assert.rejects(
-			preflight({ ...f.selection, targetProfile: f.selection.projectPath }, f.verify),
+			preflight({ ...f.selection, targetProfile: join(f.root, "project '日本語'") }, f.verify),
 			/same canonical profile/,
 		);
 		await assert.rejects(preflight({ ...f.selection, binarySha256: "c".repeat(64) }, f.verify));

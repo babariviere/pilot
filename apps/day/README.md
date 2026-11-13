@@ -10,6 +10,9 @@ host in a separately verified distribution. Its
 [connected launch requirements](../../docs/technical/day-package-inputs.md#connected-launch)
 include explicit native selection and a compatible existing daemon. Build inputs
 are not a connected daily-driver candidate.
+The native launcher selects the profile/service, not a project or model. Today
+defaults to All projects and keeps its header filter per window. Cross-project
+sections are currently read only; New still requires an explicit project choice.
 Use the [connected candidate recipe](../../docs/technical/day-connected-candidate.md)
 to prepare the real native app without installing or updating it.
 For personal connected use, see [installation preparation](../../docs/technical/day-install.md).
