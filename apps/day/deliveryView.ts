@@ -6,7 +6,9 @@
 import { signal } from "nsh";
 import { MAX_PREVIEWS } from "./artifactReads";
 import { type ArtifactSelection, artifactSelection, samePin } from "./deliveryArtifact";
+import type { PublicationRecord } from "./deliveryBridge";
 import type {
+	AgentWork,
 	ArtifactLink,
 	CapturedArtifact,
 	DeliveredWork,
@@ -14,7 +16,7 @@ import type {
 	DeliverySource,
 	VerificationSubject,
 } from "./deliveryFeed";
-import { deliveryKey, subjectOf } from "./deliveryFeed";
+import { deliveryKey, subjectOf, workOf } from "./deliveryFeed";
 import { glide } from "./motion";
 
 /** The result open on its page, and the title Pilot knows for it. */
@@ -61,6 +63,126 @@ export type Inspection = {
 /** What each output row shows, by `inspectionKey`. */
 export const inspections = signal<Record<string, Inspection>>({});
 let generations = 0;
+
+/**
+ * The Agent work disclosure of one result, while it is open. Opening it reads
+ * once; closing it, a newer delivery or another page drops the read. A saved
+ * window never keeps it.
+ */
+export type WorkRead = {
+	deliveryId: string;
+	generation: number;
+	state: "reading" | "shown" | "refused";
+	work: AgentWork | null;
+	message: string;
+};
+
+/** Open Agent work disclosures, by result key. */
+export const agentWork = signal<Record<string, WorkRead>>({});
+
+/** Opens and reads the Agent work of the result shown. A press while it reads does nothing. */
+export async function showWork(source: DeliverySource, key: string, shown: DeliveredWork) {
+	if (!shown.deliveryId) return;
+	const now = agentWork()[key];
+	if (now && now.deliveryId === shown.deliveryId && now.state === "reading") return;
+	const generation = ++generations;
+	const reading: WorkRead = { deliveryId: shown.deliveryId, generation, state: "reading", work: null, message: "" };
+	glide();
+	agentWork.update((all) => ({ ...all, [key]: reading }));
+	const r = await source.agentWork(shown);
+	if (agentWork()[key]?.generation !== generation) return;
+	agentWork.update((all) => ({
+		...all,
+		[key]:
+			r.status === "shown" && workOf(r.work, shown)
+				? { ...reading, state: "shown", work: r.work }
+				: { ...reading, state: "refused", message: r.status === "refused" ? r.message : "" },
+	}));
+}
+
+/** Closes one result's Agent work. An answer still on its way is not shown. */
+export function hideWork(key: string) {
+	if (!agentWork()[key]) return;
+	agentWork.update((all) => {
+		const next = { ...all };
+		delete next[key];
+		return next;
+	});
+}
+
+/** Agent work to open with the next page of `key`, as a coordinator thread asks. */
+export const workOnOpen = signal<string | null>(null);
+
+/** One push or pull request attempt: what was saved before it ran and what its command returned. */
+export type Attempt = {
+	id: string;
+	kind: "push" | "pr_opened";
+	/** Saved before the command ran. Absent on older records. */
+	dispatch: PublicationRecord | null;
+	/** Saved after the command returned. Absent while unresolved. */
+	result: PublicationRecord | null;
+	/** An older record that kept no separate attempt. */
+	legacy: PublicationRecord | null;
+};
+
+/** The chat's records as attempts, newest first. Nothing is merged across attempts or guessed. */
+export function attemptsOf(actions: readonly PublicationRecord[]): Attempt[] {
+	const out = new Map<string, Attempt>();
+	for (const a of actions) {
+		const p = a.publication;
+		const id = p ? p.attemptId : a.id;
+		const at = out.get(id) ?? { id, kind: a.kind, dispatch: null, result: null, legacy: null };
+		if (!p) at.legacy = a;
+		else if (p.evidence === "command-dispatch") at.dispatch = a;
+		else at.result = a;
+		out.set(id, at);
+	}
+	const time = (t: Attempt) => (t.result ?? t.dispatch ?? t.legacy)?.at ?? 0;
+	return [...out.values()].sort((a, b) => time(b) - time(a));
+}
+
+/** An identifier's first twelve characters, as Pilot shows commits. */
+export function shortId(id: string): string {
+	return id.slice(0, 12);
+}
+
+/** A saved time in UTC, to the minute. */
+export function whenOf(ms: number): string {
+	return Number.isFinite(ms) && ms > 0 && ms <= 8.64e15
+		? `${new Date(ms).toISOString().slice(0, 16).replace("T", " ")} UTC`
+		: "Time unknown";
+}
+
+/** What an attempt was: "Push main", "Open a pull request". */
+export function attemptName(t: Attempt): string {
+	const a = t.result ?? t.dispatch ?? t.legacy;
+	if (t.kind === "pr_opened") return "Open a pull request";
+	return a?.branch ? `Push ${a.branch}` : "Push";
+}
+
+/**
+ * How an attempt ended, from its own saved records only. A command's success
+ * is not proof of what reached GitHub, and a missing result stays Unknown.
+ */
+export function attemptOutcome(t: Attempt): { word: string; known: boolean } {
+	const r = t.result ?? t.legacy;
+	if (!r) return { word: "No result saved. Unknown.", known: false };
+	const confirmed = r.publication ? r.publication.stage === "confirmed" : r.exitCode === 0;
+	if (confirmed && t.kind === "pr_opened")
+		return { word: r.prNumber ? `Created PR #${r.prNumber}` : "Command succeeded", known: true };
+	if (confirmed) return { word: "Command succeeded", known: true };
+	if (r.exitCode !== null && r.exitCode !== 0) return { word: `Failed, exit ${r.exitCode}`, known: true };
+	return { word: "Unknown", known: false };
+}
+
+/** The local tip a push selected before it ran. It is never proof that this revision reached GitHub. */
+export function selectionLine(t: Attempt): string {
+	const local = (t.dispatch ?? t.result)?.publication?.local;
+	if (!local) return "";
+	if (local.status !== "owned") return "Pilot did not save which local revision it selected.";
+	const tips = local.revisions.map((r) => `${shortId(r.commitId)} (change ${shortId(r.changeId)})`).join(", ");
+	return `Selected locally before it ran: ${tips}. Not proof that it reached GitHub.`;
+}
 
 /** The row of `link` on result `key`. */
 export function inspectionKey(key: string, link: { sessionId: string; artifactId: string }): string {
@@ -304,11 +426,13 @@ export function remindersOf(saved: readonly string[]): Record<string, string[]> 
 }
 
 /** Opens the page of `subject`, named `title` when Pilot knows it. */
-export function openDelivery(subject: VerificationSubject, title: string) {
+export function openDelivery(subject: VerificationSubject, title: string, work = false) {
 	const key = deliveryKey(subject);
 	if (title) deliveryTitles.update((all) => ({ ...all, [key]: title }));
 	doneAsk.set(null);
 	hideInspection();
+	agentWork.set({});
+	workOnOpen.set(work ? key : null);
 	glide();
 	deliveryRoute.set({ key, subject, title: title || deliveryTitles()[key] || "" });
 }
@@ -317,6 +441,8 @@ export function openDelivery(subject: VerificationSubject, title: string) {
 export function closeDelivery() {
 	doneAsk.set(null);
 	hideInspection();
+	agentWork.set({});
+	workOnOpen.set(null);
 	deliveryRoute.set(null);
 }
 

@@ -42,7 +42,9 @@ mount(() => (
 				<Text testID="last-note">{`Note sent: [${source.counts().note}]`}</Text>
 				<Text testID="opened">{`Opened: [${source.opened().join(" ")}]`}</Text>
 				<Text testID="reads">{`Source reads: [${source.reads().join(" ")}]`}</Text>
+				<Text testID="work-reads">{`Work reads: ${source.workReads().length}`}</Text>
 				<View class="flex-row flex-wrap gap-1">
+					<Action label="Refuse work" onPress={() => (source.refuseWork = "unavailable")} />
 					<Action label="Lose next answer" onPress={() => (source.script.loseNext = true)} />
 					<Action label="Lose next open" onPress={() => (source.script.loseOpen = true)} />
 					<Action

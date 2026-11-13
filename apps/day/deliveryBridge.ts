@@ -89,6 +89,71 @@ export function checkDelivery(window: string, operationId: string): Promise<Deli
 	return invoke(window, "day.delivery.check", { operationId });
 }
 
+/** A local selection saved before a push ran. Never proof that it reached GitHub. */
+export type LocalSelection =
+	| { status: "unknown" }
+	| {
+			status: "owned";
+			revisions: { changeId: string; commitId: string; startCommitId: string; baselineCommitId: string | null }[];
+	  };
+
+/** One saved push or PR-creation record of the chat that did the work. */
+export interface PublicationRecord {
+	id: string;
+	kind: "push" | "pr_opened";
+	branch: string | null;
+	prNumber: number | null;
+	url: string | null;
+	summary: string;
+	description: string;
+	at: number;
+	exitCode: number | null;
+	/** Absent on records saved before attempts and results were kept apart. */
+	publication: {
+		attemptId: string;
+		stage: "attempted" | "confirmed" | "unknown";
+		evidence: "command-dispatch" | "command-result";
+		local: LocalSelection;
+	} | null;
+}
+
+/** One retained comparison's owned change and how it changed, at one pinned repository operation. */
+export type OwnedChange =
+	| { snapshotId: string; state: "unavailable" }
+	| {
+			snapshotId: string;
+			state: "shown";
+			changeId: string;
+			creationCommitId: string;
+			baselineCommitId: string | null;
+			current: "present" | "absent";
+			seed: "current" | "retained-observation" | "creation-only";
+			revisions: { changeId: string; commitId: string; parents: string[]; ownedChange: boolean }[];
+			more: boolean;
+			operationId: string;
+	  };
+
+/** What Pilot recorded about the agent's work on one exact result. Not its report or the user's check. */
+export interface AgentWork {
+	version: 1;
+	reference: { subject: VerificationSubject; targetId: string; deliveryId: string; ownerSessionId: string };
+	changes: OwnedChange[];
+	moreChanges: boolean;
+	publication:
+		| { state: "unavailable" }
+		| { state: "shown"; scope: "mission" | "chat"; actions: PublicationRecord[]; more: boolean };
+}
+
+/** Passive read of the shown result's Agent work. Native checks the result again after it. */
+export function readAgentWork(window: string, shown: DeliveredWork) {
+	return call<AgentWork>(window, "day.delivery.work", {
+		subject: shown.subject,
+		targetId: shown.targetId,
+		deliveryId: shown.deliveryId,
+		ownerSessionId: shown.ownerSessionId,
+	});
+}
+
 /** One user press on an exact displayed PR resource. Never retry after a lost
  * answer. Native rechecks canonical scope and target before its URL-only callback.
  * Opening is not acceptance; artifacts, documents and paths are unsupported. */

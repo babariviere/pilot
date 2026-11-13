@@ -115,9 +115,15 @@ canonical PR identity and checks continue to use the existing on-demand GitHub d
 described in [delivery evidence](delivery-evidence.md#passive-code-observations). A later matching
 remote record proves its observed state, not that an unresolved original mutation succeeded.
 
-The smallest Day UI follow-up is a collapsed **Agent work** disclosure in existing task/result
-detail, linked from the coordinator thread. Reuse retained comparison history and the current audit
-feed. Show local change/revisions, separate attempt/result observations, exact PR and revision-bound
-checks with their provenance. Fetch evolution only when opened. Keep report, implementation,
-merge, production and user verification separate. This backend change does not add or redesign a
-Day screen; the disclosure's visual design remains a bounded Opus follow-up.
+Day shows this as a folded **Agent work** section on a delivered result's page. A linked task in
+a coordinator thread opens that page with it shown. Only Show reads, through the native
+`day.delivery.work` method: it rechecks the exact result (target, delivery and owner chat), reads
+evolution for at most three retained comparisons the result's submission names, and reads the owner
+chat's saved audit through `GET /api/sessions/:chat/publication-audit?expectedProjectId=`. That
+route needs the native capability and the chat's exact current project, and reads the saved
+`GitHubActionsDoc` passively, without starting or subscribing to the chat. A task result keeps only
+push and PR-creation records made in its mission, at most 20. The result is read again afterwards.
+Day pairs dispatch and result records by `attemptId`; a missing result stays Unknown, and a local
+selection is labelled as not proof of the remote revision. PR state and checks come from the
+result's existing saved observations; the PR head revision is not read there. A refused section
+shows as unavailable, never as empty.

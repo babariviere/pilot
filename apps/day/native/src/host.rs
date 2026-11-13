@@ -7,6 +7,7 @@ mod bridge;
 mod changes;
 pub(crate) mod delivery;
 pub(crate) mod delivery_artifact;
+pub(crate) mod delivery_work;
 mod enrollment;
 pub(crate) mod feedback;
 pub(crate) mod intake;

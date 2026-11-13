@@ -2550,6 +2550,29 @@ export function createDaemonServer(
 			authorizeProject();
 			return json(res, 200, { projectId, chats: chats.slice(0, 100), more: chats.length > 100 });
 		}
+		// Native passive read of one chat's saved push/PR audit. The stages are command
+		// observations, not remote proof; this read never starts, subscribes or replays.
+		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "publication-audit") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Publication audit is read-only");
+			if (!githubSetup) throw new ServiceUnavailable("Publication audit unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			const expected = url.searchParams.getAll("expectedProjectId");
+			if (expected.length !== 1 || [...url.searchParams.keys()].some((k) => k !== "expectedProjectId"))
+				throw new HttpError(400, "Exact expectedProjectId required");
+			const authorize = () => {
+				const session = sessions.get(parts[2]!);
+				if (!session) throw new HttpError(404, "Unknown chat");
+				if (!session.projectId || session.projectId !== expected[0])
+					throw new HttpError(403, "Publication audit unavailable in this scope");
+				projects.require(session.projectId);
+				return session;
+			};
+			const session = authorize();
+			const actions = await sessions.publicationAudit(session.id);
+			authorize();
+			return json(res, 200, { version: 1, sessionId: session.id, projectId: session.projectId, actions });
+		}
 		if ((parts[1] === "sessions" || (missions && parts[1] === "missions")) && parts[3] === "review") {
 			res.setHeader("cache-control", "no-store");
 			const chatRoute = parts[1] === "sessions";

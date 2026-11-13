@@ -11706,6 +11706,15 @@ ${run.excerpt}`,
 		return snapshot?.type === "snapshot" ? (snapshot.history?.question ?? null) : null;
 	}
 
+	/** Passive saved GitHub action audit, as the chat stored it. Never subscribes or starts a worker. */
+	async publicationAudit(id: string): Promise<import("@pilot/protocol").GitHubAction[]> {
+		const view = await this.recentColdSnapshot(this.require(id));
+		const audit = view.events.find((event) => event.type === "github_actions_update");
+		// A missing audit event is an unreadable view, not an empty record.
+		if (audit?.type !== "github_actions_update") throw new ServiceUnavailable("Publication audit unavailable");
+		return audit.actions;
+	}
+
 	private recentColdSnapshot(meta: SessionMeta): Promise<PersistedSessionView> {
 		// Do not reuse the legacy full-history cache, or fill one by opening a paged viewer.
 		const read = this.factories.snapshot

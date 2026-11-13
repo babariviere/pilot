@@ -9,6 +9,7 @@ import { type Signal, signal } from "nsh";
 import type { Refusal } from "./bridge";
 import { type ArtifactLink, artifactSelection, type CapturedArtifact, readDeliveryArtifact } from "./deliveryArtifact";
 import {
+	type AgentWork,
 	assessDelivery,
 	checkDelivery,
 	type DeliveredWork,
@@ -16,13 +17,14 @@ import {
 	type DeliveryReply,
 	listDeliveries,
 	openDeliveryOutput,
+	readAgentWork,
 	readDelivery,
 	readSavedDeliveries,
 	type VerificationSubject,
 } from "./deliveryBridge";
 import { glide } from "./motion";
 
-export type { ArtifactLink, CapturedArtifact, DeliveredWork, DeliveryOperation, VerificationSubject };
+export type { AgentWork, ArtifactLink, CapturedArtifact, DeliveredWork, DeliveryOperation, VerificationSubject };
 
 /** What the user says about a delivered result. */
 export type Assessment = "done" | "send_back" | "reopen";
@@ -103,6 +105,9 @@ export type OpenResult = { status: "opened" | "refused" | "unknown"; message: st
  */
 export type InspectResult = { status: "shown"; artifact: CapturedArtifact } | { status: "refused"; message: string };
 
+/** What one read of a result's Agent work found, or why nothing is shown. Reading changes nothing. */
+export type AgentWorkResult = { status: "shown"; work: AgentWork } | { status: "refused"; message: string };
+
 /** A pull request linked to a result, as the page shows it. */
 export type OutputLink = DeliveredWork["pullRequests"][number];
 
@@ -136,6 +141,12 @@ export interface DeliverySource {
 	 * saved or retried, there is no latest revision, and it is never a check.
 	 */
 	inspect(shown: DeliveredWork, link: ArtifactLink): Promise<InspectResult>;
+	/**
+	 * Reads what Pilot recorded about the agent's work on exactly the result
+	 * shown: its owned changes and the chat's saved pushes and pull requests.
+	 * Passive and read once per call; never the agent's report or a check.
+	 */
+	agentWork(shown: DeliveredWork): Promise<AgentWorkResult>;
 	dispose(): void;
 }
 
@@ -251,6 +262,40 @@ export function refusedInspect(refusal: Refusal): InspectResult {
 		default:
 			return r("Pilot could not read this source. Nothing is shown.");
 	}
+}
+
+/** What a refused Agent work read means. A read changes nothing, so no answer is Unknown. */
+export function refusedAgentWork(refusal: Refusal): AgentWorkResult {
+	const r = (message: string): AgentWorkResult => ({ status: "refused", message });
+	switch (refusal) {
+		case "stale":
+			return r("This result changed since Pilot read it. Look at it again.");
+		case "busy":
+		case "closed":
+			return r("Pilot is closing. Nothing is shown.");
+		case "offline":
+			return r("Pilot could not reach its service. Nothing is shown.");
+		case "identity":
+			return r("The Pilot service changed. Open Pilot again. Nothing is shown.");
+		case "invalid":
+			return r("Pilot's service answered in a way this app does not understand. Nothing is shown.");
+		case "denied":
+		case "unavailable":
+			return r("This Pilot service cannot show agent work here.");
+		default:
+			return r("Pilot could not read the agent's work. Nothing is shown, and nothing changed.");
+	}
+}
+
+/** Whether `work` is about exactly the result `shown`. */
+export function workOf(work: AgentWork, shown: DeliveredWork): boolean {
+	const r = work.reference;
+	return (
+		deliveryKey(r.subject) === deliveryKey(shown.subject) &&
+		r.targetId === shown.targetId &&
+		r.deliveryId === shown.deliveryId &&
+		r.ownerSessionId === shown.ownerSessionId
+	);
 }
 
 /** The web address a link opens: the pull request's own, else the linked one. */
@@ -679,6 +724,15 @@ export class ConnectedDelivery implements DeliverySource {
 		// A changed result or pin: read the result again so the page shows what is current.
 		if (r.refusal === "stale") void this.read(shown.subject);
 		return refusedInspect(r.refusal);
+	}
+
+	async agentWork(shown: DeliveredWork): Promise<AgentWorkResult> {
+		if (!shown.deliveryId || !shown.ownerSessionId) return refusedAgentWork("unavailable");
+		const r = await readAgentWork(this.#window, shown);
+		if (r.ok) return workOf(r.snapshot, shown) ? { status: "shown", work: r.snapshot } : refusedAgentWork("invalid");
+		// A changed result: read it again so the page shows what is current.
+		if (r.refusal === "stale") void this.read(shown.subject);
+		return refusedAgentWork(r.refusal);
 	}
 
 	dispose(): void {

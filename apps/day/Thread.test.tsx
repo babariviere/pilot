@@ -190,6 +190,17 @@ test("unreadable threads are not shown as none", async () => {
 	expect(app.texts().some((t) => t.includes("this is not the same as having none"))).toBe(true);
 });
 
+test("a linked task's Agent work opens its result page and sends nothing", async () => {
+	const app = await thread();
+	// A linked task with a result opens its page with Agent work shown. That only reads.
+	await app.press("id:thread-agent-work-t-1");
+	await app.waitFor("id:delivery");
+	expect(app.shows("#1 Read the exporter")).toBe(true);
+	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
+	await app.keyboard.press("escape");
+	await app.waitFor("id:thread-reply");
+});
+
 test("Escape closes an open link list before leaving the thread, and keeps the words", async () => {
 	const app = await thread();
 	await app.type("id:thread-reply", "Keep me");

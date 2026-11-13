@@ -48,6 +48,7 @@ pub const METHODS: &[&str] = &[
     "day.delivery.sendBack",
     "day.delivery.reopen",
     "day.delivery.check",
+    "day.delivery.work",
     "day.artifacts.read",
     "day.artifacts.source",
     "day.today.read",
@@ -219,6 +220,7 @@ pub(crate) enum Command {
     DeliveryOpen(crate::host::delivery::Open),
     DeliveryWrite(crate::host::delivery::Write),
     DeliveryCheck(String),
+    DeliveryWork(crate::host::delivery_work::Request),
     Today,
     Mission(String),
     Pause(crate::model::PauseIntent),
@@ -514,6 +516,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: Lookup = exact(args)?;
             mission(&r.operation_id)?;
             C::DeliveryCheck(r.operation_id)
+        }
+        "day.delivery.work" => {
+            let r: crate::host::delivery_work::Request = exact(args)?;
+            r.validate()?;
+            C::DeliveryWork(r)
         }
         "day.intake.triage" | "day.intake.start" => {
             let r: crate::host::intake::Intent = exact(args)?;

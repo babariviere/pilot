@@ -6,7 +6,9 @@
 import { signal } from "nsh";
 import type { Refusal } from "./bridge";
 import { artifactSelection } from "./deliveryArtifact";
+import type { AgentWork } from "./deliveryBridge";
 import {
+	type AgentWorkResult,
 	type ArtifactLink,
 	type Assessment,
 	type CapturedArtifact,
@@ -20,6 +22,7 @@ import {
 	linkUrl,
 	type OpenResult,
 	type OutputLink,
+	refusedAgentWork,
 	refusedInspect,
 	refusedOpen,
 	UNKNOWN,
@@ -160,6 +163,100 @@ export const DEMO_TITLES: Record<string, string> = {
 	"chat/mock-project/explain-exports": "Explain CSV exports in the guide",
 };
 
+const hex = (c: string, n = 40) => c.repeat(n);
+
+/**
+ * The demo History slice's agent work: one owned change rebased once, a
+ * confirmed push of main, a pull request whose command result never came
+ * back, and an older record with no separate attempt.
+ */
+export function demoWork(work: DeliveredWork): AgentWork {
+	const change = "k".repeat(32);
+	const attempt = (id: string, kind: "push" | "pr_opened", at: number, branch: string | null) => ({
+		id: `${id}:attempt`,
+		kind,
+		branch,
+		prNumber: null,
+		url: null,
+		summary: kind === "push" ? "jj git push" : "gh pr create",
+		description: kind === "push" ? `pushed ${branch}` : "opened a PR",
+		at,
+		exitCode: null,
+		publication: {
+			attemptId: `${id}:attempt`,
+			stage: "attempted" as const,
+			evidence: "command-dispatch" as const,
+			local:
+				kind === "push"
+					? {
+							status: "owned" as const,
+							revisions: [
+								{ changeId: change, commitId: hex("c"), startCommitId: hex("a"), baselineCommitId: hex("b") },
+							],
+						}
+					: { status: "unknown" as const },
+		},
+	});
+	const push = attempt("call-1/0:0", "push", Date.UTC(2026, 10, 13, 9, 30), "main");
+	const pr = attempt("call-2/0:0", "pr_opened", Date.UTC(2026, 10, 13, 9, 40), null);
+	return {
+		version: 1,
+		reference: {
+			subject: work.subject,
+			targetId: work.targetId,
+			deliveryId: work.deliveryId ?? "",
+			ownerSessionId: work.ownerSessionId ?? "",
+		},
+		changes: [
+			{
+				snapshotId: "snap-1",
+				state: "shown",
+				changeId: change,
+				creationCommitId: hex("a"),
+				baselineCommitId: hex("b"),
+				current: "present",
+				seed: "current",
+				revisions: [
+					{ changeId: change, commitId: hex("c"), parents: [hex("d")], ownedChange: true },
+					{ changeId: change, commitId: hex("a"), parents: [hex("b")], ownedChange: true },
+				],
+				more: false,
+				operationId: hex("f", 128),
+			},
+			{ snapshotId: "snap-0", state: "unavailable" },
+		],
+		moreChanges: false,
+		publication: {
+			state: "shown",
+			scope: "mission",
+			more: false,
+			actions: [
+				{
+					id: "old-1:0",
+					kind: "push",
+					branch: "history",
+					prNumber: null,
+					url: null,
+					summary: "git push",
+					description: "pushed history",
+					at: Date.UTC(2026, 10, 12, 18, 0),
+					exitCode: 0,
+					publication: null,
+				},
+				push,
+				{
+					...push,
+					id: "call-1/0:0",
+					exitCode: 0,
+					at: push.at + 4000,
+					publication: { ...push.publication, stage: "confirmed", evidence: "command-result" },
+				},
+				pr,
+			],
+		},
+	};
+}
+
 export class ScriptedDelivery implements DeliverySource {
 	script: DeliveryScript = { loseNext: false, hold: false, loseOpen: false, holdReads: false, refuseReads: null };
 	/** Sends, Checks and the exact note last sent. */
@@ -174,6 +271,12 @@ export class ScriptedDelivery implements DeliverySource {
 	unavailable: Record<string, "missing" | "oversize" | "redacted" | "unsupported" | "invalid"> = {};
 	/** Results whose last read failed: the page keeps the earlier read and says so. */
 	unreadable = new Set<string>();
+	/** Agent work reads, in order, by result key. Reading is never a send. */
+	workReads = signal<string[]>([]);
+	/** The agent work each result shows, by key. Absent ones are refused as unavailable. */
+	work = new Map<string, (w: DeliveredWork) => AgentWork>([["task/mock-project/native/native-4", demoWork]]);
+	/** Refuse every Agent work read like native would. */
+	refuseWork: Refusal | null = null;
 	#heldReads: Array<() => void> = [];
 	works = new Map<string, DeliveredWork>();
 	#ops: DeliveryOperation[] = [];
@@ -407,6 +510,19 @@ export class ScriptedDelivery implements DeliverySource {
 						: { state: "text", source, containerSha256: "0".repeat(64), containerBytes: bytesOf(source) + 96 },
 			},
 		};
+	}
+
+	async agentWork(shown: DeliveredWork): Promise<AgentWorkResult> {
+		const key = deliveryKey(shown.subject);
+		this.workReads.set([...this.workReads(), key]);
+		if (this.refuseWork) return refusedAgentWork(this.refuseWork);
+		// Like native: the exact result, checked again after the read.
+		const now = this.works.get(key);
+		if (!now || now.deliveryId !== shown.deliveryId || now.ownerSessionId !== shown.ownerSessionId) {
+			return refusedAgentWork("stale");
+		}
+		const make = this.work.get(key);
+		return make ? { status: "shown", work: make(now) } : refusedAgentWork("unavailable");
 	}
 
 	dispose(): void {

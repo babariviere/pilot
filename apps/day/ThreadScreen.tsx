@@ -10,6 +10,7 @@
 import { effect, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
 import { Input } from "nsh/base";
 import type { Day } from "./day";
+import { openDelivery } from "./deliveryView";
 import { keepField, keepScroll, restoreScroll, scrollOf } from "./kept";
 import { glide } from "./motion";
 import {
@@ -368,10 +369,34 @@ function referenceWords(r: ThreadReference, catalog: Catalog): string {
 	return `Message ${r.entryId} of the coordinator conversation`;
 }
 
-/** What the thread links, and linking a task or decision. Linking never changes them. */
-function Links(props: { mirror: ThreadsMirror; missionId: string; topic: Topic; catalog: Catalog; canWrite: boolean }) {
+/**
+ * What the thread links, and linking a task or decision. Linking never changes them.
+ * A linked task with a result opens its page with Agent work shown; that only reads.
+ */
+function Links(props: {
+	mirror: ThreadsMirror;
+	missionId: string;
+	topic: Topic;
+	catalog: Catalog;
+	canWrite: boolean;
+	projectId: string;
+}) {
 	const key = () => draftKey(props.missionId, props.topic.id);
 	const open = () => linkOpen()[key()] === true;
+	const delivered = (r: ThreadReference) => {
+		if (r.kind !== "task" || !props.projectId) return null;
+		const t = props.catalog.tasks.find((x) => x.id === r.id);
+		return t && ["done", "in_review", "inReview"].includes(t.status) ? t : null;
+	};
+	const showWork = (r: ThreadReference) => {
+		const t = delivered(r);
+		if (!t) return;
+		openDelivery(
+			{ kind: "task", projectId: props.projectId, missionId: props.missionId, taskId: t.id },
+			`#${t.number} ${t.title}`,
+			true,
+		);
+	};
 	const has = (r: ThreadReference) =>
 		props.topic.references.some(
 			(x) => x.kind === r.kind && (x.kind === "history" ? false : x.id === (r as { id: string }).id),
@@ -396,10 +421,17 @@ function Links(props: { mirror: ThreadsMirror; missionId: string; topic: Topic; 
 			</If>
 			<Each of={props.topic.references} key={(r) => JSON.stringify(r)}>
 				{(r) => (
-					<View selectable>
-						<Text testID="thread-link" class="text-sm text-foreground">
+					<View selectable class="flex-row items-baseline gap-3">
+						<Text testID="thread-link" class="flex-1 text-sm text-foreground">
 							{referenceWords(r(), props.catalog)}
 						</Text>
+						<If when={delivered(r())}>
+							<InlineAction
+								testID={`thread-agent-work-${(r() as { id: string }).id}`}
+								label="Agent work"
+								onPress={() => showWork(r())}
+							/>
+						</If>
 					</View>
 				)}
 			</Each>
@@ -877,6 +909,7 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 									topic={t()}
 									catalog={m().snapshot?.catalog ?? { known: false, tasks: [], decisions: [] }}
 									canWrite={canWrite()}
+									projectId={props.day.delivery?.view().projectId ?? ""}
 								/>
 								<Conversation mirror={mirror} missionId={props.missionId} topic={t()} canLink={canWrite()} />
 								<Unsettled

@@ -6,6 +6,8 @@ import { type ArtifactSelection, capturedOf } from "./deliveryArtifact";
 import type { DeliveredWork } from "./deliveryContract";
 import {
 	agentLine,
+	attemptOutcome,
+	attemptsOf,
 	checkLine,
 	excerpt,
 	kindName,
@@ -14,7 +16,9 @@ import {
 	pullRequestLine,
 	SOURCE_CHARS,
 	SOURCE_LINES,
+	selectionLine,
 	unavailableLine,
+	whenOf,
 } from "./deliveryView";
 
 const desktop = { platform: "macos", width: 1100, height: 1200 } as const;
@@ -528,4 +532,136 @@ test("a long source shows its start with a note until Show all", () => {
 	expect(cut.text).toBe("x".repeat(SOURCE_CHARS - 1));
 	expect(cut.note).toBe("Showing the first 39,999 of 40,005 characters.");
 	expect(excerpt("short", false)).toEqual({ text: "short", note: "" });
+});
+
+const WORK = "id:agent-work-toggle";
+
+function workReads(app: { texts(): string[] }): string {
+	return app.texts().find((t) => t.startsWith("Work reads:")) ?? "";
+}
+
+async function pressWork(app: Awaited<ReturnType<typeof ready>>, selector = WORK) {
+	try {
+		await app.press(selector);
+	} catch (error) {
+		if ((error as { code?: string }).code !== "ERR_NSH_TEST_COVERED") throw error;
+		await app.scroll("id:agent-work", 600);
+		await app.press(selector);
+	}
+}
+
+test("Agent work stays folded until Show, reads once and keeps attempts, results and Unknown apart", async () => {
+	const app = await ready();
+	await openCsv(app);
+	// Opening the page reads no agent work.
+	expect(workReads(app)).toBe("Work reads: 0");
+	expect(app.shows("id:agent-work")).toBe(true);
+	expect(app.texts().some((t) => t.startsWith("Change "))).toBe(false);
+	await pressWork(app);
+	await app.waitFor("Change kkkkkkkkkkkk");
+	expect(workReads(app)).toBe("Work reads: 1");
+	// The owned change, its baseline and how it changed, at one repository operation.
+	expect(app.texts().includes("Started on bbbbbbbbbbbb. Created as aaaaaaaaaaaa.")).toBe(true);
+	expect(app.texts().includes("cccccccccccc on dddddddddddd")).toBe(true);
+	expect(app.texts().includes("In the repository")).toBe(true);
+	expect(
+		app.texts().includes("Read at repository operation ffffffffffff. Another chat may have made that operation."),
+	).toBe(true);
+	expect(
+		app
+			.texts()
+			.includes(
+				"Pilot cannot show this change here. It may be older than change tracking, or its history moved on.",
+			),
+	).toBe(true);
+	// A confirmed command, an attempt whose result never came back and an older record.
+	expect(app.texts().includes("Push main")).toBe(true);
+	expect(app.texts().find((t) => t === "Command succeeded")).toBe("Command succeeded");
+	expect(app.texts().includes("Open a pull request")).toBe(true);
+	expect(app.texts().includes("No result saved. Unknown.")).toBe(true);
+	expect(app.texts().includes("Push history")).toBe(true);
+	expect(app.texts().includes("2026-11-12 18:00 UTC. An older record: Pilot kept no separate attempt.")).toBe(true);
+	// A local selection is never shown as what reached GitHub.
+	expect(
+		app
+			.texts()
+			.includes(
+				"Selected locally before it ran: cccccccccccc (change kkkkkkkkkkkk). Not proof that it reached GitHub.",
+			),
+	).toBe(true);
+	expect(
+		app
+			.texts()
+			.includes(
+				"Pilot did not read the pull request's head revision here, so it cannot say which revision GitHub has.",
+			),
+	).toBe(true);
+	// Reading is not the user's check, a merge or a release.
+	expect(app.texts().includes("Not checked yet.")).toBe(true);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+	await pressWork(app);
+	expect(app.texts().includes("Change kkkkkkkkkkkk")).toBe(false);
+	expect(workReads(app)).toBe("Work reads: 1");
+});
+
+test("a newer result folds Agent work; a refused read says why and shows nothing else", async () => {
+	const app = await ready();
+	await openCsv(app);
+	await pressWork(app);
+	await app.waitFor("Change kkkkkkkkkkkk");
+	await app.press("New result");
+	await app.waitUntil(() => !app.texts().includes("Change kkkkkkkkkkkk"));
+	expect(workReads(app)).toBe("Work reads: 1");
+	await app.press("Refuse work");
+	await pressWork(app);
+	await app.waitFor("This Pilot service cannot show agent work here.");
+	expect(app.texts().includes("Change kkkkkkkkkkkk")).toBe(false);
+	expect(app.texts().includes("Push main")).toBe(false);
+	expect(workReads(app)).toBe("Work reads: 2");
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
+test("attempt outcomes come only from their own saved records", () => {
+	const base = {
+		kind: "push" as const,
+		branch: "main",
+		prNumber: null,
+		url: null,
+		summary: "jj git push",
+		description: "pushed main",
+		at: 1,
+		exitCode: null,
+		publication: null,
+	};
+	const local = { status: "unknown" as const };
+	const dispatch = {
+		...base,
+		id: "a:attempt",
+		publication: {
+			attemptId: "a:attempt",
+			stage: "attempted" as const,
+			evidence: "command-dispatch" as const,
+			local,
+		},
+	};
+	const failed = {
+		...base,
+		id: "a",
+		at: 2,
+		exitCode: 1,
+		publication: { attemptId: "a:attempt", stage: "unknown" as const, evidence: "command-result" as const, local },
+	};
+	const lost = { ...failed, exitCode: null };
+	const [one] = attemptsOf([dispatch, failed]);
+	expect(attemptOutcome(one)).toEqual({ word: "Failed, exit 1", known: true });
+	expect(selectionLine(one)).toBe("Pilot did not save which local revision it selected.");
+	expect(attemptOutcome(attemptsOf([dispatch, lost])[0])).toEqual({ word: "Unknown", known: false });
+	expect(attemptOutcome(attemptsOf([dispatch])[0])).toEqual({ word: "No result saved. Unknown.", known: false });
+	// An older record keeps its own exit only.
+	expect(attemptOutcome(attemptsOf([{ ...base, id: "old", exitCode: 0 }])[0])).toEqual({
+		word: "Command succeeded",
+		known: true,
+	});
+	expect(attemptsOf([dispatch, failed, { ...base, id: "old", at: 9 }]).map((a) => a.id)).toEqual(["old", "a:attempt"]);
+	expect(whenOf(0)).toBe("Time unknown");
 });

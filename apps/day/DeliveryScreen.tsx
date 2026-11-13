@@ -19,6 +19,7 @@ import { MAX_PREVIEWS } from "./artifactReads";
 import { artifactPreviewsAvailable } from "./bridge";
 import type { Day } from "./day";
 import { artifactSelection } from "./deliveryArtifact";
+import type { AgentWork, OwnedChange } from "./deliveryBridge";
 import {
 	type ArtifactLink,
 	type Assessment,
@@ -30,8 +31,13 @@ import {
 	webLink,
 } from "./deliveryFeed";
 import {
+	type Attempt,
 	agentLine,
+	agentWork,
 	artifactLine,
+	attemptName,
+	attemptOutcome,
+	attemptsOf,
 	backNotes,
 	backOpen,
 	checkLine,
@@ -41,6 +47,7 @@ import {
 	doneAsk,
 	dropInspections,
 	hideArtifact,
+	hideWork,
 	type Inspection,
 	inspectArtifact,
 	inspectionCurrent,
@@ -56,10 +63,15 @@ import {
 	pullRequestOpen,
 	reminderKey,
 	reminders,
+	selectionLine,
 	setNote,
 	setTicks,
+	shortId,
+	showWork,
 	titleOf,
 	unsettledLine,
+	whenOf,
+	workOnOpen,
 } from "./deliveryView";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
@@ -326,6 +338,231 @@ function Outputs(props: {
 				<Text class="text-xs text-faint">
 					Inspect source shows the saved text of a pinned revision. NSH previews run apart from Pilot and change
 					only their own state. Looking records nothing.
+				</Text>
+			</If>
+		</View>
+	);
+}
+
+/** A small heading inside Agent work. */
+function Part(props: { title: string }) {
+	return <Text class="pt-3 text-xs text-faint">{props.title}</Text>;
+}
+
+/** One owned change from a retained comparison, and how it changed. */
+function Change(props: { change: OwnedChange }) {
+	const c = () => props.change;
+	const shown = () => (c().state === "shown" ? (c() as Extract<OwnedChange, { state: "shown" }>) : null);
+	const seedLine = () => {
+		const s = shown();
+		if (!s || s.seed === "current") return "";
+		return s.seed === "retained-observation"
+			? "Read from Pilot's saved observations of this change. Later history may be missing."
+			: "Read from its first revision only. Later history may be missing.";
+	};
+	return (
+		<View selectable class="gap-0.5 border-t border-border py-2.5">
+			<If
+				when={shown()}
+				else={
+					<Text class="text-sm text-muted-foreground">
+						Pilot cannot show this change here. It may be older than change tracking, or its history moved on.
+					</Text>
+				}
+			>
+				<View class="flex-row items-baseline gap-3">
+					<Text class="flex-1 text-sm text-foreground">{`Change ${shortId(shown()?.changeId ?? "")}`}</Text>
+					<Text class="text-xs text-muted-foreground">
+						{shown()?.current === "present" ? "In the repository" : "No longer in the repository"}
+					</Text>
+				</View>
+				<Text class="text-xs text-muted-foreground">
+					{shown()?.baselineCommitId
+						? `Started on ${shortId(shown()?.baselineCommitId ?? "")}. Created as ${shortId(shown()?.creationCommitId ?? "")}.`
+						: `Starting point not recorded. Created as ${shortId(shown()?.creationCommitId ?? "")}.`}
+				</Text>
+				<Each of={shown()?.revisions ?? []} key={(r) => r.commitId}>
+					{(r) => (
+						<Text testID={`agent-work-revision-${r().commitId}`} class="text-xs text-muted-foreground">
+							{`${shortId(r().commitId)} on ${r().parents.map(shortId).join(", ") || "no parent"}${r().ownedChange ? "" : " · a related change"}`}
+						</Text>
+					)}
+				</Each>
+				<If when={shown()?.more}>
+					<Text class="text-xs text-faint">Older revisions are not shown.</Text>
+				</If>
+				<If when={seedLine()}>
+					<Text class="text-xs text-faint">{seedLine()}</Text>
+				</If>
+				<Text class="text-xs text-faint">
+					{`Read at repository operation ${shortId(shown()?.operationId ?? "")}. Another chat may have made that operation.`}
+				</Text>
+			</If>
+		</View>
+	);
+}
+
+/** One push or pull request attempt: its saved outcome, never a guess. */
+function AttemptRow(props: { attempt: Attempt }) {
+	const t = () => props.attempt;
+	const outcome = () => attemptOutcome(t());
+	const at = () => (t().result ?? t().dispatch ?? t().legacy)?.at ?? 0;
+	return (
+		<View selectable class="gap-0.5 border-t border-border py-2.5">
+			<View class="flex-row items-center gap-3">
+				<Text class="flex-1 text-sm text-foreground">{attemptName(t())}</Text>
+				<If when={!outcome().known}>
+					<Mark kind="unknown" />
+				</If>
+				<Text testID={`agent-work-outcome-${t().id}`} class="text-xs text-muted-foreground">
+					{outcome().word}
+				</Text>
+			</View>
+			<Text class="text-xs text-faint">
+				{t().legacy ? `${whenOf(at())}. An older record: Pilot kept no separate attempt.` : whenOf(at())}
+			</Text>
+			<If when={selectionLine(t())}>
+				<Text class="text-xs text-faint">{selectionLine(t())}</Text>
+			</If>
+		</View>
+	);
+}
+
+/** What the read found: owned changes, saved pushes and pull requests, and what GitHub showed. */
+function WorkRecord(props: { work: DeliveredWork; record: AgentWork }) {
+	const r = () => props.record;
+	const pub = () => r().publication;
+	const shownPub = () => {
+		const p = pub();
+		return p.state === "shown" ? p : null;
+	};
+	const attempts = () => attemptsOf(shownPub()?.actions ?? []);
+	const prs = () => ownPullRequests(props.work).filter((p) => p.kind === "github.pr");
+	return (
+		<View class="gap-0">
+			<Part title="Changes it owns" />
+			<If when={r().changes.length === 0}>
+				<Text class="py-1 text-sm text-muted-foreground">
+					This result names no retained change. Pilot does not guess one from authors or the workspace.
+				</Text>
+			</If>
+			<Each of={r().changes} key={(c) => c.snapshotId}>
+				{(c) => <Change change={c()} />}
+			</Each>
+			<If when={r().moreChanges}>
+				<Text class="text-xs text-faint">More retained changes are not shown.</Text>
+			</If>
+
+			<Part title="Pushes and pull requests" />
+			<If
+				when={shownPub()}
+				else={
+					<Text class="py-1 text-sm text-muted-foreground">
+						Pilot cannot read this chat's saved pushes and pull requests here.
+					</Text>
+				}
+			>
+				<Text class="pb-1 text-xs text-faint">
+					{shownPub()?.scope === "mission"
+						? "Saved by the chat that did this, while in this mission. They may cover more than this task."
+						: "Saved by this chat."}
+				</Text>
+				<If when={attempts().length === 0}>
+					<Text class="py-1 text-sm text-muted-foreground">
+						None saved. Pushes Pilot did not see are not shown.
+					</Text>
+				</If>
+				<Each of={attempts()} key={(a) => a.id}>
+					{(a) => <AttemptRow attempt={a()} />}
+				</Each>
+				<If when={shownPub()?.more}>
+					<Text class="text-xs text-faint">Older records are not shown.</Text>
+				</If>
+			</If>
+
+			<Part title="Seen on GitHub" />
+			<If when={prs().length === 0}>
+				<Text class="py-1 text-sm text-muted-foreground">No pull request is linked to this result.</Text>
+			</If>
+			<Each of={prs()} key={(p) => p.id}>
+				{(p) => (
+					<View selectable class="gap-0.5 border-t border-border py-2.5">
+						<View class="flex-row items-baseline gap-3">
+							<Text class="flex-1 text-sm text-foreground">{prName(p()).split(" · ")[0]}</Text>
+							<Text class="text-xs text-muted-foreground">{prState(p())}</Text>
+						</View>
+						<Text class="text-xs text-faint">{prObservation(p())}</Text>
+					</View>
+				)}
+			</Each>
+			<If when={prs().length > 0}>
+				<Text class="text-xs text-faint">
+					Pilot did not read the pull request's head revision here, so it cannot say which revision GitHub has.
+				</Text>
+			</If>
+		</View>
+	);
+}
+
+/**
+ * What Pilot recorded about the agent's work, folded until asked. Opening it
+ * reads once and records nothing. It is not the agent's report, a merge, a
+ * release or the user's check.
+ */
+function AgentWorkPanel(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: DeliveredWork; fresh: boolean }) {
+	const key = () => props.place.key;
+	const read = () => {
+		const r = agentWork()[key()];
+		return r && r.deliveryId === props.work.deliveryId ? r : null;
+	};
+	const owned = () => !!props.work.ownerSessionId;
+	const toggle = () => {
+		if (read()) {
+			glide();
+			hideWork(key());
+		} else void showWork(props.mirror.source, key(), props.work);
+	};
+	return (
+		<View testID="agent-work" class="gap-1">
+			<SectionTitle title="Agent work">
+				<If when={owned()}>
+					<Action
+						label={read() ? "Hide" : "Show"}
+						testID="agent-work-toggle"
+						accessibilityLabel={
+							read()
+								? "Hide the agent's work record."
+								: "Show the changes this agent owns and its saved pushes and pull requests. Reading records nothing."
+						}
+						disabled={!props.fresh && !read()}
+						onPress={toggle}
+					/>
+				</If>
+			</SectionTitle>
+			<If
+				when={read()}
+				else={
+					<Text class="text-sm text-muted-foreground">
+						{owned()
+							? "The changes this agent owns and its pushes and pull requests, as Pilot recorded them."
+							: "No agent chat is named for this result, so Pilot has no work record to show."}
+					</Text>
+				}
+			>
+				<If when={read()?.state === "reading"}>
+					<Text class="text-sm text-muted-foreground">Reading the agent's work…</Text>
+				</If>
+				<If when={read()?.state === "refused"}>
+					<View testID="agent-work-off" class="flex-row items-center gap-2.5">
+						<Mark kind="unknown" />
+						<Text class="flex-1 text-sm text-muted-foreground">{read()?.message ?? ""}</Text>
+					</View>
+				</If>
+				<If when={read()?.state === "shown" && read()?.work}>
+					<WorkRecord work={props.work} record={read()?.work as AgentWork} />
+				</If>
+				<Text class="pt-2 text-xs text-faint">
+					This is Pilot's record. It is separate from the agent's report, a merge, a release and your check.
 				</Text>
 			</If>
 		</View>
@@ -680,6 +917,15 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 		});
 	});
 	const anchors = new Map<string, ViewRef>();
+	// A coordinator thread's Agent work link opens it with the page, once.
+	effect(() => {
+		const w = work();
+		if (workOnOpen() !== key || !w?.deliveryId || !w.ownerSessionId || !fresh()) return;
+		untracked(() => {
+			workOnOpen.set(null);
+			void showWork(mirror.source, key, w);
+		});
+	});
 	// Escape works from the note too: the note closes first and keeps its words,
 	// then the source or preview opened last, then the page.
 	keymap.bind(
@@ -737,6 +983,9 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 							<View class="gap-10">
 								<Report work={w()} />
 								<Outputs mirror={mirror} place={props.place} work={w()} fresh={fresh()} anchors={anchors} />
+								<If when={w().deliveryId}>
+									<AgentWorkPanel mirror={mirror} place={props.place} work={w()} fresh={fresh()} />
+								</If>
 								<Stands work={w()} unsettled={unsettled()} />
 								<YourCheck mirror={mirror} place={props.place} work={w()} title={title()} />
 							</View>

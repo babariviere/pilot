@@ -5,6 +5,8 @@
 // no read has, "Coordinator replies" writes its answer, and "Save and reopen"
 // keeps the window as a close or an update saves it and shows it again fresh.
 import { mount, signal, Text, View } from "nsh";
+import { ScriptedDelivery } from "./deliveryDemo";
+import { mirrorDelivery } from "./deliveryFeed";
 import { MockDayScreen, openDay } from "./mockFeeds";
 import { ScriptedThreads, type ThreadsDemoNext } from "./threadDemo";
 import { mirrorThreads } from "./threadFeed";
@@ -13,7 +15,7 @@ import { Action } from "./ui";
 import { captureView, restoreView, startFresh } from "./updateView";
 
 const threads = new ScriptedThreads();
-const day = { ...openDay(), threads: mirrorThreads(threads) };
+const day = { ...openDay(), threads: mirrorThreads(threads), delivery: mirrorDelivery(new ScriptedDelivery()) };
 
 const NEXT: ThreadsDemoNext[] = ["unknown", "stale", "reject"];
 

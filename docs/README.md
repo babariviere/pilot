@@ -16,6 +16,9 @@ building still needs the separate Start work confirmation.
 Today To check discovers new mission deliveries from a saved first-use cutoff.
 Older work stays in missions, without being accepted or deleted. Your saved
 checks stay available. Other projects' results are read-only in this window.
+A result's Agent work section (folded until Show, or opened from a task linked in a thread) lists
+the changes its agent owns, the chat's saved pushes and pull requests, and what Pilot saw on GitHub.
+A push with no saved result stays Unknown. It is Pilot's record, not the agent's report or your check.
 For published native plans, Revisit mission requests planning only. Review new questions and
 the exact proposed changes, then pause and request a fresh preview before confirming. Earlier
 answers and finished work stay kept. Revisit never starts work or changes permissions.
