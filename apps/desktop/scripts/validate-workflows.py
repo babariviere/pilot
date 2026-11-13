@@ -19,7 +19,7 @@ ARCHIVES = {
     ("Linux", "x86_64"): ("linux_amd64", "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"),
 }
 WORKFLOWS = [ROOT / ".github/workflows" / name for name in
-             ("pr.yaml", "main.yaml", "tests.yaml", "release.yaml", "gui-package.yml", "linux-package.yml")]
+             ("pr.yaml", "main.yaml", "tests.yaml", "release.yaml", "gui-package.yml", "linux-package.yml", "day-qualification.yml")]
 
 
 def prepare():

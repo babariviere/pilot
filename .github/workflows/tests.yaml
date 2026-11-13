@@ -22,6 +22,25 @@ env:
   JJ_SHA256: 43daa37ce0f9716cdf6fb65a29cbcae74a3160aef048cf3cb3d166d41cb4ab58
 
 jobs:
+  # Always run, including Day-only changes. No native compiler, secrets or release effects.
+  day-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Day scripts, immutable inputs and package inventory regressions
+        run: |
+          set -euo pipefail
+          python3 -B -m unittest discover -s apps/day/scripts -p 'test_*.py'
+          for suite in day_build_inputs day_qualification bundle_runtime gui_release; do
+            python3 -B -m unittest discover -s apps/desktop/scripts -p "test_$suite.py"
+          done
+
   # Portable tests use Linux so they do not compete for macOS runner capacity.
   node:
     runs-on: ubuntu-24.04
@@ -95,9 +114,6 @@ jobs:
           jj --version
       - run: pnpm install --frozen-lockfile
       - run: pnpm test -- --lane=macos
-      - name: SwiftLint
-        if: ${{ !cancelled() }}
-        run: apps/macos/scripts/lint.sh
       - name: Packaging and release metadata tests
         run: |
           for script in apps/macos/scripts/*.sh; do bash -n "$script"; done

@@ -14,11 +14,12 @@ const jobOf = (workflow) => (name) => {
 const condition = (job) => job.match(/^    if: (.+)$/m)[1];
 // GitHub permits hyphenated identifiers; JavaScript requires bracket notation.
 const evaluate = (source, context) =>
-	new Function("github", "needs", "inputs", "always", `return ${source.replace(/needs\.([a-z-]+)/g, 'needs["$1"]')}`)(
+	new Function("github", "needs", "inputs", "always", "cancelled", `return ${source.replace(/^\$\{\{ (.+) \}\}$/, "$1").replace(/needs\.([a-z-]+)/g, 'needs["$1"]')}`)(
 		context.github,
 		context.needs,
 		context.inputs,
 		() => true,
+		() => context.cancelled ?? false,
 	);
 const run = (block, env, prefix = "") => {
 	const dir = mkdtempSync(join(tmpdir(), "pilot-workflow-"));
@@ -163,13 +164,9 @@ test("shared CI never builds or tests the legacy Swift app", () => {
 	}
 	assert.doesNotMatch(jobOf(workflow)("macos"), /id: changes|fetch-depth:|upload-artifact|actions\/cache|PILOT_SWIFT_JOBS/);
 	assert.doesNotMatch(workflow, /^    needs:/m, "remaining test lanes are independent");
-	// Keep local Swift source/build tooling, but no legacy release jobs or credentials.
+	// Obsolete Swift GUI tooling may be removed; shared runtime/release tools stay.
 	assert.doesNotMatch(read("release.yaml"), /macos-app:|macos-publish|SPARKLE_|macos-production-app/);
 	assert.doesNotMatch(read("release.yaml"), /swift-build|actions\/cache\/restore|actions\/cache\/save|stable-mtimes/);
-	const script = readFileSync(new URL("../bundle.sh", import.meta.url), "utf8");
-	assert.match(script, /Release bundles always compile from source/);
-	const guard = script.indexOf('if [ "$prebuilt" = 1 ] && [ "$runtime" = 1 ]');
-	assert.ok(guard >= 0 && guard < script.indexOf("swift build --package-path"));
 });
 
 test("Rust test, native and opt-in artifact jobs preserve platform and release boundaries", () => {
@@ -199,12 +196,10 @@ test("Rust test, native and opt-in artifact jobs preserve platform and release b
 	}
 });
 
-test("SwiftLint remains a strict static check without compiling the legacy app", () => {
+test("obsolete Swift GUI lint tooling is not a shared CI dependency", () => {
 	const macos = jobOf(read("tests.yaml"))("macos");
-	assert.match(macos, /- name: SwiftLint\n        if: \$\{\{ !cancelled\(\) \}\}\n        run: apps\/macos\/scripts\/lint\.sh/);
-	const script = readFileSync(new URL("../lint.sh", import.meta.url), "utf8");
-	assert.match(script, /--strict --force-exclude --no-cache/);
-	assert.doesNotMatch(script, /swift (build|test)|--fix|--baseline|--lenient/);
+	assert.doesNotMatch(macos, /SwiftLint|scripts\/lint\.sh/);
+	assert.match(macos, /scripts\/tests\/\*\.test\.mjs/);
 });
 
 test("release builds run only for newly created stable drafts or explicit retries on trusted main", () => {
@@ -236,7 +231,20 @@ test("release builds run only for newly created stable drafts or explicit retrie
 	c.github.event.repository.fork = true;
 	assert.equal(evaluate(source, c), false);
 	for (const name of ["macos-gui", "linux-gui", "gui-publish", "publish"]) {
-		assert.doesNotMatch(job(name), /^    if:/m, `${name} runs only after target succeeds`);
+		const gate = condition(job(name));
+		const dependencies = job(name).match(/^    needs: (.+)$/m)[1].replace(/[\[\]]/g, "").split(/,\s*/);
+		const current = context();
+		current.needs = Object.fromEntries(dependencies.map((dependency) => [dependency, { result: "success" }]));
+		assert.equal(evaluate(gate, current), true, `${name} admits complete dependencies`);
+		for (const dependency of dependencies) {
+			for (const result of ["failure", "skipped", "cancelled"]) {
+				current.needs[dependency].result = result;
+				assert.equal(evaluate(gate, current), false, `${name} refuses ${dependency}: ${result}`);
+			}
+			current.needs[dependency].result = "success";
+		}
+		current.cancelled = true;
+		assert.equal(evaluate(gate, current), false, `${name} refuses cancellation`);
 	}
 });
 
@@ -293,8 +301,6 @@ test("one serialized job publishes the complete draft after both platforms uploa
 	assert.match(publish, /ref: \$\{\{ github\.sha \}\}/);
 	assert.match(publish, /run: bash apps\/macos\/scripts\/finalize-release\.sh/);
 	assert.doesNotMatch(publish, /secrets\./);
-	const script = readFileSync(new URL("../publish-release.sh", import.meta.url), "utf8");
-	assert.doesNotMatch(script, /--draft=false/);
 });
 
 test("finalization verifies GUI signatures without requiring legacy Sparkle assets", () => {

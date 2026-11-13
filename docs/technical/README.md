@@ -30,6 +30,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Verified NSH app-relative daemon handoff](day-bundled-service.md)
 - [Day executable self-update handoff and exact production blockers](day-executable-handoff.md)
 - [Source-matched Day executable and package inputs](day-package-inputs.md)
+- [Day CI and release preparation, with unchanged shipping selection](day-ci-packaging.md)
 - [Connected native candidate preparation and launch](day-connected-candidate.md)
 - [Tool access by role](tool-access-by-role.md)
 - [System prompts by role](system-prompts-by-role.md)

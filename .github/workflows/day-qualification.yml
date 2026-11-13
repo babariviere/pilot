@@ -1,0 +1,90 @@
+name: Day unsigned input qualification
+
+# Deliberately uncalled. No push/tag/dispatch, secrets, signing or artifact upload.
+# Enabling a caller requires separate native acceptance and cutover authorization.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Full immutable source commit, including its build tools
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: day-native-qualification-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  inputs:
+    if: github.ref == 'refs/heads/main' && github.event.repository.fork == false && github.event_name != 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+      RUSTUP_TOOLCHAIN: 1.99.1
+      npm_config_manage_package_manager_versions: 'false'
+      npm_config_ignore_scripts: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Require an immutable native source
+        env:
+          SOURCE: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          test "$(uname -m)" = arm64
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/pnpm
+      - uses: jdx/mise-action@v2
+        with:
+          # Global MBX defaults, no task-local targets or compiler tuning.
+          tools: mr-boxington@1.30.0
+      - name: Prepare exact tools and frozen dependencies
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.99.1 --profile minimal
+          echo "NSH_DAY_REAL_CARGO=$(rustup which --toolchain 1.99.1 cargo)" >> "$GITHUB_ENV"
+          echo "RUSTC=$(rustup which --toolchain 1.99.1 rustc)" >> "$GITHUB_ENV"
+          echo "NSH_DAY_MBX=$(mise which mbx)" >> "$GITHUB_ENV"
+          stage="$RUNNER_TEMP/nsh-0.5.0"
+          mkdir "$stage"
+          curl --fail --location --output "$stage/nsh.tar.gz" https://github.com/longbridge/nsh/releases/download/v0.5.0/nsh-macos-arm64.tar.gz
+          echo "e6722427b391b00cf7ec13137db9366e78d1e7a045f2933cf00b340365309d9d  $stage/nsh.tar.gz" | shasum -a 256 --check
+          tar -xzf "$stage/nsh.tar.gz" -C "$stage"
+          echo "NSH_DAY_CLI=$stage/nsh/bin/nsh" >> "$GITHUB_ENV"
+          echo "694ab2f1e4b97871e42399ae55a916f4fb528df8319eb2c0965f9c68331ebdb8  $stage/nsh/bin/nsh" | shasum -a 256 --check
+          test "$("$stage/nsh/bin/nsh" --version)" = 'nsh 0.5.0 (f4d68f7)'
+          pnpm install --frozen-lockfile --ignore-scripts
+      - name: Day typecheck and focused hidden behavior tests
+        run: |
+          set -euo pipefail
+          apps/day/nsh.sh check
+          apps/day/scripts/typecheck.sh
+          apps/day/scripts/cargo test --locked --manifest-path apps/day/native/Cargo.toml --lib
+          # NSH accepts one path per invocation. Native.test.tsx needs a visible target.
+          for file in App Plan Intake Update; do apps/day/nsh.sh test "$file.test.tsx"; done
+      - name: Prepare locked offline input dependencies
+        run: python3 apps/desktop/scripts/prepare-day-qualification.py
+      - name: Build and qualify genuine Day inputs, never a GPUI rename
+        env:
+          SOURCE: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          export PILOT_DAY_QUICKJS_ARCHIVE="$PWD/apps/desktop/.tools/downloads/quickjs-ng-0.17.0.tar.gz"
+          python3 apps/desktop/scripts/day_build_inputs.py --source "$SOURCE" --output "$RUNNER_TEMP/day-inputs"
+          python3 apps/desktop/scripts/day_qualification.py --source "$SOURCE" --inputs "$RUNNER_TEMP/day-inputs" --output "$RUNNER_TEMP/day-qualification.json"
+          echo 'Unsigned Day inputs checked. No signed package, release, native acceptance or cutover.' >> "$GITHUB_STEP_SUMMARY"

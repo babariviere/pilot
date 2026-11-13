@@ -11,8 +11,8 @@ The input is a full immutable Pilot commit, not a working tree or bookmark.
 The builder extracts Git objects into a fresh private directory, then:
 
 1. Checks the native macOS arm64 host, installed Rust/Cargo 1.99.1,
-   mise-managed mbx and official Longbridge NSH 0.4.0. The installed CLI checksum
-   is pinned. Day's lock must select only release e626a8dd NSH crates and
+   mise-managed mbx and official Longbridge NSH 0.5.0. The installed CLI checksum
+   is pinned. Day's lock must select only release f4d68f7 NSH crates and
    must not contain GPUI. There is no CLI-build or source-patch fallback.
 2. Builds Day's own `pilot-desktop`, with `macos-host`, and the existing
    `pilot-desktop-update-helper`, with `native-macos`. Cargo JSON identifies
@@ -150,3 +150,6 @@ bytecode or admit fixture signatures. Native checks are hidden build-only
 evidence, not visible UI, installed-payload, signing or release acceptance.
 Production signed payloads and joined automatic-update acceptance remain
 unavailable until separately supplied and qualified.
+
+See [CI and release preparation](day-ci-packaging.md) for the dormant native
+qualification lane, automatic portable checks and unchanged shipping selection.
