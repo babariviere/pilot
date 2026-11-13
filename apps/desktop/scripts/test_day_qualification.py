@@ -261,9 +261,13 @@ class WorkflowTests(unittest.TestCase):
                       "github.event.pull_request.head.repo.full_name == github.repository", "persist-credentials: false"):
             self.assertIn(guard, workflow)
         for forbidden in ("  push:", "  workflow_dispatch:", "secrets:", "secrets.",
-                          "contents: write", "secrets: inherit", "continue-on-error", "upload-artifact@",
-                          "gui_release.py macos", "bundle_runtime.py bundle", "nsh.sh package"):
+                          "contents: write", "secrets: inherit", "continue-on-error",
+                          "gui_release.py macos", "nsh.sh package", "codesign"):
             self.assertNotIn(forbidden, workflow)
+        self.assertIn('bundle_runtime.py bundle --unsigned-day --source "$SOURCE"', workflow)
+        self.assertIn('bundle_runtime.py verify --unsigned-day "$RUNNER_TEMP/day-bundle/Pilot Next.app"', workflow)
+        self.assertIn('path: ${{ runner.temp }}/Pilot-Day-unsigned.zip', workflow)
+        self.assertIn("if-no-files-found: error", workflow)
         callers = []
         for path in (ROOT / ".github/workflows").glob("*"):
             if "uses: ./.github/workflows/day-qualification.yml" in path.read_text():

@@ -1,7 +1,8 @@
 name: Day unsigned input qualification
 
 # Main and same-repository PR checks only. Not acceptance or cutover authority.
-# No push/tag/dispatch, secrets, signing, shared build cache or artifact upload.
+# No push/tag/dispatch, secrets, signing or shared build cache.
+# The uploaded bundle is unsigned CI evidence, not an installable update.
 on:
   workflow_call:
     inputs:
@@ -89,15 +90,14 @@ jobs:
           node apps/day/scripts/test-artifact-source.mjs
           # NSH accepts one path per invocation. Native.test.tsx needs a visible target.
           for file in App Plan Intake Update; do apps/day/nsh.sh test "$file.test.tsx"; done
-      - name: Compile shared native helpers without the removed Swift GUI
+      - name: Stage source-matched runtime and shared native helpers
+        env:
+          SOURCE: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          apps/day/scripts/cargo build --locked --release --manifest-path apps/power/Cargo.toml --bin PilotPower
-          xcrun swiftc -O -warnings-as-errors -target arm64-apple-macosx15.0 \
-            -framework AppKit -framework Network -framework IOKit -framework CoreGraphics \
-            apps/macos/Sources/PilotSystemEvents/main.swift \
-            apps/macos/Sources/PilotSystemEvents/SystemPowerMonitor.swift \
-            -o "$RUNNER_TEMP/PilotSystemEvents"
+          RUSTUP_HOME="$PWD/apps/desktop/.tools/rustup" rustup toolchain install 1.98.1 --profile minimal --no-self-update
+          python3 apps/desktop/scripts/bundle_runtime.py runtime --source "$SOURCE" --output "$RUNNER_TEMP/day-runtime"
+          python3 apps/desktop/scripts/bundle_runtime.py native --source "$SOURCE" --output "$RUNNER_TEMP/day-helpers"
       - name: Prepare locked offline input dependencies
         run: python3 apps/desktop/scripts/prepare-day-qualification.py
       - name: Build and qualify genuine Day inputs, never a GPUI rename
@@ -107,5 +107,16 @@ jobs:
           set -euo pipefail
           export PILOT_DAY_QUICKJS_ARCHIVE="$PWD/apps/desktop/.tools/downloads/quickjs-ng-0.17.0.tar.gz"
           python3 apps/desktop/scripts/day_build_inputs.py --source "$SOURCE" --output "$RUNNER_TEMP/day-inputs"
-          python3 apps/desktop/scripts/day_qualification.py --source "$SOURCE" --inputs "$RUNNER_TEMP/day-inputs" --output "$RUNNER_TEMP/day-qualification.json"
-          echo 'Unsigned Day inputs checked. No signed package, release, native acceptance or cutover.' >> "$GITHUB_STEP_SUMMARY"
+          python3 apps/desktop/scripts/day_qualification.py --source "$SOURCE" --inputs "$RUNNER_TEMP/day-inputs" --runtime "$RUNNER_TEMP/day-runtime" --native "$RUNNER_TEMP/day-helpers" --output "$RUNNER_TEMP/day-qualification.json"
+          mkdir "$RUNNER_TEMP/day-bundle"
+          python3 apps/desktop/scripts/bundle_runtime.py bundle --unsigned-day --source "$SOURCE" --runtime "$RUNNER_TEMP/day-runtime" --executables "$RUNNER_TEMP/day-inputs" --native "$RUNNER_TEMP/day-helpers" --gui-resources "$RUNNER_TEMP/day-inputs/nsh" --output "$RUNNER_TEMP/day-bundle/Pilot Next.app"
+          python3 apps/desktop/scripts/bundle_runtime.py verify --unsigned-day "$RUNNER_TEMP/day-bundle/Pilot Next.app"
+          ditto -c -k --keepParent "$RUNNER_TEMP/day-bundle/Pilot Next.app" "$RUNNER_TEMP/Pilot-Day-unsigned.zip"
+          echo 'Unsigned Day bundle inventory checked. No signature, launch, release, native acceptance or cutover.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload unsigned Day bundle evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: pilot-day-unsigned-${{ github.sha }}
+          path: ${{ runner.temp }}/Pilot-Day-unsigned.zip
+          if-no-files-found: error
+          retention-days: 7

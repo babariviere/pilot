@@ -119,6 +119,14 @@ the existing 1 GiB debug allowance. Resources, other binaries, runtime inputs
 and signed/shared inventories keep 256 MiB per file; the total stays 2 GiB.
 This is assembly evidence, not a signed, launchable or accepted release.
 
+The Main and same-repository PR qualification uploads
+`Pilot-Day-unsigned.zip` as `pilot-day-unsigned-<commit>`. It contains
+`Pilot Next.app`, not a signed update. The workflow keeps the standalone
+updater and power checks and Day's headless boundary and connected tests.
+It no longer runs the GPUI-only visual runtime, visual session, artifact
+worker, NSH adapter or rendered Wayland probes. Day's headless checks do not
+replace production confinement, GPU or native platform acceptance.
+
 ## Shipping workflow audit
 
 | Existing path | Actual behavior and preparation boundary |
