@@ -2,9 +2,9 @@
 
 Status: source audit and isolated probes, **not a production artifact runtime**.
 No publication API, stored kind, schema, viewer, live effect or capability was
-added. The existing Day source reader stays inert. All NSH runtime claims are
-**UNVERIFIED until CI**. Local verification is lint/format only under the
-current development policy. Source findings below are not executed evidence.
+added. The existing Day source reader stays inert. Focused local execution on
+macOS arm64 now supplies the limited observations below. Source findings and
+headless results are **not production isolation or native acceptance**.
 
 ## Question and method
 
@@ -139,15 +139,73 @@ cache edit, WebView, VM containment or replacement architecture is proposed.
 
 ## Probe coverage and limits
 
-CI-only, still UNVERIFIED: local controls/comparison/reopen; stale event and
-control handles; frozen compilation after exact source-file edits; thrown
-errors and malformed source/imports/exports; denied fs/fetch/process/exit/host
-and global-process calls; hardening constructor reach-through; looping load,
-timer and promise work; heap/op/node exhaustion; disposal of pending spinning
-work; compiler parent/symlink traversal; shader validation and absent shader
-permission gate. A 30-second process deadline limits each whole probe in
-addition to the VM budgets. Temporary input is generated under the OS temp
-directory and removed after the owned child is reaped.
+The focused local command uses the supported MBX wrapper/global cache and the
+unchanged locked NSH 0.5.0 dependencies. It opens no native window or GPU
+renderer. A 30-second process deadline limits each whole probe in addition to
+the VM budgets. Temporary input is generated under the OS temp directory and
+removed after the owned child is reaped. This supervisor covers only these
+known test programs, not arbitrary native children or a production sandbox.
+
+### Executed findings (2026-11-13, macOS arm64)
+
+**Final result: 12 passed, 0 failed**, including each supervised child, in
+1.50 seconds after compilation. The supported MBX command below used the
+locked dependencies; only the test target and required dependencies were built.
+The source/fixture/documentation started unchanged from checkpoint
+`265749dc1badac8dd3994127762b321f20070759`. Repairs changed only this probe
+target and this document, not NSH, manifests, production code or CI selection.
+Execution used repository base `41b59b2bce0d04ebe38f01d08d957d1eca012c82`.
+Before publication, upstream `57820b54` changed Day's SHA-2/base64 dependency
+requirements. This evidence was rebased without changing those upstream edits;
+the focused result does not claim to verify that dependency update. The pinned
+NSH version and these probe sources were unchanged by it; new-head coverage
+remains with CI.
+
+The original checkpoint compiled and ran all 11 tests: 8 passed, 3 failed.
+There was no Rust compiler failure. The failures exposed probe/fixture defects:
+
+- The denial-result text starts with `exit:`. Headless treated that as a
+  selector prefix; the probe now explicitly uses `text:`.
+- After that selector repair, the next run exposed the obsolete raw import
+  `nsh/host`. NSH 0.5.0 serves `host` from `nsh`; the probe now uses that
+  public export. The missing module was not an observed denial.
+- A bare internal text node did not appear as a paragraph in Headless. The
+  result now uses public `Text`. That exposed the actual host result:
+  `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` when no host is advertised, not a
+  permission denial. The probe distinguishes absent-host and advertised-host
+  configurations without installing a handler or real channel.
+- Heap exhaustion first reports `Uncaught`, then `Stopped`. Taking only the
+  first report falsely rejected the stop. Heap/op/node probes now wait for
+  the actual `Stopped` report and assert the specific reason.
+- The recursive promise chain holds promises. It exhausted the 16 MiB heap
+  before the time budget; it cannot prove a promise time interrupt. That
+  case is separate from the load/timer time-budget assertions.
+
+| Boundary | Observed result and limit |
+| --- | --- |
+| TSX controls and comparison | Local count and alternative changed; reopening the same compiled bundle reset local state. Headless behavior only, not appearance/input acceptance. |
+| Old identity/bytes | Old event/control handles did not change the replacement VM; a compiled first source still showed first after the input file changed. No canonical stored-revision binding was implemented. |
+| Capability calls | File read, fetch, process run, process exit and global process spawn returned `ERR_ACCESS_DENIED`, not missing-file, DNS, TypeError or transport errors. An unadvertised host returned `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`; advertising a host (no handler/channel) instead produced `ERR_ACCESS_DENIED`. No real host action was dispatched. Only harmless nonexistent file/network/command targets were used. |
+| Source/module failures | Malformed source, unknown exports, absent Day module, file/HTTPS module imports and string-code constructors failed. Missing APIs/import resolution are not capability-denial evidence. |
+| Compiler imports | Owned parent-file imports and symlink re-exports compiled; missing import and malformed TSX failed. The compiler is demonstrably not a capture-root boundary. |
+| Shader source | Oversized/invalid WGSL failed; expensive valid WGSL compiled. A deny-all engine emitted a backdrop shader layer. No GPU work or pixel sampling occurred. |
+| Load and timer loops | The nested catch/load loop reported the 250 ms load-budget interrupt; the timer loop reported the 100 ms call-budget interrupt. This is not a native-code deadline. |
+| Promise recursion | The growing promise chain reached the JS heap ceiling and emitted `Stopped`, not a measured promise time-budget interrupt. The probe accepts either specific stop boundary without attributing heap exhaustion to time. |
+| Heap, pending operations and nodes | Separate fixtures emitted `Stopped` with out-of-memory, more than 4096 changes, and more than 256 nodes respectively. Native/GPU payload bytes remain outside the heap quota. |
+| Disposal | Dropping after the fixture's first `armed` timer report joined within 2 seconds despite a 10-second call budget. The second spinning timer is pending or running; its entry is not acknowledged, so this does not prove interruption of an already-entered spin. |
+
+These observations come from execution, not from the initial failed assertions.
+A missing service, TypeError, transport/DNS error or timeout never counts as an observed
+`ERR_ACCESS_DENIED`. No real credential was read, and no environment secrecy
+guarantee is established by these probes.
+
+The parent test runner survived the hostile fixtures and continued to subsequent
+tests. Children exited and were reaped; temporary-tree removal did not fail.
+The 30-second watchdog kill path was not triggered, so its presence is a source
+safeguard, not an observed timeout/recovery qualification. Existing non-host
+library dead-code and linker unwind-size warnings do not qualify or invalidate
+these headless observations; native exception/performance acceptance is outside
+this target.
 
 The existing `.github/workflows/day-qualification.yml` selects this exact test
 target after its library tests. It runs on macOS arm64 against the same locked
@@ -157,10 +215,12 @@ NSH dependencies. The selected CI command is:
 apps/day/scripts/cargo test --locked --manifest-path apps/day/native/Cargo.toml --test artifact_feasibility -- --test-threads=1
 ```
 
-No local test, build, NSH check or typecheck runs for this slice. CI has not yet
-reported a result. Do not infer compile success or runtime safety from source
-inspection, formatting, publication or CI target selection. Even passing CI
-would cover only these probes, not production/native acceptance.
+Only this affected test target and file formatting run locally under the focused
+test policy. No full suite, NSH check, broad typecheck, app rebuild or visible
+window is part of this qualification. Broader tests remain in CI; no CI result
+is inferred or polled. Even passing this target does not establish native/GPU
+memory quotas, compiler containment, hostile GPU deadlines, credential secrecy,
+all capability routes, process fault isolation or production/native acceptance.
 
 The fixture is a behavioral example, not a viewer design or visual acceptance.
 It owns local signals. Closing/disposal loses them; reopening the same compiled

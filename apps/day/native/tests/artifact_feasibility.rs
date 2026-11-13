@@ -101,6 +101,10 @@ impl MountSink for Errors {
 }
 
 fn failure(source: &str) -> AppError {
+    failure_matching(source, |_| true)
+}
+
+fn failure_matching(source: &str, matches: impl Fn(&AppError) -> bool) -> AppError {
     let (tx, rx) = mpsc::channel();
     let engine = Engine::start(
         isolated(Bundle::source(source.to_owned())),
@@ -108,9 +112,22 @@ fn failure(source: &str) -> AppError {
         Errors(Mutex::new(tx)),
     )
     .unwrap();
-    let result = rx
-        .recv_timeout(DEADLINE)
-        .expect("VM must report its failure");
+    let deadline = std::time::Instant::now() + DEADLINE;
+    let mut observed = Vec::new();
+    let result = loop {
+        let error = rx
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap_or_else(|error| {
+                panic!("VM failure for {source}: {error}; observed: {observed:?}")
+            });
+        eprintln!("probe failure: {error:?}");
+        if matches(&error) {
+            break error;
+        }
+        if observed.len() < 16 {
+            observed.push(error);
+        }
+    };
     drop(engine); // joins the engine, including an interrupted script
     result
 }
@@ -182,11 +199,9 @@ fn deny_policy_checks_calls_not_just_absent_services() {
         return;
     }
     let source = r#"
-        import {mount} from 'nsh';
-        import {text} from 'nsh:rt';
+        import {mount, host, Text} from 'nsh';
         import {readFile} from 'fs/promises';
         import process from 'process';
-        import {host} from 'nsh/host';
         const results = [];
         async function denied(label, call) {
             try { await call(); results.push(label + ':ALLOWED'); }
@@ -199,21 +214,28 @@ fn deny_policy_checks_calls_not_just_absent_services() {
             denied('exit', () => process.exit()),
             denied('host', () => host.call('day.connection.open', {})),
             denied('global-process', () => globalThis.process.spawn('/not-an-artifact-command')),
-        ]).then(() => { mount(() => text(results.sort().join('|'))); });
+        ]).then(() => { mount(() => Text({children: results.sort().join('|')})); });
     "#;
-    let mut app = Headless::start(isolated(Bundle::source(source.to_owned()))).unwrap();
-    app.wait_for("exit:ERR_ACCESS_DENIED|fs:ERR_ACCESS_DENIED|global-process:ERR_ACCESS_DENIED|host:ERR_ACCESS_DENIED|network:ERR_ACCESS_DENIED|process:ERR_ACCESS_DENIED").unwrap();
+    for (host_available, host_result) in [
+        (false, "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"),
+        (true, "ERR_ACCESS_DENIED"),
+    ] {
+        let mut config = isolated(Bundle::source(source.to_owned()));
+        // Advertise a host only. Never install a Day handler or real channel.
+        config.environment.host = host_available;
+        let mut app = Headless::start(config).unwrap();
+        app.wait_for(&format!("text:exit:ERR_ACCESS_DENIED|fs:ERR_ACCESS_DENIED|global-process:ERR_ACCESS_DENIED|host:{host_result}|network:ERR_ACCESS_DENIED|process:ERR_ACCESS_DENIED")).unwrap();
+    }
 }
 
 #[test]
-fn load_and_callback_loops_are_interrupted_even_inside_catch() {
+fn load_and_timer_loops_are_interrupted_even_inside_catch() {
     if supervised() {
         return;
     }
     for source in [
         "while (true) { try { while (true) {} } catch (_) {} }",
         "setTimeout(() => { while (true) {} }, 0)",
-        "Promise.resolve().then(function again() { return Promise.resolve().then(again) })",
     ] {
         let error = failure(source);
         assert!(error.message.contains("budget"), "{error:?}");
@@ -221,17 +243,44 @@ fn load_and_callback_loops_are_interrupted_even_inside_catch() {
 }
 
 #[test]
+fn growing_promise_chain_hits_heap_or_time_limit() {
+    if supervised() {
+        return;
+    }
+    let source =
+        "Promise.resolve().then(function again() { return Promise.resolve().then(again) })";
+    // The chain holds promises. Heap exhaustion can precede the time limit;
+    // its initial Uncaught diagnostic is not the engine's Stopped report.
+    let error = failure_matching(source, |error| {
+        error.is_stopped() || error.message.contains("budget")
+    });
+    assert!(
+        error.message.contains("budget") || error.message.contains("out of memory"),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn heap_and_op_exhaustion_stop_the_vm() {
     if supervised() {
         return;
     }
-    for source in [
-        "const held = []; for (;;) held.push(new Array(100000).fill(1));",
-        "import {text} from 'nsh:rt'; for (let n=0;n<10000;n++) text('x');",
-        "import {text} from 'nsh:rt'; for (let n=0;n<300;n++) text('x');",
+    for (source, reason) in [
+        (
+            "const held = []; for (;;) held.push(new Array(100000).fill(1));",
+            "out of memory",
+        ),
+        (
+            "import {text} from 'nsh:rt'; for (let n=0;n<10000;n++) text('x');",
+            "4096 changes",
+        ),
+        (
+            "import {text} from 'nsh:rt'; for (let n=0;n<300;n++) text('x');",
+            "256 nodes",
+        ),
     ] {
-        let error = failure(source);
-        assert!(error.is_fatal(), "{error:?}");
+        let error = failure_matching(source, AppError::is_stopped);
+        assert!(error.message.contains(reason), "{error:?}");
     }
 }
 
