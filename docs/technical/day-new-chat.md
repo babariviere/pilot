@@ -32,8 +32,8 @@ profile mutation, provider request, source sync or authentication recovery.
   during catalog I/O refuse the selection. No worker opens.
 * `day.projects.read {}` exposes the complete inventory and saved creation
   operation summaries through the existing root channel. Its `current` field
-  names the window's own project ID (Today's and new missions'), so New can
-  default to it. It is not a selection.
+  names the window's own project ID (Today's and new missions'). It is not a
+  selection, and New never defaults to it.
 * `day.chat.select {projectId,contextDigest,mode}` re-reads that selection and
   returns `ChatChoice`, adding a native UUID `draftId`. Selection creates no
   session. Ask means read-only; Build uses the project's existing workspace and
@@ -111,18 +111,25 @@ Existing intake, host, planning, control and saved-view suites remain the regres
 ## Screen
 
 New (`NewScreen.tsx`, `chatFeed.ts`, `chatCommands.ts`) consumes this seam.
-Opening New reads the projects and selects the user's earlier choice, else
-`current`. A pick whose project is gone stays unchosen. The screen drops answers
+Opening New reads the projects and selects the user's earlier choice. New never
+picks a project for the user: not `current`, not Today's scope and not the last
+one used. Until the user chooses, the picker reads "Choose a project" and both
+Plan a mission and Start as one chat stay unavailable. A pick whose project is
+gone stays unchosen. The screen drops answers
 to older selections, and Start chat sends only the newest accepted choice with
-the exact words. After an accepted creation it selects again, so the next chat
-gets a new draft ID. A stale creation selects again and sends nothing. While
+the exact words. An accepted creation that cleared its words uses the choice
+up: the next words need a project, and its selection a new draft ID. Leaving
+New with no words also drops the choice. A stale creation selects again and sends nothing. While
 any creation is Unknown, New shows it with Check and refuses another. Plan a
 mission stays pinned to the window's own project. Close and update save
-`SavedView.chat`; restore turns it into a choice to select again.
+`SavedView.chat` with `chatChosen`; restore turns a chosen one into a choice to
+select again. A view saved before `chatChosen` existed may hold the old default
+project, so it comes back with no project (its draft ID and words stay), and the
+native host does not restore it as the latest selection.
 
 `Chat.test.tsx` covers the screen rules on a scripted source (`chatDemo.ts`).
 `native/tests/new_chat_today.rs` runs `Connected.tsx` on the isolated daemon:
-default project, explicit other project and Ask, a lost creation ACK across a
+no default project, explicit own and other project and Ask, a lost creation ACK across a
 cold reopen, one Check lookup, no second send, and the saved chat in the chosen
 project. No native window, real provider, production profile or running app is
 used by these tests.

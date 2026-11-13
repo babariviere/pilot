@@ -832,6 +832,9 @@ async fn run(
         .lock()
         .expect("native saved window poisoned")
         .as_ref()
+        // Only the user's own choice comes back. An older view's choice may
+        // be New's former default project, which the user never chose.
+        .filter(|w| w.view["chatChosen"] == true)
         .and_then(|w| serde_json::from_value(w.view["chat"].clone()).ok());
     shared
         .startup_ready

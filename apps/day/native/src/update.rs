@@ -258,6 +258,11 @@ pub struct SavedView {
     /// Standalone New's project, permission and draft identity. Restoring never creates a chat.
     #[prop(default)]
     pub chat: Option<crate::new_chat::ChatChoice>,
+    /// Whether the user chose `chat`'s project on New themselves. New never
+    /// picks one for them. False in a view saved before this field existed,
+    /// whose project may be New's old default: it comes back unchosen.
+    #[prop(default)]
+    pub chat_chosen: bool,
     /// The Today item the user brought to the front, or empty.
     pub focused: String,
     /// The planning question the user was on in each interview, as "interview/question".

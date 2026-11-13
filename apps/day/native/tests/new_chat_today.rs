@@ -4,8 +4,8 @@
 //! needs the repository's Node dependencies). Headless: no visible window,
 //! provider, source sync or external write.
 //!
-//! New defaults to the window's own project; choosing the other project and
-//! Ask only reads its setup. Start chat sends once. A creation whose answer is
+//! New starts with no project, and both starts wait for the user's choice;
+//! choosing a project and Ask only reads its setup. Start chat sends once. A creation whose answer is
 //! lost stays "not confirmed" across a native reopen; Check reads the saved
 //! receipt once, nothing is sent again, and the saved chat is in the chosen
 //! project.
@@ -125,6 +125,7 @@ fn new_chat_starts_once_in_the_chosen_project_and_a_lost_answer_stays_check_only
         .unwrap()
         .clone();
     let own_path = own["projectPath"].as_str().unwrap().to_owned();
+    let own_name = own["name"].as_str().unwrap().to_owned();
     let other_path = other["projectPath"].as_str().unwrap().to_owned();
     let other_name = other["name"].as_str().unwrap().to_owned();
     assert_ne!(other_name, own["name"].as_str().unwrap());
@@ -135,11 +136,21 @@ fn new_chat_starts_once_in_the_chosen_project_and_a_lost_answer_stays_check_only
     assert!(!has(&app, "Mock data"));
     app.press("role:button[New]").unwrap();
     wait(&mut app, "What do you want done?");
-    // New defaults to this window's own project.
-    wait_text(&mut app, &own_path);
+    // New never picks a project, not even this window's own.
+    wait_text(&mut app, "No project is chosen for you.");
     app.type_text("id:goal", "  Exact words 👩🏽‍💻\nkept  ")
         .unwrap();
-    // Choosing the other project only reads its setup.
+    assert!(!app.screen().enabled("role:button[Plan a mission]").unwrap());
+    assert!(
+        !app.screen()
+            .enabled("role:button[Start as one chat]")
+            .unwrap()
+    );
+    // Choosing a project only reads its setup.
+    app.press(PICKER).unwrap();
+    app.press(&format!("text:{own_name}")).unwrap();
+    wait_text(&mut app, &own_path);
+    enabled(&mut app, "role:button[Plan a mission]");
     app.press(PICKER).unwrap();
     app.press(&format!("text:{other_name}")).unwrap();
     wait_text(&mut app, &other_path);

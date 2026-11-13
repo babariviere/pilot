@@ -9,7 +9,7 @@ const COUNTS = (s: number, n: number, c: number) => `Selects: ${s} · Sends: ${n
 async function ready() {
 	const app = await open("./ChatFixture.tsx", desktop);
 	await app.waitFor("What do you want done?");
-	await app.waitFor("/Users/you/src/pilot");
+	await app.waitFor("No project is chosen for you.");
 	return app;
 }
 
@@ -31,15 +31,19 @@ async function choose(app: Awaited<ReturnType<typeof ready>>, name: string) {
 	await app.press(`text:${name}`);
 }
 
-test("New defaults to this window's project, and choosing another sends nothing and keeps the words", async () => {
+test("New starts with no project: both starts wait for the user's choice, and choosing sends nothing", async () => {
 	const app = await ready();
-	expect(counts(app)).toContain(COUNTS(1, 0, 0));
+	expect(counts(app)).toContain(COUNTS(0, 0, 0));
 	await app.type("id:goal", "Fix the flaky upload test 👩🏽‍💻");
-	expect(app.enabled("role:button[Plan a mission]")).toBe(true);
+	expect(app.shows("Choose a project")).toBe(true);
+	expect(app.shows("Plan a mission and Start as one chat wait for a project.")).toBe(true);
+	expect(app.enabled("role:button[Plan a mission]")).toBe(false);
+	expect(app.enabled("role:button[Start as one chat]")).toBe(false);
 	await choose(app, "website");
 	await app.waitFor("/Users/you/src/website");
 	expect(app.value("id:goal")).toBe("Fix the flaky upload test 👩🏽‍💻");
-	expect(counts(app)).toContain(COUNTS(2, 0, 0));
+	expect(counts(app)).toContain(COUNTS(1, 0, 0));
+	expect(app.enabled("role:button[Start as one chat]")).toBe(true);
 	// Missions still start in this window's project: Plan a mission says so.
 	expect(app.enabled("role:button[Plan a mission]")).toBe(false);
 	expect(app.shows("Missions start in pilot here. Choose pilot to plan one, or start this as one chat.")).toBe(true);
@@ -49,7 +53,7 @@ test("New defaults to this window's project, and choosing another sends nothing 
 	expect(counts(app)).toContain("Sends: 0");
 });
 
-test("a chat starts once in the chosen project, with the access chosen and the exact words", async () => {
+test("a chat starts once in the chosen project, with the access chosen and the exact words, and uses its choice up", async () => {
 	const app = await ready();
 	await app.type("id:goal", "  Exact words\nkept  ");
 	await choose(app, "website");
@@ -67,6 +71,11 @@ test("a chat starts once in the chosen project, with the access chosen and the e
 	expect(counts(app)).toContain("Sends: 1");
 	expect(app.value("id:goal")).toBe("");
 	expect(app.shows("A chat in website")).toBe(true);
+	// The next words need a project of their own: New does not reuse the last one.
+	await app.waitFor("No project is chosen for you.");
+	await app.type("id:goal", "Next ask");
+	expect(app.enabled("role:button[Start as one chat]")).toBe(false);
+	expect(app.enabled("role:button[Plan a mission]")).toBe(false);
 });
 
 test("answers to older choices are dropped: the newest choice is the one sent", async () => {
@@ -126,6 +135,7 @@ test("a removed project is never swapped for another", async () => {
 test("a lost answer stays not confirmed, blocks another chat, and Check reads it once", async () => {
 	const app = await ready();
 	await app.type("id:goal", "Lost answer");
+	await choose(app, "pilot");
 	await app.press("Lose next answer");
 	await app.press("role:button[Start as one chat]");
 	await app.waitFor("pilot · Default model · medium thinking");
@@ -158,6 +168,37 @@ test("save and reopen keeps the words and the project, and sends nothing", async
 	expect(app.value("id:goal")).toBe("  Keep me 日本語 ✓\n");
 	expect(counts(app)).toContain("Sends: 0");
 	expect(app.shows("Started one")).toBe(false);
+});
+
+test("an older save's project was never the user's choice: it comes back with no project", async () => {
+	const app = await ready();
+	await app.type("id:goal", "Older save 日本語");
+	await choose(app, "website");
+	await app.waitFor("/Users/you/src/website");
+	await app.press("Reopen as an older save");
+	await app.waitFor("No project is chosen for you.");
+	expect(app.value("id:goal")).toBe("Older save 日本語");
+	expect(app.enabled("role:button[Start as one chat]")).toBe(false);
+	expect(app.enabled("role:button[Plan a mission]")).toBe(false);
+	expect(counts(app)).toContain("Sends: 0");
+});
+
+test("leaving New without words drops the project; words keep it", async () => {
+	const app = await ready();
+	await choose(app, "website");
+	await app.waitFor("/Users/you/src/website");
+	await app.keyboard.press("escape");
+	expect(app.shows("What do you want done?")).toBe(false);
+	await app.press("Open New");
+	await app.waitFor("No project is chosen for you.");
+	await app.type("id:goal", "Kept with its project");
+	await choose(app, "website");
+	await app.waitFor("/Users/you/src/website");
+	await app.keyboard.press("escape");
+	await app.press("Open New");
+	await app.waitFor("/Users/you/src/website");
+	expect(app.value("id:goal")).toBe("Kept with its project");
+	expect(counts(app)).toContain("Sends: 0");
 });
 
 test("without the service, New lists no projects and starts nothing", async () => {

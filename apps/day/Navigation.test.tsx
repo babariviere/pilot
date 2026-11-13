@@ -99,6 +99,9 @@ test("going home and back keeps New's goal and an interview answer exactly, and 
 	await app.press("id:new-open");
 	await app.waitFor("id:goal");
 	await app.type("id:goal", "  Keep this goal 日本語 ✓\n");
+	await app.press("label:Project for a new chat");
+	await app.press("text:pilot");
+	await app.waitFor("/Users/you/src/pilot");
 	await app.press("id:home");
 	await app.waitFor(TODAY);
 	await app.press("id:plan-export");
@@ -109,7 +112,8 @@ test("going home and back keeps New's goal and an interview answer exactly, and 
 	await app.waitFor(TODAY);
 	await app.press("id:new-open");
 	expect(app.value("id:goal")).toBe("  Keep this goal 日本語 ✓\n");
-	// Leaving planned nothing: New still offers its first step.
+	// Leaving planned nothing: New still offers its first step, in the project the user chose.
+	await app.waitFor("/Users/you/src/pilot");
 	expect(app.enabled("role:button[Plan a mission]")).toBe(true);
 	await app.press("id:home");
 	await app.press("id:plan-export");

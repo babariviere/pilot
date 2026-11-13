@@ -3,10 +3,19 @@
 // work needs a separate exact-plan Start. A small ask starts one chat in the
 // project the user chose, after they confirm the exact words, project and
 // access. Choosing a project only reads its setup: nothing starts, and no
-// existing chat moves or changes what it may do.
-import { effect, keymap, Scroll, Text, untracked, View } from "nsh";
+// existing chat moves or changes what it may do. The user always chooses the
+// project: New never picks one, so both starts wait for that choice.
+import { cleanup, effect, keymap, Scroll, Text, untracked, View } from "nsh";
 import { Input, RadioGroup } from "nsh/base";
-import { checkNewChat, chooseChat, modeWords, prepareChat, projectName, startNewChat } from "./chatCommands";
+import {
+	checkNewChat,
+	chooseChat,
+	dropChoice,
+	modeWords,
+	prepareChat,
+	projectName,
+	startNewChat,
+} from "./chatCommands";
 import type { ChatMode } from "./chatFeed";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
@@ -40,6 +49,11 @@ function ProjectRow(props: { plans: Plans }) {
 	const chosen = () => view().projects.find((p) => p.projectId === chatPick()?.projectId) ?? null;
 	const items = () => view().projects.map((p) => ({ value: p.projectId, title: p.name }));
 	const placeholder = () => (view().availability === "reading" ? "Reading projects…" : "Choose a project");
+	const where = () => {
+		const c = chosen();
+		if (c) return c.projectPath;
+		return view().availability === "live" && !chatPick() ? "No project is chosen for you." : "";
+	};
 	return (
 		<View testID="new-project" class="gap-1.5">
 			<View class="flex-row items-center gap-2.5">
@@ -62,7 +76,9 @@ function ProjectRow(props: { plans: Plans }) {
 					}}
 				/>
 				<View selectable class="flex-1">
-					<Text class="truncate text-xs text-faint">{chosen()?.projectPath ?? ""}</Text>
+					<Text testID="project-where" class="truncate text-xs text-faint">
+						{where()}
+					</Text>
 				</View>
 			</View>
 			<If when={view().availability === "unavailable"}>
@@ -180,24 +196,29 @@ export function NewScreen(props: { plans: Plans }) {
 		planning();
 		return props.plans.feed.canCheckNew?.() === true;
 	};
-	// Missions start in this window's own project. Another project's choice says so.
+	// The project the user chose, while Pilot still lists it. Null until they choose.
+	const picked = () => chatView().projects.find((p) => p.projectId === chatPick()?.projectId) ?? null;
+	// Missions start in this window's own project. Another project's choice
+	// says so, and so does a window whose own project Pilot did not name.
 	const elsewhere = () => {
-		const pick = chatPick();
-		const own = chatView().current;
-		return !!pick && !!own && pick.projectId !== own;
+		const pick = picked();
+		return !!pick && pick.projectId !== chatView().current;
 	};
 	const ownName = () => projectName(chatView(), chatView().current ?? "");
+	const canPlan = () => !!picked() && !elsewhere();
 	const canStartChat = () =>
-		chatView().availability === "live" &&
-		!!chatView().projects.find((p) => p.projectId === chatPick()?.projectId) &&
-		chatView().unsettled.length === 0 &&
-		!chatView().creating;
+		chatView().availability === "live" && !!picked() && chatView().unsettled.length === 0 && !chatView().creating;
 	// Reopening New renews setup and reads projects: neither is execution authority or a pending send.
 	effect(() => {
 		untracked(() => {
 			void props.plans.feed.prepareNew?.();
 			void prepareChat(chats);
 		});
+	});
+	// Leaving New without words drops the project choice: nothing keeps it.
+	// Words keep it, as their draft's project.
+	cleanup(() => {
+		if (goalDraft().trim() === "" && !newBusy()) dropChoice();
 	});
 	// New's place: its scroll, and the goal field's focus and selection.
 	const scroll = keepScroll("new");
@@ -269,8 +290,10 @@ export function NewScreen(props: { plans: Plans }) {
 							<Action
 								primary
 								label={newBusy() ? "Writing questions…" : "Plan a mission"}
-								disabled={off() || empty() || newBusy() || elsewhere()}
-								onPress={() => void planMission(props.plans)}
+								disabled={off() || empty() || newBusy() || !canPlan()}
+								onPress={() => {
+									if (canPlan()) void planMission(props.plans);
+								}}
 							/>
 							<Action
 								label="Start as one chat"
@@ -285,17 +308,22 @@ export function NewScreen(props: { plans: Plans }) {
 								}}
 							/>
 						</View>
-						<If
-							when={elsewhere()}
-							else={
-								<Text class="text-xs leading-relaxed text-faint">
-									Answer one question at a time, or use See all. Submit only when every question is answered.
-									Review and agree to the plan next; building needs a separate Start work confirmation.
-								</Text>
-							}
-						>
+						<If when={!picked()}>
+							<Text testID="choose-first" class="text-xs leading-relaxed text-faint">
+								Plan a mission and Start as one chat wait for a project.
+							</Text>
+						</If>
+						<If when={elsewhere()}>
 							<Text testID="mission-elsewhere" class="text-xs leading-relaxed text-muted-foreground">
-								{`Missions start in ${ownName()} here. Choose ${ownName()} to plan one, or start this as one chat.`}
+								{chatView().current
+									? `Missions start in ${ownName()} here. Choose ${ownName()} to plan one, or start this as one chat.`
+									: "Pilot did not say which project missions start in here. You can start this as one chat."}
+							</Text>
+						</If>
+						<If when={canPlan()}>
+							<Text class="text-xs leading-relaxed text-faint">
+								Answer one question at a time, or use See all. Submit only when every question is answered.
+								Review and agree to the plan next; building needs a separate Start work confirmation.
 							</Text>
 						</If>
 					</View>

@@ -75,6 +75,9 @@ test("an update saves every form, pauses only working agents, restores the windo
 	await app.keyboard.press("mod+n");
 	await app.waitFor("What do you want done?");
 	await app.type("id:goal", "Export chats as Markdown files");
+	await app.press("label:Project for a new chat");
+	await app.press("text:pilot");
+	await app.waitFor("/Users/you/src/pilot");
 	await app.keyboard.press("escape");
 	await app.press("id:plan-export");
 	await app.waitFor("Question 2 of 7 · 3 answered");
@@ -110,7 +113,8 @@ test("an update saves every form, pauses only working agents, restores the windo
 	expect(app.shows("id:update-open")).toBe(false);
 	await app.keyboard.press("mod+n");
 	await app.waitFor("What do you want done?");
-	// New's unsent goal came back exactly; nothing was planned or sent.
+	// New's unsent goal and the project the user chose came back; nothing was planned or sent.
+	await app.waitFor("/Users/you/src/pilot");
 	expect(app.enabled("role:button[Plan a mission]")).toBe(true);
 });
 

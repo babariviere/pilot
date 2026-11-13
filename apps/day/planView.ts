@@ -22,9 +22,10 @@ export const newMessage = signal("");
 export const newBusy = signal(false);
 
 /**
- * The project and access the user chose for a new chat on New. Null until
- * New chooses this window's own project for them. A choice stays while the
- * window is open; it never changes an existing chat.
+ * The project and access the user chose on New, themselves. Null until they
+ * choose: New never chooses one for them (not the window's own project,
+ * Today's or the last one used). A choice stays with New's words; it never
+ * changes an existing chat.
  */
 export const chatPick = signal<{ projectId: string; mode: ChatMode } | null>(null);
 /** Pilot's passive selection for that choice: what a new chat names, and what a close saves. */

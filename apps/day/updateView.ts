@@ -154,6 +154,8 @@ export function captureView(today?: Today): SavedView {
 		goal: goalDraft(),
 		// The project and access New shows, as Pilot last selected them. Never a sent chat.
 		chat: chatChoice(),
+		// New never picks a project, so a selection is the user's own choice.
+		chatChosen: chatChoice() !== null && chatPick() !== null,
 		focused: focused() ?? "",
 		questions: Object.entries(atQuestion()).map(([interview, question]) => `${interview}/${question}`),
 		ritual,
@@ -308,10 +310,16 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 		changesRoute.set(view.place === "changes" && changes ? { kind: "list" } : null);
 	}
 	goalDraft.set(view.goal);
-	// The chosen project and access come back as a choice to select again,
-	// never as a selection: New reads them again and sends nothing.
+	// The project and access the user chose come back as a choice to select
+	// again, never as a selection: New reads them again and sends nothing. A
+	// view saved without chatChosen may hold New's old default project, never
+	// the user's choice: it comes back with no project. Its draft identity stays.
 	const chat = view.chat;
-	chatPick.set(chat ? { projectId: chat.projectId, mode: chat.mode === "ask" ? "ask" : "build" } : null);
+	chatPick.set(
+		chat && view.chatChosen === true
+			? { projectId: chat.projectId, mode: chat.mode === "ask" ? "ask" : "build" }
+			: null,
+	);
 	chatChoice.set(null);
 	restoredDraft.set(chat?.draftId ?? null);
 	focused.set(view.focused || null);

@@ -133,8 +133,8 @@ pub(super) async fn handle(
         Command::Projects => {
             let snapshot = inventory(t).await?;
             check()?;
-            // `current` is this window's own project (Today's and new missions'),
-            // so New can default to it. It is not a selection.
+            // `current` is this window's own project (Today's and new missions').
+            // It is not a selection, and New never defaults to it.
             Ok(json!({"snapshot":snapshot,"current":t.source.project_id,
                 "operations":operations(t,journal),"outcome":null}))
         }

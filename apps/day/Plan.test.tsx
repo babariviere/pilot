@@ -335,6 +335,12 @@ test("New plans a mission from the user's words, or starts one chat after a conf
 	await app.waitFor("What do you want done?");
 	expect(app.enabled("role:button[Plan a mission]")).toBe(false);
 	await app.type("id:goal", "Fix the flaky upload test");
+	// New never picks a project: both starts wait for the user's choice.
+	expect(app.enabled("role:button[Plan a mission]")).toBe(false);
+	expect(app.enabled("role:button[Start as one chat]")).toBe(false);
+	await app.press("label:Project for a new chat");
+	await app.press("text:pilot");
+	await app.waitFor("/Users/you/src/pilot");
 	await app.press("role:button[Start as one chat]");
 	await app.waitFor("Start one chat with exactly these words?");
 	await app.waitFor("pilot · Default model · medium thinking");
@@ -349,6 +355,11 @@ test("New plans a mission from the user's words, or starts one chat after a conf
 	expect(app.shows("A chat in pilot")).toBe(true);
 	expect(app.shows("Missions in planning")).toBe(false);
 	await app.type("id:goal", "Let people export a chat as Markdown");
+	// The started chat used its choice: these words need their own.
+	expect(app.enabled("role:button[Plan a mission]")).toBe(false);
+	await app.press("label:Project for a new chat");
+	await app.press("text:pilot");
+	await app.waitFor("/Users/you/src/pilot");
 	await app.press("role:button[Plan a mission]");
 	await app.waitFor("id:interview");
 	expect(app.shows("You asked: Let people export a chat as Markdown")).toBe(true);

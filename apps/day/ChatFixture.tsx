@@ -2,7 +2,7 @@
 // New with a scripted chat source that follows the connected rules
 // (chatDemo.ts): two invented projects, passive selection, one send per
 // creation, Unknown until Check, and a save-and-reopen that restores only
-// the words and the choice.
+// the words and the user's own choice.
 import { mount, Scroll, Text, View } from "nsh";
 import { PlanFeed } from "pilot-day/native";
 import { DEMO_PROJECTS, ScriptedChats } from "./chatDemo";
@@ -74,6 +74,16 @@ mount(() => (
 							restoreView(view);
 						}}
 					/>
+					<Action
+						label="Reopen as an older save"
+						onPress={() => {
+							// A view saved before New recorded whether the user chose its project.
+							const { chatChosen: _, ...view } = captureView();
+							startFresh();
+							restoreView(view);
+						}}
+					/>
+					<Action label="Open New" onPress={() => planRoute.set({ kind: "new" })} />
 				</View>
 			</View>
 		</Scroll>
