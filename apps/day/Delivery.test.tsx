@@ -8,11 +8,13 @@ import {
 	agentLine,
 	checkLine,
 	excerpt,
+	kindName,
 	prObservation,
 	productionLine,
 	pullRequestLine,
 	SOURCE_CHARS,
 	SOURCE_LINES,
+	unavailableLine,
 } from "./deliveryView";
 
 const desktop = { platform: "macos", width: 1100, height: 1200 } as const;
@@ -478,6 +480,33 @@ test("only the exact inert answer for the pin asked is shown", () => {
 	expect(
 		capturedOf({ ...reply, content: { state: "unavailable", reason: "oversize" } }, asked, "html")?.content,
 	).toEqual({ state: "unavailable", reason: "oversize" });
+});
+
+test("NSH artifacts read as inert saved source, never as a preview", () => {
+	const asked: ArtifactSelection = {
+		subject: { kind: "task", projectId: "p", missionId: "m", taskId: "t" },
+		targetId: "a".repeat(64),
+		deliveryId: "b".repeat(64),
+		ownerSessionId: null,
+		sourceSessionId: "s",
+		artifactId: "nsh-artifact",
+		revision: 2,
+	};
+	const source = "export default function Artifact() {\n\treturn <Text>Plan</Text>;\n}\n";
+	const reply = {
+		version: 1,
+		reference: asked,
+		metadata: { title: "Plan", kind: "nsh" },
+		rendering: "unsupported",
+		content: { state: "text", source, containerSha256: "c".repeat(64), containerBytes: 80 },
+	};
+	expect(capturedOf(reply, asked, "nsh")?.content).toEqual(reply.content);
+	expect(capturedOf({ ...reply, rendering: "nsh" }, asked, "nsh")).toBe(null);
+	expect(capturedOf(reply, asked, "visual")).toBe(null);
+	expect(kindName("nsh")).toBe("NSH");
+	expect(unavailableLine("nsh", "unsupported")).toBe(
+		"Pilot does not run NSH artifacts yet, and cannot show this source here.",
+	);
 });
 
 test("a long source shows its start with a note until Show all", () => {

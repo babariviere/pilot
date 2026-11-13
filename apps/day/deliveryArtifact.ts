@@ -8,7 +8,8 @@ export type { ArtifactSelection, CapturedArtifact };
 /** One artifact linked to a delivered result, as the page shows it. */
 export type ArtifactLink = DeliveredWork["artifacts"][number];
 
-const KINDS = new Set(["html", "react", "image", "swiftui", "shader", "visual"]);
+// "nsh" is agent-written NSH TSX: its saved source reads like any other text kind. Pilot does not run it here.
+const KINDS = new Set(["html", "react", "image", "swiftui", "shader", "visual", "nsh"]);
 const REASONS = new Set(["missing", "oversize", "redacted", "unsupported", "invalid"]);
 
 /** The exact pin a press on `link` names, or null when the result cannot name one: a chat, no delivery, no revision. */

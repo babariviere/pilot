@@ -13,7 +13,7 @@ export interface ArtifactSelection {
 export interface CapturedArtifact {
 	version: 1;
 	reference: ArtifactSelection;
-	metadata: { title: string; kind: "html" | "react" | "image" | "swiftui" | "shader" | "visual" };
+	metadata: { title: string; kind: "html" | "react" | "image" | "swiftui" | "shader" | "visual" | "nsh" };
 	rendering: "unsupported";
 	content:
 		| { state: "text"; source: string; containerSha256: string; containerBytes: number }

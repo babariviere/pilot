@@ -131,6 +131,8 @@ export function kindName(kind: string): string {
 			return "Shader";
 		case "visual":
 			return "Visual";
+		case "nsh":
+			return "NSH";
 		default:
 			return "Artifact";
 	}
@@ -155,9 +157,9 @@ export function unavailableLine(kind: string, reason: string): string {
 		case "invalid":
 			return "This revision's saved copy is damaged, so Pilot does not show it.";
 		default:
-			return kind === "image"
-				? "Pilot shows only an image's title and kind here. It does not draw images."
-				: "Pilot cannot show this kind of source here.";
+			if (kind === "image") return "Pilot shows only an image's title and kind here. It does not draw images.";
+			if (kind === "nsh") return "Pilot does not run NSH artifacts yet, and cannot show this source here.";
+			return "Pilot cannot show this kind of source here.";
 	}
 }
 
