@@ -139,8 +139,9 @@ fn delivered_task_checked_from_its_mission_sent_back_once_and_a_lost_answer_stay
     let mut app = open(&entry, &bridge);
     wait(&mut app, &format!("id:mission-{mission}"));
     assert!(!has(&app, "Mock data"));
-    // Nothing was checked before: To check has nothing to show yet.
-    assert!(!has(&app, "id:to-check"));
+    // Nothing was checked before, and the start-fresh cutoff leaves out this
+    // earlier delivery. To check says it is reading, then has nothing to show.
+    gone(&mut app, "id:to-check");
     app.press(&format!("id:mission-{mission}")).unwrap();
     wait(&mut app, &format!("id:check-result-{task_id}"));
     app.press(&format!("id:check-result-{task_id}")).unwrap();
