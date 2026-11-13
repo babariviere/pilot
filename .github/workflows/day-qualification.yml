@@ -27,6 +27,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
       RUSTUP_TOOLCHAIN: 1.99.1
+      NSH_DAY_CARGO_MODE: direct
       npm_config_manage_package_manager_versions: 'false'
       npm_config_ignore_scripts: 'true'
     steps:
@@ -57,17 +58,12 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           dest: ${{ runner.temp }}/pnpm
-      - uses: jdx/mise-action@v2
-        with:
-          # Global MBX defaults, no task-local targets or compiler tuning.
-          tools: mr-boxington@1.30.0
       - name: Prepare exact tools and frozen dependencies
         run: |
           set -euo pipefail
           rustup toolchain install 1.99.1 --profile minimal
           echo "NSH_DAY_REAL_CARGO=$(rustup which --toolchain 1.99.1 cargo)" >> "$GITHUB_ENV"
           echo "RUSTC=$(rustup which --toolchain 1.99.1 rustc)" >> "$GITHUB_ENV"
-          echo "NSH_DAY_MBX=$(mise which mbx)" >> "$GITHUB_ENV"
           stage="$RUNNER_TEMP/nsh-0.5.0"
           mkdir "$stage"
           curl --fail --location --output "$stage/nsh.tar.gz" https://github.com/longbridge/nsh/releases/download/v0.5.0/nsh-macos-arm64.tar.gz

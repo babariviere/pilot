@@ -76,6 +76,9 @@ PY
   bootstrap)
     host
     bash scripts/bootstrap.sh
+    if [[ "${DESKTOP_CI_SHARED_ONLY:-}" == 1 ]]; then
+      exit 0
+    fi
     python3 scripts/prepare-visual-worker.py
     rustc -vV
     # Patched GPUI sources are path dependencies, so Cargo fingerprints them by

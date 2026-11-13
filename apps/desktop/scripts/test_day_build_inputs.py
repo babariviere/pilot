@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -58,6 +59,30 @@ class RecipeTests(unittest.TestCase):
             gui_release.configuration({})
         with self.assertRaises(KeyError):
             day.environment(self.root, self.tools, {}, {})
+
+    def test_direct_cargo_is_explicit_and_excludes_mbx(self):
+        tools = {key: value for key, value in self.tools.items() if key != "mbx"}
+        env = day.environment(self.root, tools, {"NSH_DAY_CARGO_MODE": "direct"}, None)
+        self.assertEqual(env["NSH_DAY_CARGO_MODE"], "direct")
+        self.assertNotIn("NSH_DAY_MBX", env)
+        with self.assertRaisesRegex(ValueError, "Invalid Cargo mode"):
+            day.environment(self.root, tools, {"NSH_DAY_CARGO_MODE": "direct"}, {})
+        cargo = tools["cargo"]
+        cargo.write_text('#!/bin/sh\nprintf "direct:%s\\n" "$*"\n')
+        result = subprocess.run([str(bundle.ROOT / "apps/day/scripts/cargo"), "metadata", "--offline"],
+                                env={"PATH": "/usr/bin:/bin", "NSH_DAY_CARGO_MODE": "direct",
+                                     "NSH_DAY_REAL_CARGO": str(cargo), "NSH_DAY_MBX": "/nonexistent"},
+                                capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout, "direct:metadata --offline\n")
+
+    def test_cargo_defaults_to_mbx(self):
+        mbx = self.tools["mbx"]
+        mbx.write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo "mbx 1.30.0"; '
+                       'else printf "mbx:%s:%s\\n" "$MBX_CARGO_SHIM_MODE" "$*"; fi\n')
+        result = subprocess.run([str(bundle.ROOT / "apps/day/scripts/cargo"), "metadata"],
+                                env={"PATH": "/usr/bin:/bin", "NSH_DAY_REAL_CARGO": str(self.tools["cargo"]),
+                                     "NSH_DAY_MBX": str(mbx)}, capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout, "mbx:1:metadata\n")
 
     def test_selected_xcode_survives_the_isolated_build_environment(self):
         selected = "/Applications/Xcode_26.2.app/Contents/Developer"

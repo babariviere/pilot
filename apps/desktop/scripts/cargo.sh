@@ -49,7 +49,9 @@ fi
 if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
   # Runners start empty and never share an mbx store, so mbx cannot hit there.
   # Keep the same toolchain and target; tests.yaml caches dependency outputs.
-  python3 scripts/prepare-patches.py
+  if [[ "${DESKTOP_CI_SHARED_ONLY:-}" != 1 ]]; then
+    python3 scripts/prepare-patches.py
+  fi
   exec cargo "$@"
 fi
 if [[ -z "$mbx" ]]; then

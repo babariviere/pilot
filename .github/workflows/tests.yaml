@@ -3,12 +3,6 @@ name: Tests
 # Shared by pr.yaml and main.yaml. Results are informational: releases never wait for them.
 on:
   workflow_call:
-    inputs:
-      desktop-release-build:
-        description: Build unsigned macOS Rust release executables (no publishing)
-        type: boolean
-        required: false
-        default: false
 
 permissions:
   contents: read
@@ -40,6 +34,13 @@ jobs:
           for suite in day_ci_policy day_build_inputs day_artifact_host day_qualification bundle_runtime gui_release; do
             python3 -B -m unittest discover -s apps/desktop/scripts -p "test_$suite.py"
           done
+          PYTHONPATH=apps/desktop/scripts python3 -B -m unittest \
+            test_ci.CiTests.test_updater_portable_invokes_real_manifest_fmt_strict_clippy_and_nonzero_core_suite \
+            test_ci.CiTests.test_linux_updater_native_checks_do_not_use_macos_platform_or_release \
+            test_ci.CiTests.test_updater_native_builds_real_helper_and_exact_registered_tests_without_metal \
+            test_ci.CiTests.test_updater_missing_registration_zero_counts_and_failed_commands_are_failures \
+            test_ci.CiTests.test_missing_local_signed_source_native_test_fails_before_execution \
+            test_ci.CiTests.test_missing_temporary_payload_native_tests_fail_before_execution
 
   # Portable tests use Linux so they do not compete for macOS runner capacity.
   node:
@@ -131,279 +132,54 @@ jobs:
           ditto -x -k "$stage/runtime.zip" "$stage/relocated"
           apps/macos/scripts/check-runtime.sh "$stage/relocated/runtime"
 
-  # Independent Linux Rust test/build sibling: no Node/Swift dependencies.
+  # Shared updater and power helper tests, without the GPUI workspace.
   rust:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      # Project wrappers pin Rust, CPU=2 and a 4 GiB admission estimate.
-      # No user state, shared compiled outputs, signing or production credentials.
-      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      DESKTOP_CI_SHARED_ONLY: '1'
       RUSTFLAGS: -C link-arg=-fuse-ld=lld
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          # Default PR checkout is the tested merge SHA, NOT the PR head.
-          fetch-depth: 2
-      - uses: actions/setup-python@v5
-        with:
-          # tomllib + safe tar extraction in the existing preparation scripts.
-          python-version: '3.13'
-      - name: Initialize runner-local paths
-        run: |
-          echo "XDG_CACHE_HOME=$RUNNER_TEMP/desktop-rust-cache" >> "$GITHUB_ENV"
-          echo "DESKTOP_CI_OUTPUT=$RUNNER_TEMP/desktop-rust-unsigned" >> "$GITHUB_ENV"
-      - name: Check Rust inputs
-        id: changes
-        run: bash apps/desktop/scripts/ci.sh changed
-      - name: Validate Actions schema and expression contexts
-        run: python3 apps/desktop/scripts/validate-workflows.py
-      - name: Verify workflow and runner contracts (no Cargo)
-        run: |
-          bash -n apps/desktop/scripts/ci.sh
-          python3 -m unittest discover -s apps/desktop/scripts -p 'test_ci.py' -v
-          bash apps/desktop/scripts/ci.sh host
-      - name: Cache checksummed downloads only
-        if: steps.changes.outputs.rust == 'true'
-        id: downloads
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/cache
-            apps/desktop/.tools/downloads
-          # Exact input identity, no fallback/restore prefix; build outputs are cached separately.
-          # Cargo.lock and preparation scripts independently verify archives.
-          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/power/Cargo.lock', 'apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
-      - name: Linux build dependencies (ephemeral runner only)
-        if: steps.changes.outputs.rust == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes build-essential clang lld pkg-config \
-            libfontconfig1-dev libfreetype6-dev libwayland-dev libxkbcommon-dev \
-            libxkbcommon-x11-dev libxcb1-dev libxcb-xkb-dev libx11-xcb-dev \
-            libvulkan-dev libssl-dev libudev-dev libegl1-mesa-dev fonts-dejavu-core \
-            sway libgl1-mesa-dri mesa-vulkan-drivers acl dbus-daemon
-      - name: Bootstrap pinned Rust and helper engine
-        if: steps.changes.outputs.rust == 'true'
-        timeout-minutes: 10
-        run: bash apps/desktop/scripts/ci.sh bootstrap
-      # Third-party dependency outputs only (cache-prune drops workspace crates). The key covers
-      # every input that can change them; only main saves (10 GB repo cache limit).
-      - name: Restore Cargo dependency build cache
-        if: steps.changes.outputs.rust == 'true'
-        uses: actions/cache/restore@v4
-        with:
-          path: apps/desktop/target/dev
-          key: desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-${{ github.sha }}
-          restore-keys: |
-            desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-
-      - name: Standalone updater portable formatting, strict Clippy and core tests
-        if: steps.changes.outputs.rust == 'true'
-        timeout-minutes: 10
-        run: bash apps/desktop/scripts/ci.sh updater-check
-      - name: Linux debug build, formatting, Clippy and portable production tests
-        if: steps.changes.outputs.rust == 'true'
-        timeout-minutes: 35
-        run: env -u DISPLAY -u WAYLAND_DISPLAY bash apps/desktop/scripts/ci.sh check
-      - name: Linux power helper build and private fake D-Bus tests, not KDE qualification
-        if: steps.changes.outputs.rust == 'true'
-        run: bash apps/desktop/scripts/ci.sh power-check
-
-      - name: Native Linux updater signatures, atomic exchange and process exit
-        if: steps.changes.outputs.rust == 'true'
-        timeout-minutes: 10
-        run: bash apps/desktop/scripts/ci.sh updater-linux-tests
-
-      - uses: actions/setup-node@v4
-        if: steps.changes.outputs.rust == 'true'
-        with:
-          node-version: '24.21.0'
-      - name: Owned Linux updater helper install and relaunch fixtures
-        if: steps.changes.outputs.rust == 'true'
-        timeout-minutes: 10
-        run: python3 apps/desktop/scripts/verify_update_lifecycle.py
-
-      - name: Relocated Linux GUI fixture, ELF closure and native Wayland buffer
-        if: steps.changes.outputs.rust == 'true'
-        timeout-minutes: 2
-        run: bash apps/desktop/scripts/ci.sh linux-gui-check
-      - name: Prune workspace outputs before saving the dependency cache
-        if: ${{ !cancelled() && steps.changes.outputs.rust == 'true' && github.ref == 'refs/heads/main' }}
-        run: bash apps/desktop/scripts/ci.sh cache-prune
-      - name: Save Cargo dependency build cache
-        if: ${{ !cancelled() && steps.changes.outputs.rust == 'true' && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@v4
-        with:
-          path: apps/desktop/target/dev
-          key: desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-${{ github.sha }}
-
-  # Only macOS helper confinement and native Metal pixels; no portable-suite duplicate.
-  rust-macos-native:
-    runs-on: macos-15
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          # Default PR checkout is the tested merge SHA, NOT the PR head.
-          fetch-depth: 2
-      - uses: actions/setup-python@v5
-        with:
-          # tomllib + safe tar extraction in the existing preparation scripts.
-          python-version: '3.13'
-      - name: Initialize runner-local paths
-        run: |
-          echo "XDG_CACHE_HOME=$RUNNER_TEMP/desktop-rust-cache" >> "$GITHUB_ENV"
-          echo "DESKTOP_CI_OUTPUT=$RUNNER_TEMP/desktop-rust-unsigned" >> "$GITHUB_ENV"
-      - name: Check Rust inputs
-        id: changes
-        run: bash apps/desktop/scripts/ci.sh changed
-      - name: Cache checksummed downloads only
-        if: steps.changes.outputs.rust == 'true'
-        id: downloads
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/cache
-            apps/desktop/.tools/downloads
-          # Exact input identity, no fallback/restore prefix; build outputs are cached separately.
-          # Cargo.lock and preparation scripts independently verify archives.
-          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/power/Cargo.lock', 'apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
-      - name: Bootstrap pinned Rust and helper engine
-        if: steps.changes.outputs.rust == 'true'
-        timeout-minutes: 10
-        run: bash apps/desktop/scripts/ci.sh bootstrap
-      # Third-party dependency outputs only (cache-prune drops workspace crates). The key covers
-      # every input that can change them; only main saves (10 GB repo cache limit).
-      - name: Restore Cargo dependency build cache
-        if: steps.changes.outputs.rust == 'true'
-        uses: actions/cache/restore@v4
-        with:
-          path: apps/desktop/target/dev
-          key: desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-${{ github.sha }}
-          restore-keys: |
-            desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-
-      - name: Standalone macOS power helper build and injected tests
-        if: steps.changes.outputs.rust == 'true'
-        run: bash apps/desktop/scripts/ci.sh power-check
-      - name: Standalone updater macOS Security, ACL, stage, swap and helper tests
-        if: steps.changes.outputs.rust == 'true'
-        timeout-minutes: 10
-        run: bash apps/desktop/scripts/ci.sh updater-mac-tests
-      - name: macOS-only helper runtime and confinement tests
-        if: steps.changes.outputs.rust == 'true'
-        timeout-minutes: 25
-        run: bash apps/desktop/scripts/ci.sh mac-tests
-      - name: NSH native chat interactions and hidden captures
-        if: steps.changes.outputs.rust == 'true'
-        timeout-minutes: 10
-        run: bash apps/desktop/scripts/ci.sh nsh-native
-      - name: macOS native renderer capability and synthetic probes
-        if: steps.changes.outputs.rust == 'true'
-        timeout-minutes: 25
-        run: bash apps/desktop/scripts/ci.sh native
-      - name: Upload native capability result
-        if: ${{ !cancelled() && steps.changes.outputs.rust == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-rust-native-status-${{ github.sha }}
-          path: apps/desktop/target/ci-native-status.txt
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Prune workspace outputs before saving the dependency cache
-        if: ${{ !cancelled() && steps.changes.outputs.rust == 'true' && github.ref == 'refs/heads/main' }}
-        run: bash apps/desktop/scripts/ci.sh cache-prune
-      - name: Save Cargo dependency build cache
-        if: ${{ !cancelled() && steps.changes.outputs.rust == 'true' && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@v4
-        with:
-          path: apps/desktop/target/dev
-          key: desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-${{ github.sha }}
-
-  # Genuine complete development bundle, no release configuration or installed-app access.
-  # Uploaded evidence is assembly/relocation smoke only, never a qualification ACK.
-  rust-macos-bundle:
-    runs-on: macos-15
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          # Use the tested merge SHA on PRs, never substitute the PR head.
-          fetch-depth: 2
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: pnpm/action-setup@v4
-      - name: Initialize runner-local paths
+      - name: Validate workflow schema
+        run: python3 apps/desktop/scripts/validate-workflows.py
+      - name: Install shared helper dependencies
         run: |
-          echo "XDG_CACHE_HOME=$RUNNER_TEMP/desktop-rust-cache" >> "$GITHUB_ENV"
-          echo "DESKTOP_CI_OUTPUT=$RUNNER_TEMP/desktop-rust-unsigned" >> "$GITHUB_ENV"
-      - name: Bootstrap pinned build-host Rust tools
+          sudo apt-get update
+          sudo apt-get install --yes build-essential clang lld pkg-config libssl-dev libudev-dev acl dbus-daemon
+      - name: Prepare pinned Rust and nextest
         run: bash apps/desktop/scripts/ci.sh bootstrap
-      - name: Assemble and smoke the exact-source relocated development bundle
+      - name: Test shared updater
         run: |
-          python3 apps/desktop/scripts/verify_macos_bundle.py --source "$GITHUB_SHA" --output "$RUNNER_TEMP/macos-bundle"
-      - name: Retain non-release bundle smoke evidence (including failures)
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-macos-bundle-smoke-${{ github.sha }}
-          path: ${{ runner.temp }}/macos-bundle/evidence
-          if-no-files-found: warn
-          retention-days: 7
+          bash apps/desktop/scripts/ci.sh updater-check
+          bash apps/desktop/scripts/ci.sh updater-linux-tests
+          python3 apps/desktop/scripts/verify_update_lifecycle.py
+      - name: Test shared power helper
+        run: bash apps/desktop/scripts/ci.sh power-check
 
-  # Opt-in reusable seam for later packaging. Normal PR/Main calls leave it OFF.
-  # No signing, feeds, release publication or Linux-to-macOS artifact promotion.
-  rust-macos-release:
-    if: inputs.desktop-release-build
+  rust-macos-native:
     runs-on: macos-15
-    timeout-minutes: 50
+    timeout-minutes: 60
     env:
-      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      DESKTOP_CI_SHARED_ONLY: '1'
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          # Default PR checkout is the tested merge SHA, NOT the PR head.
-          fetch-depth: 2
       - uses: actions/setup-python@v5
         with:
-          # tomllib + safe tar extraction in the existing preparation scripts.
           python-version: '3.13'
-      - name: Initialize runner-local paths
-        run: |
-          echo "XDG_CACHE_HOME=$RUNNER_TEMP/desktop-rust-cache" >> "$GITHUB_ENV"
-          echo "DESKTOP_CI_OUTPUT=$RUNNER_TEMP/desktop-rust-unsigned" >> "$GITHUB_ENV"
-      - name: Check Rust inputs
-        id: changes
-        run: bash apps/desktop/scripts/ci.sh changed
-      - name: Cache checksummed downloads only
-        id: downloads
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/cache
-            apps/desktop/.tools/downloads
-          # Exact input identity, no fallback/restore prefix or build-output cache.
-          # Cargo.lock and preparation scripts independently verify archives.
-          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/power/Cargo.lock', 'apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
-      - name: Bootstrap pinned Rust and helper engine
-        timeout-minutes: 10
+      - name: Prepare pinned Rust and nextest
         run: bash apps/desktop/scripts/ci.sh bootstrap
-      - name: Build locked macOS release app AND visual helper
-        timeout-minutes: 35
-        run: bash apps/desktop/scripts/ci.sh build
-      - name: Stage unsigned macOS binaries and provenance manifest
-        run: bash apps/desktop/scripts/ci.sh artifact
-      - name: Upload non-release macOS binaries (not an installable update)
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-rust-unsigned-aarch64-apple-darwin-${{ github.sha }}
-          path: ${{ env.DESKTOP_CI_OUTPUT }}
-          if-no-files-found: error
-          retention-days: 7
+      - name: Test shared macOS updater security and lifecycle
+        run: bash apps/desktop/scripts/ci.sh updater-mac-tests
+      - name: Test shared power helper
+        run: bash apps/desktop/scripts/ci.sh power-check

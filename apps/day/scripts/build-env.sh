@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 # Sourced by the two Day entry points. No global setup or shell activation.
 day="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NSH_DAY_MBX="$(command -v "${NSH_DAY_MBX:-mbx}" || true)"
-if [[ -z "$NSH_DAY_MBX" || ! -x "$NSH_DAY_MBX" ]]; then
-	echo 'Day requires mise-managed mbx on PATH (or NSH_DAY_MBX).' >&2
-	exit 127
-fi
-NSH_DAY_MBX="$(cd "$(dirname "$NSH_DAY_MBX")" && pwd)/$(basename "$NSH_DAY_MBX")"
-mbx_version="$("$NSH_DAY_MBX" --version)"
-if [[ ! "$mbx_version" =~ ^mbx\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-	echo 'Expected an installed mbx executable.' >&2
+NSH_DAY_CARGO_MODE="${NSH_DAY_CARGO_MODE:-mbx}"
+if [[ "$NSH_DAY_CARGO_MODE" != mbx && "$NSH_DAY_CARGO_MODE" != direct ]]; then
+	echo 'NSH_DAY_CARGO_MODE must be mbx or direct.' >&2
 	exit 1
+fi
+if [[ "$NSH_DAY_CARGO_MODE" == mbx ]]; then
+	NSH_DAY_MBX="$(command -v "${NSH_DAY_MBX:-mbx}" || true)"
+	if [[ -z "$NSH_DAY_MBX" || ! -x "$NSH_DAY_MBX" ]]; then
+		echo 'Day requires mise-managed mbx on PATH (or NSH_DAY_MBX).' >&2
+		exit 127
+	fi
+	NSH_DAY_MBX="$(cd "$(dirname "$NSH_DAY_MBX")" && pwd)/$(basename "$NSH_DAY_MBX")"
+	mbx_version="$("$NSH_DAY_MBX" --version)"
+	if [[ ! "$mbx_version" =~ ^mbx\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+		echo 'Expected an installed mbx executable.' >&2
+		exit 1
+	fi
+	export NSH_DAY_MBX
 fi
 # Match Day's checked-in toolchain, also when compiling the upstream CLI.
 # An explicit caller selection remains explicit, as with ordinary Cargo.
@@ -22,4 +30,4 @@ if [[ -z "$NSH_DAY_REAL_CARGO" || ! -x "$NSH_DAY_REAL_CARGO" || "$NSH_DAY_REAL_C
 	exit 127
 fi
 NSH_DAY_REAL_CARGO="$(cd "$(dirname "$NSH_DAY_REAL_CARGO")" && pwd)/$(basename "$NSH_DAY_REAL_CARGO")"
-export NSH_DAY_MBX NSH_DAY_REAL_CARGO
+export NSH_DAY_CARGO_MODE NSH_DAY_REAL_CARGO

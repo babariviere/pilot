@@ -288,17 +288,28 @@ class WorkflowTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/tests.yaml").read_text()
         job = workflow.split("  day-contracts:\n", 1)[1].split("  node:\n", 1)[0]
         self.assertNotIn("if:", job)
-        self.assertIn("day_build_inputs day_qualification bundle_runtime gui_release", job)
+        self.assertIn("day_build_inputs day_artifact_host day_qualification bundle_runtime gui_release", job)
         self.assertIn("discover -s apps/day/scripts -p 'test_*.py'", job)
         native = (ROOT / ".github/workflows/day-qualification.yml").read_text()
         self.assertIn("--frozen-lockfile --ignore-scripts", native)
-        self.assertIn("tools: mr-boxington@1.30.0", native)
-        self.assertIn("mise which mbx", native)
+        self.assertIn("NSH_DAY_CARGO_MODE: direct", native)
+        self.assertNotIn("mise which mbx", native)
+        self.assertNotIn("mr-boxington", native)
         self.assertIn("$stage/nsh/bin/nsh", native)
         self.assertIn(day.CLI_SHA256, native)
         self.assertIn("for file in App Plan Intake Update;", native)
-        self.assertIn("--manifest-path apps/day/native/Cargo.toml --lib", native)
+        self.assertIn("--manifest-path apps/day/native/Cargo.toml --features macos-host --lib", native)
         self.assertNotIn("nsh.sh test Native", native)
+
+    def test_shared_ci_keeps_security_checks_without_gpui_jobs(self):
+        workflow = (ROOT / ".github/workflows/tests.yaml").read_text()
+        for phase in ("updater-check", "updater-linux-tests", "updater-mac-tests", "power-check"):
+            self.assertIn("ci.sh " + phase, workflow)
+        self.assertIn("verify_update_lifecycle.py", workflow)
+        self.assertEqual(workflow.count("DESKTOP_CI_SHARED_ONLY: '1'"), 2)
+        for obsolete in ("rust-macos-bundle:", "rust-macos-release:", "ci.sh check\n",
+                         "ci.sh native\n", "ci.sh nsh-native\n", "ci.sh mac-tests\n"):
+            self.assertNotIn(obsolete, workflow)
 
 
 class DependencyPreparationTests(unittest.TestCase):

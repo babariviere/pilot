@@ -8,7 +8,9 @@ root="$PWD"
 export RUSTUP_HOME="$root/.tools/rustup"
 mkdir -p .tools/bin
 rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --no-self-update
-python3 scripts/prepare-patches.py --fetch
+if [[ "${DESKTOP_CI_SHARED_ONLY:-}" != 1 ]]; then
+  python3 scripts/prepare-patches.py --fetch
+fi
 # Pinned cargo-nextest for the libtest suites (local and CI). Checksummed, worktree-private.
 nextest=0.9.150
 case "$(uname -s):$(uname -m)" in
