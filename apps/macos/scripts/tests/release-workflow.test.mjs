@@ -61,10 +61,7 @@ test("CI is split into PR, main and release entry points sharing one test workfl
 	assert.match(tests, /^on:\n  workflow_call:\n/m);
 	const sharedTrigger = tests.split("on:\n")[1].split("\npermissions:")[0];
 	assert.doesNotMatch(sharedTrigger, /^  (push|pull_request|workflow_dispatch):/m);
-	assert.match(
-		sharedTrigger,
-		/    inputs:\n      desktop-release-build:\n        description: [^\n]+\n        type: boolean\n        required: false\n        default: false/,
-	);
+	assert.doesNotMatch(sharedTrigger, /desktop-release-build:/);
 	assert.match(jobOf(pr)("tests"), /uses: \.\/\.github\/workflows\/tests\.yaml/);
 	assert.match(jobOf(main)("tests"), /uses: \.\/\.github\/workflows\/tests\.yaml/);
 	// The package is validated in PRs; main and release builds never use it as a gate.
@@ -169,28 +166,24 @@ test("shared CI never builds or tests the legacy Swift app", () => {
 	assert.doesNotMatch(read("release.yaml"), /swift-build|actions\/cache\/restore|actions\/cache\/save|stable-mtimes/);
 });
 
-test("Rust test, native and opt-in artifact jobs preserve platform and release boundaries", () => {
+test("shared Rust helper jobs keep platform boundaries without building GPUI artifacts", () => {
 	const workflow = read("tests.yaml");
 	const job = jobOf(workflow);
 	const portable = job("rust");
 	const native = job("rust-macos-native");
-	const artifact = job("rust-macos-release");
-	for (const lane of [portable, native, artifact]) {
+	for (const lane of [portable, native]) {
 		assert.doesNotMatch(lane, /^    needs:/m);
+		assert.match(lane, /DESKTOP_CI_SHARED_ONLY: '1'/);
+		assert.match(lane, /ci\.sh power-check/);
+		assert.doesNotMatch(lane, /ci\.sh (?:check|build|artifact|native|mac-tests)\b|upload-artifact|secrets\.|contents: write|gh release|scripts\/publish/);
 	}
 	assert.match(portable, /runs-on: ubuntu-24\.04/);
-	assert.match(portable, /ci\.sh check/);
-	assert.doesNotMatch(portable, /ci\.sh (build|artifact|native|mac-tests)|upload-artifact/);
+	assert.match(portable, /ci\.sh updater-check/);
+	assert.match(portable, /ci\.sh updater-linux-tests/);
+	assert.match(portable, /verify_update_lifecycle\.py/);
 	assert.match(native, /runs-on: macos-15/);
-	assert.match(native, /ci\.sh mac-tests/);
-	assert.match(native, /ci\.sh native/);
-	assert.doesNotMatch(native, /ci\.sh (check|build|artifact)/);
-	assert.equal(condition(artifact), "inputs.desktop-release-build");
-	assert.match(artifact, /runs-on: macos-15/);
-	assert.match(artifact, /ci\.sh build/);
-	assert.match(artifact, /ci\.sh artifact/);
-	assert.match(artifact, /name: desktop-rust-unsigned-aarch64-apple-darwin-/);
-	assert.doesNotMatch(artifact, /secrets\.|contents: write|gh release|scripts\/publish/);
+	assert.match(native, /ci\.sh updater-mac-tests/);
+	assert.doesNotMatch(workflow, /^  rust-macos-release:/m);
 	for (const caller of ["pr.yaml", "main.yaml"]) {
 		assert.doesNotMatch(read(caller), /desktop-release-build:/, caller);
 	}

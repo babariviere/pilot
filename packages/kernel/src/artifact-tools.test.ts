@@ -563,8 +563,14 @@ test("NSH tool refuses compile errors before creating or updating any revision",
 });
 
 test("NSH tool waits for compilation of the exact captured bytes before publication", async () => {
-	const entered = Promise.withResolvers<void>();
-	const compiled = Promise.withResolvers<void>();
+	let enter = () => {};
+	const entered = new Promise<void>((resolve) => {
+		enter = resolve;
+	});
+	let compile = () => {};
+	const compiled = new Promise<void>((resolve) => {
+		compile = resolve;
+	});
 	const source = '\uFEFFexport default () => "é😀";\r\n';
 	const controller = new AbortController();
 	const f = fixture({
@@ -572,16 +578,16 @@ test("NSH tool waits for compilation of the exact captured bytes before publicat
 		captureNsh: async (path, signal) => {
 			assert.equal(path, "view.tsx");
 			assert.equal(signal, controller.signal);
-			entered.resolve();
-			await compiled.promise;
+			enter();
+			await compiled;
 			return { source, entry: "view.tsx" };
 		},
 	});
 	const pending = f.call("create", { title: "Preview", kind: "nsh", sourcePath: "view.tsx" }, controller.signal);
-	await entered.promise;
+	await entered;
 	assert.deepEqual(f.calls, []);
 	assert.equal(f.notifications, 0);
-	compiled.resolve();
+	compile();
 	const result = await pending;
 	assert.deepEqual(f.calls, [
 		{ method: "create", args: [{ title: "Preview", kind: "nsh", source, entry: "view.tsx" }, controller.signal] },
