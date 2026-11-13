@@ -73,9 +73,9 @@ def checked_inputs(path):
     value = bundle.read_json(path / "manifest.json")
     source = bundle.source(value["source"])
     config = configuration(value["updater_configuration"])
-    if value.get("kind") != "production-rust-inputs" or value.get("profile") != "release":
+    if value.get("kind") != "connected-candidate-inputs" or value.get("profile") != "release":
         raise ValueError("Connected launch requires configured release-profile inputs")
-    names = ["pilot-desktop", "pilot-desktop-update-helper", "pilot-visual-worker"]
+    names = ["pilot-desktop"]
     bundle.receipt(path, source, names)
     bundle.checked_gui_resources(path / "nsh", path, source)
     methods = bundle.run("/usr/bin/git", "show", source + ":apps/day/native/src/bridge.rs", cwd=bundle.ROOT)
@@ -85,11 +85,10 @@ def checked_inputs(path):
             or bundle.read_json(path / "nsh/app.json") != {"id": bundle.APP_ID}):
         raise ValueError("Connected resources do not match the exact native method grant")
     env = bundle.subprocess_env()
-    for name in ("pilot-desktop", "pilot-desktop-update-helper"):
-        actual = day.compiled_receipt(path / name, source, value["recipe_sha256"], value["compiler"],
-                                      config, "release", env, bundle.ROOT)
-        if actual != value["compiled"][name]:
-            raise ValueError("Prepared executable receipt changed")
+    actual = day.compiled_receipt(path / "pilot-desktop", source, value["recipe_sha256"], value["compiler"],
+                                  config, "release", env, bundle.ROOT)
+    if actual != value["compiled"]["pilot-desktop"]:
+        raise ValueError("Prepared executable receipt changed")
     package = json.loads(bundle.run("/usr/bin/git", "show", source + ":package.json", cwd=bundle.ROOT))
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", package.get("version", "")):
         raise ValueError("Expected the immutable source's numeric app version")
@@ -101,7 +100,7 @@ def prepare(source, app, output):
     config = trust_from(app)
     # Same immutable source builder and unmodified released NSH. No .app is
     # assembled here, and no code seal or release/update signature is written.
-    day.snapshot_day(source, output, production=config)
+    day.snapshot_day(source, output, production=config, connected_only=True)
     checked_inputs(output)
     return output
 

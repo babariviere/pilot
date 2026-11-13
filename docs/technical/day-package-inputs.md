@@ -16,7 +16,9 @@ The builder extracts Git objects into a fresh private directory, then:
    must not contain GPUI. There is no CLI-build or source-patch fallback.
 2. Builds Day's own `pilot-desktop`, with `macos-host`, and the existing
    `pilot-desktop-update-helper`, with `native-macos`. Cargo JSON identifies
-   each actual output. There is no renamed stock runner.
+   each actual output. It also builds `pilot-artifact-host` with `artifact-host`
+   and checks its compiled source/recipe identity through the existing transport.
+   There is no renamed stock runner.
 3. Builds the required existing `pilot-visual-worker` in an isolated
    workspace, using its unchanged sources/dependency versions and the
    desktop lock as a seed. Adding `[workspace]` isolates it from GPUI;
@@ -35,6 +37,13 @@ The builder extracts Git objects into a fresh private directory, then:
    capabilities, missing files and changed copies are refused. The bootstrap
    disables runtime-delivered chunks. `gui-resources.json` binds the full
    inventory to the executable digest, immutable source, target and release.
+
+This full-distribution recipe remains the default, including in CI. The
+[connected development candidate](day-connected-candidate.md) explicitly selects
+only its consumed main executable and NSH resources in the same builder. It has
+a distinct receipt kind, no helper/visual evidence and no QuickJS archive input.
+Both selections use the same source-matched recipe hash and shared local caches;
+no separate target/store or candidate-specific builder is added.
 
 Cargo is offline and runs through the current Day MBX dispatcher. The builder
 keeps the real HOME so global MBX settings and shared caches apply. It does not

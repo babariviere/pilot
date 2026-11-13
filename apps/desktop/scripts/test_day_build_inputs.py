@@ -1,5 +1,6 @@
 """Private offline recipe fixtures. Fake compilers/resources are NOT native acceptance."""
 import json
+import base64
 import shlex
 import sys
 from pathlib import Path
@@ -259,6 +260,21 @@ class RecipeTests(unittest.TestCase):
             day.snapshot_day("main", self.root / "output")
 
     def test_complete_recipe_emits_bound_inputs_and_keeps_missing_trust_unavailable(self):
+        self.compile_recipe(connected_only=False)
+
+    def test_connected_candidate_builds_only_main_and_resources_without_quickjs_or_helpers(self):
+        self.compile_recipe(connected_only=True)
+
+    def test_configured_full_distribution_still_builds_all_helpers(self):
+        self.compile_recipe(connected_only=False, configured=True)
+
+    def test_connected_candidate_refuses_unconfigured_inputs_before_build(self):
+        with patch.object(day, "execute", side_effect=AssertionError("must not build")):
+            with self.assertRaisesRegex(ValueError, "configured release inputs"):
+                day.compile_snapshot(self.root, self.root, self.root / "out", self.source,
+                                     self.tools, {}, connected_only=True)
+
+    def compile_recipe(self, *, connected_only, configured=False):
         checkout = self.root / "source"
         app = checkout / "apps/day"
         (app / "native/src").mkdir(parents=True)
@@ -266,18 +282,31 @@ class RecipeTests(unittest.TestCase):
             shutil.copyfile(bundle.ROOT / "apps/day" / name, app / name)
         desktop = checkout / "apps/desktop"
         visual = desktop / "visual-worker"
-        visual.mkdir(parents=True)
-        shutil.copyfile(bundle.ROOT / "apps/desktop/visual-worker/Cargo.toml", visual / "Cargo.toml")
-        shutil.copyfile(bundle.ROOT / "apps/desktop/Cargo.lock", desktop / "Cargo.lock")
-        (desktop / "updater").mkdir()
-        shutil.copyfile(bundle.ROOT / "apps/desktop/updater/Cargo.lock", desktop / "updater/Cargo.lock")
         archive = self.root / "quickjs.tar.gz"
-        archive.write_bytes(b"fixture archive only")
+        if not connected_only:
+            visual.mkdir(parents=True)
+            shutil.copyfile(bundle.ROOT / "apps/desktop/visual-worker/Cargo.toml", visual / "Cargo.toml")
+            shutil.copyfile(bundle.ROOT / "apps/desktop/Cargo.lock", desktop / "Cargo.lock")
+            (desktop / "updater").mkdir()
+            shutil.copyfile(bundle.ROOT / "apps/desktop/updater/Cargo.lock", desktop / "updater/Cargo.lock")
+            archive.write_bytes(b"fixture archive only")
+        production = None
+        if connected_only or configured:
+            import gui_release
+            production = gui_release.configuration(dict(
+                PILOT_NEXT_SIGNING_POLICY="private-adhoc",
+                PILOT_NEXT_UPDATER_PUBLIC_KEY=base64.b64encode(bytes([42]) * 32).decode(),
+                PILOT_NEXT_UPDATER_REPOSITORY="fixture/offline",
+                PILOT_NEXT_UPDATER_APPLICATION_ID=bundle.APP_ID,
+                PILOT_NEXT_UPDATER_BUILD="100.1",
+                PILOT_NEXT_UPDATER_CODE_REQUIREMENT=f'identifier "{bundle.APP_ID}"'))
+        config = production or dict(schema=1, mode="unconfigured")
         calls = []
         compiled = dict(schema=1, kind="compiled-build-input", source=self.source,
-                        recipe=bundle.digest(Path(day.__file__)), target=day.TARGET, profile="debug",
+                        recipe=bundle.digest(Path(day.__file__)), target=day.TARGET,
+                        profile="release" if production else "debug",
                         compiler=self.compiler.strip().replace("\n", "|"),
-                        updater_configuration=dict(schema=1, mode="unconfigured"))
+                        updater_configuration=config)
 
         def fake_execute(args, *, cwd, env):
             args = [str(arg) for arg in args]
@@ -312,19 +341,43 @@ class RecipeTests(unittest.TestCase):
             return ""
 
         output = self.root / "result"
+        selection = {"connected_only": True} if connected_only else {}
         with patch.object(day, "CLI_SHA256", bundle.digest(self.tools["nsh"])), patch.object(day, "execute", side_effect=fake_execute), patch.object(day, "artifact_host") as checked:
             day.compile_snapshot(checkout, self.root, output, self.source, self.tools,
-                                 {"PILOT_DAY_QUICKJS_ARCHIVE":str(archive)})
+                                 {} if connected_only else {"PILOT_DAY_QUICKJS_ARCHIVE":str(archive)},
+                                 production, **selection)
         metadata = bundle.read_json(output / "manifest.json")
         self.assertEqual(metadata["source"], self.source)
+        self.assertEqual(metadata["recipe_sha256"], bundle.digest(Path(day.__file__)))
         self.assertFalse(metadata["installable_update"])
-        self.assertEqual(metadata["updater_configuration"], {"schema":1,"mode":"unconfigured"})
-        self.assertEqual(metadata["compiled"]["pilot-desktop"], metadata["compiled"]["pilot-desktop-update-helper"])
-        bundle.receipt(output, self.source, ["pilot-desktop", "pilot-visual-worker", "pilot-desktop-update-helper"])
+        self.assertEqual(metadata["updater_configuration"], config)
+        self.assertEqual(metadata["compiled"]["pilot-desktop"], compiled)
+        names = [call[call.index("--bin") + 1] for call in calls if "--bin" in call]
+        expected = ["pilot-desktop"] if connected_only else [
+            "pilot-desktop", day.ARTIFACT_HOST, "pilot-desktop-update-helper", "pilot-visual-worker"]
+        self.assertEqual(names, expected)
+        self.assertEqual([item["name"] for item in metadata["binaries"]], expected)
+        bundle.receipt(output, self.source, expected)
+        if connected_only:
+            self.assertEqual(metadata["kind"], "connected-candidate-inputs")
+            self.assertEqual(metadata["profile"], "release")
+            self.assertEqual(list(metadata["compiled"]), ["pilot-desktop"])
+            self.assertFalse(any(key.startswith("visual_") for key in metadata))
+            self.assertFalse((output / "visual-metadata.json").exists())
+            self.assertFalse(any("metadata" in call or any("prepare-visual-worker" in arg for arg in call) for call in calls))
+            self.assertTrue(all("--release" in call for call in calls if "--bin" in call))
+            checked.assert_not_called()
+            with self.assertRaisesRegex(ValueError, "receipt mismatch"):
+                bundle.receipt(output, self.source, ["pilot-desktop-update-helper"])
+        else:
+            self.assertEqual(metadata["kind"], "production-rust-inputs" if production else "development-rust-inputs")
+            self.assertEqual(metadata["compiled"]["pilot-desktop-update-helper"], compiled)
+            self.assertEqual(metadata["visual_manifest_sha256"], bundle.digest(visual / "Cargo.toml"))
+            self.assertEqual(metadata["visual_lock_sha256"], bundle.digest(visual / "Cargo.lock"))
+            self.assertTrue((output / "visual-metadata.json").is_file())
+            checked.assert_called_once()
         bundle.checked_gui_resources(output / "nsh", output, self.source)
         self.assertTrue(any("Connected.tsx" in call for call in calls))
-        self.assertTrue(any("pilot-artifact-host" in call and "artifact-host" in call for call in calls))
-        checked.assert_called_once()
         self.assertFalse(any(any(word in ("package", "run", "nsh-cli", "codesign", "pnpm") for word in call) for call in calls))
 
 

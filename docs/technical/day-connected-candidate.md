@@ -3,13 +3,13 @@
 This is a local acceptance candidate, not a demo, release, update payload or
 default-app switch. It uses the actual `Connected.tsx`, production native
 bootstrap, sole `NativeHost` and deferred close owner. NSH stays at unmodified
-0.4.0. It connects to an explicitly selected existing daemon; it never starts one.
+0.5.0. It connects to an explicitly selected existing daemon; it never starts one.
 
 ## Prepare without assembly or signing
 
 Use current main, the existing installed NSH/Rust tools, global MBX defaults and
-the frozen pnpm dependency tree. The input builder also needs the existing pinned
-QuickJS archive. The environment/tool paths are described in
+the frozen pnpm dependency tree. This app-only lane does not need the visual
+worker's QuickJS archive. The environment/tool paths are described in
 [Day package inputs](day-package-inputs.md#entry-points).
 
 ```sh
@@ -23,8 +23,12 @@ python3 apps/day/scripts/candidate.py prepare \
 The explicit trust source supplies the existing **public** updater configuration.
 The script checks its real code seal, bundle inventory, app ID and build. It does
 not generate keys, reuse a private key, change policy or select a profile/model.
-It builds configured source-matched native inputs and the exact connected NSH
-resource closure. It prints the one separate assembly/signing command.
+It builds only the configured source-matched `pilot-desktop` executable and the
+exact connected NSH resource closure. It does not build the unused update helper,
+visual worker or artifact host. Its `connected-candidate-inputs` receipt records
+only these products, not full-distribution evidence. The default distribution
+builder still builds all four binaries and checks the pinned QuickJS inputs.
+Preparation prints the one separate assembly/signing command.
 
 ## Local development assembly
 
@@ -62,6 +66,12 @@ update-distribution assembler. Future daemon runtime packaging belongs under the
 verified NSH app's `Contents/Resources/runtime`, not GPUI capsule discovery. That
 future update work must implement the agreed global pause-first protocol and is
 not activated here.
+
+This candidate adds no local artifact capture/compiler or preview capability.
+Artifact compilation belongs to the selected daemon's verified runtime/helper;
+the app's existing saved-source view does not execute authored artifacts. A full
+Day distribution still includes its artifact helper. Connecting this candidate
+does not add missing capabilities to an older daemon.
 
 ## Authorized launch and read-only integration
 

@@ -242,8 +242,10 @@ def source_tools(checkout):
             raise ValueError("Build tools must match the immutable source: " + path.name)
 
 
-def compile_snapshot(checkout, work, output, expected, tools, inherited, production=None):
+def compile_snapshot(checkout, work, output, expected, tools, inherited, production=None, *, connected_only=False):
     """Only called on a fresh git-archive checkout, never a developer's tree."""
+    if connected_only and production is None:
+        raise ValueError("Connected candidate requires configured release inputs")
     day = checkout / "apps/day"
     release_lock(day / "native/Cargo.lock")
     env = environment(work, tools, inherited, production)
@@ -266,35 +268,37 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     original_config = bundle.read_json(day / "nsh.json")
     connected = dict(original_config, id=bundle.APP_ID, capabilities=dict(host=names))
     bundle.write_json(day / "nsh.json", connected)
-    # Isolate the existing visual engine, not the GPUI workspace. Preserve its
-    # sources, build script, exact dependency versions and seed lock selections.
-    visual = checkout / "apps/desktop/visual-worker"
-    with (visual / "Cargo.toml").open("a") as stream:
-        stream.write("\n[workspace]\n")
-    shutil.copyfile(visual.parent / "Cargo.lock", visual / "Cargo.lock")
-    # prepare-visual-worker only verifies/extracts the exact archive. Refuse a
-    # cache miss here rather than allowing its network download path.
-    archive = Path(inherited.get("PILOT_DAY_QUICKJS_ARCHIVE", ""))
-    if not archive.is_file():
-        raise ValueError("Supply the pinned QuickJS-NG 0.17.0 archive separately")
-    downloads = visual.parent / ".tools/downloads"
-    downloads.mkdir(parents=True)
-    shutil.copyfile(archive, downloads / "quickjs-ng-0.17.0.tar.gz")
-    execute([os.sys.executable, visual.parent / "scripts/prepare-visual-worker.py"], cwd=checkout, env=env)
-    manifests = [("pilot-desktop", day / "native/Cargo.toml", "macos-host"),
-                 ("pilot-artifact-host", day / "native/Cargo.toml", "artifact-host"),
-                 ("pilot-desktop-update-helper", checkout / "apps/desktop/updater/Cargo.toml", "native-macos"),
-                 ("pilot-visual-worker", visual / "Cargo.toml", "")]
-    locked = {path: bundle.digest(path) for path in (day / "native/Cargo.lock", checkout / "apps/desktop/updater/Cargo.lock")}
+    manifests = [("pilot-desktop", day / "native/Cargo.toml", "macos-host")]
+    locked = {day / "native/Cargo.lock": bundle.digest(day / "native/Cargo.lock")}
     inputs = work / "inputs"
     inputs.mkdir()
-    # Cargo must prune the former workspace lock for this standalone crate.
-    # Resolve offline from its seed, then check every selected source identity
-    # against that seed. Builds themselves remain --locked, with no new versions.
-    metadata = execute([day / "scripts/cargo", "metadata", "--offline", "--format-version=1",
-                        "--manifest-path", visual / "Cargo.toml"], cwd=checkout, env=env)
-    (inputs / "visual-metadata.json").write_text(metadata)
-    visual_lock(visual.parent / "Cargo.lock", visual / "Cargo.lock")
+    visual_evidence = {}
+    if not connected_only:
+        # Full distributions still need the helper, artifact host and visual
+        # engine. The app-only candidate neither copies nor invokes them.
+        visual = checkout / "apps/desktop/visual-worker"
+        with (visual / "Cargo.toml").open("a") as stream:
+            stream.write("\n[workspace]\n")
+        shutil.copyfile(visual.parent / "Cargo.lock", visual / "Cargo.lock")
+        # Verify/extract the pinned archive; never download on a cache miss.
+        archive = Path(inherited.get("PILOT_DAY_QUICKJS_ARCHIVE", ""))
+        if not archive.is_file():
+            raise ValueError("Supply the pinned QuickJS-NG 0.17.0 archive separately")
+        downloads = visual.parent / ".tools/downloads"
+        downloads.mkdir(parents=True)
+        shutil.copyfile(archive, downloads / "quickjs-ng-0.17.0.tar.gz")
+        execute([os.sys.executable, visual.parent / "scripts/prepare-visual-worker.py"], cwd=checkout, env=env)
+        manifests += [(ARTIFACT_HOST, day / "native/Cargo.toml", "artifact-host"),
+                      ("pilot-desktop-update-helper", checkout / "apps/desktop/updater/Cargo.toml", "native-macos"),
+                      ("pilot-visual-worker", visual / "Cargo.toml", "")]
+        updater_lock = checkout / "apps/desktop/updater/Cargo.lock"
+        locked[updater_lock] = bundle.digest(updater_lock)
+        # Prune the standalone crate's workspace seed offline, checking every
+        # selected source against it. Builds remain --locked, with no new versions.
+        metadata = execute([day / "scripts/cargo", "metadata", "--offline", "--format-version=1",
+                            "--manifest-path", visual / "Cargo.toml"], cwd=checkout, env=env)
+        (inputs / "visual-metadata.json").write_text(metadata)
+        visual_lock(visual.parent / "Cargo.lock", visual / "Cargo.lock")
     binaries, compiled = [], {}
     for name, manifest, features in manifests:
         path = build_artifact(checkout, manifest, name, features, env, profile, inputs / (name + ".cargo.jsonl"))
@@ -312,25 +316,27 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     if any(bundle.digest(path) != digest for path, digest in locked.items()):
         raise ValueError("Source lock changed during resource build")
     resource_closure(built, inputs / "nsh", names)
+    if not connected_only:
+        visual_evidence = dict(visual_manifest_sha256=bundle.digest(visual / "Cargo.toml"),
+                               visual_lock_sha256=bundle.digest(visual / "Cargo.lock"))
     bundle.write_json(inputs / "manifest.json", dict(schema=1,
-        kind="production-rust-inputs" if production else "development-rust-inputs",
+        kind="connected-candidate-inputs" if connected_only else "production-rust-inputs" if production else "development-rust-inputs",
         source=expected, target=TARGET, deployment_target="15.0", profile="release" if production else "dev",
         installable_update=False, updater_configuration=config, binaries=binaries,
         compiler=compiler, recipe_sha256=recipe, compiled=compiled,
         tools={name:dict(path=str(path), sha256=bundle.digest(path)) for name, path in tools.items()},
-        connected_configuration=connected,
-        visual_manifest_sha256=bundle.digest(visual / "Cargo.toml"),
-        visual_lock_sha256=bundle.digest(visual / "Cargo.lock")))
+        connected_configuration=connected, **visual_evidence))
     main = next(item for item in binaries if item["name"] == "pilot-desktop")
     bundle.write_json(inputs / "gui-resources.json", dict(schema=1, kind="nsh-ui-resources", source=expected,
         target=TARGET, nsh_release=bundle.NSH_RELEASE, executable=main, files=bundle.inventory(inputs / "nsh")))
     bundle.receipt(inputs, expected, [name for name, _, _ in manifests])
-    artifact_host(inputs, expected, module=checkout / HOST_MODULE)
+    if not connected_only:
+        artifact_host(inputs, expected, module=checkout / HOST_MODULE)
     bundle.checked_gui_resources(inputs / "nsh", inputs, expected)
     inputs.rename(output)
 
 
-def snapshot_day(expected, output, production=None, *, tools=None, inherited=None):
+def snapshot_day(expected, output, production=None, *, tools=None, inherited=None, connected_only=False):
     bundle.source(expected)
     if os.sys.platform != "darwin" or bundle.run("/usr/bin/uname", "-m") != "arm64":
         raise ValueError("Day input lane supports native macOS arm64 only")
@@ -355,7 +361,7 @@ def snapshot_day(expected, output, production=None, *, tools=None, inherited=Non
         with tarfile.open(archive) as stream:
             stream.extractall(checkout, filter="data")
         source_tools(checkout)
-        compile_snapshot(checkout, work, output, expected, tools, inherited, production)
+        compile_snapshot(checkout, work, output, expected, tools, inherited, production, connected_only=connected_only)
 
 
 def main():

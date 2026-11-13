@@ -28,7 +28,7 @@ class CandidateTests(unittest.TestCase):
         self.inputs = self.root / "inputs"
         self.inputs.mkdir()
         binaries = []
-        for name in ("pilot-desktop", "pilot-desktop-update-helper", "pilot-visual-worker"):
+        for name in ("pilot-desktop",):
             p = self.inputs / name
             p.write_bytes(b"synthetic fixture, not executable code")
             p.chmod(0o755)
@@ -39,10 +39,10 @@ class CandidateTests(unittest.TestCase):
         bundle.write_json(resources / "capabilities.json", day.compiled_capabilities(["day.today.read", "day.flush.ack"]))
         bundle.write_json(resources / "app.json", {"id": bundle.APP_ID})
         self.compiled = dict(source=self.source, profile="release", updater_configuration=self.config)
-        bundle.write_json(self.inputs / "manifest.json", dict(schema=1, kind="production-rust-inputs",
+        bundle.write_json(self.inputs / "manifest.json", dict(schema=1, kind="connected-candidate-inputs",
                           source=self.source, target=day.TARGET, profile="release", binaries=binaries,
                           updater_configuration=self.config, recipe_sha256="b" * 64, compiler="fixture",
-                          compiled={name: self.compiled for name in ("pilot-desktop", "pilot-desktop-update-helper")}))
+                          compiled={"pilot-desktop": self.compiled}))
         bundle.write_json(self.inputs / "gui-resources.json", dict(schema=1, kind="nsh-ui-resources",
                           source=self.source, target=day.TARGET, nsh_release=bundle.NSH_RELEASE,
                           executable=binaries[0], files=bundle.inventory(resources)))
@@ -69,7 +69,7 @@ class CandidateTests(unittest.TestCase):
                 patch.object(candidate, "assemble", side_effect=AssertionError("prepare must not assemble")):
             output = self.root / "prepared"
             self.assertEqual(candidate.prepare(self.source, self.root / "existing", output), output)
-            build.assert_called_once_with(self.source, output, production=self.config)
+            build.assert_called_once_with(self.source, output, production=self.config, connected_only=True)
             checked.assert_called_once_with(output)
 
     def test_prepare_cli_prints_next_local_stage_without_an_extra_approval_hold(self):
@@ -178,6 +178,12 @@ class CandidateTests(unittest.TestCase):
         bundle.write_json(self.inputs / "manifest.json", metadata)
         bundle.write_json(self.inputs / "nsh/capabilities.json", {"host":["day.*"]})
         with self.mocked(), self.assertRaisesRegex(ValueError, "inventory mismatch"):
+            candidate.checked_inputs(self.inputs)
+
+    def test_full_distribution_kind_is_not_candidate_build_evidence(self):
+        metadata = bundle.read_json(self.inputs / "manifest.json")
+        bundle.write_json(self.inputs / "manifest.json", metadata | {"kind": "production-rust-inputs"})
+        with self.assertRaisesRegex(ValueError, "release-profile inputs"):
             candidate.checked_inputs(self.inputs)
 
     def test_explicit_assembly_is_connected_only_and_keeps_exact_identity(self):
