@@ -157,6 +157,16 @@ impl Desk {
 
     /// Projects missions and freshness from the reads into the read model.
     fn project(&mut self) {
+        self.today.problems_known = self.overview.as_ref().is_some_and(|o| {
+            o.dashboard
+                .needs_you
+                .as_ref()
+                .is_some_and(|s| s.total as usize == s.items.len())
+        });
+        self.today.problems = self
+            .overview
+            .as_ref()
+            .map_or_else(Vec::new, project::problems);
         self.today.actions = self.actions.view();
         self.today.freshness = project::freshness(
             self.freshness.0,

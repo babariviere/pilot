@@ -308,6 +308,21 @@ export function prState(r: PR): string {
 	}
 }
 
+/** Saved observations, never a promise that the PR or checks are current. */
+export function prObservation(r: PR): string {
+	const at = (n: number | undefined) =>
+		n && Number.isFinite(n) && n > 0 && n <= 8.64e15 ? new Date(n).toISOString() : "unknown";
+	const pr = r.pullRequest;
+	const health = pr?.readiness;
+	const failed = health?.reasons.find((reason) => reason.code === "failing_checks");
+	const checks = !health?.checkedAt
+		? "Checks not observed."
+		: failed
+			? `Checks failed${failed.names?.length ? `: ${failed.names.join(", ")}` : ""}.`
+			: `Readiness ${health.state}.`;
+	return `PR state last observed: ${at(pr?.checkedAt)}. ${checks}${health?.checkedAt ? ` Health last observed: ${at(health.checkedAt)}.` : ""} Saved observations may have changed.`;
+}
+
 /** What the agent says about its work: the first of the four lines. */
 export function agentLine(work: DeliveredWork): string {
 	const v = work.verificationCurrent ? work.verification : null;

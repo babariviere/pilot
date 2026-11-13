@@ -45,6 +45,7 @@ import {
 	outputMessages,
 	ownPullRequests,
 	prName,
+	prObservation,
 	productionLine,
 	prState,
 	pullRequestLine,
@@ -113,9 +114,12 @@ function Report(props: { work: DeliveredWork }) {
 			.join(" · ");
 	const nothing = () => !w().completion && !w().nonCodeDelivery && !w().submission && !w().outcome;
 	return (
-		<View testID="delivery-report" class="gap-3 rounded-xl bg-muted px-4 py-4">
+		<View testID="delivery-report" selectable class="gap-3 rounded-xl bg-muted px-4 py-4">
 			<Text class="text-xs text-faint">The agent reports</Text>
 			<If when={w().completion}>
+				<Text class="text-xs text-faint">
+					The commit and checks below are agent-reported. Publication is not independently verified here.
+				</Text>
 				<Said label="Checks it ran" text={w().completion?.checks ?? ""} />
 				<Said label="Open issues" text={w().completion?.issues ?? ""} />
 			</If>
@@ -295,7 +299,7 @@ function Outputs(props: {
 			</If>
 			<Each of={w().pullRequests} key={(r) => r.id}>
 				{(r) => (
-					<View class="gap-0.5 border-t border-border py-2.5">
+					<View selectable class="gap-0.5 border-t border-border py-2.5">
 						<If
 							when={web() && webLink(r())}
 							else={
@@ -316,6 +320,9 @@ function Outputs(props: {
 							</RowLink>
 						</If>
 						<Text class="text-xs text-faint">{linkUrl(r())}</Text>
+						<If when={r().kind === "github.pr"}>
+							<Text class="text-xs text-faint">{prObservation(r())}</Text>
+						</If>
 					</View>
 				)}
 			</Each>

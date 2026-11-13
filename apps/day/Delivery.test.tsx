@@ -3,7 +3,17 @@
 // daemon, provider or storage.
 import { expect, open, test } from "nsh/test";
 import { type ArtifactSelection, capturedOf } from "./deliveryArtifact";
-import { excerpt, SOURCE_CHARS, SOURCE_LINES } from "./deliveryView";
+import type { DeliveredWork } from "./deliveryContract";
+import {
+	agentLine,
+	checkLine,
+	excerpt,
+	prObservation,
+	productionLine,
+	pullRequestLine,
+	SOURCE_CHARS,
+	SOURCE_LINES,
+} from "./deliveryView";
 
 const desktop = { platform: "macos", width: 1100, height: 1200 } as const;
 const CSV = "#4 History slice";
@@ -44,6 +54,54 @@ function opened(app: { texts(): string[] }): string {
 
 const PR = "https://github.com/mock/pilot/pull/431";
 
+test("publication claims, PR health observations and user verification stay separate", () => {
+	const direct: DeliveredWork = {
+		version: 1,
+		subject: { kind: "task", projectId: "p", missionId: "m", taskId: "t" },
+		deliveryId: "a".repeat(64),
+		targetId: "target",
+		ownerSessionId: "worker",
+		completion: { commit: "b".repeat(40), checks: "Agent claims checks passed and deployed", issues: "" },
+		pullRequests: [],
+		artifacts: [],
+		production: "not_tracked",
+		verification: null,
+		verificationCurrent: false,
+		verificationReceiptState: "unknown",
+		verificationRevision: 0,
+		pendingOperationId: null,
+	};
+	expect(agentLine(direct)).toBe("Says it finished. Commit bbbbbbb.");
+	expect(pullRequestLine(direct)).toBe("None linked.");
+	expect(productionLine(direct)).toBe("Not tracked.");
+	expect(checkLine(direct, undefined)).toBe("Not checked yet.");
+	const pr = {
+		id: "pr",
+		url: PR,
+		kind: "github.pr",
+		relationship: "ownership" as const,
+		pullRequest: {
+			number: 431,
+			url: PR,
+			title: "History",
+			state: "open" as const,
+			checkedAt: 100,
+			readiness: {
+				state: "blocked" as const,
+				checkedAt: 200,
+				reasons: [{ code: "failing_checks", names: ["native tests"] }],
+			},
+		},
+	};
+	expect(prObservation(pr).includes("Checks failed: native tests.")).toBe(true);
+	expect(prObservation(pr).includes("1970-01-01T00:00:00.200Z")).toBe(true);
+	expect(prObservation(pr).includes("Saved observations may have changed.")).toBe(true);
+	expect(prObservation({ ...pr, pullRequest: undefined }).includes("Checks not observed.")).toBe(true);
+	const linked = { ...direct, pullRequests: [pr] };
+	expect(pullRequestLine(linked)).toBe("PR #431: open, not merged.");
+	expect(productionLine(linked)).toBe("Not tracked.");
+});
+
 async function openCsv(app: Awaited<ReturnType<typeof ready>>) {
 	await app.press(CSV_ROW);
 	await app.waitFor("id:delivery");
@@ -53,12 +111,12 @@ async function openCsv(app: Awaited<ReturnType<typeof ready>>) {
 // NSH 0.5 rejects a covered press before dispatching any event. If a lower
 // control is behind the fixture's toolbar, take the user's scroll step, then
 // press it visibly. Never retry a dispatched action or suppress another error.
-async function pressCheck(app: Awaited<ReturnType<typeof ready>>, selector: string) {
+async function pressCheck(app: Awaited<ReturnType<typeof ready>>, selector: string, scrollBy = 2_000) {
 	try {
 		await app.press(selector);
 	} catch (error) {
 		if ((error as { code?: string }).code !== "ERR_NSH_TEST_COVERED") throw error;
-		await app.scroll("id:your-check", 2_000);
+		await app.scroll("id:your-check", scrollBy);
 		await app.press(selector);
 	}
 }
@@ -378,8 +436,7 @@ test("a save and reopen keeps the note, drops a shown source and reads nothing a
 	await openCsv(app);
 	await pressCheck(app, "id:send-back-open");
 	await app.type("id:send-back-note", "Keep exact words 💬");
-	await app.scroll("id:delivery", -2_000);
-	await app.press(`id:output-source-${HTML}`);
+	await pressCheck(app, `id:output-source-${HTML}`, -2_000);
 	await app.waitFor("id:artifact-source-text");
 	await app.press("Save and reopen");
 	await app.waitFor("id:send-back-note");

@@ -498,11 +498,11 @@ test("a mission's tasks show what their agents linked, and merged is not release
 	await app.waitFor("id:outputs-native-4");
 	for (const text of [
 		"PR #431 · Load older messages while streaming",
-		"Open, not merged",
+		"Open, not merged. state last checked 5 min ago. Checks not observed.",
 		"Scroll position, 12 capture runs",
 		"Artifact, revision 2",
 		"PR #412 · Native chat view",
-		"Merged yesterday",
+		"Merged yesterday. state last checked 5 min ago. Checks not observed.",
 		"Merged is not released. Pilot does not track releases.",
 	]) {
 		expect(app.shows(text)).toBe(true);

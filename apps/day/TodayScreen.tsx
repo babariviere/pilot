@@ -13,6 +13,7 @@ import { Incoming } from "./Incoming";
 import { todayScrollTo } from "./kept";
 import { Arrive } from "./motion";
 import { stageMark, stageWord } from "./PlanScreen";
+import { Problems } from "./Problems";
 import type { Plans } from "./planning";
 import { openPlan } from "./planView";
 import type { Rituals } from "./ritualFeed";
@@ -33,6 +34,8 @@ const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eig
 /** The headline: the coordinators' summary, until the user starts answering. */
 function headline(day: Day): string {
 	const today = day.today();
+	if (today.problems.length > 0) return "Some work needs a look.";
+	if (!today.problemsKnown) return "Your last read.";
 	if (today.attention.state !== "live" && (today.headline.startsWith("Nothing needs you") || today.notes.length > 0)) {
 		return "Your last read.";
 	}
@@ -551,6 +554,11 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 
 						<Incoming day={props.day} />
 						<NeedsYou day={props.day} />
+						<Problems
+							rows={today().problems}
+							known={today().problemsKnown}
+							earlier={today().freshness.state !== "live"}
+						/>
 						<ToCheck day={props.day} />
 						<If when={plans}>
 							<Planning plans={plans as Plans} />
@@ -560,9 +568,11 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 						<ComingUp day={props.day} />
 
 						<Text class="border-t border-border pt-5 text-xs text-faint">
-							{today().attention.state === "live"
-								? "That is everything for now. Pilot will tell you if something needs you."
-								: "What needs you is not current. Read again before acting."}
+							{today().attention.state !== "live" || !today().problemsKnown
+								? "What needs you is not current. Read again before acting."
+								: today().problems.length > 0
+									? "Unresolved work is shown above. Nothing is retried here."
+									: "That is everything for now. Pilot will tell you if something needs you."}
 						</Text>
 					</View>
 				</If>

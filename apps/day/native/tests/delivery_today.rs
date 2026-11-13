@@ -22,6 +22,11 @@ fn entry() -> PathBuf {
     let app = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let dir = std::env::temp_dir().join(format!("day-delivery-today-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&dir).unwrap();
+    std::fs::create_dir(dir.join("icons")).unwrap();
+    for file in std::fs::read_dir(app.join("icons")).unwrap() {
+        let path = file.unwrap().path();
+        std::fs::copy(&path, dir.join("icons").join(path.file_name().unwrap())).unwrap();
+    }
     for file in std::fs::read_dir(&app).unwrap() {
         let path = file.unwrap().path();
         let name = path.file_name().unwrap().to_str().unwrap().to_owned();
@@ -181,9 +186,9 @@ fn delivered_task_checked_from_its_mission_sent_back_once_and_a_lost_answer_stay
     wait(&mut app, "id:send-back-note");
     assert_eq!(app.screen().input_text("id:send-back-note"), Ok(Some(NOTE)));
     // Explicitly return to Today to find the reopened result in To check.
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("id:back").unwrap();
     wait(&mut app, &format!("id:check-result-{task_id}"));
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("id:back").unwrap();
     wait(&mut app, "id:to-check");
     wait(&mut app, &row);
     app.press(&row).unwrap();
@@ -200,7 +205,7 @@ fn delivered_task_checked_from_its_mission_sent_back_once_and_a_lost_answer_stay
     assert_eq!(stats["posts"], 3);
     assert_eq!(stats["messages"].as_array().unwrap().len(), 1);
     assert_eq!(stats["messages"][0]["content"], NOTE);
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("id:back").unwrap();
     wait(&mut app, "id:to-check");
     flush(&mut app, &bridge);
     close_window(app, bridge);
@@ -348,9 +353,9 @@ fn a_press_opens_the_exact_pull_request_once_and_ticked_reminders_are_saved_with
     let bridge = Bridge::new(DayRoot::new(recording(&f, &opened)));
     let mut app = open(&entry, &bridge);
     wait(&mut app, "id:your-check");
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("id:back").unwrap();
     wait(&mut app, &format!("id:check-result-{task_id}"));
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("id:back").unwrap();
     wait(&mut app, &format!("id:mission-{mission}"));
     app.wait(Duration::from_millis(300)).unwrap();
     assert_eq!(
@@ -407,7 +412,7 @@ fn connected_inspect_cold_open_keeps_drafts_and_navigation_but_not_source() {
     app.press("role:button[New]").unwrap();
     wait(&mut app, "id:goal");
     app.type_text("id:goal", NOTE).unwrap();
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("id:back").unwrap();
     result(&mut app, &task);
     no_source(&app);
     assert_eq!(f.stats("stats")["artifactReads"], json!([]));
@@ -517,12 +522,12 @@ fn connected_inspect_cold_open_keeps_drafts_and_navigation_but_not_source() {
         "cold open never reads source"
     );
     // The mission's detail is not read until the overlay closes.
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("id:back").unwrap();
     wait(
         &mut app,
         &format!("id:check-result-{}", task["taskId"].as_str().unwrap()),
     );
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("id:back").unwrap();
     app.press("role:button[New]").unwrap();
     wait(&mut app, "id:goal");
     assert_eq!(app.screen().input_text("id:goal"), Ok(Some(NOTE)));

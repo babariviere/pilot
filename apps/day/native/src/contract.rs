@@ -35,6 +35,10 @@ pub struct DayOverview {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Dashboard {
+    /// Canonical host-owned attention, not inferred from agent reports.
+    /// Missing on an older service means unknown, not an empty inbox.
+    #[serde(default)]
+    pub needs_you: Option<Section<NeedsYouItem>>,
     /// Active missions, those needing the user first.
     pub missions: Section<DashboardMission>,
     /// Chats working now.
@@ -43,6 +47,27 @@ pub struct Dashboard {
     /// only a preview of its rows; `total` counts them all.
     #[serde(default)]
     pub tracked: Vec<TrackedSource>,
+}
+
+/// The fields of `DashboardNeedsYouItem` needed for passive problem rows.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NeedsYouItem {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub session_id: Option<String>,
+    pub mission_id: Option<String>,
+    pub reason: Option<String>,
+    pub attention_reason: AttentionReason,
+    pub counts_in_badge: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionReason {
+    pub kind: String,
+    pub detail: Option<String>,
 }
 
 /// `DashboardTrackedSource`: a configured request source and the rows the
@@ -247,6 +272,16 @@ pub struct ReportWrite {
     pub next_step: String,
     /// Reported references, not host-verified proof.
     pub evidence: Vec<String>,
+    /// Optional scoped worker claim. Never canonical task completion.
+    pub delivery: Option<ReportDelivery>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportDelivery {
+    pub commit: String,
+    pub checks: String,
+    pub issues: String,
 }
 
 /// An agent's movement assessment.
@@ -431,6 +466,25 @@ pub struct PullRequest {
     /// Pilot's last successful look, epoch ms.
     #[serde(default)]
     pub checked_at: u64,
+    pub readiness: Option<PullRequestReadiness>,
+}
+
+/// Cached health from the actual PR lookup, never completion prose.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestReadiness {
+    pub state: String,
+    pub checked_at: u64,
+    #[serde(default)]
+    pub reasons: Vec<PullRequestReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestReason {
+    pub code: String,
+    #[serde(default)]
+    pub names: Vec<String>,
 }
 
 /// A pull request's GitHub state. Merged is not released.

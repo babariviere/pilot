@@ -31,7 +31,7 @@ export function stateWord(row: MissionRow): string {
 }
 
 /** A mission's mark. */
-export function stateMark(row: MissionRow): MarkKind {
+export function stateMark(row: Pick<MissionRow, "state" | "report">): MarkKind {
 	switch (row.state) {
 		case "moving":
 		case "resuming":
@@ -39,7 +39,7 @@ export function stateMark(row: MissionRow): MarkKind {
 		case "notMoving":
 			return "still";
 		case "unreported":
-			return "unreported";
+			return row.report?.currentness === "stale" ? "oldReport" : "unreported";
 		case "waiting":
 			return "needs";
 		case "stuck":

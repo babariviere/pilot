@@ -215,7 +215,8 @@ fn capability_permission_malformed_note_scope_and_close_are_fail_closed() {
     wrong["operationId"] = json!("caller-supplied");
     assert_eq!(f.call(&b, "day.delivery.done", wrong)["error"], "invalid");
     f.stats("deny");
-    assert_eq!(write(&f, &b, &page, "done", "")["error"], "unavailable");
+    // A current scope denial is not a transport outage.
+    assert_eq!(write(&f, &b, &page, "done", "")["error"], "identity");
     f.stats("allow");
     std::fs::write(
         f.dir.join("nsh.json"),

@@ -187,6 +187,7 @@ pub fn report(spec: &ReportSpec) -> ReportView {
             reported_at: at,
             valid_until: at + 24 * 60 * MINUTE,
             write: ReportWrite {
+                delivery: None,
                 version: 1,
                 report_id: format!("r-{}-{}-{at}", spec.mission, spec.task),
                 task_id: s(spec.task),
@@ -277,6 +278,7 @@ fn overview(
         observed_at: NOW,
         complete: true,
         dashboard: Dashboard {
+            needs_you: Some(Section::default()),
             missions: Section {
                 total: missions.len() as u32,
                 items: missions,
@@ -506,6 +508,7 @@ fn native_detail() -> MissionDetail {
                 state: PullRequestState::Merged,
                 merged_at: Some(NOW - 26 * 60 * MINUTE),
                 checked_at: NOW - 5 * MINUTE,
+                readiness: None,
             }),
         },
         Resource {
@@ -521,6 +524,7 @@ fn native_detail() -> MissionDetail {
                 state: PullRequestState::Open,
                 merged_at: None,
                 checked_at: NOW - 5 * MINUTE,
+                readiness: None,
             }),
         },
     ];

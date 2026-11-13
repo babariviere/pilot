@@ -17,6 +17,18 @@ qualified with an isolated daemon and faux workers, not enabled against your liv
 Direct chat creation, automatic continuation after human actions and budget increases are not supported
 by this connected path. Unavailable controls do not grant permission or start work.
 
+The connected overview shows each task's agent report, next step, evidence and
+linked outputs without opening its chat. PR states and check health are saved
+observations with their last-check times, not a promise they are current.
+An agent-reported commit does not prove publication. A merged PR does not prove
+a release, and none of these records replaces your explicit result check.
+
+**Needs a look** on Today and in a mission shows unresolved host-reported
+problems, their cause and a recommended next step. Saved or unfinished work
+stays explicitly unverified when the record cannot prove it. Diagnostic chat
+addresses remain available as selectable text. Reading a problem never retries
+work or grants permission. Earlier/offline reads keep their warnings visible.
+
 Use a mission when one goal needs several chats. Its **brief** describes the goal,
 **decisions** record agreed choices, and **tasks** track ownership and progress.
 

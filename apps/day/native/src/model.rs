@@ -188,6 +188,16 @@ pub struct ReportLine {
     pub next_step: String,
     /// References the agent named. Reported, not checked by Pilot.
     pub evidence: Vec<String>,
+    /// Scoped delivery facts reported by the worker, not accepted completion.
+    pub delivery: Option<ReportedDelivery>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportedDelivery {
+    pub commit: String,
+    pub checks: String,
+    pub issues: String,
 }
 
 /// A mission's control, as the service last reported it.
@@ -710,6 +720,23 @@ pub struct MissionPage {
     pub chats: Vec<ChatLine>,
     /// How fresh the read is.
     pub freshness: Freshness,
+    /// Host-owned problems needing human attention for this mission.
+    pub problems: Vec<Problem>,
+}
+
+/// Passive projection of canonical dashboard attention. Never a retry intent.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Problem {
+    pub id: String,
+    pub title: String,
+    pub cause: String,
+    pub next_step: String,
+    /// What the source can prove about saved or unfinished work.
+    pub work_state: String,
+    pub mission_id: Option<String>,
+    /// Diagnostic origin, as text. Reading it acknowledges nothing.
+    pub chat_link: String,
 }
 
 /// One result since the user last looked.
@@ -848,6 +875,10 @@ pub struct Intake {
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Today {
+    /// Host-owned unresolved problems, independent of attention card reads.
+    pub problems: Vec<Problem>,
+    /// Missing or incomplete host attention must not look empty.
+    pub problems_known: bool,
     /// Changes whenever anything below changes.
     pub revision: u32,
     /// The date and time the screen was read, as the user reads it.

@@ -10,7 +10,8 @@ use crate::{
     model::{
         ChatLine, ControlAsk, ControlState, ControlView, Currentness, Decision, DecisionKind,
         Delivery, Freshness, FreshnessState, MemberLine, MemberState, MissionPage, MissionRow,
-        MissionState, Movement, Output, OutputKind, Progress, ReportLine, TaskLine, TaskStatus,
+        MissionState, Movement, Output, OutputKind, Problem, Progress, ReportLine,
+        ReportedDelivery, TaskLine, TaskStatus,
     },
 };
 
@@ -126,6 +127,11 @@ fn report_line(view: &c::ReportView, now: u64) -> ReportLine {
         summary: report.write.summary.clone(),
         next_step: report.write.next_step.clone(),
         evidence: report.write.evidence.clone(),
+        delivery: report.write.delivery.as_ref().map(|d| ReportedDelivery {
+            commit: d.commit.clone(),
+            checks: d.checks.clone(),
+            issues: d.issues.clone(),
+        }),
     }
 }
 
@@ -352,6 +358,38 @@ pub fn missions(inputs: &Inputs) -> Groups {
     groups
 }
 
+/// Only the host's unresolved human-needed rows. Recoverable worker failures
+/// absent from this read remain coordinator-owned; report prose cannot create
+/// or clear a problem. Unread results belong to delivery discovery, not here.
+pub fn problems(overview: &c::DayOverview) -> Vec<Problem> {
+    overview.dashboard.needs_you.as_ref().map_or_else(Vec::new, |section| {
+        section.items.iter().filter(|item| item.kind != "unread" && item.counts_in_badge != Some(false)).map(|item| {
+            let reason = &item.attention_reason;
+            let next_step = match reason.kind.as_str() {
+                "mcp" => "Sign in to the service named above, then check the originating work.",
+                "limit" => "Check the usage limit before choosing whether to continue.",
+                "mission" => "Open the mission and resolve its blocked work or question.",
+                "asks" => "Read the originating question and answer it explicitly.",
+                "pr_stuck" => "Inspect the pull request and its checks before choosing a next step.",
+                "automation" => "Inspect the permission request. Continuing needs explicit permission.",
+                "tool_stall" | "long_job" => "Inspect the running work before stopping or continuing it.",
+                "no_pr" => "Inspect the saved changes and intended publication. No pull request is linked.",
+                _ => "Inspect the originating work before choosing how to continue. Nothing is retried here.",
+            };
+            Problem {
+                id: item.id.clone(),
+                title: item.title.clone(),
+                cause: reason.detail.as_ref().filter(|s| !s.trim().is_empty()).or(item.reason.as_ref().filter(|s| !s.trim().is_empty()))
+                    .cloned().unwrap_or_else(|| "The source gives no further cause.".to_owned()),
+                next_step: next_step.to_owned(),
+                work_state: "Saved-work and unfinished-effect state are not verified by this attention record. Do not assume a retry is safe.".to_owned(),
+                mission_id: item.mission_id.clone(),
+                chat_link: item.session_id.as_ref().map_or_else(String::new, |id| format!("pilot://chat/{id}")),
+            }
+        }).collect()
+    })
+}
+
 fn task_status(status: c::TaskStatus) -> Option<TaskStatus> {
     Some(match status {
         c::TaskStatus::Todo => TaskStatus::Todo,
@@ -369,7 +407,7 @@ fn pull_request_state(pr: Option<&c::PullRequest>, now: u64) -> String {
     let Some(pr) = pr else {
         return "Pilot has not checked it yet".to_owned();
     };
-    match pr.state {
+    let state = match pr.state {
         c::PullRequestState::Draft => "Draft, not merged".to_owned(),
         c::PullRequestState::Open => "Open, not merged".to_owned(),
         c::PullRequestState::Merged => pr.merged_at.map_or_else(
@@ -378,7 +416,37 @@ fn pull_request_state(pr: Option<&c::PullRequest>, now: u64) -> String {
         ),
         c::PullRequestState::Closed => "Closed without merging".to_owned(),
         c::PullRequestState::Unknown => "Pilot cannot tell its state".to_owned(),
-    }
+    };
+    let observed = if pr.checked_at == 0 {
+        "state observation time unknown".to_owned()
+    } else {
+        format!("state last checked {}", ago(now, pr.checked_at))
+    };
+    let checks = match &pr.readiness {
+        Some(r) if r.checked_at > 0 => {
+            let failed = r
+                .reasons
+                .iter()
+                .find(|reason| reason.code == "failing_checks");
+            let health = if let Some(failed) = failed {
+                if failed.names.is_empty() {
+                    "Checks failed".to_owned()
+                } else {
+                    format!("Checks failed: {}", failed.names.join(", "))
+                }
+            } else {
+                match r.state.as_str() {
+                    "ready" => "Readiness reported ready".to_owned(),
+                    "blocked" => "Readiness blocked".to_owned(),
+                    "pending" => "Readiness pending".to_owned(),
+                    _ => "Readiness unknown".to_owned(),
+                }
+            };
+            format!("{health}, last checked {}", ago(now, r.checked_at))
+        }
+        _ => "Checks not observed".to_owned(),
+    };
+    format!("{state}. {observed}. {checks}.")
 }
 
 fn link_word(kind: &str) -> &'static str {
@@ -527,6 +595,10 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
         tasks,
         chats,
         freshness,
+        problems: problems(inputs.overview)
+            .into_iter()
+            .filter(|p| p.mission_id.as_deref() == Some(mission_id))
+            .collect(),
     })
 }
 
@@ -591,7 +663,11 @@ mod tests {
         assert_eq!(
             shown,
             [
-                ("PR #476 · Fix PDF footer layout", "Merged 2 h ago", true),
+                (
+                    "PR #476 · Fix PDF footer layout",
+                    "Merged 2 h ago. state last checked 2 h ago. Checks not observed.",
+                    true
+                ),
                 ("Before and after", "Artifact, revision 2", false),
                 ("BIL-224", "Linear issue", false),
             ]
@@ -602,5 +678,146 @@ mod tests {
         assert!(!t2[0].merged);
         assert_eq!((t2[1].label.as_str(), t2[1].link.as_str()), ("Runbook", ""));
         assert!(outputs(&detail, "t3", now).is_empty());
+    }
+
+    #[test]
+    fn host_problems_survive_offline_and_reopen_without_inventing_recovery() {
+        use crate::{desk::Desk, fixture, model::Scenario};
+        let mut world = fixture::world(Scenario::Decisions);
+        let overview = world.overview.as_mut().unwrap();
+        let row = |id: &str, kind: &str, reason: &str| c::NeedsYouItem {
+            id: id.to_owned(),
+            kind: kind.to_owned(),
+            title: id.to_owned(),
+            session_id: Some(format!("chat-{id}")),
+            mission_id: Some("native".into()),
+            reason: None,
+            counts_in_badge: None,
+            attention_reason: c::AttentionReason {
+                kind: reason.into(),
+                detail: Some(format!("Cause {id}")),
+            },
+        };
+        overview.dashboard.needs_you = Some(c::Section {
+            total: 4,
+            items: vec![
+                row("failed-worker", "failed", "failed"),
+                row("blocked-coordinator", "question", "mission"),
+                row("permission", "automation", "automation"),
+                row("unread-result", "unread", "not_reviewed"),
+            ],
+        });
+        let mut desk = Desk::from_world(world);
+        assert!(desk.today().problems_known);
+        assert_eq!(desk.today().problems.len(), 3);
+        assert_eq!(desk.today().problems[0].cause, "Cause failed-worker");
+        assert_eq!(
+            desk.today().problems[0].chat_link,
+            "pilot://chat/chat-failed-worker"
+        );
+        assert!(desk.today().problems[0].work_state.contains("not verified"));
+        assert!(
+            desk.today().problems[2]
+                .next_step
+                .contains("explicit permission")
+        );
+        assert_eq!(
+            desk.mission("native").unwrap().problems,
+            desk.today().problems
+        );
+        desk.lose_read(FreshnessState::Offline, "Service unavailable");
+        let reopened = desk.restart();
+        assert_eq!(reopened.today().problems, desk.today().problems);
+        assert_eq!(reopened.today().freshness.state, FreshnessState::Offline);
+        // A complete empty read, not a local dismiss or report claim, clears them.
+        let mut next = fixture::world(Scenario::Decisions).overview.unwrap();
+        next.dashboard.needs_you = Some(c::Section::default());
+        desk.apply_overview(next).unwrap();
+        assert!(desk.today().problems.is_empty());
+        assert!(desk.today().problems_known);
+    }
+
+    #[test]
+    fn missing_or_incomplete_attention_is_unknown_and_reports_cannot_clear_it() {
+        use crate::{desk::Desk, fixture, model::Scenario};
+        let mut world = fixture::world(Scenario::Decisions);
+        world.overview.as_mut().unwrap().dashboard.needs_you = None;
+        let mut desk = Desk::from_world(world.clone());
+        assert!(!desk.today().problems_known);
+        let overview = world.overview.as_mut().unwrap();
+        overview.dashboard.needs_you = Some(c::Section {
+            total: 3,
+            items: vec![],
+        });
+        overview.reports[0].report.write.summary = "All deployed and accepted".into();
+        overview.reports[0].currentness = c::Currentness::Stale;
+        desk.apply_overview(overview.clone()).unwrap();
+        assert!(!desk.today().problems_known);
+        let page = desk
+            .mission(&overview.reports[0].report.mission_id)
+            .unwrap();
+        assert_eq!(
+            page.tasks
+                .iter()
+                .filter_map(|t| t.report.as_ref())
+                .find(|r| r.summary == "All deployed and accepted")
+                .unwrap()
+                .currentness,
+            Currentness::Stale
+        );
+    }
+
+    #[test]
+    fn pr_failures_are_observations_not_completion_or_release_claims() {
+        let pr: c::PullRequest = serde_json::from_value(serde_json::json!({
+            "number": 3, "title": "Fixture", "state": "open", "checkedAt": 1,
+            "readiness": { "state": "blocked", "checkedAt": 2,
+                "reasons": [{"code":"failing_checks", "names":["unit", "native"]}] }
+        }))
+        .unwrap();
+        let state = pull_request_state(Some(&pr), 60 * MINUTE);
+        assert!(state.contains("Open, not merged"));
+        assert!(state.contains("Checks failed: unit, native, last checked 59 min ago"));
+        assert!(!state.contains("released"));
+        assert_eq!(pull_request_state(None, 0), "Pilot has not checked it yet");
+    }
+
+    #[test]
+    fn worker_delivery_remains_a_report_and_quiet_notices_do_not_interrupt() {
+        use crate::{desk::Desk, fixture, model::Scenario};
+        let mut world = fixture::world(Scenario::Decisions);
+        let overview = world.overview.as_mut().unwrap();
+        let report = &mut overview.reports[0];
+        let mission = report.report.mission_id.clone();
+        let task = report.report.write.task_id.clone();
+        report.currentness = c::Currentness::Stale;
+        report.report.write.delivery = Some(c::ReportDelivery {
+            commit: "a".repeat(40),
+            checks: "Agent claims deployed".into(),
+            issues: "Not verified".into(),
+        });
+        overview.dashboard.needs_you = Some(c::Section {
+            total: 1,
+            items: vec![c::NeedsYouItem {
+                id: "late-success".into(),
+                kind: "scheduled_notice".into(),
+                counts_in_badge: Some(false),
+                ..Default::default()
+            }],
+        });
+        let desk = Desk::from_world(world);
+        assert!(desk.today().problems_known);
+        assert!(desk.today().problems.is_empty());
+        let page = desk.mission(&mission).unwrap();
+        let t = page.tasks.iter().find(|t| t.id == task).unwrap();
+        let report = t.report.as_ref().unwrap();
+        assert_eq!(report.currentness, Currentness::Stale);
+        assert_eq!(
+            report.delivery.as_ref().unwrap().checks,
+            "Agent claims deployed"
+        );
+        // The report does not create a PR, release, user check or task transition.
+        assert_eq!(t.status, TaskStatus::InProgress);
+        assert!(t.outputs.is_empty());
     }
 }

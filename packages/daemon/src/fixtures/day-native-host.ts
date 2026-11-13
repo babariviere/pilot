@@ -284,6 +284,21 @@ for await (const line of createInterface({ input: process.stdin })) {
 		invalidate();
 	}
 	if (cmd.action === "dayRace") dayRace = true;
+	if (cmd.action === "problem") {
+		const chat = chats[1]!;
+		if (cmd.value) {
+			chat.state = "failed";
+			chat.outcome = "failed";
+			chat.outcomeAt = 2;
+			chat.outcomeReason = "Synthetic native checks failed";
+		} else {
+			chat.state = "idle";
+			delete chat.outcome;
+			delete chat.outcomeAt;
+			delete chat.outcomeReason;
+		}
+		invalidate();
+	}
 	if (cmd.action === "detailRace") detailRace = cmd.value ? 1 : -1;
 	if (cmd.action === "detailRaceOff") detailRace = 0;
 	if (cmd.action === "coordinator") changeCoordinator = cmd.value;

@@ -17,6 +17,7 @@ import {
 import type { Bar, Evidence, Progress } from "pilot-day/native";
 import back from "./icons/back.svg";
 import changes from "./icons/changes.svg";
+import document from "./icons/document.svg";
 import moon from "./icons/moon.svg";
 import notes from "./icons/notes.svg";
 import pause from "./icons/pause.svg";
@@ -29,7 +30,7 @@ import update from "./icons/update.svg";
 // One small family of line icons, drawn on a 16-point grid with the same
 // stroke. They are template images: the class's tint colors them. They
 // stand beside words, never in place of a label the user must guess.
-const ICONS = { back, changes, moon, notes, pause, play, plus, refresh, sun, update } as const;
+const ICONS = { back, changes, document, moon, notes, pause, play, plus, refresh, sun, update } as const;
 
 /** The name of one of the app's icons. */
 export type IconName = keyof typeof ICONS;
@@ -57,10 +58,12 @@ export type MarkKind =
 	| "still"
 	| "paused"
 	| "unreported"
+	| "oldReport"
 	| "done"
 	| "new";
 
 const MARKS: Record<MarkKind, string> = {
+	oldReport: "",
 	needs: "bg-needs",
 	failed: "bg-failed",
 	ready: "bg-ok",
@@ -76,7 +79,14 @@ const MARKS: Record<MarkKind, string> = {
 
 /** A small round mark for a state. */
 export function Mark(props: { kind: MarkKind }) {
-	return <View class={`size-2 rounded-full transition-colors duration-200 ${MARKS[props.kind]}`} />;
+	return (
+		<If
+			when={props.kind === "oldReport"}
+			else={<View class={`size-2 rounded-full transition-colors duration-200 ${MARKS[props.kind]}`} />}
+		>
+			<Icon name="document" tint="tint-muted-foreground" />
+		</If>
+	);
 }
 
 /** A key the user can press, as a small cap. `on` fills it: the choice it picks is chosen. */

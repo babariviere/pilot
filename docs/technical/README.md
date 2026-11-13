@@ -58,6 +58,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Decision notice routing and durable batches](mission-decision-routing.md)
 - [Authorized work continuation and current-policy source](mission-continuation.md)
 - [Mission Pause/Resume and versioned agent reports](mission-controls-reports.md)
+- [Mission results and failure visibility audit](day-results-visibility.md)
 - [Proposed mission interview and approval contract](mission-interview-approval.md)
 - [Day interview and agreement backend (host-only)](day-mission-agreements.md)
 - [Native mission planning and Fog of war (host-only)](day-mission-planning.md)

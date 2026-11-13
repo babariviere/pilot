@@ -13,6 +13,7 @@ import { keepScroll, restoreScroll, scrollOf } from "./kept";
 import { glide } from "./motion";
 import { goHome } from "./nav";
 import { mapSummary, stageMark, stageWord } from "./PlanScreen";
+import { Problems } from "./Problems";
 import type { Plans } from "./planning";
 import { openPlan } from "./planView";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
@@ -23,6 +24,24 @@ import { controlLine, memberWord, provenance, rowLine, taskWord } from "./words"
 function total(row: MissionRow): number {
 	const p = row.progress;
 	return p.done + p.review + p.active + p.blocked + p.todo;
+}
+
+/** Worker delivery facts from the canonical report, not task completion. */
+function ReportedOutput(props: { report: ReportLine }) {
+	return (
+		<If when={props.report.delivery}>
+			<View selectable class="gap-1">
+				<Text class="text-xs text-faint">
+					Worker delivery claim. Task completion and your check remain separate.
+				</Text>
+				<Text class="text-sm text-muted-foreground">{`Reported commit: ${props.report.delivery?.commit ?? ""}`}</Text>
+				<Text class="text-sm text-muted-foreground">{`Reported checks: ${props.report.delivery?.checks ?? ""}`}</Text>
+				<If when={props.report.delivery?.issues}>
+					<Text class="text-sm text-muted-foreground">{`Open issues: ${props.report.delivery?.issues}`}</Text>
+				</If>
+			</View>
+		</If>
+	);
 }
 
 /** An agent's report: its words, next step and what it named. */
@@ -37,6 +56,7 @@ function Report(props: { report: ReportLine }) {
 			<If when={props.report.nextStep}>
 				<Text class="text-sm text-muted-foreground">{`Next: ${props.report.nextStep}`}</Text>
 			</If>
+			<ReportedOutput report={props.report} />
 			<View class="flex-row flex-wrap items-center gap-1.5">
 				<Each of={props.report.evidence} key={(e) => e}>
 					{(e) => <EvidenceChip evidence={{ label: e(), tone: "neutral" }} />}
@@ -251,9 +271,17 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
 				<Text class="text-xs text-muted-foreground">{taskWord(props.task.status)}</Text>
 			</View>
 			<If when={props.task.report}>
-				<View class="gap-0.5 pl-10">
+				<View selectable class="gap-0.5 pl-10">
 					<Text class="text-sm text-muted-foreground">{props.task.report?.summary ?? ""}</Text>
+					<If when={props.task.report?.nextStep}>
+						<Text class="text-sm text-muted-foreground">{`Next: ${props.task.report?.nextStep}`}</Text>
+					</If>
+					<Each of={props.task.report?.evidence ?? []} key={(e) => e}>
+						{(e) => <Text class="text-xs text-muted-foreground">{e()}</Text>}
+					</Each>
 					<Text class="text-xs text-faint">{props.task.report ? provenance(props.task.report) : ""}</Text>
+					<Text class="text-xs text-faint">Agent assessment, not verified progress or acceptance.</Text>
+					<ReportedOutput report={props.task.report as ReportLine} />
 				</View>
 			</If>
 			<If when={props.task.outputs.length > 0}>
@@ -261,9 +289,12 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
 					<Text class="text-xs text-faint">Outputs, as linked by its agents</Text>
 					<Each of={props.task.outputs} key={(o) => o.id}>
 						{(o) => (
-							<View class="flex-row items-baseline gap-3">
+							<View selectable class="gap-1">
 								<Text class="flex-1 text-sm text-foreground">{o().label}</Text>
 								<Text class="text-xs text-muted-foreground">{o().state}</Text>
+								<If when={o().link}>
+									<Text class="text-xs text-muted-foreground">{o().link}</Text>
+								</If>
 							</View>
 						)}
 					</Each>
@@ -372,6 +403,13 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage }) {
 				<Control day={props.day} page={props.page} />
 				<Waiting day={props.day} row={row()} />
 			</View>
+
+			<Problems
+				rows={props.page.problems}
+				known={props.day.today().problemsKnown}
+				inMission
+				earlier={props.page.freshness.state !== "live"}
+			/>
 
 			<View class="gap-3">
 				<SectionTitle title="Latest report" />

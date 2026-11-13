@@ -135,6 +135,37 @@ fn ready(host: &NativeHost) -> Today {
 }
 
 #[test]
+fn canonical_failure_is_visible_without_chat_reads_and_survives_host_reopen() {
+    let mut f = Fixture::new();
+    let host = f.open();
+    ready(&host);
+    f.cmd("problem", true);
+    assert!(matches!(reply(host.refresh()), Ok(_) | Err(Error::Stale)));
+    let today = wait(&host, |t| !t.problems.is_empty());
+    assert!(today.problems_known);
+    assert_eq!(today.problems[0].cause, "Synthetic native checks failed");
+    assert_eq!(
+        today.problems[0].mission_id.as_deref(),
+        Some(f.mission().as_str())
+    );
+    assert!(today.problems[0].chat_link.starts_with("pilot://chat/"));
+    assert!(today.problems[0].work_state.contains("not verified"));
+    assert_eq!(f.cmd("stats", false)["posts"], 0);
+    reply(host.close()).unwrap();
+    let reopened = f.open();
+    assert_eq!(ready(&reopened).problems, today.problems);
+    f.cmd("problem", false);
+    assert!(matches!(
+        reply(reopened.refresh()),
+        Ok(_) | Err(Error::Stale)
+    ));
+    let cleared = wait(&reopened, |t| t.problems.is_empty());
+    assert!(cleared.problems_known);
+    assert_eq!(f.cmd("stats", false)["posts"], 0);
+    reply(reopened.close()).unwrap();
+}
+
+#[test]
 fn background_refresh_does_not_turn_notice_invalidation_into_read_failure() {
     let mut f = Fixture::new();
     let host = f.open();

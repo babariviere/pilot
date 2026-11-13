@@ -74,6 +74,11 @@ export interface DeliveredWork {
 			branch?: string;
 			mergedAt?: number;
 			checkedAt: number;
+			readiness?: {
+				state: "ready" | "pending" | "blocked";
+				checkedAt: number;
+				reasons: Array<{ code: string; names?: string[] }>;
+			};
 		};
 	}>;
 	artifacts: Array<{
