@@ -26,6 +26,38 @@ use std::{
 
 const MAX_ARCHIVE: u64 = 1024 * 1024 * 1024;
 
+/// Inspect one explicitly selected native input directory. Paths are hints, not
+/// trust: both signed releases and their GUI-bundled runtimes use the existing
+/// verifiers. No journal write, consent, pause, close or service effect occurs.
+pub(crate) fn inspect_inputs(
+    directory: &Path,
+    trust: Trust,
+    journal: PathBuf,
+) -> Result<Value, Error> {
+    if !directory.is_absolute() {
+        return Err(Error::Invalid);
+    }
+    let current = directory.join("rollback");
+    let rollback = VerifiedRollback::prepare(
+        &trust,
+        &read(&current.join("latest.json"), 128 * 1024)?,
+        &read(&current.join("latest.json.sig"), 4096)?,
+        &current.join("app.zip"),
+    )?;
+    let next = directory.join("target");
+    let app = VerifiedApp::prepare(
+        trust,
+        journal,
+        &read(&next.join("latest.json"), 128 * 1024)?,
+        &read(&next.join("latest.json.sig"), 4096)?,
+        &next.join("app.zip"),
+    )?;
+    app.verify_rollback(&rollback)?;
+    // A diagnostic pin only. Deliberately drop the private immutable copies and
+    // execution handles. A future qualified root must reverify before consent.
+    Ok(app.target.clone())
+}
+
 enum ClosedUpdate {
     Preserved(ClosedWindow, String),
     Forced(super::update_loss::Accepted),
@@ -378,6 +410,17 @@ fn persist_backup(
 }
 
 impl VerifiedApp {
+    fn verify_rollback(&self, rollback: &VerifiedRollback) -> Result<(), Error> {
+        if rollback.installed != self.installed
+            || rollback.key != self.trust.public_key
+            || rollback.requirement != self.trust.code_requirement
+            || rollback.manifest.build != self.trust.current_build
+        {
+            return Err(Error::Identity);
+        }
+        Ok(())
+    }
+
     /// Native worker-thread preflight. Initial distribution uses ZIP, allowing
     /// reuse of the existing bounded, link-safe archive verifier. NSH performs
     /// the actual install; no local code swaps the app. No global CLI is used.
@@ -553,13 +596,7 @@ impl VerifiedApp {
         if nsh_platform_macos::objc2::MainThreadMarker::new().is_some() {
             return Err(Error::Invalid);
         }
-        if rollback.installed != self.installed
-            || rollback.key != self.trust.public_key
-            || rollback.requirement != self.trust.code_requirement
-            || rollback.manifest.build != self.trust.current_build
-        {
-            return Err(Error::Identity);
-        }
+        self.verify_rollback(&rollback)?;
         let state = match closed {
             ClosedUpdate::Preserved(closed, operation_id) => {
                 let capture = closed.capture().clone();
@@ -928,6 +965,26 @@ mod tests {
             let (config, trust, bytes, signature) = signed(&body);
             assert!(signed_target(&config, &trust, &bytes, signature.as_bytes()).is_err());
         }
+    }
+
+    #[test]
+    fn native_input_hints_cannot_create_a_journal_or_bypass_signed_preflight() {
+        let scratch = Scratch::new().unwrap();
+        let (_, trust, _, _) = signed(&manifest());
+        let journal = scratch.0.join("journal");
+        assert_eq!(
+            inspect_inputs(Path::new("relative"), trust.clone(), journal.clone()),
+            Err(Error::Invalid)
+        );
+        assert_eq!(
+            inspect_inputs(&scratch.0, trust, journal.clone()),
+            Err(Error::Storage)
+        );
+        assert!(
+            !journal.exists(),
+            "preflight is not consent or update entry"
+        );
+        assert!(!scratch.0.join("official-app-backups").exists());
     }
 
     #[test]

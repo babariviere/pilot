@@ -116,6 +116,7 @@ impl Fixture {
             binding: None,
             app: None,
             restore_transaction: None,
+            official: None,
         };
         let id = uuid::Uuid::new_v4().to_string();
         let capture = SavedWindow {
@@ -219,6 +220,7 @@ impl Fixture {
 #[test]
 fn official_normal_restart_restores_exact_window_without_legacy_transaction_or_execution() {
     let mut f = Fixture::new(false);
+    f.selection.official = Some(Default::default());
     let signature = Signature::default();
     let mut state = f.restore(signature.clone());
     let view = state.snapshot();
@@ -271,6 +273,7 @@ fn official_normal_restart_restores_exact_window_without_legacy_transaction_or_e
 #[test]
 fn force_startup_observes_target_but_never_fakes_a_saved_view_or_resume() {
     let mut f = Fixture::new(true);
+    f.selection.official = Some(Default::default());
     let mut state = f.restore(Signature::default());
     assert!(state.snapshot().restore.is_none());
     let run = state.snapshot().run.unwrap();

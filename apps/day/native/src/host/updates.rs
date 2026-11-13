@@ -33,6 +33,8 @@ pub struct Selection {
     /// Native startup's existing updater transaction, if this is its successor.
     /// Lookup only. This never acknowledges startup or grants execution.
     pub restore_transaction: Option<PathBuf>,
+    /// Official native root status. This is not an installer or Force grant.
+    pub official: Option<super::official_root::OfficialRoot>,
 }
 #[derive(Clone)]
 pub struct AppTarget {
@@ -111,6 +113,7 @@ pub(crate) fn successor(
         binding: None,
         app: None,
         restore_transaction: Some(transaction.into()),
+        official: None,
     };
     let expected = pilot_desktop_updater::iteration::ExpectedTarget::new(
         record.root["app"]["source"]
@@ -803,6 +806,14 @@ pub(super) async fn handle(
     };
     match command {
         Command::Read | Command::Check => {
+            if state.unsettled() {
+                state.view.offer = None;
+                state.view.force_available = Some(false);
+                state.view.blocked =
+                    "The original update requires lookup. Nothing will be resent.".into();
+                state.changed();
+                return Ok(outcome(OutcomeStatus::Accepted, state.view.revision, ""));
+            }
             if let Some(selection) = state.selection.clone() {
                 if !selection.matches(&t.source) {
                     return Err(Error::Identity);
@@ -817,6 +828,14 @@ pub(super) async fn handle(
                         version: String::new(),
                         note: "Register the selected native profile.".into(),
                     });
+                    state.changed();
+                    return Ok(outcome(OutcomeStatus::Accepted, state.view.revision, ""));
+                }
+                if let Some(root) = &selection.official {
+                    state.view.offer = None;
+                    state.view.force_available = Some(false);
+                    state.view.blocked = root.blocked().into();
+                    state.view.reason = state.view.blocked.clone();
                     state.changed();
                     return Ok(outcome(OutcomeStatus::Accepted, state.view.revision, ""));
                 }
@@ -878,6 +897,14 @@ pub(super) async fn handle(
             Ok(outcome(OutcomeStatus::Accepted, state.view.revision, ""))
         }
         Command::Prepare(intent, window) => {
+            if state.unsettled() {
+                return Err(Error::Unknown);
+            }
+            if intent.kind != UpdateKind::Register
+                && let Some(root) = state.selection.as_ref().and_then(|s| s.official.as_ref())
+            {
+                root.authorize(intent.mode.unwrap_or_default())?;
+            }
             // Legacy staged-helper selections have no accepted-loss close
             // capability. Never turn Force into an ordinary captured update.
             if intent.mode == Some(UpdateMode::Force) {
@@ -885,9 +912,6 @@ pub(super) async fn handle(
             }
             if intent.revision != state.view.revision {
                 return Err(Error::Stale);
-            }
-            if state.unsettled() {
-                return Err(Error::Unknown);
             }
             let selection = state.selection.as_ref().ok_or(Error::Unavailable)?;
             if !selection.matches(&t.source) {

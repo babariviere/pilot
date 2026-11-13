@@ -5,6 +5,7 @@ use crate::{
     contract::Home,
     host::{
         Error, NativeHost, Options, Source,
+        official_root::OfficialRoot,
         updates::{AppTarget, Selection},
     },
     macos_app::ApplicationOwner,
@@ -161,7 +162,25 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
                 journal,
                 app,
                 planning_model,
+                official_inputs,
             } = *selected;
+            // Distribution inputs are optional update preflight, not ordinary
+            // read-only startup prerequisites. Verification failure disables
+            // updates without losing the window or its original recovery record.
+            let official = if let Some(directory) = official_inputs {
+                let input_trust = trust.clone();
+                let input_journal = journal.clone();
+                let result = before_appkit(move || {
+                    crate::host::official_update::inspect_inputs(
+                        &directory,
+                        input_trust,
+                        input_journal,
+                    )
+                });
+                OfficialRoot::inspected(result)
+            } else {
+                OfficialRoot::default()
+            };
             let connection = pilot_desktop_updater::app_update::Connection::new(
                 pilot_desktop_updater::coordination::Location {
                     home: source.profile.clone(),
@@ -182,6 +201,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
                     binding: None,
                     app,
                     restore_transaction: None,
+                    official: Some(official),
                 },
                 planning_model,
             )
@@ -226,6 +246,7 @@ struct NativeSelection {
     journal: PathBuf,
     app: Option<AppTarget>,
     planning_model: Option<String>,
+    official_inputs: Option<PathBuf>,
 }
 
 fn launch(args: Vec<OsString>) -> Result<Launch, Error> {
@@ -251,6 +272,7 @@ fn launch(args: Vec<OsString>) -> Result<Launch, Error> {
             "--update-source",
             "--update-build",
             "--planning-model",
+            "--official-update-inputs",
         ]
         .iter()
         .any(|s| key == *s)
@@ -263,6 +285,19 @@ fn launch(args: Vec<OsString>) -> Result<Launch, Error> {
         }
     }
     let (source, journal) = selection(selected)?;
+    let official_inputs = native
+        .remove(&OsString::from("--official-update-inputs"))
+        .map(PathBuf::from);
+    if official_inputs
+        .as_ref()
+        .is_some_and(|path| !path.is_absolute())
+        || (official_inputs.is_some()
+            && ["--update-transaction", "--update-source", "--update-build"]
+                .iter()
+                .any(|key| native.contains_key(&OsString::from(key))))
+    {
+        return Err(Error::Invalid);
+    }
     // Optional, exact native model selection. No ambient/profile default and no
     // provider call here. The existing enrollment confirmation still gates New.
     let planning_model = native
@@ -310,6 +345,7 @@ fn launch(args: Vec<OsString>) -> Result<Launch, Error> {
         journal,
         app,
         planning_model,
+        official_inputs,
     })))
 }
 
@@ -429,5 +465,40 @@ mod tests {
         let mut args = selected_args();
         args.extend(["--model".into(), "faux/faux-1".into()]);
         assert!(launch(args).is_err(), "no alternate model flag");
+    }
+
+    #[test]
+    fn official_inputs_are_optional_explicit_and_never_mixed_with_legacy_targets() {
+        let Launch::Selected(selected) = launch(selected_args()).unwrap() else {
+            panic!("selected launch")
+        };
+        assert!(selected.official_inputs.is_none());
+        let mut args = selected_args();
+        args.extend([
+            "--official-update-inputs".into(),
+            "/tmp/distributions".into(),
+        ]);
+        let Launch::Selected(selected) = launch(args.clone()).unwrap() else {
+            panic!("selected launch")
+        };
+        assert_eq!(
+            selected.official_inputs,
+            Some(PathBuf::from("/tmp/distributions"))
+        );
+        args.extend(["--update-transaction".into(), "/tmp/legacy".into()]);
+        assert!(launch(args).is_err());
+        for value in ["relative", ""] {
+            let mut args = selected_args();
+            args.extend(["--official-update-inputs".into(), value.into()]);
+            assert!(launch(args).is_err());
+        }
+        let mut args = selected_args();
+        args.extend([
+            "--official-update-inputs".into(),
+            "/tmp/one".into(),
+            "--official-update-inputs".into(),
+            "/tmp/two".into(),
+        ]);
+        assert!(launch(args).is_err());
     }
 }

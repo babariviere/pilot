@@ -161,8 +161,43 @@ capability. Saved records cannot reconstruct these
 execution handles. Backups survive lost replies and process exit. Startup,
 cold recovery execution and selective global release still need the verified
 native binding below. Installed/restart-requested does **not** mean the successor
-started or chats resumed. The ordinary root does not yet select an official
-target or enter this adapter. No actual app was updated by these checks.
+started or chats resumed. The ordinary root can preflight an explicitly selected
+official target and rollback through this adapter, but cannot enter installation.
+No actual app was updated by these checks.
+
+### Native root preflight (installation unavailable)
+
+The native executable accepts the optional `--official-update-inputs` absolute
+directory. It contains `target/` and `rollback/`, each with `latest.json`,
+`latest.json.sig` and `app.zip`. This is a native path hint, not a trusted
+selection or consent. Relative paths, duplicate flags and a mixture with legacy
+`--update-transaction/source/build` inputs refuse parsing. No TSX method accepts
+these paths. There is no automatic download or registration.
+
+Bootstrap joins a worker-thread preflight before opening the host. It calls the
+existing `VerifiedRollback::prepare` and `VerifiedApp::prepare`, including signed
+official NSH manifests, actual code-sealed running bundle/config/compiled key,
+exact archive bytes, and verified GUI-bundled runtime inventories. It checks
+that the rollback belongs to that same running app. Preflight drops its private
+archive copies and execution handles. Only a diagnostic exact-target pin remains.
+It writes no consent, update operation, durable backup or preparation request.
+No inputs, or failed verification, leave the ordinary window usable with updates
+unavailable. Ordinary read-only startup still needs no update distribution.
+
+Even successful preflight cannot offer a normal or Force install: the native root
+has **no independent job/descendant shutdown verifier**. Its existing update
+status explains this precise failure; both modes refuse before confirmation,
+loss acceptance, capture, pause or close. Force is not advertised, and legacy
+staged inputs cannot provide a fallback installer. These are fail-closed input
+and root-routing seams, not a completed production update flow. A future qualified
+root must reverify immutable inputs and bind exact consent, capture/loss and the
+same mandatory process verifier before calling the existing official installer.
+
+An unsettled saved operation takes precedence over fresh target offers in host
+Read/Check. It keeps its original identity and Unknown outcome, offers no
+replacement target and reconstructs no capture or Force authority. Existing
+official normal/Force startup readers still verify the retained exact image;
+normal requires its fresh display observation, and Force never supplies a view.
 
 ### Native successor observation
 
@@ -225,7 +260,7 @@ The following native/distribution gates remain:
    DEVELOPMENT inputs are not a signed distribution or production acceptance.
 7. Qualify Force's native root selection, accepted-loss close and cold startup
    using actual signed inputs. The separate confirmation/journal/installer
-   capabilities are implemented; the current unqualified legacy root does not
+   capabilities are implemented; the current unqualified official root does not
    advertise or enter Force. Normal capture stays mandatory for normal updates.
    No ordinary confirmation, save failure or retained loss record grants Force
    or waives signature/trust, shutdown, permissions or Unknown/no-replay rules.

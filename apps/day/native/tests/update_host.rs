@@ -158,6 +158,7 @@ impl Fixture {
                 source: "a".repeat(40),
             }),
             restore_transaction: None,
+            official: None,
         };
         let host = Self::open(&path, &source, &selection);
         let bridge = Bridge::new(DayRoot::new(host.clone()));
@@ -240,6 +241,59 @@ impl Drop for Fixture {
     }
 }
 const VIEW: &str = r#"{place:'new',id:'',update:true,goal:'  unsent 👩🏽‍💻\nexact  ',focused:'decision',questions:['round/question']}"#;
+
+#[test]
+fn official_root_refuses_normal_and_force_before_capture_or_loss_and_ignores_legacy_target() {
+    let mut f = Fixture::new(false);
+    f.selection.official = Some(Default::default());
+    f.reopen();
+    let read = f.run("return await call('day.update.read');");
+    let snapshot = &read["value"]["snapshot"];
+    assert!(snapshot["offer"].is_null());
+    assert_eq!(snapshot["forceAvailable"], false);
+    assert!(
+        snapshot["blocked"]
+            .as_str()
+            .unwrap()
+            .contains("not selected")
+    );
+    for mode in ["normal", "force"] {
+        let result = f.run(&format!("const r=await call('day.update.read'); return await call('day.update.prepare',{{kind:'app',mode:'{mode}',revision:r.value.snapshot.revision}});"));
+        assert_eq!(result["error"], "unavailable", "{mode}");
+    }
+    assert!(f.bridge.pending_update().is_none());
+    assert_eq!(std::fs::metadata(f.path.join("journal")).unwrap().len(), 0);
+    assert!(!f.source.profile.join(".daemon-upgrade.json").exists());
+}
+
+#[test]
+fn official_root_check_keeps_original_unknown_operation_instead_of_a_new_offer() {
+    let mut f = Fixture::new(false);
+    let confirmed = f.run(&format!("const p=await call('day.update.prepare',{{kind:'app',revision:1}});return await call('day.update.confirm',{{confirmation:p.value.snapshot.pending.id,view:{VIEW}}});"));
+    let operation = confirmed["value"]["snapshot"]["operation"].clone();
+    let before = std::fs::read(f.path.join("journal")).unwrap();
+    f.selection.official = Some(Default::default());
+    f.reopen();
+    let checked = f.run("return await call('day.update.check');");
+    let snapshot = &checked["value"]["snapshot"];
+    assert_eq!(snapshot["operation"], operation);
+    assert_eq!(snapshot["run"]["phase"], "unknown");
+    assert!(snapshot["offer"].is_null());
+    assert!(snapshot["pending"].is_null());
+    assert_eq!(snapshot["forceAvailable"], false);
+    for mode in ["normal", "force"] {
+        let result = f.run(&format!("const r=await call('day.update.read'); return await call('day.update.prepare',{{kind:'app',mode:'{mode}',revision:r.value.snapshot.revision}});"));
+        assert_eq!(
+            result["error"], "unknown",
+            "retained {mode} cannot retarget"
+        );
+    }
+    assert_eq!(std::fs::read(f.path.join("journal")).unwrap(), before);
+    assert!(
+        f.bridge.pending_update().is_none(),
+        "Check cannot reconstruct capture authority"
+    );
+}
 
 #[component]
 fn NativeFeedProbe() -> impl IntoElement {

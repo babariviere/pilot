@@ -138,6 +138,7 @@ mount(()=><View class="flex-1"><Input multiline value={text()} onChange={({value
                     installed: installed.clone(), capsule: None, binding: None,
                     app: Some(AppTarget { transaction: directory.join("missing-transaction"), target: installed, build: "2.0".into(), source: "a".repeat(40) }),
                     restore_transaction: None,
+                    official: None,
                 }
             });
             let host = NativeHost::open_with_options(
