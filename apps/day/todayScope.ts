@@ -7,6 +7,21 @@
 import { type Signal, signal } from "nsh";
 import type { Planning, Today } from "pilot-day/native";
 import { call, type Refusal } from "./bridge";
+import type { DeliveredWork, VerificationSubject } from "./deliveryContract";
+
+/** Passive results from another project. No actions can use that project's root. */
+export type ScopeResults = {
+	complete: boolean;
+	more: boolean | null;
+	reason: string;
+	items: {
+		subject: VerificationSubject;
+		snapshot: DeliveredWork | null;
+		title: string;
+		currentness: string;
+		unsettled?: boolean;
+	}[];
+};
 
 /** The window's Today scope: "all" for All projects, else one project's ID. */
 export const todayProject = signal<string>("all");
@@ -24,6 +39,7 @@ export type ScopeProject = {
 	needsYou: ScopeCount;
 	today: Today | null;
 	planning: Planning | null;
+	results?: ScopeResults | null;
 	/** Why a section of this project could not be read, by section. */
 	errors: Record<string, string>;
 };
@@ -139,6 +155,7 @@ export function scopeOf(x: unknown): ScopeSnapshot | null {
 			needsYou: needs,
 			today,
 			planning: raw.selected ? planningOf(raw.planning) : null,
+			results: raw.selected ? resultsOf(raw.results, raw.id) : null,
 			errors,
 		});
 	}
@@ -149,6 +166,26 @@ export function scopeOf(x: unknown): ScopeSnapshot | null {
 		complete: s.complete,
 		projects,
 		outsideNeedsYou: outside,
+	};
+}
+
+function resultsOf(x: unknown, project: string): ScopeResults | null {
+	const r = x as ScopeResults | null;
+	if (!r || typeof r.complete !== "boolean" || !Array.isArray(r.items) || r.items.length > 40) return null;
+	if (
+		r.items.some(
+			(i) =>
+				!i.subject ||
+				i.subject.projectId !== project ||
+				(i.snapshot && (i.snapshot.version !== 1 || i.snapshot.subject.projectId !== project)),
+		)
+	)
+		return null;
+	return {
+		complete: r.complete,
+		more: r.more,
+		reason: typeof r.reason === "string" ? r.reason : "",
+		items: r.items.map((i) => ({ ...i, title: typeof i.title === "string" ? i.title : "A delivered result" })),
 	};
 }
 

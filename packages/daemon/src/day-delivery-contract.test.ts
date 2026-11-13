@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { DeliveredWork, UserVerificationLookup, VerificationSubject } from "@pilot/protocol";
+import type { DeliveredWork, DeliveredWorkList, UserVerificationLookup, VerificationSubject } from "@pilot/protocol";
 import type {
+	DeliveryList,
 	UserVerificationLookup as NativeLookup,
 	VerificationSubject as NativeSubject,
 	DeliveredWork as NativeView,
@@ -16,6 +17,8 @@ const canonicalLookup: (v: NativeLookup) => UserVerificationLookup = (v) => v;
 const view: (v: DeliveredWork) => NativeView = (v) => v;
 type Fields = Exclude<keyof DeliveredWork, "pullRequests" | "artifacts">;
 const canonicalFields: (v: NativeView) => Pick<DeliveredWork, Fields> = (v) => v;
+const list: (v: DeliveredWorkList) => DeliveryList = (v) => v;
+const listFields: (v: DeliveryList) => Omit<DeliveredWorkList, "items"> = (v) => v;
 
 test("Day wire view keeps canonical identities, assessments and receipt pairs", () => {
 	const v: VerificationSubject = { kind: "chat", projectId: "project", sessionId: "session" };
@@ -25,6 +28,8 @@ test("Day wire view keeps canonical identities, assessments and receipt pairs", 
 	// Keep the projection signatures referenced without inventing domain fixtures.
 	assert.equal(typeof view, "function");
 	assert.equal(typeof canonicalFields, "function");
+	assert.equal(typeof list, "function");
+	assert.equal(typeof listFields, "function");
 });
 
 import type { DeliveredArtifact, DeliveredArtifactRequest } from "@pilot/protocol";

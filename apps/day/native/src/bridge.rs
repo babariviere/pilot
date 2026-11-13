@@ -28,6 +28,7 @@ pub const METHODS: &[&str] = &[
     "day.intake.start",
     "day.intake.check",
     "day.delivery.read",
+    "day.delivery.list",
     "day.delivery.artifact",
     "day.delivery.saved",
     "day.delivery.open",
@@ -184,6 +185,7 @@ pub(crate) enum Command {
     IntakeWrite(crate::host::intake::Intent),
     IntakeCheck(String),
     DeliveryRead(crate::host::delivery::Subject),
+    DeliveryList(crate::host::delivery::List),
     DeliveryArtifact(crate::host::delivery_artifact::Request),
     DeliverySaved,
     DeliveryOpen(crate::host::delivery::Open),
@@ -351,6 +353,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 return Err(Error::Invalid);
             }
             C::LinearRead
+        }
+        "day.delivery.list" => {
+            let r: crate::host::delivery::List = exact(args)?;
+            r.validate()?;
+            C::DeliveryList(r)
         }
         "day.delivery.read" => {
             let s: crate::host::delivery::Subject = exact(args)?;
@@ -625,6 +632,7 @@ impl Command {
                     | Self::IntakeRead
                     | Self::LinearRead
                     | Self::DeliveryRead(_)
+                    | Self::DeliveryList(_)
                     | Self::DeliverySaved
                     | Self::Mission(_)
                     | Self::Plan(_)

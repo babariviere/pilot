@@ -236,10 +236,10 @@ fn label_sections(row: &mut Value, project: &Value) {
     label_rows(&mut row["results"], "items", project);
 }
 
-/// Reuse saved verification subjects and acknowledged native starts. This is
-/// NOT a global delivery inventory (that contract is not available yet).
+/// Keep saved checks/starts even when automatic discovery is unavailable.
 async fn results(t: &Transport, journal: &Journal) -> Value {
     let mut subjects = std::collections::BTreeMap::new();
+    let mut uncertain = std::collections::BTreeSet::new();
     for r in journal
         .planning
         .values()
@@ -257,19 +257,44 @@ async fn results(t: &Transport, journal: &Journal) -> Value {
             _ => continue,
         };
         if let Ok(s) = serde_json::from_value::<super::delivery::Subject>(subject.clone()) {
+            if r.operation["kind"] == "user-verification" && r.pending() {
+                uncertain.insert(subject.to_string());
+            }
             subjects.insert(subject.to_string(), s);
         }
     }
     let mut items = Vec::new();
     // Same candidate limit as the existing delivery feed. No unbounded fanout.
     for subject in subjects.values().take(20) {
+        let unsettled =
+            serde_json::to_value(subject).is_ok_and(|s| uncertain.contains(&s.to_string()));
         let value = super::delivery::read(t, subject).await;
         items.push(match value {
-            Ok(snapshot) => json!({"subject":subject,"snapshot":snapshot,"currentness":"live"}),
-            Err(error) => json!({"subject":subject,"snapshot":null,"currentness":"unavailable","reason":error.to_string()}),
+            Ok(snapshot) => json!({"subject":subject,"snapshot":snapshot,"currentness":"live","unsettled":unsettled}),
+            Err(error) => json!({"subject":subject,"snapshot":null,"currentness":"unavailable","unsettled":unsettled,"reason":error.to_string()}),
         });
     }
-    json!({"complete":false,"items":items,"reason":"Only saved verification subjects and acknowledged starts are available; this is not all delivered work."})
+    let discovered = super::delivery::list(t, &super::delivery::List::default()).await;
+    match discovered {
+        Ok(v) => {
+            for item in v["items"].as_array().into_iter().flatten() {
+                if !items
+                    .iter()
+                    .any(|saved| saved["subject"] == item["subject"])
+                {
+                    items.push(json!({"subject":item["subject"],"title":item["title"],"snapshot":item["snapshot"],"currentness":v["currentness"]}));
+                }
+            }
+            let complete = v["complete"] == true
+                && subjects.len() <= 20
+                && items.iter().all(|i| i["currentness"] == "live");
+            json!({"complete":complete,"more":v["more"],"baseline":v["baseline"],"items":items,
+                "reason":if complete {""} else {"More results may be available in missions. This list is incomplete."}})
+        }
+        Err(error) => {
+            json!({"complete":false,"more":null,"items":items,"reason":format!("New deliveries could not be read: {error}. Saved checks and starts are kept.")})
+        }
+    }
 }
 
 pub(super) async fn read(

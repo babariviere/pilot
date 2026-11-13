@@ -183,6 +183,7 @@ async fn run(
     if matches!(
         call.command,
         Command::DeliveryRead(_)
+            | Command::DeliveryList(_)
             | Command::DeliverySaved
             | Command::DeliveryOpen(_)
             | Command::DeliveryWrite(_)
@@ -252,6 +253,7 @@ async fn run(
         Command::TodayScope(_) => unreachable!("handled scoped Today read"),
         Command::DeliveryArtifact(_) => unreachable!("handled captured artifact read"),
         Command::DeliveryRead(_)
+        | Command::DeliveryList(_)
         | Command::DeliverySaved
         | Command::DeliveryOpen(_)
         | Command::DeliveryWrite(_)

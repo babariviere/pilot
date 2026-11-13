@@ -21,6 +21,40 @@ fn checked(f: &Fixture, b: &Bridge, id: &Value) -> Value {
 const NOTE: &str = "  Keep exact bytes 👩🏽‍💻\nThis is not deployed.  ";
 
 #[test]
+fn passive_list_starts_fresh_and_keeps_the_cutoff_after_reopen() {
+    let mut f = fixture();
+    let b = f.bridge();
+    let first = f.call(&b, "day.delivery.list", json!({}));
+    let baseline = first["value"]["snapshot"]["baseline"].clone();
+    assert_eq!(first["value"]["snapshot"]["items"], json!([]));
+    assert_eq!(baseline["mode"], "start_fresh");
+    f.stats("canonical-delivery");
+    let list = f.call(&b, "day.delivery.list", json!({}));
+    assert_eq!(
+        list["value"]["snapshot"]["items"][0]["subject"],
+        f.info["task"]
+    );
+    assert_eq!(list["value"]["snapshot"]["baseline"], baseline);
+    assert_eq!(f.stats("stats")["posts"], 0);
+    assert_eq!(
+        f.call(&b, "day.delivery.list", json!({"projectId":"other"}))["error"],
+        "invalid"
+    );
+    close(b);
+    let b = f.bridge();
+    let reopened = f.call(&b, "day.delivery.list", json!({}));
+    assert_eq!(reopened["value"]["snapshot"]["baseline"], baseline);
+    assert_eq!(
+        reopened["value"]["snapshot"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    close(b);
+}
+
+#[test]
 fn canonical_task_and_standalone_outputs_done_reopen_and_exact_durable_send_back() {
     let mut f = fixture();
     let b = f.bridge();

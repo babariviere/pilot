@@ -6,6 +6,9 @@ For the upcoming interface, [launch the separate local development preview](deve
 Connected Day keeps earlier reads marked as older while it refreshes. An
 unavailable attention read never means that nothing needs you. Read again only
 reads; it does not resend an answer or start work.
+Today To check discovers new mission deliveries from a saved first-use cutoff.
+Older work stays in missions, without being accepted or deleted. Your saved
+checks stay available. Other projects' results are read-only in this window.
 
 | Feature                                         | Guide                                         |
 | ----------------------------------------------- | --------------------------------------------- |

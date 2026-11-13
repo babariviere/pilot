@@ -201,6 +201,16 @@ for await (const line of createInterface({ input: process.stdin })) {
 	}
 	if (c.action === "delete-output") f.store.removeResource(mission.id, pr.id);
 	if (c.action === "new-delivery") f.store.updateTask(mission.id, task.id, { body: randomUUID() });
+	if (c.action === "canonical-delivery") {
+		f.store.writeBrief(mission.id, "A new synthetic output", 0);
+		f.store.saveNonCodeDelivery(mission.id, task.id, worker.id, {
+			kind: "non-code",
+			references: [{ kind: "brief", revision: 1 }],
+			checks: "Synthetic",
+			limitations: "No release proof",
+		});
+		await f.store.durable();
+	}
 	if (c.action === "new-outcome") outcomeAt++;
 	if (c.action.startsWith("malformed:")) malformed = c.action.slice(10);
 	if (c.action === "corrupt-lookup") corruptLookup = true;

@@ -62,6 +62,41 @@ Reads cross durability barriers and recheck live scope after receipt I/O.
 They never mark a result checked, subscribe/start a worker, or reconcile by
 repeating an effect.
 
+### Start-fresh discovery
+
+`GET /api/projects/:projectId/delivered-work?after=<source cursor>` uses the same
+native capability. `after` is optional, exclusive, and never saved as a cutoff.
+The first authorized discovery read saves one profile-wide **start_fresh** baseline
+in `delivery_discovery_baselines`, then waits for `durable()` before returning it.
+Reopen, scope changes, pagination and later projects reuse that exact baseline.
+Nothing accepts or deletes historical work. Existing saved checks and acknowledged
+standalone starts remain candidates through their existing native journal readers.
+
+`delivery_sources` is a payload-free index of canonical completion, non-code and
+evidence-submission insertions. Startup seeds existing records once. Subsequent
+source rows and the replicated `delivery_source_clock` are written inside the
+same transactions as the canonical records. The clock cannot reuse a sequence
+after deletion or restart. No timestamps, task status, report, PR tracking state,
+or app-open time determine the cutoff. A new evidence submission is a new source;
+editing only an old task's definition or links does not rediscover pre-cutoff work.
+For already eligible subjects, the existing exact `deliveryId` still controls
+verification currentness, including definition and artifact-pin changes.
+
+Each page inspects at most 20 distinct task subjects in source order, with one
+lookahead, and limits serialized result data to 1 MiB (oversize refuses rather
+than truncates). It excludes only exact current Done/Sent back with accepted
+outer/domain receipts and no pending operation. Missing/Unknown receipts stay
+pending. Responses include the baseline, source/next cursor, `more`, `complete`
+and `currentness`. Complete means no more sources after this page, not that
+earlier pages or historical work were accepted. Source or assessment changes
+during receipt I/O make the page stale/incomplete. Reads send no messages, start
+no work and perform no external integration reads. Schema code is exercised only
+against isolated fixtures here, not the live database.
+
+Automatic inventory covers canonical task records. Standalone outcomes remain
+available through acknowledged starts and saved checks, not a new global session
+scan or copied outcome tracker.
+
 ## Explicit operations
 
 Use the existing version-1 `DurableOperation` envelope and native capability
@@ -152,6 +187,11 @@ the sandbox; unlisted output metadata still passes through unchanged.
   command summaries, with `snapshot: {projectId}` naming the root's own project
   (TSX builds a task subject from it, never chooses one). It makes no HTTP call,
   Check or effect.
+* `day.delivery.list` takes `{}` or `{after}` and returns a discovery page in
+  `snapshot`. Native chooses the project from its root. Project/transport fields
+  are refused; responses validate exact subjects and delivery snapshots. The call
+  is passive and permitted during draft capture, not after sealing/close. It
+  changes no operation journal entry or command receipt.
 * `day.delivery.done`, `day.delivery.sendBack` and `day.delivery.reopen` take
   `{subject,targetId,deliveryId,expectedRevision,ownerSessionId,note}` from the
   displayed result. The method fixes the action. Done/Reopen need an empty note;
@@ -238,16 +278,21 @@ Reopen send exactly the displayed `DeliveredWork` pins. A confirmation pinned
 to an older delivery or revision cannot be sent. A lost or uncertain answer is
 Unknown and Check-only; a GET that already reports Done does not settle it.
 
-`ToCheck.tsx` builds Today's To check from saved records only: subjects named
+`ToCheck.tsx` builds Today's To check from discovery plus saved records: subjects named
 by `day.delivery.saved` (Unknown first, then sent back or reopened, then Done)
 and standalone chats from accepted intake Starts (`sessionId` in the intake
-summaries), at most 20, each read passively. It reads again when Today shows
+summaries), at most 20 saved subjects plus a page of 20 discoveries, each read passively. It reads again when Today shows
 or the window becomes active, not on every change notice. Its rows are results
 with a canonical delivery that is not currently Done or Sent back.
 
-Gap: no route lists every delivered task or chat in a project, so a mission
-task's first delivery is reached from its mission page (Done or In review
-tasks offer Check the result). Unsent Send back notes and the open result are
+Next results/First results page only the automatic list, never the durable cutoff
+or saved Unknown checks. Later pages state that earlier results are still pending.
+`day.today.scope` merges the same bounded discovery with saved subjects for other
+configured projects. Their To check rows name their project and stay read-only;
+they cannot retarget this window's assessment/open/Check authority. Unavailable or
+incomplete discovery stays explicit instead of looking like no pending results.
+Historical tasks remain reachable from their mission (Check the result).
+Unsent Send back notes and the open result are
 saved in the window's `SavedView` (`delivery`, `notes`), counted against its
 limits, and restored without sending. Reminder checklist ticks are saved the same way
 (`reminders`, as `<result>#<deliveryId>\n<tick>...`, at most 20 results). They

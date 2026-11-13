@@ -1,7 +1,7 @@
 // Today's To check: delivered results that wait for the user's own check,
 // and the user's Done, Send back or Reopen whose answer is not known.
-// Pilot looks at the results the user checked before and the requests they
-// started as standalone chats. Opening a row reads it; nothing here sends,
+// Pilot also reads new canonical deliveries after the saved start-fresh cutoff.
+// Earlier checks and acknowledged standalone starts are kept. Nothing here sends,
 // and an agent's report or a merged pull request never counts as a check.
 import { signal, Text, View } from "nsh";
 import type { MissionRow } from "pilot-day/native";
@@ -47,6 +47,7 @@ function LiveToCheck(props: { day: Day; mirror: DeliveryMirror }) {
 	void props.mirror.source.readSaved();
 	const missionTitle = (id: string) => missions(props.day).find((m) => m.id === id)?.title;
 	const title = (op: { key: string; subject: DeliveryOp["subject"] }) =>
+		v().entries[op.key]?.title ??
 		titleOf(op.key, op.subject, op.subject.kind === "task" ? missionTitle(op.subject.missionId) : undefined);
 	const rows = (): DeliveryEntry[] =>
 		v()
@@ -54,10 +55,11 @@ function LiveToCheck(props: { day: Day; mirror: DeliveryMirror }) {
 			.filter(
 				(e): e is DeliveryEntry =>
 					!!e &&
-					waitsForCheck(
+					(waitsForCheck(
 						e.snapshot,
 						v().unsettled.find((o) => o.key === e.key),
-					) &&
+					) ||
+						(!!e.snapshot?.pendingOperationId && !v().unsettled.some((o) => o.key === e.key))) &&
 					!v().sending.includes(e.key),
 			);
 	const notes = () =>
@@ -66,7 +68,11 @@ function LiveToCheck(props: { day: Day; mirror: DeliveryMirror }) {
 			.slice(-3);
 	const message = signal("");
 	const visible = () =>
-		rows().length + v().unsettled.length + notes().length > 0 || v().saved === "unavailable" || !!message();
+		rows().length + v().unsettled.length + notes().length > 0 ||
+		v().saved === "unavailable" ||
+		!!message() ||
+		!!v().discovery?.reason ||
+		!!v().discovery?.more;
 	const origin = (subject: DeliveryOp["subject"]) =>
 		subject.kind === "task" ? (missionTitle(subject.missionId) ?? "A mission") : "Standalone chat";
 	const meta = (key: string) => {
@@ -81,6 +87,19 @@ function LiveToCheck(props: { day: Day; mirror: DeliveryMirror }) {
 				<View class="pb-1">
 					<SectionTitle title="To check" count={rows().length} />
 				</View>
+				<If when={v().discovery?.reason}>
+					<Text class="text-xs text-muted-foreground">{v().discovery?.reason ?? ""}</Text>
+				</If>
+				<If when={v().discovery?.more}>
+					<Action label="Next results" testID="check-more" onPress={() => void props.mirror.source.readMore?.()} />
+				</If>
+				<If when={v().discovery?.later}>
+					<Action
+						label="First results"
+						testID="check-first"
+						onPress={() => void props.mirror.source.readSaved()}
+					/>
+				</If>
 				<If when={v().saved === "unavailable"}>
 					<View class="mb-2 flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
 						<Mark kind="unknown" />
@@ -125,8 +144,10 @@ function LiveToCheck(props: { day: Day; mirror: DeliveryMirror }) {
 									onPress={place.press}
 								>
 									<View class="flex-row items-center gap-1.5">
-										<Mark kind="needs" />
-										<Text class="text-xs text-needs-ink">To check</Text>
+										<Mark kind={e().snapshot?.pendingOperationId ? "unknown" : "needs"} />
+										<Text class="text-xs text-needs-ink">
+											{e().snapshot?.pendingOperationId ? "Check not confirmed" : "To check"}
+										</Text>
 									</View>
 								</RowLink>
 								<Text class="text-xs text-faint">{meta(entry.key)}</Text>

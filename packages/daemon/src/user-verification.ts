@@ -1,5 +1,6 @@
 import type {
 	DeliveredWork,
+	DeliveredWorkList,
 	DurableOperation,
 	UserVerificationIntent,
 	UserVerificationLookup,
@@ -25,6 +26,72 @@ export class UserVerifications {
 	private readonly deps: Dependencies;
 	constructor(deps: Dependencies) {
 		this.deps = deps;
+	}
+	/** Passive discovery. Only the first-use cutoff is saved, never acceptance or a moving read cursor. */
+	async list(projectId: string, after?: number): Promise<DeliveredWorkList> {
+		if (!id(projectId) || (after !== undefined && (!Number.isSafeInteger(after) || after < 0)))
+			throw new OperationRejected("Invalid delivery discovery cursor");
+		this.deps.projects.require(projectId);
+		await this.deps.store.durable();
+		const source = this.deps.store.userVerifications;
+		const baseline = source.discoveryBaseline();
+		// Do not acknowledge a cutoff that is only in the in-memory replica.
+		await this.deps.store.durable();
+		const through = source.sourceCursor();
+		if (after !== undefined && (after < baseline || after > through))
+			throw new OperationRejected("Invalid delivery discovery cursor");
+		const candidates = source.discoveryCandidates(projectId, after ?? baseline, through, 21);
+		const items: DeliveredWorkList["items"] = [];
+		const observed: DeliveredWork[] = [];
+		for (const c of candidates.slice(0, 20)) {
+			const subject: VerificationSubject = { kind: "task", projectId, missionId: c.missionId, taskId: c.taskId };
+			const snapshot = await this.read(subject);
+			observed.push(snapshot);
+			// Unknown/missing outer receipts never hide a pending check.
+			if (
+				snapshot.deliveryId &&
+				!(
+					snapshot.verificationCurrent &&
+					!snapshot.pendingOperationId &&
+					(snapshot.verification?.state === "done" || snapshot.verification?.state === "sent_back")
+				)
+			)
+				items.push({
+					subject,
+					title: this.deps.store.task(c.missionId, c.taskId).title,
+					snapshot,
+					sourceSequence: c.sequence,
+				});
+		}
+		if (Buffer.byteLength(JSON.stringify(items)) > 1024 * 1024)
+			throw new OperationRejected("Delivery discovery page exceeds capacity; inspect results in their missions");
+		await this.deps.store.durable();
+		this.deps.projects.require(projectId);
+		const more = candidates.length > 20;
+		const unchanged = observed.every((shown) => {
+			const now = this.readNow(shown.subject);
+			const pending =
+				now.pendingOperationId ??
+				(shown.verificationReceiptState === "unknown" ? (now.verification?.operationId ?? null) : null);
+			return (
+				now.deliveryId === shown.deliveryId &&
+				now.ownerSessionId === shown.ownerSessionId &&
+				now.verificationRevision === shown.verificationRevision &&
+				pending === shown.pendingOperationId
+			);
+		});
+		const currentness = source.sourceCursor() === through && unchanged ? "live" : "stale";
+		return {
+			version: 1,
+			projectId,
+			baseline: { mode: "start_fresh", sourceSequence: baseline },
+			sourceCursor: through,
+			nextCursor: more ? candidates[19]!.sequence : null,
+			more,
+			complete: !more && currentness === "live",
+			currentness,
+			items,
+		};
 	}
 	private subject(s: VerificationSubject) {
 		if (

@@ -1,9 +1,14 @@
 // The native host owns exact operations and receipt pairs across window lifetimes.
 // These methods never infer success from an agent report, a PR, or a passive read.
 import { call, type Refusal } from "./bridge";
-import type { DeliveredWork, UserVerificationLookup, VerificationSubject } from "./deliveryContract";
+import type { DeliveredWork, DeliveryList, UserVerificationLookup, VerificationSubject } from "./deliveryContract";
 
 export type { DeliveredWork, VerificationSubject };
+
+/** Native selects the project; a page cursor never retargets the window. */
+export function listDeliveries(window: string, after?: number) {
+	return call<DeliveryList>(window, "day.delivery.list", after === undefined ? {} : { after });
+}
 
 /** Availability comes from the native owner, never from an output's URL. */
 export interface OutputCapabilities {

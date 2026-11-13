@@ -282,6 +282,9 @@ impl Peer {
                     } else if route.ends_with("/intake") {
                         status = 503;
                         json!({})
+                    } else if route.ends_with("/delivered-work") {
+                        json!({"version":1,"projectId":project,"baseline":{"mode":"start_fresh","sourceSequence":5},
+                            "sourceCursor":5,"complete":true,"more":false,"nextCursor":null,"currentness":"live","items":[]})
                     } else {
                         json!({"id":project,"path":format!("/{project}")})
                     }
@@ -336,7 +339,8 @@ async fn scope_read_checks_configured_access_and_never_sends_work_or_changes_sou
     assert!(projects[1]["today"].is_null() && projects[1]["planning"].is_null());
     assert_eq!(read["outsideNeedsYou"]["count"], 0);
     assert!(!read["complete"].as_bool().unwrap());
-    assert_eq!(projects[0]["results"]["complete"], false);
+    assert_eq!(projects[0]["results"]["complete"], true);
+    assert_eq!(projects[0]["results"]["baseline"]["mode"], "start_fresh");
     assert_eq!(projects[0]["errors"]["intake"], "Unavailable");
     assert_eq!(peer.transport.source, source);
     assert_eq!(

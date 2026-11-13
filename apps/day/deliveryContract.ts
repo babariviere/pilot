@@ -97,3 +97,16 @@ export interface DeliveredWork {
 	verificationRevision: number;
 	pendingOperationId: string | null;
 }
+
+/** One bounded post-cutoff page. A list never settles an operation. */
+export type DeliveryList = {
+	version: 1;
+	projectId: string;
+	baseline: { mode: "start_fresh"; sourceSequence: number };
+	sourceCursor: number;
+	nextCursor: number | null;
+	complete: boolean;
+	more: boolean;
+	currentness: "live" | "stale";
+	items: { subject: VerificationSubject; title: string; snapshot: DeliveredWork; sourceSequence: number }[];
+};

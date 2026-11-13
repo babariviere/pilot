@@ -2221,6 +2221,7 @@ export interface TaskModelResponse {
 export type { DeliveredArtifact, DeliveredArtifactRequest } from "./delivered-artifact.ts";
 export type {
 	DeliveredWork,
+	DeliveredWorkList,
 	UserVerification,
 	UserVerificationIntent,
 	UserVerificationLookup,

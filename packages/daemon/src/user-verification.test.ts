@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { type TestContext, test } from "node:test";
 import type {
 	DeliveredWork,
@@ -95,9 +96,10 @@ async function fixture(t: TestContext) {
 			issues: "",
 		});
 	const run = (op: DurableOperation) => journal.execute(op, (o, entry) => service.admit(o, entry.firstEntry));
-	const reopenStorage = async () => {
+	const reopenStorage = async (beforeOpen?: () => void) => {
 		await store.durable();
 		store.close();
+		beforeOpen?.();
 		store = new MissionStore(join(home, "missions.sqlite"));
 		journal = new OperationJournal(join(home, "operations"), host);
 		service = new UserVerifications({ store, journal, projects, sessions });
@@ -110,6 +112,7 @@ async function fixture(t: TestContext) {
 	return {
 		home,
 		project,
+		projects,
 		mission,
 		task,
 		subject,
@@ -170,6 +173,157 @@ test("Done, Send back and Reopen are immutable revisions, not task/merge/release
 	assert.equal((await f.service.read(f.subject)).verification?.revision, 3);
 	assert.deepEqual(await f.service.lookup(done), pair, "historical exact receipt survives reopen");
 	assert.equal((await f.service.lookup(back)).receipt.state, "accepted");
+});
+
+test("discovery starts fresh once, keeps history and uses one durable cutoff across projects", async (t) => {
+	const f = await fixture(t);
+	f.deliver();
+	const old = await f.service.read(f.subject);
+	const first = await f.service.list(f.project.id);
+	assert.equal(first.items.length, 0);
+	assert.equal(first.complete, true);
+	assert.ok(first.baseline.sourceSequence > 0);
+	assert.equal(old.verification, null);
+	await mkdir(join(f.home, "other"));
+	const other = await f.projects.create({ path: join(f.home, "other") });
+	const mission = f.store.create({ projectId: other.id, title: "Other project" });
+	f.store.join("other-lead", mission.id);
+	f.store.update(mission.id, { coordinatorSessionId: "other-lead" });
+	const task = f.store.addTask(mission.id, { title: "New other delivery" });
+	f.store.completeTask(mission.id, task.id, "other-lead", { commit: "b".repeat(40), checks: "Synthetic", issues: "" });
+	const list = await f.service.list(other.id);
+	assert.deepEqual(list.baseline, first.baseline, "a later project read does not move the profile cutoff");
+	assert.deepEqual(list.items[0]?.subject, {
+		kind: "task",
+		projectId: other.id,
+		missionId: mission.id,
+		taskId: task.id,
+	});
+	assert.equal(list.items[0]?.snapshot.production, "not_tracked");
+	assert.equal((await f.service.list(f.project.id)).items.length, 0);
+	await f.reopenStorage();
+	assert.deepEqual((await f.service.list(other.id)).baseline, first.baseline);
+	assert.equal((await f.service.list(other.id)).items.length, 1, "pending across restart without any acceptance");
+	assert.equal((await f.service.read(f.subject)).deliveryId, old.deliveryId, "history remains readable");
+	assert.equal((await f.service.read(f.subject)).verification, null);
+	assert.equal(f.sends.length, 0);
+});
+
+test("discovery hides only exact acknowledged Done or Sent back and keeps Unknown", async (t) => {
+	const f = await fixture(t);
+	const baseline = (await f.service.list(f.project.id)).baseline;
+	f.deliver();
+	assert.equal((await f.service.list(f.project.id)).items.length, 1);
+	const page = await f.service.read(f.subject);
+	assert.equal((await f.run(operation(page))).state, "accepted");
+	assert.equal((await f.service.list(f.project.id)).items.length, 0);
+	assert.equal((await f.run(operation(await f.service.read(f.subject), "reopen"))).state, "accepted");
+	assert.equal((await f.service.list(f.project.id)).items.length, 1);
+	assert.equal((await f.run(operation(await f.service.read(f.subject), "send_back", "Fix"))).state, "accepted");
+	assert.equal((await f.service.list(f.project.id)).items.length, 0);
+	// A canonical new record changes identity; the earlier assessment stays historical.
+	f.store.writeBrief(f.mission.id, "Second delivery", 0);
+	f.store.saveNonCodeDelivery(f.mission.id, f.task.id, "worker", {
+		kind: "non-code",
+		references: [{ kind: "brief", revision: 1 }],
+		checks: "Synthetic",
+		limitations: "Not released",
+	});
+	assert.equal((await f.service.list(f.project.id)).items.length, 1);
+	f.setSend("lost");
+	const back = operation(await f.service.read(f.subject), "send_back", "Again");
+	assert.equal((await f.run(back)).state, "pending");
+	await f.reopenStorage();
+	const list = await f.service.list(f.project.id);
+	assert.deepEqual(list.baseline, baseline);
+	assert.equal(list.items[0]?.snapshot.pendingOperationId, back.operationId);
+	assert.equal(f.sends.length, 2, "passive reads never resend Unknown");
+});
+
+test("discovery is bounded and page cursors never advance the cutoff or erase pending checks", async (t) => {
+	const f = await fixture(t);
+	const first = await f.service.list(f.project.id);
+	for (let i = 0; i < 22; i++) {
+		const task = f.store.addTask(f.mission.id, { title: `Delivery ${i}` });
+		f.store.completeTask(f.mission.id, task.id, "completion-lead", {
+			commit: "a".repeat(40),
+			checks: "Synthetic",
+			issues: "",
+		});
+	}
+	const page = await f.service.list(f.project.id);
+	assert.equal(page.items.length, 20);
+	assert.equal(page.more, true);
+	assert.equal(page.complete, false);
+	const next = await f.service.list(f.project.id, page.nextCursor!);
+	assert.equal(next.items.length, 2);
+	assert.equal(next.complete, true);
+	assert.equal(next.more, false);
+	assert.deepEqual(next.baseline, first.baseline);
+	assert.equal(new Set([...page.items, ...next.items].map((i) => i.snapshot.targetId)).size, 22);
+	assert.deepEqual(
+		(await f.service.list(f.project.id)).items,
+		page.items,
+		"reopen/filter returns the still-pending first page",
+	);
+	await assert.rejects(f.service.list(f.project.id, -1));
+	await assert.rejects(f.service.list(f.project.id, Number.MAX_SAFE_INTEGER));
+	assert.equal(f.sends.length, 0);
+});
+
+test("pre-cutoff definition, PR and status changes do not rediscover historical output", async (t) => {
+	const f = await fixture(t);
+	f.deliver();
+	const baseline = (await f.service.list(f.project.id)).baseline;
+	f.store.updateTask(f.mission.id, f.task.id, { body: "Changed definition", status: "todo" });
+	f.store.addResource(f.mission.id, {
+		taskId: f.task.id,
+		url: "https://github.com/example/repo/pull/1",
+		relationship: "reference",
+	});
+	assert.equal((await f.service.list(f.project.id)).items.length, 0);
+	f.store.writeBrief(f.mission.id, "New delivery", 0);
+	f.store.saveNonCodeDelivery(f.mission.id, f.task.id, "worker", {
+		kind: "non-code",
+		references: [{ kind: "brief", revision: 1 }],
+		checks: "Synthetic",
+		limitations: "Not released",
+	});
+	assert.deepEqual((await f.service.list(f.project.id)).baseline, baseline);
+	assert.equal((await f.service.list(f.project.id)).items.length, 1);
+});
+
+test("older canonical records are indexed once without accepting or flooding history", async (t) => {
+	const f = await fixture(t);
+	f.deliver();
+	await f.reopenStorage(() => {
+		const disk = new DatabaseSync(join(f.home, "missions.sqlite"));
+		disk.exec("DROP TABLE delivery_sources; DROP TABLE delivery_source_clock;");
+		disk.close();
+	});
+	const list = await f.service.list(f.project.id);
+	assert.equal(list.items.length, 0);
+	assert.ok(list.baseline.sourceSequence > 0);
+	assert.equal((await f.service.read(f.subject)).verification, null);
+	await f.reopenStorage();
+	assert.deepEqual((await f.service.list(f.project.id)).baseline, list.baseline);
+});
+
+test("source identities never reuse a deleted latest delivery after restart", async (t) => {
+	const f = await fixture(t);
+	f.deliver();
+	const first = await f.service.list(f.project.id);
+	f.store.remove(f.mission.id);
+	await f.reopenStorage();
+	const mission = f.store.create({ projectId: f.project.id, title: "Later work" });
+	f.store.join("lead", mission.id);
+	f.store.update(mission.id, { coordinatorSessionId: "lead" });
+	const task = f.store.addTask(mission.id, { title: "Later result" });
+	f.store.completeTask(mission.id, task.id, "lead", { commit: "c".repeat(40), checks: "Synthetic", issues: "" });
+	const list = await f.service.list(f.project.id);
+	assert.deepEqual(list.baseline, first.baseline);
+	assert.ok(list.items[0]!.sourceSequence > first.sourceCursor);
+	assert.equal(list.items.length, 1);
 });
 
 test("new task delivery identity invalidates old Done and old Send back CAS", async (t) => {
@@ -247,6 +401,7 @@ test("standalone outcomes are exact, scoped and separate from task status and ag
 
 test("entered domain success without outer receipt remains Unknown, and malformed bytes cannot replay", async (t) => {
 	const f = await fixture(t);
+	await f.service.list(f.project.id);
 	f.deliver();
 	const op = operation(await f.service.read(f.subject));
 	await f.journal.reserve(op);
@@ -257,6 +412,7 @@ test("entered domain success without outer receipt remains Unknown, and malforme
 	await f.reopenStorage();
 	const page = await f.service.read(f.subject);
 	assert.equal(page.verificationCurrent, false, "domain success alone cannot show Done after reopen");
+	assert.equal((await f.service.list(f.project.id)).items[0]?.snapshot.pendingOperationId, op.operationId);
 	assert.equal(page.verificationReceiptState, "unknown");
 	assert.equal(page.pendingOperationId, op.operationId);
 	assert.equal((await f.run(operation(page, "reopen"))).state, "rejected");
@@ -368,11 +524,16 @@ test("new canonical submission supersedes checked delivery without inheriting ve
 			}),
 		);
 	const first = await submit(null);
+	const baseline = (await f.service.list(f.project.id)).baseline;
+	assert.equal((await f.service.list(f.project.id)).items.length, 0, "first submission is historical at first use");
 	const old = await f.service.read(subject);
 	assert.equal(old.submissionId, first.id);
 	assert.equal(old.submission?.claim, "First result");
 	assert.equal((await f.run(operation(old))).state, "accepted");
 	const next = await submit(first.id);
+	const discovered = await f.service.list(f.project.id);
+	assert.deepEqual(discovered.baseline, baseline);
+	assert.equal(discovered.items[0]?.snapshot.submissionId, next.id, "new canonical submission crosses the cutoff");
 	const current = await f.service.read(subject);
 	assert.equal(current.submissionId, next.id);
 	assert.notEqual(current.deliveryId, old.deliveryId);

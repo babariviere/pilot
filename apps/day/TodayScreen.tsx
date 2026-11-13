@@ -25,6 +25,7 @@ import {
 	OtherNew,
 	OtherNotShown,
 	OtherPlanning,
+	OtherToCheck,
 	otherMissionsCount,
 	otherNeedsCount,
 	otherNewShown,
@@ -567,6 +568,7 @@ function OtherProject(props: { ctx: TodayScope }) {
 					<SectionTitle title="Needs you" count={otherNeedsCount(props.ctx)} />
 					<OtherNeeds ctx={props.ctx} />
 				</View>
+				<OtherToCheck ctx={props.ctx} />
 				<OtherNotShown ctx={props.ctx} />
 				<If when={props.ctx.others().some((p) => (p.planning?.plans.length ?? 0) > 0 || p.errors.planning)}>
 					<View class="gap-1">
@@ -657,6 +659,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 									earlier={today().freshness.state !== "live"}
 								/>
 								<ToCheck day={props.day} />
+								<OtherToCheck ctx={ctx} />
 								<If when={ctx.tagged()}>
 									<OtherNotShown ctx={ctx} />
 								</If>

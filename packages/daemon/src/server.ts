@@ -2179,6 +2179,20 @@ export function createDaemonServer(
 				),
 			);
 		}
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "delivered-work") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Delivery discovery is read-only");
+			if (!githubSetup || !userVerifications) throw new ServiceUnavailable("User verification unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			const cursor = url.searchParams.get("after");
+			if (
+				[...url.searchParams.keys()].some((k) => k !== "after") ||
+				url.searchParams.getAll("after").length > 1 ||
+				(cursor !== null && !/^(0|[1-9][0-9]*)$/.test(cursor))
+			)
+				throw new HttpError(400, "Invalid delivery discovery cursor");
+			return json(res, 200, await userVerifications.list(parts[2]!, cursor === null ? undefined : Number(cursor)));
+		}
 		if (
 			parts[1] === "projects" &&
 			((parts.length === 8 && parts[3] === "missions" && parts[5] === "tasks" && parts[7] === "delivered-work") ||

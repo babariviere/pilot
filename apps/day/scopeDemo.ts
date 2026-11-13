@@ -5,6 +5,7 @@
 import { signal } from "nsh";
 import { type Today, TodayFeed } from "pilot-day/native";
 import type { Refusal } from "./bridge";
+import type { DeliveredWork } from "./deliveryContract";
 import type { ScopeSource } from "./todayScope";
 
 /** What a test can make the script do next. */
@@ -71,7 +72,36 @@ export class ScriptedScope implements ScopeSource {
 				today: selected && readable ? today : null,
 				planning: null,
 				intake: null,
-				results: { complete: false, items: [] },
+				results: {
+					complete: readable,
+					more: false,
+					reason: readable ? "" : "Delivered results could not be read.",
+					items:
+						selected && p.id === "demo-website"
+							? [
+									{
+										subject: { kind: "task", projectId: p.id, missionId: "site", taskId: "copy" },
+										title: "Landing page copy",
+										currentness: "live",
+										snapshot: {
+											version: 1,
+											subject: { kind: "task", projectId: p.id, missionId: "site", taskId: "copy" },
+											deliveryId: "d".repeat(64),
+											targetId: "copy",
+											ownerSessionId: null,
+											pullRequests: [],
+											artifacts: [],
+											production: "not_tracked",
+											verification: null,
+											verificationCurrent: false,
+											verificationReceiptState: "unknown",
+											verificationRevision: 0,
+											pendingOperationId: null,
+										} satisfies DeliveredWork,
+									},
+								]
+							: [],
+				},
 				canAct: false,
 				errors: readable ? {} : { today: "Pilot could not reach billing's coordinator." },
 			};

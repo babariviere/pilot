@@ -14,6 +14,7 @@ import {
 	type DeliveredWork,
 	type DeliveryOperation,
 	type DeliveryReply,
+	listDeliveries,
 	openDeliveryOutput,
 	readDelivery,
 	readSavedDeliveries,
@@ -56,6 +57,8 @@ export type DeliveryEntry = {
 	availability: "reading" | "live" | "unavailable";
 	/** Why the result is not shown, or why what is shown is from an earlier read. */
 	reason: string;
+	/** Canonical task title supplied by discovery, not inferred from task status. */
+	title?: string;
 };
 
 /** A saved command, by its result's key. `checking` while Check reads it. */
@@ -80,6 +83,8 @@ export type DeliveryView = {
 	webLinks: boolean;
 	/** Links on their way to the browser, as "<result key>#<resource id>". */
 	opening: string[];
+	/** Automatic discovery is separate from saved checks and their Unknown receipts. */
+	discovery?: { complete: boolean; more: boolean; reason: string; later?: boolean };
 };
 
 /** What a command or a Check did, for the user. */
@@ -112,6 +117,8 @@ export interface DeliverySource {
 	 * started as standalone chats, at most `MAX_CANDIDATES`. Passive.
 	 */
 	readSaved(): Promise<void>;
+	/** Reads the next bounded page. It never advances the durable cutoff. */
+	readMore?(): Promise<void>;
 	/** Sends the user's assessment of exactly the result shown, once. */
 	assess(shown: DeliveredWork, action: Assessment, note: string): Promise<DeliveryResult>;
 	/** Reads one unsettled command's saved receipt. Never sends the command again. */
@@ -339,6 +346,13 @@ export class ConnectedDelivery implements DeliverySource {
 	#listeners = new Map<number, (view: DeliveryView) => void>();
 	#next = 0;
 	#closed = false;
+	#discovered: VerificationSubject[] = [];
+	#nextCursor: number | null = null;
+	#discovery: NonNullable<DeliveryView["discovery"]> = {
+		complete: false,
+		more: false,
+		reason: "Reading new deliveries…",
+	};
 
 	constructor(window: string, started: () => VerificationSubject[] = () => []) {
 		this.#window = window;
@@ -365,6 +379,7 @@ export class ConnectedDelivery implements DeliverySource {
 			projectId: this.#project,
 			webLinks: this.#webLinks,
 			opening: [...this.#opening],
+			discovery: this.#discovery,
 		};
 	}
 
@@ -395,7 +410,14 @@ export class ConnectedDelivery implements DeliverySource {
 			if (snapshot) {
 				const key = deliveryKey(snapshot.subject);
 				if (order > (this.#applied.get(key) ?? 0)) {
-					this.#entries.set(key, { key, subject: snapshot.subject, snapshot, availability: "live", reason: "" });
+					this.#entries.set(key, {
+						key,
+						subject: snapshot.subject,
+						snapshot,
+						availability: "live",
+						reason: "",
+						title: this.#entries.get(key)?.title,
+					});
 					this.#applied.set(key, order);
 				}
 				return;
@@ -455,6 +477,76 @@ export class ConnectedDelivery implements DeliverySource {
 		return out;
 	}
 
+	async #discover(after?: number) {
+		const order = ++this.#sent;
+		const reply = await listDeliveries(this.#window, after);
+		if (this.#closed) return;
+		if (!reply.ok) {
+			this.#discovery = {
+				complete: false,
+				more: false,
+				reason: `${deliveryReason(reply.refusal)} Earlier checks are kept.`,
+			};
+			return;
+		}
+		const list = reply.snapshot;
+		if (
+			list?.version !== 1 ||
+			!Array.isArray(list.items) ||
+			list.items.length > MAX_CANDIDATES ||
+			(this.#project && list.projectId !== this.#project)
+		) {
+			this.#discovery = { complete: false, more: false, reason: deliveryReason("invalid") };
+			return;
+		}
+		this.#project = list.projectId;
+		this.#discovered = list.items.map((i) => i.subject);
+		this.#nextCursor = list.nextCursor;
+		this.#discovery = {
+			complete: list.complete && after === undefined,
+			more: list.more,
+			later: after !== undefined,
+			reason:
+				list.currentness === "stale"
+					? "Deliveries changed during this read. Look again for the latest results."
+					: after === undefined
+						? ""
+						: "Showing later results. Earlier results are still pending, not accepted.",
+		};
+		for (const item of list.items) {
+			const key = deliveryKey(item.subject);
+			if (snapshotOf(item.snapshot) && order > (this.#applied.get(key) ?? 0)) {
+				this.#entries.set(key, {
+					key,
+					subject: item.subject,
+					snapshot: item.snapshot,
+					availability: "live",
+					reason: this.#discovery.reason,
+					title: item.title,
+				});
+				this.#applied.set(key, order);
+			}
+		}
+	}
+
+	#candidatesNow() {
+		// The saved 20 keep priority; a bounded discovery page adds at most 20.
+		this.#candidates = [...new Set([...this.#rank(), ...this.#discovered].map(deliveryKey))];
+	}
+
+	async readMore(): Promise<void> {
+		if (this.#reading || this.#nextCursor === null) return;
+		this.#reading = (async () => {
+			await this.#discover(this.#nextCursor!);
+			this.#candidatesNow();
+			this.#publish();
+		})().finally(() => {
+			this.#reading = null;
+			if (this.#again && !this.#closed) void this.readSaved();
+		});
+		return this.#reading;
+	}
+
 	readSaved(): Promise<void> {
 		if (this.#reading) {
 			this.#again = true;
@@ -469,8 +561,9 @@ export class ConnectedDelivery implements DeliverySource {
 				if (order >= this.#opsApplied) this.#saved = reply.ok ? "live" : "unavailable";
 				const project = reply.ok ? (reply.snapshot as { projectId?: unknown } | null)?.projectId : null;
 				if (typeof project === "string") this.#project = project;
+				await this.#discover();
 				const subjects = this.#rank();
-				this.#candidates = subjects.map(deliveryKey);
+				this.#candidatesNow();
 				this.#publish();
 				for (const subject of subjects) {
 					if (this.#closed) return;
@@ -485,7 +578,7 @@ export class ConnectedDelivery implements DeliverySource {
 
 	/** Puts `key` first among the results Today looks at. */
 	#notice(key: string) {
-		this.#candidates = [key, ...this.#candidates.filter((k) => k !== key)].slice(0, MAX_CANDIDATES);
+		this.#candidates = [key, ...this.#candidates.filter((k) => k !== key)].slice(0, MAX_CANDIDATES * 2);
 	}
 
 	async assess(shown: DeliveredWork, action: Assessment, note: string): Promise<DeliveryResult> {

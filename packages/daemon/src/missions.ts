@@ -120,7 +120,7 @@ import { KNOWLEDGE_SCHEMA, ProjectKnowledgeStore } from "./project-knowledge-sto
 import { RETAINED_PROJECTION_SCHEMA, RetainedReviewProjections } from "./retained-review-projections.ts";
 import { REVIEW_REQUEST_SCHEMA, ReviewRequestStore } from "./review-request-store.ts";
 import type { PullRequestBinding } from "./sessions.ts";
-import { USER_VERIFICATION_SCHEMA, UserVerificationStore } from "./user-verification-store.ts";
+import { DELIVERY_SOURCE_SCHEMA, USER_VERIFICATION_SCHEMA, UserVerificationStore } from "./user-verification-store.ts";
 import { WORKFLOW_CONFIRMATION_SCHEMA, WorkflowConfirmationStore } from "./workflow-confirmation-store.ts";
 
 /** Who changed mission state. Omitted sessionId means the user (or pilotd itself). */
@@ -807,6 +807,7 @@ export class MissionStore {
 	});
 	readonly userVerifications = new UserVerificationStore({
 		one: (sql, ...params) => this.one(sql, ...params),
+		all: (sql, ...params) => this.all(sql, ...params),
 		run: (sql, ...params) => this.run(sql, ...params),
 		transaction: (work) => this.transaction(work, true),
 	});
@@ -960,6 +961,9 @@ export class MissionStore {
 		this.db.exec(MISSION_PLAN_SCHEMA);
 		this.db.exec(ATTENTION_SCHEMA);
 		this.db.exec(USER_VERIFICATION_SCHEMA);
+		if (!this.one("SELECT 1 FROM sqlite_master WHERE name='delivery_sources'")) {
+			this.db.exec(`BEGIN; ${DELIVERY_SOURCE_SCHEMA} COMMIT;`);
+		}
 		this.db.exec(MISSION_CONTROL_SCHEMA);
 		this.db.exec(MISSION_REVISION_SCHEMA);
 		this.db.exec(HUMAN_REVIEW_SCHEMA);
@@ -3808,6 +3812,7 @@ export class MissionStore {
 		}
 		this.batchChanges(() => {
 			this.run("INSERT INTO task_completions VALUES (?, ?)", task.id, encoded);
+			this.userVerifications.recordSource(`completion:${task.id}`, task.id);
 			this.knowledge.invalidateMission(id, "taskId", task.id);
 			this.knowledge.invalidateDelivery(this.require(id).projectId, id, task.id, record.commit);
 			this.updateTask(id, task.id, { status: "done" }, { sessionId });
@@ -3913,7 +3918,10 @@ export class MissionStore {
 					throw new Conflict("Artifact reference must be pinned to this task and revision");
 			}
 		}
-		this.transaction(() => this.run("INSERT INTO task_non_code_deliveries VALUES (?, ?)", task.id, encoded), true);
+		this.transaction(() => {
+			this.run("INSERT INTO task_non_code_deliveries VALUES (?, ?)", task.id, encoded);
+			this.userVerifications.recordSource(`non-code:${task.id}`, task.id);
+		}, true);
 		return record;
 	}
 
@@ -4015,6 +4023,7 @@ export class MissionStore {
 			record.type,
 			JSON.stringify(record),
 		);
+		if (record.type === "submission") this.userVerifications.recordSource(`submission:${record.id}`, record.taskId);
 	}
 
 	/** Dormant host-only API. Resolver is host code, never request-supplied observations or passing booleans. */

@@ -32,6 +32,7 @@ const READS: &[&str] = &[
     "day.intake.read",
     "day.linear.read",
     "day.delivery.read",
+    "day.delivery.list",
     "day.delivery.saved",
     "day.window.read",
     "day.update.read",

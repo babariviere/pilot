@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { DeliveredWork, DurableOperation, UserVerificationIntent } from "@pilot/protocol";
+import type { DeliveredWork, DeliveredWorkList, DurableOperation, UserVerificationIntent } from "@pilot/protocol";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
 import { payloadHash } from "./operation-journal.ts";
 
@@ -11,6 +11,24 @@ test("native delivered-work read exposes canonical outputs, explicit verificatio
 	const f = await nativeIntakeFixture();
 	t.after(() => f.close());
 	const headers = { "content-type": "application/json", "x-pilot-github-capability": f.capability };
+	const listPath = `${f.root}/api/projects/${f.project.id}/delivered-work`;
+	const list = async () => {
+		const r = await fetch(listPath, { headers });
+		assert.equal(r.status, 200);
+		assert.equal(r.headers.get("cache-control"), "no-store");
+		return (await r.json()) as DeliveredWorkList;
+	};
+	const baseline = (await list()).baseline;
+	for (const r of await Promise.all([
+		fetch(listPath, { headers: { ...headers, "x-pilot-github-capability": "bad" } }),
+		fetch(listPath, { headers, method: "POST", body: "{}" }),
+		fetch(`${listPath}?after=-1`, { headers }),
+		fetch(`${listPath}?after=0&after=0`, { headers }),
+		fetch(`${listPath}?projectId=other`, { headers }),
+	])) {
+		assert.notEqual(r.status, 200);
+		await r.arrayBuffer();
+	}
 	const worker = await f.sessions.spawnDurable(
 		{ projectId: f.project.id, mode: "build", model: "fake/model", message: "Synthetic work only" },
 		randomUUID(),
@@ -88,6 +106,11 @@ test("native delivered-work read exposes canonical outputs, explicit verificatio
 	assert.equal(page.artifacts[0]?.artifactId, "fake-artifact");
 	assert.equal(page.production, "not_tracked");
 	assert.equal(page.verification, null);
+	const found = await list();
+	assert.deepEqual(found.baseline, baseline);
+	assert.equal(found.items.length, 1);
+	assert.equal(found.items[0]?.snapshot.deliveryId, page.deliveryId);
+	assert.equal(found.complete, true);
 	const before = f.store.task(mission.id, task.id);
 	const operation = (action: UserVerificationIntent["action"], note = ""): DurableOperation => {
 		const payload = JSON.stringify({
@@ -133,6 +156,7 @@ test("native delivered-work read exposes canonical outputs, explicit verificatio
 	page = await get();
 	assert.equal(page.verificationCurrent, true);
 	assert.equal(page.verificationReceiptState, "accepted");
+	assert.equal((await list()).items.length, 0);
 	assert.equal((await post(operation("reopen"))).body.receipt.state, "accepted");
 	page = await get();
 	const note = "  Please check this exact line 🐦\nNot deployed yet.  ";
@@ -144,6 +168,7 @@ test("native delivered-work read exposes canonical outputs, explicit verificatio
 	assert.equal(meta.pending.find((p: { requestId: string }) => p.requestId === back.operationId).content, note);
 	assert.deepEqual(f.store.task(mission.id, task.id), before, "no task state changes");
 	assert.equal((await get()).production, "not_tracked");
+	assert.equal((await list()).items.length, 0, "only exact acknowledged Sent back is hidden");
 	assert.equal(f.stats().external, 0);
 	for (const forbidden of [
 		fetch(f.root + path, { headers: { ...headers, "x-pilot-github-capability": "bad" } }),

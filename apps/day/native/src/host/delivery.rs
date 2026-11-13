@@ -7,6 +7,21 @@ use std::sync::{Arc, Mutex};
 
 const MAX_REVISION: u64 = 9_007_199_254_740_990;
 
+/// Native chooses the project. TSX can only page within that root's sources.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct List {
+    pub after: Option<u64>,
+}
+impl List {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
+        if self.after.is_some_and(|n| n > MAX_REVISION) {
+            return Err(Error::Invalid);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub(crate) enum Subject {
@@ -294,6 +309,11 @@ pub(super) async fn read(t: &Transport, s: &Subject) -> Result<Value, Error> {
     }
     t.gate(false).await?;
     let v = t.get(&s.path()).await?;
+    validate_snapshot(&v, s)?;
+    Ok(v)
+}
+
+fn validate_snapshot(v: &Value, s: &Subject) -> Result<(), Error> {
     if v["version"] != 1
         || v["subject"] != serde_json::to_value(s).map_err(|_| Error::Invalid)?
         || v["targetId"].as_str().is_none_or(|s| !valid_id(s))
@@ -321,7 +341,76 @@ pub(super) async fn read(t: &Transport, s: &Subject) -> Result<Value, Error> {
         return Err(Error::Invalid);
     }
     // Preserve canonical completion, evidence, PR tracking and user assessment as separate fields.
+    Ok(())
+}
+
+pub(super) async fn list(t: &Transport, request: &List) -> Result<Value, Error> {
+    request.validate()?;
+    t.gate(false).await?;
+    let path = format!(
+        "/api/projects/{}/delivered-work{}",
+        t.source.project_id,
+        request
+            .after
+            .map(|n| format!("?after={n}"))
+            .unwrap_or_default()
+    );
+    let v = t.get(&path).await?;
+    validate_list(&v, &t.source.project_id)?;
+    if request.after.is_some_and(|after| {
+        v["more"] == true && v["nextCursor"].as_u64().is_none_or(|next| next <= after)
+    }) {
+        return Err(Error::Invalid);
+    }
     Ok(v)
+}
+
+fn validate_list(v: &Value, project: &str) -> Result<(), Error> {
+    let baseline = v["baseline"]["sourceSequence"]
+        .as_u64()
+        .ok_or(Error::Invalid)?;
+    let cursor = v["sourceCursor"].as_u64().ok_or(Error::Invalid)?;
+    let more = v["more"].as_bool().ok_or(Error::Invalid)?;
+    let current = v["currentness"].as_str().ok_or(Error::Invalid)?;
+    let items = v["items"].as_array().ok_or(Error::Invalid)?;
+    if v["version"] != 1
+        || v["projectId"] != project
+        || v["baseline"]["mode"] != "start_fresh"
+        || baseline > cursor
+        || cursor > MAX_REVISION
+        || items.len() > 20
+        || !matches!(current, "live" | "stale")
+        || v["complete"] != (!more && current == "live")
+        || (more
+            && v["nextCursor"]
+                .as_u64()
+                .is_none_or(|n| n <= baseline || n > cursor))
+        || (!more && !v["nextCursor"].is_null())
+    {
+        return Err(Error::Invalid);
+    }
+    let mut previous = baseline;
+    for item in items {
+        let s: Subject =
+            serde_json::from_value(item["subject"].clone()).map_err(|_| Error::Invalid)?;
+        s.validate()?;
+        let seq = item["sourceSequence"].as_u64().ok_or(Error::Invalid)?;
+        if !matches!(s, Subject::Task { .. })
+            || s.project() != project
+            || seq <= previous
+            || seq > cursor
+            || item["title"].as_str().is_none()
+            || item["snapshot"]["deliveryId"].is_null()
+        {
+            return Err(Error::Invalid);
+        }
+        validate_snapshot(&item["snapshot"], &s)?;
+        previous = seq;
+    }
+    if more && v["nextCursor"].as_u64().is_none_or(|n| n < previous) {
+        return Err(Error::Invalid);
+    }
+    Ok(())
 }
 pub(super) async fn handle(
     t: &Transport,
@@ -337,6 +426,14 @@ pub(super) async fn handle(
     };
     let mut outcome = Value::Null;
     let subject = match command {
+        Command::DeliveryList(request) => {
+            let epoch = shared.epoch.load(std::sync::atomic::Ordering::SeqCst);
+            check()?;
+            let snapshot = list(t, request).await?;
+            shared.current(epoch)?;
+            check()?;
+            return Ok(json!({"snapshot":snapshot,"outcome":null}));
+        }
         Command::DeliveryRead(s) => Some(s.clone()),
         Command::DeliverySaved => {
             // The journal's saved commands only: no HTTP, Check, or read of any
@@ -484,6 +581,45 @@ fn settle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delivery_list_is_bounded_scoped_and_never_accepts_unknown_as_done() {
+        let subject = json!({"kind":"task","projectId":"p","missionId":"m","taskId":"t"});
+        let snapshot = json!({"version":1,"subject":subject,"targetId":"target","deliveryId":"d".repeat(64),
+            "ownerSessionId":null,"verificationRevision":1,"verificationCurrent":false,
+            "verificationReceiptState":"unknown","verification":null,"pendingOperationId":"uncertain",
+            "production":"not_tracked","artifacts":[],"pullRequests":[]});
+        let page = json!({"version":1,"projectId":"p","baseline":{"mode":"start_fresh","sourceSequence":10},
+            "sourceCursor":12,"complete":true,"more":false,"nextCursor":null,"currentness":"live",
+            "items":[{"subject":subject,"title":"Result","sourceSequence":11,"snapshot":snapshot}]});
+        assert_eq!(validate_list(&page, "p"), Ok(()));
+        for (path, value) in [
+            ("/projectId", json!("other")),
+            ("/baseline/sourceSequence", json!(12)),
+            ("/complete", json!(false)),
+            ("/items/0/sourceSequence", json!(10)),
+            ("/items/0/subject/projectId", json!("other")),
+            ("/items/0/snapshot/subject/taskId", json!("other")),
+            ("/items/0/snapshot/verificationCurrent", json!(true)),
+            ("/items/0/snapshot/deliveryId", Value::Null),
+        ] {
+            let mut changed = page.clone();
+            *changed.pointer_mut(path).unwrap() = value;
+            assert_eq!(validate_list(&changed, "p"), Err(Error::Invalid), "{path}");
+        }
+        let mut many = page.clone();
+        many["items"] = json!(vec![page["items"][0].clone(); 21]);
+        assert_eq!(validate_list(&many, "p"), Err(Error::Invalid));
+        assert!(serde_json::from_value::<List>(json!({"projectId":"p"})).is_err());
+        assert!(serde_json::from_value::<List>(json!({"after":-1})).is_err());
+        assert_eq!(
+            List {
+                after: Some(MAX_REVISION + 1)
+            }
+            .validate(),
+            Err(Error::Invalid)
+        );
+    }
 
     #[test]
     fn output_activation_pins_exact_subject_delivery_owner_resource_and_target() {

@@ -8,10 +8,11 @@ import { effect, lifecycle, Text, untracked, View } from "nsh";
 import type { Decision, HumanAction, MissionRow, Planning } from "pilot-day/native";
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
+import { waitsForCheck } from "./deliveryView";
 import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { type ScopeCount, type ScopeProject, todayProject } from "./todayScope";
-import { InlineAction, Mark, Picker } from "./ui";
+import { InlineAction, Mark, Picker, SectionTitle } from "./ui";
 import { drafts, picks, replies, reports } from "./view";
 import { rowLine, stateMark, stateWord } from "./words";
 
@@ -468,14 +469,61 @@ export function OtherNew(props: { ctx: TodayScope }) {
 	);
 }
 
+/** Other projects' delivered results. Reading does not retarget this window or grant actions. */
+export function OtherToCheck(props: { ctx: TodayScope }) {
+	const rows = (p: ScopeProject) =>
+		p.results?.items.filter(
+			(i) => i.unsettled || i.snapshot?.pendingOperationId || waitsForCheck(i.snapshot, undefined),
+		) ?? [];
+	const shown = () => props.ctx.others().filter((p) => rows(p).length > 0 || !p.results?.complete);
+	return (
+		<If when={shown().length > 0}>
+			<View class="gap-1" testID="scope-to-check">
+				<SectionTitle title="To check" />
+				<Each of={shown()} key={(p) => p.id}>
+					{(p) => (
+						<View class="gap-0.5">
+							<ProjectLabel name={p().name} stale={p().currentness !== "live"} />
+							<Each of={rows(p())} key={(i) => i.snapshot?.targetId ?? JSON.stringify(i.subject)}>
+								{(i) => (
+									<View class="flex-row items-center gap-2.5 py-2">
+										<Mark kind={i().unsettled || i().snapshot?.pendingOperationId ? "unknown" : "needs"} />
+										<Text class="flex-1 text-sm text-foreground">{i().title}</Text>
+										<Text class="text-xs text-needs-ink">
+											{i().unsettled || i().snapshot?.pendingOperationId
+												? "Check not confirmed"
+												: "To check"}
+										</Text>
+									</View>
+								)}
+							</Each>
+							<If when={!p().results?.complete}>
+								<Text class="text-xs text-muted-foreground">
+									{p().results?.reason ||
+										"Delivered results could not all be read. This is not an empty list."}
+								</Text>
+							</If>
+							<If when={rows(p()).length > 0}>
+								<Text class="text-xs text-faint">
+									Read only here. Open this project's window to check its results.
+								</Text>
+							</If>
+						</View>
+					)}
+				</Each>
+			</View>
+		</If>
+	);
+}
+
 /** Sections other projects have that Today cannot show yet, said once. */
 export function OtherNotShown(props: { ctx: TodayScope }) {
 	return (
 		<If when={props.ctx.others().length > 0}>
 			<Text testID="scope-not-shown" class="text-xs text-faint">
 				{props.ctx.showsOwn()
-					? "Results to check and Coming up from other projects are not shown here yet."
-					: "Results to check and Coming up for this project are not shown here yet."}
+					? "Coming up from other projects is not shown here yet."
+					: "Coming up for this project is not shown here yet."}
 			</Text>
 		</If>
 	);

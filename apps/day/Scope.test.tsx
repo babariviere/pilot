@@ -26,6 +26,8 @@ test("Today starts on All projects: other projects' rows name their project, and
 	expect(app.shows("id:scope-needs-demo-website")).toBe(true);
 	expect(app.shows("Across your projects. Pilot could not read billing.")).toBe(true);
 	expect(app.shows("billing: Pilot could not reach billing's coordinator.")).toBe(true);
+	expect(app.shows("Landing page copy")).toBe(true);
+	expect(app.shows("Read only here. Open this project's window to check its results.")).toBe(true);
 	expect(sent(app)).toContain("Sent: 0");
 });
 

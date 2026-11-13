@@ -81,3 +81,17 @@ export interface DeliveredWork {
 	/** An entered Send back without its final receipt blocks new assessments. Check only. */
 	pendingOperationId: string | null;
 }
+
+/** Task results only. Standalone chats remain discoverable through acknowledged starts/saved checks. */
+export interface DeliveredWorkList {
+	version: 1;
+	projectId: string;
+	baseline: { mode: "start_fresh"; sourceSequence: number };
+	sourceCursor: number;
+	nextCursor: number | null;
+	/** No more sources after this page's cursor. Not a claim about history or earlier pages. */
+	complete: boolean;
+	more: boolean;
+	currentness: "live" | "stale";
+	items: Array<{ subject: VerificationSubject; title: string; snapshot: DeliveredWork; sourceSequence: number }>;
+}
