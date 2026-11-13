@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { createSlackStatusTool, SLACK_STATUS_TOOL } from "./slack-status-tool.ts";
 
 test("slack_status forwards only the status and reason to pilotd", async () => {

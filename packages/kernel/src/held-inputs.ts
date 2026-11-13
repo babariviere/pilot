@@ -1,5 +1,6 @@
 /** Stop parks automatic input outside pi.inbox, where neither abort nor a run boundary can consume it. */
-import { type Context, copyJson } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
+import { copyJson } from "@earendil-works/chord/json";
 import {
 	ConversationBusy,
 	type ConversationId,

@@ -1,5 +1,5 @@
 /** The `mission` tool: shared mission state, owned by pilotd and reached over the worker's IPC channel. */
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { MISSION_WRITE_LIMITS, validateMissionWrite } from "./mission-write.ts";

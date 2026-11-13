@@ -1,5 +1,5 @@
 /** Which pi.user entries were automatic input rather than typed by the user, from their submission request IDs. */
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { ConversationId, Cursor, EntryRecord, Storage } from "@earendil-works/pi-durable";
 import type { AgentEvent, AutomaticInputProvenance, InputOrigin } from "@pilot/protocol";
 

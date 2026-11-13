@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, link, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -94,10 +94,10 @@ const sdk = import.meta.resolve("@earendil-works/pi-coding-agent");
 const configEditors: SdkConfig[] = [
 	await import(new URL("./extensions/mcp/config.js", sdk).href),
 	// The published CLI has its own compiled copy. Test its actual public editing functions too.
-	await import(new URL("./bundle/chunks/chunk-NZY7EIPA.js", sdk).href),
+	await import(new URL("./bundle/chunks/chunk-MMDXLZVS.js", sdk).href),
 ];
 
-test("MCP and SDK writes preserve untouched numeric literals without rounding or null conversion", async (t) => {
+test("Pilot MCP writes preserve untouched numeric literals without rounding or null conversion", async (t) => {
 	const { directory, store } = await fixture(t);
 	const path = join(directory, "mcp.json");
 	await writeFile(
@@ -106,13 +106,10 @@ test("MCP and SDK writes preserve untouched numeric literals without rounding or
 	);
 	const before = await store.read();
 	await store.apply({ expectedRevision: before.revision, entries: [entry()] });
-	for (const editor of configEditors) {
-		editor.updateMcpServerConfig(path, "example", { enabled: false });
-		const saved = await readFile(path, "utf8");
-		assert.match(saved, /"large": 9007199254740993/);
-		assert.match(saved, /"exponent": 1e309/);
-		assert.match(saved, /"future": 9007199254740993/);
-	}
+	const saved = await readFile(path, "utf8");
+	assert.match(saved, /"large": 9007199254740993/);
+	assert.match(saved, /"exponent": 1e309/);
+	assert.match(saved, /"future": 9007199254740993/);
 });
 
 test("SDK and bundled CLI writes accept a UTF-8 BOM like Pi readers", async (t) => {
@@ -127,46 +124,34 @@ test("SDK and bundled CLI writes accept a UTF-8 BOM like Pi readers", async (t) 
 	}
 });
 
-test("SDK and bundled CLI add, remove and update share the native lock, including directory aliases", async (t) => {
+test("Pilot MCP writes reject an external SDK edit without overwriting it", async (t) => {
 	const { directory } = await fixture(t);
-	await mkdir(join(directory, "real"));
-	await symlink(join(directory, "real"), join(directory, "alias"));
-	const path = join(directory, "real", "mcp.json");
+	const path = join(directory, "mcp.json");
 	await writeFile(
 		path,
 		JSON.stringify({ future: { private: "kept-local" }, mcpServers: { original: entry().config } }),
 	);
-	let entered!: () => void, release!: () => void;
-	const ready = new Promise<void>((resolve) => {
-		entered = resolve;
-	});
-	const gate = new Promise<void>((resolve) => {
-		release = resolve;
-	});
-	const store = new McpSetupStore(join(directory, "alias"), {
+	const store = new McpSetupStore(directory, {
 		beforeCommit: async () => {
-			entered();
-			await gate;
+			configEditors[0]!.addMcpServerConfig(path, "cli", entry().config);
 		},
 	});
 	const snapshot = await store.read();
-	const pending = store.apply({ expectedRevision: snapshot.revision, entries: [entry("native")] });
-	try {
-		await ready;
-		for (const editor of configEditors) {
-			for (const target of [path, join(directory, "alias", "mcp.json")]) {
-				for (const edit of [
-					() => editor.addMcpServerConfig(target, "cli", entry().config),
-					() => editor.updateMcpServerConfig(target, "original", { enabled: false }),
-					() => editor.removeMcpServerConfig(target, "original"),
-				])
-					assert.throws(edit, (error: unknown) => (error as NodeJS.ErrnoException).code === "ELOCKED");
-			}
-		}
-	} finally {
-		release();
-	}
-	await pending;
+	await assert.rejects(
+		store.apply({ expectedRevision: snapshot.revision, entries: [entry("native")] }),
+		(error: unknown) => error instanceof McpSetupError && error.code === "mcp_setup_conflict",
+	);
+	const saved = JSON.parse(await readFile(path, "utf8"));
+	assert.deepEqual(Object.keys(saved.mcpServers), ["original", "cli"]);
+	assert.deepEqual(saved.future, { private: "kept-local" });
+	assert.deepEqual(await readdir(directory), ["mcp.json"]);
+});
+
+test("unpatched SDK and bundled CLI edits interoperate sequentially with Pilot", async (t) => {
+	const { directory, store } = await fixture(t);
+	const path = join(directory, "mcp.json");
+	const before = await store.read();
+	await store.apply({ expectedRevision: before.revision, entries: [entry("native")] });
 	for (const [index, editor] of configEditors.entries()) {
 		editor.addMcpServerConfig(path, `cli${index}`, entry().config);
 		editor.updateMcpServerConfig(path, `cli${index}`, { enabled: false });
@@ -174,29 +159,18 @@ test("SDK and bundled CLI add, remove and update share the native lock, includin
 		assert.equal(editor.removeMcpServerConfig(path, `cli${index}`), true);
 	}
 	const saved = JSON.parse(await readFile(path, "utf8"));
-	assert.deepEqual(Object.keys(saved.mcpServers), ["original", "native"]);
-	assert.deepEqual(saved.future, { private: "kept-local" });
-	await assert.rejects(store.apply({ expectedRevision: snapshot.revision, entries: [entry("late")] }), McpSetupError);
-	assert.deepEqual(await readdir(join(directory, "real")), ["mcp.json"]);
+	assert.deepEqual(Object.keys(saved.mcpServers), ["native"]);
+	assert.deepEqual(await readdir(directory), ["mcp.json"]);
 });
 
-test("SDK writer failures release the lock and never truncate a config; symlinks and hard links are refused", async (t) => {
+test("Pilot MCP reads refuse hard-linked files without changing them", async (t) => {
 	const { directory, store } = await fixture(t);
 	const path = join(directory, "mcp.json");
 	const original = '{"mcpServers":{"example":{"url":"https://example.test/mcp"}}}';
 	await writeFile(path, original);
-	const { editMcpConfigSync } = await import(new URL("./extensions/mcp/config-writer.js", sdk).href);
-	assert.throws(() =>
-		editMcpConfigSync(path, () => {
-			throw new Error("fixture interruption");
-		}),
-	);
-	assert.equal(await readFile(path, "utf8"), original);
-	assert.deepEqual(await readdir(directory), ["mcp.json"]);
 	const alias = join(directory, "alias");
 	await link(path, alias);
 	await assert.rejects(store.read(), McpSetupError);
-	for (const editor of configEditors) assert.throws(() => editor.addMcpServerConfig(path, "new", entry().config));
 	assert.equal(await readFile(path, "utf8"), original);
 });
 

@@ -7,7 +7,7 @@ import { constants } from "node:fs";
 import { link, mkdir, open, rename, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { ProjectDatabaseSettings } from "@pilot/protocol";
 import pg from "pg";
 import { parse, toClientConfig } from "pg-connection-string";

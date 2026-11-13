@@ -1,5 +1,5 @@
 /** Pilot's idle manual compaction barrier. The Harness still owns summarization, generation and recovery. */
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import {
 	CompactionTask,
 	type Conversation,

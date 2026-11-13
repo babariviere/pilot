@@ -1,6 +1,6 @@
 /** IPC between pilotd and one kernel worker process. */
 
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
 	AgentEvent,
 	ArtifactRevision,

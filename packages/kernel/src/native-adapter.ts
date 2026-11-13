@@ -9,8 +9,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
-import type { JsonValue, Context as TaskContext } from "@earendil-works/chord";
+import type { Context as TaskContext } from "@earendil-works/chord/context";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import {
 	type Api,
 	type AssistantMessage,

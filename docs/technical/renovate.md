@@ -16,9 +16,22 @@ overrides together, including mixed major/minor updates. Git digest updates
 track upstream pi-extensions separately with pnpm artifact generation. Grouping
 adds no schedule and does not enable any paused dependency.
 
-Pi SDK dependencies and overrides currently share 1.5.0. The pi-extensions Git
+Pi SDK dependencies and overrides currently share 1.5.2. The pi-extensions Git
 pin includes its embedding exports and host lifecycle/tool-drain fixes. Pilot
 no longer carries an extension patch; these APIs are maintained upstream.
+
+The SDK no longer patches MCP configuration writes. Pilot keeps its own atomic
+MCP saves and revision checks; Pi CLI and manual edits do not share Pilot's lock,
+so do not edit the same file concurrently. The coding-agent patch now only binds
+the bundled CLI to the overridden external Undici dependency. The durable patch
+keeps the handoff hooks and steer-first inbox behavior used by Pilot, but drops
+the unused manual-compaction budget extension. Posthorse's patch stays unchanged.
+When upgrading the SDK, port these remaining patches and update their version
+selectors together. Do not bypass unused-patch or patch-application errors.
+
+PR #1100's ZIP resolution error was not reproduced with its manifest updates and
+Renovate's `cargo update --workspace` command against crates.io. The updater's
+exact ZIP pin stays unchanged; a failed hosted artifact update still needs a retry.
 
 Cargo discovers the desktop workspace (`apps/desktop/Cargo.toml`), its
 `visual-worker` member and the independent `updater` workspace. The desktop and

@@ -5,6 +5,24 @@ import { test } from "node:test";
 const config = JSON.parse(readFileSync(new URL("../renovate.json", import.meta.url), "utf8"));
 const name = "@babariviere/pi-extensions";
 
+test("SDK upgrades keep patch selectors aligned and avoid custom MCP writer coupling", () => {
+	const workspace = readFileSync(new URL("../pnpm-workspace.yaml", import.meta.url), "utf8");
+	const kernel = JSON.parse(readFileSync(new URL("../packages/kernel/package.json", import.meta.url), "utf8"));
+	for (const name of ["pi-coding-agent", "pi-durable"]) {
+		const version = kernel.dependencies[`@earendil-works/${name}`];
+		const patchFile = `patches/@earendil-works__${name}@${version}.patch`;
+		assert.ok(workspace.includes(`"@earendil-works/${name}@${version}": ${patchFile}`));
+		const patch = readFileSync(new URL(`../${patchFile}`, import.meta.url), "utf8");
+		assert.doesNotMatch(patch, /config-writer|mcpConfigWriteProtocol|manual\?:/);
+		if (name === "pi-coding-agent") {
+			assert.equal(patch.match(/^diff --git /gm)?.length, 1, "only the external Undici binding stays patched");
+			assert.ok(patch.includes('var undici=__toESM(require("undici"),1);'));
+		}
+	}
+	const setup = readFileSync(new URL("../packages/daemon/src/mcp-setup.ts", import.meta.url), "utf8");
+	assert.doesNotMatch(setup, /config-writer|mcpConfigWriteProtocol/);
+});
+
 test("Renovate uses native npm Git updates with pnpm artifact generation", () => {
 	assert.deepEqual(config.enabledManagers, ["npm", "cargo"]);
 	assert.equal(config.customManagers, undefined);

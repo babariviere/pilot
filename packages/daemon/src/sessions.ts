@@ -13162,7 +13162,7 @@ ${run.excerpt}`,
 					worker.send({
 						type: "insights.backlog.result",
 						callId: packet.callId,
-						result: result as import("@earendil-works/chord").JsonValue,
+						result: result as import("@earendil-works/chord/json").JsonValue,
 					});
 				})
 				.catch((error: unknown) => {

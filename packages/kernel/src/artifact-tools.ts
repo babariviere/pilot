@@ -1,5 +1,5 @@
 /** Pi SDK tools for publishing and inspecting session-local, offline artifacts. */
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	ArtifactNotFound,

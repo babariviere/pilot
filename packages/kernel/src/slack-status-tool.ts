@@ -1,5 +1,5 @@
 /** The `slack_status` tool: a chat started from a Slack message reports its message as waiting, in progress or done. Executed by pilotd. */
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 

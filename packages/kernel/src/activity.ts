@@ -2,7 +2,8 @@ import { wireCompactions } from "./wire-compaction.ts";
 /** Small, commit-consistent run/inbox monitor. Never hydrates transcript history. */
 
 import { execFile } from "node:child_process";
-import { type Context, copyJson } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
+import { copyJson } from "@earendil-works/chord/json";
 import type { McpTransportFactory } from "@earendil-works/pi-coding-agent";
 import {
 	type ConversationId,

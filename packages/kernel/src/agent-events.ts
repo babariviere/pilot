@@ -22,8 +22,9 @@
 /** Bridge Durable state/commit observations to Pilot's stable wire events.
  * Translation adapted from pi-durable 1.4 (MIT, Earendil Works).
  */
-import { type Context, NativeWatch, type WatchEnd } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { Op, Path } from "@earendil-works/chord/delta";
+import { NativeWatch, type WatchEnd } from "@earendil-works/chord/watch";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
 	AgentDoc,

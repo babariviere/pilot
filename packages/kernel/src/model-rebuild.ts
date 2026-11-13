@@ -1,5 +1,5 @@
 /** Provider-neutral context rebuilt from raw, fork-aware history, never a compaction's model payload. */
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { estimateMessageTokens, estimateTextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type {

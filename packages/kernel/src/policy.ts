@@ -1,6 +1,6 @@
 /** Pilot's rules for agents: where they work, how they deliver, and what they may not do on GitHub. */
 
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import { type Extension, hook, type PromptInput, section, ToolTask } from "@earendil-works/pi-durable";
 import type { DiagnosticTargetReference, MissionDecision, MissionRole, OperationHost } from "@pilot/protocol";
 import { messageFormatBlock } from "./message-format.ts";

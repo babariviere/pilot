@@ -22,7 +22,7 @@
 /** Pilot wire events. Kept stable independently of Durable's state watch API.
  * Event shapes adapted from pi-durable 1.4 (MIT, Earendil Works).
  */
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { AssistantMessage, Message, Usage } from "@earendil-works/pi-ai";
 import type {
 	AgentState,

@@ -34,12 +34,6 @@ type Raw = {
 	dev?: bigint;
 };
 
-// This protocol is provided by the pinned package patch, including the bundled CLI.
-const writer = (await import(
-	new URL("./extensions/mcp/config-writer.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href
-)) as { mcpConfigWriteProtocol: number };
-if (writer.mcpConfigWriteProtocol !== 1) throw new Error("Unsupported MCP configuration writer");
-
 function configKey(config: McpShareConfig): string {
 	return JSON.stringify(Object.fromEntries(Object.entries(config).sort(([a], [b]) => a.localeCompare(b))));
 }
@@ -82,8 +76,8 @@ export function mcpSetupInput(value: unknown): McpSetupApplyRequest {
 }
 
 /** Explicit native requests only. Never reads auth stores, expands secrets, launches or installs commands.
- * Shares the patched SDK/CLI's canonical lock path. Adds missing names only, preserving other values.
- * Independently installed unpatched Pi/manual editors must not edit during this transaction.
+ * Serializes Pilot writes. Adds missing names only, preserving other values.
+ * Pi and manual editors do not share this lock; do not edit concurrently.
  */
 export class McpSetupStore {
 	readonly path: string;

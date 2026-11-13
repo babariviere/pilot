@@ -2,7 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { serialize } from "node:v8";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { ConversationBusy } from "@earendil-works/pi-durable";
 import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
 import release from "../../../package.json" with { type: "json" };

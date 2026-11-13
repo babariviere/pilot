@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { AgentQuestion } from "@pilot/protocol";
 import { createDatabaseTool, DATABASE_TOOL } from "./database-tool.ts";
 

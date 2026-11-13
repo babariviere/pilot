@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { createLiveUpdateTools } from "./live-update-tool.ts";
 import type { KernelSpec } from "./protocol.ts";

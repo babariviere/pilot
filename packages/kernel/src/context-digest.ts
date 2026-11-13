@@ -12,7 +12,7 @@
  * a check passes only with explicit evidence, a failure is "recovered" only by a later identical success, and paths
  * or links quoted inside code, fixtures or templates are not reported as real changes.
  */
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import { estimateTextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type { Cursor, EntryId, EntryRecord } from "@earendil-works/pi-durable";
 import { neutralizeUntrusted, quoteLine, redactHistoryText, splitAuthority } from "./history-privacy.ts";

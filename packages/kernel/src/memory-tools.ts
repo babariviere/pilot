@@ -1,6 +1,6 @@
 /** Project memory tools are backed by pilotd over the supervised worker channel. */
 
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { redactHistoryText } from "./history-privacy.ts";

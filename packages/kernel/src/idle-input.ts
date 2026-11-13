@@ -1,5 +1,5 @@
 /** Atomic idle-only specialization of pi-durable input admission, using its public transaction API. */
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import {
 	type Conversation,
 	ConversationBusy,

@@ -1,5 +1,5 @@
 /** Bounded transcript storage reads. Agent context and legacy snapshots are unchanged. */
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { ConversationId, EntryRecord, Storage } from "@earendil-works/pi-durable";
 import type { SessionHistoryPage, TranscriptContext, TranscriptHistory } from "@pilot/protocol";
 

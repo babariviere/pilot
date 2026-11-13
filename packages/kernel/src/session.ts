@@ -1,7 +1,7 @@
 /** One durable pi session: a Harness root conversation driven by the native Pi kernel. */
 import { dirname, join } from "node:path";
 import { ToolDrain } from "@babariviere/pi-extensions/tool-drain";
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";

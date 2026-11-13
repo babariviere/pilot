@@ -1,6 +1,7 @@
 /** Await host maintenance at the first prompt preparation, never between tool rounds or on a steer. */
+
+import type { Context } from "@earendil-works/chord/context";
 import { LiveDoc, type PromptInput, type Storage } from "@earendil-works/pi-durable";
-import type { Context } from "@earendil-works/chord";
 
 export function turnPreparation(
 	storage: Pick<Storage, "submission" | "scanEntries">,

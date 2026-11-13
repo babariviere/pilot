@@ -1,6 +1,6 @@
 /** Presentation metadata only. Compaction and its model summary remain owned by the Harness. */
 
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import {
 	CompactionTask,
 	defineDoc,

@@ -2,7 +2,7 @@
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { Storage } from "@earendil-works/pi-durable";
 import {
 	CURRENT_SQLITE_SCHEMA_VERSION,

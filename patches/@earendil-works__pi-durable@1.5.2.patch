@@ -1,17 +1,7 @@
 diff --git a/dist/harness/compaction.js b/dist/harness/compaction.js
 --- a/dist/harness/compaction.js
 +++ b/dist/harness/compaction.js
-@@ -66,7 +66,8 @@
-             const model = ref === undefined ? undefined : runtime.models.getModel(ref.provider, ref.modelId);
-             if (ref === undefined || model === undefined)
-                 return failNoModel(runtime, ref, context);
--            const policy = compactionPolicy(settings, ref);
-+            const resolved = compactionPolicy(settings, ref);
-+            const policy = task.input.reason === "manual" ? { ...resolved, ...resolved.manual } : resolved;
-             const view = await runtime.context(conversationId, context);
-             const cut = selectCut(view, policy.keepRecentTokens);
-             if (cut === undefined)
-@@ -87,8 +88,12 @@
+@@ -87,8 +87,12 @@
              });
              if (decision !== undefined && "decline" in decision)
                  return complete(runtime, context);
@@ -25,15 +15,7 @@ diff --git a/dist/harness/compaction.js b/dist/harness/compaction.js
              const request = {
                  attempt: 1,
                  model: ref,
-@@ -206,6 +211,7 @@
-         reserveTokens: override?.reserveTokens ?? policy.reserveTokens,
-         keepRecentTokens: override?.keepRecentTokens ?? policy.keepRecentTokens,
-         backgroundTokens: override?.backgroundTokens ?? policy.backgroundTokens,
-+        manual: override?.manual ?? policy.manual,
-     };
- }
- /**
-@@ -365,8 +371,8 @@
+@@ -377,8 +381,8 @@
      return `${text.slice(0, maxChars)}\n\n[... ${text.length - maxChars} more characters truncated]`;
  }
  /** Place a summary supplied by a hook in its own commit. */
@@ -44,7 +26,7 @@ diff --git a/dist/harness/compaction.js b/dist/harness/compaction.js
  }
  /**
   * Place the summary entry and complete (spec §8.7). A blocking compaction, owned by its generation, appends it: the
-@@ -374,15 +380,34 @@
+@@ -386,15 +390,34 @@
   * idle, otherwise at the next boundary, or settled `stale`.
   * REMINDER: nothing else may append to a busy conversation, so every non-blocking summary goes through admission.
   */
@@ -83,7 +65,7 @@ diff --git a/dist/harness/compaction.js b/dist/harness/compaction.js
      };
      const result = current.owner === undefined
          ? {
-@@ -409,6 +434,15 @@
+@@ -421,6 +444,15 @@
          };
      }, context);
  }
@@ -99,6 +81,13 @@ diff --git a/dist/harness/compaction.js b/dist/harness/compaction.js
  async function failNoModel(runtime, ref, context) {
      const message = ref === undefined ? "No model is configured" : `Model ${ref.provider}/${ref.modelId} is not available`;
      await runtime.commit(async (tx) => {
+@@ -428,4 +460,4 @@
+         return { status: "terminal", outcome: { status: "failed", error: { message, detail: { reason: "no_model" } } } };
+     }, context);
+ }
+-//# sourceMappingURL=compaction.js.map
+\ No newline at end of file
++//# sourceMappingURL=compaction.js.map
 diff --git a/dist/harness/inbox.js b/dist/harness/inbox.js
 --- a/dist/harness/inbox.js
 +++ b/dist/harness/inbox.js
@@ -126,16 +115,29 @@ diff --git a/dist/harness/inbox.js b/dist/harness/inbox.js
 diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
-@@ -508,6 +508,8 @@
-     keepRecentTokens: number;
-     /** Background compaction starts `backgroundTokens` below the blocking threshold; `0` disables it. */
-     backgroundTokens: number;
-+    /** Preserve an explicit manual compaction's budget independently of an automatic replacement policy. */
-+    manual?: { reserveTokens: number; keepRecentTokens: number };
- };
- /**
-  * Harness-wide compaction settings. `modelOverrides` is keyed by exact `"provider/modelId"`; each field it sets
-@@ -988,6 +990,15 @@
+@@ -928,9 +928,19 @@
+     onYield(answer: AssistantMessage, api: HookApi, context: Context): HookResult<{
+         readonly continue: UserInput;
+     }>;
+-    /** After every tool of the round is terminal; `results` are the round's result entries in call order. */
+-    afterTools(assistant: EntryId, results: readonly EntryId[], api: HookApi, context: Context): void | Promise<void>;
+     /**
++     * After every tool is terminal; `results` are top-level result entries in call order. The first decision wins.
++     * A handoff resets context atomically at this boundary only when every result is present and successful.
++     */
++    afterTools(assistant: EntryId, results: readonly EntryId[], api: HookApi, context: Context): HookResult<{
++        readonly handoff: string;
++        /**
++         * Synchronous placement fence, called inside the reset commit after result validation. Includes every queued
++         * input and user-message write, even unselected follow-ups. Non-user model writes block a fenced reset.
++         */
++        readonly canReset?: (pending: readonly UserInput[]) => boolean;
++    }>;
++    /**
+      * After a run answered, its answer committed and its inputs settled `done`: a final answer, or a `terminate` round;
+      * not when an `onYield` continuation is taken, and never after a failure or an abort. The requested tasks of every
+      * hook are created together as children of the generation, which keeps the run, and the conversation busy, until
+@@ -1005,6 +1015,15 @@
          readonly decline: true;
      } | {
          readonly summary: string;
@@ -163,7 +165,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
  import { defineTask } from "../tasks.js";
  import { addTools, agentHooks, sectionExtension } from "./agent.js";
  import { compactionPolicy, createCompaction, estimateContext, selectCut } from "./compaction.js";
-@@ -856,14 +856,19 @@
+@@ -858,14 +858,19 @@
      });
      const slots = (await runtime.snapshot(LiveDoc, conversationId, context))?.tools ?? [];
      const results = slots.flatMap((slot) => (slot.entry === undefined ? [] : [slot.entry]));
@@ -185,7 +187,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
      // Read from the phase's agent, as every agent field; a `configure()` during the round applies at its end.
      const maxTurns = (await runtime.agent(context)).maxTurns;
      const afterRun = terminate && (await asksAfterRun(runtime, context));
-@@ -875,10 +880,42 @@
+@@ -877,10 +882,42 @@
          const now = runtime.now();
          // The run's last entry so far: the newest result, or the assistant when no result has an entry.
          let last = results.reduce((newest, id) => (id > newest ? id : newest), assistant);
@@ -229,27 +231,3 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
              boundary.head = entry.id;
              last = entry.id;
          }
-diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
---- a/dist/harness/types.d.ts
-+++ b/dist/harness/types.d.ts
-@@ -911,8 +911,18 @@
-     onYield(answer: AssistantMessage, api: HookApi, context: Context): HookResult<{
-         readonly continue: UserInput;
-     }>;
--    /** After every tool of the round is terminal; `results` are the round's result entries in call order. */
--    afterTools(assistant: EntryId, results: readonly EntryId[], api: HookApi, context: Context): void | Promise<void>;
-+    /**
-+     * After every tool is terminal; `results` are top-level result entries in call order. The first decision wins.
-+     * A handoff resets context atomically at this boundary only when every result is present and successful.
-+     */
-+    afterTools(assistant: EntryId, results: readonly EntryId[], api: HookApi, context: Context): HookResult<{
-+        readonly handoff: string;
-+        /**
-+         * Synchronous placement fence, called inside the reset commit after result validation. Includes every queued
-+         * input and user-message write, even unselected follow-ups. Non-user model writes block a fenced reset.
-+         */
-+        readonly canReset?: (pending: readonly UserInput[]) => boolean;
-+    }>;
-     /**
-      * After a run answered, its answer committed and its inputs settled `done`: a final answer, or a `terminate` round;
-      * not when an `onYield` continuation is taken, and never after a failure or an abort. The requested tasks of every

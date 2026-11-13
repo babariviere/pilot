@@ -3,7 +3,7 @@
  * conversation at an earlier entry and switch to the fork; earlier attempts stay in storage and can be activated again.
  * Workspace files are never reverted.
  */
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import {
 	type ConversationId,
 	type Cursor,

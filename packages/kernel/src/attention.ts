@@ -1,5 +1,5 @@
 /** Automatic, restart-stable settled-run outcomes. */
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import {
 	CompactionEntry,
 	type Conversation,

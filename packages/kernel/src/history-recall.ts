@@ -4,7 +4,7 @@
  * storage on its own execution host. It takes no session, project or host argument, so it cannot reach another chat.
  * Results are redacted, neutralized and labeled untrusted; they never feed permissions or question state.
  */
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Conversation, Cursor, EntryId, EntryRecord } from "@earendil-works/pi-durable";

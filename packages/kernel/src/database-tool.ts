@@ -1,5 +1,5 @@
 /** The `db` tool: user-configured Postgres access, executed by pilotd. The kernel never sees connection URLs. */
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AgentQuestion } from "@pilot/protocol";
 import { Type } from "typebox";

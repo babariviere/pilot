@@ -34,9 +34,7 @@ let parent;
 globalThis.fetch = () => { throw new Error('Runtime profile smoke test must stay offline'); };
 try {
   const sdk = import.meta.resolve('@earendil-works/pi-coding-agent');
-  const writer = await import(new URL('./extensions/mcp/config-writer.js', sdk).href);
-  assert.equal(writer.mcpConfigWriteProtocol, 1, 'Coordinated MCP writer patch is missing');
-  const config = await import(new URL('./bundle/chunks/chunk-NZY7EIPA.js', sdk).href);
+  const config = await import(new URL('./bundle/chunks/chunk-MMDXLZVS.js', sdk).href);
   const mcpPath = join(isolated, 'mcp.json');
   config.addMcpServerConfig(mcpPath, 'fixture', { url: 'https://example.test/mcp' });
   const { McpSetupStore } = await import('./packages/daemon/src/mcp-setup.ts');
