@@ -2,6 +2,7 @@
 //! No exit hook, app-swap implementation, service manager or VM export lives here.
 use super::{Error, journal::Journal, updates::Record, window::SavedWindow};
 use crate::macos_host::{ClosedWindow, ForcedClosedWindow};
+use crate::update::{Confirmation, UpdateKind, UpdateMode};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use nsh_updater::{Available, Config, Download, install::Installation};
 use pilot_desktop_updater::{
@@ -59,8 +60,136 @@ pub(crate) fn inspect_inputs(
 }
 
 enum ClosedUpdate {
-    Preserved(ClosedWindow, String),
+    Preserved(ClosedWindow, NormalConsent),
     Forced(super::update_loss::Accepted),
+}
+
+/// A one-use normal confirmation from immutable verified official inputs.
+/// It is not state-loss consent, capture evidence or permission to install.
+#[derive(Debug)]
+#[must_use]
+pub struct NormalOffer {
+    confirmation: Confirmation,
+    source: super::Source,
+    window: String,
+    target: Value,
+    journal: PathBuf,
+}
+
+/// Fresh normal consent. Only its exact owning window may begin capture.
+/// Never serialized, cloned or reconstructed by retained-operation lookup.
+#[derive(Debug)]
+#[must_use]
+pub struct NormalConsent {
+    offer: NormalOffer,
+    capture_started: bool,
+    generation: Option<u32>,
+}
+
+impl NormalOffer {
+    fn verified(
+        source: super::Source,
+        window: String,
+        target: Value,
+        journal: PathBuf,
+        from: String,
+    ) -> Result<Self, Error> {
+        if uuid::Uuid::parse_str(&window).is_err() {
+            return Err(Error::Invalid);
+        }
+        Ok(Self {
+            confirmation: Confirmation {
+                id: uuid::Uuid::new_v4().to_string(),
+                mode: Some(UpdateMode::Normal),
+                kind: UpdateKind::App,
+                from,
+                to: target["build"].as_str().ok_or(Error::Identity)?.into(),
+                pauses: None,
+                keeps: None,
+                restarts: true,
+            },
+            source,
+            window,
+            target,
+            journal,
+        })
+    }
+
+    pub fn confirmation(&self) -> &Confirmation {
+        &self.confirmation
+    }
+
+    fn accept(
+        self,
+        id: &str,
+        target: &Value,
+        source: &super::Source,
+        journal: &Path,
+    ) -> Result<NormalConsent, Error> {
+        if self.confirmation.id != id || self.target != *target {
+            return Err(Error::Stale);
+        }
+        if self.source != *source || self.journal != journal {
+            return Err(Error::Identity);
+        }
+        Ok(NormalConsent {
+            offer: self,
+            capture_started: false,
+            generation: None,
+        })
+    }
+}
+
+impl NormalConsent {
+    /// Dispatch only to the confirmed native root. This starts preservation,
+    /// not global pause, close, loss acceptance or installation. Canceling this
+    /// capture consumes the attempt; a new attempt needs fresh confirmation.
+    ///
+    /// # Errors
+    /// Refuses another window, a consumed attempt or a native capture failure.
+    pub fn begin_capture(
+        &mut self,
+        owner: &mut crate::macos_host::WindowOwner,
+        main: nsh_platform_macos::objc2::MainThreadMarker,
+    ) -> Result<u32, Error> {
+        self.capture_allowed(owner.identity())?;
+        // Consume before native dispatch, including a failure with no returned
+        // generation. Neither a lost reply nor cancel can replay this attempt.
+        self.capture_started = true;
+        let generation = owner.begin_close(main)?;
+        self.generation = Some(generation);
+        Ok(generation)
+    }
+
+    fn capture_allowed(&self, window: &str) -> Result<(), Error> {
+        if self.capture_started {
+            return Err(Error::Stale);
+        }
+        if self.offer.window != window {
+            return Err(Error::Identity);
+        }
+        Ok(())
+    }
+
+    fn verify_capture(
+        &self,
+        target: &Value,
+        journal: &Path,
+        capture: &SavedWindow,
+    ) -> Result<(), Error> {
+        capture.validate()?;
+        if self.offer.target != *target
+            || self.offer.journal != journal
+            || self.offer.source != capture.source
+            || self.offer.window != capture.window
+        {
+            return Err(Error::Identity);
+        }
+        if !self.capture_started || self.generation != Some(capture.generation) {
+            return Err(Error::Stale);
+        }
+        Ok(())
+    }
 }
 
 struct InstallState {
@@ -525,6 +654,40 @@ impl VerifiedApp {
         })
     }
 
+    /// Prepare normal preservation consent for one exact source and native root.
+    /// A prepared choice has no capture, pause or install effects.
+    ///
+    /// # Errors
+    /// Refuses an invalid window identity or incomplete verified target.
+    pub fn normal_offer(
+        &self,
+        source: super::Source,
+        window: String,
+    ) -> Result<NormalOffer, Error> {
+        NormalOffer::verified(
+            source,
+            window,
+            self.target.clone(),
+            self.journal.clone(),
+            self.trust.current_build.clone(),
+        )
+    }
+
+    /// Consume explicit normal confirmation against the same current native
+    /// host and verified inputs. No durable/external effect has entered yet.
+    ///
+    /// # Errors
+    /// Refuses a closed host, stale confirmation or different target/source/journal.
+    pub fn accept_normal(
+        &self,
+        offer: NormalOffer,
+        id: &str,
+        host: &super::NativeHost,
+    ) -> Result<NormalConsent, Error> {
+        host.0.shared.open()?;
+        offer.accept(id, &self.target, &host.0.source, &host.0.ledger)
+    }
+
     /// Prepare a separate loss confirmation from this exact verified signed target.
     /// Acceptance rechecks the current verified target before any loss is recorded.
     pub fn force_offer(
@@ -552,6 +715,20 @@ impl VerifiedApp {
         offer.accept(id, host, &self.target, &self.journal).await
     }
 
+    /// Dispatch accepted loss only while these exact verified inputs remain
+    /// selected. The window also checks source, journal and native identity.
+    ///
+    /// # Errors
+    /// Refuses another target/journal or a window which cannot enter joined close.
+    pub fn begin_force_close(
+        &self,
+        owner: &mut crate::macos_host::WindowOwner,
+        accepted: super::update_loss::Accepted,
+    ) -> Result<crate::macos_host::ForcedClosing, Error> {
+        accepted.matches_target(&self.target, &self.journal)?;
+        owner.begin_force_close(accepted)
+    }
+
     /// Consume exact accepted loss, joined host close and disposed engine. All
     /// signature, runtime, rollback and independent process checks stay mandatory.
     pub fn install_force(
@@ -577,11 +754,11 @@ impl VerifiedApp {
         self,
         closed: ClosedWindow,
         rollback: VerifiedRollback,
-        operation_id: String,
+        consent: NormalConsent,
         verify_processes: impl FnOnce(&Value) -> Result<(), Error>,
     ) -> Result<InstalledApp, Error> {
         self.install_closed(
-            ClosedUpdate::Preserved(closed, operation_id),
+            ClosedUpdate::Preserved(closed, consent),
             rollback,
             verify_processes,
         )
@@ -598,13 +775,13 @@ impl VerifiedApp {
         }
         self.verify_rollback(&rollback)?;
         let state = match closed {
-            ClosedUpdate::Preserved(closed, operation_id) => {
+            ClosedUpdate::Preserved(closed, consent) => {
                 let capture = closed.capture().clone();
-                capture.validate()?;
+                consent.verify_capture(&self.target, &self.journal, &capture)?;
                 InstallState {
                     source: capture.source.clone(),
                     window: capture.window.clone(),
-                    operation_id,
+                    operation_id: consent.offer.confirmation.id,
                     view: capture.view.clone(),
                     flush: Some((capture.generation, capture.save_sequence)),
                     capture: Some(capture),
@@ -612,9 +789,7 @@ impl VerifiedApp {
                 }
             }
             ClosedUpdate::Forced(mut accepted) => {
-                if accepted.journal() != self.journal || accepted.record().target != self.target {
-                    return Err(Error::Identity);
-                }
+                accepted.matches_target(&self.target, &self.journal)?;
                 // Only ForcedClosedWindow reaches here: joined host and engine
                 // disposal happened before this off-AppKit history write.
                 accepted.closed()?;
@@ -925,6 +1100,170 @@ mod tests {
         json!({"id":"dev.pilot.day","version":"2.0.0","platforms":{
             nsh_updater::platform():{"url":"https://example.invalid/app.zip","sha256":hash(b"archive"),"size":7}},
             "pilot":{"source":"a".repeat(40),"build":"2.0"}})
+    }
+
+    fn normal_choice(journal: PathBuf) -> NormalOffer {
+        NormalOffer::verified(
+            super::super::Source {
+                profile: journal.parent().unwrap().into(),
+                port: 1,
+                home: crate::contract::Home {
+                    daemon_id: "daemon".into(),
+                    lineage_id: "lineage".into(),
+                },
+                project_id: "project".into(),
+                project_path: "/project".into(),
+            },
+            uuid::Uuid::new_v4().to_string(),
+            json!({"source":"a".repeat(40),"build":"2.0","version":"2.0.0",
+                "sha256":"b".repeat(64),"size":7,"configHash":"c".repeat(64)}),
+            journal,
+            "1.0".into(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn official_consent_normal_is_exact_one_use_and_has_no_loss_or_journal_effect() {
+        let scratch = Scratch::new().unwrap();
+        let path = scratch.0.join("journal");
+        let offer = normal_choice(path.clone());
+        let id = offer.confirmation().id.clone();
+        assert_eq!(offer.confirmation().mode, Some(UpdateMode::Normal));
+        assert_eq!(offer.confirmation().pauses, None);
+        let target = offer.target.clone();
+        let source = offer.source.clone();
+        let consent = offer.accept(&id, &target, &source, &path).unwrap();
+        assert_eq!(consent.offer.confirmation.id, id);
+        assert!(consent.generation.is_none(), "consent is not capture");
+        assert!(
+            !path.exists(),
+            "normal consent is neither loss nor install entry"
+        );
+        drop(consent);
+        let next = normal_choice(path.clone());
+        let target = next.target.clone();
+        assert!(matches!(
+            next.accept(&id, &target, &source, &path),
+            Err(Error::Stale)
+        ));
+        assert!(!path.exists(), "dropping/canceling cannot discard state");
+    }
+
+    #[test]
+    fn official_consent_normal_refuses_retargeting_or_different_native_authority() {
+        let scratch = Scratch::new().unwrap();
+        let path = scratch.0.join("journal");
+        for field in ["source", "build", "version", "sha256", "size", "configHash"] {
+            let offer = normal_choice(path.clone());
+            let id = offer.confirmation().id.clone();
+            let source = offer.source.clone();
+            let mut target = offer.target.clone();
+            target[field] = Value::Null;
+            assert!(
+                matches!(
+                    offer.accept(&id, &target, &source, &path),
+                    Err(Error::Stale)
+                ),
+                "{field}: same build labels cannot substitute signed bytes"
+            );
+        }
+        for field in [
+            "profile", "port", "daemon", "lineage", "project", "path", "journal",
+        ] {
+            let offer = normal_choice(path.clone());
+            let id = offer.confirmation().id.clone();
+            let target = offer.target.clone();
+            let mut source = offer.source.clone();
+            let mut ledger = path.clone();
+            match field {
+                "profile" => source.profile = scratch.0.join("other-profile"),
+                "port" => source.port += 1,
+                "daemon" => source.home.daemon_id.push('2'),
+                "lineage" => source.home.lineage_id.push('2'),
+                "project" => source.project_id.push('2'),
+                "path" => source.project_path.push('2'),
+                _ => ledger = scratch.0.join("other-journal"),
+            }
+            assert!(
+                matches!(
+                    offer.accept(&id, &target, &source, &ledger),
+                    Err(Error::Identity)
+                ),
+                "{field}"
+            );
+        }
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn official_consent_normal_capture_dispatch_and_install_bind_the_same_native_generation() {
+        let scratch = Scratch::new().unwrap();
+        let path = scratch.0.join("journal");
+        let offer = normal_choice(path.clone());
+        let id = offer.confirmation().id.clone();
+        let target = offer.target.clone();
+        let source = offer.source.clone();
+        let window = offer.window.clone();
+        let mut consent = offer.accept(&id, &target, &source, &path).unwrap();
+        assert_eq!(
+            consent.capture_allowed("another-window"),
+            Err(Error::Identity)
+        );
+        assert_eq!(consent.capture_allowed(&window), Ok(()));
+        let capture = SavedWindow {
+            kind: "window-capture".into(),
+            version: 1,
+            source,
+            window,
+            generation: 7,
+            save_sequence: 3,
+            view: serde_json::to_value(crate::update::SavedView {
+                goal: " exact unsent 👩🏽‍💻\n".into(),
+                ..Default::default()
+            })
+            .unwrap(),
+        };
+        assert_eq!(
+            consent.verify_capture(&target, &path, &capture),
+            Err(Error::Stale)
+        );
+        // Pure binding seam only. This does NOT manufacture ClosedWindow or
+        // claim AppKit capture/IME acceptance; only WindowOwner produces those.
+        consent.capture_started = true;
+        assert_eq!(consent.capture_allowed(&capture.window), Err(Error::Stale));
+        assert_eq!(
+            consent.verify_capture(&target, &path, &capture),
+            Err(Error::Stale),
+            "an entered attempt without a native generation stays unusable"
+        );
+        consent.generation = Some(7);
+        assert_eq!(consent.capture_allowed(&capture.window), Err(Error::Stale));
+        assert_eq!(consent.verify_capture(&target, &path, &capture), Ok(()));
+        for field in ["source", "window", "generation", "invalid-view"] {
+            let mut changed = capture.clone();
+            match field {
+                "source" => changed.source.project_id.push('2'),
+                "window" => changed.window = uuid::Uuid::new_v4().to_string(),
+                "generation" => changed.generation += 1,
+                _ => changed.view = Value::Null,
+            }
+            assert!(
+                consent.verify_capture(&target, &path, &changed).is_err(),
+                "{field}"
+            );
+        }
+        let mut changed = target.clone();
+        changed["sha256"] = "d".repeat(64).into();
+        assert_eq!(
+            consent.verify_capture(&changed, &path, &capture),
+            Err(Error::Identity)
+        );
+        assert_eq!(
+            consent.verify_capture(&target, &scratch.0.join("other"), &capture),
+            Err(Error::Identity)
+        );
+        assert!(!path.exists(), "binding checks cannot pause or install");
     }
 
     #[test]

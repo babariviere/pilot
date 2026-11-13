@@ -193,6 +193,32 @@ and root-routing seams, not a completed production update flow. A future qualifi
 root must reverify immutable inputs and bind exact consent, capture/loss and the
 same mandatory process verifier before calling the existing official installer.
 
+The official adapter now supplies `NormalOffer` and `NormalConsent` for that
+future root binding. A normal offer pins the complete verified artifact
+(including archive digest, size and updater-config digest), source/profile,
+journal and native window. Explicit confirmation consumes the offer against
+the same open native host. It cannot authorize Force or record accepted loss.
+Consent dispatches capture only to that window and remembers the generation
+returned by `WindowOwner::begin_close`. Installation now consumes both that
+one-use consent and the opaque joined/disposed `ClosedWindow`; an arbitrary
+operation UUID, an old capture, another window or a same-build different
+artifact cannot substitute for them. The latest journaled capture must still
+match before backup/preparation or any daemon effect.
+
+Normal consent is transient and has no external or loss effect. Dropping it,
+canceling capture or reopening cannot recreate it. Durable capture remains
+passive saved state; install entry keeps the original confirmation UUID as its
+operation identity. Retained-operation lookup grants neither consent nor a new
+capture attempt. This adds native consent/capture dispatch, not executable-root
+activation: root authorization still refuses both modes before any of it runs.
+Force continues to require its separate warned, durable exact-target loss
+acceptance and opaque forced close. Its native close dispatch now goes through
+`VerifiedApp::begin_force_close`, which rechecks the accepted target and journal
+before any window is sealed or disposed. The low-level window method is
+crate-private. A changed selection refuses without marking the window closed;
+the original accepted-loss record stays lookup-only, not transferable consent
+for another update. No journal schema or recovery authority is expanded.
+
 An unsettled saved operation takes precedence over fresh target offers in host
 Read/Check. It keeps its original identity and Unknown outcome, offers no
 replacement target and reconstructs no capture or Force authority. Existing
@@ -231,8 +257,8 @@ evidence must not be relabeled as a broken-chat veto or silently cleared.
 
 The following native/distribution gates remain:
 
-1. Bind the existing explicit confirmation/root selection to the official
-   adapter and verified distribution inputs above. Keep actual all-form capture,
+1. Bind executable-root selection to the official adapter's normal consent and
+   separate Force loss capabilities above. Keep actual all-form capture,
    preedit, global pause/cancellation and close **before** installation.
 2. Qualify native successor observation with actual signed distributions and
    finish operation-bound selective release. The normal native verification and

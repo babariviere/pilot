@@ -311,7 +311,7 @@ impl WindowOwner {
 
     /// Skip preservation only after durable, exact native consent. The host's
     /// entered writes and commands still drain before the engine is disposed.
-    pub fn begin_force_close(
+    pub(crate) fn begin_force_close(
         &mut self,
         accepted: crate::host::update_loss::Accepted,
     ) -> Result<ForcedClosing, Error> {

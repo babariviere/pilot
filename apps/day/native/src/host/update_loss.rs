@@ -200,6 +200,17 @@ impl Accepted {
     pub(super) fn record(&self) -> &Record {
         &self.record
     }
+    /// Recheck before native loss/close dispatch, not merely after disposal.
+    pub(super) fn matches_target(
+        &self,
+        target: &Value,
+        journal: &std::path::Path,
+    ) -> Result<(), Error> {
+        if self.record.target != *target || self.journal != journal {
+            return Err(Error::Identity);
+        }
+        Ok(())
+    }
     /// Native close already joined. This writes history, never reconstructs authority.
     pub(crate) fn closed(&mut self) -> Result<(), Error> {
         let mut journal = Journal::open(self.journal.clone())?;
@@ -309,6 +320,33 @@ mod tests {
         let next = super::tests::offer(path, "2.0");
         let id = next.confirmation().id.clone();
         assert!(matches!(next.accept_offline(&id), Err(Error::Unknown)));
+    }
+
+    #[test]
+    fn official_consent_force_rechecks_exact_target_before_native_loss_dispatch() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("journal");
+        let offer = offer(path.clone(), "2.0");
+        let id = offer.confirmation().id.clone();
+        let accepted = offer.accept_offline(&id).unwrap();
+        let target = accepted.record.target.clone();
+        assert_eq!(accepted.matches_target(&target, &path), Ok(()));
+        let mut different_bytes = target.clone();
+        different_bytes["sha256"] = "b".repeat(64).into();
+        assert_eq!(
+            accepted.matches_target(&different_bytes, &path),
+            Err(Error::Identity)
+        );
+        assert_eq!(
+            accepted.matches_target(&target, &dir.path().join("other")),
+            Err(Error::Identity)
+        );
+        let journal = Journal::open(path).unwrap();
+        assert!(!journal.losses[&accepted.record.operation].closed);
+        assert!(
+            journal.updates.is_empty(),
+            "accepted loss is not install entry"
+        );
     }
 
     #[test]
