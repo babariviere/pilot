@@ -1,6 +1,10 @@
 # Day CI and release preparation
 
 This prepares **unsigned build inputs**, not a release or desktop cutover.
+
+For the separate opt-in credential setup and its remaining material blocker,
+see [Day signing secrets](day-signing-secrets.md). The manual readiness workflow
+does not sign bundles or change this unsigned workflow.
 The shipping GPUI path stays selected and usable. No Day lane publishes,
 uploads, signs, installs, opens a window, contacts a daemon or changes a service.
 

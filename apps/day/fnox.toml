@@ -1,0 +1,17 @@
+#:schema https://fnox.jdx.dev/schema.json
+# Explicit opt-in: fnox -c apps/day/fnox.toml. Never store the identity here.
+root = true
+default_provider = "age"
+if_missing = "error"
+env = false
+prompt_auth = false
+
+[providers.age]
+type = "age"
+recipients = ["age12dtkz7h7fmgpm8znw6j3g044857xcwvpztnvkcaurecqx99hdvzqj9jvfk"]
+daemon_cache = false
+
+[secrets]
+# Missing until imported from the verified existing Ed25519 PEM, using stdin.
+# fnox set writes age ciphertext into value, never add plaintext by hand.
+DAY_UPDATER_PRIVATE_KEY = { provider = "age", if_missing = "error", env = false }
