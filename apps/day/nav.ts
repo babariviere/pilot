@@ -5,16 +5,16 @@
 // one level of that tree, Escape does the same, and Pilot at the top left
 // always goes to Today. Moving around only changes where the user is: it
 // never drops a draft, sends, saves or starts anything.
-import { artifactsOpen, closeArtifacts } from "./artifactReads";
+import { artifactsOpen, closeArtifacts, openArtifacts } from "./artifactReads";
 import type { Changes } from "./changeFeed";
-import { changesRoute } from "./changesView";
+import { changesRoute, showChanges } from "./changesView";
 import type { Day } from "./day";
 import { closeDelivery, deliveryRoute, hideInspection } from "./deliveryView";
-import { closeFeedback, feedbackOpen } from "./feedbackView";
-import { closeLinear, linearOpen } from "./linearView";
+import { closeFeedback, feedbackOpen, openFeedback } from "./feedbackView";
+import { closeLinear, linearOpen, openLinear } from "./linearView";
 import type { Plans } from "./planning";
-import { closePlanning, planRoute } from "./planView";
-import { closeSettings, settingsOpen } from "./preferencesView";
+import { closePlanning, openNew, openPlan, planRoute } from "./planView";
+import { closeSettings, openSettings, settingsOpen } from "./preferencesView";
 import { backFromStandup, closeRitual, ritualRoute } from "./ritualView";
 import { closeThread, threadRoute } from "./threadView";
 import { closeUpdate, updateEntry, updateOpen } from "./updateView";
@@ -152,4 +152,55 @@ export function goHome() {
 	changesRoute.set(null);
 	closePlanning();
 	closeMission();
+}
+
+// The places every screen can reach. Each goes home first, so its Back
+// goes to Today. Drafts stay where they are; opening a place only reads.
+
+/** Opens New from wherever the user is. It never picks a project. */
+export function goNew() {
+	goHome();
+	openNew();
+}
+
+/** Opens Changes from wherever the user is. */
+export function goChanges() {
+	goHome();
+	showChanges();
+}
+
+/** Opens Settings from wherever the user is. */
+export function goSettings() {
+	goHome();
+	openSettings();
+}
+
+/** Opens Feedback about Pilot in general from wherever the user is. Opening it sends nothing. */
+export function goFeedback() {
+	goHome();
+	openFeedback(null);
+}
+
+/** Opens the project's Artifacts from wherever the user is. */
+export function goArtifacts() {
+	goHome();
+	openArtifacts();
+}
+
+/** Opens the read-only Linear page from wherever the user is. */
+export function goLinear() {
+	goHome();
+	openLinear();
+}
+
+/** Opens mission `id`'s overview from wherever the user is. */
+export function goMission(id: string) {
+	goHome();
+	openMission(id);
+}
+
+/** Opens mission `id`'s interview and plan from wherever the user is. Answering and approving stay there. */
+export function goPlan(id: string) {
+	goHome();
+	openPlan(id);
 }

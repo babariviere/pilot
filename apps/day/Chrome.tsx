@@ -2,17 +2,26 @@
 // Today; one Back that goes up a level; and the few places every screen can
 // reach: an update that needs the user, Changes, Artifacts, Feedback, Settings and New. It stays put while
 // the screens below it change, so the way out is always in the same place.
+// Command+K opens the palette over any screen: the same places, and the
+// missions Today lists, by name.
 import { keymap, Text, View, windowSize } from "nsh";
 import { Button } from "nsh/base";
-import { openArtifacts } from "./artifactReads";
 import type { Changes } from "./changeFeed";
-import { showChanges } from "./changesView";
 import type { Day } from "./day";
-import { openFeedback } from "./feedbackView";
-import { type Back, backTarget, goHome, type Places, shown } from "./nav";
+import {
+	type Back,
+	backTarget,
+	goArtifacts,
+	goChanges,
+	goFeedback,
+	goHome,
+	goNew,
+	goSettings,
+	type Places,
+	shown,
+} from "./nav";
+import { Palette } from "./Palette";
 import type { Plans } from "./planning";
-import { openNew } from "./planView";
-import { openSettings } from "./preferencesView";
 import { updateLabel } from "./UpdateScreen";
 import { Action, Icon } from "./ui";
 import { showUpdate, updateEntry, updateOpen } from "./updateView";
@@ -25,36 +34,6 @@ export const SETTINGS_KEYS = keymap.label("mod+,");
 
 /** Below this width the header keeps its icons and drops their words. */
 const NARROW = 640;
-
-/** Opens New from wherever the user is. Drafts stay where they are. */
-function goNew() {
-	goHome();
-	openNew();
-}
-
-/** Opens Changes from wherever the user is. */
-function goChanges() {
-	goHome();
-	showChanges();
-}
-
-/** Opens Settings from wherever the user is. Drafts stay where they are. */
-function goSettings() {
-	goHome();
-	openSettings();
-}
-
-/** Opens Feedback about Pilot in general from wherever the user is. Drafts stay where they are. */
-function goFeedback() {
-	goHome();
-	openFeedback(null);
-}
-
-/** Opens the project's Artifacts from wherever the user is. */
-function goArtifacts() {
-	goHome();
-	openArtifacts();
-}
 
 /** Pilot's mark and name: the way home. */
 function Home() {
@@ -111,6 +90,7 @@ export function AppHeader(props: { day: Day; plans?: Plans; changes?: Changes })
 	if (props.day.preferences) keymap.bind("mod+,", goSettings);
 	return (
 		<View testID="app-header" class="h-12 flex-row items-center gap-1 border-b border-border bg-background px-3">
+			<Palette places={places} />
 			<Home />
 			<Each of={back() ? [back() as Back] : []} key={(b) => b.label}>
 				{(b) => (

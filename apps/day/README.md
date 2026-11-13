@@ -15,6 +15,8 @@ defaults to All projects and keeps its header filter per window. Cross-project
 sections are currently read only. New starts with no project; choose one to read
 its configured model and trusted planning setup. Plan a mission and Start as one
 chat remain separate explicit actions. Saved drafts keep their chosen project.
+Command+K opens a palette over any screen. It goes to Day's places and to the
+missions Today and Planning list; it only navigates and never starts work.
 Use the [connected candidate recipe](../../docs/technical/day-connected-candidate.md)
 to prepare the real native app without installing or updating it.
 For personal connected use, see [installation preparation](../../docs/technical/day-install.md).
