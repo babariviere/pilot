@@ -34,9 +34,6 @@ Intentional exceptions:
 - The updater's `zip =8.6.0` stays manual. Its archive admission code deliberately
   mirrors that parser's ZIP32/ZIP64 dispatch and fallback behavior. Re-audit and
   rerun the adversarial archive tests before changing it.
-- `experiments/nsh-chat` and its GPUI comparison are baseline fixtures, not
-  maintained product dependencies. Their NSH Git revision, local source patches
-  and comparison dependencies stay manual.
 - The Rust toolchain manager is not enabled. Desktop Rust 1.98.1, experimental
   Rust 1.99.1 and separately pinned build tools remain deliberate manual choices.
 

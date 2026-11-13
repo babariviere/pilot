@@ -94,8 +94,6 @@ const manifests = [
 	["apps/desktop/Cargo.toml", "apps/desktop/Cargo.lock", "serde"],
 	["apps/desktop/visual-worker/Cargo.toml", "apps/desktop/Cargo.lock", "cc"],
 	["apps/desktop/updater/Cargo.toml", "apps/desktop/updater/Cargo.lock", "ring"],
-	["experiments/nsh-chat/Cargo.toml", "experiments/nsh-chat/Cargo.lock", "nsh-core"],
-	["experiments/nsh-chat/gpui/Cargo.toml", "experiments/nsh-chat/gpui/Cargo.lock", "gpui-kit"],
 ];
 const matched = getMatchingFiles(
 	{ ...cargo.defaultConfig, ...config, ...config.cargo, manager: "cargo" },
@@ -121,7 +119,7 @@ for (const [packageFile, lockFile, representative] of manifests) {
 			packageFile,
 			updateType: "patch",
 		});
-		const paused = packageFile.startsWith("experiments/") || dep.depName.startsWith("gpui-") || dep.depName === "zip";
+		const paused = dep.depName.startsWith("gpui-") || dep.depName === "zip";
 		assert.equal(configured.enabled === false, paused, `${packageFile}: ${dep.depName}`);
 		assert.equal(configured.automerge, false);
 		if (dep.depName === "pilot-desktop-updater") {

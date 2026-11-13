@@ -51,12 +51,6 @@
 			"enabled": false
 		},
 		{
-			"description": "NSH comparison fixtures retain their qualified source and dependency baseline",
-			"matchManagers": ["cargo"],
-			"matchFileNames": ["experiments/nsh-chat/**"],
-			"enabled": false
-		},
-		{
 			"description": "Day's NSH crates must match the installed, qualified NSH CLI release; upgrade them together by hand",
 			"matchManagers": ["cargo"],
 			"matchPackageNames": ["nsh-*"],

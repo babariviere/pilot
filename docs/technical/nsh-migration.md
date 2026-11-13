@@ -49,9 +49,11 @@ them. A source file, completed task or successful prototype is not NSH parity.
   neither changes the pin nor certifies that revision's runtime behavior.
 - Upstream source references below use that observed revision in
   [longbridge/nsh](https://github.com/longbridge/nsh/tree/0e4a20bd41ee72a35515cecbf9a7fba88742d911).
-  Never use patches from `experiments/nsh-chat`, fork NSH, edit Cargo's cache, or
+  Never use patches from the [historical nsh-chat experiment](https://github.com/babariviere/pilot/tree/c3318a6f39fab3a56ef44673ec18947cf42b931c/experiments/nsh-chat), fork NSH, edit Cargo's cache, or
   add WebView/TSX/QuickJS for app UI without approval. The existing isolated
   native-visual worker is a separate, already delivered artifact contract.
+  The historical experiment's [findings](https://github.com/babariviere/pilot/blob/c3318a6f39fab3a56ef44673ec18947cf42b931c/experiments/nsh-chat/FINDINGS.md)
+  record selection, input and scroll limitations; they are not Day acceptance.
 
 ## Ownership and reuse rules
 

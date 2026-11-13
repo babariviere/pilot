@@ -12,8 +12,8 @@ exclusions were used. Maintenance warnings are not security-fix claims.
 | `apps/desktop/Cargo.lock` | Desktop and `visual-worker/Cargo.toml` | 3 → 0 | 8 |
 | `apps/desktop/updater/Cargo.lock` | Independent updater, also a desktop path dependency | 3 → 0 | 0 |
 | `apps/power/Cargo.lock` | Independent PilotPower | 0 → 0 | 0 |
-| `experiments/nsh-chat/Cargo.lock` | Independent NSH prototype | 0 → 0 | 2 |
-| `experiments/nsh-chat/gpui/Cargo.lock` | Independent GPUI comparison | 0 → 0 | 8 |
+| [Historical `experiments/nsh-chat/Cargo.lock`](https://github.com/babariviere/pilot/blob/c3318a6f39fab3a56ef44673ec18947cf42b931c/experiments/nsh-chat/Cargo.lock) | Independent NSH prototype | 0 → 0 | 2 |
+| Historical `experiments/nsh-chat/gpui/Cargo.lock` | Independent GPUI comparison | 0 → 0 | 8 |
 
 These are all five tracked Cargo lockfiles and six tracked manifests. Generated
 patch/bootstrap manifests are build inputs, not additional maintained workspaces.
@@ -122,7 +122,7 @@ Additional paths outside GPUI:
 | Advisory | Exact remaining version and dependency path | Why retained |
 | --- | --- | --- |
 | RUSTSEC-2025-0141 | nsh-chat-prototype 0.1.0 → nsh-base 0.3.0 → syntect 5.3.0 → bincode 1.3.3 | Replacing serialization is an upstream prototype dependency change. |
-| RUSTSEC-2026-0192 | nsh-chat-prototype 0.1.0 → nsh-core 0.3.0 → nsh-macros 0.3.0 → ttf-parser 0.25.1 | Preserve source-pinned prototype; requires upstream font-parser replacement. |
+| RUSTSEC-2026-0192 | nsh-chat-prototype 0.1.0 → nsh-core 0.3.0 → nsh-macros 0.3.0 → ttf-parser 0.25.1 | Historical prototype; upstream font-parser replacement was required. |
 
 ## Reproduce
 
