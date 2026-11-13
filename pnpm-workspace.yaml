@@ -3,17 +3,17 @@ packages:
 
 overrides:
    # Keep every Pi SDK package on one release: mixed releases have incompatible APIs.
-   "@earendil-works/pi-coding-agent>@earendil-works/pi-codemode": 1.5.0
+   "@earendil-works/pi-coding-agent>@earendil-works/pi-codemode": 1.5.2
    mermaid>katex: 0.19.1
    # Keep the bundled CLI on the same external undici as the SDK.
    "@earendil-works/pi-coding-agent>undici": 8.12.4
-   "@earendil-works/pi-codemode": 1.5.0
-   "@earendil-works/chord": 1.5.0
-   "@earendil-works/pi-agent-core": 1.5.0
-   "@earendil-works/pi-ai": 1.5.0
-   "@earendil-works/pi-durable": 1.5.0
-   "@earendil-works/pi-mcp": 1.5.0
-   "@earendil-works/pi-tui": 1.5.0
+   "@earendil-works/pi-codemode": 1.5.2
+   "@earendil-works/chord": 1.5.2
+   "@earendil-works/pi-agent-core": 1.5.2
+   "@earendil-works/pi-ai": 1.5.2
+   "@earendil-works/pi-durable": 1.5.2
+   "@earendil-works/pi-mcp": 1.5.2
+   "@earendil-works/pi-tui": 1.5.2
 
 # Only these dependencies may run install scripts.
 allowBuilds:
