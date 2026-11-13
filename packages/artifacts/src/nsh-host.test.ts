@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { getEventListeners } from "node:events";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { callArtifactHost, readArtifactHostBinding } from "./nsh-host.ts";
 import { nshSource } from "./nsh-source.ts";
 
@@ -154,30 +156,69 @@ test(
 	},
 );
 
-test("NSH helper transport joins after cancellation and rejects oversized/malformed host responses", async (t) => {
+test("NSH helper transport joins the owned helper before it releases a slot or settles", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "nsh-host-transport-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const executable = join(root, "helper");
 	const program = join(root, "program.cjs");
+	const pids = join(root, "pids");
 	const quote = (path: string) => `'${path.replaceAll("'", "'\\''")}'`;
 	await writeFile(executable, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(program)}\n`, { mode: 0o700 });
-	const script = (body: string) => writeFile(program, body);
-	await script("process.stdin.resume(); process.stdout.write('not json');");
-	await assert.rejects(callArtifactHost({}, undefined, executable), /Invalid/);
-	await script("process.stdin.resume(); process.stdout.write('x'.repeat(5*1024*1024));");
-	await assert.rejects(callArtifactHost({}, undefined, executable), /output exceeds/);
-	await script("setInterval(() => {}, 1000);");
+	// Each helper records its own PID (exec keeps it), so the test can see that it was reaped.
+	const script = (body: string) =>
+		writeFile(program, `require("node:fs").appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");\n${body}`);
+	const started = async () => (await readFile(pids, "utf8").catch(() => "")).split("\n").filter(Boolean).map(Number);
+	// Settlement must follow the direct helper's exit and reaping. This is not subtree evidence.
+	const joined = async (count: number) => {
+		const list = await started();
+		assert.equal(list.length, count);
+		for (const pid of list) assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+		await rm(pids, { force: true });
+	};
+	const fail = async (body: string, error: RegExp) => {
+		await script(body);
+		await assert.rejects(callArtifactHost({}, undefined, executable), error);
+		await joined(1);
+	};
+	await fail("process.stdin.resume(); process.stdout.write('not json');", /Invalid/);
+	// Oversized output: the helper stays alive, so only the transport's kill can end it.
+	await fail("process.stdout.write('x'.repeat(5*1024*1024)); setInterval(() => {}, 1000);", /output exceeds/);
+
+	// Cancellation: a complete reply already written is not accepted, and both slots stay
+	// held until each helper is joined.
+	await script("process.stdout.write(JSON.stringify({value: 1})); setInterval(() => {}, 1000);");
 	const controller = new AbortController();
 	const waiting = callArtifactHost({}, controller.signal, executable);
 	const second = callArtifactHost({}, controller.signal, executable);
 	await assert.rejects(callArtifactHost({}, undefined, executable), /busy/);
+	for (let tries = 0; (await started()).length < 2; tries++) {
+		assert.ok(tries < 500, "helpers did not start");
+		await delay(10);
+	}
 	controller.abort();
+	await assert.rejects(callArtifactHost({}, undefined, executable), /busy/);
 	const stopped = await Promise.allSettled([waiting, second]);
 	assert.ok(stopped.every((result) => result.status === "rejected" && /canceled/.test(String(result.reason))));
-	await script("setInterval(() => {}, 1000);");
-	await assert.rejects(callArtifactHost({}, undefined, executable), /5 second deadline/);
-	await script("process.exit(13);");
-	await assert.rejects(callArtifactHost({}, undefined, executable), /host failed/);
+	assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+	await joined(2);
+	// An already-canceled request never starts a helper.
+	await assert.rejects(callArtifactHost({}, controller.signal, executable), { name: "AbortError" });
+	await joined(0);
+
+	await fail("setInterval(() => {}, 1000);", /5 second deadline/);
+	await fail("process.exit(13);", /host failed/);
+	// A helper that closes stdout early settles only after it exits.
+	await script("process.stdout.end(JSON.stringify({value: 2})); setTimeout(() => {}, 300);");
+	assert.equal(await callArtifactHost({}, undefined, executable), 2);
+	await joined(1);
+
+	// Spawn failures settle and release their slots; repeated failures never become busy.
+	const blocked = join(root, "not-executable");
+	await writeFile(blocked, "#!/bin/sh\n");
+	await chmod(blocked, 0o600);
+	for (const path of [join(root, "missing"), blocked, join(root, "missing"), blocked])
+		await assert.rejects(callArtifactHost({}, undefined, path), /unavailable/);
+
 	await script(
 		"process.stdout.write(JSON.stringify({value: [process.env.HOME ?? null, process.env.NSH_ARTIFACT_TEST_HOST ?? null]}));",
 	);

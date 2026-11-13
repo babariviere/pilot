@@ -203,6 +203,10 @@ export async function callArtifactHost(
 	if (Buffer.byteLength(request) > MAX_RESPONSE) throw new Error("Artifact host input exceeds limit");
 	if (active >= 2) throw new Error("Artifact source host is busy");
 	active++;
+	// The slot, deadline and abort listener are released only on "close": the owned helper has
+	// exited, Node has reaped it and its stdio pipes have closed. This proves the direct child
+	// is joined, not that a descendant subtree exited; the fixed helper never spawns one.
+	// Callers keep their inputs and cleanup held until this promise settles.
 	return new Promise((resolve, reject) => {
 		const child = spawn(executable, [], { env: {}, stdio: ["pipe", "pipe", "pipe"] });
 		const chunks: Buffer[] = [];
@@ -215,14 +219,16 @@ export async function callArtifactHost(
 		const aborted = () => stop(new Error("Artifact host canceled"));
 		const timer = setTimeout(() => stop(new Error("Artifact host exceeded 5 second deadline")), 5000);
 		signal?.addEventListener("abort", aborted, { once: true });
-		child.stdout.on("data", (part: Buffer) => {
+		// Node leaves stdio null when spawn fails early (EMFILE/ENFILE). "error" and "close"
+		// still follow, so the failure settles through the same join path.
+		child.stdout?.on("data", (part: Buffer) => {
 			length += part.length;
 			if (length > MAX_RESPONSE) stop(new Error("Artifact host output exceeds limit"));
 			else chunks.push(part);
 		});
 		// Diagnostics return in the bounded JSON response, not an unbounded stderr buffer.
-		child.stderr.resume();
-		child.stdin.on("error", () => {});
+		child.stderr?.resume();
+		child.stdin?.on("error", () => {});
 		child.on("error", () => {
 			failure ??= new Error("Artifact host unavailable");
 		});
@@ -257,6 +263,7 @@ export async function callArtifactHost(
 			}
 		});
 		if (signal?.aborted) aborted();
+		else if (!child.stdin) failure ??= new Error("Artifact host unavailable");
 		else child.stdin.end(request);
 	}).finally(() => {
 		active--;

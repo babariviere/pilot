@@ -65,9 +65,16 @@ The helper API has exactly Ensure, Capture and Compile. Unknown actions/fields,
 including authored bytecode, fail. Its Node transport inherits no environment,
 limits request/response to 4 MiB, permits at most two active helper calls per
 worker process, and kills on abort, output overflow or a five-second deadline.
-It waits for process close before releasing the call. The fixed helper does not
-spawn children or evaluate authored code. These are source-host safeguards,
-**not** a production native renderer sandbox or a total memory quota.
+A call settles, and frees its slot, only on process close: the helper has exited,
+Node has reaped it and its pipes have closed. Callers keep their inputs and
+cleanup until then. A complete reply written before an abort is still refused.
+Close proves the direct helper joined, not a descendant subtree. The fixed helper
+does not spawn children or evaluate authored code. These are source-host
+safeguards, **not** a production native renderer sandbox or a total memory quota.
+
+Abrupt loss of the owning worker is an open gate. Nothing then joins the helper,
+and it has no deadline of its own. From the code, it should see end of input,
+finish its limited work and fail to write to the closed pipe. This is not tested.
 
 There is no stateful preview in this increment. Existing example signals remain
 local to a future admitted engine; reopening/replacing a revision must dispose
