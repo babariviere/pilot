@@ -1,9 +1,10 @@
 # User feedback
 
-Day has a direct path for the user's own feedback about Pilot. It saves the words and
-shows them again. It is not agent Insights, findings or a retrospective, and it is not
-an inbox: saving feedback creates no mission, starts or routes no work, spends nothing
-and approves nothing. Triage, routing, dedupe and retro analysis stay open design work.
+Day has a direct path for the user's own feedback about Pilot. It saves the words, shows
+them again and lets the user take explicit steps on them. It is not agent Insights,
+findings or a retrospective, and it is not an inbox. Saving feedback creates no mission,
+spends nothing and approves nothing. There is no dedicated improvement mission and no
+mission is needed for triage.
 
 ## Storage and API
 
@@ -17,7 +18,51 @@ and approves nothing. Triage, routing, dedupe and retro analysis stay open desig
   is required. The accepted receipt's `result` is the saved `UserFeedback`, after the
   durable write. Journal recovery is lookup only: a lost ACK stays Unknown, never resent.
 - `GET /api/feedback?before=<sequence>&limit=20` (native authenticated) lists saved
-  feedback newest first with an exact cursor.
+  feedback newest first with an exact cursor. Each item has `work`: its saved steps,
+  oldest first, with what Pilot reads about them now (below).
+
+## Steps
+
+A step is one explicit act of the user's on one saved item, saved append-only in
+`user_feedback_work` (at most 32 per item). Native operation kind `feedback-work`;
+types live in `packages/protocol/src/user-feedback.ts` (`UserFeedbackWorkIntent`).
+None follows from another by itself.
+
+| Action | Target | What it does |
+| --- | --- | --- |
+| `triage` | new chat ID | One read-only Ask chat in the chosen project. |
+| `fix` | new chat ID | One Build chat for a finished triage's exact `fix` proposal. |
+| `link` | mission ID | Links an active mission and adds a user note to its activity. |
+| `resolve` / `reopen` | feedback ID | The user's own mark. Nothing else resolves feedback. |
+
+- Triage and fix payloads freeze the exact project selection that
+  `GET /api/projects/:id/chat-profile` returned (`projectId`, `projectPath`,
+  `contextDigest`, `model`, `thinking`). The daemon requalifies it through
+  `NativeChat` and creates the chat with `spawnDurable`, so project, model policy, price
+  caps, Stop, pause and update gates are the existing ones. The daemon writes the
+  opening message; the window cannot supply one, a mode or a cwd.
+- The step row is saved before the chat is created, so a crash never leaves an unlinked
+  chat. If creation then fails, the row shows the chat as `missing`.
+- One triage and one fix at a time per item. A fix needs the triage's current proposal
+  digest and `next:"fix"`; a changed or later answer refuses it as stale.
+- A link refuses a missing or inactive mission and a repeat of the latest link. The
+  mission note says the feedback is context, not a request to start work.
+- Recovery is lookup only, like Send: a lost ACK stays Unknown and is never resent.
+
+## Triage
+
+The triage chat gets the feedback, up to 30 other recent feedback items and the
+project's active missions as labeled data, not instructions. It reads the code, lists
+duplicates, uses `ask_user` when something is unclear and ends with one JSON object:
+`{summary, duplicates, next, detail, missionId, goal}`, where `next` is `fix`,
+`existing-mission`, `new-mission` or `none`. The proposal stays in that chat's
+history. A read parses the last assistant text of the finished turn (at most 8 KiB, one
+optional Markdown fence) and returns `{value, digest}` or `{problem}`. Duplicates keep
+only saved feedback IDs. Parsing is cached per chat and finished turn; reads save nothing.
+
+Each triage or fix step reads its chat as `starting`, `working`, `question`, `done`,
+`failed`, `stopped`, `archived` or `missing`. A mission link reads the mission's
+title, status and task counts, or `null` when it is gone.
 
 ## Day
 
@@ -29,9 +74,30 @@ the origin. No transcript, file or project is attached silently.
 - `day.feedback.read {before?}` reads one page. A failed read is never an empty list.
 - `day.feedback.send {text, origin}` journals the envelope before its one POST. While an
   earlier Send is Unknown, the root refuses another.
-- `day.feedback.check {operationId}` only looks up that saved envelope's receipt.
+- `day.feedback.step {feedbackId, action, …}` names only its action's fields. For triage
+  and fix the host re-reads the project's chat setup right before saving the envelope;
+  a changed project is Stale. While an earlier step is Unknown, the root refuses another.
+- `day.feedback.check {operationId}` only looks up that saved Send's or step's receipt.
+
+"Agent triage in" names the project agents work in. Nothing is chosen for the user, and
+the choice lasts only while the window is open. While one is chosen, a saved Send also
+starts its triage there. Each saved item then shows its triage, the proposal with its
+one suggested command (Start fix, Link to this mission or Plan a new mission), a mission
+picker from Today's missions, the fix and link states, and Mark resolved / Reopen.
+Plan a new mission only fills New's empty goal and opens New; the existing planning flow
+creates the mission, and the user links it afterwards. A delivered fix leaves the
+feedback open until the user marks it resolved.
 
 Only an accepted receipt clears the draft. Leaving the page, closing or updating keeps
-the draft and its origin in the saved view (`feedbackOpen`, `feedback`). Saved
-feedback shows its words, date and origin, with the plain statement that nothing triages
-or routes it yet.
+the draft and its origin in the saved view (`feedbackOpen`, `feedback`).
+
+## Limits
+
+- Day has no chat screen: a triage question is answered in the chat
+  (`pilot://chat/<id>`), wherever Pilot shows it.
+- New does not link the mission it creates; the user links it from the feedback page.
+- The agent project choice is not saved across a close or update.
+- Checks: `user-feedback-work.test.ts` (real daemon HTTP, faux sessions/provider),
+  `host::feedback` unit tests and `Feedback.test.tsx` on a scripted source. They do not
+  run a real provider, a native window or a live triage.
+

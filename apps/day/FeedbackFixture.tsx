@@ -2,34 +2,50 @@
 // feedback page over a scripted in-memory source: `Next …` picks what the
 // next Send does, "Unreadable" makes reads fail, "Many saved" fills older
 // pages, and "Save and reopen" keeps the window as a close or an update
-// saves it and shows it again in a fresh window state.
+// saves it and shows it again in a fresh window state. "Triage …" finishes
+// the newest item's triage with a scripted proposal; "Next step …" picks
+// what the next step does.
 import { mount, signal, Text, View } from "nsh";
 import {
 	type FeedbackItem,
 	type FeedbackSource,
+	type FeedbackStepOp,
 	type FeedbackView,
 	mirrorFeedback,
 	refusedSend,
+	refusedStep,
 	type SendIntent,
 	type SendResult,
+	type StepIntent,
+	type StepResult,
 	type UserFeedbackOrigin,
+	type UserFeedbackProposal,
+	type UserFeedbackWorkView,
 } from "./feedbackFeed";
 import { MockDayScreen, openDay } from "./mockFeeds";
+import { goalDraft } from "./planView";
 import { Action } from "./ui";
 import { captureView, restoreView, startFresh } from "./updateView";
 
 type Next = "accept" | "unknown" | "reject";
 
+const DIGEST = "d".repeat(64);
+const PROJECTS = [{ projectId: "pilot", name: "Pilot code", contextDigest: DIGEST }];
+
 /** Saved feedback in memory, newest first, two per page. Nothing leaves the fixture. */
 class ScriptedFeedback implements FeedbackSource {
 	next = signal<Next>("accept");
+	nextStep = signal<Next>("accept");
 	unreadable = signal(false);
 	sends = signal(0);
 	checks = signal(0);
+	steps = signal<string[]>([]);
 	#saved: FeedbackItem[] = [];
 	#shown = 0;
 	#lost: { operationId: string; intent: SendIntent } | null = null;
+	#lostStep: { operationId: string; intent: StepIntent } | null = null;
 	#sending = false;
+	#projects: typeof PROJECTS | null = null;
 	#failed = false;
 	#listeners = new Set<(view: FeedbackView) => void>();
 	#sequence = 0;
@@ -44,8 +60,20 @@ class ScriptedFeedback implements FeedbackSource {
 			unsettled: this.#lost
 				? [{ operationId: this.#lost.operationId, state: "unknown", text: this.#lost.intent.text }]
 				: [],
+			unsettledSteps: this.#lostStep
+				? [
+						{
+							operationId: this.#lostStep.operationId,
+							state: "unknown",
+							feedbackId: this.#lostStep.intent.feedbackId,
+							step: this.#lostStep.intent.action,
+						} satisfies FeedbackStepOp,
+					]
+				: [],
+			projects: this.#projects,
 			reading: false,
 			sending: this.#sending,
+			stepping: null,
 		};
 	}
 	onChange(listener: (view: FeedbackView) => void): () => void {
@@ -71,6 +99,7 @@ class ScriptedFeedback implements FeedbackSource {
 			recordedAt: Date.UTC(2026, 10, 13, 12),
 			operationId,
 			sequence: this.#sequence,
+			work: [],
 		};
 		this.#saved = [item, ...this.#saved];
 		this.#shown = Math.min(this.#saved.length, Math.max(2, this.#shown + 1));
@@ -114,6 +143,102 @@ class ScriptedFeedback implements FeedbackSource {
 		this.#shown = 2;
 		this.#publish();
 	}
+	async readProjects() {
+		this.#projects = PROJECTS;
+		this.#publish();
+	}
+	#apply(intent: StepIntent, operationId: string) {
+		const item = this.#saved.find((i) => i.id === intent.feedbackId);
+		if (!item) return;
+		const base = { operationId, recordedAt: Date.UTC(2026, 10, 13, 13) };
+		const n = this.steps().length;
+		let w: UserFeedbackWorkView;
+		if (intent.action === "triage")
+			w = {
+				...base,
+				kind: "triage",
+				sessionId: `triage-${n}`,
+				projectId: intent.projectId,
+				chat: { title: "Triage", state: "working" },
+			};
+		else if (intent.action === "fix")
+			w = {
+				...base,
+				kind: "fix",
+				sessionId: `fix-${n}`,
+				projectId: intent.projectId,
+				triageSessionId: intent.triageSessionId,
+				proposalDigest: intent.proposalDigest,
+				chat: { title: "Fix", state: "working" },
+			};
+		else if (intent.action === "link")
+			w = {
+				...base,
+				kind: "mission",
+				missionId: intent.missionId,
+				projectId: "pilot",
+				mission: { title: `Mission ${intent.missionId}`, status: "active", tasksDone: 1, tasksTotal: 4 },
+			};
+		else w = { ...base, kind: intent.action === "resolve" ? "resolved" : "reopened" };
+		this.#saved = this.#saved.map((i) => (i === item ? { ...i, work: [...i.work, w] } : i));
+	}
+	async step(intent: StepIntent): Promise<StepResult> {
+		if (this.#lostStep) return refusedStep("unknown");
+		this.steps.update((s) => [...s, intent.action]);
+		const mode = this.nextStep();
+		this.nextStep.set("accept");
+		const operationId = `step-${this.steps().length}`;
+		if (mode === "reject") return refusedStep("stale");
+		if (mode === "unknown") {
+			this.#lostStep = { operationId, intent };
+			this.#publish();
+			return refusedStep("lost");
+		}
+		this.#apply(intent, operationId);
+		this.#publish();
+		return { status: "accepted", message: "" };
+	}
+	async checkStep(operationId: string): Promise<StepResult> {
+		this.checks.update((n) => n + 1);
+		const lost = this.#lostStep;
+		if (!lost || lost.operationId !== operationId) return refusedStep("lost");
+		this.#lostStep = null;
+		this.#apply(lost.intent, operationId);
+		this.#publish();
+		return { status: "accepted", message: "" };
+	}
+	/** Finishes the newest item's triage with `proposal`, or leaves it asking. */
+	finishTriage(proposal: Partial<UserFeedbackProposal> | "asks") {
+		const item = this.#saved[0];
+		const t = item?.work.findIndex((w) => w.kind === "triage") ?? -1;
+		if (!item || t < 0) return;
+		const w = item.work[t]!;
+		const others = this.#saved.slice(1).map((i) => i.id);
+		const work: UserFeedbackWorkView[] = item.work.map((x, i) =>
+			i !== t
+				? x
+				: proposal === "asks"
+					? { ...w, chat: { title: "Triage", state: "question" } }
+					: {
+							...w,
+							chat: { title: "Triage", state: "done" },
+							proposal: {
+								value: {
+									summary: "The plan page hides who works on each task.",
+									duplicates: others.slice(0, 1),
+									next: "fix",
+									detail: "Show the assignee on each plan row and check it in Plan.test.tsx.",
+									missionId: null,
+									goal: null,
+									...proposal,
+								},
+								digest: DIGEST,
+							},
+						},
+		);
+		this.#saved = [{ ...item, work }, ...this.#saved.slice(1)];
+		this.#publish();
+	}
 	dispose() {
 		this.#listeners.clear();
 	}
@@ -136,6 +261,16 @@ mount(() => (
 			</Each>
 			<Action label="Unreadable" onPress={() => feedback.unreadable.set(true)} />
 			<Action label="Many saved" onPress={() => feedback.manySaved()} />
+			<Text testID="steps">{`Steps: [${feedback.steps().join(",")}]`}</Text>
+			<Each of={NEXT} key={(n) => n}>
+				{(n) => <Action label={`Next step ${n()}`} onPress={() => feedback.nextStep.set(n())} />}
+			</Each>
+			<Action label="Triage fix" onPress={() => feedback.finishTriage({})} />
+			<Action label="Triage asks" onPress={() => feedback.finishTriage("asks")} />
+			<Action
+				label="Triage new mission"
+				onPress={() => feedback.finishTriage({ next: "new-mission", goal: "Make plans show their people" })}
+			/>
 			<Action
 				label="Save and reopen"
 				onPress={() => {
@@ -146,6 +281,7 @@ mount(() => (
 				}}
 			/>
 			<Text testID="kept">{`Kept: [${kept()}]`}</Text>
+			<Text testID="goal-draft">{`New goal: [${goalDraft().split("\n")[0]}]`}</Text>
 		</View>
 		<MockDayScreen day={day} />
 	</View>

@@ -28,6 +28,20 @@ export const feedbackOffer = signal<{ origin: UserFeedbackOriginRef | null } | n
 /** What the last Send or Check said, or "". */
 export const feedbackMessage = signal("");
 
+/**
+ * The project agents triage and fix feedback in, as the user chose it on
+ * this page, or null. Nothing chooses it for the user. While one is chosen,
+ * a saved Send also starts its triage there. Kept only while the window is open.
+ */
+export const feedbackProject = signal<string | null>(null);
+
+/** What the last step on each saved item said, by feedback ID. */
+export const stepMessages = signal<Record<string, string>>({});
+
+export function setStepMessage(feedbackId: string, message: string) {
+	stepMessages.update((all) => ({ ...all, [feedbackId]: message }));
+}
+
 /** An origin as one key, such as "mission/<id>", or "" for Pilot in general. */
 export function originKey(origin: UserFeedbackOriginRef | null): string {
 	if (!origin) return "";
@@ -92,6 +106,8 @@ export function forgetFeedback() {
 	feedbackDraft.set(EMPTY);
 	feedbackOffer.set(null);
 	feedbackMessage.set("");
+	feedbackProject.set(null);
+	stepMessages.set({});
 }
 
 /** A local date such as "9 Nov", or "" when it cannot be read. */

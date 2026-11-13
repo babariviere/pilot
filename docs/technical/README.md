@@ -45,7 +45,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Descriptor-anchored source traversal (design only)](descriptor-anchored-source-traversal.md)
 - [Posthorse context management](posthorse.md)
 - [Small project preferences and canonical context](project-preferences.md)
-- [User feedback: saved words about Pilot, no routing](user-feedback.md)
+- [User feedback: saved words about Pilot, agent triage and the user's steps](user-feedback.md)
 - [Passive model and thinking defaults](model-defaults.md)
 - [Shared context and independent task execution](shared-context.md)
 - [Narrow coordinator repository inspection (design only)](coordinator-repository-inspection.md)

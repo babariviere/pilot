@@ -3,22 +3,45 @@
 // exact mission or chat the user kept, and Check only looks up a lost Send's
 // receipt. Rust names the record; the service reads the origin's project and
 // title. Feedback is the user's own words: saving it starts no work, routes
-// nothing and approves nothing.
+// nothing and approves nothing. A step (`day.feedback.step`) is one explicit
+// act of the user's on saved feedback: start an agent triage or a small fix
+// in a project the user chose, link a mission, or mark it resolved. Each is
+// sent once; a lost one stays Unknown until Check reads its receipt.
 import { type Signal, signal } from "nsh";
 import { call, type Refusal, type Reply } from "./bridge";
-import type { UserFeedback, UserFeedbackOrigin, UserFeedbackOriginRef } from "./feedbackContract";
+import type {
+	UserFeedback,
+	UserFeedbackOrigin,
+	UserFeedbackOriginRef,
+	UserFeedbackProposal,
+	UserFeedbackWorkView,
+} from "./feedbackContract";
 import { glide } from "./motion";
 
-export type { UserFeedback, UserFeedbackOrigin, UserFeedbackOriginRef };
+export type { UserFeedback, UserFeedbackOrigin, UserFeedbackOriginRef, UserFeedbackProposal, UserFeedbackWorkView };
 
 /** At most this many UTF-8 bytes of feedback, as the service counts them. */
 export const MAX_FEEDBACK_BYTES = 8192;
 
-/** One saved piece of feedback and its place in the list. */
-export type FeedbackItem = UserFeedback & { sequence: number };
+/** One saved piece of feedback, its place in the list and the user's steps on it, oldest first. */
+export type FeedbackItem = UserFeedback & { sequence: number; work: UserFeedbackWorkView[] };
 
 /** One Send whose result Pilot does not know. Only Check settles it. */
 export type FeedbackOp = { operationId: string; state: "unknown" | "checking"; text: string };
+
+/** One step whose result Pilot does not know, on one saved item. Only Check settles it. */
+export type FeedbackStepOp = { operationId: string; state: "unknown" | "checking"; feedbackId: string; step: string };
+
+/** A project agents can work in, as Pilot read it. The ID is the identity. */
+export type FeedbackProject = { projectId: string; name: string; contextDigest: string };
+
+/** One explicit step on one saved item. */
+export type StepIntent = { feedbackId: string } & (
+	| { action: "triage"; projectId: string; contextDigest: string }
+	| { action: "fix"; projectId: string; contextDigest: string; triageSessionId: string; proposalDigest: string }
+	| { action: "link"; missionId: string }
+	| { action: "resolve" | "reopen" }
+);
 
 /** What the feedback page shows. */
 export type FeedbackView = {
@@ -32,10 +55,16 @@ export type FeedbackView = {
 	more: boolean;
 	/** Sends whose result is not known. */
 	unsettled: FeedbackOp[];
+	/** Steps whose result is not known. While one is, no other step is sent. */
+	unsettledSteps: FeedbackStepOp[];
+	/** The projects agents can work in, or null before a read or when none could be read. */
+	projects: FeedbackProject[] | null;
 	/** A read is on its way. */
 	reading: boolean;
 	/** A Send is on its way. */
 	sending: boolean;
+	/** The feedback a step is on its way for, or null. */
+	stepping: string | null;
 };
 
 /** The words and, when the user kept one, the exact mission or chat they are about. */
@@ -62,8 +91,17 @@ export interface FeedbackSource {
 	send(intent: SendIntent): Promise<SendResult>;
 	/** Reads one unsettled Send's saved receipt. Never sends it again. */
 	check(operationId: string): Promise<SendResult>;
+	/** Reads the projects agents can work in. Passive. */
+	readProjects(): Promise<void>;
+	/** Sends one step once. Never resent. */
+	step(intent: StepIntent): Promise<StepResult>;
+	/** Reads one unsettled step's saved receipt. Never sends it again. */
+	checkStep(operationId: string): Promise<StepResult>;
 	dispose(): void;
 }
+
+/** What a step or its Check did, for the user. */
+export type StepResult = { status: "accepted" | "rejected" | "stale" | "unknown"; message: string };
 
 /** The UTF-8 length of `text`, as the service counts its limit. */
 export function utf8Bytes(text: string): number {
@@ -152,6 +190,42 @@ export function feedbackOf(x: unknown): UserFeedback | null {
 	return { id: f.id, text: f.text, origin, recordedAt: f.recordedAt, operationId: f.operationId };
 }
 
+const STATES = ["starting", "working", "question", "done", "failed", "stopped", "archived", "missing"];
+const NEXT = ["fix", "existing-mission", "new-mission", "none"];
+const str = (v: unknown) => typeof v === "string";
+
+function proposalOf(x: unknown): UserFeedbackWorkView["proposal"] | null {
+	const p = x as Record<string, unknown> | null;
+	if (!p || typeof p !== "object") return null;
+	if (str(p.problem)) return { problem: p.problem as string };
+	const v = p.value as Record<string, unknown> | null;
+	if (!v || typeof v !== "object" || !str(p.digest) || !str(v.summary) || !str(v.detail)) return null;
+	if (!NEXT.includes(v.next as string) || !Array.isArray(v.duplicates) || !v.duplicates.every(str)) return null;
+	if ((v.missionId !== null && !str(v.missionId)) || (v.goal !== null && !str(v.goal))) return null;
+	return { value: v as unknown as UserFeedbackProposal, digest: p.digest as string };
+}
+
+/** One saved step as a read shows it, or null when it does not read. */
+function workOf(x: unknown): UserFeedbackWorkView | null {
+	const w = x as Record<string, unknown> | null;
+	if (!w || typeof w !== "object" || !str(w.operationId) || typeof w.recordedAt !== "number") return null;
+	if (w.kind === "triage" || w.kind === "fix") {
+		const chat = w.chat as Record<string, unknown> | undefined;
+		if (!str(w.sessionId) || !str(w.projectId)) return null;
+		if (chat !== undefined && (!chat || !str(chat.title) || !STATES.includes(chat.state as string))) return null;
+		if (w.kind === "fix" && (!str(w.triageSessionId) || !str(w.proposalDigest))) return null;
+		if (w.proposal !== undefined && !proposalOf(w.proposal)) return null;
+		return w as unknown as UserFeedbackWorkView;
+	}
+	if (w.kind === "mission") {
+		const m = w.mission as Record<string, unknown> | null | undefined;
+		if (!str(w.missionId) || !str(w.projectId)) return null;
+		if (m && (!str(m.title) || !str(m.status) || typeof m.tasksDone !== "number")) return null;
+		return w as unknown as UserFeedbackWorkView;
+	}
+	return w.kind === "resolved" || w.kind === "reopened" ? (w as unknown as UserFeedbackWorkView) : null;
+}
+
 /** The root's page: newest first, with its cursor. `older` marks a page after the first. */
 type Page = { items: FeedbackItem[]; more: boolean; before: number | null; older: boolean };
 
@@ -164,20 +238,85 @@ export function pageOf(x: unknown): Page | null {
 	for (const raw of p.items as Record<string, unknown>[]) {
 		const f = feedbackOf(raw);
 		if (!f || typeof raw.sequence !== "number") return null;
-		items.push({ ...f, sequence: raw.sequence });
+		// An older service lists no steps; a step that does not read hides nothing else.
+		const work: UserFeedbackWorkView[] = [];
+		for (const w of Array.isArray(raw.work) ? raw.work : []) {
+			const step = workOf(w);
+			if (!step) return null;
+			work.push(step);
+		}
+		items.push({ ...f, sequence: raw.sequence, work });
 	}
 	const before = typeof p.before === "number" ? p.before : null;
 	return { items, more: p.more, before, older: p.older === true };
 }
 
-type Summary = { operationId: string; text: string };
+type Summary = { operationId: string; text: string; feedbackId: string | null; step: string | null };
 
 function summariesOf(x: unknown): Summary[] | null {
 	if (!Array.isArray(x)) return null;
 	const out: Summary[] = [];
 	for (const raw of x as Record<string, unknown>[]) {
 		if (!raw || typeof raw.operationId !== "string") continue;
-		out.push({ operationId: raw.operationId, text: typeof raw.text === "string" ? raw.text : "" });
+		const step = typeof raw.step === "string" && typeof raw.feedbackId === "string";
+		out.push({
+			operationId: raw.operationId,
+			text: typeof raw.text === "string" ? raw.text : "",
+			feedbackId: step ? (raw.feedbackId as string) : null,
+			step: step ? (raw.step as string) : null,
+		});
+	}
+	return out;
+}
+
+export const UNKNOWN_STEP = "Pilot sent this but heard nothing back. It will not send it again; Check only reads.";
+
+/** What a refused or lost step means. Only a lost or uncertain one may have happened. */
+export function refusedStep(refusal: Refusal): StepResult {
+	switch (refusal) {
+		case "lost":
+			return { status: "unknown", message: UNKNOWN_STEP };
+		case "unknown":
+			return { status: "rejected", message: "An earlier step is not confirmed. Check it first; nothing was sent." };
+		case "stale":
+			return {
+				status: "stale",
+				message: "This project changed since Pilot read it. Choose it again. Nothing was sent.",
+			};
+		case "busy":
+		case "closed":
+			return { status: "rejected", message: "Pilot is closing. Nothing was sent." };
+		case "offline":
+			return { status: "rejected", message: "Pilot could not reach its service. Nothing was sent." };
+		case "denied":
+		case "unavailable":
+			return { status: "rejected", message: "This Pilot service cannot triage feedback yet. Nothing was sent." };
+		default:
+			return { status: "rejected", message: "Pilot could not send this. Nothing was sent." };
+	}
+}
+
+function stepOutcomeOf(x: unknown): StepResult {
+	const o = x as { state?: unknown; receipt?: { reason?: unknown } | null } | null;
+	if (o?.state === "accepted") return { status: "accepted", message: "" };
+	if (o?.state === "rejected" || o?.state === "not-sent") {
+		const reason = typeof o.receipt?.reason === "string" ? o.receipt.reason : "";
+		return {
+			status: "rejected",
+			message: reason ? `Pilot's service refused it: ${reason}.` : "Pilot did not do it.",
+		};
+	}
+	return { status: "unknown", message: UNKNOWN_STEP };
+}
+
+/** The projects a root's `day.projects.read` lists, or null when they do not read. */
+function projectsOf(x: unknown): FeedbackProject[] | null {
+	const s = x as { projects?: unknown } | null;
+	if (!s || !Array.isArray(s.projects)) return null;
+	const out: FeedbackProject[] = [];
+	for (const p of s.projects as Record<string, unknown>[]) {
+		if (!p || !str(p.projectId) || !str(p.name) || !str(p.contextDigest)) return null;
+		out.push({ projectId: p.projectId as string, name: p.name as string, contextDigest: p.contextDigest as string });
 	}
 	return out;
 }
@@ -216,6 +355,8 @@ export class ConnectedFeedback implements FeedbackSource {
 	#again = false;
 	#asked = false;
 	#sending = false;
+	#stepping: string | null = null;
+	#projects: FeedbackProject[] | null = null;
 	#sent = 0;
 	#applied = 0;
 	#listeners = new Map<number, (view: FeedbackView) => void>();
@@ -238,13 +379,25 @@ export class ConnectedFeedback implements FeedbackSource {
 			reason,
 			items: items ?? [],
 			more: this.#more,
-			unsettled: this.#ops.map((o) => ({
-				operationId: o.operationId,
-				state: this.#checking.has(o.operationId) ? "checking" : "unknown",
-				text: o.text,
-			})),
+			unsettled: this.#ops
+				.filter((o) => o.step === null)
+				.map((o) => ({
+					operationId: o.operationId,
+					state: this.#checking.has(o.operationId) ? "checking" : "unknown",
+					text: o.text,
+				})),
+			unsettledSteps: this.#ops
+				.filter((o) => o.step !== null)
+				.map((o) => ({
+					operationId: o.operationId,
+					state: this.#checking.has(o.operationId) ? "checking" : "unknown",
+					feedbackId: o.feedbackId ?? "",
+					step: o.step ?? "",
+				})),
+			projects: this.#projects,
 			reading: this.#reading !== null,
 			sending: this.#sending,
+			stepping: this.#stepping,
 		};
 	}
 
@@ -325,7 +478,7 @@ export class ConnectedFeedback implements FeedbackSource {
 
 	async send(intent: SendIntent): Promise<SendResult> {
 		if (this.#sending) return refusedSend("busy");
-		if (this.#ops.length > 0) {
+		if (this.#ops.some((o) => o.step === null)) {
 			return {
 				status: "unknown",
 				message: "Earlier feedback is not confirmed. Check it first; nothing was sent.",
@@ -374,6 +527,56 @@ export class ConnectedFeedback implements FeedbackSource {
 			};
 		}
 		const result = outcomeOf(r.value.outcome, operationId);
+		if (result.status === "unknown")
+			result.message = "Pilot's service has no result for it yet. Nothing was sent again.";
+		return result;
+	}
+
+	async readProjects(): Promise<void> {
+		const r = await call<unknown>(this.#window, "day.projects.read", {});
+		if (this.#closed) return;
+		// A failed read keeps the projects Pilot read before; none is chosen for the user.
+		const projects = r.ok ? projectsOf(r.snapshot) : null;
+		if (projects) this.#projects = projects;
+		this.#publish();
+	}
+
+	async step(intent: StepIntent): Promise<StepResult> {
+		if (this.#stepping) return refusedStep("busy");
+		if (this.#ops.some((o) => o.step !== null)) return refusedStep("unknown");
+		this.#stepping = intent.feedbackId;
+		this.#publish();
+		let r: Reply<unknown>;
+		try {
+			r = await this.#call("day.feedback.step", intent);
+		} finally {
+			this.#stepping = null;
+		}
+		if (!r.ok) {
+			// A lost answer may hide a sent step: the read lists it as Unknown.
+			void this.read();
+			this.#publish();
+			return refusedStep(r.refusal);
+		}
+		if (!pageOf(r.snapshot)) void this.read();
+		this.#publish();
+		return stepOutcomeOf(r.value.outcome);
+	}
+
+	async checkStep(operationId: string): Promise<StepResult> {
+		if (this.#checking.has(operationId)) return refusedStep("busy");
+		this.#checking.add(operationId);
+		this.#publish();
+		let r: Reply<unknown>;
+		try {
+			r = await this.#call("day.feedback.check", { operationId });
+		} finally {
+			this.#checking.delete(operationId);
+		}
+		this.#publish();
+		if (!r.ok) return { status: "unknown", message: "Pilot could not check it now. Nothing was sent again." };
+		if (!pageOf(r.snapshot)) void this.read();
+		const result = stepOutcomeOf(r.value.outcome);
 		if (result.status === "unknown")
 			result.message = "Pilot's service has no result for it yet. Nothing was sent again.";
 		return result;

@@ -1,10 +1,11 @@
-import type { DurableOperation, UserFeedback, UserFeedbackOrigin } from "@pilot/protocol";
+import type { DurableOperation, UserFeedback, UserFeedbackOrigin, UserFeedbackPage } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import type { MissionStore } from "./missions.ts";
 import { type OperationJournal, OperationRejected, sameHost } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
 import { USER_FEEDBACK_LIMITS as LIMITS } from "./user-feedback-store.ts";
+import type { UserFeedbackWorkService } from "./user-feedback-work.ts";
 
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -24,6 +25,8 @@ interface Dependencies {
 	store: MissionStore;
 	projects: Pick<ProjectStore, "require">;
 	sessions: Pick<SessionManager, "get">;
+	/** The user's steps on each item. Without it a page lists none. */
+	work?: Pick<UserFeedbackWorkService, "view">;
 }
 
 /**
@@ -91,14 +94,17 @@ export class UserFeedbackService {
 		}
 	}
 
-	/** One page, newest first. Passive. */
-	async page(before?: string, limit?: string) {
+	/** One page, newest first, with each item's steps. Passive. */
+	async page(before?: string, limit?: string): Promise<UserFeedbackPage> {
 		const cursor = before === undefined ? Number.MAX_SAFE_INTEGER : Number(before);
 		const count = limit === undefined ? LIMITS.page : Number(limit);
 		if (!Number.isSafeInteger(cursor) || cursor < 1 || !Number.isSafeInteger(count) || count < 1)
 			throw new OperationRejected("Invalid feedback page");
 		if (count > LIMITS.page) throw new OperationRejected(`Feedback page limit is ${LIMITS.page}`);
 		await this.deps.store.durable();
-		return this.deps.store.feedback.page(cursor, count);
+		const page = this.deps.store.feedback.page(cursor, count);
+		const items = [];
+		for (const item of page.items) items.push({ ...item, work: (await this.deps.work?.view(item.id)) ?? [] });
+		return { ...page, items };
 	}
 }

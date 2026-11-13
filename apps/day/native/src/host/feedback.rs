@@ -5,6 +5,11 @@
 //! journaled operation sent once. A lost answer stays Unknown: Check looks up
 //! that exact envelope and never sends a replacement. Saving feedback starts
 //! no work and approves nothing.
+//!
+//! A step is one explicit act of the user's on saved feedback: start an agent
+//! triage or a small fix in a project the user chose, link a mission, or mark
+//! it resolved or open again. The host re-reads the project's chat setup right
+//! before saving a triage or fix, and sends each step once, like a Send.
 use super::{Error, Journal, Shared, Transport, planning, valid_id};
 use crate::bridge::{Command, Gate};
 use serde::Deserialize;
@@ -13,6 +18,8 @@ use std::sync::{Arc, Mutex};
 
 /// The operation kind and payload purpose.
 pub(super) const KIND: &str = "user-feedback";
+/// A step's operation kind and payload purpose.
+pub(super) const WORK_KIND: &str = "feedback-work";
 /// At most this many UTF-8 bytes of feedback text, as the service counts them.
 pub(crate) const MAX_TEXT: usize = 8192;
 /// At most this many saved items per page.
@@ -21,6 +28,12 @@ const MAX_CURSOR: u64 = 9_007_199_254_740_991;
 
 fn valid_text(text: &str) -> bool {
     !text.trim().is_empty() && text.len() <= MAX_TEXT && !text.contains('\0')
+}
+
+fn valid_digest(s: &str) -> bool {
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
 /// Null, or exactly one mission or chat by its ID.
@@ -75,6 +88,55 @@ impl Read {
     }
 }
 
+/// One step on one saved feedback item. Only the fields its action needs.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct Step {
+    feedback_id: String,
+    action: String,
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    context_digest: Option<String>,
+    #[serde(default)]
+    triage_session_id: Option<String>,
+    #[serde(default)]
+    proposal_digest: Option<String>,
+    #[serde(default)]
+    mission_id: Option<String>,
+}
+impl Step {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
+        let id = |v: &Option<String>| v.as_deref().is_some_and(valid_id);
+        let digest = |v: &Option<String>| v.as_deref().is_some_and(valid_digest);
+        let chat =
+            id(&self.project_id) && digest(&self.context_digest) && self.mission_id.is_none();
+        let ok = valid_id(&self.feedback_id)
+            && match self.action.as_str() {
+                "triage" => {
+                    chat && self.triage_session_id.is_none() && self.proposal_digest.is_none()
+                }
+                "fix" => chat && id(&self.triage_session_id) && digest(&self.proposal_digest),
+                "link" => {
+                    id(&self.mission_id)
+                        && self.project_id.is_none()
+                        && self.context_digest.is_none()
+                        && self.triage_session_id.is_none()
+                        && self.proposal_digest.is_none()
+                }
+                "resolve" | "reopen" => {
+                    self.project_id.is_none()
+                        && self.context_digest.is_none()
+                        && self.triage_session_id.is_none()
+                        && self.proposal_digest.is_none()
+                        && self.mission_id.is_none()
+                }
+                _ => false,
+            };
+        if ok { Ok(()) } else { Err(Error::Invalid) }
+    }
+}
+
 fn payload(op: &Value) -> Result<Value, Error> {
     serde_json::from_str(op["payload"].as_str().ok_or(Error::Storage)?).map_err(|_| Error::Storage)
 }
@@ -90,6 +152,100 @@ pub(super) fn validate_record(op: &Value) -> Result<(), Error> {
         || !valid_origin(&p["origin"])
     {
         return Err(Error::Storage);
+    }
+    Ok(())
+}
+
+/// The fields a saved step's payload holds for its action, after purpose, action and feedbackId.
+fn step_fields(action: &str) -> Option<&'static [&'static str]> {
+    const CHAT: &[&str] = &[
+        "projectId",
+        "projectPath",
+        "contextDigest",
+        "model",
+        "thinking",
+    ];
+    const FIX: &[&str] = &[
+        "projectId",
+        "projectPath",
+        "contextDigest",
+        "model",
+        "thinking",
+        "triageSessionId",
+        "proposalDigest",
+    ];
+    match action {
+        "triage" => Some(CHAT),
+        "fix" => Some(FIX),
+        "link" => Some(&["missionId"]),
+        "resolve" | "reopen" => Some(&[]),
+        _ => None,
+    }
+}
+
+/// A saved step holds exactly its action's fields, aimed at its own target.
+pub(super) fn validate_step_record(op: &Value) -> Result<(), Error> {
+    let p = payload(op)?;
+    let action = p["action"].as_str().unwrap_or("");
+    let fields = step_fields(action).ok_or(Error::Storage)?;
+    let o = p.as_object().ok_or(Error::Storage)?;
+    let str_of = |k: &str| p[k].as_str().unwrap_or("");
+    let chat = || {
+        valid_id(str_of("projectId"))
+            && valid_digest(str_of("contextDigest"))
+            && op["bindingId"] == p["contextDigest"]
+            && str_of("projectPath").starts_with('/')
+            && str_of("projectPath").len() <= 4096
+            && !str_of("model").is_empty()
+            && str_of("model").len() <= 256
+            && p["thinking"].as_str().is_some_and(|t| t.len() <= 128)
+    };
+    let target = op["targetId"].as_str().unwrap_or("");
+    let ok = o.len() == 3 + fields.len()
+        && fields.iter().all(|k| o.contains_key(*k))
+        && p["purpose"] == WORK_KIND
+        && op["kind"] == WORK_KIND
+        && op["bindingGeneration"] == 1
+        && valid_id(str_of("feedbackId"))
+        && match action {
+            "triage" => chat() && valid_id(target),
+            "fix" => {
+                chat()
+                    && valid_id(target)
+                    && valid_id(str_of("triageSessionId"))
+                    && valid_digest(str_of("proposalDigest"))
+            }
+            "link" => valid_id(str_of("missionId")) && target == str_of("missionId"),
+            _ => target == str_of("feedbackId"),
+        };
+    if ok { Ok(()) } else { Err(Error::Storage) }
+}
+
+/// Only an accepted receipt naming this operation and the step's own chat or mission proves a step.
+pub(super) fn exact_step(op: &Value, r: &Value) -> Result<(), Error> {
+    let p = payload(op).map_err(|_| Error::Unknown)?;
+    let result = &r["result"];
+    let kind = match p["action"].as_str() {
+        Some("triage") => "triage",
+        Some("fix") => "fix",
+        Some("link") => "mission",
+        Some("resolve") => "resolved",
+        Some("reopen") => "reopened",
+        _ => return Err(Error::Unknown),
+    };
+    let same = match kind {
+        "triage" | "fix" => {
+            result["sessionId"] == op["targetId"] && result["projectId"] == p["projectId"]
+        }
+        "mission" => result["missionId"] == op["targetId"],
+        _ => true,
+    };
+    if !same
+        || result["kind"] != kind
+        || result["operationId"] != op["operationId"]
+        || !result["recordedAt"].is_u64()
+    {
+        return Err(Error::Unknown);
     }
     Ok(())
 }
@@ -112,15 +268,23 @@ fn is_feedback(r: &planning::PlanningRecord) -> bool {
     r.operation["kind"] == KIND
 }
 
-/// Sends whose result is not known yet. Settled ones show in the saved list.
+fn is_step(r: &planning::PlanningRecord) -> bool {
+    r.operation["kind"] == WORK_KIND
+}
+
+/// Sends and steps whose result is not known yet. Settled ones show in the saved list.
 fn unsettled(t: &Transport, journal: &Journal) -> Vec<Value> {
     journal
         .planning
         .values()
-        .filter(|r| r.source == t.source && is_feedback(r) && r.pending())
+        .filter(|r| r.source == t.source && (is_feedback(r) || is_step(r)) && r.pending())
         .map(|r| {
             let p = payload(&r.operation).unwrap_or(Value::Null);
-            json!({"operationId":r.id(),"state":"unknown","text":p["text"]})
+            if is_step(r) {
+                json!({"operationId":r.id(),"state":"unknown","step":p["action"],"feedbackId":p["feedbackId"]})
+            } else {
+                json!({"operationId":r.id(),"state":"unknown","text":p["text"]})
+            }
         })
         .collect()
 }
@@ -211,29 +375,69 @@ pub(super) async fn handle(
             let request = json!({"purpose":KIND,"text":intent.text,"origin":intent.origin});
             let digest = planning::hash(&request.to_string());
             let id = uuid::Uuid::new_v4().to_string();
-            let mut record = planning::record(&t.source, id, digest, request)?;
-            journal.save_planning(record.clone())?;
-            if let Err(e) = t.local().and_then(|_| check()) {
-                record.not_sent = true;
-                journal.save_planning(record)?;
-                return Err(e);
+            outcome = send_once(t, journal, &check, id, digest, request).await?;
+        }
+        Command::FeedbackStep(step) => {
+            step.validate()?;
+            // An earlier step whose result is unknown is checked first, never sent again beside a copy.
+            if journal
+                .planning
+                .values()
+                .any(|r| r.source == t.source && is_step(r) && r.pending())
+            {
+                return Err(Error::Unknown);
             }
-            // No async gap, retry or recreation between the durable record and this sole POST.
-            let mut saved = true;
-            if let Ok(receipt) = t.planning_operation(&record.operation, false).await {
-                record.receipt = Some(receipt);
-                if journal.save_planning(record.clone()).is_err() {
-                    journal.poison();
-                    saved = false;
+            read(t, None).await?;
+            check()?;
+            let mut request =
+                json!({"purpose":WORK_KIND,"action":step.action,"feedbackId":step.feedback_id});
+            let (target, digest) = match step.action.as_str() {
+                "triage" | "fix" => {
+                    let mode = if step.action == "triage" {
+                        "ask"
+                    } else {
+                        "build"
+                    };
+                    let select = super::new_chat::Select {
+                        project_id: step.project_id.clone().unwrap_or_default(),
+                        context_digest: step.context_digest.clone().unwrap_or_default(),
+                        mode: mode.into(),
+                    };
+                    // The project's current setup, read right before saving. A changed one is Stale.
+                    let profile = super::new_chat::profile(t, &select).await?;
+                    check()?;
+                    for k in [
+                        "projectId",
+                        "projectPath",
+                        "contextDigest",
+                        "model",
+                        "thinking",
+                    ] {
+                        request[k] = profile[k].clone();
+                    }
+                    if step.action == "fix" {
+                        request["triageSessionId"] = json!(step.triage_session_id);
+                        request["proposalDigest"] = json!(step.proposal_digest);
+                    }
+                    (uuid::Uuid::new_v4().to_string(), select.context_digest)
                 }
-            }
-            outcome = outcome_of(&record, saved);
+                "link" => {
+                    request["missionId"] = json!(step.mission_id);
+                    let digest = planning::hash(&request.to_string());
+                    (step.mission_id.clone().unwrap_or_default(), digest)
+                }
+                _ => {
+                    let digest = planning::hash(&request.to_string());
+                    (step.feedback_id.clone(), digest)
+                }
+            };
+            outcome = send_once(t, journal, &check, target, digest, request).await?;
         }
         Command::FeedbackCheck(id) => {
             let mut record = journal
                 .planning
                 .get(id)
-                .filter(|r| r.source == t.source && is_feedback(r))
+                .filter(|r| r.source == t.source && (is_feedback(r) || is_step(r)))
                 .cloned()
                 .ok_or(Error::Unknown)?;
             // Only the saved envelope's receipt. Nothing is sent again.
@@ -260,6 +464,35 @@ pub(super) async fn handle(
             json!({"snapshot":snapshot.ok().filter(|_| check().is_ok()),"operations":unsettled(t,journal),"outcome":outcome}),
         )
     }
+}
+
+/// Saves the exact envelope, then sends it once. A lost answer stays Unknown.
+async fn send_once(
+    t: &Transport,
+    journal: &mut Journal,
+    check: &impl Fn() -> Result<(), Error>,
+    target: String,
+    digest: String,
+    request: Value,
+) -> Result<Value, Error> {
+    let mut record = planning::record(&t.source, target, digest, request)?;
+    record.validate().map_err(|_| Error::Invalid)?;
+    journal.save_planning(record.clone())?;
+    if let Err(e) = t.local().and_then(|_| check()) {
+        record.not_sent = true;
+        journal.save_planning(record)?;
+        return Err(e);
+    }
+    // No async gap, retry or recreation between the durable record and this sole POST.
+    let mut saved = true;
+    if let Ok(receipt) = t.planning_operation(&record.operation, false).await {
+        record.receipt = Some(receipt);
+        if journal.save_planning(record.clone()).is_err() {
+            journal.poison();
+            saved = false;
+        }
+    }
+    Ok(outcome_of(&record, saved))
 }
 
 fn outcome_of(record: &planning::PlanningRecord, saved: bool) -> Value {
@@ -374,5 +607,124 @@ mod tests {
         let many = json!({"items":(1..=21).rev().map(item).collect::<Vec<_>>(),"more":false,"before":null});
         assert!(!valid_page(&many, None));
         assert_eq!(Read { before: Some(0) }.validate(), Err(Error::Invalid));
+    }
+
+    fn step(v: Value) -> Result<Step, Error> {
+        let s: Step = serde_json::from_value(v).map_err(|_| Error::Invalid)?;
+        s.validate()?;
+        Ok(s)
+    }
+
+    #[test]
+    fn a_step_names_only_what_its_action_needs() {
+        let d = "a".repeat(64);
+        assert!(
+            step(json!({"feedbackId":"f","action":"triage","projectId":"p","contextDigest":d}))
+                .is_ok()
+        );
+        assert!(
+            step(
+                json!({"feedbackId":"f","action":"fix","projectId":"p","contextDigest":d,
+            "triageSessionId":"s","proposalDigest":d})
+            )
+            .is_ok()
+        );
+        assert!(step(json!({"feedbackId":"f","action":"link","missionId":"m"})).is_ok());
+        assert!(step(json!({"feedbackId":"f","action":"resolve"})).is_ok());
+        assert!(step(json!({"feedbackId":"f","action":"reopen"})).is_ok());
+        for bad in [
+            json!({"feedbackId":"f","action":"start"}),
+            json!({"feedbackId":"f","action":"triage","projectId":"p"}),
+            json!({"feedbackId":"f","action":"triage","projectId":"p","contextDigest":"A".repeat(64)}),
+            json!({"feedbackId":"f","action":"triage","projectId":"p","contextDigest":d,"missionId":"m"}),
+            json!({"feedbackId":"f","action":"fix","projectId":"p","contextDigest":d,"triageSessionId":"s"}),
+            json!({"feedbackId":"f","action":"link"}),
+            json!({"feedbackId":"f","action":"link","missionId":"m","projectId":"p"}),
+            json!({"feedbackId":"f","action":"resolve","missionId":"m"}),
+            json!({"feedbackId":"../f","action":"resolve"}),
+            // The window cannot choose a model, mode, message or operation.
+            json!({"feedbackId":"f","action":"triage","projectId":"p","contextDigest":d,"model":"x"}),
+            json!({"feedbackId":"f","action":"triage","projectId":"p","contextDigest":d,"mode":"build"}),
+            json!({"feedbackId":"f","action":"resolve","message":"x"}),
+        ] {
+            assert!(step(bad.clone()).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn only_the_steps_own_chat_or_mission_settles_it() {
+        let d = "b".repeat(64);
+        let op = |target: &str, p: Value| {
+            json!({"operationId":"op","targetId":target,"kind":WORK_KIND,"bindingGeneration":1,
+                "bindingId":d,"payload":p.to_string()})
+        };
+        let triage = op(
+            "s1",
+            json!({"purpose":WORK_KIND,"action":"triage","feedbackId":"f","projectId":"p",
+                "projectPath":"/repo","contextDigest":d,"model":"fake/model","thinking":"high"}),
+        );
+        assert_eq!(validate_step_record(&triage), Ok(()));
+        let r = json!({"result":{"operationId":"op","kind":"triage","sessionId":"s1","projectId":"p","recordedAt":1}});
+        assert_eq!(exact_step(&triage, &r), Ok(()));
+        for (pointer, value) in [
+            ("/result/sessionId", json!("s2")),
+            ("/result/projectId", json!("q")),
+            ("/result/kind", json!("fix")),
+            ("/result/operationId", json!("other")),
+            ("/result/recordedAt", Value::Null),
+        ] {
+            let mut changed = r.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert_eq!(
+                exact_step(&triage, &changed),
+                Err(Error::Unknown),
+                "{pointer}"
+            );
+        }
+        let link = op(
+            "m",
+            json!({"purpose":WORK_KIND,"action":"link","feedbackId":"f","missionId":"m"}),
+        );
+        assert_eq!(validate_step_record(&link), Ok(()));
+        let linked = json!({"result":{"operationId":"op","kind":"mission","missionId":"m","projectId":"p","recordedAt":1}});
+        assert_eq!(exact_step(&link, &linked), Ok(()));
+        let mark = op(
+            "f",
+            json!({"purpose":WORK_KIND,"action":"resolve","feedbackId":"f"}),
+        );
+        assert_eq!(validate_step_record(&mark), Ok(()));
+        assert_eq!(
+            exact_step(
+                &mark,
+                &json!({"result":{"operationId":"op","kind":"reopened","recordedAt":1}})
+            ),
+            Err(Error::Unknown)
+        );
+        // A step aimed elsewhere, or with an extra field, is not this step.
+        for forged in [
+            op(
+                "m2",
+                json!({"purpose":WORK_KIND,"action":"link","feedbackId":"f","missionId":"m"}),
+            ),
+            op(
+                "g",
+                json!({"purpose":WORK_KIND,"action":"resolve","feedbackId":"f"}),
+            ),
+            op(
+                "f",
+                json!({"purpose":WORK_KIND,"action":"resolve","feedbackId":"f","text":"x"}),
+            ),
+            op(
+                "s1",
+                json!({"purpose":WORK_KIND,"action":"triage","feedbackId":"f","projectId":"p",
+                    "projectPath":"/repo","contextDigest":"c".repeat(64),"model":"fake/model","thinking":"high"}),
+            ),
+        ] {
+            assert_eq!(
+                validate_step_record(&forged),
+                Err(Error::Storage),
+                "{forged}"
+            );
+        }
     }
 }

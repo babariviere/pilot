@@ -181,7 +181,10 @@ async fn run(
     }
     if matches!(
         call.command,
-        Command::FeedbackRead(_) | Command::FeedbackSend(_) | Command::FeedbackCheck(_)
+        Command::FeedbackRead(_)
+            | Command::FeedbackSend(_)
+            | Command::FeedbackCheck(_)
+            | Command::FeedbackStep(_)
     ) {
         return super::feedback::handle(t, journal, shared, &call.command, &call.gate).await;
     }
@@ -319,9 +322,10 @@ async fn run(
         | Command::PreferencesHistory(_) => {
             unreachable!("handled preferences command")
         }
-        Command::FeedbackRead(_) | Command::FeedbackSend(_) | Command::FeedbackCheck(_) => {
-            unreachable!("handled feedback command")
-        }
+        Command::FeedbackRead(_)
+        | Command::FeedbackSend(_)
+        | Command::FeedbackCheck(_)
+        | Command::FeedbackStep(_) => unreachable!("handled feedback command"),
         Command::ThreadsRead(_)
         | Command::ThreadsHistory(_)
         | Command::ThreadsWrite(_)

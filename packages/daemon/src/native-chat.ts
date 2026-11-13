@@ -6,7 +6,7 @@ import type { SessionManager } from "./sessions.ts";
 
 const id = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(v);
 const digest = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
-interface Selection {
+export interface Selection {
 	projectId: string;
 	projectPath: string;
 	contextDigest: string;
@@ -112,6 +112,14 @@ export class NativeChat {
 	async admit(op: DurableOperation, firstEntry: boolean) {
 		const p = this.request(op);
 		if (!firstEntry) throw new Error("Chat creation may have entered; Check only");
+		const session = await this.createPinned(p, p.draftId, op.operationId, p.message);
+		return { sessionId: session.id, projectId: p.projectId, admissionId: op.operationId };
+	}
+	/**
+	 * Rechecks an exact project selection and its model policy. Returns the project check that
+	 * creation repeats during admission. Opens no worker.
+	 */
+	async qualify(p: Selection): Promise<() => void> {
 		const check = () => {
 			if (
 				canonicalJSON(this.project(p.projectId)) !==
@@ -124,11 +132,21 @@ export class NativeChat {
 		check();
 		if (selected.model !== p.model || selected.thinking !== p.thinking)
 			throw new OperationRejected("Model policy changed; select the project again");
-		// Once session admission enters, failures remain Unknown. No recovery re-enters it.
-		const session = await this.deps.sessions.spawnDurable(
-			{ projectId: p.projectId, mode: p.mode, model: p.model, thinking: p.thinking, message: p.message },
-			p.draftId,
-			op.operationId,
+		return check;
+	}
+	/** Creates one qualified chat. Once admission enters, failures remain Unknown: never re-enter it. */
+	spawn(p: Selection, draftId: string, operationId: string, message: string, check: () => void, title?: string) {
+		return this.deps.sessions.spawnDurable(
+			{
+				projectId: p.projectId,
+				mode: p.mode,
+				model: p.model,
+				thinking: p.thinking,
+				message,
+				...(title ? { title } : {}),
+			},
+			draftId,
+			operationId,
 			() => {
 				try {
 					check();
@@ -137,6 +155,8 @@ export class NativeChat {
 				}
 			},
 		);
-		return { sessionId: session.id, projectId: p.projectId, admissionId: op.operationId };
+	}
+	async createPinned(p: Selection, draftId: string, operationId: string, message: string) {
+		return this.spawn(p, draftId, operationId, message, await this.qualify(p));
 	}
 }

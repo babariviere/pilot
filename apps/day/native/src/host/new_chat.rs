@@ -94,7 +94,7 @@ pub(super) async fn inventory(t: &Transport) -> Result<Value, Error> {
     }
     Ok(v)
 }
-async fn profile(t: &Transport, request: &Select) -> Result<Value, Error> {
+pub(super) async fn profile(t: &Transport, request: &Select) -> Result<Value, Error> {
     if !super::valid_id(&request.project_id) || !matches!(request.mode.as_str(), "ask" | "build") {
         return Err(Error::Invalid);
     }

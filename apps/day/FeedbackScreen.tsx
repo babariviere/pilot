@@ -1,6 +1,8 @@
 // Feedback: the user's own words about Pilot, sent to Pilot's service and
 // kept there. Not agent Insights or findings, and not an inbox: sending
-// feedback starts no work, creates no mission and approves nothing.
+// feedback creates no mission and approves nothing. When the user chose a
+// project for agents, a saved Send also starts a read-only triage there; its
+// proposal starts nothing until the user presses one of its commands.
 // The page holds one draft with the context the user kept (Pilot in general,
 // or the exact mission it was opened from). Send sends it once; only an
 // accepted receipt clears it. A Send whose answer was lost stays Unknown:
@@ -8,6 +10,7 @@
 import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
 import { Input } from "nsh/base";
 import type { Day } from "./day";
+import { FeedbackRow } from "./FeedbackRow";
 import {
 	type FeedbackItem,
 	type FeedbackMirror,
@@ -16,10 +19,19 @@ import {
 	type UserFeedbackOriginRef,
 	utf8Bytes,
 } from "./feedbackFeed";
-import { closeFeedback, dayOf, feedbackDraft, feedbackMessage, feedbackOffer, originKey } from "./feedbackView";
+import {
+	closeFeedback,
+	dayOf,
+	feedbackDraft,
+	feedbackMessage,
+	feedbackOffer,
+	feedbackProject,
+	originKey,
+	setStepMessage,
+} from "./feedbackView";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
-import { Action, Mark, SectionTitle } from "./ui";
+import { Action, Mark, Picker, SectionTitle } from "./ui";
 
 const SEND_KEYS = keymap.label("mod+enter");
 
@@ -62,6 +74,42 @@ function savedLine(item: FeedbackItem): string {
 	return ["Saved", when, about].filter(Boolean).join(" · ");
 }
 
+/** The project agents triage and fix feedback in. Nothing is chosen for the user. */
+function AgentProject(props: { mirror: FeedbackMirror }) {
+	const v = (): FeedbackView => props.mirror.view();
+	const projects = () => v().projects ?? [];
+	const chosen = () => projects().find((p) => p.projectId === feedbackProject()) ?? null;
+	return (
+		<View testID="feedback-agents" class="gap-1">
+			<View class="flex-row items-center gap-2.5">
+				<Text class="text-xs text-faint">Agent triage in</Text>
+				<Picker
+					testID="feedback-project"
+					label="Project where agents triage and fix your feedback"
+					items={projects().map((p) => ({ value: p.projectId, title: p.name }))}
+					value={chosen()?.projectId ?? null}
+					placeholder={v().projects ? "Choose a project" : "Reading projects…"}
+					disabled={projects().length === 0}
+					searchable={projects().length > 8}
+					searchPlaceholder="Find a project"
+					onChange={(id) => {
+						glide();
+						feedbackProject.set(id);
+					}}
+				/>
+				<If when={chosen()}>
+					<Action label="No triage" testID="feedback-project-none" onPress={() => feedbackProject.set(null)} />
+				</If>
+			</View>
+			<Text testID="feedback-agents-note" class="text-xs text-faint">
+				{chosen()
+					? "A read-only agent reads that project and proposes what to do. It changes nothing; you pick the next step."
+					: "Choose the project with Pilot's code to have an agent triage what you send."}
+			</Text>
+		</View>
+	);
+}
+
 /** The draft: what it is about, the words, and one explicit Send. */
 function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 	const v = (): FeedbackView => props.mirror.view();
@@ -96,6 +144,18 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 		}
 		// An Unknown Send shows as its own note, with Check.
 		feedbackMessage.set(r.status === "unknown" && v().unsettled.length > 0 ? "" : r.message);
+		// The user chose a project for agents: the saved feedback's triage starts there, once.
+		const project = v().projects?.find((p) => p.projectId === feedbackProject());
+		if (r.status === "accepted" && r.saved && project) {
+			const t = await props.mirror.source.step({
+				action: "triage",
+				feedbackId: r.saved.id,
+				projectId: project.projectId,
+				contextDigest: project.contextDigest,
+			});
+			if (t.status !== "accepted" && t.status !== "unknown")
+				setStepMessage(r.saved.id, `Saved, but its triage did not start. ${t.message}`);
+		}
 	};
 	const check = async (operationId: string) => {
 		feedbackMessage.set("");
@@ -170,6 +230,7 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 				onSelectionChange={field.select}
 				class="min-h-28 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
 			/>
+			<AgentProject mirror={props.mirror} />
 			<If when={blocker()}>
 				<Text testID="feedback-blocked" class="text-xs text-needs-ink">
 					{blocker()}
@@ -212,8 +273,8 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 	);
 }
 
-/** Saved feedback, newest first. Reading it changes nothing. */
-function Sent(props: { mirror: FeedbackMirror }) {
+/** Saved feedback, newest first, with each item's steps. Reading it changes nothing. */
+function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 	const v = (): FeedbackView => props.mirror.view();
 	const loading = signal(false);
 	const more = async () => {
@@ -226,8 +287,8 @@ function Sent(props: { mirror: FeedbackMirror }) {
 			<View class="gap-1.5">
 				<SectionTitle title="Sent" count={v().items.length} />
 				<Text class="text-sm leading-relaxed text-muted-foreground">
-					Pilot keeps your feedback here, in your words. Nothing triages or routes it yet, and it never starts work
-					on its own.
+					Pilot keeps your feedback here, in your words. A fix or a mission link starts only when you press it, and
+					only you mark feedback resolved.
 				</Text>
 			</View>
 			<If when={v().reason}>
@@ -247,12 +308,7 @@ function Sent(props: { mirror: FeedbackMirror }) {
 			</If>
 			<View>
 				<Each of={v().items} key={(i) => i.id}>
-					{(i) => (
-						<View testID={`feedback-item-${i().id}`} class="gap-1 border-t border-border py-3">
-							<Text class="text-sm leading-relaxed text-foreground">{i().text}</Text>
-							<Text class="text-xs text-faint">{savedLine(i())}</Text>
-						</View>
-					)}
+					{(i) => <FeedbackRow day={props.day} mirror={props.mirror} item={i()} when={savedLine(i())} />}
 				</Each>
 			</View>
 			<If when={v().more}>
@@ -273,6 +329,7 @@ function Sent(props: { mirror: FeedbackMirror }) {
 export function FeedbackScreen(props: { day: Day }) {
 	const mirror = props.day.feedback as FeedbackMirror;
 	void mirror.source.read();
+	void mirror.source.readProjects();
 	keymap.bind("escape", closeFeedback, { when: "always" });
 	const scroll = keepScroll("feedback");
 	// A restored offset waits for the rows it scrolled through.
@@ -302,11 +359,11 @@ export function FeedbackScreen(props: { day: Day }) {
 					</Text>
 					<Text class="text-base leading-relaxed text-muted-foreground">
 						Tell Pilot what works and what gets in your way. Your words are saved with the context you choose.
-						Sending feedback starts no work and approves nothing.
+						Sending feedback approves nothing.
 					</Text>
 				</View>
 				<Compose day={props.day} mirror={mirror} />
-				<Sent mirror={mirror} />
+				<Sent day={props.day} mirror={mirror} />
 			</View>
 		</Scroll>
 	);

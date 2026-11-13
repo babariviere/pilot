@@ -54,6 +54,7 @@ impl PlanningRecord {
                         | "user-verification"
                         | "project-preferences-update"
                         | "user-feedback"
+                        | "feedback-work"
                         | "thread-create"
                         | "thread-disposition"
                         | "thread-reference"
@@ -87,6 +88,9 @@ impl PlanningRecord {
         }
         if o["kind"] == super::feedback::KIND {
             super::feedback::validate_record(o)?;
+        }
+        if o["kind"] == super::feedback::WORK_KIND {
+            super::feedback::validate_step_record(o)?;
         }
         if o["kind"].as_str().is_some_and(super::threads::is_thread_kind) {
             super::threads::validate_record(o)?;
@@ -158,6 +162,7 @@ fn record_pinned(
                     | "user-verification"
                     | "project-preferences-update"
                     | "user-feedback"
+                    | "feedback-work"
                     | "thread-create"
                     | "thread-disposition"
                     | "thread-reference"
@@ -177,6 +182,7 @@ fn record_pinned(
                     | "user-verification"
                     | "project-preferences-update"
                     | "user-feedback"
+                    | "feedback-work"
                     | "thread-create"
                     | "thread-disposition"
                     | "thread-reference"
@@ -294,6 +300,9 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
     }
     if op["kind"] == super::feedback::KIND && r["state"] == "accepted" {
         super::feedback::exact_result(op, &r)?;
+    }
+    if op["kind"] == super::feedback::WORK_KIND && r["state"] == "accepted" {
+        super::feedback::exact_step(op, &r)?;
     }
     if op["kind"].as_str().is_some_and(super::threads::is_thread_kind) && r["state"] == "accepted" {
         super::threads::exact_result(op, &r)?;

@@ -31,6 +31,7 @@ pub const METHODS: &[&str] = &[
     "day.feedback.read",
     "day.feedback.send",
     "day.feedback.check",
+    "day.feedback.step",
     "day.threads.read",
     "day.threads.history",
     "day.threads.write",
@@ -202,6 +203,7 @@ pub(crate) enum Command {
     FeedbackRead(crate::host::feedback::Read),
     FeedbackSend(crate::host::feedback::Intent),
     FeedbackCheck(String),
+    FeedbackStep(crate::host::feedback::Step),
     ThreadsRead(String),
     ThreadsHistory(crate::host::threads::HistoryRequest),
     ThreadsWrite(crate::host::threads::Intent),
@@ -425,6 +427,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: Lookup = exact(args)?;
             mission(&r.operation_id)?;
             C::FeedbackCheck(r.operation_id)
+        }
+        "day.feedback.step" => {
+            let r: crate::host::feedback::Step = exact(args)?;
+            r.validate()?;
+            C::FeedbackStep(r)
         }
         "day.threads.read" => {
             let r: crate::host::threads::ReadRequest = exact(args)?;
