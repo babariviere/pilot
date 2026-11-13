@@ -1,4 +1,4 @@
-/** Trusted creation-only planning worker lifecycle. No existing chat adoption or generic send fallback. */
+/** Trusted planning worker lifecycle. No existing chat adoption or generic send fallback. */
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import {
@@ -126,7 +126,14 @@ export class PlanningWorkers {
 		});
 	}
 	private roundContext(state: PlanningWorkerState, authority: string): string {
-		return hash({ authority, plan: this.deps.store.plans.get(state.binding.missionId) ?? null });
+		const missionId = state.binding.missionId;
+		return hash({
+			authority,
+			plan: this.deps.store.plans.get(missionId) ?? null,
+			...(this.deps.store.interviews.latest(missionId)?.kind === "revisit"
+				? { briefRevision: this.deps.store.brief(missionId)?.revision }
+				: {}),
+		});
 	}
 	private input(state: PlanningWorkerState, op: DurableOperation): PlanningInput {
 		const submitted = this.deps.store.interviews.latest(state.binding.missionId)?.submission;
@@ -135,10 +142,109 @@ export class PlanningWorkers {
 			operation: op,
 			hold: op.kind === "interview-continue" ? state.hold : null,
 			content:
-				op.kind === "interview-continue"
-					? `Continue planning from this exact submitted interview. Answers are not build permission. Use the trusted native planning skills and records only.\n${canonicalJSON(submitted)}`
-					: `Plan this requested outcome using the trusted upstream skills. Read mission_plan, then publish the complete first saved round with action questions. Do not ask inside ask_user or start implementation.\n${state.goal}`,
+				op.kind === "plan-revisit"
+					? "The user explicitly requested a planning-only Revisit. Read mission_plan for current agreement, active decisions, tasks and settled answers. Use the trusted upstream skills. Keep settled answers; ask only genuinely new gaps in one saved kind=revisit round. Save an inert revision with action revision when ready. Never publish a creation plan, change agreement, approve or start execution."
+					: op.kind === "interview-continue"
+						? `Continue planning from this exact submitted interview. Answers are not build permission. Use the trusted native planning skills and records only.\n${canonicalJSON(submitted)}`
+						: `Plan this requested outcome using the trusted upstream skills. Read mission_plan, then publish the complete first saved round with action questions. Do not ask inside ask_user or start implementation.\n${state.goal}`,
 		};
+	}
+	private revisitPin(missionId: string) {
+		const state = this.deps.store.planningWorkers.get(missionId);
+		if (
+			state?.phase !== "active" ||
+			state.hold ||
+			state.pendingHold ||
+			this.admissions.has(missionId) ||
+			this.turnAdmissions.has(missionId)
+		)
+			throw new Conflict("Revisit needs an active, unheld planner");
+		const authority = this.authority(state.binding);
+		const identity = this.deps.sessions.planningIdentity(state.binding.ownerSessionId) as { inputGeneration: number };
+		const owner = this.deps.sessions.get(state.binding.ownerSessionId);
+		if (
+			identity.inputGeneration !== 0 ||
+			owner?.working ||
+			owner?.state !== "idle" ||
+			!this.deps.store.plans.get(missionId)?.publication
+		)
+			throw new Conflict("Published, unstopped planning owner required");
+		return { authority, source: this.deps.store.revisions.source(missionId), revision: state.revision };
+	}
+	revisitView(missionId: string) {
+		try {
+			const pin = this.revisitPin(missionId);
+			return { available: true, source: pin.source, contextDigest: hash(pin), reason: "" };
+		} catch (e) {
+			return { available: false, reason: e instanceof Error ? e.message : "Revisit unavailable" };
+		}
+	}
+	/** Only authenticated native user ingress enters. Recovery never re-admits a turn. */
+	revisit(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
+		if (this.closing.signal.aborted) return Promise.reject(new Error("Planning host is closing"));
+		const work = this.revisitEntered(op, firstEntry);
+		this.tasks.add(work);
+		void work.finally(() => this.tasks.delete(work)).catch(() => {});
+		return work;
+	}
+	private async revisitEntered(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
+		if (!firstEntry) return this.recover(op);
+		let pin: ReturnType<PlanningWorkers["revisitPin"]>;
+		try {
+			const request = JSON.parse(op.payload);
+			interviewExact(request, ["purpose", "source"]);
+			pin = this.revisitPin(op.targetId);
+			if (
+				op.kind !== "plan-revisit" ||
+				request.purpose !== op.kind ||
+				request.source !== pin.source ||
+				op.bindingId !== hash(pin) ||
+				op.bindingGeneration !== 1 ||
+				op.origin.hostId !== "local" ||
+				!sameHost(op.origin, this.deps.journal.destination) ||
+				!sameHost(op.destination, this.deps.journal.destination)
+			)
+				throw new Conflict("Exact user Revisit preview required");
+		} catch (e) {
+			throw new OperationRejected(String(e));
+		}
+		await this.deps.journal.checkpoint(op, { stage: "revisit-entered", payloadHash: op.payloadHash });
+		if (hash(this.revisitPin(op.targetId)) !== hash(pin)) throw new Conflict("Revisit context changed");
+		const prior = this.deps.store.planningWorkers.get(op.targetId)!;
+		this.deps.store.planningWorkers.retain(op.targetId, `$revisit:${op.operationId}`, op);
+		const state = this.deps.store.planningWorkers.change(op.targetId, prior.revision, (s) => {
+			s.revisit = { operation: op, admitted: false };
+			s.phase = "revisiting";
+		});
+		let release!: () => void;
+		const turn = new Promise<void>((r) => {
+			release = r;
+		});
+		this.turnAdmissions.set(op.targetId, turn);
+		const guard = () => {
+			if (
+				this.closing.signal.aborted ||
+				this.authority(state.binding) !== pin.authority ||
+				this.deps.store.revisions.source(op.targetId) !== pin.source ||
+				this.scope(state.binding).revision !== state.revision
+			)
+				throw new Conflict("Revisit admission changed");
+		};
+		try {
+			await this.deps.store.durable();
+			guard();
+			const receipt = await this.admitInput(state, op, guard);
+			guard();
+			this.deps.store.planningWorkers.change(op.targetId, state.revision, (s) => {
+				s.revisit!.admitted = true;
+				s.phase = "active";
+			});
+			await this.deps.store.durable();
+			return receipt;
+		} finally {
+			this.turnAdmissions.delete(op.targetId);
+			release();
+		}
 	}
 	private async admitInput(state: PlanningWorkerState, op: DurableOperation, guard: () => void) {
 		const admission = Promise.resolve().then(() => this.deps.sessions.admitPlanning(this.input(state, op), guard));
@@ -320,12 +426,15 @@ export class PlanningWorkers {
 					throw new Conflict("Question context changed");
 			};
 		const { plans, interviews } = this.services(binding, guard);
+		const published = !!this.deps.store.plans.get(binding.missionId)?.publication;
 		if (request.action === "read")
 			return {
 				value:
-					request.revision === undefined
-						? await plans.view(binding.missionId)
-						: await plans.read(binding.missionId, request.revision),
+					published && request.revision === undefined
+						? await this.revisitContext(binding, guard)
+						: request.revision === undefined
+							? await plans.view(binding.missionId)
+							: await plans.read(binding.missionId, request.revision),
 			};
 		if (request.action === "knowledge")
 			return { value: await plans.knowledge(binding.missionId, request.id, request.revision) };
@@ -348,11 +457,20 @@ export class PlanningWorkers {
 		}
 		if (
 			state.phase !== "active" ||
-			(request.action === "write"
-				? !isPlanOperation(request.request.purpose)
-				: request.request.purpose !== "interview-questions")
+			(request.action === "revision"
+				? !published || !state.revisit?.admitted
+				: request.action === "write"
+					? !isPlanOperation(request.request.purpose)
+					: request.request.purpose !== "interview-questions")
 		)
 			throw new Conflict("Planning is held or purpose unavailable");
+		if (
+			published &&
+			(request.action === "write" ||
+				!state.revisit?.admitted ||
+				(request.action === "questions" && request.request.kind !== "revisit"))
+		)
+			throw new Conflict("Published planning only saves requested Revisit questions or inert revisions");
 		if (request.action === "questions")
 			this.deps.store.interviews.assertNewQuestions(binding.missionId, request.request.questions);
 		const payload = canonicalJSON(request.request),
@@ -383,9 +501,11 @@ export class PlanningWorkers {
 		await this.deps.store.durable();
 		guard();
 		const receipt = await this.deps.journal.execute(op, (operation, entry) =>
-			request.action === "write"
-				? plans.admit(operation, entry.firstEntry)
-				: interviews.admit(operation, entry.firstEntry),
+			request.action === "revision"
+				? this.revision(operation, entry.firstEntry, binding, guard)
+				: request.action === "write"
+					? plans.admit(operation, entry.firstEntry)
+					: interviews.admit(operation, entry.firstEntry),
 		);
 		if (opensRound && receipt.state === "accepted") {
 			guard();
@@ -416,6 +536,53 @@ export class PlanningWorkers {
 			guard();
 		}
 		return { value: receipt, ...(receipt.state === "pending" ? { blocked: true } : {}) };
+	}
+	private async revisitContext(binding: PlanningWorkerBinding, guard: () => void) {
+		const store = this.deps.store;
+		const snapshot = () => ({
+			mission: store.require(binding.missionId),
+			agreement: store.brief(binding.missionId),
+			decisions: store.workflowConfirmationState(binding.missionId).decisions,
+			tasks: store.tasks(binding.missionId),
+			revisionDelta: store.revisions.latestConfirmed(binding.missionId) ?? null,
+			revisionSource: store.revisions.source(binding.missionId),
+			interview: store.interviews.latest(binding.missionId),
+			settledAnswers: store.interviews.history(binding.missionId).map((h) => h.interview.submission),
+			knowledge: store.knowledge.list(binding.projectId, { missionId: binding.missionId }, undefined, 40),
+		});
+		const pin = snapshot();
+		await store.durable();
+		guard();
+		if (hash(pin) !== hash(snapshot())) throw new Conflict("Revisit context changed");
+		return pin;
+	}
+	private async revision(
+		op: DurableOperation,
+		firstEntry: boolean,
+		binding: PlanningWorkerBinding,
+		guard: () => void,
+	) {
+		if (!firstEntry) {
+			const saved = this.deps.store.revisions.lookup(op.targetId, op.operationId);
+			if (!saved) throw new Error("Unknown revision; lookup only");
+			await this.deps.store.durable();
+			return saved;
+		}
+		const request: Extract<PlanningWorkerRequest, { action: "revision" }>["request"] = JSON.parse(op.payload);
+		try {
+			interviewExact(request, ["purpose", "source", "summary", "delta"]);
+			if (request.purpose !== "revision-propose") throw new Conflict("Inert revision required");
+			guard();
+			return await this.deps.store.revisions.propose(
+				op.targetId,
+				{ operationId: op.operationId, source: request.source, summary: request.summary, delta: request.delta },
+				{ sessionId: binding.ownerSessionId },
+			);
+		} catch (e) {
+			if (this.deps.store.revisions.lookup(op.targetId, op.operationId))
+				throw new Error("Unknown saved revision; lookup only", { cause: e });
+			throw new OperationRejected(String(e));
+		}
 	}
 	private async finishHold(state: PlanningWorkerState, op: DurableOperation): Promise<PlanningWorkerState> {
 		const interview = this.deps.store.interviews.lookup(op);
@@ -519,6 +686,21 @@ export class PlanningWorkers {
 		);
 	}
 	async recover(op: DurableOperation): Promise<unknown> {
+		if (op.kind === "plan-revisit") {
+			const state = this.deps.store.planningWorkers.get(op.targetId);
+			if (!state || canonicalJSON(state.revisit?.operation) !== canonicalJSON(op))
+				throw new Error("Unknown Revisit identity; lookup only");
+			const receipt = await this.deps.sessions.lookupPlanning(this.input(state, op));
+			if (!receipt) throw new Error("Unknown Revisit admission; no replay");
+			if (state.phase === "revisiting") {
+				this.deps.store.planningWorkers.change(op.targetId, state.revision, (s) => {
+					s.phase = "active";
+					s.revisit!.admitted = true;
+				});
+				await this.deps.store.durable();
+			}
+			return receipt;
+		}
 		if (op.kind === "planning-enroll") {
 			if (
 				canonicalJSON((await this.deps.journal.lookup(op))?.result) !==
@@ -560,6 +742,7 @@ export class PlanningWorkers {
 		}
 		const retained = this.deps.store.planningWorkers.operation(op.targetId, op.operationId);
 		if (canonicalJSON(retained) !== canonicalJSON(op)) throw new Error("Unknown planning operation");
+		if (op.kind === "revision-propose") return this.revision(op, false, state.binding, () => {});
 		const { plans, interviews } = this.services(state.binding, () => {});
 		const receipt = await (isPlanOperation(op.kind) ? plans.admit(op, false) : interviews.admit(op, false));
 		if (state.phase === "holding" && state.pendingHold?.operationId === op.operationId)

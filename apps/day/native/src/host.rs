@@ -758,6 +758,31 @@ async fn qualify_planning(
     request: &serde_json::Value,
 ) -> Result<(), Error> {
     let read = read_planning(t, shared, epoch, mission).await?;
+    if request["purpose"] == "plan-revisit" {
+        if read["revisit"]["available"] != true
+            || read["revisit"]["contextDigest"] != digest
+            || request["source"] != read["revisit"]["source"]
+        {
+            return Err(Error::Stale);
+        }
+        return Ok(());
+    }
+    if matches!(
+        request["purpose"].as_str(),
+        Some("revision-preview" | "revision-confirm")
+    ) {
+        let revision = &read["revision"];
+        let pending = &revision["pending"]["proposal"];
+        if revision["source"] != digest
+            || request["source"] != digest
+            || pending["id"] != request["proposalId"]
+            || pending["digest"] != request["digest"]
+            || (request["purpose"] == "revision-confirm" && revision["pending"]["current"] != true)
+        {
+            return Err(Error::Stale);
+        }
+        return Ok(());
+    }
     if request["purpose"] == "plan-start" {
         let start = &read["start"];
         if start["available"] != true

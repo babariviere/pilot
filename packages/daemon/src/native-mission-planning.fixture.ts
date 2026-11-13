@@ -157,6 +157,11 @@ export async function nativePlanningFixture(options: { native?: boolean } = {}) 
 		get store() {
 			return store;
 		},
+		get journal() {
+			return journal;
+		},
+		confirmations,
+		closePlanning: () => server.closePlanning(),
 		set coordinator(value: SessionSummary | undefined) {
 			coordinator = value;
 		},

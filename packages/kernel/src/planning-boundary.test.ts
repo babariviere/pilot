@@ -64,6 +64,51 @@ async function fixture(t: TestContext) {
 	return { storage, harness, conversation, binding, hold, input };
 }
 
+test("Revisit never releases a planning hold even without an exposed round", async (t) => {
+	const f = await fixture(t);
+	await f.conversation.commit(async (tx) => {
+		(await tx.doc(PlanningWorkerDoc, f.conversation.id)).hold = null;
+	}, context);
+	const input = {
+		...f.input,
+		hold: null,
+		operation: { ...f.input.operation, operationId: "revisit", kind: "plan-revisit" },
+	};
+	await assert.rejects(
+		admitPlanningInput(f.harness, f.conversation, input, async () => {}, context),
+		/held or busy/,
+	);
+	assert.equal((await f.harness.snapshot(HeldInputsDoc, f.conversation.id, context))?.planning, true);
+	assert.deepEqual((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))?.receipts, {});
+});
+
+test("unheld Revisit admits one exact planning input, without granting or releasing Stop", async (t) => {
+	const f = await fixture(t);
+	await f.conversation.commit(async (tx) => {
+		(await tx.doc(PlanningWorkerDoc, f.conversation.id)).hold = null;
+		(await tx.doc(HeldInputsDoc, f.conversation.id)).planning = false;
+	}, context);
+	const input = {
+		...f.input,
+		hold: null,
+		operation: { ...f.input.operation, operationId: "revisit", kind: "plan-revisit" },
+	};
+	await admitPlanningInput(f.harness, f.conversation, input, async () => {}, context);
+	await admitPlanningInput(
+		f.harness,
+		f.conversation,
+		input,
+		async () => {
+			throw new Error("Must not reenter");
+		},
+		context,
+	);
+	assert.deepEqual(Object.keys((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))!.receipts), [
+		"revisit",
+	]);
+	assert.equal((await f.harness.snapshot(HeldInputsDoc, f.conversation.id, context))?.stopped, false);
+});
+
 test("planning hold is durable and independent from Stop and ordinary input", async (t) => {
 	const f = await fixture(t);
 	assert.equal((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))?.hold, planningJSON(f.hold));

@@ -34,10 +34,6 @@ impl Drop for Permit {
 const NO_START: &str =
     "Starting a standalone chat from Day is not connected yet. Nothing was sent.";
 
-/// The service's revision routes are not bound to the native host yet.
-const NO_REVISIT: &str =
-    "Revisit is not connected to Pilot's service in this build yet. Nothing was sent or changed.";
-
 /// The selected mission and what the feed is doing for it.
 #[derive(Debug, Default)]
 struct HostState {
@@ -596,8 +592,8 @@ impl PlanFeed {
     /// ask new questions only for the gaps. It changes, pauses and starts
     /// nothing; a revision applies only through `confirmRevision`.
     pub async fn revisit(this: Instance<Self>, intent: RevisitIntent) -> PlanOutcome {
-        if this.with(|f| f.native.is_some()) {
-            return outcome(OutcomeStatus::Rejected, NO_REVISIT, Some(intent.mission_id));
+        if let Some(side) = this.with(|f| f.native.clone()) {
+            return Self::host_write(&this, side, |read| crate::plan_revision_host::request(read, &intent.mission_id), |_, _| (), "Revisit saved. Review its questions or fresh comparison before confirming anything.").await;
         }
         let ((), latency) = match Self::begin(&this, |desk| desk.begin_revisit(&intent)) {
             Ok(started) => started,
@@ -618,8 +614,15 @@ impl PlanFeed {
         this: Instance<Self>,
         intent: ConfirmRevisionIntent,
     ) -> PlanOutcome {
-        if this.with(|f| f.native.is_some()) {
-            return outcome(OutcomeStatus::Rejected, NO_REVISIT, Some(intent.mission_id));
+        if let Some(side) = this.with(|f| f.native.clone()) {
+            return Self::host_write(
+                &this,
+                side,
+                |read| crate::plan_revision_host::confirm(read, &intent),
+                |_, _| (),
+                "Revision confirmed. Work stays paused; no permission changed.",
+            )
+            .await;
         }
         let (ticket, latency) = match Self::begin(&this, |desk| desk.begin_confirm(&intent)) {
             Ok(started) => started,
@@ -632,8 +635,49 @@ impl PlanFeed {
     /// Reads whether a confirmation whose answer was lost applied. Never
     /// sends it again.
     pub async fn check_revision(this: Instance<Self>, intent: RevisionRef) -> PlanOutcome {
-        if this.with(|f| f.native.is_some()) {
-            return outcome(OutcomeStatus::Rejected, NO_REVISIT, Some(intent.mission_id));
+        if let Some(side) = this.with(|f| f.native.clone()) {
+            let _permit = side.lock().await;
+            let operation = side
+                .host
+                .planning_operations(&intent.mission_id)
+                .into_iter()
+                .find(|o| {
+                    matches!(
+                        o["kind"].as_str(),
+                        Some("plan-revisit" | "revision-preview" | "revision-confirm")
+                    ) && matches!(o["state"].as_str(), Some("pending" | "unknown"))
+                        && (intent.revision_id.is_empty() || o["proposalId"] == intent.revision_id)
+                });
+            let Some(operation) = operation else {
+                return outcome(
+                    OutcomeStatus::Rejected,
+                    "There is nothing to check.",
+                    Some(intent.mission_id),
+                );
+            };
+            let reply = side
+                .host
+                .check_planning(
+                    operation["operationId"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                )
+                .recv()
+                .await;
+            let _ = side
+                .host
+                .read_planning(intent.mission_id.clone())
+                .recv()
+                .await;
+            if !this.is_disposed() {
+                this.with(Self::changed);
+            }
+            return host_outcome(
+                reply,
+                "Read the exact saved receipt. Nothing was sent again.",
+                Some(intent.mission_id),
+            );
         }
         let ((), latency) = match Self::begin(&this, |desk| desk.begin_check_revision(&intent)) {
             Ok(started) => started,

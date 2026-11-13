@@ -45,6 +45,9 @@ impl PlanningRecord {
                         | "interview-submit"
                         | "planning-enroll"
                         | "plan-start"
+                        | "plan-revisit"
+                        | "revision-preview"
+                        | "revision-confirm"
                         | "intake-triage"
                         | "intake-start"
                         | "native-chat-create"
@@ -77,7 +80,12 @@ impl PlanningRecord {
     }
     pub fn summary(&self) -> Value {
         let enrollment = self.operation["kind"] == "planning-enroll";
+        let request: Value = self.operation["payload"]
+            .as_str()
+            .and_then(|p| serde_json::from_str(p).ok())
+            .unwrap_or(Value::Null);
         json!({"operationId":self.id(), "missionId":if enrollment {self.receipt.as_ref().map(|r| r["result"]["missionId"].clone()).unwrap_or(Value::Null)} else {json!(self.mission())},
+            "proposalId":request["proposalId"],
             "enrollmentId":if enrollment {json!(self.mission())} else {Value::Null}, "setupDigest":self.setup_digest,
             "kind":self.operation["kind"],
             "state": if self.not_sent {"not-sent"} else {self.receipt.as_ref().and_then(|r| r["state"].as_str()).unwrap_or("unknown")},
@@ -126,6 +134,9 @@ fn record_pinned(
                 "interview-save"
                     | "interview-submit"
                     | "plan-start"
+                    | "plan-revisit"
+                    | "revision-preview"
+                    | "revision-confirm"
                     | "intake-triage"
                     | "intake-start"
                     | "native-chat-create"
@@ -136,6 +147,9 @@ fn record_pinned(
             request["purpose"].as_str(),
             Some(
                 "plan-start"
+                    | "plan-revisit"
+                    | "revision-preview"
+                    | "revision-confirm"
                     | "intake-triage"
                     | "intake-start"
                     | "native-chat-create"
@@ -195,6 +209,38 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
                 .is_none_or(|s| !valid_id(s)))
     {
         return Err(Error::Unknown);
+    }
+    if op["kind"] == "plan-revisit"
+        && r["state"] == "accepted"
+        && r["result"]["admissionId"] != op["operationId"]
+    {
+        return Err(Error::Unknown);
+    }
+    if matches!(
+        op["kind"].as_str(),
+        Some("revision-preview" | "revision-confirm")
+    ) && r["state"] == "accepted"
+    {
+        let p: Value = serde_json::from_str(op["payload"].as_str().ok_or(Error::Unknown)?)
+            .map_err(|_| Error::Unknown)?;
+        let result = &r["result"];
+        if result["missionId"] != op["targetId"]
+            || (op["kind"] == "revision-preview"
+                && (result["operationId"] != op["operationId"]
+                    || result["repreviewOf"]["id"] != p["proposalId"]
+                    || result["repreviewOf"]["digest"] != p["digest"]
+                    || result["source"] != p["source"]))
+            || (op["kind"] == "revision-confirm"
+                && (result["id"] != p["proposalId"]
+                    || result["digest"] != p["digest"]
+                    || result["confirmation"]["humanSource"]
+                        != format!(
+                            "native-revision:{}",
+                            op["operationId"].as_str().unwrap_or("")
+                        )))
+        {
+            return Err(Error::Unknown);
+        }
     }
     if op["kind"] == "intake-start" && r["state"] == "accepted" {
         let p: Value = serde_json::from_str(op["payload"].as_str().ok_or(Error::Unknown)?)

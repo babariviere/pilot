@@ -432,6 +432,15 @@ export function RevisitSection(props: { plans: Plans; page: PlanPage; revisit: R
 					</View>
 				</If>
 				<Now missionId={id()} revisit={r()} />
+				<If when={props.page.stage === "unknown" && !r().revision}>
+					<Action
+						testID="check-revisit"
+						label="Check again"
+						icon="refresh"
+						disabled={busy()}
+						onPress={() => void checkRevision(props.plans, id(), "")}
+					/>
+				</If>
 				<If when={r().revision}>
 					<Each of={r().revision ? [r().revision as Revision] : []} key={(x) => x.id}>
 						{(x) => <RevisionView plans={props.plans} page={props.page} revisit={r()} revision={x()} />}

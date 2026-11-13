@@ -136,30 +136,31 @@ Stale, unpaused and lost-answer cases refuse or stay Unknown; Check only reads.
 `plan.rs` mirrors the delta above; the mock rules are in `plan_revisit.rs` and
 `native/tests/revisit.rs`.
 
-The connected host does not bind these routes yet and shows Revisit as unavailable. Connecting
-the complete journey still needs:
+The connected planning read includes the canonical current mission, brief, tasks, active
+decisions, controls, revision source and pending proposal. No second revision store is used.
+The existing private native planning ledger journals three explicit human intents through
+authenticated `/api/operations`:
 
-- **Discovery binding.** GET `/revisions` now exposes the latest pending proposal after the
-  last confirmation, including explicit currentness. Day still needs to bind that read.
-- **User request.** No route lets the user ask the coordinator for a check-up.
-- **Round binding.** Canonical inert Revisit rounds and the existing native interview mapper
-  are ready; the connected check-up producer still needs to open them through the trusted
-  planner. There is no legacy enrollment adapter.
-- **Preview binding.** The post-Pause user re-preview route makes a confirmable proposal
-  reachable without running a held coordinator. Day still needs to journal that new explicit
-  intent, display the complete fresh comparison and bind its exact confirmation/lookup.
+- `plan-revisit` names the displayed source and admission digest. Only an active, idle,
+  unheld, unstopped trusted published planning owner can receive it through `admitPlanning`.
+  There is no ordinary Build/sendNotice fallback, legacy adoption or age-triggered admission.
+- `revision-preview` names a saved proposal's ID/digest and the new current source. The
+  established “Ask for a new revision” action uses this after Pause, without waking a held
+  planner. It creates a fresh proposal and displays its full current comparison.
+- `revision-confirm` names that fresh proposal's ID/digest/source. Its user provenance is
+  fixed to `native-revision:<operationId>`. Confirmation preserves Pause and all permissions.
 
-The remaining request seam is not a generic send: `SessionManager.canSendNotice` explicitly
-excludes trusted planning sessions. A proposed extension would admit one explicitly requested
-planning-only check-up through `admitPlanning` only for an active, unheld published coordinator,
-with retained exact operation identity and lookup-only recovery. It would also expose inert
-revision output on that trusted planner's tool surface. It must not release interview holds,
-clear Stop/user holds, approve/start build work or use ordinary Build input as a fallback.
-That admission extension is not implemented here; already-held coordinators remain unavailable.
+Published planners can only save new `kind=revisit` questions or an inert `revision-propose`
+delta through `mission_plan`. The default read returns current agreement, active decisions,
+tasks, latest confirmed summary and settled answers, not old full plans. Historical plan reads
+remain explicit. The trusted upstream skills and normal saved-round continuation are reused.
+Creation submit/approval never serves as amendment consent or execution Start.
 
-A future host adapter must read `/revisions`, the pending proposal and `/api/missions/:id`
-(for current text), recheck the exact source, confirm with a fixed `humanSource`, and settle
-lost replies only through exact proposal/operation lookup.
+Every uncertain admission, preview or confirmation is lookup-only with the original full
+operation. Recovery reads saved kernel input receipts or exact canonical proposal/confirmation
+records, never re-enters an effect. The existing Check again action settles Unknown. Unsupported
+older services remain unavailable. Native appearance and real-provider acceptance are separate
+gates; isolated tests do not authorize live check-ups.
 
 ## Verification
 
@@ -175,10 +176,10 @@ Stop/completed-task refusal, inert canonical/native submissions and exact histor
 `native/tests/plan_host.rs::revisit_round_uses_saved_interview_without_publishing_agreement`
 exercises that existing bridge seam in an isolated daemon, not connected Revisit acceptance.
 
-Local checkpoint evidence (2026-11-13): eight narrowly selected Node tests passed on
-`41b59b2b`, plus scoped Biome/rustfmt checks. After reconciliation onto `81cd801e`, the single
-named native bridge test could not compile: upstream `57820b54` updated Day's SHA-2/base64
-requirements without updating its tracked Cargo lock. The supported MBX invocation with
-`--locked` refused before compilation; no lock/cache bypass or dependency rollback ran.
-That native regression and the new-head dependency updates remain unverified. Broader suites
-stay in CI. This is independently safe backend groundwork, not complete connected Revisit.
+`revisit-planning.test.ts` replaces all worker/provider admission with isolated fakes. It covers
+explicit admission and duplicates, held/Stop/access/owner/source/busy refusal, current-only
+context, inert deltas, new-round submission, post-Pause re-preview, exact confirmation and lost
+ACK lookup without replay. `planning-boundary.test.ts` covers kernel holds and atomic input
+deduplication. `plan_revision_host::tests` covers the existing native projection and exact
+intent mapping, including unchanged/completed tasks, stale sources and Unknown. Broader suites
+and native appearance remain separate CI/acceptance work.

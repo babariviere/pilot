@@ -94,6 +94,7 @@ export async function admitPlanningInput(
 		const live = await tx.doc(LiveDoc, conversation.id);
 		const inbox = await tx.doc(InboxDoc, conversation.id);
 		if (
+			(input.operation.kind === "plan-revisit" && held.planning) ||
 			held.stopped ||
 			held.paused ||
 			held.questionPending ||

@@ -1,5 +1,6 @@
 /** Private, versioned worker binding. Never accepted from model arguments or generic SpawnRequest. */
 import type { DurableOperation, InterviewVersion, OperationHost, PlanWrite } from "@pilot/protocol";
+import type { MissionRevisionDelta } from "../../protocol/src/mission-revision.ts";
 
 export const PLANNING_PROFILE = {
 	version: 1,
@@ -28,6 +29,11 @@ export type PlanningWorkerRequest =
 	| { action: "knowledge"; id: string; revision: number }
 	| { action: "receipt"; operationId: string }
 	| { action: "write"; toolCallId: string; request: PlanWrite }
+	| {
+			action: "revision";
+			toolCallId: string;
+			request: { purpose: "revision-propose"; source: string; summary: string; delta: MissionRevisionDelta };
+	  }
 	| {
 			action: "questions";
 			toolCallId: string;

@@ -1,6 +1,7 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { InterviewWrite, PlanWrite } from "@pilot/protocol";
 import { Type } from "typebox";
+import type { MissionRevisionDelta } from "../../protocol/src/mission-revision.ts";
 
 export interface NativePlanningPort {
 	/** Bound to the current admitted mission/project/coordinator, never model-supplied IDs. */
@@ -11,6 +12,11 @@ export interface NativePlanningPort {
 	/** Host owns durable envelope identity, retains it by callId, and never replays Unknown effects.
 	 * Only MissionPlans operations, never interview-save/submit or worker admission. */
 	write(callId: string, request: PlanWrite, signal?: AbortSignal): Promise<unknown>;
+	revision?(
+		callId: string,
+		request: { purpose: "revision-propose"; source: string; summary: string; delta: MissionRevisionDelta },
+		signal?: AbortSignal,
+	): Promise<unknown>;
 	questions?(
 		callId: string,
 		request: Extract<InterviewWrite, { purpose: "interview-questions" }>,
@@ -202,8 +208,27 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 		name: "mission_plan",
 		label: "Mission planning",
 		description:
-			"Read native mission planning or save a revision-bound map, fog promotion, question claim, prototype findings, human round, spec or slices. read returns the saved records plus map, the same overview people see; update the map from evidence when a claim there is changed or missing, never by guessing. Prototype findings need exact read digests and a pinned mission artifact; they never run code or accept a preference. Human answers/submission use native UI, never this tool. Publication creates reviewed native records, not workers or external issues. Unknown writes require exact receipt lookup, never a new attempt.",
+			"Read native planning or save a revision-bound map, questions, spec or slices. After publication, read returns current agreement/tasks/active decisions and settled answers; only explicitly requested Revisit questions or an inert revision delta are allowed. Use read revisionSource for action revision; only separate exact human confirmation applies it. Prototype findings need exact digests and a pinned artifact; they never accept a preference. Human answers use native UI. Publication starts nothing. Unknown writes require exact receipt lookup, never a new attempt.",
 		parameters: Type.Union([
+			Type.Object(
+				{
+					action: Type.Literal("revision"),
+					request: Type.Object(
+						{
+							purpose: Type.Literal("revision-propose"),
+							source: key,
+							summary: Type.String({ minLength: 1, maxLength: 1000 }),
+							delta: Type.Unsafe<MissionRevisionDelta>({
+								type: "object",
+								description:
+									"Inert MissionRevisionDelta: optional goal/markdown, tasks [{id,title?,body?,drop?,assignment?,dependsOn?,decisionIds?}], decisions [{id,reason,action:replace|withdraw,text?,audience?}], corrections [{kind:instruction|permission,text}]. Existing IDs only; no completed task edits. Corrections never apply permissions.",
+							}),
+						},
+						{ additionalProperties: false },
+					),
+				},
+				{ additionalProperties: false },
+			),
 			Type.Object(
 				{
 					action: Type.Literal("questions"),
@@ -250,7 +275,10 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 		]),
 		async execute(callId, args, signal) {
 			let result: unknown;
-			if (args.action === "questions") {
+			if (args.action === "revision") {
+				if (!port.revision) throw new Error("Trusted Revisit binding unavailable");
+				result = await port.revision(callId, args.request, signal);
+			} else if (args.action === "questions") {
 				if (!port.questions) throw new Error("Trusted interview worker binding unavailable");
 				result = await port.questions(
 					callId,

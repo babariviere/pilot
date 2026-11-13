@@ -9,6 +9,9 @@ reads; it does not resend an answer or start work.
 Today To check discovers new mission deliveries from a saved first-use cutoff.
 Older work stays in missions, without being accepted or deleted. Your saved
 checks stay available. Other projects' results are read-only in this window.
+For published native plans, Revisit mission requests planning only. Review new questions and
+the exact proposed changes, then pause and request a fresh preview before confirming. Earlier
+answers and finished work stay kept. Revisit never starts work or changes permissions.
 
 | Feature                                         | Guide                                         |
 | ----------------------------------------------- | --------------------------------------------- |

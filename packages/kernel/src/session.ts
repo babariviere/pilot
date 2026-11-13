@@ -691,6 +691,8 @@ export class KernelSession {
 									planningCall({ action: "write", toolCallId, request }, signal),
 								questions: (toolCallId, request, signal) =>
 									planningCall({ action: "questions", toolCallId, request }, signal),
+								revision: (toolCallId, request, signal) =>
+									planningCall({ action: "revision", toolCallId, request }, signal),
 							},
 						}
 					: {}),

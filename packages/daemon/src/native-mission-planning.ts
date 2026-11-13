@@ -1,7 +1,7 @@
 /** Authenticated native human ingress. Interviews never admit builders; explicit Start is separate. */
 import type { DurableOperation, OperationReceipt, PlanningInventory, PlanningInventoryItem } from "@pilot/protocol";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
-import { interviewDigest } from "./mission-interview-contract.ts";
+import { interviewDigest, interviewExact } from "./mission-interview-contract.ts";
 import { isInterviewOperation, MissionInterviews } from "./mission-interviews.ts";
 import { isPlanOperation, MissionPlans } from "./mission-plans.ts";
 import type { MissionStore } from "./missions.ts";
@@ -12,8 +12,17 @@ import type { SessionManager } from "./sessions.ts";
 import type { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
 export const isNativePlanningOperation = (kind: string) =>
-	isInterviewOperation(kind) || isPlanOperation(kind) || kind === "plan-start";
-const humanKinds = ["interview-save", "interview-submit", "plan-start"];
+	isInterviewOperation(kind) ||
+	isPlanOperation(kind) ||
+	["plan-start", "plan-revisit", "revision-preview", "revision-confirm"].includes(kind);
+const humanKinds = [
+	"interview-save",
+	"interview-submit",
+	"plan-start",
+	"plan-revisit",
+	"revision-preview",
+	"revision-confirm",
+];
 /** Only the complete planning inventory limit, not general service unavailability. */
 export class PlanningInventoryCapacity extends ServiceUnavailable {
 	readonly limit: number;
@@ -204,7 +213,11 @@ export class NativeMissionPlanning {
 		const plans = new MissionPlans({ ...this.deps, authorize: check });
 		const view = await plans.view(missionId);
 		const start = await this.deps.workers?.startView(missionId);
+		const revision = this.revisionView(missionId);
+		await this.deps.store.durable();
 		check();
+		if (canonicalJSON(revision) !== canonicalJSON(this.revisionView(missionId)))
+			throw new Conflict("Revision view changed");
 		return {
 			version: 1,
 			projectId,
@@ -213,6 +226,11 @@ export class NativeMissionPlanning {
 			contextDigest: view.interview.questions.length ? contextDigest : null,
 			questionDigests: Object.fromEntries(view.interview.questions.map((q) => [q.id, interviewDigest(q)])),
 			start: start ?? { available: false, state: "unavailable", reason: "Start authority unavailable" },
+			revisit: this.deps.workers?.revisitView(missionId) ?? {
+				available: false,
+				reason: "Trusted Revisit owner unavailable",
+			},
+			revision,
 			view: view.interview.questions.length ? view : null,
 			capabilities: {
 				answers: worker && worker.phase !== "held" ? "unavailable" : 1,
@@ -248,7 +266,7 @@ export class NativeMissionPlanning {
 		const expected = (
 			request as { expected?: { fence?: { ownerSessionId?: string; enrollmentId?: string; missionId?: string } } }
 		)?.expected?.fence;
-		if (op.kind === "plan-start") return;
+		if (["plan-start", "plan-revisit", "revision-preview", "revision-confirm"].includes(op.kind)) return;
 		if (
 			expected?.missionId !== op.targetId ||
 			expected.ownerSessionId !== pin.interview.fence.ownerSessionId ||
@@ -256,19 +274,34 @@ export class NativeMissionPlanning {
 		)
 			throw new OperationRejected("Native interview owner or enrollment changed");
 	}
-	/** Authenticated status. Start can reconcile an exact saved kernel receipt, never send work. */
+	/** Authenticated exact receipt recovery, never a new turn or revision mutation. */
 	async lookup(op: DurableOperation): Promise<OperationReceipt | undefined> {
 		this.envelope(op);
 		let receipt = await this.deps.journal.lookup(op);
-		if (op.kind === "plan-start" && receipt?.state === "pending" && this.deps.workers) {
-			// This handler can only inspect the exact kernel input receipt. It cannot create or send.
-			receipt = await this.deps.journal.execute(op, () => this.deps.workers!.start(op, false));
+		if (
+			["plan-start", "plan-revisit", "revision-preview", "revision-confirm"].includes(op.kind) &&
+			receipt?.state === "pending"
+		) {
+			// Inspect saved kernel/canonical effects under the original identity. Never re-enter them.
+			receipt = await this.deps.journal.execute(op, () => this.admit(op, false));
 		}
 		this.envelope(op);
 		return receipt;
 	}
 	/** Journal recovery is exact saved-effect lookup, never new authority or model dispatch. */
 	async admit(op: DurableOperation, firstEntry = false): Promise<unknown> {
+		if (op.kind === "plan-revisit") {
+			if (!this.deps.workers) throw new OperationRejected("Revisit authority unavailable");
+			if (firstEntry) {
+				try {
+					this.envelope(op);
+				} catch (cause) {
+					throw new OperationRejected(String(cause));
+				}
+			}
+			return this.deps.workers.revisit(op, firstEntry);
+		}
+		if (["revision-preview", "revision-confirm"].includes(op.kind)) return this.revisionIntent(op, firstEntry);
 		if (op.kind === "plan-start") {
 			if (!this.deps.workers) throw new OperationRejected("Start authority unavailable");
 			if (firstEntry) this.envelope(op);
@@ -304,5 +337,68 @@ export class NativeMissionPlanning {
 		}
 		if (op.kind === "interview-submit") this.deps.workers?.submitted(op.targetId, op.operationId);
 		return result;
+	}
+	private revisionView(missionId: string) {
+		const store = this.deps.store;
+		return {
+			source: store.revisions.source(missionId),
+			pending: store.revisions.pending(missionId),
+			latestConfirmed: store.revisions.latestConfirmed(missionId) ?? null,
+			mission: store.require(missionId),
+			brief: store.brief(missionId) ?? null,
+			tasks: store.tasks(missionId),
+			decisions: store.workflowConfirmationState(missionId).decisions,
+			control: store.controls.current(missionId),
+		};
+	}
+	private async revisionIntent(op: DurableOperation, firstEntry: boolean) {
+		const store = this.deps.store;
+		const request: { purpose: string; proposalId: string; digest: string; source: string } = JSON.parse(op.payload);
+		if (!firstEntry) {
+			const saved =
+				op.kind === "revision-preview"
+					? store.revisions.lookup(op.targetId, op.operationId)
+					: store.revisions.get(op.targetId, request.proposalId);
+			if (
+				!saved ||
+				(op.kind === "revision-confirm" &&
+					(saved.digest !== request.digest ||
+						saved.confirmation?.humanSource !== `native-revision:${op.operationId}`))
+			)
+				throw new Error("Unknown revision effect; lookup only");
+			await store.durable();
+			return saved;
+		}
+		try {
+			this.envelope(op);
+			interviewExact(request, ["purpose", "proposalId", "digest", "source"]);
+			if (
+				request.purpose !== op.kind ||
+				request.source !== store.revisions.source(op.targetId) ||
+				op.bindingId !== request.source
+			)
+				throw new Conflict("Exact current revision source required");
+			const saved = store.revisions.get(op.targetId, request.proposalId);
+			if (saved.digest !== request.digest || saved.confirmation)
+				throw new Conflict("Exact pending revision required");
+			return op.kind === "revision-preview"
+				? await store.revisions.repreview(op.targetId, saved.id, {
+						operationId: op.operationId,
+						source: request.source,
+						digest: request.digest,
+					})
+				: await store.revisions.confirm(op.targetId, saved.id, {
+						digest: request.digest,
+						humanSource: `native-revision:${op.operationId}`,
+					});
+		} catch (cause) {
+			const saved =
+				op.kind === "revision-preview"
+					? store.revisions.lookup(op.targetId, op.operationId)
+					: store.revisions.get(op.targetId, request.proposalId);
+			if (saved && (op.kind === "revision-preview" || saved.confirmation))
+				throw new Error("Unknown saved revision; lookup only", { cause });
+			throw new OperationRejected(String(cause));
+		}
 	}
 }

@@ -163,6 +163,36 @@ test("native planning tool has no human-answer, external-publishing or execution
 	assert.match(JSON.stringify(tool.parameters), /smallestExperiment/);
 });
 
+test("native Revisit tool forwards inert delta only, never confirmation or worker admission", async () => {
+	const calls: unknown[] = [];
+	const tool = createMissionPlanTool({
+		read: async () => ({}),
+		knowledge: async () => ({}),
+		receipt: async () => ({}),
+		write: async () => {
+			throw new Error("No creation write");
+		},
+		revision: async (callId, request) => {
+			calls.push({ callId, request });
+			return { saved: true };
+		},
+	});
+	const request = {
+		purpose: "revision-propose" as const,
+		source: "a".repeat(64),
+		summary: "Inert scope delta",
+		delta: { goal: "New goal" },
+	};
+	await tool.execute("revision-call", { action: "revision", request }, undefined, undefined, {} as never);
+	assert.deepEqual(calls, [{ callId: "revision-call", request }]);
+	for (const purpose of ["revision-confirm", "revision-preview", "plan-revisit", "plan-start"])
+		await assert.rejects(
+			tool.execute("never", { action: "write", request: { purpose } } as never, undefined, undefined, {} as never),
+			/Unsupported/,
+		);
+	assert.equal(calls.length, 1);
+});
+
 test("actual NativeAdapter planning profile reads upstream but blocks direct and nested external effects", async (t) => {
 	const home = await realpath(await mkdtemp(join(tmpdir(), "native-planning-")));
 	const main = join(home, "main"),
