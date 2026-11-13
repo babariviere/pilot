@@ -3,6 +3,10 @@
 Use this page only when the artifact tool accepts `kind: "nsh"`. Until it does, publish visuals
 ([visuals.md](visuals.md)), including Mermaid for diagrams.
 
+Pilot does not run NSH artifacts yet. A published one is saved exactly, and readers see its source marked
+unsupported, not a drawing. When the user needs to see something now, publish a visual. Publish an NSH
+artifact when one is asked for, and say that it shows as source only for now.
+
 An NSH artifact is one TSX file that Pilot draws with native views, in its own sandbox. It gets local state
 (signals, presses, text input) and nothing else: no files, network, storage, clipboard, processes, credentials
 or Pilot actions. Calls that need them fail. Pressing things in an artifact changes only the artifact.
@@ -11,9 +15,9 @@ or Pilot actions. Calls that need them fail. Pressing things in an artifact chan
 
 1. Write the file in the session's `scratch/artifacts/` folder, for example `scratch/artifacts/release-plan.tsx`.
    It is session scratch, not repository source.
-2. Publish it with the artifact tool. Publication saves the file's exact bytes as a new revision. The preview and
-   every later reader use that saved revision, never the file. Editing the file changes nothing until you publish
-   an update.
+2. Publish it with the artifact tool. Publication saves the file's exact bytes as a new revision. Every reader,
+   and any later preview, uses that saved revision, never the file. Editing the file changes nothing until you
+   publish an update.
 3. Workspace cleanup deletes the scratch folder, unpublished files included. Published revisions stay.
 
 ## The file
@@ -43,7 +47,7 @@ export default function Artifact() {
   `border-border`, `bg-primary`) and the spacing scale (`gap-3`, `p-4`). The artifact then follows light and dark.
 - Write every number as text. Say states in words; color only supports them.
 - Keep motion short and skip it when `reduceMotion()` is true. Never imitate loading, progress or success: Pilot's
-  viewer shows compiling, errors, stopped work and cancellation itself.
+  viewer reports the artifact's real state itself.
 - A mockup says it is a preview. It changes nothing outside itself.
 
 ## Helpers (`pilot-artifact/ui`)

@@ -11,7 +11,7 @@ The `artifact` tool publishes session-local, offline artifacts. Pass source dire
 - UI mockups, styled layouts, typography and vectors: the mockups section of [references/visuals.md](references/visuals.md), with complete [mobile](references/mockup-mobile.js) and [desktop](references/mockup-desktop.js) examples
 - PNG, JPEG, GIF or WebP images: [references/images.md](references/images.md)
 - Existing standalone shader contract: [references/shaders.md](references/shaders.md). Shader rendering, including `ui.shader`, remains unavailable in Pilot Next. Do not use shaders for Next mockups.
-- NSH TSX artifacts, only when the artifact tool accepts `kind: "nsh"`: [references/nsh.md](references/nsh.md), with copyable examples and native diagram helpers.
+- NSH TSX artifacts, only when the artifact tool accepts `kind: "nsh"`: [references/nsh.md](references/nsh.md), with copyable examples and native diagram helpers. Pilot shows them as source only for now.
 
 Creating, publishing and previewing HTML, React and SwiftUI artifacts is no longer supported. Historical sources, revisions, library provenance and IDs remain readable as inert data. Never reinterpret a legacy body as a native visual. Create a new visual if a replacement is needed, without overwriting the original.
 

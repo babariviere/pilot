@@ -1,23 +1,24 @@
 # NSH artifact helpers and examples
 
 Status: trusted helper source, copyable examples and agent guidance. **Not a production artifact runtime or
-viewer.** The artifact tool does not accept NSH TSX yet. Visuals and Mermaid stay the published diagram
+viewer.** Even once the artifact tool can save `kind: "nsh"` source, previews stay unsupported (source text
+only) until running captured code is separately qualified. Visuals and Mermaid stay the published diagram
 path, and existing artifacts keep their readers and exact revisions.
 
 ## Files
 
-`packages/kernel/skills/pilot-artifacts/nsh/› is a TSX-only NSH project:
+`packages/kernel/skills/pilot-artifacts/nsh/` is a TSX-only NSH project:
 
-- `kit/›: the trusted `pilot-artifact/ui› module. Layout is pure TypeScript (`flow.ts›, `sequence.ts›,
-  `text.ts›, `check.ts›); views are `ui.tsx›, `charts.tsx› and `diagrams.tsx›. It imports only `nsh› and
-  `nsh/base›, and makes no host, storage, clipboard, file or network call.
-- `examples/›: one complete artifact per common need (summary/table, charts/timeline, interactive mockup,
+- `kit/`: the trusted `pilot-artifact/ui` module. Layout is pure TypeScript (`flow.ts`, `sequence.ts`,
+  `text.ts`, `check.ts`); views are `ui.tsx`, `charts.tsx` and `diagrams.tsx`. It imports only `nsh` and
+  `nsh/base`, and makes no host, storage, clipboard, file or network call.
+- `examples/`: one complete artifact per common need (summary/table, charts/timeline, interactive mockup,
   flow, sequence). [references/nsh.md](../../packages/kernel/skills/pilot-artifacts/references/nsh.md) is the
-  agent guide; `SKILL.md› routes to it only when the tool accepts `kind: "nsh"›.
-- `tests/›: layout checks and headless example checks. `tests/entries/› hold the entry shape below.
-- `App.tsx›: a gallery for people reviewing the helpers with `nsh run›. Pilot never loads it.
+  agent guide; `SKILL.md` routes to it only when the tool accepts `kind: "nsh"`.
+- `tests/`: layout checks and headless example checks. `tests/entries/` hold the entry shape below.
+- `App.tsx`: a gallery for people reviewing the helpers with `nsh run`. Pilot never loads it.
 
-`ARTIFACT_NSH_FILES› in `packages/kernel/src/artifact-skill.ts› lists the examples and helper sources, so
+`ARTIFACT_NSH_FILES` in `packages/kernel/src/artifact-skill.ts` lists the examples and helper sources, so
 Ask can read them like the other bundled references. A kernel test keeps that list complete and checks the
 import allowlist.
 
@@ -26,13 +27,16 @@ import allowlist.
 These are the helper side of the boundary. The production compiler, capture, isolation and viewer belong to
 the runtime work and must qualify them; nothing here grants them.
 
-- One trusted specifier, `pilot-artifact/ui›, resolved to Pilot's own kit bytes at compile time (the
-  project's `nsh.json› uses NSH 0.5.0 `resolve.alias›). It is never resolved from session scratch.
-- The captured file has `export default› and no `mount› call. The trusted compiler generates the entry:
-  `import A from "<captured>"; import { mountArtifact } from "pilot-artifact/ui"; mountArtifact(A);›.
-- `mountArtifact› wraps the artifact in an `ErrorBoundary› that shows the thrown message, not a blank page.
-- Imports the examples need: `nsh› (`View›, `Text›, `Scroll›, `Canvas›, `signal›, `computed›, `token›,
-  `fontScale›, `reduceMotion›, `LayoutAnimation›, `ErrorBoundary›, `mount›) and `nsh/base› (`Button›).
+- One trusted specifier, `pilot-artifact/ui`. The production compiler supplies Pilot's own kit bytes as
+  in-memory trusted chunks; it uses no filesystem resolver and never resolves from session scratch. The
+  `resolve.alias` in this project's `nsh.json` serves only the local checks and the review gallery.
+- The captured file has `export default` and no `mount` call. The trusted compiler generates the entry:
+  `import A from "<captured>"; import { mountArtifact } from "pilot-artifact/ui"; mountArtifact(A);`.
+- `mountArtifact` wraps the artifact in an `ErrorBoundary` that shows the thrown message, not a blank page.
+- Upstream exports the kit and examples use: `nsh` (`View`, `Text`, `Scroll`, `Canvas`, `signal`, `computed`,
+  `token`, `fontScale`, `reduceMotion`, `LayoutAnimation`, `ErrorBoundary`, `mount`) and `nsh/base` (`Button`).
+  This is a request to the runtime, not a qualified allowlist: an export the runtime has not qualified stays
+  unavailable, and the examples change to fit.
 
 ## Helper behavior
 
@@ -50,15 +54,15 @@ the runtime work and must qualify them; nothing here grants them.
 
 ## Checks
 
-From `packages/kernel/skills/pilot-artifacts/nsh›, with the installed NSH 0.5.0 CLI:
+From `packages/kernel/skills/pilot-artifacts/nsh`, with the installed NSH 0.5.0 CLI:
 
 ```sh
 NSH_TSC=<workspace>/node_modules/.bin/tsgo nsh check
 nsh test
 ```
 
-`nsh test› runs headless: it needs no Rust build, window or GPU. The kernel check is
-`node --test packages/kernel/src/artifact-skill.test.ts›.
+`nsh test` runs headless: it needs no Rust build, window or GPU. The kernel check is
+`node --test packages/kernel/src/artifact-skill.test.ts`.
 
 ## Not established here
 
