@@ -55,6 +55,9 @@ The source-matched unsigned steps:
    resources, not the GPUI workspace or a renamed stock NSH runner.
    Also compiles the shared Rust power helper and the two kept SystemEvents
    Swift files directly. It does not resolve/build the removed Swift GUI.
+   Day also builds the source-only `pilot-artifact-host` with its own feature.
+   Its strict protocol adds compiled source/recipe evidence, not another command
+   or a preview permission. Unsigned qualification checks that evidence too.
 5. Writes a runner-local qualification receipt. It binds the immutable recipe,
    real Cargo outputs/compiled app and helper diagnostics, official CLI,
    source-matched host grant, app identity and exact resource inventory.
@@ -77,6 +80,11 @@ assembler accepts Day's explicit `--gui-resources INPUTS/nsh` together with
 source-matched runtime and native-helper inputs. It preserves `Pilot Next.app`,
 `com.babariviere.pilot-next`, `pilot-desktop`, helper paths, runtime manifest,
 compatibility capsule policy and app/helper compiled-trust equality.
+Only the explicit Day-resource branch stages the artifact source helper under
+runtime's `packages/artifacts/native`, includes it in existing native verification
+and seals a final-byte binding before the outer signature. The GPUI branch is
+unchanged. This path does not enable executable NSH artifact previews; see
+[source foundation and remaining gates](nsh-artifact-source.md).
 
 `day_qualification.py --source SHA --inputs INPUTS --output RECEIPT` checks
 unsigned Day inputs. Adding **both** `--runtime RUNTIME --native HELPERS`

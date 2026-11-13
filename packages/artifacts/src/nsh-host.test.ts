@@ -1,13 +1,57 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { callArtifactHost } from "./nsh-host.ts";
+import { callArtifactHost, readArtifactHostBinding } from "./nsh-host.ts";
 import { nshSource } from "./nsh-source.ts";
 
 const host = process.env.NSH_ARTIFACT_TEST_HOST;
 const options = { skip: !host ? "Run apps/day/scripts/test-artifact-source.mjs for the native compiler" : false };
+
+test("NSH installed helper binds exact runtime source and bytes, not a loose executable", async (t) => {
+	const { createHash } = await import("node:crypto");
+	const root = await mkdtemp(join(tmpdir(), "nsh-binding-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const directory = join(root, "packages/artifacts/native");
+	await mkdir(directory, { recursive: true });
+	const executable = join(directory, "pilot-artifact-host");
+	const bytes = Buffer.from("synthetic native bytes, not executed");
+	await writeFile(executable, bytes, { mode: 0o755 });
+	const identity = {
+		schema: 1,
+		kind: "nsh-source-host",
+		runtime: "nsh 0.5.0",
+		source: "a".repeat(40),
+		recipe: "b".repeat(64),
+	};
+	const descriptor = {
+		schema: 1,
+		identity,
+		bytes: bytes.length,
+		sha256: createHash("sha256").update(bytes).digest("hex"),
+	};
+	const stamp = { schema: 1, source: identity.source, platform: "darwin", arch: "arm64" };
+	const write = (value: unknown) => writeFile(join(directory, "artifact-host.json"), JSON.stringify(value));
+	await writeFile(join(root, "runtime-build.json"), JSON.stringify(stamp));
+	await assert.rejects(readArtifactHostBinding(executable));
+	await write(descriptor);
+	assert.deepEqual(await readArtifactHostBinding(executable), identity);
+	for (const changed of [
+		{ ...descriptor, identity: { ...identity, source: "c".repeat(40) } },
+		{ ...descriptor, sha256: "0".repeat(64) },
+		{ ...descriptor, bytes: 1 },
+	]) {
+		await write(changed);
+		await assert.rejects(readArtifactHostBinding(executable));
+	}
+	await write(descriptor);
+	await writeFile(executable, "tampered");
+	await assert.rejects(readArtifactHostBinding(executable));
+	await rm(executable);
+	await symlink(join(root, "runtime-build.json"), executable);
+	await assert.rejects(readArtifactHostBinding(executable));
+});
 function captured(source: string) {
 	const metadata = nshSource(source, "demo.tsx");
 	return {
@@ -138,4 +182,19 @@ test("NSH helper transport joins after cancellation and rejects oversized/malfor
 		"process.stdout.write(JSON.stringify({value: [process.env.HOME ?? null, process.env.NSH_ARTIFACT_TEST_HOST ?? null]}));",
 	);
 	assert.deepEqual(await callArtifactHost({}, undefined, executable), [null, null]);
+	const identity = {
+		schema: 1,
+		kind: "nsh-source-host",
+		runtime: "nsh 0.5.0",
+		source: "a".repeat(40),
+		recipe: "b".repeat(64),
+	};
+	await script(`process.stdout.write(JSON.stringify({value:null,identity:${JSON.stringify(identity)}}));`);
+	assert.equal(await callArtifactHost({}, undefined, executable, identity), null);
+	await assert.rejects(
+		callArtifactHost({}, undefined, executable, { ...identity, source: "c".repeat(40) }),
+		/Invalid/,
+	);
+	await script("process.stdout.write(JSON.stringify({value:null,error:'ambiguous'}));");
+	await assert.rejects(callArtifactHost({}, undefined, executable), /Invalid/);
 });

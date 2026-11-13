@@ -24,6 +24,10 @@ directory traversal, symlinks, invalid UTF-8, changing file metadata, missing
 files, cancellation and oversized source. No filesystem bundler runs. Capturing
 an import statement does not read its target. The session root comes from the
 trusted worker spec, under the existing Build file authority, not artifact code.
+The host supplies a canonical absolute root: each root component is walked with
+no-follow directory handles. The selected root, scratch and artifacts directories
+must belong to the effective user and must not be group/world writable. Aliases
+are refused, not resolved as a path-check fallback.
 
 The captured string round-trips exact UTF-8, including BOM, CRLF and Unicode.
 `ArtifactStore` reuses its UUID, ownership, serialized writes, immutable numbered
@@ -95,12 +99,33 @@ The native target is `pilot-artifact-host` with the `artifact-host` feature.
 The kernel looks only for the trusted installed code location
 `packages/artifacts/native/pilot-artifact-host`, relative to its own module.
 It never accepts an executable path from a tool/artifact, nor searches PATH or
-scratch. If that installed binding is absent, macOS does not offer sourcePath
+scratch. The Day-only immutable input recipe now builds this fourth native
+executable through the supported Cargo/MBX wrapper and checks its compiled
+source/recipe identity through its existing source-only Compile operation.
+No new helper command or authored JS execution is added.
+
+Only assembly with explicit Day NSH resources copies it into runtime. The existing
+native closure/signing/inventory covers it; a binding records the final signed
+bytes before the unchanged outer app seal. GPUI assembly and release selection
+do not gain it. Connected-only candidates still contain no daemon runtime and
+therefore no source-helper binding. Packaging tests use synthetic inputs, not
+actual signing/native acceptance.
+
+Before offering capture, the kernel checks the fixed binding against runtime
+source and streams the helper's exact bytes in 64 KiB chunks. A per-process
+stat/identity cache avoids hashing unchanged bytes on every call. It also checks
+the helper's compiled identity with fixed benign source before Ensure can touch
+session storage; every later reply must match it. These checks supplement the
+existing verified app/runtime closure, not replace signatures or grant trust to
+a loose local helper. First-use hashing adds startup I/O; a genuine signed-bundle
+latency measurement remains outstanding.
+
+If that installed binding is absent or fails checks, macOS does not offer sourcePath
 publication. An unavailable or unsafe scratch setup also disables this optional
 publication path without preventing the rest of the session from opening.
-Source-matched packaging/signature qualification of that helper
-remains a separate gate; this increment does not install it, change an existing
-app/runtime, or alter GPUI packaging. Test-only helper selection is not authority
+Actual source-matched packaging/signature qualification remains a gate; this
+implementation does not assemble/install or change an existing app/runtime.
+Test-only helper selection is not authority
 to bind an installed executable.
 
 The supplied summary, chart, flow and sequence examples are checked as captured

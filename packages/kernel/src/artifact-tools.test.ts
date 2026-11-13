@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -546,7 +546,7 @@ test("NSH tool captures only session scratch and keeps exact pins without execut
 			? "Run the focused Day artifact-source wrapper"
 			: false,
 }, async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "nsh-tool-"));
+	const root = await realpath(await mkdtemp(join(tmpdir(), "nsh-tool-")));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const host = process.env.NSH_ARTIFACT_TEST_HOST;
 	const directory = await ensureArtifactScratch(root, host);

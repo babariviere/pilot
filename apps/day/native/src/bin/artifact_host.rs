@@ -21,10 +21,16 @@ fn main() {
                 .map_err(|_| "Invalid artifact host request".to_owned())?;
             artifact_source::handle(request)
         });
-    let response = match result {
+    let mut response = match result {
         Ok(value) => serde_json::json!({"value": value}),
         Err(error) => serde_json::json!({"error": error}),
     };
+    // Compiled build evidence, not a command, signature or execution grant.
+    response["identity"] = serde_json::json!({
+        "schema": 1, "kind": "nsh-source-host", "runtime": "nsh 0.5.0",
+        "source": option_env!("PILOT_BUILD_SOURCE"),
+        "recipe": option_env!("PILOT_BUILD_RECIPE"),
+    });
     if let Ok(bytes) = serde_json::to_vec(&response) {
         let _ = std::io::stdout().write_all(&bytes);
     }

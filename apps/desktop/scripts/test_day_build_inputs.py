@@ -1,6 +1,5 @@
 """Private offline recipe fixtures. Fake compilers/resources are NOT native acceptance."""
 import json
-import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -9,6 +8,7 @@ from unittest.mock import patch
 
 import bundle_runtime as bundle
 import day_build_inputs as day
+import day_artifact_host
 
 
 class RecipeTests(unittest.TestCase):
@@ -67,10 +67,10 @@ class RecipeTests(unittest.TestCase):
     def test_executing_tools_must_match_the_archived_source(self):
         directory = self.root / "apps/desktop/scripts"
         directory.mkdir(parents=True)
-        for module in (day.__file__, bundle.__file__):
+        for module in (day.__file__, bundle.__file__, day_artifact_host.__file__):
             shutil.copyfile(module, directory / Path(module).name)
         day.source_tools(self.root)
-        for module in (day.__file__, bundle.__file__):
+        for module in (day.__file__, bundle.__file__, day_artifact_host.__file__):
             path = directory / Path(module).name
             original = path.read_bytes()
             path.write_bytes(original + b"\n# different source\n")
@@ -285,7 +285,7 @@ class RecipeTests(unittest.TestCase):
             return ""
 
         output = self.root / "result"
-        with patch.object(day, "CLI_SHA256", bundle.digest(self.tools["nsh"])), patch.object(day, "execute", side_effect=fake_execute):
+        with patch.object(day, "CLI_SHA256", bundle.digest(self.tools["nsh"])), patch.object(day, "execute", side_effect=fake_execute), patch.object(day_artifact_host, "checked") as checked:
             day.compile_snapshot(checkout, self.root, output, self.source, self.tools,
                                  {"PILOT_DAY_QUICKJS_ARCHIVE":str(archive)})
         metadata = bundle.read_json(output / "manifest.json")
@@ -296,6 +296,8 @@ class RecipeTests(unittest.TestCase):
         bundle.receipt(output, self.source, ["pilot-desktop", "pilot-visual-worker", "pilot-desktop-update-helper"])
         bundle.checked_gui_resources(output / "nsh", output, self.source)
         self.assertTrue(any("Connected.tsx" in call for call in calls))
+        self.assertTrue(any("pilot-artifact-host" in call and "artifact-host" in call for call in calls))
+        checked.assert_called_once()
         self.assertFalse(any(any(word in ("package", "run", "nsh-cli", "codesign", "pnpm") for word in call) for call in calls))
 
 

@@ -13,6 +13,7 @@ from unittest.mock import patch
 import zipfile
 
 import bundle_runtime as bundle
+import day_artifact_host
 import make_dev_icon
 
 
@@ -477,6 +478,19 @@ class BundleRuntimeTests(unittest.TestCase):
             self.assemble()
 
     def gui_resources(self):
+        # Day alone adds a native source host. It is never executed by these synthetic fixtures.
+        binary = self.executables / day_artifact_host.NAME
+        binary.write_bytes(b"\xcf\xfa\xed\xfe" + b"synthetic only")
+        binary.chmod(0o755)
+        manifest = bundle.read_json(self.executables / "manifest.json")
+        manifest.update(source=self.source, recipe_sha256="b" * 64)
+        manifest["binaries"].append(dict(name=binary.name, bytes=binary.stat().st_size, sha256=bundle.digest(binary)))
+        bundle.write_json(self.executables / "manifest.json", manifest)
+        (self.runtime / "packages/artifacts").mkdir(parents=True)
+        binding = patch.object(day_artifact_host, "identity", return_value=dict(schema=1,kind="nsh-source-host",
+            runtime="nsh 0.5.0",source=self.source,recipe="b" * 64))
+        binding.start()
+        self.addCleanup(binding.stop)
         resources = self.root / "nsh"
         resources.mkdir()
         for name in ("bundle.nshc", "capabilities.json", "app.json"):

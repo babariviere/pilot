@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -22,7 +22,7 @@ test(
 	"NSH capture keeps exact BOM/CRLF/Unicode bytes across revisions, reopen and scratch cleanup",
 	captureOptions,
 	async (t) => {
-		const root = await mkdtemp(join(tmpdir(), "nsh-source-"));
+		const root = await realpath(await mkdtemp(join(tmpdir(), "nsh-source-")));
 		t.after(() => rm(root, { recursive: true, force: true }));
 		const directory = await scratch(root);
 		const path = join(directory, "one.tsx");
@@ -76,10 +76,15 @@ test(
 	"NSH capture denies escapes, links, binary, oversize, cancellation and unsupported paths",
 	captureOptions,
 	async (t) => {
-		const root = await mkdtemp(join(tmpdir(), "nsh-capture-deny-"));
+		const root = await realpath(await mkdtemp(join(tmpdir(), "nsh-capture-deny-")));
 		t.after(() => rm(root, { recursive: true, force: true }));
 		const directory = await scratch(root);
 		await writeFile(join(directory, "ok.tsx"), "export default () => null;");
+		await chmod(root, 0o777);
+		await assert.rejects(capture(root, "ok.tsx"), /ownership|permissions/);
+		await chmod(root, 0o700);
+		await symlink(root, join(root, "root-alias"));
+		await assert.rejects(capture(join(root, "root-alias"), "ok.tsx"));
 		for (const path of ["../ok.tsx", "sub/ok.tsx", "/not-here.tsx", "https://no.tsx", "ok.js", ""]) {
 			await assert.rejects(capture(root, path), /sourcePath/);
 		}

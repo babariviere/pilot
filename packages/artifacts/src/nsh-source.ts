@@ -17,14 +17,30 @@ function child(directory: FileHandle, name: string): string {
 const DIRECTORY = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
 
 async function withDirectory<T>(sessionDirectory: string, create: boolean, call: (dir: FileHandle) => Promise<T>) {
-	const session = await open(sessionDirectory, DIRECTORY);
+	const parts = sessionDirectory.split("/").slice(1);
+	if (!isAbsolute(sessionDirectory) || !parts.length || parts.some((name) => !name || name === "." || name === ".."))
+		throw new Error("Invalid canonical host session directory");
+	let session = await open("/", DIRECTORY);
 	let scratch: FileHandle | undefined;
 	let artifacts: FileHandle | undefined;
 	try {
+		for (const name of parts) {
+			const next = await open(child(session, name), DIRECTORY);
+			await session.close();
+			session = next;
+		}
+		const owned = async (directory: FileHandle) => {
+			const info = await directory.stat();
+			if (info.uid !== process.geteuid?.() || (info.mode & 0o022) !== 0)
+				throw new Error("Unsafe session directory ownership or permissions");
+		};
+		await owned(session);
 		if (create) await mkdir(child(session, "scratch"), { mode: 0o700 }).catch(existing);
 		scratch = await open(child(session, "scratch"), DIRECTORY);
+		await owned(scratch);
 		if (create) await mkdir(child(scratch, "artifacts"), { mode: 0o700 }).catch(existing);
 		artifacts = await open(child(scratch, "artifacts"), DIRECTORY);
+		await owned(artifacts);
 		return await call(artifacts);
 	} finally {
 		await Promise.allSettled([artifacts?.close(), scratch?.close(), session.close()]);

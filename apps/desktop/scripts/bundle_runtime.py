@@ -366,6 +366,9 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
             (contents / "MacOS" / name).chmod(0o755)
         shutil.copytree(runtime, contents / "Resources/runtime", symlinks=True)
         if resources is not None:
+            # Explicit Day only. GPUI assembly and release selection are unchanged.
+            from day_artifact_host import stage
+            stage(executables, contents / "Resources/runtime", expected_source)
             destination = contents / "Resources/nsh"
             shutil.copytree(gui_resources, destination, symlinks=True)
             # A changed input or copy is never signed as the reviewed closure.
@@ -402,6 +405,9 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
             if binary != (contents / "MacOS/pilot-desktop").resolve():
                 run("/usr/bin/codesign", "--force", "--sign", "-", str(binary))
         run("/usr/bin/codesign", "--force", "--sign", "-", str(helper.parent))
+        if resources is not None:
+            from day_artifact_host import write_binding
+            write_binding(contents / "Resources/runtime", expected_source)
         # The main executable's outer signature seals resources and cannot hash itself.
         payload = [item for item in inventory(output) if item["path"] != "Contents/MacOS/pilot-desktop"
                    and not item["path"].startswith("Contents/_CodeSignature")]

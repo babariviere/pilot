@@ -2,7 +2,6 @@
 import hashlib
 import importlib.util
 from pathlib import Path
-import shutil
 import tempfile
 import subprocess
 import tomllib
@@ -61,6 +60,9 @@ class QualificationTests(unittest.TestCase):
         self.receipt_patch = patch.object(day, "compiled_receipt", return_value=self.compiled)
         self.receipt = self.receipt_patch.start()
         self.addCleanup(self.receipt_patch.stop)
+        binding = patch.object(qualification.day_artifact_host, "checked")
+        binding.start()
+        self.addCleanup(binding.stop)
 
     def qualify(self, **kwargs):
         return qualification.qualify(self.source, self.inputs, **kwargs)

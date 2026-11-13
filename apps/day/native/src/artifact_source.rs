@@ -315,22 +315,26 @@ pub fn handle(request: Request) -> Result<Value, String> {
     }
 }
 fn directories(root: &str, create: bool) -> Result<File, String> {
-    if !Path::new(root).is_absolute() {
+    if !Path::new(root).is_absolute() || Path::new(root).components().count() < 2 {
         return Err("Invalid host session directory".into());
     }
-    let root = CString::new(root).map_err(|_| "Invalid host session directory")?;
-    // SAFETY: NUL-terminated path, constant flags; the owned descriptor goes to File exactly once.
-    let fd = unsafe {
-        libc::open(
-            root.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    };
-    if fd < 0 {
-        return Err("Session directory unavailable".into());
+    // Walk from the OS root so no intermediate symlink can redirect the host-selected root.
+    // Do not resolve symlinks as a fallback. The host must supply its canonical session root.
+    let mut directory = File::open("/").map_err(|_| "Session directory unavailable")?;
+    for component in Path::new(root).components() {
+        match component {
+            std::path::Component::RootDir => {}
+            std::path::Component::Normal(name) => {
+                directory = open_at(
+                    &directory,
+                    name.to_str().ok_or("Invalid session directory")?,
+                    true,
+                )?;
+            }
+            _ => return Err("Invalid host session directory".into()),
+        }
     }
-    // SAFETY: open returned a fresh owned descriptor.
-    let mut directory = unsafe { File::from_raw_fd(fd) };
+    owned_directory(&directory)?;
     for name in ["scratch", "artifacts"] {
         if create {
             let name = CString::new(name).map_err(|_| "Invalid directory")?;
@@ -340,8 +344,20 @@ fn directories(root: &str, create: bool) -> Result<File, String> {
             }
         }
         directory = open_at(&directory, name, true)?;
+        owned_directory(&directory)?;
     }
     Ok(directory)
+}
+fn owned_directory(directory: &File) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let info = directory
+        .metadata()
+        .map_err(|_| "Session directory unavailable")?;
+    // SAFETY: geteuid has no arguments or memory preconditions.
+    if info.uid() != unsafe { libc::geteuid() } || info.mode() & 0o022 != 0 {
+        return Err("Unsafe session directory ownership or permissions".into());
+    }
+    Ok(())
 }
 fn open_at(directory: &File, name: &str, is_directory: bool) -> Result<File, String> {
     let name = CString::new(name).map_err(|_| "Invalid source basename")?;

@@ -12,6 +12,7 @@ import tempfile
 import tomllib
 
 import bundle_runtime as bundle
+import day_artifact_host
 
 TARGET = "aarch64-apple-darwin"
 CLI_VERSION = "nsh 0.5.0 (f4d68f7)"
@@ -172,7 +173,7 @@ def resource_closure(built, output, names):
 def source_tools(checkout):
     # These modules run outside the archive. Refuse a current-helper overlay
     # on older app source, including edits not yet in the supplied commit.
-    for module in (__file__, bundle.__file__):
+    for module in (__file__, bundle.__file__, day_artifact_host.__file__):
         path = Path(module).resolve()
         archived = checkout / "apps/desktop/scripts" / path.name
         if not archived.is_file() or path.read_bytes() != archived.read_bytes():
@@ -219,6 +220,7 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     shutil.copyfile(archive, downloads / "quickjs-ng-0.17.0.tar.gz")
     execute([os.sys.executable, visual.parent / "scripts/prepare-visual-worker.py"], cwd=checkout, env=env)
     manifests = [("pilot-desktop", day / "native/Cargo.toml", "macos-host"),
+                 ("pilot-artifact-host", day / "native/Cargo.toml", "artifact-host"),
                  ("pilot-desktop-update-helper", checkout / "apps/desktop/updater/Cargo.toml", "native-macos"),
                  ("pilot-visual-worker", visual / "Cargo.toml", "")]
     locked = {path: bundle.digest(path) for path in (day / "native/Cargo.lock", checkout / "apps/desktop/updater/Cargo.lock")}
@@ -234,7 +236,7 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     binaries, compiled = [], {}
     for name, manifest, features in manifests:
         path = build_artifact(checkout, manifest, name, features, env, profile, inputs / (name + ".cargo.jsonl"))
-        if name != "pilot-visual-worker":
+        if name not in ("pilot-visual-worker", "pilot-artifact-host"):
             compiled[name] = compiled_receipt(path, expected, recipe, compiler, config, profile, env, checkout)
         shutil.copyfile(path, inputs / name)
         (inputs / name).chmod(0o755)
@@ -261,6 +263,7 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     bundle.write_json(inputs / "gui-resources.json", dict(schema=1, kind="nsh-ui-resources", source=expected,
         target=TARGET, nsh_release=bundle.NSH_RELEASE, executable=main, files=bundle.inventory(inputs / "nsh")))
     bundle.receipt(inputs, expected, [name for name, _, _ in manifests])
+    day_artifact_host.checked(inputs, expected)
     bundle.checked_gui_resources(inputs / "nsh", inputs, expected)
     inputs.rename(output)
 

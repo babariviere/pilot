@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -B -m unittest discover -s apps/day/scripts -p 'test_*.py'
-          for suite in day_ci_policy day_build_inputs day_qualification bundle_runtime gui_release; do
+          for suite in day_ci_policy day_build_inputs day_artifact_host day_qualification bundle_runtime gui_release; do
             python3 -B -m unittest discover -s apps/desktop/scripts -p "test_$suite.py"
           done
 
