@@ -14,6 +14,7 @@ import { glide } from "./motion";
 import { goHome } from "./nav";
 import { mapSummary, stageMark, stageWord } from "./PlanScreen";
 import { Problems } from "./Problems";
+import { askRevisit } from "./planCommands";
 import type { Plans } from "./planning";
 import { openPlan } from "./planView";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
@@ -330,6 +331,13 @@ function PlanLink(props: { plans: Plans; missionId: string }) {
 		const p = props.plans.feed.page(props.missionId);
 		return p?.available && p.route === "wayfinder" ? p : null;
 	};
+	// An older mission can be revisited: one explicit press asks Pilot to
+	// compare it with what was agreed, and opens its planning to follow.
+	const revisit = () => {
+		props.plans.planning();
+		const r = props.plans.feed.page(props.missionId)?.revisit;
+		return r?.available && r.canAsk && props.plans.feed.revisit ? r : null;
+	};
 	// Reading the saved plan answers, saves and starts nothing.
 	if (row()) void props.plans.feed.open(props.missionId);
 	const stage = () => {
@@ -367,6 +375,22 @@ function PlanLink(props: { plans: Plans; missionId: string }) {
 				<Text testID="mission-map" class="text-sm text-muted-foreground">
 					{page() ? `Map: ${mapSummary(page() as PlanPage)}` : ""}
 				</Text>
+			</If>
+			<If when={revisit()}>
+				<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1 pt-1">
+					<Action
+						testID="mission-revisit"
+						label="Revisit mission"
+						accessibilityLabel="Revisit mission: Pilot compares it with what you agreed and asks about gaps. Nothing changes until you confirm."
+						onPress={() => {
+							open();
+							void askRevisit(props.plans, props.missionId);
+						}}
+					/>
+					<Text class="text-xs text-faint">
+						Check it against what you want now. Nothing changes until you confirm.
+					</Text>
+				</View>
 			</If>
 		</View>
 	);

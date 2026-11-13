@@ -66,6 +66,14 @@ export const focusField = signal<string | null>(null);
 export const writing = signal<Record<string, boolean>>({});
 /** Whether an interview shows all its questions at once, by interview. One at a time is the default. */
 export const seeAll = signal<Record<string, boolean>>({});
+/** The revision whose confirmation the user opened, exactly as shown, by mission. */
+export const revisionShown = signal<Record<string, { revisionId: string; digest: string }>>({});
+/** Whether a Revisit intent waits for its answer, by mission. */
+export const revisitBusy = signal<Record<string, boolean>>({});
+/** The last message a Revisit intent returned, by mission. */
+export const revisitMessages = signal<Record<string, string>>({});
+/** Whether a part of the Revisit is open, by mission and part. */
+export const revisitOpen = signal<Record<string, boolean>>({});
 
 /** The key of one answer: its interview and question. */
 export function answerKey(interview: Interview, question: Question): string {

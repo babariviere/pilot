@@ -1,6 +1,6 @@
 # Confirmed mission revisions
 
-Backend contract only. The Revisit interview and preview screens are separate UI work.
+Backend contract. Pilot Day's Revisit screens run on mock data only (see [Native UI](#native-ui)).
 Nothing here runs a model, changes a live mission, resets a chat, or enables a schedule.
 
 ## Reused records and limits
@@ -102,6 +102,33 @@ continuation flow after its safe boundary, carrying only current agreement, refe
 history, kept drafts and uncertain effects. Do not reset automatically, recreate a lost tool
 stack, replay effects, bypass opt-in compaction or claim that resume discarded old context.
 This implementation does not initiate that lifecycle flow.
+
+## Native UI
+
+Day's planning page (`apps/day/RevisitDoc.tsx`) shows the agreement now, a Revisit interview
+round (`RoundKind::Revisit`, the existing saved interview UI), and a full preview of one
+revision: goal and agreement text, every open task (stays, changes or drops), finished tasks
+kept, decision replacements and withdrawals with reasons, and unapplied instruction or
+permission corrections. Confirmation is two presses and names the revision ID and digest shown.
+Stale, unpaused and lost-answer cases refuse or stay Unknown; Check only reads.
+`plan.rs` mirrors the delta above; the mock rules are in `plan_revisit.rs` and
+`native/tests/revisit.rs`.
+
+The connected host does not bind these routes yet and shows Revisit as unavailable. Binding
+them needs these backend seams first:
+
+- **Pending discovery.** GET `/revisions` returns only the source and latest confirmed
+  summary. The UI cannot find an unconfirmed proposal without its ID.
+- **User request.** No route lets the user ask the coordinator for a check-up.
+- **Revisit rounds.** `interview-submit` maps answers into the brief. A Revisit round must save
+  answers without writing the agreement.
+- **Pause and source.** The source includes the control state, and application needs a paused
+  mission when members exist (the coordinator is one). Pause holds admission for member
+  chats, so a paused coordinator cannot take a turn to propose, and pausing after a proposal
+  makes it stale. As written, a mission with a coordinator cannot reach a confirmable revision.
+
+The host then reads `/revisions`, the pending proposal and `/api/missions/:id` (for current
+text), confirms with a fixed `humanSource`, and settles a lost reply by reading the proposal.
 
 ## Verification
 

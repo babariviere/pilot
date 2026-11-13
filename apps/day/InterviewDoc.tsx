@@ -338,6 +338,7 @@ function Answers(props: { plans: Plans; page: PlanPage; interview: Interview }) 
 	const left = () => iv().questions.length - iv().answered;
 	const busy = () => submitting()[iv().id] === true;
 	const review = () => iv().kind === "review";
+	const revisit = () => iv().kind === "revisit";
 	const ready = () => props.page.fresh && iv().current && !fixed(iv()) && left() === 0 && !busy();
 	const groups = computed(() =>
 		SECTIONS.map((section) => ({ section, questions: iv().questions.filter((q) => q.section === section) })).filter(
@@ -448,7 +449,9 @@ function Answers(props: { plans: Plans; page: PlanPage; interview: Interview }) 
 						? ""
 						: left() > 0
 							? `${left() === 1 ? "One question" : `${left()} questions`} left. Pilot continues only after you submit.`
-							: "Submitting sends every answer at once. Nothing starts building."}
+							: revisit()
+								? "Submitting completes this round. Nothing changes until you confirm a revision."
+								: "Submitting sends every answer at once. Nothing starts building."}
 				</Text>
 			</View>
 		</View>
@@ -516,6 +519,7 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 	const heading = () => {
 		if (review()) return "Your review";
 		if (iv().kind === "topic") return `Questions about “${iv().topic}”`;
+		if (iv().kind === "revisit") return "Revisit questions";
 		return iv().round > 1 ? `Questions, round ${iv().round}` : "Questions";
 	};
 	const sectionLine = (q: Question) => {
@@ -574,6 +578,12 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 				<If when={iv().round > 1 && iv().kind === "mission"}>
 					<Text class="text-xs text-faint">
 						New questions only. Earlier answers stay as they were, under Earlier interview rounds.
+					</Text>
+				</If>
+				<If when={iv().kind === "revisit"}>
+					<Text class="text-xs text-faint">
+						New questions about gaps only. Your agreement and earlier answers stay as they are until you confirm a
+						revision.
 					</Text>
 				</If>
 			</View>

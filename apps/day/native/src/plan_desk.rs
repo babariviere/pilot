@@ -8,12 +8,14 @@
 //! trusted native host binds them behind the same read model.
 
 use crate::plan::{
-    AnswerIntent, Choice, Delivery, Exploration, FogArea, Interview, InterviewRef, MapInfo,
-    NewIntent, OutcomeStatus, PlanAvailability, PlanOutcome, PlanPage, PlanRoute, PlanRow,
-    PlanScenario, PlanStage, Planning, Proposal, PrototypeSupport, Question, QuestionSection,
-    QuestionState, RoundAnswer, RoundKind, RoundLine, RoundState, Setup, StartedChat, Step,
+    AnswerIntent, Choice, ConfirmRevisionIntent, ConfirmState, Delivery, Exploration, FogArea,
+    Interview, InterviewRef, MapInfo, NewIntent, OutcomeStatus, PauseNeed, PlanAvailability,
+    PlanOutcome, PlanPage, PlanRoute, PlanRow, PlanScenario, PlanStage, Planning, Proposal,
+    PrototypeSupport, Question, QuestionSection, QuestionState, RevisionRef, RevisitIntent,
+    RevisitStage, RoundAnswer, RoundKind, RoundLine, RoundState, Setup, StartedChat, Step,
     StepState, SubmitIntent, SubmitState,
 };
+use crate::plan_revisit::{ConfirmAck, RevisitDesk};
 use crate::plan_world;
 
 /// The longest answer or goal Day saves, in characters.
@@ -343,6 +345,8 @@ pub(crate) struct Plan {
     /// Whether Pilot can continue from a submission. When it cannot, the
     /// submission is kept and nothing more happens.
     pub continuation: bool,
+    /// Revisit, for a mission whose plan is published.
+    pub revisit: Option<RevisitDesk>,
 }
 
 impl Plan {
@@ -380,6 +384,7 @@ impl Plan {
             continuations: 0,
             next_round: 2,
             continuation: true,
+            revisit: None,
         }
     }
 
@@ -397,6 +402,17 @@ impl Plan {
                 SubmitState::Submitted => {}
             }
         }
+        if let Some(p) = self.revisit.as_ref().and_then(|r| {
+            r.proposed
+                .as_ref()
+                .filter(|_| r.stage == RevisitStage::Review)
+        }) {
+            match p.confirm {
+                ConfirmState::Unknown | ConfirmState::Checking => return PlanStage::Unknown,
+                ConfirmState::Open | ConfirmState::Confirming => return PlanStage::Review,
+                ConfirmState::Confirmed => {}
+            }
+        }
         if self.published == StepState::Done {
             PlanStage::Published
         } else if self.approved == StepState::Done {
@@ -410,10 +426,16 @@ impl Plan {
 
     fn row(&self) -> PlanRow {
         let stage = self.stage();
+        let revising = self
+            .revisit
+            .as_ref()
+            .is_some_and(|r| r.stage == RevisitStage::Review);
         let line = match (stage, &self.round) {
             (PlanStage::Questions, Some(round)) => {
                 format!("{} of {} answered", round.answered(), round.asks.len())
             }
+            (PlanStage::Review, _) if revising => "A revision is ready for your review".into(),
+            (PlanStage::Unknown, _) if revising => "Revision not confirmed".into(),
             (PlanStage::Review, _) => "The plan is ready for your review".into(),
             (PlanStage::Unknown, _) => "Submission not confirmed".into(),
             (PlanStage::Approved, _) => "Approved. Not published yet".into(),
@@ -492,6 +514,7 @@ impl Plan {
             proposal: self.proposal.clone(),
             steps: self.steps(),
             work: None,
+            revisit: self.revisit.as_ref().map(RevisitDesk::view),
             note: self.note.clone(),
         }
     }
@@ -518,6 +541,13 @@ pub struct SubmitTicket {
     /// The mission whose interview was submitted.
     pub mission_id: String,
     interview_id: String,
+}
+
+/// A confirmation that waits for the service.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfirmTicket {
+    mission_id: String,
+    revision_id: String,
 }
 
 /// Planning's state and every rule for changing it.
@@ -909,12 +939,18 @@ impl PlanDesk {
             );
         }
         self.submitted(at);
+        let message = if self.plans[at]
+            .round
+            .as_ref()
+            .is_some_and(|r| r.kind == RoundKind::Revisit)
+        {
+            "Submitted. Pilot prepares a revision from your answers. Nothing changes until you confirm it."
+        } else {
+            "Submitted. Pilot continues from your answers."
+        };
         PlanOutcome {
             mission_id: Some(ticket.mission_id.clone()),
-            ..self.outcome(
-                OutcomeStatus::Accepted,
-                "Submitted. Pilot continues from your answers.",
-            )
+            ..self.outcome(OutcomeStatus::Accepted, message)
         }
     }
 
@@ -929,6 +965,7 @@ impl PlanDesk {
             RoundKind::Review => format!("Review, round {}", round.round),
             RoundKind::Topic => format!("{}, round {}", round.topic, round.round),
             RoundKind::Mission => format!("Round {}", round.round),
+            RoundKind::Revisit => format!("Revisit, round {}", round.round),
         };
         let line = if !review {
             format!("{} answers, submitted", round.asks.len())
@@ -944,6 +981,17 @@ impl PlanDesk {
             state: RoundState::Submitted,
             answers: round.answers(),
         });
+        if round.kind == RoundKind::Revisit {
+            // A Revisit round completes itself only. The plan's own steps
+            // stay as they were; Pilot now prepares a revision.
+            if let Some(revisit) = plan.revisit.as_mut() {
+                revisit.stage = RevisitStage::Proposing;
+            }
+            plan.continuations += 1;
+            plan.note.clear();
+            self.changed();
+            return;
+        }
         plan.submitted = StepState::Done;
         if plan.continuation {
             plan.continued = StepState::Done;
@@ -1018,8 +1066,260 @@ impl PlanDesk {
         let Some(round) = plan.round.take_if(|r| r.submit == SubmitState::Submitted) else {
             return;
         };
+        if round.kind == RoundKind::Revisit {
+            let id = plan.mission_id.clone();
+            if let Some(revisit) = plan.revisit.as_mut() {
+                revisit.propose(&id, Some(&round));
+            }
+            plan.note = "Pilot proposes a revision. Read it in full before you confirm it.".into();
+            self.changed();
+            return;
+        }
         plan_world::advance(plan, round);
         self.changed();
+    }
+
+    fn revisit_at(&self, mission_id: &str) -> Result<usize, PlanOutcome> {
+        self.usable(None)?;
+        match self
+            .plans
+            .iter()
+            .position(|p| p.mission_id == mission_id && p.revisit.is_some())
+        {
+            Some(at) => Ok(at),
+            None => self.refuse(
+                OutcomeStatus::Rejected,
+                "This mission cannot be revisited here. Nothing was changed.",
+            ),
+        }
+    }
+
+    fn revisit_mut(&mut self, at: usize) -> &mut RevisitDesk {
+        self.plans[at]
+            .revisit
+            .as_mut()
+            .expect("a revisit found before")
+    }
+
+    /// Asks Pilot to revisit a mission. It changes nothing: Pilot compares
+    /// the mission with its agreement first.
+    pub fn begin_revisit(&mut self, intent: &RevisitIntent) -> Result<(), PlanOutcome> {
+        let at = self.revisit_at(&intent.mission_id)?;
+        let plan = &self.plans[at];
+        if plan
+            .round
+            .as_ref()
+            .is_some_and(|r| r.submit != SubmitState::Submitted)
+        {
+            return self.refuse(
+                OutcomeStatus::Rejected,
+                "Answer the open questions first. Nothing was changed.",
+            );
+        }
+        if !plan.revisit.as_ref().is_some_and(RevisitDesk::can_ask) {
+            return self.refuse(
+                OutcomeStatus::Rejected,
+                "A Revisit is already under way. Nothing was changed.",
+            );
+        }
+        let revisit = self.revisit_mut(at);
+        revisit.stage = RevisitStage::Preparing;
+        revisit.proposed = None;
+        self.plans[at].note = "Pilot compares the mission with what you agreed.".into();
+        self.changed();
+        Ok(())
+    }
+
+    /// Pilot found the gaps: new questions only, or a revision straight
+    /// from earlier answers when nothing new needs asking.
+    pub fn settle_revisit(&mut self, intent: &RevisitIntent) -> PlanOutcome {
+        let Ok(at) = self.revisit_at(&intent.mission_id) else {
+            return self.outcome(OutcomeStatus::Rejected, "That mission is gone.");
+        };
+        let plan = &mut self.plans[at];
+        let id = plan.mission_id.clone();
+        let number = plan.next_round;
+        let revisit = plan.revisit.as_mut().expect("found above");
+        if revisit.stage != RevisitStage::Preparing {
+            return self.outcome(OutcomeStatus::Accepted, "");
+        }
+        let message = match revisit.round(&id, number) {
+            Some(round) => {
+                let count = round.asks.len();
+                revisit.stage = RevisitStage::Questions;
+                plan.round = Some(round);
+                plan.next_round += 1;
+                plan.note = format!(
+                    "Pilot found {count} gaps and asks about them only. Your earlier answers stay."
+                );
+                "Pilot asks new questions about the gaps only. Nothing changed."
+            }
+            None => {
+                revisit.propose(&id, None);
+                plan.note =
+                    "Pilot found no new questions and proposes a revision from earlier answers."
+                        .into();
+                "Pilot proposes a revision. Nothing changed."
+            }
+        };
+        self.changed();
+        self.outcome(OutcomeStatus::Accepted, message)
+    }
+
+    /// Checks a confirmation against the revision shown and the mission now.
+    pub fn begin_confirm(
+        &mut self,
+        intent: &ConfirmRevisionIntent,
+    ) -> Result<ConfirmTicket, PlanOutcome> {
+        let at = self.revisit_at(&intent.mission_id)?;
+        let revisit = self.plans[at].revisit.as_ref().expect("found above");
+        let shown = revisit
+            .proposed
+            .as_ref()
+            .filter(|p| revisit.stage == RevisitStage::Review && p.id == intent.revision_id);
+        let Some(p) = shown else {
+            return self.refuse(
+                OutcomeStatus::Stale,
+                "This is not the revision Pilot proposes now. Read it again; nothing was changed.",
+            );
+        };
+        match p.confirm {
+            ConfirmState::Open => {}
+            ConfirmState::Unknown | ConfirmState::Checking => {
+                return self.refuse(
+                    OutcomeStatus::Rejected,
+                    "Pilot has not heard whether your confirmation applied. Check first; it never sends it twice.",
+                );
+            }
+            _ => {
+                return self.refuse(
+                    OutcomeStatus::Rejected,
+                    "This revision is already confirmed.",
+                );
+            }
+        }
+        if p.digest() != intent.digest {
+            return self.refuse(
+                OutcomeStatus::Stale,
+                "The revision changed since it was shown. Read it again; nothing was changed.",
+            );
+        }
+        if p.source != revisit.now.source {
+            return self.refuse(
+                OutcomeStatus::Stale,
+                "The mission changed after Pilot proposed this revision. Nothing was changed; ask for a new one.",
+            );
+        }
+        if revisit.now.pause == PauseNeed::Needed {
+            return self.refuse(
+                OutcomeStatus::Rejected,
+                "Pause the mission's work first. Pilot applies a revision only while its work is paused. Nothing was changed.",
+            );
+        }
+        let mission_id = self.plans[at].mission_id.clone();
+        let revision_id = p.id.clone();
+        if let Some(p) = self.revisit_mut(at).proposed.as_mut() {
+            p.confirm = ConfirmState::Confirming;
+        }
+        self.changed();
+        Ok(ConfirmTicket {
+            mission_id,
+            revision_id,
+        })
+    }
+
+    /// The service answers: applied, lost, or refused because the mission changed.
+    pub fn settle_confirm(&mut self, ticket: &ConfirmTicket) -> PlanOutcome {
+        let Ok(at) = self.revisit_at(&ticket.mission_id) else {
+            return self.outcome(
+                OutcomeStatus::Unknown,
+                "The mission closed while it was confirmed.",
+            );
+        };
+        let revisit = self.revisit_mut(at);
+        if !revisit
+            .proposed
+            .as_ref()
+            .is_some_and(|p| p.id == ticket.revision_id && p.confirm == ConfirmState::Confirming)
+        {
+            return self.outcome(
+                OutcomeStatus::Unknown,
+                "This confirmation is no longer shown.",
+            );
+        }
+        let (status, message) = match revisit.ack {
+            ConfirmAck::Change => {
+                revisit.ack = ConfirmAck::Confirm;
+                revisit.change_elsewhere();
+                if let Some(p) = revisit.proposed.as_mut() {
+                    p.confirm = ConfirmState::Open;
+                }
+                (
+                    OutcomeStatus::Stale,
+                    "The mission changed while you confirmed. Nothing was changed; ask for a new revision.",
+                )
+            }
+            ConfirmAck::Lose => {
+                if let Some(p) = revisit.proposed.as_mut() {
+                    p.confirm = ConfirmState::Unknown;
+                    p.landed = true;
+                }
+                (
+                    OutcomeStatus::Unknown,
+                    "Pilot sent your confirmation but heard nothing back. It will not send it again until it checks.",
+                )
+            }
+            ConfirmAck::Confirm => {
+                revisit.apply();
+                // The Revisit's own line says what confirming did.
+                (OutcomeStatus::Accepted, "")
+            }
+        };
+        self.plans[at].note.clear();
+        self.changed();
+        self.outcome(status, message)
+    }
+
+    /// Starts a read of whether a lost confirmation applied. Never resends.
+    pub fn begin_check_revision(&mut self, intent: &RevisionRef) -> Result<(), PlanOutcome> {
+        let at = self.revisit_at(&intent.mission_id)?;
+        let unknown = self.plans[at].revisit.as_ref().and_then(|r| {
+            r.proposed
+                .as_ref()
+                .filter(|p| p.id == intent.revision_id && p.confirm == ConfirmState::Unknown)
+        });
+        if unknown.is_none() {
+            return self.refuse(OutcomeStatus::Rejected, "There is nothing to check.");
+        }
+        if let Some(p) = self.revisit_mut(at).proposed.as_mut() {
+            p.confirm = ConfirmState::Checking;
+        }
+        self.changed();
+        Ok(())
+    }
+
+    /// The read's result: applied, or not. Either way nothing is sent again.
+    pub fn settle_check_revision(&mut self, intent: &RevisionRef) -> PlanOutcome {
+        let Ok(at) = self.revisit_at(&intent.mission_id) else {
+            return self.outcome(OutcomeStatus::Rejected, "There is nothing to check.");
+        };
+        let revisit = self.revisit_mut(at);
+        let Some(p) = revisit
+            .proposed
+            .as_mut()
+            .filter(|p| p.id == intent.revision_id && p.confirm == ConfirmState::Checking)
+        else {
+            return self.outcome(OutcomeStatus::Rejected, "There is nothing to check.");
+        };
+        let message = if p.landed {
+            revisit.apply();
+            "Your confirmation applied. Nothing was sent again."
+        } else {
+            p.confirm = ConfirmState::Open;
+            "Your confirmation did not arrive. Nothing changed; you can confirm it now."
+        };
+        self.changed();
+        self.outcome(OutcomeStatus::Accepted, message)
     }
 }
 

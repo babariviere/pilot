@@ -1,7 +1,8 @@
 // Every command of New and the planning screens, once. Saves name the
 // question as the user saw it when they typed or picked; the one submission
-// names the saved answers and, for a review, the plan shown. Rust decides
-// what happens; the screens show what it publishes.
+// names the saved answers and, for a review, the plan shown. A revision's
+// confirmation names the revision and digest shown. Rust decides what
+// happens; the screens show what it publishes.
 import type { Interview, PlanPage, Question } from "pilot-day/native";
 import type { Plans } from "./planning";
 import {
@@ -16,6 +17,9 @@ import {
 	openPlan,
 	planMessages,
 	put,
+	revisionShown,
+	revisitBusy,
+	revisitMessages,
 	submitting,
 } from "./planView";
 
@@ -270,6 +274,57 @@ export async function checkSubmit(plans: Plans, page: PlanPage) {
 	put(planMessages, page.missionId, "");
 	const outcome = await plans.feed.checkSubmit({ interviewId: interview.id });
 	put(planMessages, page.missionId, outcome.message);
+}
+
+/**
+ * Asks Pilot to revisit a mission. Pilot compares it with what was agreed
+ * and asks only about gaps. Nothing changes, pauses or starts.
+ */
+export async function askRevisit(plans: Plans, missionId: string) {
+	if (revisitBusy()[missionId]) return;
+	put(revisitBusy, missionId, true);
+	put(revisitMessages, missionId, "");
+	try {
+		const outcome = plans.feed.revisit
+			? await plans.feed.revisit({ missionId })
+			: { message: "Revisit is not available here. Nothing was sent." };
+		put(revisitMessages, missionId, outcome.message);
+	} finally {
+		put(revisitBusy, missionId, false);
+	}
+}
+
+/**
+ * Confirms the revision the user opened, by the id and digest they saw
+ * then. If it changed since, Rust refuses it and nothing changes.
+ */
+export async function confirmRevision(plans: Plans, missionId: string) {
+	const pin = revisionShown()[missionId];
+	if (!pin || revisitBusy()[missionId] || !plans.feed.confirmRevision) return;
+	put(revisitBusy, missionId, true);
+	put(revisitMessages, missionId, "");
+	try {
+		const outcome = await plans.feed.confirmRevision({ missionId, ...pin });
+		put(revisitMessages, missionId, outcome.message);
+	} catch {
+		put(revisitMessages, missionId, "Your confirmation is not confirmed. Check it; do not confirm again.");
+	} finally {
+		drop(revisionShown, missionId);
+		put(revisitBusy, missionId, false);
+	}
+}
+
+/** Reads whether a lost confirmation applied. Never confirms again. */
+export async function checkRevision(plans: Plans, missionId: string, revisionId: string) {
+	if (revisitBusy()[missionId] || !plans.feed.checkRevision) return;
+	put(revisitBusy, missionId, true);
+	put(revisitMessages, missionId, "");
+	try {
+		const outcome = await plans.feed.checkRevision({ missionId, revisionId });
+		put(revisitMessages, missionId, outcome.message);
+	} finally {
+		put(revisitBusy, missionId, false);
+	}
 }
 
 /** Starts a mission interview from the goal, and opens it once its questions arrive. */

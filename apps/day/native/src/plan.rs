@@ -35,6 +35,12 @@ pub enum PlanScenario {
     Held,
     /// One mission interview with 40 questions, the most one round holds.
     Long,
+    /// An older mission with a published plan, offered a Revisit: new
+    /// questions for its gaps, then the exact revision to review.
+    Revisit,
+    /// Revisits in trouble: a revision the mission outgrew, one that needs
+    /// a paused mission, and a confirmation whose answer is lost.
+    RevisitTrouble,
 }
 
 /// Whether planning can be used at all.
@@ -238,6 +244,9 @@ pub enum RoundKind {
     Topic,
     /// The user's review of a proposed plan.
     Review,
+    /// New questions for the gaps a Revisit found. Submitting them changes
+    /// nothing; only a confirmed revision does.
+    Revisit,
 }
 
 /// Where an interview's one submission is.
@@ -628,6 +637,9 @@ pub struct PlanPage {
     pub steps: Vec<Step>,
     /// Explicit Start for the exact published plan. Absent in unsupported/mock flows.
     pub work: Option<PlanWork>,
+    /// Revisit: the current agreement and any revision of it. Absent until
+    /// a plan is published.
+    pub revisit: Option<Revisit>,
     /// One notice about a change, such as a plan that changed during review.
     pub note: String,
 }
@@ -660,6 +672,268 @@ pub struct PlanWork {
     pub context: String,
     /// What is known, separately from task execution or acceptance.
     pub line: String,
+}
+
+/// Where a mission's Revisit is. Asking for one, answering its questions
+/// and reading a revision change nothing. Only the user's confirmation of
+/// the exact revision shown changes the agreement and open tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RevisitStage {
+    /// Nothing asked. The user can ask for one.
+    #[default]
+    Idle,
+    /// Pilot compares the mission with what was agreed. Nothing is asked yet.
+    Preparing,
+    /// New questions for the gaps wait for the user, in the open interview.
+    Questions,
+    /// The answers are submitted. Pilot prepares a revision; nothing changed.
+    Proposing,
+    /// A revision waits for the user's review.
+    Review,
+    /// The user confirmed a revision. The agreement changed as shown.
+    Confirmed,
+}
+
+/// What a revision does to one part of the mission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChangeKind {
+    /// It stays as it is.
+    #[default]
+    Stays,
+    /// It changes, as shown.
+    Changes,
+    /// It is dropped. An open task only; its history stays.
+    Drops,
+}
+
+/// One text of the agreement, now and after the revision.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextChange {
+    /// Whether it stays or changes.
+    pub kind: ChangeKind,
+    /// The text now, exactly.
+    pub before: String,
+    /// The text after the revision, exactly. Equal to `before` when it stays.
+    pub after: String,
+}
+
+/// One open task under a revision. Finished tasks are never part of one.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskChange {
+    /// The task.
+    pub id: String,
+    /// Its number in the mission.
+    pub number: u32,
+    /// Its title now.
+    pub title: String,
+    /// Whether it stays, changes or drops.
+    pub kind: ChangeKind,
+    /// What changes, one line each, such as "Title: Add quiet hours → Follow Focus".
+    pub lines: Vec<String>,
+}
+
+/// What a revision does to an active decision. Decisions are replaced or
+/// withdrawn with a reason; the earlier text stays as history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DecisionAction {
+    /// A new decision replaces it.
+    #[default]
+    Replace,
+    /// It no longer applies, and nothing replaces it.
+    Withdraw,
+}
+
+/// One decision a revision replaces or withdraws.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionChange {
+    /// The decision.
+    pub id: String,
+    /// Its number, such as 3 for D3.
+    pub number: u32,
+    /// Its text now.
+    pub before: String,
+    /// Replaced or withdrawn.
+    pub action: DecisionAction,
+    /// The replacement's text. Empty when withdrawn.
+    pub after: String,
+    /// Why, as Pilot gave it.
+    pub reason: String,
+}
+
+/// Who a proposed correction would change. Confirming a revision applies
+/// neither: each has its own settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CorrectionKind {
+    /// How the coordinator works.
+    #[default]
+    Instruction,
+    /// What Pilot's agents may do.
+    Permission,
+}
+
+/// A correction Pilot proposes beside the revision, never applied by it.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Correction {
+    /// Instruction or permission.
+    pub kind: CorrectionKind,
+    /// What it would change, as Pilot wrote it.
+    pub text: String,
+}
+
+/// Whether the mission's work must be paused before a revision applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PauseNeed {
+    /// No chat works on the mission. Nothing needs pausing.
+    #[default]
+    None,
+    /// Chats belong to it, and its work is paused.
+    Paused,
+    /// Chats belong to it and its work is not paused. A confirmation is refused.
+    Needed,
+}
+
+/// Where the confirmation of one revision is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConfirmState {
+    /// Not confirmed. Nothing changed.
+    #[default]
+    Open,
+    /// Sent; waiting for the service.
+    Confirming,
+    /// Confirmed and applied, exactly as shown.
+    Confirmed,
+    /// Sent, but no answer came back. Only a check settles it.
+    Unknown,
+    /// Reading whether it applied. Changes nothing.
+    Checking,
+}
+
+/// A proposed revision of the mission, in full: what stays, changes and
+/// drops. The user confirms exactly this revision or nothing.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Revision {
+    /// Stable for the revision's life.
+    pub id: String,
+    /// Changes when any part changes. A confirmation names it.
+    pub digest: String,
+    /// Pilot's summary of it, in one or two sentences.
+    pub summary: String,
+    /// Whether the mission is still what Pilot revised. When it changed,
+    /// this revision cannot be confirmed; Pilot proposes a new one.
+    pub current: bool,
+    /// The mission's goal.
+    pub goal: TextChange,
+    /// The agreement (the mission's spec).
+    pub plan: TextChange,
+    /// Every open task, in order.
+    pub tasks: Vec<TaskChange>,
+    /// Finished tasks. They and their history always stay.
+    pub finished: u32,
+    /// Active decisions it replaces or withdraws.
+    pub decisions: Vec<DecisionChange>,
+    /// Active decisions that stay as they are.
+    pub kept_decisions: u32,
+    /// Proposed corrections it does not apply.
+    pub corrections: Vec<Correction>,
+    /// Whether work must be paused first.
+    pub pause: PauseNeed,
+    /// Where its confirmation is.
+    pub confirm: ConfirmState,
+}
+
+/// One revision the user confirmed. Its earlier agreement stays readable
+/// on request; it is history, not guidance.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionLine {
+    /// The revision.
+    pub id: String,
+    /// Its summary.
+    pub summary: String,
+    /// One line, such as "Confirmed by you".
+    pub line: String,
+    /// The goal before it, exactly.
+    pub earlier_goal: String,
+    /// The agreement before it, exactly.
+    pub earlier_plan: String,
+    /// The decisions it replaced or withdrew, in words, with their reasons.
+    pub retired: Vec<String>,
+}
+
+/// A mission's Revisit: its agreement now, the new questions, and the
+/// revision to review. Asking starts no work; confirming changes the
+/// agreement and open tasks but grants, resumes and starts nothing.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Revisit {
+    /// Whether a Revisit can be used here.
+    pub available: bool,
+    /// Why not, when unavailable. Empty otherwise.
+    pub reason: String,
+    /// Where it is.
+    pub stage: RevisitStage,
+    /// Whether the user can ask for a Revisit now.
+    pub can_ask: bool,
+    /// The goal now.
+    pub goal: String,
+    /// The agreement now, exactly.
+    pub plan: String,
+    /// Open tasks now.
+    pub open_tasks: u32,
+    /// Finished tasks now.
+    pub finished_tasks: u32,
+    /// Active decisions now.
+    pub decisions: u32,
+    /// The revision proposed, once there is one.
+    pub revision: Option<Revision>,
+    /// Confirmed revisions, newest first.
+    pub history: Vec<RevisionLine>,
+}
+
+/// Ask Pilot to revisit a mission: compare it with what was agreed, and
+/// ask new questions only for the gaps. It changes nothing by itself.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct RevisitIntent {
+    /// The mission.
+    pub mission_id: String,
+}
+
+/// Confirm one revision exactly as shown. It changes the agreement and
+/// open tasks; it resumes, starts and permits nothing.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct ConfirmRevisionIntent {
+    /// The mission.
+    pub mission_id: String,
+    /// The revision shown.
+    pub revision_id: String,
+    /// The revision's digest shown.
+    pub digest: String,
+}
+
+/// Name one revision, to check its confirmation.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct RevisionRef {
+    /// The mission.
+    pub mission_id: String,
+    /// The revision.
+    pub revision_id: String,
 }
 
 /// Start a mission interview, or a chat, from the user's words.

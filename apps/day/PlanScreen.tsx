@@ -24,6 +24,7 @@ import { planBack } from "./nav";
 import { flush, unsavedCount } from "./planCommands";
 import type { Plans } from "./planning";
 import { fogOpen, mapOpen, put, roundOpen, settledOpen } from "./planView";
+import { RevisitSection } from "./RevisitDoc";
 import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
 
 /** The words beside a plan's mark. */
@@ -707,6 +708,11 @@ function Body(props: {
 			<If when={review()}>
 				<Each of={review() ? [review() as NonNullable<PlanPage["interview"]>] : []} key={(iv) => iv.id}>
 					{(iv) => <InterviewDoc plans={props.plans} page={p()} interview={iv()} />}
+				</Each>
+			</If>
+			<If when={p().revisit}>
+				<Each of={p().revisit ? [p().revisit as NonNullable<PlanPage["revisit"]>] : []} key={() => p().missionId}>
+					{(r) => <RevisitSection plans={props.plans} page={p()} revisit={r()} />}
 				</Each>
 			</If>
 			<If when={p().available}>

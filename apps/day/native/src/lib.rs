@@ -36,6 +36,7 @@ pub mod plan;
 pub mod plan_desk;
 pub mod plan_feed;
 pub mod plan_host;
+pub mod plan_revisit;
 pub mod plan_world;
 pub mod project;
 pub mod ritual;

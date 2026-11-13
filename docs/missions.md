@@ -47,8 +47,24 @@ The backend now supports reviewed mission revisions. Proposed changes do nothing
 confirm the exact saved version. Completed work and earlier decisions stay in history.
 Coordinator context uses the current agreement, active decisions and current work, not old
 plans or retired decision bodies. History remains available on demand. This does not erase
-earlier chat text or reset chats. The native **Revisit mission** interview/preview is not yet
-connected. See [the backend contract](technical/mission-revisions.md) for its safety limits.
+earlier chat text or reset chats. See [the backend contract](technical/mission-revisions.md)
+for its safety limits.
+
+Pilot Day shows **Revisit mission** on an older mission's overview and planning page, on mock
+data for now. It keeps three steps apart:
+
+1. **Answer new questions.** Pilot asks only about gaps, in a saved interview round. Drafts save
+   as you go. Submit once, after every question has an answer. Submitting completes that round
+   only; nothing changes.
+2. **Review the revision.** It shows what stays, changes and drops in the goal, agreement, open
+   tasks and decisions. Finished tasks stay. Instruction and permission suggestions are listed
+   apart and never applied by it.
+3. **Confirm it.** One explicit confirmation of the exact revision shown. Pilot refuses it if the
+   mission changed, or while chats still work and the mission is not paused. Confirming starts,
+   resumes and permits nothing. A lost answer stays unconfirmed until you check; Pilot never
+   sends it twice.
+
+The connected app says Revisit is not connected yet.
 
 In coordinator-owned planning, the coordinator maintains scope, assignments, and
 acceptance criteria. Workers report progress, evidence, and blockers and propose

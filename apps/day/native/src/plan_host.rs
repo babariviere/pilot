@@ -16,8 +16,8 @@ use serde_json::{Value, json};
 use crate::plan::{
     AnswerIntent, Choice, Delivery, Exploration, ExploreKind, ExploreState, FogArea, Interview,
     MapInfo, MapTask, OutcomeStatus, PlanIdentity, PlanPage, PlanRoute, PlanRow, PlanStage,
-    PlanWork, Proposal, PrototypeSupport, Question, QuestionSection, QuestionState, RoundAnswer,
-    RoundKind, RoundLine, RoundState, Slice, SliceOwner, Spec, Step, StepState, Story,
+    PlanWork, Proposal, PrototypeSupport, Question, QuestionSection, QuestionState, Revisit,
+    RoundAnswer, RoundKind, RoundLine, RoundState, Slice, SliceOwner, Spec, Step, StepState, Story,
     SubmitIntent, SubmitState,
 };
 use crate::plan_desk::ANSWER_ROOM;
@@ -716,6 +716,13 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
             thinking: s(&read["start"]["thinking"]),
             context: s(&read["start"]["contextDigest"]),
             line: s(&read["start"]["reason"]),
+        }),
+        // The daemon's revision routes are not bound to this host yet. Say so
+        // where a Revisit would be offered, rather than hide it or guess.
+        revisit: published.then(|| Revisit {
+            available: false,
+            reason: "Revisit is not connected to Pilot's service in this build yet. Ask the mission's coordinator in its chat; nothing here changes the mission.".into(),
+            ..Revisit::default()
         }),
         note: if fresh {
             String::new()

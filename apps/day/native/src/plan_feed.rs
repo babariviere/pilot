@@ -14,8 +14,8 @@ use crate::{
     host::{Error, NativeHost},
     model::IntentOutcome,
     plan::{
-        AnswerIntent, InterviewRef, NewIntent, OutcomeStatus, PlanOutcome, PlanPage, PlanScenario,
-        Planning, SubmitIntent,
+        AnswerIntent, ConfirmRevisionIntent, InterviewRef, NewIntent, OutcomeStatus, PlanOutcome,
+        PlanPage, PlanScenario, Planning, RevisionRef, RevisitIntent, SubmitIntent,
     },
     plan_desk::PlanDesk,
     plan_host::{self, Local},
@@ -33,6 +33,10 @@ impl Drop for Permit {
 
 const NO_START: &str =
     "Starting a standalone chat from Day is not connected yet. Nothing was sent.";
+
+/// The service's revision routes are not bound to the native host yet.
+const NO_REVISIT: &str =
+    "Revisit is not connected to Pilot's service in this build yet. Nothing was sent or changed.";
 
 /// The selected mission and what the feed is doing for it.
 #[derive(Debug, Default)]
@@ -586,5 +590,56 @@ impl PlanFeed {
         let outcome = Self::settle(&this, |desk| desk.settle_check(&intent));
         Self::continue_after(&this, &outcome, latency).await;
         outcome
+    }
+
+    /// Asks Pilot to revisit a mission: compare it with what was agreed and
+    /// ask new questions only for the gaps. It changes, pauses and starts
+    /// nothing; a revision applies only through `confirmRevision`.
+    pub async fn revisit(this: Instance<Self>, intent: RevisitIntent) -> PlanOutcome {
+        if this.with(|f| f.native.is_some()) {
+            return outcome(OutcomeStatus::Rejected, NO_REVISIT, Some(intent.mission_id));
+        }
+        let ((), latency) = match Self::begin(&this, |desk| desk.begin_revisit(&intent)) {
+            Ok(started) => started,
+            Err(outcome) => return outcome,
+        };
+        timer(latency * 2).await;
+        if this.is_disposed() {
+            return outcome(OutcomeStatus::Unknown, "", None);
+        }
+        Self::settle(&this, |desk| desk.settle_revisit(&intent))
+    }
+
+    /// Confirms one revision exactly as shown: its id and digest. It applies
+    /// only while the mission is what Pilot revised. It changes the agreement
+    /// and open tasks; it resumes, starts and permits nothing. A lost answer
+    /// is `unknown`, and only `checkRevision` can settle it.
+    pub async fn confirm_revision(
+        this: Instance<Self>,
+        intent: ConfirmRevisionIntent,
+    ) -> PlanOutcome {
+        if this.with(|f| f.native.is_some()) {
+            return outcome(OutcomeStatus::Rejected, NO_REVISIT, Some(intent.mission_id));
+        }
+        let (ticket, latency) = match Self::begin(&this, |desk| desk.begin_confirm(&intent)) {
+            Ok(started) => started,
+            Err(outcome) => return outcome,
+        };
+        timer(latency).await;
+        Self::settle(&this, |desk| desk.settle_confirm(&ticket))
+    }
+
+    /// Reads whether a confirmation whose answer was lost applied. Never
+    /// sends it again.
+    pub async fn check_revision(this: Instance<Self>, intent: RevisionRef) -> PlanOutcome {
+        if this.with(|f| f.native.is_some()) {
+            return outcome(OutcomeStatus::Rejected, NO_REVISIT, Some(intent.mission_id));
+        }
+        let ((), latency) = match Self::begin(&this, |desk| desk.begin_check_revision(&intent)) {
+            Ok(started) => started,
+            Err(outcome) => return outcome,
+        };
+        timer(latency).await;
+        Self::settle(&this, |desk| desk.settle_check_revision(&intent))
     }
 }

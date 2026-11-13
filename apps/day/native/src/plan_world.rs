@@ -3,11 +3,12 @@
 //! for the real coordinator, which uses the trusted upstream planning skills.
 
 use crate::plan::{
-    Exploration, ExploreKind, ExploreState, FogArea, MapInfo, PlanAvailability, PlanRoute,
-    PlanScenario, Proposal, QuestionSection as S, RoundKind, RoundLine, RoundState, Setup, Slice,
-    SliceOwner, Spec, StepState, Story,
+    Exploration, ExploreKind, ExploreState, FogArea, MapInfo, PauseNeed, PlanAvailability,
+    PlanRoute, PlanScenario, Proposal, QuestionSection as S, RoundKind, RoundLine, RoundState,
+    Setup, Slice, SliceOwner, Spec, StepState, Story,
 };
 use crate::plan_desk::{Ask, Plan, PlanWorld, Round, Script, SubmitAck, digest};
+use crate::plan_revisit as revisit;
 
 /// An earlier, submitted round of `asks`, each answered as given.
 fn submitted_round(
@@ -82,6 +83,28 @@ pub fn world(scenario: PlanScenario) -> PlanWorld {
             world.plans.push(plan);
         }
         PlanScenario::Long => world.plans.push(long()),
+        PlanScenario::Revisit => world.plans.push(revisit::notify("notify", PauseNeed::None)),
+        PlanScenario::RevisitTrouble => {
+            // Someone changes the mission while the user confirms.
+            let mut changes =
+                revisit::notify_review("notify", "Quieter notifications", PauseNeed::None);
+            if let Some(r) = changes.revisit.as_mut() {
+                r.ack = revisit::ConfirmAck::Change;
+            }
+            world.plans.push(changes);
+            // Chats still work on it: a confirmation is refused.
+            world.plans.push(revisit::notify_review(
+                "digest",
+                "Weekly digest",
+                PauseNeed::Needed,
+            ));
+            // Paused, and the confirmation's answer is lost.
+            let mut lost = revisit::notify_review("alerts", "Calmer alerts", PauseNeed::Paused);
+            if let Some(r) = lost.revisit.as_mut() {
+                r.ack = revisit::ConfirmAck::Lose;
+            }
+            world.plans.push(lost);
+        }
     }
     world
 }
