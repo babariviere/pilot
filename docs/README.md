@@ -12,6 +12,9 @@ checks stay available. Other projects' results are read-only in this window.
 For published native plans, Revisit mission requests planning only. Review new questions and
 the exact proposed changes, then pause and request a fresh preview before confirming. Earlier
 answers and finished work stay kept. Revisit never starts work or changes permissions.
+A mission's overview lists threads with its coordinator, one subject each. A thread shows the
+coordinator's whole conversation and marks the messages it sent or linked. Send reaches only an
+active, unheld planning coordinator; Later and Discard keep the history. Talking never starts work.
 
 | Feature                                         | Guide                                         |
 | ----------------------------------------------- | --------------------------------------------- |

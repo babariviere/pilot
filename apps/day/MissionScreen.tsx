@@ -17,6 +17,7 @@ import { Problems } from "./Problems";
 import { askRevisit } from "./planCommands";
 import type { Plans } from "./planning";
 import { openPlan } from "./planView";
+import { MissionThreadsSection } from "./ThreadScreen";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
 import { Action, EvidenceChip, Mark, RowLink, SectionTitle, Track } from "./ui";
 import { closeMission, confirming, controlMessages, focused, focusFront, setFor, todayPlace } from "./view";
@@ -448,6 +449,10 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage }) {
 
 			<If when={props.plans}>
 				<PlanLink plans={props.plans as Plans} missionId={row().id} />
+			</If>
+
+			<If when={props.day.threads}>
+				<MissionThreadsSection day={props.day} missionId={row().id} />
 			</If>
 
 			<View class="gap-1">

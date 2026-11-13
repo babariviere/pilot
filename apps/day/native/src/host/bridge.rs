@@ -179,6 +179,15 @@ async fn run(
     ) {
         return super::preferences::handle(t, journal, shared, &call.command, &call.gate).await;
     }
+    if matches!(
+        call.command,
+        Command::ThreadsRead(_)
+            | Command::ThreadsHistory(_)
+            | Command::ThreadsWrite(_)
+            | Command::ThreadsCheck(_)
+    ) {
+        return super::threads::handle(t, journal, shared, &call.command, &call.gate).await;
+    }
     if call.command.is_ritual() {
         return ritual(t, journal, shared, day, epoch, call).await;
     }
@@ -286,6 +295,12 @@ async fn run(
         | Command::PreferencesCheck(_)
         | Command::PreferencesHistory(_) => {
             unreachable!("handled preferences command")
+        }
+        Command::ThreadsRead(_)
+        | Command::ThreadsHistory(_)
+        | Command::ThreadsWrite(_)
+        | Command::ThreadsCheck(_) => {
+            unreachable!("handled mission thread command")
         }
         Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot => None,
         Command::WindowRead => unreachable!("handled saved window read"),

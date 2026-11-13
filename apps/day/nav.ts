@@ -1,6 +1,6 @@
 // Where the window's one Back goes, and Pilot's way home. The app is a
-// tree: Today, then a mission's overview, then its interview and plan or a
-// result; Changes, Linear, Settings, New and the rituals hang off Today. Back goes up
+// tree: Today, then a mission's overview, then its interview and plan, a
+// thread or a result; Changes, Linear, Settings, New and the rituals hang off Today. Back goes up
 // one level of that tree, Escape does the same, and Pilot at the top left
 // always goes to Today. Moving around only changes where the user is: it
 // never drops a draft, sends, saves or starts anything.
@@ -13,6 +13,7 @@ import type { Plans } from "./planning";
 import { closePlanning, planRoute } from "./planView";
 import { closeSettings, settingsOpen } from "./preferencesView";
 import { backFromStandup, closeRitual, ritualRoute } from "./ritualView";
+import { closeThread, threadRoute } from "./threadView";
 import { closeUpdate, updateEntry, updateOpen } from "./updateView";
 import { closeMission, openMission, route } from "./view";
 
@@ -55,6 +56,7 @@ export type Shown =
 	| "changes"
 	| "new"
 	| "plan"
+	| "thread"
 	| "mission"
 	| "today";
 
@@ -69,7 +71,9 @@ export function shown(places: Places): Shown {
 	if (change) return change.kind === "change" ? "change" : "changes";
 	const plan = places.plans ? planRoute() : null;
 	if (plan) return plan.kind;
-	if (route()) return "mission";
+	const mission = route();
+	if (mission && places.day.threads && threadRoute()?.missionId === mission) return "thread";
+	if (mission) return "mission";
 	return "today";
 }
 
@@ -104,6 +108,10 @@ export function backTarget(places: Places): Back | null {
 		case "plan": {
 			const plan = planRoute();
 			return plan?.kind === "plan" ? planBack(places.day, plan.missionId) : to("Today", closePlanning);
+		}
+		case "thread": {
+			const id = route() ?? "";
+			return to(places.day.feed.mission(id)?.row.title || "Mission overview", closeThread);
 		}
 		case "mission":
 			return to("Today", closeMission);

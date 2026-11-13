@@ -6,6 +6,7 @@
 import { effect, type Signal, signal, type ViewRef } from "nsh";
 import type { Decision, HumanAction, Today } from "pilot-day/native";
 import { glide } from "./motion";
+import { closeThread } from "./threadView";
 
 /** The help a decision card shows. */
 export type Help = "simpler" | "more" | "visual" | "ask" | "details";
@@ -101,12 +102,15 @@ export function placeRow(testID: string, open: () => void) {
 /** Opens the overview of mission `id`. */
 export function openMission(id: string) {
 	confirming.set(null);
+	// A mission opens on its overview, never on a thread left open earlier.
+	closeThread();
 	route.set(id);
 }
 
 /** Goes back to Today. */
 export function closeMission() {
 	confirming.set(null);
+	closeThread();
 	route.set(null);
 }
 

@@ -22,6 +22,7 @@ pub(crate) mod plan_sources;
 mod planning;
 pub(crate) mod preferences;
 pub mod ritual;
+pub(crate) mod threads;
 pub(crate) mod today_scope;
 mod transport;
 pub mod update_loss;
@@ -707,7 +708,10 @@ fn publish_planning(shared: &Shared, record: &planning::PlanningRecord) {
     if matches!(
         record.operation["kind"].as_str(),
         Some("native-chat-create" | "user-verification" | "project-preferences-update")
-    ) {
+    ) || record.operation["kind"]
+        .as_str()
+        .is_some_and(threads::is_thread_kind)
+    {
         return;
     }
     shared

@@ -340,6 +340,15 @@ pub struct SavedView {
     /// with their own project.
     #[prop(default)]
     pub preferences: Vec<String>,
+    /// The thread on screen over its mission, as "<mission>/<thread>", or
+    /// empty. Showing it again only reads.
+    #[prop(default)]
+    pub thread: String,
+    /// Unsent thread words, exactly as typed, as "<mission>\n<thread>\n<text>"
+    /// ("" for the thread of a new thread's title). Restoring them sends
+    /// nothing, and they stay with their own mission and thread.
+    #[prop(default)]
+    pub threads: Vec<String>,
 }
 
 impl SavedView {
@@ -353,6 +362,7 @@ impl SavedView {
             .chain(&self.notes)
             .chain(&self.reminders)
             .chain(&self.preferences)
+            .chain(&self.threads)
             .map(String::len)
             .sum::<usize>();
         self.goal.len()
@@ -367,6 +377,7 @@ impl SavedView {
             + self.delivery.len()
             + self.linear.len()
             + self.today_project.len()
+            + self.thread.len()
             + lists
     }
 
@@ -378,6 +389,7 @@ impl SavedView {
             + self.notes.len()
             + self.reminders.len()
             + self.preferences.len()
+            + self.threads.len()
     }
 
     /// Whether its offsets are plain, non-negative numbers.
@@ -423,6 +435,26 @@ impl SavedView {
             && rest.iter().all(|line| {
                 line.split_once('\n')
                     .is_some_and(|(entry, _)| entry.is_empty() || id(entry))
+            })
+    }
+
+    /// Whether `thread` is empty or "<mission>/<thread>", and each unsent
+    /// thread draft names a valid mission and an empty or valid thread.
+    pub fn threads_valid(&self) -> bool {
+        let id = |s: &str| crate::host::valid_id(s);
+        let place = self.thread.is_empty()
+            || self
+                .thread
+                .split_once('/')
+                .is_some_and(|(mission, topic)| id(mission) && id(topic));
+        place
+            && self.threads.len() <= 64
+            && self.threads.iter().all(|line| {
+                let mut parts = line.splitn(3, '\n');
+                matches!(
+                    (parts.next(), parts.next(), parts.next()),
+                    (Some(mission), Some(topic), Some(_)) if id(mission) && (topic.is_empty() || id(topic))
+                )
             })
     }
 }
@@ -911,7 +943,8 @@ impl UpdateDesk {
                 || view.entries() > VIEW_ENTRIES
                 || !view.offsets_valid()
                 || !view.linear_valid()
-                || !view.preferences_valid())
+                || !view.preferences_valid()
+                || !view.threads_valid())
         {
             self.bump();
             return Err(outcome(

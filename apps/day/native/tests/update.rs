@@ -44,6 +44,11 @@ fn view() -> SavedView {
             "p-small\nKeep PRs small 🐦".into(),
             "\nNew one".into(),
         ],
+        thread: "export/topic-1".into(),
+        threads: vec![
+            "export\ntopic-1\n  Exact words 日本語\nsecond line ".into(),
+            "export\n\nA new thread".into(),
+        ],
     }
 }
 
@@ -328,6 +333,25 @@ fn an_oversized_view_is_refused_whole_before_anything_pauses() {
             start(&mut desk, odd),
             Err(OutcomeStatus::Rejected),
             "{preferences:?}"
+        );
+    }
+    // A thread and its unsent words name a valid mission and thread.
+    for (thread, threads) in [
+        ("export", vec![]),
+        ("export/", vec![]),
+        ("ex port/topic", vec![]),
+        ("", vec!["export\ntopic-1".to_owned()]),
+        ("", vec!["ex port\ntopic\ntext".to_owned()]),
+        ("", vec!["export\nbad topic\ntext".to_owned()]),
+    ] {
+        let mut desk = UpdateDesk::new(UpdateScenario::Available);
+        let mut odd = view();
+        odd.thread = thread.into();
+        odd.threads = threads.clone();
+        assert_eq!(
+            start(&mut desk, odd),
+            Err(OutcomeStatus::Rejected),
+            "{thread} {threads:?}"
         );
     }
     assert!(desk.view().run.is_none());

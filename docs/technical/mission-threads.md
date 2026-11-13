@@ -1,6 +1,6 @@
 # Focused mission discussions
 
-Backend API for the approved focused coordinator threads. The native screen is separate work.
+Backend API for the approved focused coordinator threads, and Day's native screen over it.
 There is no pre-mission thread, second transcript, new chat engine or task tracker.
 
 ## Records and reads
@@ -38,12 +38,12 @@ original `DurableOperation`. `targetId` is the mission ID. Use the read's opaque
 `bindingId` and `payload.source`, with `bindingGeneration: 1`. Payloads are `MissionThreadWrite`
 in `packages/protocol/src/mission-thread.ts`:
 
-| purpose | Other payload fields |
-| --- | --- |
-| `thread-create` | `topicId` (new caller-chosen stable ID), `title` |
-| `thread-disposition` | `topicId`, `disposition` (`open`, `later`, `discarded`) |
-| `thread-reference` | `topicId`, `reference` (canonical task/decision ID or original session/entry ID) |
-| `thread-send` | `topicId`, `text` (exact bytes, no trimming or replacement) |
+| purpose              | Other payload fields                                                             |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `thread-create`      | `topicId` (new caller-chosen stable ID), `title`                                 |
+| `thread-disposition` | `topicId`, `disposition` (`open`, `later`, `discarded`)                          |
+| `thread-reference`   | `topicId`, `reference` (canonical task/decision ID or original session/entry ID) |
+| `thread-send`        | `topicId`, `text` (exact bytes, no trimming or replacement)                      |
 
 Unknown fields refuse. References must exist in this mission or the topic's original history.
 At most 100 topics, 100 references per topic, 2048 metadata events per mission and 32000 UTF-8
@@ -78,3 +78,30 @@ Tests use canonical temporary SQLite/journals and fake sessions, with no provide
 or live profile effects: `mission-threads.test.ts`, the shared `published-planning.fixture.ts`,
 `revisit-planning.test.ts` and selected `planning-boundary.test.ts` cases. UI integration and native
 acceptance are not established by these backend checks.
+
+## Day
+
+A mission's overview lists its threads (open, then Later; discarded on request) and starts a new
+one from an explicit title. A thread's page shows its links, the original coordinator conversation
+and a reply box. Only entries the topic names are marked as its own: messages it sent (by exact
+operation ID in `pilot.planning-input` entries) and history references. Other entries stay
+labelled as the coordinator's conversation. Tool results fold into one quiet line.
+
+The native root (`apps/day/native/src/host/threads.rs`) adds four exact methods:
+
+- `day.threads.read {missionId}` reads the topics view plus task and decision names from the
+  mission detail. It requires `nativeThreads`. A 404 or 409 is a refused scope, never an empty list.
+- `day.threads.history {missionId, topicId, before|null}` reads one page of 32 original entries.
+  Long entries show their first 8000 bytes and say so.
+- `day.threads.write {missionId, source, purpose, topicId?, title|disposition|reference|text}`
+  names the exact `source` the window showed. The root reads again and refuses a changed source
+  (Stale). A send to a topic that is not open, or while `discussion.available` is false, is
+  refused before anything is saved. The root chooses the operation ID and a new topic's ID,
+  journals the envelope, then sends it once.
+- `day.threads.check {operationId}` only looks up that saved envelope's receipt.
+
+An accepted receipt counts only when its topic shows the exact effect; a send also needs the
+planning admission of the same operation. Accepted means the coordinator has the message, not
+that it answered. An unsettled write on a mission blocks further thread and planning writes for
+that mission until Check settles it. Unsent words are kept by mission and thread in the saved
+view (`thread`, `threads`) across Back, close and update; only an accepted send clears them.

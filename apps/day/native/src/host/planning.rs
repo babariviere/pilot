@@ -53,6 +53,10 @@ impl PlanningRecord {
                         | "native-chat-create"
                         | "user-verification"
                         | "project-preferences-update"
+                        | "thread-create"
+                        | "thread-disposition"
+                        | "thread-reference"
+                        | "thread-send"
                 )
             )
             || o["payload"]
@@ -79,6 +83,9 @@ impl PlanningRecord {
         }
         if o["kind"] == super::preferences::KIND {
             super::preferences::validate_record(&self.source, o)?;
+        }
+        if o["kind"].as_str().is_some_and(super::threads::is_thread_kind) {
+            super::threads::validate_record(o)?;
         }
         Ok(())
     }
@@ -146,6 +153,10 @@ fn record_pinned(
                     | "native-chat-create"
                     | "user-verification"
                     | "project-preferences-update"
+                    | "thread-create"
+                    | "thread-disposition"
+                    | "thread-reference"
+                    | "thread-send"
             )
         )
         || (!matches!(
@@ -160,6 +171,10 @@ fn record_pinned(
                     | "native-chat-create"
                     | "user-verification"
                     | "project-preferences-update"
+                    | "thread-create"
+                    | "thread-disposition"
+                    | "thread-reference"
+                    | "thread-send"
             )
         ) && request["expected"]["fence"]["missionId"] != mission)
     {
@@ -270,6 +285,9 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
     }
     if op["kind"] == super::preferences::KIND && r["state"] == "accepted" {
         super::preferences::exact_result(op, &r)?;
+    }
+    if op["kind"].as_str().is_some_and(super::threads::is_thread_kind) && r["state"] == "accepted" {
+        super::threads::exact_result(op, &r)?;
     }
     Ok(r)
 }

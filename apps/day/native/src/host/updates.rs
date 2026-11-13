@@ -439,6 +439,7 @@ pub(crate) fn validate_view(view: &SavedView) -> Result<(), Error> {
     if !view.offsets_valid()
         || !view.linear_valid()
         || !view.preferences_valid()
+        || !view.threads_valid()
         || view.chat.as_ref().is_some_and(|c| !c.validate())
         || (!view.today_project.is_empty() && !crate::host::valid_id(&view.today_project))
     {

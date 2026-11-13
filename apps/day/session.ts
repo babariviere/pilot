@@ -10,9 +10,11 @@ import { mirrorLinear } from "./linearFeed";
 import { openPlanning } from "./planning";
 import { ScriptedPreferences } from "./preferencesDemo";
 import { mirrorPreferences } from "./preferencesFeed";
+import { ScriptedThreads } from "./threadDemo";
+import { mirrorThreads } from "./threadFeed";
 import { openUpdate } from "./updateFeed";
 
-/** The running app's feed: the decisions world, with demo results to check, saved Linear issues and preferences. */
+/** The running app's feed: the decisions world, with demo results to check, saved Linear issues, preferences and threads. */
 export const day = mirrorDay(
 	new TodayFeed(),
 	undefined,
@@ -20,6 +22,7 @@ export const day = mirrorDay(
 	mirrorLinear(new ScriptedLinear()),
 	undefined,
 	mirrorPreferences(new ScriptedPreferences()),
+	mirrorThreads(new ScriptedThreads()),
 );
 /** The running app's planning feed: one mission interview in progress. */
 export const plans = openPlanning();

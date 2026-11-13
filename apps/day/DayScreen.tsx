@@ -24,7 +24,9 @@ import { RitualScreen } from "./RitualScreen";
 import { mockRituals, type Rituals } from "./ritualFeed";
 import { ritualEntry, ritualRoute } from "./ritualView";
 import { SettingsScreen } from "./SettingsScreen";
+import { ThreadScreen } from "./ThreadScreen";
 import { TodayScreen } from "./TodayScreen";
+import { threadRoute } from "./threadView";
 import { bindRestore, UpdateScreen } from "./UpdateScreen";
 import type { Update } from "./updateFeed";
 import { updateEntry, updateOpen } from "./updateView";
@@ -165,9 +167,22 @@ function Places(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Ch
 						>
 							<Each of={route() ? [route() as string] : []} key={(id) => id}>
 								{(id) => (
-									<Arrive class="flex-1">
-										<MissionScreen day={props.day} plans={props.plans} missionId={id()} />
-									</Arrive>
+									<If
+										when={props.day.threads && threadRoute()?.missionId === id()}
+										else={
+											<Arrive class="flex-1">
+												<MissionScreen day={props.day} plans={props.plans} missionId={id()} />
+											</Arrive>
+										}
+									>
+										<Each of={threadRoute() ? [threadRoute()?.topicId as string] : []} key={(t) => t}>
+											{(t) => (
+												<Arrive class="flex-1">
+													<ThreadScreen day={props.day} missionId={id()} topicId={t()} />
+												</Arrive>
+											)}
+										</Each>
+									</If>
 								)}
 							</Each>
 						</If>

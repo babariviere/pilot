@@ -60,6 +60,7 @@ import {
 	settingsOpen,
 } from "./preferencesView";
 import { type RitualRoute, ritualRoute, startStep } from "./ritualView";
+import { forgetThreads, restoreThreads, savedThread, savedThreadDrafts, threadRoute } from "./threadView";
 import { todayProject } from "./todayScope";
 import type { Update } from "./updateFeed";
 import {
@@ -119,6 +120,8 @@ export function shownKey(): string {
 	if (delivery) return `delivery/${delivery.key}`;
 	if (linearOpen()) return "linear";
 	const at = place();
+	const thread = threadRoute();
+	if (at.place === "mission" && thread?.missionId === at.id) return `thread/${thread.missionId}/${thread.topicId}`;
 	return at.id ? `${at.place}/${at.id}` : at.place;
 }
 
@@ -196,6 +199,10 @@ export function captureView(today?: Today): SavedView {
 		// project and revision. Restoring them sends and saves nothing.
 		settings: settingsOpen(),
 		preferences: savedPreferences(),
+		// The thread on screen and unsent thread words, by mission and thread.
+		// Restoring them sends nothing and never moves words to another thread.
+		thread: savedThread(),
+		threads: savedThreadDrafts(),
 	};
 }
 
@@ -303,6 +310,7 @@ export function startFresh() {
 	settingsOpen.set(false);
 	preferencesDraft.set(null);
 	preferencesMessage.set("");
+	forgetThreads();
 	todayPlace.y = 0;
 	todayPlace.row = null;
 	forgetPlaces();
@@ -380,6 +388,9 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	if (linear && view.linear) restoreLinear(view.linear);
 	restorePreferences(view.preferences ?? []);
 	settingsOpen.set(settings && view.settings === true);
+	// A thread comes back over its own mission only; its words always come back unsent.
+	const thread = view.thread ?? "";
+	restoreThreads(view.place === "mission" && thread.startsWith(`${view.id}/`) ? thread : "", view.threads ?? []);
 	// Today's project scope comes back as a read; a view saved before it existed shows All projects.
 	todayProject.set(view.todayProject || "all");
 	todayPlace.y = Math.max(0, view.todayY ?? 0);

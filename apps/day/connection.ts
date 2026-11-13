@@ -18,6 +18,7 @@ import { mirrorPlanning, type Plans } from "./planning";
 import { answerDrafts, answerPicks } from "./planView";
 import { ConnectedPreferences, mirrorPreferences } from "./preferencesFeed";
 import { mirrorRituals, type Rituals, rootRecap } from "./ritualFeed";
+import { ConnectedThreads, mirrorThreads } from "./threadFeed";
 import { ConnectedScope, mirrorScope } from "./todayScope";
 import type { Update } from "./updateFeed";
 import { captureView, restoreView, saveForms } from "./updateView";
@@ -207,7 +208,7 @@ async function connect() {
 		requests = now;
 		void intakeFeed.read();
 	});
-	// The saved Linear issues and the project's preferences are read only when their page opens.
+	// The saved Linear issues, the project's preferences and a mission's threads are read only when their page opens.
 	const day = mirrorDay(
 		today,
 		intake,
@@ -215,6 +216,7 @@ async function connect() {
 		mirrorLinear(new ConnectedLinear(window)),
 		mirrorScope(new ConnectedScope(window)),
 		mirrorPreferences(new ConnectedPreferences(window)),
+		mirrorThreads(new ConnectedThreads(window)),
 	);
 	// New's projects are read when New opens; reading sends nothing.
 	const plans = mirrorPlanning(planFeed, mirrorChats(new ConnectedChats(window)));

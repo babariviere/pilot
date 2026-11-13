@@ -9,6 +9,7 @@ import type { IntakeMirror } from "./intakeFeed";
 import type { LinearMirror } from "./linearFeed";
 import { glide } from "./motion";
 import type { PreferencesMirror } from "./preferencesFeed";
+import type { ThreadsMirror } from "./threadFeed";
 import type { ScopeMirror } from "./todayScope";
 
 /** Today's read model as Rust last published it, and the feed to change it. */
@@ -42,6 +43,11 @@ export type Day = {
 	 * window offers no Settings.
 	 */
 	preferences?: PreferencesMirror;
+	/**
+	 * Missions' focused threads with their coordinator. Without them a
+	 * mission's overview offers no threads.
+	 */
+	threads?: ThreadsMirror;
 	/** Stops listening and frees the feed. */
 	close: () => void;
 };
@@ -59,6 +65,7 @@ export function mirrorDay(
 	linear?: LinearMirror,
 	scope?: ScopeMirror,
 	preferences?: PreferencesMirror,
+	threads?: ThreadsMirror,
 ): Day {
 	const today = signal(feed.snapshot());
 	const stop = feed.onChange((next) => {
@@ -75,6 +82,7 @@ export function mirrorDay(
 		linear,
 		scope,
 		preferences,
+		threads,
 		close: () => {
 			stop();
 			feed.dispose();
@@ -82,6 +90,7 @@ export function mirrorDay(
 			delivery?.close();
 			linear?.close();
 			preferences?.close();
+			threads?.close();
 		},
 	};
 }

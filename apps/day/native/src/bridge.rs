@@ -28,6 +28,10 @@ pub const METHODS: &[&str] = &[
     "day.preferences.save",
     "day.preferences.check",
     "day.preferences.history",
+    "day.threads.read",
+    "day.threads.history",
+    "day.threads.write",
+    "day.threads.check",
     "day.intake.triage",
     "day.intake.start",
     "day.intake.check",
@@ -190,6 +194,10 @@ pub(crate) enum Command {
     PreferencesSave(crate::host::preferences::Intent),
     PreferencesCheck(String),
     PreferencesHistory(crate::host::preferences::History),
+    ThreadsRead(String),
+    ThreadsHistory(crate::host::threads::HistoryRequest),
+    ThreadsWrite(crate::host::threads::Intent),
+    ThreadsCheck(String),
     IntakeWrite(crate::host::intake::Intent),
     IntakeCheck(String),
     DeliveryRead(crate::host::delivery::Subject),
@@ -387,6 +395,31 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: crate::host::preferences::History = exact(args)?;
             r.validate()?;
             C::PreferencesHistory(r)
+        }
+        "day.threads.read" => {
+            let r: crate::host::threads::ReadRequest = exact(args)?;
+            mission(&r.mission_id)?;
+            C::ThreadsRead(r.mission_id)
+        }
+        "day.threads.history" => {
+            let r: crate::host::threads::HistoryRequest = exact(args)?;
+            r.validate()?;
+            C::ThreadsHistory(r)
+        }
+        "day.threads.write" => {
+            let r: crate::host::threads::Intent = exact(args)?;
+            r.validate()?;
+            C::ThreadsWrite(r)
+        }
+        "day.threads.check" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Lookup {
+                operation_id: String,
+            }
+            let r: Lookup = exact(args)?;
+            mission(&r.operation_id)?;
+            C::ThreadsCheck(r.operation_id)
         }
         "day.delivery.list" => {
             let r: crate::host::delivery::List = exact(args)?;
@@ -667,6 +700,8 @@ impl Command {
                     | Self::LinearRead
                     | Self::PreferencesRead
                     | Self::PreferencesHistory(_)
+                    | Self::ThreadsRead(_)
+                    | Self::ThreadsHistory(_)
                     | Self::DeliveryRead(_)
                     | Self::DeliveryList(_)
                     | Self::DeliverySaved
@@ -1092,5 +1127,45 @@ mod tests {
         gate.save_sequence += 1; // Another form save was enqueued behind this ACK.
         assert_eq!(ack.admit(&gate), Err(Error::Stale));
         assert_eq!(Command::Flush(1, 8, None).admit(&gate), Ok(()));
+    }
+
+    #[test]
+    fn thread_reads_pass_a_save_but_writes_wait_and_args_are_exact() {
+        let gate = Gate {
+            flushing: true,
+            ..Gate::default()
+        };
+        let source = "a".repeat(64);
+        let read = command("day.threads.read", json!({"missionId":"m"})).unwrap();
+        assert_eq!(read.admit(&gate), Ok(()));
+        let history = command(
+            "day.threads.history",
+            json!({"missionId":"m","topicId":"t","before":null}),
+        )
+        .unwrap();
+        assert_eq!(history.admit(&gate), Ok(()));
+        let send = command(
+            "day.threads.write",
+            json!({"missionId":"m","source":source,"purpose":"thread-send","topicId":"t","text":"x"}),
+        )
+        .unwrap();
+        assert_eq!(send.admit(&gate), Err(Error::Busy));
+        let check = command("day.threads.check", json!({"operationId":"op"})).unwrap();
+        assert_eq!(check.admit(&gate), Err(Error::Busy));
+        for (name, args) in [
+            ("day.threads.read", json!({"missionId":"m","projectId":"other"})),
+            ("day.threads.read", json!({"missionId":"../m"})),
+            (
+                "day.threads.history",
+                json!({"missionId":"m","topicId":"t","before":1}),
+            ),
+            (
+                "day.threads.write",
+                json!({"missionId":"m","source":source,"purpose":"thread-send","topicId":"t","text":"x","operationId":"mine"}),
+            ),
+            ("day.threads.check", json!({"operationId":"op","resend":true})),
+        ] {
+            assert!(command(name, args.clone()).is_err(), "{name} {args}");
+        }
     }
 }
