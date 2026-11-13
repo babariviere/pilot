@@ -22,6 +22,15 @@ jobs:
   tests:
     uses: ./.github/workflows/tests.yaml
 
+  # Ephemeral hosted runner, read-only token, no secrets or shared build cache.
+  # Fork code never enters the native lane; portable tests still cover forks.
+  day-qualification:
+    if: github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == github.repository && github.event.repository.fork == false
+    uses: ./.github/workflows/day-qualification.yml
+    with:
+      # Test the immutable merge commit, never the PR head or a mutable branch.
+      ref: ${{ github.sha }}
+
   # Builds and validates the Linux production package, without signing or publishing it.
   linux-package:
     uses: ./.github/workflows/linux-package.yml

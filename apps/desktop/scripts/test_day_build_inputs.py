@@ -59,6 +59,28 @@ class RecipeTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             day.environment(self.root, self.tools, {}, {})
 
+    def test_selected_xcode_survives_the_isolated_build_environment(self):
+        selected = "/Applications/Xcode_26.2.app/Contents/Developer"
+        env = day.environment(self.root, self.tools, {"DEVELOPER_DIR": selected}, None)
+        self.assertEqual(env["DEVELOPER_DIR"], selected)
+
+    def test_executing_tools_must_match_the_archived_source(self):
+        directory = self.root / "apps/desktop/scripts"
+        directory.mkdir(parents=True)
+        for module in (day.__file__, bundle.__file__):
+            shutil.copyfile(module, directory / Path(module).name)
+        day.source_tools(self.root)
+        for module in (day.__file__, bundle.__file__):
+            path = directory / Path(module).name
+            original = path.read_bytes()
+            path.write_bytes(original + b"\n# different source\n")
+            with self.assertRaisesRegex(ValueError, "match the immutable source"):
+                day.source_tools(self.root)
+            path.write_bytes(original)
+        (directory / "day_build_inputs.py").unlink()
+        with self.assertRaisesRegex(ValueError, "match the immutable source"):
+            day.source_tools(self.root)
+
     def test_tools_require_absolute_executable_files(self):
         with self.assertRaises(ValueError):
             day.tool("cargo")

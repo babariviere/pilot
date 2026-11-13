@@ -12,11 +12,32 @@ inventory and existing bundle/release contracts. Both `main.yaml` and `pr.yaml`
 already call this workflow. Fixture success is not native or signing evidence.
 Required command failures propagate; this lane uses no credentials or compiler.
 
-`day-qualification.yml` is **workflow_call only, with no caller**. It has no
-push, tag or dispatch trigger, secret inputs, write permission or upload step.
-It additionally refuses forks/non-main/PR invocations. Adding a caller is a
-separate authorization step, not an automatic result of passing these tests.
-Its prepared macOS arm64 recipe:
+`main.yaml` and `pr.yaml` call `day-qualification.yml` for unsigned checks.
+Main release-only commits are skipped, as with the existing test job. The native
+lane accepts Main pushes and same-repository PRs targeting Main, never fork PRs,
+tags, dispatches or `pull_request_target`. Portable tests still cover fork PRs.
+The reusable workflow sees the caller's event name, not `workflow_call`.
+It checks the supplied commit against `github.sha` and checkout HEAD; PRs build
+the merge SHA, not the head or a mutable branch. A tested runtime policy also
+checks event/repository/ref identity before dependency setup. No secret inputs,
+write permissions, shared build cache or uploads enter this lane. PR code runs
+only on ephemeral GitHub-hosted runners, never as trusted release code.
+
+The native recipe supports **macOS arm64 only**, on standard `macos-15`:
+
+- GitHub's [hosted runner table](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+  identifies `macos-15` as M1/arm64 for public and private repositories;
+  `macos-15-intel` is a different lane and is not used here.
+- The [arm64 image inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)
+  (image `20261104.0514.1`, checked 2026-11-13) includes Xcode 26.2 at
+  `/Applications/Xcode_26.2.app`, with macOS SDK 26.2. The default is Xcode 16.4,
+  so the job selects and verifies 26.2 explicitly. Isolated builds keep
+  `DEVELOPER_DIR`; they must not silently revert to the default toolchain.
+- Runtime architecture, Xcode, SDK, clang and swiftc checks fail on missing or
+  changed images. Hosted images are not immutable; this is an explicit gate,
+  not a claim that all future images will keep these prerequisites.
+
+The source-matched unsigned steps:
 
 1. Checks out the supplied full commit, checks equality with HEAD, and uses
    that commit's tools. It does not overlay current helpers on older app source.
@@ -32,14 +53,21 @@ Its prepared macOS arm64 recipe:
    visual worker. The immutable builder remains offline. It builds Day's own
    native bootstrap, updater helper, visual worker and exact `Connected.tsx`
    resources, not the GPUI workspace or a renamed stock NSH runner.
+   Also compiles the shared Rust power helper and the two kept SystemEvents
+   Swift files directly. It does not resolve/build the removed Swift GUI.
 5. Writes a runner-local qualification receipt. It binds the immutable recipe,
    real Cargo outputs/compiled app and helper diagnostics, official CLI,
    source-matched host grant, app identity and exact resource inventory.
    It always reports `installable_update`, `signed_package` and
    `native_acceptance` as false. There is no archive upload.
+   Unsigned debug executables alone have a 1 GiB diagnostic per-file limit,
+   within the existing 2 GiB total closure limit. Resources/logs/runtime and
+   all shipping/assembly inventories keep their 256 MiB per-file limit.
+   Qualification never strips, re-signs or changes shared compiler outputs.
 
-The native workflow is prepared but has **not been dispatched or qualified on
-GitHub**. Missing tool/dependency inputs fail, not skip or fixture-fallback.
+The callers now schedule these checks automatically. Local checks and workflow
+validation are not evidence of a green remote execution. Missing tool/dependency
+inputs fail, not skip or fixture-fallback. No remote CI polling is required.
 
 ## Reusing the package pipeline
 
@@ -65,7 +93,7 @@ not called by qualification.
 | `release.yaml` | Main pushes run Release Please. Created stable drafts or explicit retries resolve a tag to an immutable SHA; macOS and Linux packages build that SHA, then upload/sign manifests and publish. Unchanged. Tests do not gate publication. Do not insert Day here before acceptance and explicit cutover. |
 | `gui-package.yml` | Existing GPUI macOS/Linux builders. Uses tagged app source with a current packaging-helper overlay. Only the Linux inventory-signing step receives the updater private key; publication has its separate key scope. No Day selection, added secrets or key inheritance. |
 | `linux-package.yml` | Reusable x64 headless runtime build in pinned manylinux, relocated runtime checks and CI artifact upload. Still called by PR CI, not changed into a Day desktop. |
-| `main.yaml`, `pr.yaml` | Existing shared tests. PRs also build the Linux runtime. No call to the new native qualification workflow. |
+| `main.yaml`, `pr.yaml` | Existing shared tests plus exact-source unsigned Day qualification. PRs also build the Linux runtime. No Day release or production selection. |
 | `tests.yaml` | Existing Node/GPUI/native helper checks kept, plus portable Day package regressions. No release permissions. |
 
 Linux GPUI release inventory already checks bundled-launch, installer and

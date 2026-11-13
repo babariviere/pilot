@@ -4,17 +4,52 @@ import argparse
 import hashlib
 from pathlib import Path
 import re
+import stat
 import subprocess
 
 import bundle_runtime as bundle
 import day_build_inputs as day
 
 BINARIES = ("pilot-desktop", "pilot-desktop-update-helper", "pilot-visual-worker")
+# Global-default debug outputs can exceed a shipping file's 256 MiB limit.
+# This diagnostic-only allowance applies to these exact executables, not NSH
+# resources, logs, runtime inputs or the assembler. Total closure stays 2 GiB.
+DEBUG_FILE_CAPS = {name: 1024**3 for name in BINARIES}
+
+
+def debug_inventory(inputs):
+    """Day-only unsigned compiler outputs. Shared shipping policy is unchanged."""
+    entries = []
+    for path in sorted(inputs.iterdir()):
+        info = path.lstat()
+        if path.is_symlink() or info.st_mode & 0o6022:
+            raise ValueError("Unsafe Day input: " + path.name)
+        mode = stat.S_IMODE(info.st_mode)
+        if path.name == "nsh" and path.is_dir():
+            entries.append(dict(path="nsh", kind="directory", mode=mode))
+            entries.extend(dict(item, path="nsh/" + item["path"]) for item in bundle.inventory(path))
+        elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+            if info.st_size > DEBUG_FILE_CAPS.get(path.name, 256 * 1024**2):
+                raise ValueError(f"Day input exceeds expanded byte policy: {path.name} ({info.st_size} bytes)")
+            entries.append(dict(path=path.name, kind="file", bytes=info.st_size,
+                                mode=mode, sha256=bundle.digest(path)))
+        else:
+            raise ValueError("Unsupported Day input: " + path.name)
+    if len(entries) > bundle.CAP_FILES or sum(item.get("bytes", 0) for item in entries) > bundle.CAP_BYTES:
+        raise ValueError("Day inputs exceed total inventory policy")
+    return sorted(entries, key=lambda item: item["path"])
 
 
 def source_file(source, relative):
     return subprocess.check_output(["git", "show", source + ":" + relative], cwd=bundle.ROOT,
                                    env=bundle.subprocess_env(), timeout=30).decode()
+
+
+def source_tools(source):
+    for module in (__file__, day.__file__, bundle.__file__):
+        path = Path(module)
+        if source_file(source, "apps/desktop/scripts/" + path.name) != path.read_text():
+            raise ValueError("Qualification tools must match the immutable source: " + path.name)
 
 
 def qualify(source, inputs, *, runtime=None, native=None):
@@ -59,7 +94,7 @@ def qualify(source, inputs, *, runtime=None, native=None):
                   target=day.TARGET, nsh_release=bundle.NSH_RELEASE,
                   application_id=bundle.APP_ID, installable_update=False,
                   signed_package=False, native_acceptance=False,
-                  inputs=bundle.inventory(inputs), resources=resources)
+                  inputs=debug_inventory(inputs), resources=resources)
     if runtime is not None:
         runtime, native = Path(runtime).resolve(strict=True), Path(native).resolve(strict=True)
         result["runtime_build"] = bundle.validate_runtime(runtime, source)
@@ -79,6 +114,7 @@ def main():
     args = parser.parse_args()
     if args.output.exists() or args.output.is_symlink():
         raise ValueError("Use a fresh qualification receipt")
+    source_tools(bundle.source(args.source))
     result = qualify(args.source, args.inputs, runtime=args.runtime, native=args.native)
     bundle.write_json(args.output, result)
 

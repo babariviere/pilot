@@ -51,7 +51,7 @@ def tool(path):
 
 def environment(work, tools, inherited, production):
     """Global MBX defaults; no ambient trust, package hooks or Cargo tuning."""
-    env = {name: inherited[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "SDKROOT") if name in inherited}
+    env = {name: inherited[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "SDKROOT", "DEVELOPER_DIR") if name in inherited}
     env.update(NSH_DAY_CLI=str(tools["nsh"]), NSH_DAY_MBX=str(tools["mbx"]),
                NSH_DAY_REAL_CARGO=str(tools["cargo"]), RUSTC=str(tools["rustc"]),
                RUSTDOC=str(tools["rustc"].with_name("rustdoc")),
@@ -169,6 +169,16 @@ def resource_closure(built, output, names):
         raise ValueError("NSH resource copy changed")
 
 
+def source_tools(checkout):
+    # These modules run outside the archive. Refuse a current-helper overlay
+    # on older app source, including edits not yet in the supplied commit.
+    for module in (__file__, bundle.__file__):
+        path = Path(module).resolve()
+        archived = checkout / "apps/desktop/scripts" / path.name
+        if not archived.is_file() or path.read_bytes() != archived.read_bytes():
+            raise ValueError("Build tools must match the immutable source: " + path.name)
+
+
 def compile_snapshot(checkout, work, output, expected, tools, inherited, production=None):
     """Only called on a fresh git-archive checkout, never a developer's tree."""
     day = checkout / "apps/day"
@@ -278,6 +288,7 @@ def snapshot_day(expected, output, production=None, *, tools=None, inherited=Non
                            stdout=stream, env=bundle.subprocess_env(), check=True, timeout=60)
         with tarfile.open(archive) as stream:
             stream.extractall(checkout, filter="data")
+        source_tools(checkout)
         compile_snapshot(checkout, work, output, expected, tools, inherited, production)
 
 

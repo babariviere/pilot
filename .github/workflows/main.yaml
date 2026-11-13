@@ -18,3 +18,9 @@ jobs:
     # Release commits only bump versions and the changelog. Leave macOS runners free for the release build.
     if: "${{ !startsWith(github.event.head_commit.message, 'chore(main): release') }}"
     uses: ./.github/workflows/tests.yaml
+
+  day-qualification:
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore(main): release') }}"
+    uses: ./.github/workflows/day-qualification.yml
+    with:
+      ref: ${{ github.sha }}

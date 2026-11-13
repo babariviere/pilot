@@ -1,7 +1,7 @@
 name: Day unsigned input qualification
 
-# Deliberately uncalled. No push/tag/dispatch, secrets, signing or artifact upload.
-# Enabling a caller requires separate native acceptance and cutover authorization.
+# Main and same-repository PR checks only. Not acceptance or cutover authority.
+# No push/tag/dispatch, secrets, signing, shared build cache or artifact upload.
 on:
   workflow_call:
     inputs:
@@ -14,12 +14,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: day-native-qualification-${{ github.repository }}
+  group: day-native-qualification-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   inputs:
-    if: github.ref == 'refs/heads/main' && github.event.repository.fork == false && github.event_name != 'pull_request'
+    # Reusable workflows keep the CALLER's event_name/ref/sha, not workflow_call.
+    if: inputs.ref == github.sha && github.event.repository.fork == false && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == github.repository))
+    # Standard macos-15 is Apple Silicon, not macos-15-intel. Verify at runtime.
     runs-on: macos-15
     timeout-minutes: 90
     env:
@@ -39,7 +41,13 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$SOURCE"
+          python3 apps/desktop/scripts/day_ci_policy.py --source "$SOURCE"
           test "$(uname -m)" = arm64
+          test -d "$DEVELOPER_DIR"
+          test "$(xcodebuild -version | head -1)" = 'Xcode 26.2'
+          test "$(xcrun --sdk macosx --show-sdk-version)" = '26.2'
+          xcrun --find clang
+          xcrun --find swiftc
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -77,6 +85,15 @@ jobs:
           apps/day/scripts/cargo test --locked --manifest-path apps/day/native/Cargo.toml --lib
           # NSH accepts one path per invocation. Native.test.tsx needs a visible target.
           for file in App Plan Intake Update; do apps/day/nsh.sh test "$file.test.tsx"; done
+      - name: Compile shared native helpers without the removed Swift GUI
+        run: |
+          set -euo pipefail
+          apps/day/scripts/cargo build --locked --release --manifest-path apps/power/Cargo.toml --bin PilotPower
+          xcrun swiftc -O -warnings-as-errors -target arm64-apple-macosx15.0 \
+            -framework AppKit -framework Network -framework IOKit -framework CoreGraphics \
+            apps/macos/Sources/PilotSystemEvents/main.swift \
+            apps/macos/Sources/PilotSystemEvents/SystemPowerMonitor.swift \
+            -o "$RUNNER_TEMP/PilotSystemEvents"
       - name: Prepare locked offline input dependencies
         run: python3 apps/desktop/scripts/prepare-day-qualification.py
       - name: Build and qualify genuine Day inputs, never a GPUI rename

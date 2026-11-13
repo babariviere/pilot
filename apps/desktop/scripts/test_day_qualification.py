@@ -70,9 +70,61 @@ class QualificationTests(unittest.TestCase):
         for key in ("installable_update", "signed_package", "native_acceptance"):
             self.assertIs(expected[key], False)
         self.assertEqual(self.receipt.call_count, 2)
+        self.assertEqual(expected["inputs"], bundle.inventory(self.inputs))
         moved = self.root / "relocated inputs"
         self.inputs.rename(moved)
         self.assertEqual(qualification.qualify(self.source, moved), expected)
+
+    def test_large_debug_binary_is_diagnostic_only_not_shipping_admission(self):
+        binary = self.inputs / "pilot-desktop"
+        with binary.open("wb") as stream:
+            stream.truncate(257 * 1024**2)
+        entry = self.manifest["binaries"][0]
+        entry.update(bytes=binary.stat().st_size, sha256=bundle.digest(binary))
+        bundle.write_json(self.inputs / "manifest.json", self.manifest)
+        resources = bundle.read_json(self.inputs / "gui-resources.json")
+        resources["executable"] = entry
+        bundle.write_json(self.inputs / "gui-resources.json", resources)
+        self.assertFalse(self.qualify()["installable_update"])
+        with self.assertRaisesRegex(ValueError, "expanded byte policy"):
+            bundle.inventory(self.inputs)
+        # Exact executable names only. Logs/resources keep the ordinary limit.
+        binary.rename(self.inputs / "oversized.log")
+        with self.assertRaisesRegex(ValueError, "expanded byte policy"):
+            qualification.debug_inventory(self.inputs)
+        (self.inputs / "oversized.log").unlink()
+        with binary.open("wb") as stream:
+            stream.truncate(1024**3 + 1)
+        with self.assertRaisesRegex(ValueError, "expanded byte policy"):
+            qualification.debug_inventory(self.inputs)
+
+    def test_day_debug_inventory_keeps_structural_resource_and_total_limits(self):
+        extra = self.inputs / "extra"
+        extra.mkdir()
+        with self.assertRaisesRegex(ValueError, "Unsupported Day input"):
+            qualification.debug_inventory(self.inputs)
+        extra.rmdir()
+        extra.symlink_to("pilot-desktop")
+        with self.assertRaisesRegex(ValueError, "Unsafe Day input"):
+            qualification.debug_inventory(self.inputs)
+        extra.unlink()
+        extra.hardlink_to(self.inputs / "pilot-desktop")
+        with self.assertRaisesRegex(ValueError, "Unsupported Day input"):
+            qualification.debug_inventory(self.inputs)
+        extra.unlink()
+        binary = self.inputs / "pilot-desktop"
+        binary.chmod(0o777)
+        with self.assertRaisesRegex(ValueError, "Unsafe Day input"):
+            qualification.debug_inventory(self.inputs)
+        binary.chmod(0o755)
+        with patch.object(bundle, "CAP_FILES", 3), self.assertRaisesRegex(ValueError, "total inventory policy"):
+            qualification.debug_inventory(self.inputs)
+        with patch.object(bundle, "CAP_BYTES", 1), self.assertRaisesRegex(ValueError, "byte policy|total inventory policy"):
+            qualification.debug_inventory(self.inputs)
+        with (self.inputs / "nsh/large.asset").open("wb") as stream:
+            stream.truncate(257 * 1024**2)
+        with self.assertRaisesRegex(ValueError, "expanded byte policy"):
+            qualification.debug_inventory(self.inputs)
 
     def test_source_recipe_target_tool_and_production_substitution_refuse(self):
         for key, bad in (("source", "b" * 40), ("target", "x86_64-unknown-linux-gnu"),
@@ -153,6 +205,16 @@ class QualificationTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_qualification_tools_cannot_overlay_a_different_source(self):
+        def content(source, relative):
+            self.assertEqual(source, "a" * 40)
+            return (ROOT / relative).read_text()
+        with patch.object(qualification, "source_file", side_effect=content):
+            qualification.source_tools("a" * 40)
+        with patch.object(qualification, "source_file", return_value="other source"):
+            with self.assertRaisesRegex(ValueError, "tools must match the immutable source"):
+                qualification.source_tools("a" * 40)
+
     def test_cli_native_testing_and_runner_use_one_tagged_release(self):
         day.release_lock(ROOT / "apps/day/native/Cargo.lock")
         day.release_lock(ROOT / "apps/day/fixtures/rust-today/Cargo.lock")
@@ -185,22 +247,36 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("if: inputs.platform == 'linux'", linux)
         self.assertIn("PILOT_NEXT_UPDATER_PRIVATE_KEY: ${{ secrets.PILOT_NEXT_UPDATER_PRIVATE_KEY }}", linux)
 
-    def test_qualification_has_no_automatic_caller_or_production_effects(self):
+    def test_qualification_has_exact_source_callers_without_production_effects(self):
         workflow = (ROOT / ".github/workflows/day-qualification.yml").read_text()
         self.assertIn("  workflow_call:", workflow)
         self.assertIn("ref: ${{ inputs.ref }}", workflow)
         self.assertIn('[[ "$SOURCE" =~ ^[0-9a-f]{40}$ ]]', workflow)
         self.assertIn('test "$(git rev-parse HEAD)" = "$SOURCE"', workflow)
         for guard in ("github.ref == 'refs/heads/main'", "github.event.repository.fork == false",
-                      "github.event_name != 'pull_request'", "persist-credentials: false"):
+                      "inputs.ref == github.sha", "github.event_name == 'pull_request'",
+                      "github.event_name == 'push'", "github.event.pull_request.base.ref == 'main'",
+                      "github.event.pull_request.head.repo.full_name == github.repository", "persist-credentials: false"):
             self.assertIn(guard, workflow)
         for forbidden in ("  push:", "  workflow_dispatch:", "secrets:", "secrets.",
                           "contents: write", "secrets: inherit", "continue-on-error", "upload-artifact@",
                           "gui_release.py macos", "bundle_runtime.py bundle", "nsh.sh package"):
             self.assertNotIn(forbidden, workflow)
+        callers = []
         for path in (ROOT / ".github/workflows").glob("*"):
-            if path.name != "day-qualification.yml":
-                self.assertNotIn("uses: ./.github/workflows/day-qualification.yml", path.read_text())
+            if "uses: ./.github/workflows/day-qualification.yml" in path.read_text():
+                callers.append(path.name)
+                call = path.read_text().split("  day-qualification:\n", 1)[1].split("\n  #", 1)[0]
+                self.assertIn("ref: ${{ github.sha }}", call)
+                self.assertNotIn("secrets:", call)
+        self.assertEqual(sorted(callers), ["main.yaml", "pr.yaml"])
+        pr = (ROOT / ".github/workflows/pr.yaml").read_text()
+        self.assertIn("if: github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == github.repository && github.event.repository.fork == false", pr)
+        self.assertIn("runs-on: macos-15\n", workflow)
+        self.assertIn('test "$(uname -m)" = arm64', workflow)
+        self.assertIn('test "$(xcodebuild -version | head -1)" = \'Xcode 26.2\'', workflow)
+        self.assertIn('test "$(xcrun --sdk macosx --show-sdk-version)" = \'26.2\'', workflow)
+        self.assertIn('day_ci_policy.py --source "$SOURCE"', workflow)
         for name in ("release.yaml", "gui-package.yml", "linux-package.yml"):
             self.assertNotIn("day_qualification", (ROOT / ".github/workflows" / name).read_text())
         self.assertIn("snapshot_rust(expected, rust, production=config)",

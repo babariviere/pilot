@@ -4,7 +4,7 @@ Pilot Day is the upcoming Pilot desktop app, built with Native Shell (NSH)
 TSX and a Rust core in `native/`.
 
 The default app uses **mock data**. It connects to no daemon, account or user
-data, and does not replace the shipping GPUI or Swift apps. `Connected.tsx`
+data, and does not replace the shipping GPUI app. `Connected.tsx`
 uses the production native host through a separately verified distribution.
 Its [connected launch requirements](../../docs/technical/day-package-inputs.md#connected-launch)
 include explicit native selection and a compatible existing daemon. Build inputs
