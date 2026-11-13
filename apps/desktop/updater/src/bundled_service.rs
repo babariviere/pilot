@@ -281,7 +281,7 @@ pub fn preflight(
         cancel,
     )?;
     host.owner = verified(coordination::record(&host.location))?;
-    host.original = plist(&host.plist)?;
+    capture_definition(&mut host)?;
     validate_definition(&host.original, &host.home, &host.location, &host.label)?;
     if host.original["PilotNextManaged"] != true
         || verified(coordination::private_json(
@@ -298,6 +298,13 @@ pub fn preflight(
         json!({"target":target.pin(),"previousRuntime":host.owner["runtimeRoot"],"previousBuild":host.owner["build"],
         "boot":host.owner["boot"],"pid":host.owner["pid"]}),
     )
+}
+
+fn capture_definition(host: &mut LaunchAgent<'_>) -> Result<(), Failure> {
+    let meta = private_regular(&host.plist)?;
+    host.plist_stamp = Some((meta.dev(), meta.ino()));
+    host.original = plist(&host.plist)?;
+    Ok(())
 }
 
 fn stop_owned<'a>(

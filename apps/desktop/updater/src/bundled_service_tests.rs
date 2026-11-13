@@ -56,6 +56,41 @@ fn fixture() -> (Temp, PathBuf, Runtime) {
 }
 
 #[test]
+fn preflight_captures_the_private_definition_inode_before_revalidation() {
+    let (temp, app, runtime) = fixture();
+    let cancel = AtomicBool::new(false);
+    let mut host = launch_agent(
+        Location {
+            home: temp.path().into(),
+            port: 1234,
+            policy: Default::default(),
+        },
+        &app,
+        &runtime.trust,
+        "daemon",
+        "lineage",
+        &cancel,
+    )
+    .unwrap();
+    host.plist = temp.path().join("service.plist");
+    // plutil accepts JSON input. This fixture does not register a service.
+    fs::write(&host.plist, br#"{"Label":"fixture"}"#).unwrap();
+    fs::set_permissions(&host.plist, fs::Permissions::from_mode(0o600)).unwrap();
+    let meta = fs::symlink_metadata(&host.plist).unwrap();
+    capture_definition(&mut host).unwrap();
+    assert_eq!(host.original, json!({"Label":"fixture"}));
+    assert_eq!(host.plist_stamp, Some((meta.dev(), meta.ino())));
+
+    // A replaced inode still fails before any live service lookup.
+    fs::rename(&host.plist, host.plist.with_extension("previous")).unwrap();
+    fs::write(&host.plist, br#"{"Label":"fixture"}"#).unwrap();
+    fs::set_permissions(&host.plist, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(host.revalidate(), Err(Failure::Unverified));
+    fs::set_permissions(&host.plist, fs::Permissions::from_mode(0o666)).unwrap();
+    assert_eq!(capture_definition(&mut host), Err(Failure::Unverified));
+}
+
+#[test]
 fn app_relative_inputs_relocate_only_with_exact_verified_bytes() {
     let (temp, app, selected) = fixture();
     assert_eq!(
