@@ -183,6 +183,13 @@ test("NSH helper transport joins the owned helper before it releases a slot or s
 	await fail("process.stdin.resume(); process.stdout.write('not json');", /Invalid/);
 	// Oversized output: the helper stays alive, so only the transport's kill can end it.
 	await fail("process.stdout.write('x'.repeat(5*1024*1024)); setInterval(() => {}, 1000);", /output exceeds/);
+	// Packaging uses the same supervisor with a smaller response allowance.
+	await script("process.stdout.write('x'.repeat(9000)); setInterval(() => {}, 1000);");
+	await assert.rejects(callArtifactHost({}, undefined, executable, undefined, 8192), /output exceeds/);
+	await joined(1);
+	for (const limit of [0, 4 * 1024 * 1024 + 1, 1.5, Number.NaN])
+		await assert.rejects(callArtifactHost({}, undefined, executable, undefined, limit), /Invalid.*limit/);
+	await joined(0);
 
 	// Cancellation: a complete reply already written is not accepted, and both slots stay
 	// held until each helper is joined.

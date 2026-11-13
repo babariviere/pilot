@@ -1,15 +1,17 @@
 """Private offline recipe fixtures. Fake compilers/resources are NOT native acceptance."""
 import json
+import shlex
+import sys
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import bundle_runtime as bundle
 import day_build_inputs as day
-import day_artifact_host
 
 
 class RecipeTests(unittest.TestCase):
@@ -92,10 +94,10 @@ class RecipeTests(unittest.TestCase):
     def test_executing_tools_must_match_the_archived_source(self):
         directory = self.root / "apps/desktop/scripts"
         directory.mkdir(parents=True)
-        for module in (day.__file__, bundle.__file__, day_artifact_host.__file__):
+        for module in (day.__file__, bundle.__file__):
             shutil.copyfile(module, directory / Path(module).name)
         day.source_tools(self.root)
-        for module in (day.__file__, bundle.__file__, day_artifact_host.__file__):
+        for module in (day.__file__, bundle.__file__):
             path = directory / Path(module).name
             original = path.read_bytes()
             path.write_bytes(original + b"\n# different source\n")
@@ -310,7 +312,7 @@ class RecipeTests(unittest.TestCase):
             return ""
 
         output = self.root / "result"
-        with patch.object(day, "CLI_SHA256", bundle.digest(self.tools["nsh"])), patch.object(day, "execute", side_effect=fake_execute), patch.object(day_artifact_host, "checked") as checked:
+        with patch.object(day, "CLI_SHA256", bundle.digest(self.tools["nsh"])), patch.object(day, "execute", side_effect=fake_execute), patch.object(day, "artifact_host") as checked:
             day.compile_snapshot(checkout, self.root, output, self.source, self.tools,
                                  {"PILOT_DAY_QUICKJS_ARCHIVE":str(archive)})
         metadata = bundle.read_json(output / "manifest.json")
@@ -324,6 +326,92 @@ class RecipeTests(unittest.TestCase):
         self.assertTrue(any("pilot-artifact-host" in call and "artifact-host" in call for call in calls))
         checked.assert_called_once()
         self.assertFalse(any(any(word in ("package", "run", "nsh-cli", "codesign", "pnpm") for word in call) for call in calls))
+
+
+class ArtifactHostTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="day-artifact-direct-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.binary = self.root / "pilot-artifact-host"
+        self.source, self.recipe = "a" * 40, "b" * 64
+        self.identity = dict(schema=1, kind="nsh-source-host", runtime="nsh 0.5.0",
+                             source=self.source, recipe=self.recipe)
+        self.module = bundle.ROOT / day.HOST_MODULE
+
+    def program(self, body):
+        script = self.root / "program.py"
+        script.write_text(body)
+        self.binary.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(str(script)) + "\n")
+        self.binary.chmod(0o755)
+
+    def test_existing_node_transport_keeps_identity_and_empty_environment(self):
+        self.program("import json,sys,os\nr=json.load(sys.stdin)\n"
+            "assert r['action']=='compile' and len(sys.argv)==1\n"
+            "assert 'HOME' not in os.environ and 'GH_TOKEN' not in os.environ\n"
+            "print(json.dumps({'identity':" + repr(self.identity) + ", 'value':"
+            "{'rendering':'unsupported','sourceSha256':r['captured']['sourceSha256']}}))\n")
+        self.assertEqual(day.artifact_identity(self.binary, self.source, self.recipe, module=self.module), self.identity)
+        for source, recipe in (("c" * 40, self.recipe), (self.source, "c" * 64)):
+            with self.assertRaisesRegex(ValueError, "compiled source"):
+                day.artifact_identity(self.binary, source, recipe, module=self.module)
+
+    def test_node_transport_refuses_deadline_oversize_and_malformed_reply(self):
+        for body in ("print('not json')", "print('x'*9000)", "import time\ntime.sleep(30)"):
+            self.program(body)
+            with self.assertRaisesRegex(ValueError, "compiled source"):
+                day.artifact_identity(self.binary, self.source, self.recipe, module=self.module)
+
+    def test_current_transport_cannot_overlay_the_requested_source(self):
+        with patch.object(day.subprocess, "check_output", return_value=b"different bytes"):
+            with self.assertRaisesRegex(ValueError, "immutable source"):
+                day.artifact_identity(self.binary, self.source, self.recipe)
+
+    def test_input_bytes_kind_modes_links_and_source_stay_checked(self):
+        self.binary.write_bytes(b"\xcf\xfa\xed\xfe" + b"synthetic native bytes, never executed")
+        self.binary.chmod(0o755)
+        entry = dict(name=self.binary.name, bytes=self.binary.stat().st_size, sha256=bundle.digest(self.binary))
+        value = dict(source=self.source, recipe_sha256=self.recipe, target=day.TARGET, binaries=[entry])
+        bundle.write_json(self.root / "manifest.json", value)
+        with patch.object(day, "artifact_identity", return_value=self.identity):
+            expected = day.artifact_host(self.root, self.source)
+            self.assertEqual(expected, dict(schema=1, identity=self.identity, bytes=entry["bytes"], sha256=entry["sha256"]))
+            for mode in (0o777, 0o644):
+                self.binary.chmod(mode)
+                with self.assertRaisesRegex(ValueError, "Unsafe"):
+                    day.artifact_host(self.root, self.source)
+            self.binary.chmod(0o755)
+            actual = self.binary.lstat()
+            lstat = Path.lstat
+            foreign = SimpleNamespace(st_mode=actual.st_mode, st_nlink=1,
+                                      st_uid=day.os.geteuid() + 12345)
+            with patch.object(Path, "lstat", autospec=True, side_effect=lambda path: foreign if path == self.binary else lstat(path)):
+                with self.assertRaisesRegex(ValueError, "Unsafe"):
+                    day.artifact_host(self.root, self.source)
+            with self.assertRaisesRegex(ValueError, "source/target"):
+                day.artifact_host(self.root, "c" * 40)
+            original = self.binary.read_bytes()
+            self.binary.write_bytes(b"tampered")
+            with self.assertRaisesRegex(ValueError, "receipt mismatch"):
+                day.artifact_host(self.root, self.source)
+            self.binary.write_bytes(original)
+            self.binary.write_bytes(b"not native")
+            entry.update(bytes=self.binary.stat().st_size, sha256=bundle.digest(self.binary))
+            bundle.write_json(self.root / "manifest.json", value)
+            with self.assertRaisesRegex(ValueError, "Mach-O"):
+                day.artifact_host(self.root, self.source)
+            self.binary.write_bytes(original)
+            entry.update(bytes=self.binary.stat().st_size, sha256=bundle.digest(self.binary))
+            bundle.write_json(self.root / "manifest.json", value)
+            alias = self.root / "hardlink"
+            alias.hardlink_to(self.binary)
+            with self.assertRaisesRegex(ValueError, "Unsafe"):
+                day.artifact_host(self.root, self.source)
+            alias.unlink()
+            self.binary.rename(self.root / "saved")
+            self.binary.symlink_to("saved")
+            with self.assertRaisesRegex(ValueError, "Unsafe"):
+                day.artifact_host(self.root, self.source)
 
 
 if __name__ == "__main__":

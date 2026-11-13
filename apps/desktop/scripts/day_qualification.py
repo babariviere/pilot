@@ -9,7 +9,6 @@ import subprocess
 
 import bundle_runtime as bundle
 import day_build_inputs as day
-import day_artifact_host
 
 BINARIES = ("pilot-desktop", "pilot-desktop-update-helper", "pilot-visual-worker", "pilot-artifact-host")
 # Global-default debug outputs can exceed a shipping file's 256 MiB limit.
@@ -47,7 +46,7 @@ def source_file(source, relative):
 
 
 def source_tools(source):
-    for module in (__file__, day.__file__, bundle.__file__, day_artifact_host.__file__):
+    for module in (__file__, day.__file__, bundle.__file__):
         path = Path(module)
         if source_file(source, "apps/desktop/scripts/" + path.name) != path.read_text():
             raise ValueError("Qualification tools must match the immutable source: " + path.name)
@@ -69,7 +68,7 @@ def qualify(source, inputs, *, runtime=None, native=None):
     if sorted(item.get("name", "") for item in value.get("binaries", [])) != sorted(BINARIES):
         raise ValueError("Expected the exact Day executable/helper/visual-worker inventory")
     bundle.receipt(inputs, source, BINARIES)
-    day_artifact_host.checked(inputs, source)
+    day.artifact_host(inputs, source)
     recipe = hashlib.sha256(source_file(source, "apps/desktop/scripts/day_build_inputs.py").encode()).hexdigest()
     if value.get("recipe_sha256") != recipe:
         raise ValueError("Day recipe must match the immutable source, without a tools overlay")

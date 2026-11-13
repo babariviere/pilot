@@ -13,7 +13,7 @@ from unittest.mock import patch
 import zipfile
 
 import bundle_runtime as bundle
-import day_artifact_host
+import day_build_inputs as day
 import make_dev_icon
 
 
@@ -479,7 +479,7 @@ class BundleRuntimeTests(unittest.TestCase):
 
     def gui_resources(self):
         # Day alone adds a native source host. It is never executed by these synthetic fixtures.
-        binary = self.executables / day_artifact_host.NAME
+        binary = self.executables / day.ARTIFACT_HOST
         binary.write_bytes(b"\xcf\xfa\xed\xfe" + b"synthetic only")
         binary.chmod(0o755)
         manifest = bundle.read_json(self.executables / "manifest.json")
@@ -487,7 +487,7 @@ class BundleRuntimeTests(unittest.TestCase):
         manifest["binaries"].append(dict(name=binary.name, bytes=binary.stat().st_size, sha256=bundle.digest(binary)))
         bundle.write_json(self.executables / "manifest.json", manifest)
         (self.runtime / "packages/artifacts").mkdir(parents=True)
-        binding = patch.object(day_artifact_host, "identity", return_value=dict(schema=1,kind="nsh-source-host",
+        binding = patch.object(day, "artifact_identity", return_value=dict(schema=1,kind="nsh-source-host",
             runtime="nsh 0.5.0",source=self.source,recipe="b" * 64))
         binding.start()
         self.addCleanup(binding.stop)
@@ -534,6 +534,48 @@ class BundleRuntimeTests(unittest.TestCase):
         (resources / "bundle.nshc").write_text("changed source bytes")
         with self.assertRaisesRegex(ValueError, "inventory mismatch"):
             bundle.checked_gui_resources(resources, self.executables, self.source)
+
+    def test_nsh_helper_binds_final_signed_bytes_and_keeps_input_unchanged(self):
+        resources, _ = self.gui_resources()
+        copied = self.output / "Contents/Resources/runtime/packages/artifacts/native/pilot-artifact-host"
+        original = (self.executables / "pilot-artifact-host").read_bytes()
+        def sign(*args, **kwargs):
+            if args[0] == "/usr/bin/codesign" and args[-1] == str(copied):
+                copied.write_bytes(copied.read_bytes() + b"synthetic signature")
+            return ""
+        with patch.object(bundle, "native_closure", return_value=[copied]), patch.object(bundle, "run", side_effect=sign):
+            bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, gui_resources=resources)
+        binding = bundle.read_json(copied.parent / "artifact-host.json")
+        self.assertEqual(binding["sha256"], bundle.digest(copied))
+        self.assertEqual(binding["bytes"], copied.stat().st_size)
+        self.assertEqual(binding["identity"]["source"], self.source)
+        self.assertEqual((self.executables / "pilot-artifact-host").read_bytes(), original)
+        bundle.verify(self.output)
+
+    def test_nsh_helper_copy_tamper_is_refused_before_signing(self):
+        resources, _ = self.gui_resources()
+        copy = bundle.shutil.copyfile
+        def tamper(src, dest, *args, **kwargs):
+            result = copy(src, dest, *args, **kwargs)
+            if Path(dest).name == "pilot-artifact-host":
+                Path(dest).write_bytes(b"changed after input validation")
+            return result
+        with patch.object(bundle.shutil, "copyfile", side_effect=tamper), patch.object(bundle, "run") as command:
+            with self.assertRaisesRegex(ValueError, "helper copy changed"):
+                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, gui_resources=resources)
+        command.assert_not_called()
+        self.assertFalse(self.output.exists())
+
+    def test_nsh_helper_parent_alias_is_refused_before_signing(self):
+        resources, _ = self.gui_resources()
+        parent = self.runtime / "packages/artifacts"
+        parent.rmdir()
+        parent.symlink_to("kernel", target_is_directory=True)
+        with patch.object(bundle, "run") as command:
+            with self.assertRaisesRegex(ValueError, "real runtime directories"):
+                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, gui_resources=resources)
+        command.assert_not_called()
+        self.assertFalse(self.output.exists())
 
     def test_nsh_resource_copy_tampering_is_not_signed_or_kept_as_output(self):
         resources, _ = self.gui_resources()

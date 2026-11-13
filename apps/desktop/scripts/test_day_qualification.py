@@ -60,7 +60,7 @@ class QualificationTests(unittest.TestCase):
         self.receipt_patch = patch.object(day, "compiled_receipt", return_value=self.compiled)
         self.receipt = self.receipt_patch.start()
         self.addCleanup(self.receipt_patch.stop)
-        binding = patch.object(qualification.day_artifact_host, "checked")
+        binding = patch.object(day, "artifact_host")
         binding.start()
         self.addCleanup(binding.stop)
 
@@ -288,7 +288,8 @@ class WorkflowTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/tests.yaml").read_text()
         job = workflow.split("  day-contracts:\n", 1)[1].split("  node:\n", 1)[0]
         self.assertNotIn("if:", job)
-        self.assertIn("day_build_inputs day_artifact_host day_qualification bundle_runtime gui_release", job)
+        self.assertIn("day_build_inputs day_qualification bundle_runtime gui_release", job)
+        self.assertNotIn("day_artifact_host", job)
         self.assertIn("discover -s apps/day/scripts -p 'test_*.py'", job)
         native = (ROOT / ".github/workflows/day-qualification.yml").read_text()
         self.assertIn("--frozen-lockfile --ignore-scripts", native)

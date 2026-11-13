@@ -62,6 +62,8 @@ The source-matched unsigned steps:
    Day also builds the source-only `pilot-artifact-host` with its own feature.
    Its strict protocol adds compiled source/recipe evidence, not another command
    or a preview permission. Unsigned qualification checks that evidence too.
+   These checks reuse the existing Node transport; no separate Python helper
+   supervisor or staging wrapper is used.
 5. Writes a runner-local qualification receipt. It binds the immutable recipe,
    real Cargo outputs/compiled app and helper diagnostics, official CLI,
    source-matched host grant, app identity and exact resource inventory.

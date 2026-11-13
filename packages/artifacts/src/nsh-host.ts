@@ -193,8 +193,11 @@ export async function callArtifactHost(
 	signal?: AbortSignal,
 	executable = INSTALLED_HOST,
 	expectedIdentity?: Record<string, unknown>,
+	responseBytes = MAX_RESPONSE,
 ): Promise<unknown> {
 	signal?.throwIfAborted();
+	if (!Number.isSafeInteger(responseBytes) || responseBytes < 1 || responseBytes > MAX_RESPONSE)
+		throw new Error("Invalid artifact host response limit");
 	// Installed bytes are already subject to the verified app/runtime closure. Also bind
 	// this exact helper to that runtime's source and its compiled response identity.
 	const binding = executable === INSTALLED_HOST ? await readArtifactHostBinding() : expectedIdentity;
@@ -223,7 +226,7 @@ export async function callArtifactHost(
 		// still follow, so the failure settles through the same join path.
 		child.stdout?.on("data", (part: Buffer) => {
 			length += part.length;
-			if (length > MAX_RESPONSE) stop(new Error("Artifact host output exceeds limit"));
+			if (length > responseBytes) stop(new Error("Artifact host output exceeds limit"));
 			else chunks.push(part);
 		});
 		// Diagnostics return in the bounded JSON response, not an unbounded stderr buffer.

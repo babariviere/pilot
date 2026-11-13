@@ -367,8 +367,20 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
         shutil.copytree(runtime, contents / "Resources/runtime", symlinks=True)
         if resources is not None:
             # Explicit Day only. GPUI assembly and release selection are unchanged.
-            from day_artifact_host import stage
-            stage(executables, contents / "Resources/runtime", expected_source)
+            from day_build_inputs import artifact_host
+            host_input = artifact_host(executables, expected_source)
+            host_directory = contents / "Resources/runtime/packages/artifacts/native"
+            for parent in (host_directory.parent.parent, host_directory.parent):
+                if not stat.S_ISDIR(parent.lstat().st_mode):
+                    raise ValueError("Artifact helper parents must be real runtime directories")
+            if host_directory.exists() or host_directory.is_symlink():
+                raise ValueError("Artifact helper destination must be absent")
+            host_directory.mkdir(mode=0o755)
+            host = host_directory / "pilot-artifact-host"
+            shutil.copyfile(executables / "pilot-artifact-host", host)
+            host.chmod(0o755)
+            if host.stat().st_size != host_input["bytes"] or digest(host) != host_input["sha256"]:
+                raise ValueError("Artifact helper copy changed")
             destination = contents / "Resources/nsh"
             shutil.copytree(gui_resources, destination, symlinks=True)
             # A changed input or copy is never signed as the reviewed closure.
@@ -406,8 +418,12 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
                 run("/usr/bin/codesign", "--force", "--sign", "-", str(binary))
         run("/usr/bin/codesign", "--force", "--sign", "-", str(helper.parent))
         if resources is not None:
-            from day_artifact_host import write_binding
-            write_binding(contents / "Resources/runtime", expected_source)
+            if host_input["identity"]["source"] != build["source"]:
+                raise ValueError("Artifact helper/runtime source mismatch")
+            # Signing changes bytes, not the source identity already checked on the
+            # exact copied image. Write one final binding before the outer seal.
+            write_json(host_directory / "artifact-host.json", dict(host_input,
+                       bytes=host.stat().st_size, sha256=digest(host)))
         # The main executable's outer signature seals resources and cannot hash itself.
         payload = [item for item in inventory(output) if item["path"] != "Contents/MacOS/pilot-desktop"
                    and not item["path"].startswith("Contents/_CodeSignature")]

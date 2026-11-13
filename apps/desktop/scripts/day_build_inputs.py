@@ -6,18 +6,20 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
 import tomllib
 
 import bundle_runtime as bundle
-import day_artifact_host
 
 TARGET = "aarch64-apple-darwin"
 CLI_VERSION = "nsh 0.5.0 (f4d68f7)"
 CLI_SHA256 = "694ab2f1e4b97871e42399ae55a916f4fb528df8319eb2c0965f9c68331ebdb8"
 TRUST_FIELDS = ("public_key", "repository", "application_id", "build", "code_requirement")
+ARTIFACT_HOST = "pilot-artifact-host"
+HOST_MODULE = "packages/artifacts/src/nsh-host.ts"
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
 # crates.io 0.5.0 archive SHA-256s. Each archive's .cargo_vcs_info.json names
 # the peeled release commit bundle.NSH_RELEASE["source"].
@@ -149,6 +151,62 @@ def compiled_receipt(binary, expected, recipe, compiler, config, profile, env, c
     return value
 
 
+def artifact_identity(binary, source, recipe, *, module=None):
+    """Reuse the Node transport's bounded protocol and joined exit, never a second supervisor."""
+    if module is None:
+        module = bundle.ROOT / HOST_MODULE
+        archived = subprocess.check_output(["/usr/bin/git", "show", source + ":" + HOST_MODULE],
+            cwd=bundle.ROOT, env=bundle.subprocess_env(), timeout=30)
+        if module.read_bytes() != archived:
+            raise ValueError("Artifact transport must match the immutable source")
+    node = tool(shutil.which("node") or "")
+    # Fixed trusted program, not artifact source. callArtifactHost owns empty env,
+    # five-second deadline, 8KiB output ceiling, identity validation and child join.
+    program = """
+import {createHash} from 'node:crypto';
+try {
+ const [module, binary, source, recipe] = process.argv.slice(1);
+ const {callArtifactHost} = await import(module);
+ const identity = {schema:1,kind:'nsh-source-host',runtime:'nsh 0.5.0',source,recipe};
+ const text = 'export default function Artifact() { return null; }';
+ const hash = createHash('sha256').update(text).digest('hex');
+ const value = await callArtifactHost({action:'compile',captured:{
+  artifactId:'11111111-1111-1111-1111-111111111111',sourceSessionId:'packaging',revision:1,
+  entry:'Artifact.tsx',source:text,sourceSha256:hash,sourceBytes:Buffer.byteLength(text)}},
+  undefined,binary,identity,8192);
+ if(value?.rendering !== 'unsupported' || value?.sourceSha256 !== hash) throw Error();
+} catch { process.exitCode = 1; }
+"""
+    try:
+        execute([node, "--input-type=module", "-e", program, Path(module).resolve().as_uri(), binary, source, recipe],
+                cwd=Path(binary).parent, env={})
+    except subprocess.CalledProcessError as error:
+        raise ValueError("Artifact helper compiled source identity mismatch") from error
+    return dict(schema=1, kind="nsh-source-host", runtime="nsh 0.5.0", source=source, recipe=recipe)
+
+
+def artifact_host(inputs, source, *, module=None):
+    """Exact input evidence reused by the Day builder, qualifier and explicit Day assembly."""
+    inputs = Path(inputs)
+    value = bundle.read_json(inputs / "manifest.json")
+    bundle.receipt(inputs, source, [ARTIFACT_HOST])
+    recipe = value.get("recipe_sha256", "")
+    if (value.get("source") != bundle.source(source) or not isinstance(recipe, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", recipe)):
+        raise ValueError("Artifact helper input source/recipe mismatch")
+    path = inputs / ARTIFACT_HOST
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o6022
+            or not info.st_mode & 0o111 or info.st_uid not in (0, os.geteuid())):
+        raise ValueError("Unsafe artifact helper input")
+    with path.open("rb") as stream:
+        if stream.read(4) != b"\xcf\xfa\xed\xfe":
+            raise ValueError("Artifact helper must be native Mach-O")
+    entry = next(item for item in value["binaries"] if item["name"] == ARTIFACT_HOST)
+    identity = artifact_identity(path, source, recipe, module=module)
+    return dict(schema=1, identity=identity, bytes=entry["bytes"], sha256=entry["sha256"])
+
+
 def compiled_capabilities(names):
     # Exact NSH 0.5.0 Capabilities::to_json form. Explicit empty/false defaults
     # are denials, not additional authority. Unknown keys still fail equality.
@@ -177,7 +235,7 @@ def resource_closure(built, output, names):
 def source_tools(checkout):
     # These modules run outside the archive. Refuse a current-helper overlay
     # on older app source, including edits not yet in the supplied commit.
-    for module in (__file__, bundle.__file__, day_artifact_host.__file__):
+    for module in (__file__, bundle.__file__):
         path = Path(module).resolve()
         archived = checkout / "apps/desktop/scripts" / path.name
         if not archived.is_file() or path.read_bytes() != archived.read_bytes():
@@ -267,7 +325,7 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     bundle.write_json(inputs / "gui-resources.json", dict(schema=1, kind="nsh-ui-resources", source=expected,
         target=TARGET, nsh_release=bundle.NSH_RELEASE, executable=main, files=bundle.inventory(inputs / "nsh")))
     bundle.receipt(inputs, expected, [name for name, _, _ in manifests])
-    day_artifact_host.checked(inputs, expected)
+    artifact_host(inputs, expected, module=checkout / HOST_MODULE)
     bundle.checked_gui_resources(inputs / "nsh", inputs, expected)
     inputs.rename(output)
 

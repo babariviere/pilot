@@ -111,12 +111,22 @@ executable through the supported Cargo/MBX wrapper and checks its compiled
 source/recipe identity through its existing source-only Compile operation.
 No new helper command or authored JS execution is added.
 
+The existing recipe calls the existing Node `callArtifactHost` transport directly
+with fixed benign source and an 8 KiB response allowance. It reuses the same
+empty environment, strict identity/protocol checks, deadline and joined exit;
+there is no separate Python process supervisor or staging wrapper. Outside an
+archived build, the transport module must match the requested Git source exactly.
+
 Only assembly with explicit Day NSH resources copies it into runtime. The existing
 native closure/signing/inventory covers it; a binding records the final signed
 bytes before the unchanged outer app seal. GPUI assembly and release selection
 do not gain it. Connected-only candidates still contain no daemon runtime and
 therefore no source-helper binding. Packaging tests use synthetic inputs, not
 actual signing/native acceptance.
+The assembler compares the copied helper with the captured manifest digest and
+size, not a later read of potentially changed input. It then uses the existing
+native signing/inventory and writes one final binding. It does not re-run the
+identity probe on the identical copy or after the trusted signing operation.
 
 Before offering capture, the kernel checks the fixed binding against runtime
 source and streams the helper's exact bytes in 64 KiB chunks. A per-process
