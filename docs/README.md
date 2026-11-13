@@ -36,5 +36,11 @@ answers and finished work stay kept. Revisit never starts work or changes permis
 Pilot runs work locally. Remote devbox execution is retired; saved history and
 drafts are not migrated or submitted elsewhere.
 
+Agents cannot run filesystem-root searches such as `find /` or `fd . /`.
+They must choose a project or a specific directory. Pilot also blocks unsafe
+`rm` targets, including home folders, root, top-level system folders and
+repository metadata. Scoped build cleanup and ordinary file edits still work.
+These command checks catch mistakes; they are not a filesystem security boundary.
+
 Implementation contracts, proposals, benchmarks, and historical material belong in
 [technical documentation](technical/README.md), not these guides.

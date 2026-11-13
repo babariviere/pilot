@@ -1,5 +1,6 @@
 /** Host-owned child composition. Never import upstream child.ts, which imports file-backed todos. */
 import { fileURLToPath, pathToFileURL } from "node:url";
+import filesystemGuard from "@babariviere/pi-extensions/filesystem-guard";
 import { PILOT_CHILD_PROFILE_PATH } from "@babariviere/pi-extensions/profile";
 import { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -13,6 +14,7 @@ import { inheritedExecutionPermission, nativeToolPolicy } from "./tool-policy.ts
 import { installChildUsageCapture, observeChildUsageStreams } from "./usage-capture.ts";
 
 export default async function childProfile(pi: ExtensionAPI): Promise<void> {
+	filesystemGuard(pi);
 	installChildUsageCapture(callParentUsage, callParentUsageEpoch);
 	nativeToolPolicy(inheritedExecutionPermission(process.env.PILOT_EXECUTION_PERMISSION))(pi);
 	await installCredentialBrokerHooks();

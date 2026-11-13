@@ -23,6 +23,7 @@ export const CHILD_WORKER_ENTRY = fileURLToPath(
 const PROFILE_PATHS = PILOT_EXTENSION_NAMES.filter((name) => name !== "todos").map((name) =>
 	fileURLToPath(new URL(`../extensions/${name}/index.ts`, pathToFileURL(PILOT_PROFILE_PATH))),
 );
+const FILESYSTEM_GUARD_PATH = fileURLToPath(import.meta.resolve("@babariviere/pi-extensions/filesystem-guard"));
 
 export function bundledResourceLoader(
 	options: ConstructorParameters<typeof DefaultResourceLoader>[0],
@@ -34,7 +35,7 @@ export function bundledResourceLoader(
 		projectTrusted,
 		requiredPaths: [
 			...(profile
-				? PROFILE_PATHS.map((path) =>
+				? [...PROFILE_PATHS, FILESYSTEM_GUARD_PATH].map((path) =>
 						path.endsWith("/jobs/index.ts")
 							? fileURLToPath(new URL("./job-group-extension.ts", import.meta.url))
 							: coordinator && path.endsWith("/sandbox/index.ts")
@@ -47,7 +48,13 @@ export function bundledResourceLoader(
 		ownedPackages: {
 			"pi-posthorse": ["*"],
 			"@babariviere/pi-extensions": profile
-				? [...PILOT_EXTENSION_NAMES.map((name) => `extensions/${name}`), "embedding/pilot.ts", "embedding/child.ts"]
+				? [
+						...PILOT_EXTENSION_NAMES.map((name) => `extensions/${name}`),
+						"embedding/pilot.ts",
+						"embedding/child.ts",
+						"embedding/root-search.ts",
+						"embedding/filesystem-guard.ts",
+					]
 				: [],
 			"@gotgenes/pi-anthropic-auth": ["*"],
 		},

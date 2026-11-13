@@ -203,6 +203,50 @@ text(last);
 	assert.ok(other.session.getCallableToolNames().includes("bash"));
 });
 
+test("bundled filesystem policy blocks root searches and unsafe deletions without edit restrictions", async (t) => {
+	const f = await fixture(t);
+	const adapter = await f.open();
+	for (const [name, input] of [
+		["bash", { command: "find / -maxdepth 0" }],
+		["jobs", { action: "start", name: "root-scan", command: "find / -maxdepth 0" }],
+		["bash", { command: "rm -rf ~" }],
+		["jobs", { action: "start", name: "unsafe-delete", command: "rm -rf /Users" }],
+	] as const) {
+		const decision = await adapter.session.extensionRunner.emitToolCall({
+			type: "tool_call",
+			toolCallId: "blocked-root-search",
+			toolName: name,
+			input,
+		});
+		assert.equal(decision?.block, true);
+		assert.match(decision?.reason ?? "", /filesystem root|home directory|system directory/);
+	}
+	const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
+	const input = {
+		code: `
+try {
+	await tools.bash({command: "find / -maxdepth 0"});
+	throw new Error("Root search was not blocked");
+} catch (error) {
+	if (!String(error).includes("filesystem root")) throw error;
+	text(String(error));
+}
+text(await tools.bash({command: "printf allowed > allowed.txt"}));
+`,
+	};
+	adapter.session.agent.state.messages.push(
+		fauxAssistantMessage(
+			{ type: "toolCall", id: "nested-root-search", name: "codemode", arguments: input },
+			{ stopReason: "toolUse" },
+		),
+	);
+	const result = await codemode.execute("nested-root-search", input, undefined);
+	assert.ok(!result.isError, JSON.stringify(result));
+	assert.match(JSON.stringify(result.content), /filesystem root/);
+	assert.equal(await readFile(join(f.root, "allowed.txt"), "utf8"), "allowed");
+	assert.deepEqual(await adapter.jobs(), []);
+});
+
 test("host reload discovers edited extensions, preserves host policy and fails closed until repaired", async (t) => {
 	const f = await fixture(t);
 	const adapter = await f.open();
@@ -759,7 +803,7 @@ export default pi => {
 	pi.registerTool({ name: "bash", label: "bash", description: "Offline publication stub", parameters: Type.Object({command: Type.String()}), execute: async (_id, {command}) => { appendFileSync(${JSON.stringify(publication)}, command + "\\n"); return {content:[{type:"text",text:"stub"}],details:undefined}; } });
  const faux = fauxProvider({provider:'openai-codex',models:[{id:'offline'}]});
  faux.setResponses([
-  fauxAssistantMessage({type:'toolCall',id:'child-todo',name:'codemode',arguments:{code:'const symbols = await tools.code_symbols({query:"ChildFixture",exact:true,path:"child-fixture.tsx"}); if (symbols.results[0]?.name !== "ChildFixture") throw new Error("child exploration failed"); for (const parts of [["jj","git","push","--bookmark","fix/child"],["gh","pr","create"],["gh","pr","merge","1"],["gh","repo","delete","fixture/repo","--yes"]]) { try { await tools.bash({command:parts.join(" ")}); } catch {} } const item = await tools.todo({action:"create",title:"From real child"}); await tools.todo({action:"claim",id:item.id}); return item;'}}, {stopReason:'toolUse'}),
+  fauxAssistantMessage({type:'toolCall',id:'child-todo',name:'codemode',arguments:{code:'const symbols = await tools.code_symbols({query:"ChildFixture",exact:true,path:"child-fixture.tsx"}); if (symbols.results[0]?.name !== "ChildFixture") throw new Error("child exploration failed"); for (const parts of [["rm","-rf","~"],["rm","-rf","/Users"],["find","/","-maxdepth","0"],["fd",".","/"],["jj","git","push","--bookmark","fix/child"],["gh","pr","create"],["gh","pr","merge","1"],["gh","repo","delete","fixture/repo","--yes"]]) { try { await tools.bash({command:parts.join(" ")}); } catch {} } const item = await tools.todo({action:"create",title:"From real child"}); await tools.todo({action:"claim",id:item.id}); return item;'}}, {stopReason:'toolUse'}),
   fauxAssistantMessage("", {stopReason:'error',errorMessage:'usage_limit_reached'}),
   fauxAssistantMessage("CHILD_PROFILE_OK"), fauxAssistantMessage("CHILD_FOLLOWUP_OK")
  ]);
