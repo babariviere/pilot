@@ -1,9 +1,10 @@
 // The window's one header: Pilot at the top left, which always goes to
 // Today; one Back that goes up a level; and the few places every screen can
-// reach: an update that needs the user, Changes, Settings and New. It stays put while
+// reach: an update that needs the user, Changes, Artifacts, Settings and New. It stays put while
 // the screens below it change, so the way out is always in the same place.
 import { keymap, Text, View, windowSize } from "nsh";
 import { Button } from "nsh/base";
+import { openArtifacts } from "./artifactReads";
 import type { Changes } from "./changeFeed";
 import { showChanges } from "./changesView";
 import type { Day } from "./day";
@@ -40,6 +41,12 @@ function goChanges() {
 function goSettings() {
 	goHome();
 	openSettings();
+}
+
+/** Opens the project's Artifacts from wherever the user is. */
+function goArtifacts() {
+	goHome();
+	openArtifacts();
 }
 
 /** Pilot's mark and name: the way home. */
@@ -121,6 +128,16 @@ export function AppHeader(props: { day: Day; plans?: Plans; changes?: Changes })
 			</If>
 			<If when={props.changes && at() !== "changes"}>
 				<ChangesPlace changes={props.changes as Changes} narrow={narrow()} />
+			</If>
+			<If when={props.day.artifacts && at() !== "artifacts"}>
+				<Action
+					label="Artifacts"
+					icon="document"
+					iconOnly={narrow()}
+					accessibilityLabel="Artifacts this project's chats saved"
+					testID="artifacts-open"
+					onPress={goArtifacts}
+				/>
 			</If>
 			<If when={props.day.preferences && at() !== "settings"}>
 				<Action

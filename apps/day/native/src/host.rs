@@ -2,6 +2,7 @@
 //! Selection is explicit and immutable. Retire and join this host before replacing
 //! a profile/project; old replies can never populate the replacement's Desk.
 pub mod attention;
+pub(crate) mod artifacts;
 mod bridge;
 mod changes;
 pub(crate) mod delivery;

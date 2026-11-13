@@ -1,9 +1,10 @@
 // Where the window's one Back goes, and Pilot's way home. The app is a
 // tree: Today, then a mission's overview, then its interview and plan, a
-// thread or a result; Changes, Linear, Settings, New and the rituals hang off Today. Back goes up
+// thread or a result; Changes, Linear, Artifacts, Settings, New and the rituals hang off Today. Back goes up
 // one level of that tree, Escape does the same, and Pilot at the top left
 // always goes to Today. Moving around only changes where the user is: it
 // never drops a draft, sends, saves or starts anything.
+import { artifactsOpen, closeArtifacts } from "./artifactReads";
 import type { Changes } from "./changeFeed";
 import { changesRoute } from "./changesView";
 import type { Day } from "./day";
@@ -52,6 +53,7 @@ export type Shown =
 	| "settings"
 	| "delivery"
 	| "linear"
+	| "artifacts"
 	| "change"
 	| "changes"
 	| "new"
@@ -67,6 +69,7 @@ export function shown(places: Places): Shown {
 	if (places.day.preferences && settingsOpen()) return "settings";
 	if (places.day.delivery && deliveryRoute()) return "delivery";
 	if (places.day.linear && linearOpen()) return "linear";
+	if (places.day.artifacts && artifactsOpen()) return "artifacts";
 	const change = places.changes ? changesRoute() : null;
 	if (change) return change.kind === "change" ? "change" : "changes";
 	const plan = places.plans ? planRoute() : null;
@@ -99,6 +102,8 @@ export function backTarget(places: Places): Back | null {
 		}
 		case "linear":
 			return to("Today", closeLinear);
+		case "artifacts":
+			return to("Today", closeArtifacts);
 		case "change":
 			return to("Changes", () => changesRoute.set({ kind: "list" }));
 		case "changes":
@@ -131,6 +136,7 @@ export function goHome() {
 	hideInspection();
 	if (deliveryRoute()) closeDelivery();
 	if (linearOpen()) closeLinear();
+	closeArtifacts();
 	changesRoute.set(null);
 	closePlanning();
 	closeMission();

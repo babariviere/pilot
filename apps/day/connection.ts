@@ -5,6 +5,7 @@
 // reopen the feeds.
 import { host, signal } from "nsh";
 import type { RitualSnapshot, SavedView, Setup, Today } from "pilot-day/native";
+import { ConnectedArtifacts } from "./artifactReads";
 import { ConnectedPlans, ConnectedRituals, ConnectedToday, call, type Refusal, windowId } from "./bridge";
 import { ConnectedChats, mirrorChats } from "./chatFeed";
 import { connectedUpdates } from "./connectedUpdates";
@@ -208,7 +209,8 @@ async function connect() {
 		requests = now;
 		void intakeFeed.read();
 	});
-	// The saved Linear issues, the project's preferences and a mission's threads are read only when their page opens.
+	// The saved Linear issues, the project's preferences, a mission's threads and
+	// saved artifacts are read only when their page opens.
 	const day = mirrorDay(
 		today,
 		intake,
@@ -217,6 +219,7 @@ async function connect() {
 		mirrorScope(new ConnectedScope(window)),
 		mirrorPreferences(new ConnectedPreferences(window)),
 		mirrorThreads(new ConnectedThreads(window)),
+		new ConnectedArtifacts(window),
 	);
 	// New's projects are read when New opens; reading sends nothing.
 	const plans = mirrorPlanning(planFeed, mirrorChats(new ConnectedChats(window)));

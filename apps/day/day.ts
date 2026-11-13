@@ -3,6 +3,7 @@
 // transport, and nsh.json denies network, sockets, files and processes.
 import { type Signal, signal } from "nsh";
 import { type Scenario, type Today, TodayFeed } from "pilot-day/native";
+import type { ArtifactSource } from "./artifactReads";
 import type { DeliveryMirror } from "./deliveryFeed";
 import type { DayFeed } from "./feeds";
 import type { IntakeMirror } from "./intakeFeed";
@@ -48,6 +49,11 @@ export type Day = {
 	 * mission's overview offers no threads.
 	 */
 	threads?: ThreadsMirror;
+	/**
+	 * Saved artifacts of the window's project and its missions. Without them
+	 * the window offers no Artifacts page or mission section.
+	 */
+	artifacts?: ArtifactSource;
 	/** Stops listening and frees the feed. */
 	close: () => void;
 };
@@ -66,6 +72,7 @@ export function mirrorDay(
 	scope?: ScopeMirror,
 	preferences?: PreferencesMirror,
 	threads?: ThreadsMirror,
+	artifacts?: ArtifactSource,
 ): Day {
 	const today = signal(feed.snapshot());
 	const stop = feed.onChange((next) => {
@@ -83,6 +90,7 @@ export function mirrorDay(
 		scope,
 		preferences,
 		threads,
+		artifacts,
 		close: () => {
 			stop();
 			feed.dispose();

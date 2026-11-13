@@ -4,6 +4,7 @@
 // saves them in the window's SavedView, and a restored window shows them
 // again without sending anything (updateView.ts).
 import { signal } from "nsh";
+import { MAX_PREVIEWS } from "./artifactReads";
 import { type ArtifactSelection, artifactSelection, samePin } from "./deliveryArtifact";
 import type {
 	ArtifactLink,
@@ -40,10 +41,10 @@ export const deliveryMessages = signal<Record<string, string>>({});
 export const outputMessages = signal<Record<string, string>>({});
 
 /**
- * The saved source the user asked to see: one exact artifact pin on one
- * result's page. Inert text only. It lives with the page: closing the page,
- * a newer result, a lost read or an update drops it, and a saved window
- * never keeps it, so nothing reads it again by itself.
+ * What one output row of a result's page shows: the saved source of one exact
+ * artifact pin as inert text, or its isolated preview. Each row keeps its
+ * own. It lives with the page: closing the page, a newer result, a lost read
+ * or an update drops it, and a saved window never keeps it.
  */
 export type Inspection = {
 	key: string;
@@ -57,8 +58,14 @@ export type Inspection = {
 	message: string;
 };
 
-export const inspection = signal<Inspection | null>(null);
-let inspections = 0;
+/** What each output row shows, by `inspectionKey`. */
+export const inspections = signal<Record<string, Inspection>>({});
+let generations = 0;
+
+/** The row of `link` on result `key`. */
+export function inspectionKey(key: string, link: { sessionId: string; artifactId: string }): string {
+	return `${key}|${link.sessionId}/${link.artifactId}`;
+}
 
 /** The pin `link` names on `work`, when it is still exactly the one `i` read. */
 export function inspectionCurrent(i: Inspection, key: string, work: DeliveredWork): boolean {
@@ -79,10 +86,26 @@ export function inspects(i: Inspection | null, key: string, work: DeliveredWork,
 	);
 }
 
+/** What `link`'s row shows now, when it is still exactly the pin read. */
+export function inspectionOf(key: string, work: DeliveredWork, link: ArtifactLink): Inspection | null {
+	const i = inspections()[inspectionKey(key, link)] ?? null;
+	return inspects(i, key, work, link) ? i : null;
+}
+
+/** The row on result `key` opened last, for Escape. */
+export function lastInspection(key: string): Inspection | null {
+	let last: Inspection | null = null;
+	for (const i of Object.values(inspections())) {
+		if (i.key === key && (!last || i.generation > last.generation)) last = i;
+	}
+	return last;
+}
+
 /**
- * Reads the saved source of `link` on the result shown, for one press.
- * What showed before goes first, before the read starts; only the newest
- * press's answer shows. A press while the same pin is reading does nothing.
+ * Reads the saved source of `link` on the result shown, for one press or
+ * the page's first preview. What its row showed before goes first; only the
+ * newest read of that row shows. A press while the same pin is reading does
+ * nothing. A preview beyond `MAX_PREVIEWS` closes the page's oldest one.
  */
 export async function inspectArtifact(
 	source: DeliverySource,
@@ -94,9 +117,10 @@ export async function inspectArtifact(
 	if (mode === "preview" && link.kind !== "nsh") return;
 	const pin = artifactSelection(shown, link);
 	if (!pin) return;
-	const now = inspection();
-	if (now && now.state === "reading" && now.key === key && samePin(now.pin, pin)) return;
-	const generation = ++inspections;
+	const row = inspectionKey(key, link);
+	const now = inspections()[row];
+	if (now && now.state === "reading" && samePin(now.pin, pin)) return;
+	const generation = ++generations;
 	const reading: Inspection = {
 		key,
 		pin,
@@ -109,20 +133,52 @@ export async function inspectArtifact(
 		message: "",
 	};
 	glide();
-	inspection.set(reading);
+	inspections.update((all) => {
+		const next = { ...all, [row]: reading };
+		if (mode === "preview") {
+			const open = Object.entries(next)
+				.filter(([, i]) => i.key === key && i.preview)
+				.sort(([, a], [, b]) => a.generation - b.generation);
+			for (const [k] of open.slice(0, Math.max(0, open.length - MAX_PREVIEWS))) delete next[k];
+		}
+		return next;
+	});
 	const r = await source.inspect(shown, link);
-	if (inspection()?.generation !== generation) return;
-	inspection.set(
-		r.status === "shown"
-			? { ...reading, state: "shown", artifact: r.artifact }
-			: { ...reading, state: "refused", message: r.message },
-	);
+	if (inspections()[row]?.generation !== generation) return;
+	inspections.update((all) => ({
+		...all,
+		[row]:
+			r.status === "shown"
+				? { ...reading, state: "shown", artifact: r.artifact }
+				: { ...reading, state: "refused", message: r.message },
+	}));
 }
 
-/** Hides the source and drops its text. An answer still on its way is not shown. */
+/** Hides one row's source or preview and drops it. An answer still on its way is not shown. */
+export function hideArtifact(key: string, link: { sessionId: string; artifactId: string }) {
+	const row = inspectionKey(key, link);
+	if (!inspections()[row]) return;
+	inspections.update((all) => {
+		const next = { ...all };
+		delete next[row];
+		return next;
+	});
+}
+
+/** Drops the rows of result `key` that `keep` refuses. */
+export function dropInspections(key: string, keep: (i: Inspection) => boolean) {
+	const gone = Object.entries(inspections()).filter(([, i]) => i.key === key && !keep(i));
+	if (gone.length === 0) return;
+	inspections.update((all) => {
+		const next = { ...all };
+		for (const [k] of gone) delete next[k];
+		return next;
+	});
+}
+
+/** Hides every shown source and preview. An answer still on its way is not shown. */
 export function hideInspection() {
-	inspections++;
-	if (inspection()) inspection.set(null);
+	if (Object.keys(inspections()).length > 0) inspections.set({});
 }
 
 /** An artifact kind in a word or two. */

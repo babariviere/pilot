@@ -87,20 +87,62 @@ link or a standalone chat's link has none, and nothing looks up a latest
 revision. One press makes one `day.delivery.artifact` read of exactly that
 pin. Opening the page, a restored window and a hot update read nothing.
 
-The page shows one source at a time, labelled Source with kind and revision.
+Each output keeps its own view: its source or its NSH preview, labelled with
+kind and revision. Previews run in the app's isolated native engine
+(`pilot/artifact-preview`). When the page opens, the first pinned NSH output
+opens in its preview without a press; the sandbox, not the press, is the
+safety boundary. This happens once per delivery: Hide keeps it closed, and a
+newer delivery opens its own first preview. At most two previews stay open on
+a page; opening another closes the oldest. Other outputs open on a press.
 Text shows as plain monospaced text; the first 400 lines or 40,000 characters
 show until the user presses Show all, and the page says how much shows. An
 image shows its title and kind only. `missing`, `oversize`, `redacted`,
 `unsupported` and `invalid` each have their own sentence; none shows a part of
 another revision instead. A refused read shows why and no source.
 
-Each press clears the shown source before it awaits, and a generation number
-drops any answer that is not the newest press's. A newer delivery, a changed
-pin or kind, a failed result read, Hide source, Escape, leaving the page,
-`startFresh` and `restoreView` drop the text at once. The shown source lives in
-`deliveryView.ts` only; SavedView never keeps it. A stale refusal reads the
-result again, like an output link's. Reading never opens, runs or draws
-anything, sends nothing and is never the user's check.
+Each press clears that output's view before it awaits, and a generation
+number drops any answer that is not that output's newest read. A newer
+delivery, a changed pin or kind or a failed result read drops the affected
+views at once. Hide, Escape (the view opened last first), leaving the page,
+`startFresh` and `restoreView` drop them too. The views live in
+`deliveryView.ts` only; SavedView never keeps them. A stale refusal reads the
+result again, like an output link's. Reading sends nothing and is never the
+user's check.
+
+## Project and mission artifacts
+
+The header's **Artifacts** opens the window's project page: every artifact its
+chats saved, newest first (at most 100, then a note). A mission's overview has
+an **Artifacts** section with its `MissionArtifactLink` rows grouped by task. A
+pinned link keeps its revision; an unpinned link shows the current revision,
+read when the section opens. Both pages share `ArtifactShelf.tsx`: the same
+row, `SourcePanel.tsx` and `ArtifactPreview.tsx`, per-row views, at most two
+previews, and the newest readable NSH artifact opening in its preview once
+when the page opens. Reading, empty and refused lists each have their own
+state; a refused list never looks like an empty one. Nothing polls.
+
+`day.artifacts.read` takes `{}` or `{missionId}`. Native chooses the project
+from its root, reads `GET /api/projects/:project/artifacts`, and for a mission
+`GET /api/missions/:mission`, which must belong to that project. It validates
+every row (artifact UUID, session ID, known kind, revision, project) and
+refuses the whole list otherwise.
+
+`day.artifacts.source` takes `{sourceSessionId, artifactId, revision}` and
+reads `GET /api/projects/:project/artifacts/:session/:artifact?revision=N`.
+That route needs the native capability and `Cache-Control: no-store`. The
+daemon checks that the chat belongs to the project now and has that revision,
+reads the numbered container with the same reader, limits and redaction as a
+delivered output, and refuses access changes during the read. It never falls
+back to another revision. Native projects only the inert fields, as above.
+
+## Compile cache
+
+`artifact_runtime.rs` compiles the fixed artifact kit once per process. It
+keeps the compiled entry module of the eight most recent sources by their
+SHA-256, after `artifact_source::verify` checks the exact bytes, ids and
+revision. It keeps code only, never an engine, its state or a grant, and saves
+nothing to disk. Every open still reads the exact revision through the native
+checks above and starts a fresh engine.
 
 Focused tests use isolated saved revisions and synthetic sessions, with workers
 disabled. They cover exact older revisions, stale delivery/source pins,

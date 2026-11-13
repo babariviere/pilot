@@ -198,6 +198,20 @@ async fn run(
             .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
         return Ok(json!({"snapshot":snapshot,"outcome":null}));
     }
+    if let Command::ArtifactsRead(request) = &call.command {
+        let snapshot = super::artifacts::list(t, request).await?;
+        shared.open()?;
+        call.command
+            .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
+        return Ok(json!({"snapshot":snapshot,"outcome":null}));
+    }
+    if let Command::ArtifactSource(request) = &call.command {
+        let snapshot = super::artifacts::source(t, request).await?;
+        shared.open()?;
+        call.command
+            .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
+        return Ok(json!({"snapshot":snapshot,"outcome":null}));
+    }
     if matches!(
         call.command,
         Command::DeliveryRead(_)
@@ -270,6 +284,9 @@ async fn run(
     let work = match &call.command {
         Command::TodayScope(_) => unreachable!("handled scoped Today read"),
         Command::DeliveryArtifact(_) => unreachable!("handled captured artifact read"),
+        Command::ArtifactsRead(_) | Command::ArtifactSource(_) => {
+            unreachable!("handled artifact read")
+        }
         Command::DeliveryRead(_)
         | Command::DeliveryList(_)
         | Command::DeliverySaved

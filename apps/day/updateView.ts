@@ -7,6 +7,7 @@
 // SavedView. The new window shows it again and sends nothing.
 import { signal } from "nsh";
 import type { PlaceKind, SavedView, Today } from "pilot-day/native";
+import { closeArtifacts } from "./artifactReads";
 import type { Changes } from "./changeFeed";
 import { changeMessages, changesRoute, changeTabs, detailsOpen, listMessage } from "./changesView";
 import { saveActionDraft, saveDecisionDraft } from "./commands";
@@ -302,6 +303,7 @@ export function startFresh() {
 	outputMessages.set({});
 	// A shown source is never saved or read again by a restored window.
 	hideInspection();
+	closeArtifacts();
 	linearOpen.set(false);
 	openIssue.set(null);
 	linearProject.set(null);
@@ -381,6 +383,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	backNotes.set(notes);
 	backOpen.set(Object.fromEntries(Object.keys(notes).map((key) => [key, true])));
 	reminders.set(remindersOf(view.reminders ?? []));
+	closeArtifacts();
 	linearOpen.set(false);
 	openIssue.set(null);
 	linearProject.set(null);

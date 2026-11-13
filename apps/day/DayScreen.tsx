@@ -4,6 +4,8 @@
 // and Escape goes back too.
 
 import { effect, lifecycle, untracked, View } from "nsh";
+import { ArtifactsScreen } from "./ArtifactsScreen";
+import { type ArtifactSource, artifactsOpen } from "./artifactReads";
 import { ChangesScreen } from "./ChangesScreen";
 import { AppHeader } from "./Chrome";
 import type { Changes } from "./changeFeed";
@@ -130,7 +132,18 @@ function Results(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: C
 			else={
 				<If
 					when={props.day.linear && linearOpen()}
-					else={<Places day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />}
+					else={
+						<If
+							when={props.day.artifacts && artifactsOpen()}
+							else={
+								<Places day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />
+							}
+						>
+							<Arrive class="flex-1">
+								<ArtifactsScreen source={props.day.artifacts as ArtifactSource} />
+							</Arrive>
+						</If>
+					}
 				>
 					<Arrive class="flex-1">
 						<LinearScreen day={props.day} />

@@ -1,16 +1,15 @@
 // Saved NSH source is data here. Only the app-owned native component runs it,
 // in another engine with local state and no connected host services.
 import { nativeComponent, signal, Text, View } from "nsh";
-import type { CapturedArtifact } from "./deliveryArtifactContract";
-import type { Inspection } from "./deliveryView";
+import type { SavedArtifact, Shown } from "./artifactReads";
 
 type State = { state: string; message: string };
-const NativePreview = nativeComponent<{ snapshot: CapturedArtifact }, { state: State }>("pilot/artifact-preview", {
+const NativePreview = nativeComponent<{ snapshot: SavedArtifact }, { state: State }>("pilot/artifact-preview", {
 	props: ["snapshot"],
 	events: ["state"],
 });
 
-export function ArtifactPreview(props: { inspection: Inspection }) {
+export function ArtifactPreview(props: { inspection: Shown }) {
 	const state = signal<State>({ state: "loading", message: "" });
 	const saved = () => props.inspection.artifact;
 	const present = () => saved()?.content.state === "text";
@@ -38,7 +37,7 @@ export function ArtifactPreview(props: { inspection: Inspection }) {
 			</If>
 			<If when={present()}>
 				<NativePreview
-					snapshot={saved() as CapturedArtifact}
+					snapshot={saved() as SavedArtifact}
 					class="h-96 w-full"
 					onState={(next) => state.set(next)}
 				/>

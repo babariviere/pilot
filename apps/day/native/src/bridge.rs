@@ -44,6 +44,8 @@ pub const METHODS: &[&str] = &[
     "day.delivery.sendBack",
     "day.delivery.reopen",
     "day.delivery.check",
+    "day.artifacts.read",
+    "day.artifacts.source",
     "day.today.read",
     "day.today.scope",
     "day.mission.read",
@@ -203,6 +205,8 @@ pub(crate) enum Command {
     DeliveryRead(crate::host::delivery::Subject),
     DeliveryList(crate::host::delivery::List),
     DeliveryArtifact(crate::host::delivery_artifact::Request),
+    ArtifactsRead(crate::host::artifacts::List),
+    ArtifactSource(crate::host::artifacts::Request),
     DeliverySaved,
     DeliveryOpen(crate::host::delivery::Open),
     DeliveryWrite(crate::host::delivery::Write),
@@ -435,6 +439,16 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: crate::host::delivery_artifact::Request = exact(args)?;
             r.validate()?;
             C::DeliveryArtifact(r)
+        }
+        "day.artifacts.read" => {
+            let r: crate::host::artifacts::List = exact(args)?;
+            r.validate()?;
+            C::ArtifactsRead(r)
+        }
+        "day.artifacts.source" => {
+            let r: crate::host::artifacts::Request = exact(args)?;
+            r.validate()?;
+            C::ArtifactSource(r)
         }
         "day.delivery.saved" => {
             if args != json!({}) {
@@ -1153,7 +1167,10 @@ mod tests {
         let check = command("day.threads.check", json!({"operationId":"op"})).unwrap();
         assert_eq!(check.admit(&gate), Err(Error::Busy));
         for (name, args) in [
-            ("day.threads.read", json!({"missionId":"m","projectId":"other"})),
+            (
+                "day.threads.read",
+                json!({"missionId":"m","projectId":"other"}),
+            ),
             ("day.threads.read", json!({"missionId":"../m"})),
             (
                 "day.threads.history",
@@ -1163,7 +1180,10 @@ mod tests {
                 "day.threads.write",
                 json!({"missionId":"m","source":source,"purpose":"thread-send","topicId":"t","text":"x","operationId":"mine"}),
             ),
-            ("day.threads.check", json!({"operationId":"op","resend":true})),
+            (
+                "day.threads.check",
+                json!({"operationId":"op","resend":true}),
+            ),
         ] {
             assert!(command(name, args.clone()).is_err(), "{name} {args}");
         }

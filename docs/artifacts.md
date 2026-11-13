@@ -14,9 +14,12 @@ and raster artifacts offer **Copy image** separately from copying source text.
 
 Where the tool offers NSH TSX, it captures and compiles one session-scratch file
 before saving a revision. Compile errors leave history unchanged. These artifacts
-open with **Preview** in the native Day app. Interactions change only that
-preview's local state; closing it resets them. **Inspect source** remains
-available. Other clients can still show source without running it.
+show as a preview in the native Day app: on a delivered result's page, the
+first one opens by itself and the others open with **Preview**. Interactions
+change only that preview's local state; hiding it resets them. **Inspect
+source** remains available. Day's **Artifacts** page lists what the project's
+chats saved, newest first, and each mission's overview lists its linked
+artifacts by task. Other clients can still show source without running it.
 
 Other new artifacts use images or native visuals. Creating and previewing HTML, React and
 SwiftUI artifacts is no longer available. Their existing sources, revisions and provenance

@@ -91,30 +91,49 @@ pub(super) async fn read(t: &Transport, request: &Request) -> Result<Value, Erro
         .as_str()
         .filter(|s| s.len() <= 640)
         .ok_or(Error::Invalid)?;
-    if !matches!(
-        kind,
-        "html" | "react" | "swiftui" | "shader" | "visual" | "image" | "nsh"
-    ) {
+    if !kind_ok(kind) {
         return Err(Error::Invalid);
     }
-    let content = match result["content"]["state"].as_str() {
+    let content = content(&result["content"], kind)?;
+    // The artifact endpoint is the final asynchronous disclosure barrier: it
+    // checks current delivery/source membership after reading captured bytes.
+    // Do not await an unrelated delivery GET afterwards (that GET alone does
+    // not check source custody and could hide a revocation during that wait).
+    Ok(
+        json!({"version":1,"reference":expected,"metadata":{"kind":kind,"title":title},
+        "rendering":"unsupported","content":content}),
+    )
+}
+
+/// The artifact kinds Pilot names. Others are refused, not shown as text.
+pub(super) fn kind_ok(kind: &str) -> bool {
+    matches!(
+        kind,
+        "html" | "react" | "swiftui" | "shader" | "visual" | "image" | "nsh"
+    )
+}
+
+/// The inert content of one saved revision: exact text, or a known reason.
+/// Only these fields reach the VM; images never carry bytes.
+pub(super) fn content(content: &Value, kind: &str) -> Result<Value, Error> {
+    Ok(match content["state"].as_str() {
         Some("text") if kind != "image" => {
-            let source = result["content"]["source"]
+            let source = content["source"]
                 .as_str()
                 .filter(|s| s.len() <= 512 * 1024)
                 .ok_or(Error::Invalid)?;
-            let digest = result["content"]["containerSha256"]
+            let digest = content["containerSha256"]
                 .as_str()
                 .filter(|s| delivery::digest(s))
                 .ok_or(Error::Invalid)?;
-            let bytes = result["content"]["containerBytes"]
+            let bytes = content["containerBytes"]
                 .as_u64()
                 .filter(|n| *n <= 1024 * 1024)
                 .ok_or(Error::Invalid)?;
             json!({"state":"text","source":source,"containerSha256":digest,"containerBytes":bytes})
         }
         Some("unavailable") => {
-            let reason = result["content"]["reason"].as_str().ok_or(Error::Invalid)?;
+            let reason = content["reason"].as_str().ok_or(Error::Invalid)?;
             if !matches!(
                 reason,
                 "missing" | "oversize" | "redacted" | "unsupported" | "invalid"
@@ -124,13 +143,5 @@ pub(super) async fn read(t: &Transport, request: &Request) -> Result<Value, Erro
             json!({"state":"unavailable","reason":reason})
         }
         _ => return Err(Error::Invalid),
-    };
-    // The artifact endpoint is the final asynchronous disclosure barrier: it
-    // checks current delivery/source membership after reading captured bytes.
-    // Do not await an unrelated delivery GET afterwards (that GET alone does
-    // not check source custody and could hide a revocation during that wait).
-    Ok(
-        json!({"version":1,"reference":expected,"metadata":{"kind":kind,"title":title},
-        "rendering":"unsupported","content":content}),
-    )
+    })
 }

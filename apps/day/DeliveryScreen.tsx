@@ -8,9 +8,11 @@
 // the window only. A command whose answer is lost stays Unknown, with Check
 // only, until its own receipt says how it ended.
 // An artifact's pinned revision shows its saved source as plain text on a
-// press of Inspect source, read once. NSH may open in the app's isolated
-// native preview. A newer result or lost read hides either; looking records nothing.
-import { effect, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
+// press of Inspect source, read once. NSH opens in the app's isolated native
+// preview: the first pinned one on its own when the page opens, others on a
+// press. Each output keeps its own view. A newer result or lost read hides
+// them; looking records nothing.
+import { effect, keymap, Scroll, signal, Text, untracked, View, type ViewRef } from "nsh";
 import { Checkbox, Input } from "nsh/base";
 import { ArtifactPreview } from "./ArtifactPreview";
 import { artifactPreviewsAvailable } from "./bridge";
@@ -36,14 +38,13 @@ import {
 	type DeliveryPlace,
 	deliveryMessages,
 	doneAsk,
-	excerpt,
-	hideInspection,
+	dropInspections,
+	hideArtifact,
 	type Inspection,
 	inspectArtifact,
-	inspection,
 	inspectionCurrent,
-	inspects,
-	kindName,
+	inspectionOf,
+	lastInspection,
 	outputMessages,
 	ownPullRequests,
 	prName,
@@ -56,13 +57,12 @@ import {
 	reminders,
 	setNote,
 	setTicks,
-	sizeOf,
 	titleOf,
-	unavailableLine,
 	unsettledLine,
 } from "./deliveryView";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
+import { SourcePanel } from "./SourcePanel";
 import { Action, Mark, RowLink, SectionTitle } from "./ui";
 import { setFor } from "./view";
 
@@ -150,66 +150,6 @@ function shortName(r: OutputLink): string {
 	return prName(r).split(" · ")[0];
 }
 
-/**
- * One inspected saved source: its title, kind and revision, then the saved
- * text exactly as stored, or why it is not shown. Plain text only.
- */
-function SourcePanel(props: { inspection: Inspection }) {
-	const all = signal(false);
-	const i = () => props.inspection;
-	const saved = () => i().artifact;
-	const text = () => {
-		const c = saved()?.content;
-		return c?.state === "text" ? excerpt(c.source, all()) : null;
-	};
-	const bytes = () => {
-		const c = saved()?.content;
-		return c?.state === "text" ? c.containerBytes : 0;
-	};
-	const unavailable = () => {
-		const c = saved()?.content;
-		return c?.state === "unavailable" ? unavailableLine(i().kind, c.reason) : "";
-	};
-	return (
-		<View testID="artifact-source" selectable class="gap-2 rounded-xl bg-muted px-4 py-3">
-			<Text class="text-xs text-faint">{`Source · ${kindName(i().kind)} · revision ${i().pin.revision}`}</Text>
-			<If when={saved()}>
-				<Text role="header" class="text-sm font-medium text-foreground">
-					{saved()?.metadata.title || i().title || "Artifact"}
-				</Text>
-			</If>
-			<If when={i().state === "reading"}>
-				<Text class="text-sm text-muted-foreground">Reading the saved source…</Text>
-			</If>
-			<If when={i().state === "refused"}>
-				<Text role="alert" testID="artifact-source-refused" class="text-sm text-muted-foreground">
-					{i().message}
-				</Text>
-			</If>
-			<If when={text()}>
-				<Text testID="artifact-source-text" class="font-mono text-xs leading-relaxed text-foreground">
-					{text()?.text ?? ""}
-				</Text>
-				<If when={text()?.note}>
-					<View class="flex-row items-center gap-3">
-						<Text class="flex-1 text-xs text-faint">{text()?.note ?? ""}</Text>
-						<Action label="Show all" testID="artifact-source-all" onPress={() => all.set(true)} />
-					</View>
-				</If>
-				<Text class="text-xs text-faint">{`Saved copy, ${sizeOf(bytes())}.`}</Text>
-			</If>
-			<If when={unavailable()}>
-				<Text testID="artifact-source-unavailable" class="text-sm text-muted-foreground">
-					{unavailable()}
-				</Text>
-			</If>
-			<Text class="text-xs text-faint">
-				Plain text from this saved revision. Pilot does not run or draw it, and looking records nothing.
-			</Text>
-		</View>
-	);
-}
-
 /** One artifact the agent linked: its title, kind and pinned revision, and Inspect source when it has a pin. */
 function ArtifactOutput(props: {
 	mirror: DeliveryMirror;
@@ -221,10 +161,7 @@ function ArtifactOutput(props: {
 }) {
 	const key = () => props.place.key;
 	const pinned = () => !!artifactSelection(props.work, props.link);
-	const mine = () => {
-		const i = inspection();
-		return props.fresh && inspects(i, key(), props.work, props.link) ? i : null;
-	};
+	const mine = () => (props.fresh ? inspectionOf(key(), props.work, props.link) : null);
 	const reading = () => mine()?.state === "reading";
 	const name = () => props.link.title || "the artifact";
 	let sourceAnchor: ViewRef | undefined;
@@ -259,13 +196,13 @@ function ArtifactOutput(props: {
 							if (sourceAnchor) props.anchors.set(props.link.artifactId, sourceAnchor);
 							if (mine() && !mine()?.preview) {
 								glide();
-								hideInspection();
+								hideArtifact(key(), props.link);
 							} else void inspectArtifact(props.mirror.source, key(), props.work, props.link);
 						}}
 					/>
 					<If when={props.link.kind === "nsh" && artifactPreviewsAvailable()}>
 						<Action
-							label={mine()?.preview ? "Close preview" : "Preview"}
+							label={mine()?.preview ? "Hide preview" : "Preview"}
 							testID={`output-preview-${props.link.artifactId}`}
 							disabled={reading() || !props.fresh}
 							anchor={(node) => {
@@ -273,8 +210,10 @@ function ArtifactOutput(props: {
 							}}
 							onPress={() => {
 								if (previewAnchor) props.anchors.set(props.link.artifactId, previewAnchor);
-								if (mine()?.preview) hideInspection();
-								else void inspectArtifact(props.mirror.source, key(), props.work, props.link, "preview");
+								if (mine()?.preview) {
+									glide();
+									hideArtifact(key(), props.link);
+								} else void inspectArtifact(props.mirror.source, key(), props.work, props.link, "preview");
 							}}
 						/>
 					</If>
@@ -383,8 +322,8 @@ function Outputs(props: {
 			</If>
 			<If when={w().artifacts.length > 0}>
 				<Text class="text-xs text-faint">
-					Inspect source shows the saved text of a pinned revision. NSH previews change only their local state, and
-					looking records nothing.
+					Inspect source shows the saved text of a pinned revision. NSH previews run apart from Pilot and change
+					only their own state. Looking records nothing.
 				</Text>
 			</If>
 		</View>
@@ -718,29 +657,39 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 	const origin = () =>
 		props.place.subject.kind === "task" ? `A task in ${missionTitle() ?? "a mission"}` : "A standalone chat";
 	const fresh = () => !!work() && !entry()?.reason;
-	// A shown source is only for the exact pin of the result as last read.
-	// A newer result, a changed pin or a failed read drops its text at once.
+	// A shown source or preview is only for the exact pin of the result as last
+	// read. A newer result, a changed pin or a failed read drops it at once.
 	effect(() => {
-		const i = inspection();
-		if (!i || i.key !== key) return;
 		const w = work();
-		if (!w || !fresh() || !inspectionCurrent(i, key, w)) hideInspection();
+		const ok = fresh();
+		untracked(() => dropInspections(key, (i) => !!w && ok && inspectionCurrent(i, key, w)));
+	});
+	// The first pinned NSH output opens in its preview once per delivery: Hide
+	// keeps it closed, and a newer delivery opens its own. The sandbox, not a
+	// press, is the safety boundary. Others open on a press.
+	let previewed = "";
+	effect(() => {
+		const w = work();
+		if (!w?.deliveryId || !fresh() || !artifactPreviewsAvailable() || w.deliveryId === previewed) return;
+		previewed = w.deliveryId;
+		const first = w.artifacts.find((a) => a.kind === "nsh" && artifactSelection(w, a));
+		if (first) untracked(() => void inspectArtifact(mirror.source, key, w, first, "preview"));
 	});
 	const anchors = new Map<string, ViewRef>();
 	// Escape works from the note too: the note closes first and keeps its words,
-	// then a shown source, then the page.
+	// then the source or preview opened last, then the page.
 	keymap.bind(
 		"escape",
 		() => {
+			const last = lastInspection(key);
 			if (doneAsk()?.key === key) doneAsk.set(null);
 			else if (backOpen()[key]) {
 				glide();
 				setFor(backOpen, key, false);
-			} else if (inspection()?.key === key) {
-				const id = inspection()?.pin.artifactId ?? "";
+			} else if (last) {
 				glide();
-				hideInspection();
-				anchors.get(id)?.focus();
+				hideArtifact(key, { sessionId: last.pin.sourceSessionId, artifactId: last.pin.artifactId });
+				anchors.get(last.pin.artifactId)?.focus();
 			} else closeDelivery();
 		},
 		{ when: "always" },

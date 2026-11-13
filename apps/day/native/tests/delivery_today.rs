@@ -449,7 +449,8 @@ fn connected_inspect_cold_open_keeps_drafts_and_navigation_but_not_source() {
     app.press(&long).unwrap();
     wait(&mut app, "id:artifact-source-all");
     assert!(!app.screen().texts().contains(&source.as_str()));
-    assert!(!has(&app, "<script>throw Error('never execute')</script>"));
+    // Each output keeps its own view.
+    assert!(has(&app, "<script>throw Error('never execute')</script>"));
     app.press("id:artifact-source-all").unwrap();
     wait_text(&mut app, &source);
     assert!(!has(&app, "id:artifact-source-all"));
@@ -538,7 +539,7 @@ fn connected_inspect_cold_open_keeps_drafts_and_navigation_but_not_source() {
 }
 
 #[test]
-fn connected_preview_click_reads_the_exact_pin_and_revocation_refuses_the_next_preview() {
+fn connected_preview_opens_the_exact_pin_on_its_own_and_revocation_refuses_the_next_preview() {
     let mut f = Fixture::with_daemon("day-delivered-artifact.ts");
     let fixture = f.stats("nsh");
     let id = fixture["nshId"].as_str().expect("saved NSH fixture");
@@ -549,21 +550,6 @@ fn connected_preview_click_reads_the_exact_pin_and_revocation_refuses_the_next_p
     let mut params = bridge.channel().params();
     params.get_mut("day").unwrap()["artifactPreview"] = json!(true);
     bridge.channel().set_params(params);
-    let mut app = open(&entry, &bridge);
-    result(&mut app, &f.info["task"]);
-    let preview_button = format!("id:output-preview-{id}");
-    wait(&mut app, &preview_button);
-    assert!(
-        !has(
-            &app,
-            &format!(
-                "id:output-preview-{}",
-                f.info["artifactId"].as_str().unwrap()
-            )
-        ),
-        "HTML has no preview action"
-    );
-
     #[derive(Default)]
     struct Observed {
         node: Option<nsh_core::NodeId>,
@@ -571,6 +557,7 @@ fn connected_preview_click_reads_the_exact_pin_and_revocation_refuses_the_next_p
     }
     let observed = Arc::new(Mutex::new(Observed::default()));
     let observer = observed.clone();
+    let mut app = open(&entry, &bridge);
     app.observe(move |_, batch| {
         let mut observed = observer.lock().unwrap();
         for item in &batch.items {
@@ -584,6 +571,9 @@ fn connected_preview_click_reads_the_exact_pin_and_revocation_refuses_the_next_p
                     for (name, value) in props {
                         if &**name == "snapshot"
                             && let Some(value) = value
+                            // The result page's pins only; the mission's own
+                            // Artifacts section previews through another read.
+                            && !value["reference"]["deliveryId"].is_null()
                         {
                             observed.snapshots.push(value.clone());
                         }
@@ -593,7 +583,20 @@ fn connected_preview_click_reads_the_exact_pin_and_revocation_refuses_the_next_p
             }
         }
     });
-    app.press(&preview_button).unwrap();
+    result(&mut app, &f.info["task"]);
+    let preview_button = format!("id:output-preview-{id}");
+    wait(&mut app, &preview_button);
+    assert!(
+        !has(
+            &app,
+            &format!(
+                "id:output-preview-{}",
+                f.info["artifactId"].as_str().unwrap()
+            )
+        ),
+        "HTML has no preview action"
+    );
+    // The first pinned NSH output opens on its own when the page opens.
     app.wait_until("exact saved bytes reach native preview", WAIT, |_| {
         !observed.lock().unwrap().snapshots.is_empty()
     })
@@ -652,8 +655,15 @@ fn connected_preview_click_reads_the_exact_pin_and_revocation_refuses_the_next_p
     flush(&mut app, &bridge);
     assert_eq!(observed.lock().unwrap().snapshots.len(), 3);
     let stats = f.stats("stats");
-    // Three previews and one source read, none after leaving.
-    assert_eq!(stats["artifactReads"].as_array().unwrap().len(), 4);
+    // Three previews and one source read of the first delivery. Leaving makes
+    // a newer delivery, whose first preview is read once and refused: no
+    // bytes reach the preview after leaving.
+    let reads = stats["artifactReads"].as_array().unwrap();
+    assert_eq!(reads.len(), 5, "{stats}");
+    assert_ne!(
+        reads[4]["query"]["deliveryId"],
+        reads[0]["query"]["deliveryId"]
+    );
     assert_eq!(stats["posts"], 0);
     assert_eq!(stats["messages"], json!([]));
     close_window(app, bridge);
@@ -745,16 +755,17 @@ fn connected_denied_and_late_channel_replies_never_restore_an_earlier_results_so
     result(&mut app, &f.info["task"]);
     app.press(&inspect_button(&f.info["longId"])).unwrap();
     wait(&mut app, "id:artifact-source-text");
+    // Each output keeps its own view: hide this one so only the next shows.
+    app.press(&inspect_button(&f.info["longId"])).unwrap();
+    gone(&mut app, "id:artifact-source-text");
     *mode.lock().unwrap() = "denied";
     app.press(&inspect_button(&f.info["artifactId"])).unwrap();
     wait_text(&mut app, "Pilot cannot show saved sources in this window.");
     no_source(&app);
 
-    // Show the other pin again. Pressing the refused pin itself would only
-    // hide its panel, not issue another read.
-    *mode.lock().unwrap() = "answer";
-    app.press(&inspect_button(&f.info["longId"])).unwrap();
-    wait(&mut app, "id:artifact-source-text");
+    // Pressing the refused pin hides its panel without another read.
+    app.press(&inspect_button(&f.info["artifactId"])).unwrap();
+    gone(&mut app, "Pilot cannot show saved sources in this window.");
     *mode.lock().unwrap() = "hold";
     app.press(&inspect_button(&f.info["artifactId"])).unwrap();
     wait_text(&mut app, "Reading the saved source…");
@@ -783,7 +794,7 @@ fn connected_denied_and_late_channel_replies_never_restore_an_earlier_results_so
     assert!(!has(&app, "<script>throw Error('never execute')</script>"));
     assert_eq!(
         calls.lock().unwrap().len(),
-        5,
+        4,
         "each explicit Inspect calls once"
     );
     wait_text(&mut app, "Not checked yet.");

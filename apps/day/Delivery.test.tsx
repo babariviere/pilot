@@ -273,7 +273,7 @@ test("a press opens the exact pull request once, records nothing and never retri
 	await openCsv(app);
 	expect(
 		app.shows(
-			"Inspect source shows the saved text of a pinned revision. Pilot does not run or draw artifacts, and looking records nothing.",
+			"Inspect source shows the saved text of a pinned revision. NSH previews run apart from Pilot and change only their own state. Looking records nothing.",
 		),
 	).toBe(true);
 	await app.press("id:output-open-pr-431");
@@ -329,12 +329,14 @@ test("Inspect source reads one exact pin once, as plain text that never runs, an
 	// Looking is not the user's check.
 	expect(app.texts().includes("Not checked yet.")).toBe(true);
 	expect(app.shows("id:mark-done")).toBe(true);
-	// An image shows its title and kind only; the HTML text goes.
+	// An image shows its title and kind only. Each output keeps its own view.
 	await app.press(`id:output-source-${IMAGE}`);
 	await app.waitFor("Pilot shows only an image's title and kind here. It does not draw images.");
 	expect(app.texts().includes("Source · Image · revision 1")).toBe(true);
-	expect(showsSource(app, HTML_SOURCE)).toBe(false);
+	expect(showsSource(app, HTML_SOURCE)).toBe(true);
 	await app.press(`id:output-source-${IMAGE}`);
+	expect(app.texts().includes("Source · Image · revision 1")).toBe(false);
+	await app.press(`id:output-source-${HTML}`);
 	expect(app.shows("id:artifact-source")).toBe(false);
 	// Escape hides a shown source first, then leaves the page.
 	await app.press(`id:output-source-${VISUAL}`);
@@ -352,7 +354,7 @@ test("Inspect source reads one exact pin once, as plain text that never runs, an
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
 });
 
-test("a read on its way hides the earlier source, and only the newest press's answer shows", async () => {
+test("each output reads on its own, and a hidden read's late answer is dropped", async () => {
 	const app = await ready();
 	await openCsv(app);
 	await app.press(`id:output-source-${VISUAL}`);
@@ -360,15 +362,17 @@ test("a read on its way hides the earlier source, and only the newest press's an
 	await app.press("Hold reads");
 	await app.press(`id:output-source-${HTML}`);
 	await app.waitFor("Reading the saved source…");
-	expect(showsSource(app, VISUAL_SOURCE)).toBe(false);
+	expect(showsSource(app, VISUAL_SOURCE)).toBe(true);
 	// One press, one read: the same pin cannot be pressed again while it reads.
 	expect(app.enabled(`id:output-source-${HTML}`)).toBe(false);
-	await app.press(`id:output-source-${IMAGE}`);
-	// The image's answer comes first; the HTML answer arrives late and is dropped.
+	// Escape hides the view opened last, still reading; its late answer is dropped.
+	await app.keyboard.press("escape");
+	expect(app.texts().includes("Reading the saved source…")).toBe(false);
 	await app.press("Release reads");
+	await app.press(`id:output-source-${IMAGE}`);
 	await app.waitFor("Pilot shows only an image's title and kind here. It does not draw images.");
 	expect(showsSource(app, HTML_SOURCE)).toBe(false);
-	expect(app.texts().includes("Source · Image · revision 1")).toBe(true);
+	expect(showsSource(app, VISUAL_SOURCE)).toBe(true);
 	expect(reads(app)).toBe(`Source reads: [${VISUAL}@2 ${HTML}@3 ${IMAGE}@1]`);
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
 });
@@ -383,8 +387,11 @@ test("missing, oversize, held back and damaged copies say why, never another rev
 	await app.press(`id:output-source-${VISUAL}`);
 	await app.waitFor("This revision's saved copy is too large to show here. Pilot does not show part of it instead.");
 	await app.press("Held back");
+	// Each output keeps its view: hide it, then read it again.
+	await app.press(`id:output-source-${HTML}`);
 	await app.press(`id:output-source-${HTML}`);
 	await app.waitFor("Pilot held this source back because it may contain a secret.");
+	await app.press(`id:output-source-${VISUAL}`);
 	await app.press(`id:output-source-${VISUAL}`);
 	await app.waitFor("This revision's saved copy is damaged, so Pilot does not show it.");
 	expect(showsSource(app, VISUAL_SOURCE)).toBe(false);

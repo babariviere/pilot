@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
-import type { DeliveredArtifact, DeliveredArtifactRequest, DeliveredWork } from "@pilot/protocol";
+import type { DeliveredArtifact, DeliveredArtifactRequest, DeliveredWork, ProjectArtifact } from "@pilot/protocol";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
 
 async function fixture(t: TestContext) {
@@ -181,6 +181,55 @@ test("missing, oversized, redacted and corrupt captured revisions never fall bac
 	}
 	await writeFile(file, "invalid JSON contains private text");
 	assert.deepEqual((await (await f.read()).json()).content, { state: "unavailable", reason: "invalid" });
+});
+
+test("project artifact reads one exact revision of a chat in that project, with the same limits", async (t) => {
+	const f = await fixture(t);
+	const route = (project: string, session: string, artifact: string, query: string) =>
+		`${f.root}/api/projects/${project}/artifacts/${session}/${artifact}?${query}`;
+	const get = (url: string, token = f.capability) => fetch(url, { headers: { "x-pilot-github-capability": token } });
+	const exact = route(f.project.id, f.worker.id, f.artifact.id, "revision=1");
+	const before = f.stats();
+	const response = await get(exact);
+	assert.equal(response.status, 200);
+	assert.equal(response.headers.get("cache-control"), "no-store");
+	const value = (await response.json()) as ProjectArtifact;
+	assert.deepEqual(value.reference, {
+		projectId: f.project.id,
+		sourceSessionId: f.worker.id,
+		artifactId: f.artifact.id,
+		revision: 1,
+	});
+	assert.deepEqual(value.metadata, { title: f.artifact.title, kind: "visual" });
+	assert.deepEqual(value.content, {
+		state: "text",
+		source: f.artifact.source,
+		containerSha256: createHash("sha256").update(f.bytes).digest("hex"),
+		containerBytes: f.bytes.length,
+	});
+	assert.equal("html" in value, false);
+	assert.deepEqual(f.stats(), before);
+	// Revision 2 is its own exact read, never a fallback.
+	assert.equal(
+		((await (await get(route(f.project.id, f.worker.id, f.artifact.id, "revision=2"))).json()) as ProjectArtifact)
+			.content.state === "text",
+		true,
+	);
+	assert.notEqual((await get(exact, "bad-token")).status, 200);
+	for (const url of [
+		route(f.project.id, f.worker.id, f.artifact.id, "revision=3"),
+		route(f.project.id, f.worker.id, f.artifact.id, "revision=0"),
+		route(f.project.id, f.worker.id, f.artifact.id, ""),
+		route(f.project.id, f.worker.id, f.artifact.id, "revision=1&revision=2"),
+		route(f.project.id, f.worker.id, f.artifact.id, "revision=1&path=/tmp/a"),
+		route(f.project.id, f.worker.id, randomUUID(), "revision=1"),
+		route(f.project.id, f.worker.id, "latest", "revision=1"),
+		route(f.project.id, randomUUID(), f.artifact.id, "revision=1"),
+		route(f.other.id, f.worker.id, f.artifact.id, "revision=1"),
+	])
+		assert.notEqual((await get(url)).status, 200, url);
+	await writeFile(join(f.directory, "1.json"), JSON.stringify({ ...f.artifact, source: "password=synthetic-secret" }));
+	assert.deepEqual((await (await get(exact)).json()).content, { state: "unavailable", reason: "redacted" });
 });
 
 for (const kind of ["html", "react", "swiftui", "shader", "visual", "image", "nsh"] as const) {

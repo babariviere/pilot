@@ -1,9 +1,16 @@
 /** Native-user output inspection. Never consumes reviewer allocations or executes saved source. */
 import { createHash } from "node:crypto";
 import { ArtifactNotFound, StoredArtifactTooLarge } from "@pilot/artifacts";
-import type { DeliveredArtifact, DeliveredArtifactRequest } from "@pilot/protocol";
+import type {
+	ArtifactKind,
+	DeliveredArtifact,
+	DeliveredArtifactRequest,
+	ProjectArtifact,
+	ProjectArtifactRequest,
+	SavedArtifactContent,
+} from "@pilot/protocol";
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
-import { Conflict } from "./errors.ts";
+import { Conflict, NotFound } from "./errors.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, OperationRejected } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
@@ -12,11 +19,63 @@ import type { UserVerifications } from "./user-verification.ts";
 
 const id = (s: unknown): s is string => typeof s === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(s);
 const hash = (s: unknown): s is string => typeof s === "string" && /^[a-f0-9]{64}$/.test(s);
+const uuid = (s: unknown): s is string =>
+	typeof s === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s);
+
+type Stored = Awaited<ReturnType<SessionManager["readCapturedArtifactRevision"]>>;
+
+/** Reads one numbered saved container. Failures become a reason, never another revision. */
+async function capture(
+	sessions: Pick<SessionManager, "readCapturedArtifactRevision">,
+	sessionId: string,
+	artifactId: string,
+	revision: number,
+): Promise<{ stored?: Stored; reason?: "missing" | "oversize" | "invalid" }> {
+	try {
+		return { stored: await sessions.readCapturedArtifactRevision(sessionId, artifactId, revision) };
+	} catch (e) {
+		return {
+			reason:
+				e instanceof StoredArtifactTooLarge ? "oversize" : e instanceof ArtifactNotFound ? "missing" : "invalid",
+		};
+	}
+}
+
+/**
+ * The inert answer for one captured container: its text, or why it is held back.
+ * Images never carry bytes; oversize and possible secrets are never cut or shown.
+ */
+function describe(
+	a: Stored["artifact"],
+	bytes: Stored["bytes"],
+	title: string,
+	knownSecrets: readonly string[],
+): { metadata: { title: string; kind: ArtifactKind }; content: SavedArtifactContent } {
+	const metadata = { title, kind: a.kind };
+	if (a.kind === "image") return { metadata, content: { state: "unavailable", reason: "unsupported" } };
+	if (Buffer.byteLength(a.source) > 512 * 1024)
+		return { metadata, content: { state: "unavailable", reason: "oversize" } };
+	if (
+		redactDiagnosticText(a.source) !== a.source ||
+		title !== a.title ||
+		knownSecrets.some((s) => s && (a.source.includes(s) || a.title.includes(s)))
+	)
+		return { metadata: { ...metadata, title: "Artifact" }, content: { state: "unavailable", reason: "redacted" } };
+	return {
+		metadata,
+		content: {
+			state: "text",
+			source: a.source,
+			containerSha256: createHash("sha256").update(bytes).digest("hex"),
+			containerBytes: bytes.byteLength,
+		},
+	};
+}
 
 interface Dependencies {
 	store: MissionStore;
 	projects: ProjectStore;
-	sessions: Pick<SessionManager, "get" | "onChange" | "readCapturedArtifactRevision">;
+	sessions: Pick<SessionManager, "get" | "onChange" | "readCapturedArtifactRevision" | "artifacts">;
 	verifications: UserVerifications;
 }
 export class DeliveredArtifacts {
@@ -81,14 +140,7 @@ export class DeliveredArtifacts {
 			changed = true;
 		});
 		try {
-			let stored: Awaited<ReturnType<SessionManager["readCapturedArtifactRevision"]>> | undefined;
-			let reason: "missing" | "oversize" | "invalid" | undefined;
-			try {
-				stored = await sessions.readCapturedArtifactRevision(r.sourceSessionId, r.artifactId, r.revision);
-			} catch (e) {
-				reason =
-					e instanceof StoredArtifactTooLarge ? "oversize" : e instanceof ArtifactNotFound ? "missing" : "invalid";
-			}
+			const { stored, reason } = await capture(sessions, r.sourceSessionId, r.artifactId, r.revision);
 			if (changed || canonicalJSON(observe()) !== canonicalJSON(before))
 				throw new Conflict("Delivered artifact access changed during read");
 			const result: DeliveredArtifact = {
@@ -108,30 +160,72 @@ export class DeliveredArtifacts {
 				a.kind !== before.link.kind
 			)
 				throw new Conflict("Captured artifact identity changed");
-			result.metadata.title = safeTitle(a.title);
-			if (a.kind === "image") return result;
-			if (Buffer.byteLength(a.source) > 512 * 1024) {
-				result.content = { state: "unavailable", reason: "oversize" };
-				return result;
-			}
-			if (
-				redactDiagnosticText(a.source) !== a.source ||
-				result.metadata.title !== a.title ||
-				knownSecrets.some((s) => s && (a.source.includes(s) || a.title.includes(s)))
-			) {
-				result.metadata.title = "Artifact";
-				result.content = { state: "unavailable", reason: "redacted" };
-				return result;
-			}
-			result.content = {
-				state: "text",
-				source: a.source,
-				containerSha256: createHash("sha256").update(stored.bytes).digest("hex"),
-				containerBytes: stored.bytes.byteLength,
-			};
-			return result;
+			return { ...result, ...describe(a, stored.bytes, safeTitle(a.title), knownSecrets) };
 		} finally {
 			offMission();
+			offSession();
+			offProject();
+		}
+	}
+
+	/**
+	 * One exact saved revision made by a chat that belongs to `projectId` now.
+	 * Read-only text with the same limits and redaction as a delivered output;
+	 * never a latest-revision fallback, preview preparation or execution.
+	 */
+	async readProject(request: ProjectArtifactRequest, knownSecrets: readonly string[] = []): Promise<ProjectArtifact> {
+		const r = structuredClone(request);
+		if (
+			!r ||
+			Object.keys(r).sort().join() !== "artifactId,projectId,revision,sourceSessionId" ||
+			!id(r.projectId) ||
+			!id(r.sourceSessionId) ||
+			!uuid(r.artifactId) ||
+			!Number.isSafeInteger(r.revision) ||
+			r.revision < 1
+		)
+			throw new OperationRejected("Exact project artifact revision required");
+		const { sessions, projects } = this.deps;
+		const safeTitle = (title: string) =>
+			knownSecrets.some((s) => s && title.includes(s)) ? "Artifact" : redactDiagnosticText(title);
+		const observe = async () => {
+			projects.require(r.projectId);
+			if (sessions.get(r.sourceSessionId)?.projectId !== r.projectId)
+				throw new OperationRejected("Artifact source is not part of this project");
+			const summary = (await sessions.artifacts(r.sourceSessionId)).find((a) => a.id === r.artifactId);
+			if (!summary || summary.revision < r.revision) throw new NotFound("Unknown artifact revision");
+			return { kind: summary.kind, title: summary.title };
+		};
+		const before = await observe();
+		let changed = false;
+		const offSession = sessions.onChange((s) => {
+			if (s.id === r.sourceSessionId) changed = true;
+		});
+		const offProject = projects.onChange(() => {
+			changed = true;
+		});
+		try {
+			const { stored, reason } = await capture(sessions, r.sourceSessionId, r.artifactId, r.revision);
+			await observe();
+			if (changed) throw new Conflict("Project artifact access changed during read");
+			const result: ProjectArtifact = {
+				version: 1,
+				reference: r,
+				metadata: { title: safeTitle(before.title), kind: before.kind },
+				rendering: "unsupported",
+				content: { state: "unavailable", reason: reason ?? "unsupported" },
+			};
+			if (!stored) return result;
+			const a = stored.artifact;
+			if (
+				a.id !== r.artifactId ||
+				a.revision !== r.revision ||
+				a.sessionId !== r.sourceSessionId ||
+				a.projectId !== r.projectId
+			)
+				throw new Conflict("Captured artifact identity changed");
+			return { ...result, ...describe(a, stored.bytes, safeTitle(a.title), knownSecrets) };
+		} finally {
 			offSession();
 			offProject();
 		}

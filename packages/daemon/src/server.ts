@@ -2229,6 +2229,29 @@ export function createDaemonServer(
 				),
 			);
 		}
+		if (parts[1] === "projects" && parts.length === 6 && parts[3] === "artifacts") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Project artifact is read-only");
+			if (!githubSetup || !deliveredArtifacts) throw new ServiceUnavailable("Project artifact unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			const revisions = url.searchParams.getAll("revision");
+			if ([...url.searchParams.keys()].some((k) => k !== "revision") || revisions.length !== 1)
+				throw new OperationRejected("Exact artifact revision required");
+			if (!/^[1-9][0-9]*$/.test(revisions[0]!)) throw new OperationRejected("Explicit artifact revision required");
+			return json(
+				res,
+				200,
+				await deliveredArtifacts.readProject(
+					{
+						projectId: parts[2]!,
+						sourceSessionId: parts[4]!,
+						artifactId: parts[5]!,
+						revision: Number(revisions[0]),
+					},
+					[String(req.headers["x-pilot-github-capability"])],
+				),
+			);
+		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "delivered-work") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Delivery discovery is read-only");

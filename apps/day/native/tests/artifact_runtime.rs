@@ -114,6 +114,13 @@ fn captured_runtime_rejects_wrong_identity_and_host_imports_before_execution() {
     let mut input = captured("export default () => null;");
     input.source.push(' ');
     assert!(artifact_runtime::config(input).is_err());
+    // A compiled entry is reused only for the exact verified bytes: other
+    // source claiming the same digest is refused, never served from the cache.
+    let cached = captured("export default () => null;");
+    assert!(artifact_runtime::config(cached.clone()).is_ok());
+    let mut swapped = captured("export default () => 'other';");
+    swapped.source_sha256 = cached.source_sha256;
+    assert!(artifact_runtime::config(swapped).is_err());
     for source in [
         "import {Bridge} from 'pilot-day/native'; export default () => Bridge;",
         "import {host} from 'nsh'; export default () => host;",

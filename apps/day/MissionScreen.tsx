@@ -6,6 +6,7 @@
 // revision it showed and, for Resume, the Pause it showed.
 import { computed, keymap, Scroll, signal, Text, View } from "nsh";
 import type { Decision, MissionPage, MissionRow, PlanPage, PlanRow, ReportLine, TaskLine } from "pilot-day/native";
+import { createShelf, MissionArtifacts, type Shelf } from "./ArtifactShelf";
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
@@ -401,7 +402,7 @@ function PlanLink(props: { plans: Plans; missionId: string }) {
 // The overview is a column of independent sections, each reading only
 // `MissionPage`. Later mission detail (planning, Fog of war) adds a field to
 // `MissionPage` in Rust and its own section here; nothing else changes.
-function Body(props: { day: Day; plans?: Plans; page: MissionPage }) {
+function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf }) {
 	const row = () => props.page.row;
 	return (
 		<View class="gap-10">
@@ -468,6 +469,14 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage }) {
 				</Each>
 			</View>
 
+			<If when={props.day.artifacts}>
+				<MissionArtifacts
+					source={props.day.artifacts as NonNullable<Day["artifacts"]>}
+					shelf={props.shelf}
+					missionId={row().id}
+				/>
+			</If>
+
 			<If when={props.page.chats.length > 0}>
 				<View class="gap-1">
 					<View class="pb-2">
@@ -499,13 +508,14 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 	});
 	const readNote = signal("");
 	const reading = signal(true);
+	const shelf = createShelf();
 	void props.day.feed.openMission({ missionId: props.missionId }).then((outcome) => {
 		reading.set(false);
 		readNote.set(outcome.status === "accepted" ? "" : outcome.message);
 	});
 	// Escape puts away what is open first: a confirmation, then the new
-	// thread's title (its words stay, as Cancel keeps them), then the page.
-	// It works from the title field too.
+	// thread's title (its words stay, as Cancel keeps them), then the artifact
+	// source or preview opened last, then the page. It works from the title field too.
 	keymap.bind(
 		"escape",
 		() => {
@@ -513,7 +523,7 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 			else if (props.day.threads && naming()[props.missionId]) {
 				glide();
 				naming.update((all) => ({ ...all, [props.missionId]: false }));
-			} else closeMission();
+			} else if (!shelf.hideLast()) closeMission();
 		},
 		{ when: "always" },
 	);
@@ -544,7 +554,7 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 					}
 				>
 					<Each of={page() ? [page() as MissionPage] : []} key={(p) => p.row.id}>
-						{(p) => <Body day={props.day} plans={props.plans} page={p()} />}
+						{(p) => <Body day={props.day} plans={props.plans} page={p()} shelf={shelf} />}
 					</Each>
 				</If>
 			</View>

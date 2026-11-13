@@ -91,8 +91,11 @@ fn entry_ok(entry: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
-/// No filesystem resolution, assets, user bytecode or dynamic import machinery is used here.
-pub fn prepare(input: CapturedSource) -> Result<PreparedSource, String> {
+/// Checks the exact source identity: ids, revision, entry name, byte count and SHA-256.
+///
+/// # Errors
+/// Returns an error when any field does not match the saved source bytes.
+pub fn verify(input: &CapturedSource) -> Result<(), String> {
     if uuid::Uuid::parse_str(&input.artifact_id).is_err()
         || input.artifact_id.len() != 36
         || input.source_session_id.is_empty()
@@ -111,6 +114,12 @@ pub fn prepare(input: CapturedSource) -> Result<PreparedSource, String> {
     {
         return Err("Invalid exact NSH source identity, bytes or digest".into());
     }
+    Ok(())
+}
+
+/// No filesystem resolution, assets, user bytecode or dynamic import machinery is used here.
+pub fn prepare(input: CapturedSource) -> Result<PreparedSource, String> {
+    verify(&input)?;
     let code = compile_source(&input.source, &input.entry)?;
     Ok(PreparedSource {
         artifact_id: input.artifact_id,
