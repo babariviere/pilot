@@ -127,6 +127,14 @@ It no longer runs the GPUI-only visual runtime, visual session, artifact
 worker, NSH adapter or rendered Wayland probes. Day's headless checks do not
 replace production confinement, GPU or native platform acceptance.
 
+For the separately gated configured full-runtime producer, use the
+[direct production commands](day-package-inputs.md#configured-full-bundle-separate-gated-production-action).
+`bundle --production` now exposes the existing assembly API with the same
+explicit public environment parser as `day_build_inputs.py --production`.
+No workflow change, signing secret, dispatch or automatic live release is added.
+The documented official-manifest/resource prerequisites remain separate; this
+CLI change does not claim a genuinely produced signed bundle.
+
 ## Shipping workflow audit
 
 | Existing path | Actual behavior and preparation boundary |

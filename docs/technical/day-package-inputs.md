@@ -100,6 +100,136 @@ authorized** action, not part of input verification here. App/helper trust
 equality, visual-worker, runtime/native-helper receipts, NativePlatform,
 signature and ExpectedTarget checks remain required.
 
+## Configured full bundle (separate, gated production action)
+
+The ordinary assembler now exposes `bundle --production`, using the **same**
+`gui_release.configuration(os.environ)` parser as `day_build_inputs.py
+--production`. It is mutually exclusive with `--unsigned-day`. It does not
+select Day implicitly: keep `--gui-resources` explicit. Development and GPUI
+defaults are unchanged. No workflow enables production automatically.
+
+Public trust checked on 2026-11-13 against `DAY_UPDATER_PUBLIC_KEY` in
+`babariviere/pilot` and the [approved policy](day-signing-secrets.md):
+
+| Field | Value |
+| --- | --- |
+| Day Ed25519 public key | `MbGhgDgZuJPyC81SSCJ8IVEyLks66acK5s9NKIudSsE=` |
+| Repository | `babariviere/pilot` |
+| Application ID | `com.babariviere.pilot-next` |
+| Code requirement | `identifier "com.babariviere.pilot-next"` |
+| Signing policy | `private-adhoc` (existing assembler policy, not Developer ID) |
+| Build | Explicit numeric target, identical in app, helper and bundle |
+
+Do not take the key from a GPUI installation. No private key is needed for
+input compilation or full bundle assembly under this existing policy.
+
+These are commands for a separately authorized production run, **not commands
+executed as task verification**. Use tools from the selected immutable source,
+with the qualified installed paths above, frozen dependencies and offline Cargo
+inputs already prepared (see `prepare-day-qualification.py`). Local builds use
+MBX, never CI's direct-Cargo setting. Source must include the daemon handoff
+change `29102eb5f20f735c208300769f65cd9227279986` and this CLI change. Capture one
+full commit once; do not resolve a moving branch again between steps.
+
+```sh
+set -euo pipefail
+: "${SOURCE:?Set the full immutable post-handoff/CLI commit}"
+: "${BUILD:?Set the explicit numeric target build}"
+[[ "$SOURCE" =~ ^[0-9a-f]{40}$ ]]
+git merge-base --is-ancestor 29102eb5f20f735c208300769f65cd9227279986 "$SOURCE"
+export NSH_DAY_CARGO_MODE=mbx
+export PILOT_NEXT_SIGNING_POLICY=private-adhoc
+export PILOT_NEXT_UPDATER_PUBLIC_KEY='MbGhgDgZuJPyC81SSCJ8IVEyLks66acK5s9NKIudSsE='
+export PILOT_NEXT_UPDATER_REPOSITORY=babariviere/pilot
+export PILOT_NEXT_UPDATER_BUILD="$BUILD"
+work=$(mktemp -d "${TMPDIR:-/tmp}/day-full.XXXXXX")
+python3 apps/desktop/scripts/bundle_runtime.py runtime --source "$SOURCE" --output "$work/runtime"
+python3 apps/desktop/scripts/bundle_runtime.py native --source "$SOURCE" --output "$work/native"
+python3 apps/desktop/scripts/day_build_inputs.py --production --source "$SOURCE" --output "$work/inputs"
+mkdir "$work/app"
+python3 apps/desktop/scripts/bundle_runtime.py bundle --production \
+  --source "$SOURCE" --bundle-build "$BUILD" \
+  --runtime "$work/runtime" --native "$work/native" --executables "$work/inputs" \
+  --gui-resources "$work/inputs/nsh" --output "$work/app/Pilot Next.app"
+python3 apps/desktop/scripts/bundle_runtime.py verify "$work/app/Pilot Next.app"
+codesign --verify --deep --strict \
+  '-R=identifier "com.babariviere.pilot-next"' "$work/app/Pilot Next.app"
+```
+
+Assembly checks matching production/release receipts, app/helper trust/build,
+runtime source/version/Node, native helpers, visual/artifact helpers, NSH release
+and resource inventory before sealing. Shipping limits remain 256 MiB per file
+and 2 GiB total. It refuses missing or changed inputs, not fixture-fallback.
+`day_qualification.py` is deliberately **not** used for configured inputs: it
+qualifies only unsigned development evidence. `candidate.py` is deliberately
+**not** used: its connected app omits the runtime/helpers.
+
+This implements a source-ready producer command. No configured full bundle,
+signature, archive or installation has been produced/qualified by this change.
+Keep the temporary output only for the authorized run, or remove your own
+staging after consumers finish. Never install from unsigned CI evidence.
+
+### Official update manifest prerequisites (still gated)
+
+A code seal alone is not an official update distribution. Current source does
+not supply `Contents/Resources/nsh/assets/nsh-updater.json`; the ordinary
+`nsh build` input recipe does not inject an updater configuration. Automatic
+update qualification additionally needs that asset bound into the **input**
+resource inventory before assembly, with the same ID/key/repository and the
+runtime package version, not Day's development `0.1.0`. Do not edit the assembled
+bundle or its input receipt to add it. This missing update-resource wiring is
+separate from the installer full-runtime producer seam.
+
+For a later authorized official distribution, use upstream NSH 0.5.0
+`update-manifest`, not `gui-release-manifest.mjs`'s legacy envelope. Prerequisites:
+a prepared `RELEASE_ENTRY/nsh.json` matching the actual sealed app ID/version
+and updater source/key; an existing matching Day key in NSH's base64 32-byte
+seed format (`NSH_SECRET`, mode 0600); the same existing PEM via fnox; a genuine
+verified archive; and an approved HTTPS `BASE_URL`. PEM and NSH seed are
+different encodings of the **same** key, not permission to generate another.
+No key conversion/provisioning is performed here. Upstream's command verifies
+the supplied seed against `updater.publicKey`.
+
+Once those prerequisites are met, these direct steps create the official
+manifest and its required signed Pilot source/build extension:
+
+```sh
+# VERSION must equal the sealed runtime/Info.plist short version.
+ditto -c -k --norsrc --noextattr --noqtn --keepParent \
+  "$work/app/Pilot Next.app" "$work/Pilot-$VERSION-macos-aarch64.zip"
+"$NSH_DAY_CLI" update-manifest --entry "$RELEASE_ENTRY" --key "$NSH_SECRET" \
+  --base-url "$BASE_URL" --out "$work/official" "$work/Pilot-$VERSION-macos-aarch64.zip"
+jq --arg source "$SOURCE" --arg build "$BUILD" \
+  '. + {pilot: {source: $source, build: $build}}' \
+  "$work/official/latest.json" > "$work/official/extended.json"
+mv "$work/official/extended.json" "$work/official/latest.json"
+# NSH signs the context prefix plus exact manifest bytes, not a legacy envelope.
+# Keep tracing off. No plaintext key is printed or stored with distributable files.
+umask 077
+fnox --no-daemon --non-interactive -c apps/day/fnox.toml get DAY_UPDATER_PRIVATE_KEY > "$work/day-key.pem"
+openssl pkey -in "$work/day-key.pem" -pubout -outform DER -out "$work/day-public.der"
+test "$(tail -c 32 "$work/day-public.der" | openssl base64 -A)" = "$PILOT_NEXT_UPDATER_PUBLIC_KEY"
+{ printf 'nsh-updater-manifest\0'; cat "$work/official/latest.json"; } > "$work/framed-manifest"
+openssl pkeyutl -sign -rawin -inkey "$work/day-key.pem" \
+  -in "$work/framed-manifest" -out "$work/manifest.sig"
+openssl pkeyutl -verify -rawin -pubin -keyform DER -inkey "$work/day-public.der" \
+  -in "$work/framed-manifest" -sigfile "$work/manifest.sig"
+openssl base64 -A -in "$work/manifest.sig" > "$work/official/latest.json.sig"
+rm "$work/day-key.pem" "$work/day-public.der" "$work/framed-manifest" "$work/manifest.sig"
+```
+
+The extension must be added **before the final signature**. `OfficialRoot`
+checks those exact signed bytes, archive hash/size, sealed app, source and build.
+Normal updates need matching genuine target **and actual running rollback**
+distributions; a new Day key cannot authenticate old GPUI metadata. Semver must
+increase as well as the numeric build. These commands do not upload, publish,
+install, hand off a daemon or prove update acceptance. No signing command above
+was run. See [daemon handoff](day-daemon-handoff.md) for the separate installer
+entry and [global updates](day-global-updates.md) for runtime acceptance gates.
+
+Manifest format/signature references: upstream [CLI producer](https://github.com/longbridge/nsh/blob/f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1/crates/nsh-cli/src/updater.rs)
+and [signature framing](https://github.com/longbridge/nsh/blob/f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1/crates/nsh-updater/src/lib.rs).
+
 ## Connected launch
 
 The production bootstrap requires a verified, code-sealed native bundle.

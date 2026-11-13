@@ -611,7 +611,9 @@ def main():
     bundle.add_argument("--bundle-build")
     bundle.add_argument("--accepted-capsule", action="append", default=[])
     bundle.add_argument("--gui-resources", type=Path)
-    bundle.add_argument("--unsigned-day", action="store_true", help="Unsigned Day development bundle only; no shipping/signing policy changes")
+    mode = bundle.add_mutually_exclusive_group()
+    mode.add_argument("--production", action="store_true", help="Use explicit public updater environment configuration, matching day_build_inputs.py --production; signs the bundle")
+    mode.add_argument("--unsigned-day", action="store_true", help="Unsigned Day development bundle only; no shipping/signing policy changes")
     check = commands.add_parser("verify")
     check.add_argument("output", type=Path)
     check.add_argument("--unsigned-day", action="store_true", help="Inspect unsigned Day development inventory, not shipping acceptance")
@@ -621,7 +623,11 @@ def main():
     elif args.action in ("runtime", "native"):
         snapshot_build(args.source, args.output.absolute(), args.action == "native")
     elif args.action == "bundle":
-        assemble(args.runtime, args.executables, args.native, args.output, args.source, args.updater, args.bundle_build, args.accepted_capsule, gui_resources=args.gui_resources, unsigned_day=args.unsigned_day)
+        config = None
+        if args.production:
+            import gui_release
+            config = gui_release.configuration(os.environ)
+        assemble(args.runtime, args.executables, args.native, args.output, args.source, args.updater, args.bundle_build, args.accepted_capsule, production=config, gui_resources=args.gui_resources, unsigned_day=args.unsigned_day)
     else:
         verify(args.output, unsigned_day=args.unsigned_day)
 

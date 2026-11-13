@@ -17,6 +17,55 @@ import day_build_inputs as day
 import make_dev_icon
 
 
+class BundleCliTests(unittest.TestCase):
+    def argv(self, *options):
+        return ["bundle_runtime.py", "bundle", "--source", "a" * 40,
+                "--runtime", "/inputs/runtime", "--executables", "/inputs/day",
+                "--native", "/inputs/native", "--output", "/output/Pilot Next.app", *options]
+
+    def test_production_uses_the_input_builder_configuration_parser(self):
+        import gui_release
+        env = dict(PILOT_NEXT_SIGNING_POLICY="private-adhoc",
+                   PILOT_NEXT_UPDATER_PUBLIC_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                   PILOT_NEXT_UPDATER_REPOSITORY="owner/repo", PILOT_NEXT_UPDATER_BUILD="200.1")
+        with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", self.argv(
+                "--production", "--bundle-build", "200.1", "--gui-resources", "/inputs/day/nsh")), \
+                patch.object(bundle, "assemble") as assemble:
+            bundle.main()
+        self.assertEqual(assemble.call_args.kwargs["production"], gui_release.configuration(env))
+        self.assertEqual(assemble.call_args.args[6], "200.1")
+        self.assertEqual(assemble.call_args.kwargs["gui_resources"], Path("/inputs/day/nsh"))
+        self.assertFalse(assemble.call_args.kwargs["unsigned_day"])
+
+    def test_missing_or_invalid_production_configuration_never_assembles(self):
+        valid = dict(PILOT_NEXT_SIGNING_POLICY="private-adhoc",
+                     PILOT_NEXT_UPDATER_PUBLIC_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                     PILOT_NEXT_UPDATER_REPOSITORY="owner/repo", PILOT_NEXT_UPDATER_BUILD="200.1")
+        for env in ({}, {"PILOT_NEXT_SIGNING_POLICY": "invented-policy"},
+                    valid | {"PILOT_NEXT_UPDATER_PUBLIC_KEY": "invalid"},
+                    valid | {"PILOT_NEXT_UPDATER_REPOSITORY": "https://example.invalid/repo"},
+                    valid | {"PILOT_NEXT_UPDATER_BUILD": "1.2.3.4.5"}):
+            with self.subTest(env=env), patch.dict(os.environ, env, clear=True), \
+                    patch.object(sys, "argv", self.argv("--production")), patch.object(bundle, "assemble") as assemble:
+                with self.assertRaises(ValueError):
+                    bundle.main()
+                assemble.assert_not_called()
+
+    def test_production_and_unsigned_are_mutually_exclusive(self):
+        with patch.object(sys, "argv", self.argv("--production", "--unsigned-day")), \
+                patch.object(bundle, "assemble") as assemble, patch("sys.stderr"):
+            with self.assertRaises(SystemExit) as error:
+                bundle.main()
+            self.assertEqual(error.exception.code, 2)
+            assemble.assert_not_called()
+
+    def test_development_does_not_read_ambient_production_configuration(self):
+        with patch.dict(os.environ, {"PILOT_NEXT_SIGNING_POLICY": "invalid"}), \
+                patch.object(sys, "argv", self.argv()), patch.object(bundle, "assemble") as assemble:
+            bundle.main()
+        self.assertIsNone(assemble.call_args.kwargs["production"])
+
+
 class SubprocessEnvironmentTests(unittest.TestCase):
     def test_discovery_tokens_never_reach_native_queries(self):
         env = {"GH_TOKEN": "api-only", "GITHUB_TOKEN": "api-only", "PATH": "/usr/bin"}
@@ -746,6 +795,34 @@ class BundleRuntimeTests(unittest.TestCase):
                             bundle_build="200.1", production=config)
         self.assertEqual(bundle.read_json(self.output / bundle.MANIFEST)["kind"], "production-bundled-runtime")
         bundle.verify(self.output)
+
+    def test_production_day_cli_keeps_full_inventory_and_rejects_resource_tampering(self):
+        import gui_release
+        resources, _ = self.gui_resources()
+        env = dict(PILOT_NEXT_SIGNING_POLICY="private-adhoc",
+                   PILOT_NEXT_UPDATER_PUBLIC_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                   PILOT_NEXT_UPDATER_REPOSITORY="owner/repo", PILOT_NEXT_UPDATER_BUILD="200.1")
+        manifest = self.executables / "manifest.json"
+        bundle.write_json(manifest, bundle.read_json(manifest) | dict(
+            updater_configuration=gui_release.configuration(env), profile="release", kind="production-rust-inputs"))
+        argv = ["bundle_runtime.py", "bundle", "--production", "--source", self.source,
+                "--runtime", str(self.runtime), "--executables", str(self.executables),
+                "--native", str(self.native), "--output", str(self.output),
+                "--gui-resources", str(resources), "--bundle-build", "200.1"]
+        with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", argv), \
+                patch.object(bundle, "native_closure", return_value=[]), patch.object(bundle, "run", return_value=""):
+            bundle.main()
+        value = bundle.read_json(self.output / bundle.MANIFEST)
+        self.assertEqual(value["kind"], "production-bundled-runtime")
+        paths = {item["path"] for item in value["files"]}
+        self.assertTrue({"Contents/Resources/runtime/node/bin/node", "Contents/MacOS/pilot-visual-worker",
+                         "Contents/Helpers/pilot-desktop-update-helper", "Contents/Helpers/PilotPower",
+                         "Contents/Resources/runtime/packages/artifacts/native/pilot-artifact-host",
+                         "Contents/Resources/nsh/bundle.nshc"}.issubset(paths))
+        bundle.verify(self.output)
+        (self.output / "Contents/Resources/nsh/bundle.nshc").write_text("tampered")
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            bundle.verify(self.output)
 
     def test_production_plane_icon_comes_from_immutable_source(self):
         plane = bundle.ROOT / "apps/macos/Resources/AppIcon.icns"
