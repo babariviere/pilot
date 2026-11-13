@@ -460,7 +460,7 @@ fn replacement_joins_old_root_preserves_project_progress_and_separates_profile()
     let old = f.host().clone();
     let old_context = old.ritual_snapshot().context;
     drop(app);
-    f.source.project()?.project_id = "other-project".into();
+    f.source.project.as_mut().unwrap().project_id = "other-project".into();
     f.reopen();
     f.read_clock();
     assert_eq!(

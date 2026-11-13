@@ -425,7 +425,7 @@ fn selected_project_is_never_guessed_and_journal_writer_is_exclusive() {
     assert_eq!(reply(duplicate.close()), Err(Error::Storage));
     reply(host.close()).unwrap();
     let mut changed = f.source();
-    changed.project_id = f.info["other"].as_str().unwrap().into();
+    changed.project.as_mut().unwrap().project_id = f.info["other"].as_str().unwrap().into();
     let other = NativeHost::open(changed, f.ledger()).unwrap();
     wait(&other, |t| t.freshness.state == FreshnessState::Unavailable);
     assert!(
