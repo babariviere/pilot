@@ -12,7 +12,11 @@ In ordinary Local Build chats, paste clipboard images or drop supported image fi
 into the composer. Review the attachment previews before sending. Conversation images
 and raster artifacts offer **Copy image** separately from copying source text.
 
-New artifacts use images or native visuals. Creating and previewing HTML, React and
+Where the tool offers NSH TSX, it captures and compiles one session-scratch file
+before saving a revision. Compile errors leave history unchanged. These artifacts
+still open as source only; interactive NSH preview is not available yet.
+
+Other new artifacts use images or native visuals. Creating and previewing HTML, React and
 SwiftUI artifacts is no longer available. Their existing sources, revisions and provenance
 remain in history for read-only inspection and copying, not execution. Shader
 rendering remains unavailable in Pilot Next.

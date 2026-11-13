@@ -13,7 +13,10 @@ capture binding. An agent writes one UTF-8 `.tsx` file in its own session's
 inside that directory). The request cannot select a source root, executable,
 module resolver, credentials or bytecode. Ask does not offer file capture.
 An update must name the current `expectedRevision`. NSH identities cannot
-change kind. The tool reports that source was saved, not that a preview ran.
+change kind. The tool compiles the captured string before creating or updating
+a revision. Syntax/import errors publish nothing and leave earlier revisions
+unchanged. Cancellation after compilation also prevents publication. The tool
+reports that source compiled and was saved, not that a preview ran.
 
 `captureNshSource` limits source to 512 KiB before allocation. Linux opens
 directories through owned `/proc/self/fd` descriptors. macOS cannot traverse
@@ -44,7 +47,12 @@ returns `rendering: "unsupported"`, not compiled code, assets or callbacks.
 
 ## Compiler and lifetime
 
-`prepareNshRevision` accepts one saved `ArtifactRevision`, not a live file. It
+`compileNshSource` checks captured bytes before publication through the same
+compiler as saved revisions. Its private check identity is not a canonical
+artifact, persisted receipt or rendering permit. It discards the generated code;
+only the exact source is saved. It never reopens the mutable scratch file.
+
+`prepareNshRevision` accepts one saved revision's identity and source, not a live file. It
 calls the fixed native source host with its exact ID, owner, revision, source,
 entry, digest and length. The result must echo that identity and remain
 Unsupported. The helper never mounts a component or constructs a JS VM.

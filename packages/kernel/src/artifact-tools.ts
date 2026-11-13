@@ -6,6 +6,7 @@ import {
 	type ArtifactStore,
 	assertArtifactWriteKind,
 	captureNshSource,
+	compileNshSource,
 	imageSize,
 	loadArtifactImage,
 	MAX_IMAGE_SOURCE_BYTES,
@@ -83,6 +84,8 @@ export interface ArtifactToolOptions {
 	nshSessionDirectory?: string;
 	/** Host-owned capture binding, never an executable/path selected by an artifact request. */
 	captureNsh?: (sourcePath: string, signal?: AbortSignal) => Promise<{ source: string; entry: string }>;
+	/** Host-owned compiler binding. Checks captured bytes, never a mutable source file. */
+	compileNsh?: (source: string, entry: string, signal?: AbortSignal) => Promise<void>;
 }
 
 function checkSource(write: ArtifactWrite): void {
@@ -162,7 +165,7 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 - update: replace the complete document by id, not a patch; expectedRevision rejects stale updates.
 - get: read source and metadata by id, optionally at a historical revision. Local artifacts read latest when revision is omitted. Linked mission/task references are read-only: omission uses the pinned revision, or latest for unpinned links; conflicting pins require an explicit linked revision.
 - list: list current session summaries without source.
-${nsh ? `NSH: kind nsh captures one sourcePath (.tsx basename or absolute path in ${JSON.stringify(`${options.nshSessionDirectory}/scratch/artifacts`)}). Do not pass inline source. Saved UTF-8 bytes are immutable and survive scratch cleanup; this is source publication, not a compiled/accepted preview. No local/remote imports or assets are loaded at capture; runtime may refuse unsupported code.\n` : ""}Source must be self-contained and offline. Text source: 512 KiB UTF-8 max; images: 16 MiB decoded max.
+${nsh ? `NSH: kind nsh captures and compiles one sourcePath (.tsx basename or absolute path in ${JSON.stringify(`${options.nshSessionDirectory}/scratch/artifacts`)}). Do not pass inline source. Compile errors publish nothing; fix the source and retry. Saved UTF-8 bytes are immutable and survive scratch cleanup. Compilation does not run the preview or fully typecheck TypeScript. No local/remote imports or assets are loaded.\n` : ""}Source must be self-contained and offline. Text source: 512 KiB UTF-8 max; images: 16 MiB decoded max.
 ${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Images accept local PNG, JPEG, GIF or WebP paths, or inline data URLs; never remote URLs."}
 HTML, React and SwiftUI are read-only historical kinds, not supported for publication or preview.
 Shaders are Shadertoy-style GLSL (mainImage); publication fails with line-numbered compile errors.
@@ -299,6 +302,8 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 								: await captureNshSource(options.nshSessionDirectory!, params.sourcePath, signal);
 							write.source = captured.source;
 							write.entry = captured.entry;
+							await (options.compileNsh ?? compileNshSource)(write.source, write.entry, signal);
+							signal?.throwIfAborted();
 						}
 						if (write.kind === "image") {
 							// Check before any filesystem image loader, including forged direct/nested calls.
@@ -315,18 +320,14 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 							return published(
 								value,
 								write.kind === "nsh"
-									? [
-											"Source captured. Compilation and interactive rendering are not qualified; preview remains unsupported.",
-										]
+									? ["Source compiled and saved. Interactive preview remains unsupported."]
 									: [],
 							);
 						}
 						const value = await store.update(id!, write, params.expectedRevision, signal);
 						const warnings: string[] =
 							write.kind === "nsh"
-								? [
-										"Source captured. Compilation and interactive rendering are not qualified; preview remains unsupported.",
-									]
+								? ["Source compiled and saved. Interactive preview remains unsupported."]
 								: [];
 						if (params.expectedRevision === undefined)
 							warnings.unshift(

@@ -6,7 +6,13 @@ import { test } from "node:test";
 import type { JsonValue } from "@earendil-works/chord";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { ArtifactNotFound, ArtifactStore, captureNshSource, ensureArtifactScratch } from "@pilot/artifacts";
+import {
+	ArtifactNotFound,
+	ArtifactStore,
+	captureNshSource,
+	compileNshSource,
+	ensureArtifactScratch,
+} from "@pilot/artifacts";
 import type { ArtifactRevision, ArtifactWrite } from "@pilot/protocol";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
@@ -540,28 +546,123 @@ test("updates without expectedRevision succeed with a warning", async () => {
 	assert.ok(!("warnings" in (pinned.structuredContent as object)));
 });
 
+test("NSH tool refuses compile errors before creating or updating any revision", async () => {
+	let published = 0;
+	const f = fixture({
+		nshSessionDirectory: "/host/session",
+		captureNsh: async () => ({ source: "export default () => <Text>;", entry: "view.tsx" }),
+		compileNsh: async () => {
+			throw new Error("Artifact.tsx:1:28: Expected closing tag. Nothing was published.");
+		},
+		onArtifactPublished: async () => {
+			published++;
+		},
+	});
+	for (const action of ["create", "update"]) {
+		await assert.rejects(
+			f.call(action, { id: "existing", expectedRevision: 1, title: "Invalid", kind: "nsh", sourcePath: "view.tsx" }),
+			/Artifact.tsx:1:28: Expected closing tag/,
+		);
+	}
+	assert.deepEqual(f.calls, []);
+	assert.equal(f.notifications, 0);
+	assert.equal(published, 0);
+});
+
+test("NSH tool waits for compilation of the exact captured bytes before publication", async () => {
+	const entered = Promise.withResolvers<void>();
+	const compiled = Promise.withResolvers<void>();
+	const source = '\uFEFFexport default () => "é😀";\r\n';
+	const controller = new AbortController();
+	const f = fixture({
+		nshSessionDirectory: "/host/session",
+		captureNsh: async () => ({ source, entry: "view.tsx" }),
+		compileNsh: async (captured, entry, signal) => {
+			assert.equal(captured, source);
+			assert.equal(entry, "view.tsx");
+			assert.equal(signal, controller.signal);
+			entered.resolve();
+			await compiled.promise;
+		},
+	});
+	const pending = f.call("create", { title: "Preview", kind: "nsh", sourcePath: "view.tsx" }, controller.signal);
+	await entered.promise;
+	assert.deepEqual(f.calls, []);
+	assert.equal(f.notifications, 0);
+	compiled.resolve();
+	const result = await pending;
+	assert.deepEqual(f.calls, [
+		{ method: "create", args: [{ title: "Preview", kind: "nsh", source, entry: "view.tsx" }, controller.signal] },
+	]);
+	assert.match((result.structuredContent as { warnings: string[] }).warnings.join(), /compiled and saved/);
+	assert.equal(f.notifications, 1);
+});
+
+test("NSH canceled compilation cannot publish even if the compiler returns success", async () => {
+	const controller = new AbortController();
+	const f = fixture({
+		nshSessionDirectory: "/host/session",
+		captureNsh: async () => ({ source: "export default () => null;", entry: "view.tsx" }),
+		compileNsh: async () => {
+			controller.abort();
+		},
+	});
+	await assert.rejects(
+		f.call("create", { title: "Preview", kind: "nsh", sourcePath: "view.tsx" }, controller.signal),
+		{ name: "AbortError" },
+	);
+	assert.deepEqual(f.calls, []);
+	assert.equal(f.notifications, 0);
+});
+
+test("NSH failed update compilation keeps the saved revision and history unchanged", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "nsh-tool-compile-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const store = new ArtifactStore(root, { sessionId: "owner" });
+	const first = await store.create({
+		title: "Saved",
+		kind: "nsh",
+		source: "export default () => null;",
+		entry: "view.tsx",
+	});
+	const f = fixture({
+		store,
+		nshSessionDirectory: root,
+		captureNsh: async () => ({ source: "export default () => <Text>;", entry: "view.tsx" }),
+		compileNsh: async () => {
+			throw new Error("Artifact.tsx:1:28: Invalid TSX");
+		},
+	});
+	await assert.rejects(
+		f.call("update", { id: first.id, expectedRevision: 1, title: "Invalid", kind: "nsh", sourcePath: "view.tsx" }),
+		/Invalid TSX/,
+	);
+	assert.deepEqual(await store.get(first.id), first);
+	assert.equal((await store.list()).length, 1);
+	assert.equal(f.notifications, 0);
+});
+
 test("NSH tool captures only session scratch and keeps exact pins without executing source", {
-	skip:
-		process.platform === "darwin" && !process.env.NSH_ARTIFACT_TEST_HOST
-			? "Run the focused Day artifact-source wrapper"
-			: false,
+	skip: !process.env.NSH_ARTIFACT_TEST_HOST ? "Run the focused Day artifact-source wrapper" : false,
 }, async (t) => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "nsh-tool-")));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const host = process.env.NSH_ARTIFACT_TEST_HOST;
 	const directory = await ensureArtifactScratch(root, host);
-	await writeFile(join(directory, "view.tsx"), "throw Error('never executed at publication');\r\n");
+	const source = "throw Error('never executed at publication'); export default () => null;\r\n";
+	await writeFile(join(directory, "view.tsx"), source);
 	const store = new ArtifactStore(root, { sessionId: "owner" });
 	const f = fixture({
 		store,
 		nshSessionDirectory: root,
 		captureNsh: (path, signal) => captureNshSource(root, path, signal, host),
+		compileNsh: (source, entry, signal) => compileNshSource(source, entry, signal, host),
 	});
 	const result = await f.call("create", { title: "Preview", kind: "nsh", sourcePath: "view.tsx" });
 	const data = result.structuredContent as { artifact: { id: string; revision: number }; warnings: string[] };
 	assert.equal(data.artifact.revision, 1);
 	assert.match(data.warnings.join(), /unsupported/);
-	assert.equal((await store.get(data.artifact.id)).source, "throw Error('never executed at publication');\r\n");
+	assert.equal((await store.get(data.artifact.id)).source, source);
 	await assert.rejects(
 		f.call("update", { id: data.artifact.id, title: "Next", kind: "nsh", sourcePath: "view.tsx" }),
 		/expectedRevision/,

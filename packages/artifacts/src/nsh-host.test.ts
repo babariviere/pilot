@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { callArtifactHost, readArtifactHostBinding } from "./nsh-host.ts";
-import { nshSource } from "./nsh-source.ts";
+import { compileNshSource, nshSource } from "./nsh-source.ts";
 
 const host = process.env.NSH_ARTIFACT_TEST_HOST;
 const options = { skip: !host ? "Run apps/day/scripts/test-artifact-source.mjs for the native compiler" : false };
@@ -66,6 +66,55 @@ function captured(source: string) {
 		sourceBytes: metadata.sourceBytes,
 	};
 }
+
+test("NSH prepublication compiler validates exact helper replies without saving or evaluating source", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "nsh-compile-check-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const executable = join(root, "helper");
+	const program = join(root, "program.cjs");
+	const requestFile = join(root, "request.json");
+	const quote = (path: string) => `'${path.replaceAll("'", "'\\''")}'`;
+	await writeFile(executable, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(program)}\n`, { mode: 0o700 });
+	const helper = (change = "") =>
+		writeFile(
+			program,
+			`
+let input = '';
+process.stdin.on('data', chunk => input += chunk);
+process.stdin.on('end', () => {
+  const request = JSON.parse(input);
+  require('node:fs').writeFileSync(${JSON.stringify(requestFile)}, input);
+  const value = { ...request.captured, code: 'compiled, never evaluated', rendering: 'unsupported', reason: 'App preview is separate' };
+  ${change}
+  process.stdout.write(JSON.stringify({value}));
+});`,
+		);
+	await helper();
+	const source = '\uFEFFthrow Error("not executed"); export default () => "é😀";\r\n';
+	assert.equal(await compileNshSource(source, "view.tsx", undefined, executable), undefined);
+	const request = JSON.parse(await readFile(requestFile, "utf8"));
+	assert.equal(request.action, "compile");
+	assert.equal(request.captured.source, source);
+	assert.equal(request.captured.entry, "view.tsx");
+	assert.equal(request.captured.sourceSha256, nshSource(source, "view.tsx").sourceSha256);
+	assert.equal(request.captured.sourceBytes, Buffer.byteLength(source));
+	await helper("value.sourceSha256 = '0'.repeat(64);");
+	await assert.rejects(compileNshSource(source, "view.tsx", undefined, executable), /Invalid prepared NSH revision/);
+	const controller = new AbortController();
+	controller.abort();
+	await assert.rejects(compileNshSource(source, "view.tsx", controller.signal, executable), { name: "AbortError" });
+	await assert.rejects(compileNshSource(source, "../view.tsx", undefined, executable), /basename/);
+});
+
+test(
+	"NSH prepublication compiler reports real syntax and import errors without evaluating source",
+	options,
+	async () => {
+		await compileNshSource("throw Error('not executed'); export default () => null;", "view.tsx", undefined, host);
+		for (const source of ["export default () => <Text>;", "import {host} from 'nsh'; export default () => host;"])
+			await assert.rejects(compileNshSource(source, "view.tsx", undefined, host), /Artifact.tsx/);
+	},
+);
 
 test("NSH production compiler consumes exact source only and never grants rendering", options, async () => {
 	const source =

@@ -126,7 +126,7 @@ export interface NshPreparation {
 
 /** Explicit host preparation of one saved revision, never a live file or a rendering permit. */
 export async function prepareNshRevision(
-	artifact: ArtifactRevision,
+	artifact: Pick<ArtifactRevision, "kind" | "nsh" | "id" | "sessionId" | "revision" | "source">,
 	signal?: AbortSignal,
 	executable?: string,
 ): Promise<NshPreparation> {

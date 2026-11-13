@@ -4,7 +4,7 @@ import { constants } from "node:fs";
 import { type FileHandle, mkdir, open } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import type { ArtifactNsh } from "@pilot/protocol";
-import { callArtifactHost } from "./nsh-host.ts";
+import { callArtifactHost, prepareNshRevision } from "./nsh-host.ts";
 
 export const NSH_SOURCE_BYTES = 512 * 1024;
 export const NSH_RUNTIME = "nsh 0.5.0";
@@ -72,6 +72,25 @@ export function nshSource(source: string, entry: string): ArtifactNsh {
 		sourceBytes: bytes.length,
 		rendering: "unsupported",
 	};
+}
+
+/** Compile the captured string before publication. No source is evaluated or saved by this check. */
+export async function compileNshSource(source: string, entry: string, signal?: AbortSignal, executable?: string) {
+	signal?.throwIfAborted();
+	await prepareNshRevision(
+		{
+			kind: "nsh",
+			nsh: nshSource(source, entry),
+			// A private compile-check identity, not an allocated canonical artifact or receipt.
+			id: "11111111-1111-1111-1111-111111111111",
+			sessionId: "compilation",
+			revision: 1,
+			source,
+		},
+		signal,
+		executable,
+	);
+	signal?.throwIfAborted();
 }
 
 /** No relative imports/assets are read. File and every untrusted parent are opened without following links. */

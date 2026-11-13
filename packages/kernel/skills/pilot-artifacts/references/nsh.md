@@ -15,9 +15,10 @@ or Pilot actions. Calls that need them fail. Pressing things in an artifact chan
 
 1. Write the file in the session's `scratch/artifacts/` folder, for example `scratch/artifacts/release-plan.tsx`.
    It is session scratch, not repository source.
-2. Publish it with the artifact tool. Publication saves the file's exact bytes as a new revision. Every reader,
+2. Publish it with the artifact tool. The tool compiles the captured bytes first. Fix reported compile errors
+   and retry; failed compilation saves nothing. Success saves those exact bytes as a new revision. Every reader,
    and any later preview, uses that saved revision, never the file. Editing the file changes nothing until you
-   publish an update.
+   publish an update. Compilation does not run the preview or fully typecheck TypeScript.
 3. Workspace cleanup deletes the scratch folder, unpublished files included. Published revisions stay.
 
 ## The file
