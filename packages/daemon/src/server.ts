@@ -914,6 +914,7 @@ export function createDaemonServer(
 				})
 			: undefined;
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
+		if (op.kind === "project-preferences-update") throw new Error("Preference outcome is unknown; Check only");
 		if (op.kind === "user-verification") throw new Error("Verification outcome is unknown; Check only");
 		if (op.kind === "attention-answer") {
 			if (!nativeAttention) throw new OperationRejected("Native attention unavailable");
@@ -1573,6 +1574,27 @@ export function createDaemonServer(
 						res,
 						200,
 						await journal.execute(operation, (op, entry) => planningWorkers.enroll(op, entry.firstEntry)),
+					);
+				} finally {
+					end();
+				}
+			}
+			if (operation?.kind === "project-preferences-update") {
+				res.setHeader("cache-control", "no-store");
+				const preferences = missions?.knowledge?.preferences;
+				if (!githubSetup || !preferences) throw new ServiceUnavailable("Native project preferences unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				const saved = await journal.lookup(operation);
+				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					return json(
+						res,
+						200,
+						await journal.execute(operation, (op, entry) =>
+							preferences.admitNative(op, journal, entry.firstEntry),
+						),
 					);
 				} finally {
 					end();
@@ -2579,6 +2601,32 @@ export function createDaemonServer(
 				if (error instanceof DatabaseSettingsError) return json(res, error.status, { error: error.message });
 				throw error;
 			}
+			throw new HttpError(405, "Method not allowed");
+		}
+		// Explicit project choices. User writes require native authority; never runtime permissions.
+		if (parts[1] === "projects" && parts[3] === "preferences" && parts.length <= 6) {
+			const preferences = missions?.knowledge?.preferences;
+			if (!preferences) throw new ServiceUnavailable("Project preferences are unavailable");
+			const projectId = parts[2]!;
+			res.setHeader("cache-control", "no-store");
+			if (parts.length === 4 && req.method === "GET") return json(res, 200, await preferences.read(projectId));
+			if (parts.length === 4 && req.method === "PUT") {
+				if (!githubSetup) throw new ServiceUnavailable("Native preferences authority unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				return json(res, 200, await preferences.write(projectId, await readJson(req, 16 * 1024)));
+			}
+			if (parts.length === 5 && parts[4] === "history" && req.method === "GET")
+				return json(
+					res,
+					200,
+					await preferences.history(
+						projectId,
+						url.searchParams.get("before") ?? undefined,
+						url.searchParams.get("limit") ?? undefined,
+					),
+				);
+			if (parts.length === 6 && parts[4] === "operations" && req.method === "GET")
+				return json(res, 200, await preferences.lookup(projectId, parts[5]));
 			throw new HttpError(405, "Method not allowed");
 		}
 		// Project knowledge. GETs read stored rows only; writes act for the local user and ACK after durability.

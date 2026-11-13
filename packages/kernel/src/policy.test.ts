@@ -23,6 +23,26 @@ const mission: MissionContext = {
 	decisions: ["IDs are opaque strings"],
 };
 
+test("project record context reloads canonical revisions and states the source boundaries", async () => {
+	let revision = 1;
+	let unavailable = false;
+	const extension = withPilotPolicy({}, {}, undefined, undefined, undefined, async () => {
+		if (unavailable) throw new Error("Context unavailable");
+		return { preferences: { projectId: "p", revision } };
+	});
+	const render = () => extension.sections![0]!.render(undefined as never, BACKGROUND_CONTEXT);
+	const first = await render();
+	assert.match(first!, /"revision":1/);
+	assert.match(first!, /mission records hold live agreement/);
+	assert.match(first!, /Knowledge holds durable sourced understanding/);
+	assert.match(first!, /preferences never override/);
+	assert.match(first!, /Existing memory\/history is unchanged/);
+	revision = 2;
+	assert.match((await render())!, /"revision":2/);
+	unavailable = true;
+	await assert.rejects(render(), /Context unavailable/);
+});
+
 test("Build guidance uses TMPDIR instead of session storage for temporary output", () => {
 	const prompt = pilotPrompt({});
 	assert.match(prompt, /Use TMPDIR \(or the OS temporary-directory API\)/);

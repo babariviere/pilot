@@ -117,6 +117,7 @@ import { reasonLine } from "./needs-you-reason.ts";
 import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
 import { PLANNING_WORKER_SCHEMA, PlanningWorkerStore } from "./planning-worker-store.ts";
 import { KNOWLEDGE_SCHEMA, ProjectKnowledgeStore } from "./project-knowledge-store.ts";
+import { PROJECT_PREFERENCES_SCHEMA, ProjectPreferencesStore } from "./project-preferences-store.ts";
 import { RETAINED_PROJECTION_SCHEMA, RetainedReviewProjections } from "./retained-review-projections.ts";
 import { REVIEW_REQUEST_SCHEMA, ReviewRequestStore } from "./review-request-store.ts";
 import type { PullRequestBinding } from "./sessions.ts";
@@ -652,6 +653,13 @@ export class MissionStore {
 		transaction: (work) => this.transaction(work),
 		changed: (missionId) => this.changed(missionId, [], true),
 	});
+	/** Small explicit project choices, separate from mission agreement and sourced Knowledge. */
+	readonly preferences = new ProjectPreferencesStore({
+		all: (sql, ...params) => this.all(sql, ...params),
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+	});
 	/** Scoped tracking records share canonical tasks, transactions and disk durability. */
 	readonly insights = new InsightsBacklog({
 		all: (sql, ...params) => this.all(sql, ...params),
@@ -951,6 +959,7 @@ export class MissionStore {
 		const migratePrTransitions = !this.one("SELECT 1 FROM sqlite_master WHERE name = 'pull_request_transitions'");
 		this.db.exec(SCHEMA);
 		this.db.exec(KNOWLEDGE_SCHEMA);
+		this.db.exec(PROJECT_PREFERENCES_SCHEMA);
 		this.db.exec(INSIGHTS_SCHEMA);
 		this.db.exec(INSIGHTS_WORKSPACE_SCHEMA);
 		this.db.exec(INSIGHTS_OWNER_SCHEMA);

@@ -44,6 +44,7 @@ Local versus devbox placement does not define a new role or grant extra permissi
 | `artifact` | Session-local | Session-local, restricted inputs/previews | Session-local | Not injected by Pilot's child profile | No |
 | `memory` | Conditional project memory | No | Conditional project memory | Not injected by Pilot | No |
 | `knowledge` | Project chats; list/get/revisions, create/append | No | Project chats; also links to its own mission | Not injected by Pilot | No |
+| `project_preferences` | Project reads | No | Explicit sourced choices, current owner only | Not injected by Pilot | No |
 | `mission` | When a mission member | When a mission member | Coordinator actions | Not injected by Pilot | No |
 | `ask_user` | Available | Available | Available | Not injected by Pilot | No |
 | `db` | Configured project databases | No | Configured project databases | Not injected by Pilot | No |
@@ -71,6 +72,7 @@ listed here because they depend on the user's servers, trust decisions and expos
 | Tool | Actions / operation | Boundary |
 | --- | --- | --- |
 | `memory` | `note`, `recall`, `zoom` | Chats use their implicit project. Notes bind origin to the supervised chat and retain audit identity; notes containing credentials are refused before reaching pilotd. Recall takes a regex or query words (ranked within pilotd's bounded newest matches, replaced notes last). Notes never grant permissions. No forget action. |
+| `project_preferences` | `get`, `history`, `lookup`, `write` | Own project only. Current active writable coordinator, exact human note citation, revision CAS and lookup-only lost-ACK recovery. Max16 entries/8KiB including provenance; no inferred policy or execution authority. Bound planning profiles get only this scoped surface, not generic Knowledge writes. See [contract](project-preferences.md). |
 | `knowledge` | `list`, `get`, `revisions`, `create`, `append`, `link`, `unlink` | The chat's own project only; pilotd derives author, project and origin from the supervised session and rejects a `projectId` argument. Ask, explorer and diagnostics chats get no tool and pilotd refuses their writes. Writes are append-only revisions with a readable Markdown body, at most 64 sources and 64 KiB, and an operation ID for exact retry. `link`/`unlink` are only for the coordinator of the chat's own mission, with a link-revision compare-and-set. Saving never marks an entry checked. See [project knowledge](project-knowledge-catalog.md). |
 | `history_recall` | `search` (`relevance` or `recent`), `read` | Ordinary chats only, over the fork-aware history of the chat's own conversation in its own session storage, including entries compacted out of context. No session, project or host argument exists. Bounded scans with continuations, redacted and neutralized quotes linked to entry IDs, labeled untrusted. Quotes never grant permissions or answer questions. |
 | `todo` | `list`, `listAll`, `get`, `create`, `update`, `append`, `delete`, `claim`, `release` | One durable list shared by a parent and its subagents, with actor-aware claims. Not repository `.pi/todos` files. |

@@ -82,7 +82,7 @@ import { createInsightsBacklogTool, type InsightsBacklogCall } from "./insights-
 import { createInsightsHistoryTool } from "./insights-history-tool.ts";
 import { validateInsightsOwnerBinding } from "./insights-owner-binding.ts";
 import { JobsMonitor } from "./jobs.ts";
-import { createKnowledgeTool } from "./knowledge-tools.ts";
+import { createKnowledgeTool, createProjectPreferencesTool } from "./knowledge-tools.ts";
 import { createLiveUpdateTools } from "./live-update-tool.ts";
 import { createManualCompaction, queueDuringCompaction } from "./manual-compaction.ts";
 import { mcpActivity } from "./mcp-activity.ts";
@@ -781,7 +781,10 @@ export class KernelSession {
 											? createMemoryTools(hooks.callMemory, spec.sessionId)
 											: []),
 										...(spec.projectId && hooks.callKnowledge
-											? [createKnowledgeTool(hooks.callKnowledge)]
+											? [
+													createKnowledgeTool(hooks.callKnowledge),
+													createProjectPreferencesTool(hooks.callKnowledge),
+												]
 											: []),
 										...(spec.databases && hooks.callDatabase
 											? [createDatabaseTool(hooks.callDatabase, publishQuestion)]
@@ -814,6 +817,9 @@ export class KernelSession {
 						async (input, context) => {
 							await prepareWorkspace?.();
 						},
+						!spec.role && !spec.pilot?.ask && spec.projectId && hooks.callKnowledge
+							? () => hooks.callKnowledge!("context", {})
+							: undefined,
 					),
 				);
 				const audited = audit ? audit.prepare(prepared) : prepared;

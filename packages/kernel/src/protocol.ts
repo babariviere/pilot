@@ -431,7 +431,7 @@ export type KernelPacket =
 			type: "knowledge.call";
 			callId: string;
 			operationId?: string;
-			action: import("./knowledge-tools.ts").KnowledgeAction;
+			action: import("./knowledge-tools.ts").KnowledgeAction | import("./knowledge-tools.ts").ProjectContextAction;
 			args: Record<string, JsonValue>;
 	  }
 	/** Proposal only, answered by `liveUpdate.result`. Host rechecks scope and validates the release. */

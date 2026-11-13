@@ -38,6 +38,7 @@ export function planningToolAllowed(name: string): boolean {
 		"code_call_paths",
 		"code_impact",
 		"mission_plan",
+		"project_preferences",
 		"web",
 	].includes(name);
 }

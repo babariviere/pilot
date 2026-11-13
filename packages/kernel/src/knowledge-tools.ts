@@ -17,11 +17,54 @@ export const KNOWLEDGE_ACTIONS = [
 	"batch",
 ] as const;
 export type KnowledgeAction = (typeof KNOWLEDGE_ACTIONS)[number];
+export type ProjectContextAction =
+	| "context"
+	| "preferences.get"
+	| "preferences.history"
+	| "preferences.lookup"
+	| "preferences.write";
 export type KnowledgeCall = (
-	action: KnowledgeAction,
+	action: KnowledgeAction | ProjectContextAction,
 	args: Record<string, JsonValue>,
 	operationId?: string,
 ) => Promise<JsonValue>;
+
+/** Reuse the supervised project/author IPC seam without turning preferences into wiki entries. */
+export function createProjectPreferencesTool(call: KnowledgeCall): ToolDefinition {
+	return defineTool({
+		name: "project_preferences",
+		label: "Project preferences",
+		description: `Small explicit choices for this project, never global defaults, facts/wiki, task status or inferred policy. No permission, Stop, budget or safety override. get reads current items; history reads immutable revisions (before, limit<=20); lookup reads the exact operation receipt. Only the current active mission coordinator may write, using expectedRevision and a full entries list (id,text). Cite a same-mission human-authored note via source {type:"mission_note",missionId,eventId,quote}; new text must quote that explicit user choice exactly. Agent decisions are not proof of human choice. Max16 items,512 UTF-8 bytes/text,8KiB including provenance. Supply reason and a unique operationId. After a lost ACK, use lookup only, never resend or automatically create a replacement operation; unknown is not proof of failure. Unchanged items keep source/history. Conflicting/stale/revoked writes fail; read current state before proposing a fresh user-authorized edit.`,
+		parameters: Type.Object({
+			action: StringEnum(["get", "history", "lookup", "write"] as const),
+			operationId: Type.Optional(Type.String({ maxLength: 128 })),
+			expectedRevision: Type.Optional(Type.Integer({ minimum: 0 })),
+			entries: Type.Optional(
+				Type.Array(Type.Object({ id: Type.String({ maxLength: 128 }), text: Type.String({ maxLength: 512 }) }), {
+					maxItems: 16,
+				}),
+			),
+			reason: Type.Optional(Type.String({ maxLength: 512 })),
+			source: Type.Optional(
+				Type.Object({
+					type: Type.Literal("mission_note"),
+					missionId: Type.String({ maxLength: 128 }),
+					eventId: Type.Integer({ minimum: 1 }),
+					quote: Type.String({ maxLength: 1024 }),
+				}),
+			),
+			before: Type.Optional(Type.Integer({ minimum: 1 })),
+			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+		}),
+		executionMode: "sequential",
+		annotations: { openWorldHint: false },
+		async execute(_id, params) {
+			const { action, ...args } = params;
+			const data = await call(`preferences.${action}`, args as Record<string, JsonValue>);
+			return { content: [{ type: "text", text: JSON.stringify(data) }], details: data };
+		},
+	});
+}
 
 export function createKnowledgeTool(call: KnowledgeCall): ToolDefinition {
 	return defineTool({

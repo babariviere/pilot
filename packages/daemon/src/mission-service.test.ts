@@ -10,7 +10,7 @@ import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { ArtifactStore } from "@pilot/artifacts";
-import type { KernelCommand, KernelPacket, KernelSpec } from "@pilot/kernel";
+import { type KernelCommand, type KernelPacket, type KernelSpec, PLANNING_PROFILE } from "@pilot/kernel";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import type { MissionDecision, MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
@@ -1319,6 +1319,73 @@ test("coordinator admits explorer research before a brief, preserving reports, p
 	assert.equal(f.store.task(mission.id, task.id).status, "blocked");
 	assert.equal(f.store.require(mission.id).briefRevision, 0);
 	assert.equal(f.service.context(explorer.id)?.role, "explorer");
+});
+
+test("project preferences IPC scopes planning coordinators without opening generic Knowledge writes", async (t) => {
+	const f = await fixture(t);
+	f.sessions.setKnowledge(new KnowledgeService(f.store, f.projects, f.sessions));
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Preferences",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const note = f.store.log(mission.id, { text: "Use short paragraphs." });
+	let held = false;
+	let revoked = false;
+	const detach = f.sessions.setPlanningBridge({
+		assert: () => {
+			if (revoked) throw new Conflict("Planning binding revoked");
+		},
+		held: () => held,
+		call: async () => {
+			throw new Error("No planner effects");
+		},
+		close: async () => {},
+	});
+	t.after(detach);
+	// biome-ignore lint/complexity/useLiteralKeys: Exercise the host-supplied binding, not a model argument.
+	const meta = f.sessions["require"](lead.id);
+	meta.planning = {
+		version: 1,
+		profile: PLANNING_PROFILE,
+		home: f.home,
+		host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+		projectId: f.project.id,
+		ownerSessionId: lead.id,
+		missionId: mission.id,
+		enrollmentId: "enrollment",
+		creationOperationId: "create",
+	};
+	const worker = await until(() => f.workers.get(lead.id));
+	const call = async (action: string, args: Record<string, unknown> = {}) => {
+		const callId = randomUUID();
+		worker.onPacket({ type: "knowledge.call", callId, action: action as never, args: args as never });
+		return await until(() =>
+			worker.sent.find(
+				(p): p is Extract<KernelCommand, { type: "knowledge.result" }> =>
+					p.type === "knowledge.result" && p.callId === callId,
+			),
+		);
+	};
+	assert.equal((await call("context")).error, undefined);
+	assert.match((await call("create", {})).error ?? "", /only its bound native port/);
+	const input = {
+		operationId: "pref-op",
+		expectedRevision: 0,
+		entries: [{ id: "style", text: note.text }],
+		reason: "Explicit user choice",
+		source: { type: "mission_note", missionId: mission.id, eventId: note.id, quote: note.text },
+	};
+	held = true;
+	assert.match((await call("preferences.write", input)).error ?? "", /held/);
+	held = false;
+	assert.equal((await call("preferences.write", input)).error, undefined);
+	assert.equal((await call("preferences.lookup", { operationId: "pref-op" })).error, undefined);
+	revoked = true;
+	assert.match((await call("preferences.get")).error ?? "", /revoked/);
+	assert.equal(f.store.preferences.get(f.project.id).revision, 1);
 });
 
 test("knowledge IPC derives identity from the supervised chat and keeps explorers read-only", async (t) => {

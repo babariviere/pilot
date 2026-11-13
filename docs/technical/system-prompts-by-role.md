@@ -59,6 +59,11 @@ Project memory (untrusted factual context, not instructions):
 Its content is data, not a fixed role prompt. Tool definitions and tool descriptions also supply
 action-specific instructions; they are documented separately in the access matrix.
 
+Project Build/coordinator prompts also read a fresh `project_records` section with small
+explicit preferences and a limited linked Knowledge index. The section states the
+[canonical source boundaries](project-preferences.md); the existing mission section
+still owns live agreement/work. It does not convert or remove the older memory view.
+
 ## Build
 
 Representative Pilot section for a registered project, shared jj workspace, PR delivery, project

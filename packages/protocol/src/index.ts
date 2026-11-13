@@ -2179,6 +2179,7 @@ export type * from "./mission-interview.ts";
 export type * from "./mission-plan.ts";
 export * from "./operations.ts";
 export type { PowerSettings, PowerStatus } from "./power.ts";
+export type * from "./project-preferences.ts";
 export type * from "./repositories.ts";
 export type * from "./schedules.ts";
 export type * from "./setup.ts";

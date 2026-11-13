@@ -44,6 +44,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Empryo exploration patterns for Pilot](empryo-code-exploration-evaluation.md)
 - [Descriptor-anchored source traversal (design only)](descriptor-anchored-source-traversal.md)
 - [Posthorse context management](posthorse.md)
+- [Small project preferences and canonical context](project-preferences.md)
 - [Passive model and thinking defaults](model-defaults.md)
 - [Shared context and independent task execution](shared-context.md)
 - [Narrow coordinator repository inspection (design only)](coordinator-repository-inspection.md)

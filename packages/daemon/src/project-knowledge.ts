@@ -16,6 +16,7 @@ import { Conflict, NotFound } from "./errors.ts";
 import { KnowledgeMaintenance, type RepositoryObservation } from "./knowledge-maintenance.ts";
 import type { MissionStore } from "./missions.ts";
 import type { KnowledgeListFilter, PreparedKnowledgeWrite } from "./project-knowledge-store.ts";
+import { ProjectPreferencesService } from "./project-preferences.ts";
 
 export const KNOWLEDGE_LIMITS = {
 	/** UTF-8 bytes of one revision's title, synopsis, body, sources and reason. */
@@ -57,10 +58,21 @@ export interface KnowledgeCaller {
 	projectId: string;
 	/** Ask, explorer and diagnostics chats read only. */
 	readOnly: boolean;
+	/** Supervised worker/binding guard, rechecked after I/O and immediately before a preference commit. */
+	assertCurrent?: (write: boolean) => void;
 }
 
 export interface KnowledgeSessions {
-	get(id: string): { projectId?: string } | undefined;
+	get(id: string):
+		| {
+				projectId?: string;
+				archivedAt?: number;
+				mode?: string;
+				role?: string;
+				executionPermission?: { level: string };
+				inputGeneration?: number;
+		  }
+		| undefined;
 	/** Exact stored artifact revision; never wakes a worker. */
 	artifact(sessionId: string, artifactId: string, revision?: number): Promise<{ revision: number }>;
 	/** Existing committed-artifact notifications are hints; no worker is opened. */
@@ -324,6 +336,7 @@ export interface KnowledgeListQuery {
 
 export class KnowledgeService {
 	readonly maintenance: KnowledgeMaintenance;
+	readonly preferences: ProjectPreferencesService;
 	private readonly store: MissionStore;
 	private readonly projects: KnowledgeProjects;
 	private readonly sessions: KnowledgeSessions;
@@ -337,6 +350,7 @@ export class KnowledgeService {
 		this.projects = projects;
 		this.sessions = sessions;
 		this.maintenance = new KnowledgeMaintenance(store, projects, sessions, repository);
+		this.preferences = new ProjectPreferencesService(store, projects, sessions);
 	}
 
 	private admitProject(projectId: string): void {
@@ -576,6 +590,22 @@ export class KnowledgeService {
 		operationId?: string,
 	): Promise<unknown> {
 		if (args.projectId !== undefined) throw new Error("Knowledge uses this chat's own project");
+		if (action.startsWith("preferences.")) {
+			const project = caller.projectId;
+			switch (action) {
+				case "preferences.get":
+					return this.preferences.read(project, caller);
+				case "preferences.history":
+					return this.preferences.history(project, args.before, args.limit, caller);
+				case "preferences.lookup":
+					return this.preferences.lookup(project, args.operationId, caller);
+				case "preferences.write":
+					return this.preferences.write(project, args, caller);
+				default:
+					throw new Error("Unknown project preferences action");
+			}
+		}
+		if (action === "context") return this.projectContext(caller);
 		const projectId = caller.projectId;
 		const author: KnowledgeAuthor = { type: "session", sessionId: caller.sessionId };
 		const missionId = this.store.missionOf(caller.sessionId);
@@ -693,6 +723,59 @@ export class KnowledgeService {
 			default:
 				throw new Error("Unknown knowledge action");
 		}
+	}
+
+	/** Fresh, bounded context, not a second wiki. Existing mission section carries live agreement/work.
+	 * Only linked Knowledge is loaded here. A pin loads that exact revision, not a newer synopsis.
+	 */
+	private async projectContext(caller: KnowledgeCaller) {
+		const scope = () => {
+			caller.assertCurrent?.(false);
+			this.admitProject(caller.projectId);
+			if (this.sessions.get(caller.sessionId)?.projectId !== caller.projectId)
+				throw new Conflict("Project context reader changed project");
+			const member = this.store.membership(caller.sessionId);
+			if (!member) return undefined;
+			const mission = this.store.require(member.missionId);
+			if (mission.projectId !== caller.projectId)
+				throw new Conflict("Current same-project mission membership required for context");
+			return mission.id;
+		};
+		const pin = scope();
+		await this.store.durable();
+		if (scope() !== pin) throw new Conflict("Project context membership changed");
+		const page = pin ? this.store.knowledge.list(caller.projectId, { missionId: pin }, undefined, 8) : undefined;
+		const result = {
+			projectId: caller.projectId,
+			preferences: this.store.preferences.get(caller.projectId),
+			missionId: pin ?? null,
+			knowledge:
+				page?.entries.map((entry) => {
+					const detail = this.store.knowledge.detail(caller.projectId, entry.id, entry.link?.pinnedRevision)!;
+					return {
+						id: entry.id,
+						revision: detail.revision.revision,
+						currentRevision: entry.revision,
+						title: detail.revision.title,
+						synopsis: detail.revision.synopsis,
+						author: detail.revision.author,
+						recordedAt: detail.revision.recordedAt,
+						freshness: detail.freshness.state,
+						link: entry.link,
+					};
+				}) ?? [],
+			moreKnowledge: page?.more ?? false,
+		};
+		await this.store.durable();
+		if (scope() !== pin) throw new Conflict("Project context membership changed");
+		if (
+			this.store.preferences.get(caller.projectId).revision !== result.preferences.revision ||
+			JSON.stringify(
+				pin ? this.store.knowledge.list(caller.projectId, { missionId: pin }, undefined, 8) : undefined,
+			) !== JSON.stringify(page)
+		)
+			throw new Conflict("Project context records changed during the read; load fresh context");
+		return result;
 	}
 }
 

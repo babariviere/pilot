@@ -1,5 +1,16 @@
 # Project memory and knowledge
 
+## Small project preferences
+
+Project coordinators can record small explicit user choices with a cited user note.
+These choices belong only to that project. They are not wiki facts, global defaults
+or permissions. Changes keep their source and revision history; stale edits fail
+instead of replacing newer choices. Day Settings support is a separate UI slice.
+
+Mission records hold current agreement and work. Knowledge holds sourced project
+understanding. Posthorse keeps working context. Existing memory and history are
+unchanged. See the [backend contract](technical/project-preferences.md) for limits.
+
 ## Memory
 
 Open **Memory…** from a project's Overview to browse stored notes and summary ranges.

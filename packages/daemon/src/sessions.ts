@@ -12743,7 +12743,15 @@ ${run.excerpt}`,
 			void call.finally(() => this.planningCalls.delete(call));
 			return;
 		}
-		if (meta.planning) {
+		if (
+			meta.planning &&
+			!(
+				packet.type === "knowledge.call" &&
+				["context", "preferences.get", "preferences.history", "preferences.lookup", "preferences.write"].includes(
+					packet.action,
+				)
+			)
+		) {
 			const denied = {
 				"mission.call": "mission.result",
 				"memory.call": "memory.result",
@@ -13418,6 +13426,17 @@ ${run.excerpt}`,
 					{
 						sessionId: meta.id,
 						projectId: meta.projectId,
+						assertCurrent: (write) => {
+							if (this.workers.get(meta.id) !== worker) throw new Conflict("Project context worker changed");
+							if (write) this.assertPlanningOpen(meta.id);
+							if (meta.planning) {
+								if (!this.planningBridge) throw new Conflict("Planning project context unavailable");
+								this.planningBridge.assert(meta.planning);
+								if (write) {
+									if (this.planningBridge.held(meta.planning)) throw new Conflict("Planning is held");
+								}
+							}
+						},
 						readOnly:
 							!!meta.ask ||
 							meta.mode === "ask" ||
