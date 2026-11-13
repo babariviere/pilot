@@ -2,7 +2,7 @@
 
 This is the production **source capture, revision and compiler boundary**, not
 an enabled interactive preview. Authored JavaScript is never executed by this
-path. Every prepared result still says `rendering: "unsupported"`. Existing
+path. Preview availability remains app-owned and Unsupported. Existing
 visual/Mermaid publication and all historical readers remain available.
 
 ## Publication and exact bytes
@@ -13,16 +13,15 @@ capture binding. An agent writes one UTF-8 `.tsx` file in its own session's
 inside that directory). The request cannot select a source root, executable,
 module resolver, credentials or bytecode. Ask does not offer file capture.
 An update must name the current `expectedRevision`. NSH identities cannot
-change kind. The tool compiles the captured string before creating or updating
+change kind. One helper call captures and compiles the string before creating or updating
 a revision. Syntax/import errors publish nothing and leave earlier revisions
 unchanged. Cancellation after compilation also prevents publication. The tool
 reports that source compiled and was saved, not that a preview ran.
 
-`captureNshSource` limits source to 512 KiB before allocation. Linux opens
-directories through owned `/proc/self/fd` descriptors. macOS cannot traverse
-`/dev/fd/<directory>/child`, so it uses the ordinary unprivileged native helper's
-`openat` path instead. Both paths open each untrusted directory and the final
-file with `O_NOFOLLOW`; files must be regular with one hard link. They reject
+`captureNshSource` uses the same ordinary unprivileged native helper on Linux
+and macOS. Its `openat` path limits reads to 512 KiB and opens each untrusted
+directory and final file with `O_NOFOLLOW`. Files must be regular, owned by the
+effective user, not group/world writable, and have one hard link. It rejects
 directory traversal, symlinks, invalid UTF-8, changing file metadata, missing
 files, cancellation and oversized source. No filesystem bundler runs. Capturing
 an import statement does not read its target. The session root comes from the
@@ -35,15 +34,18 @@ are refused, not resolved as a path-check fallback.
 The captured string round-trips exact UTF-8, including BOM, CRLF and Unicode.
 `ArtifactStore` reuses its UUID, ownership, serialized writes, immutable numbered
 JSON revisions, durable latest pointer and conflict rules. Each NSH revision
-keeps `nsh` metadata: API 1, pinned runtime name, basename, source SHA-256 and
+keeps `nsh` metadata: API 1, write-time runtime provenance, basename, source SHA-256 and
 UTF-8 length. These identify saved bytes, not rendering or acceptance. The
 prepared HTML is empty. The complete numbered container must also fit the
 existing 1 MiB passive-read limit, including JSON escaping; it is never truncated.
 
 Explicit reopen verifies the metadata against source bytes. Earlier revisions
 do not follow edits to the scratch file or inherit later state. The existing
-exact delivery/member/owner pin reader can return NSH as inert source. It still
-returns `rendering: "unsupported"`, not compiled code, assets or callbacks.
+exact delivery/member/owner pin reader can return NSH as inert source, not
+compiled code, assets or callbacks. Reopen checks API, entry, digest and byte
+length, but does not compare runtime provenance with the installed app. New
+revisions omit `nsh.rendering`; historical values stay readable and unchanged.
+Neither field authorizes rendering or makes preview available.
 
 ## App-side preview preparation
 
@@ -62,17 +64,15 @@ not connected yet, and the existing reader still shows saved source only.
 
 ## Compiler and lifetime
 
-`compileNshSource` checks captured bytes before publication through the same
-compiler as saved revisions. Its private check identity is not a canonical
-artifact, persisted receipt or rendering permit. It discards the generated code;
-only the exact source is saved. It never reopens the mutable scratch file.
+Capture compiles its exact in-memory string and returns source only after success.
+The separate source-only `compileNshSource` check returns no generated code or
+rendering permit. The helper IPC does not carry artifact IDs/revisions or echo
+source hashes; canonical storage owns those pins. The app must independently
+validate and compile its saved revision when preview is supported. The Rust
+`prepare` function remains for that app-side exact-pin boundary, not helper IPC.
+The helper never mounts a component or constructs a JS VM.
 
-`prepareNshRevision` accepts one saved revision's identity and source, not a live file. It
-calls the fixed native source host with its exact ID, owner, revision, source,
-entry, digest and length. The result must echo that identity and remain
-Unsupported. The helper never mounts a component or constructs a JS VM.
-
-The source host validates those pins and uses OXC's TSX AST to reject local,
+The source host uses OXC's TSX AST to reject local,
 remote, dynamic, default and namespace imports, import metadata/attributes,
 TypeScript import aliases/types and module re-exports. A default component
 export is required. Only named imports from the explicit `nsh`, `nsh/base` and
@@ -80,7 +80,8 @@ trusted `pilot-artifact/ui` export lists are prepared. The agent cannot import
 `mount`, host, filesystem/process modules, Day/native, shaders or raw `nsh:rt`.
 The host then uses pinned unmodified NSH 0.5.0 `compile_module` on the in-memory
 string. It does not use `bundle`, `nsh.json`, aliases, package discovery or a
-filesystem resolver. Output is at most 2 MiB. Syntax diagnostics name virtual
+filesystem resolver. Generated code is limited to 2 MiB, then discarded by the
+helper. Syntax diagnostics name virtual
 `Artifact.tsx`, with line/UTF-16 column; other compiler diagnostics are limited
 to 4096 characters. This is not full TypeScript typechecking or module linking.
 
@@ -114,8 +115,8 @@ retention already reclaimed the workspace. Automatic retention can still
 reclaim a workspace, but leaves scratch alone.
 
 Publication/capture stays within the worker's busy tool lifetime. Capture's
-handles and helper process close before the tool returns. Compilation uses a
-copy of published bytes, never scratch. No production preview is admitted, so
+handles and helper process close before the tool returns. Compilation uses the
+captured in-memory bytes, never a second scratch read. No production preview is admitted, so
 there is no live preview pin to bypass. Any later preview lifecycle must join
 its owned work before participating in cleanup. Published `artifacts/` revisions,
 original history and workspace recovery records are outside scratch and survive.
@@ -154,13 +155,21 @@ identity probe on the identical copy or after the trusted signing operation.
 Before offering capture, the kernel checks the fixed binding against runtime
 source and streams the helper's exact bytes in 64 KiB chunks. A per-process
 stat/identity cache avoids hashing unchanged bytes on every call. It also checks
-the helper's compiled identity with fixed benign source before Ensure can touch
-session storage; every later reply must match it. These checks supplement the
+every helper reply's compiled identity. Availability no longer starts a trial
+compilation: the exact-byte binding already identifies the build-probed executable.
+These checks supplement the
 existing verified app/runtime closure, not replace signatures or grant trust to
 a loose local helper. First-use hashing adds startup I/O; a genuine signed-bundle
 latency measurement remains outstanding.
 
-If that installed binding is absent or fails checks, macOS does not offer sourcePath
+There is not yet a verifiable inherited app-installation capability at the kernel
+launch seam. Day's `bootstrap.rs` verifies the app before loading its GUI, but
+`runtime-bootstrap.ts` checks only a runtime stamp. That is not an equivalent
+signature/installation proof for the helper. The descriptor, exact-byte hash and
+compiled identity echo therefore remain. A fixed path alone cannot replace them;
+they also do not turn a loose or unsigned installation into a verified app.
+
+If that installed binding is absent or fails checks, no platform offers sourcePath
 publication. An unavailable or unsafe scratch setup also disables this optional
 publication path without preventing the rest of the session from opening.
 Actual source-matched packaging/signature qualification remains a gate; this

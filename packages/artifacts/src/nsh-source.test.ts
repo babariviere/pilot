@@ -4,7 +4,6 @@ import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { prepareNshRevision } from "./nsh-host.ts";
 import { captureNshSource, ensureArtifactScratch, NSH_SOURCE_BYTES } from "./nsh-source.ts";
 import { ArtifactStore } from "./store.ts";
 
@@ -12,10 +11,7 @@ const host = process.env.NSH_ARTIFACT_TEST_HOST;
 const capture = (root: string, path: string, signal?: AbortSignal) => captureNshSource(root, path, signal, host);
 const scratch = (root: string) => ensureArtifactScratch(root, host);
 const captureOptions = {
-	skip:
-		process.platform === "darwin" && !host
-			? "Run apps/day/scripts/test-artifact-source.mjs for native openat capture"
-			: false,
+	skip: !host ? "Run apps/day/scripts/test-artifact-source.mjs for native openat capture" : false,
 };
 
 test(
@@ -56,15 +52,9 @@ test(
 		await rm(join(root, "scratch"), { recursive: true });
 		const reopened = new ArtifactStore(root, identity);
 		assert.deepEqual(Buffer.from((await reopened.get(a.id, 1)).source), first);
-		assert.equal((await reopened.readCapturedRevision(a.id, 2)).artifact.nsh?.rendering, "unsupported");
+		assert.equal((await reopened.readCapturedRevision(a.id, 2)).artifact.nsh?.rendering, undefined);
 		assert.equal((await reopened.get(a.id, 1)).html, "");
 		assert.equal((await reopened.list())[0]?.revision, 2);
-		if (host) {
-			const prepared = await prepareNshRevision(await reopened.get(a.id, 1), undefined, host);
-			assert.equal(prepared.sourceSha256, captured.nsh.sourceSha256);
-			assert.equal(prepared.revision, 1);
-			assert.equal(prepared.rendering, "unsupported");
-		}
 		const stored = JSON.parse(await readFile(join(root, "artifacts", a.id, "2.json"), "utf8"));
 		stored.nsh.sourceSha256 = "0".repeat(64);
 		await writeFile(join(root, "artifacts", a.id, "2.json"), JSON.stringify(stored));
@@ -80,6 +70,13 @@ test(
 		t.after(() => rm(root, { recursive: true, force: true }));
 		const directory = await scratch(root);
 		await writeFile(join(directory, "ok.tsx"), "export default () => null;");
+		for (const source of ["export default () => <Text>;", "import {host} from 'nsh'; export default () => host;"]) {
+			await writeFile(join(directory, "invalid.tsx"), source);
+			await assert.rejects(capture(root, "invalid.tsx"), /Artifact.tsx/);
+		}
+		await chmod(join(directory, "ok.tsx"), 0o666);
+		await assert.rejects(capture(root, "ok.tsx"), /Unsafe/);
+		await chmod(join(directory, "ok.tsx"), 0o600);
 		await chmod(root, 0o777);
 		await assert.rejects(capture(root, "ok.tsx"), /ownership|permissions/);
 		await chmod(root, 0o700);
@@ -108,6 +105,16 @@ test(
 		await assert.rejects(scratch(root));
 	},
 );
+
+test("NSH capture and scratch setup require the native helper on every platform", async (t) => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "nsh-missing-host-")));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const executable = join(root, "missing-host");
+	await assert.rejects(ensureArtifactScratch(root, executable), /unavailable/);
+	await mkdir(join(root, "scratch", "artifacts"), { recursive: true });
+	await writeFile(join(root, "scratch", "artifacts", "valid.tsx"), "export default () => null;");
+	await assert.rejects(captureNshSource(root, "valid.tsx", undefined, executable), /unavailable/);
+});
 
 test("NSH failed publication leaves history intact and cannot produce an oversized stored container", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "nsh-container-"));

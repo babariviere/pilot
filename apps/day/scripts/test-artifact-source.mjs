@@ -41,6 +41,7 @@ const tests = spawn(
 		"--test-concurrency=1",
 		"--test-name-pattern=NSH ",
 		"packages/artifacts/src/nsh-source.test.ts",
+		"packages/artifacts/src/nsh-revision.test.ts",
 		"packages/artifacts/src/nsh-host.test.ts",
 		"packages/kernel/src/artifact-tools.test.ts",
 	],

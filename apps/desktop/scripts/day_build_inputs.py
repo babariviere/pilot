@@ -163,18 +163,14 @@ def artifact_identity(binary, source, recipe, *, module=None):
     # Fixed trusted program, not artifact source. callArtifactHost owns empty env,
     # five-second deadline, 8KiB output ceiling, identity validation and child join.
     program = """
-import {createHash} from 'node:crypto';
 try {
  const [module, binary, source, recipe] = process.argv.slice(1);
  const {callArtifactHost} = await import(module);
  const identity = {schema:1,kind:'nsh-source-host',runtime:'nsh 0.5.0',source,recipe};
  const text = 'export default function Artifact() { return null; }';
- const hash = createHash('sha256').update(text).digest('hex');
- const value = await callArtifactHost({action:'compile',captured:{
-  artifactId:'11111111-1111-1111-1111-111111111111',sourceSessionId:'packaging',revision:1,
-  entry:'Artifact.tsx',source:text,sourceSha256:hash,sourceBytes:Buffer.byteLength(text)}},
+ const value = await callArtifactHost({action:'compile',entry:'Artifact.tsx',source:text},
   undefined,binary,identity,8192);
- if(value?.rendering !== 'unsupported' || value?.sourceSha256 !== hash) throw Error();
+ if(value !== null) throw Error();
 } catch { process.exitCode = 1; }
 """
     try:

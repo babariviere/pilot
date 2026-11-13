@@ -403,7 +403,7 @@ class ArtifactHostTests(unittest.TestCase):
             "assert r['action']=='compile' and len(sys.argv)==1\n"
             "assert 'HOME' not in os.environ and 'GH_TOKEN' not in os.environ\n"
             "print(json.dumps({'identity':" + repr(self.identity) + ", 'value':"
-            "{'rendering':'unsupported','sourceSha256':r['captured']['sourceSha256']}}))\n")
+            "None}))\n")
         self.assertEqual(day.artifact_identity(self.binary, self.source, self.recipe, module=self.module), self.identity)
         for source, recipe in (("c" * 40, self.recipe), (self.source, "c" * 64)):
             with self.assertRaisesRegex(ValueError, "compiled source"):

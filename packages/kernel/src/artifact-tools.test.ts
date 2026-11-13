@@ -6,13 +6,7 @@ import { test } from "node:test";
 import type { JsonValue } from "@earendil-works/chord";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import {
-	ArtifactNotFound,
-	ArtifactStore,
-	captureNshSource,
-	compileNshSource,
-	ensureArtifactScratch,
-} from "@pilot/artifacts";
+import { ArtifactNotFound, ArtifactStore, captureNshSource, ensureArtifactScratch } from "@pilot/artifacts";
 import type { ArtifactRevision, ArtifactWrite } from "@pilot/protocol";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
@@ -550,8 +544,7 @@ test("NSH tool refuses compile errors before creating or updating any revision",
 	let published = 0;
 	const f = fixture({
 		nshSessionDirectory: "/host/session",
-		captureNsh: async () => ({ source: "export default () => <Text>;", entry: "view.tsx" }),
-		compileNsh: async () => {
+		captureNsh: async () => {
 			throw new Error("Artifact.tsx:1:28: Expected closing tag. Nothing was published.");
 		},
 		onArtifactPublished: async () => {
@@ -576,13 +569,12 @@ test("NSH tool waits for compilation of the exact captured bytes before publicat
 	const controller = new AbortController();
 	const f = fixture({
 		nshSessionDirectory: "/host/session",
-		captureNsh: async () => ({ source, entry: "view.tsx" }),
-		compileNsh: async (captured, entry, signal) => {
-			assert.equal(captured, source);
-			assert.equal(entry, "view.tsx");
+		captureNsh: async (path, signal) => {
+			assert.equal(path, "view.tsx");
 			assert.equal(signal, controller.signal);
 			entered.resolve();
 			await compiled.promise;
+			return { source, entry: "view.tsx" };
 		},
 	});
 	const pending = f.call("create", { title: "Preview", kind: "nsh", sourcePath: "view.tsx" }, controller.signal);
@@ -602,9 +594,9 @@ test("NSH canceled compilation cannot publish even if the compiler returns succe
 	const controller = new AbortController();
 	const f = fixture({
 		nshSessionDirectory: "/host/session",
-		captureNsh: async () => ({ source: "export default () => null;", entry: "view.tsx" }),
-		compileNsh: async () => {
+		captureNsh: async () => {
 			controller.abort();
+			return { source: "export default () => null;", entry: "view.tsx" };
 		},
 	});
 	await assert.rejects(
@@ -628,8 +620,7 @@ test("NSH failed update compilation keeps the saved revision and history unchang
 	const f = fixture({
 		store,
 		nshSessionDirectory: root,
-		captureNsh: async () => ({ source: "export default () => <Text>;", entry: "view.tsx" }),
-		compileNsh: async () => {
+		captureNsh: async () => {
 			throw new Error("Artifact.tsx:1:28: Invalid TSX");
 		},
 	});
@@ -656,7 +647,6 @@ test("NSH tool captures only session scratch and keeps exact pins without execut
 		store,
 		nshSessionDirectory: root,
 		captureNsh: (path, signal) => captureNshSource(root, path, signal, host),
-		compileNsh: (source, entry, signal) => compileNshSource(source, entry, signal, host),
 	});
 	const result = await f.call("create", { title: "Preview", kind: "nsh", sourcePath: "view.tsx" });
 	const data = result.structuredContent as { artifact: { id: string; revision: number }; warnings: string[] };
@@ -681,6 +671,24 @@ test("NSH tool captures only session scratch and keeps exact pins without execut
 	const read = await f.call("get", { id: data.artifact.id, revision: 1 });
 	assert.equal(
 		(read.structuredContent as { artifact: { nsh: { rendering: string } } }).artifact.nsh.rendering,
-		"unsupported",
+		undefined,
 	);
+	for (const invalid of ["export default () => <Text>;", "import {host} from 'nsh'; export default () => host;"]) {
+		await writeFile(join(directory, "view.tsx"), invalid);
+		for (const action of ["create", "update"]) {
+			await assert.rejects(
+				f.call(action, {
+					id: data.artifact.id,
+					expectedRevision: 1,
+					title: "Invalid",
+					kind: "nsh",
+					sourcePath: "view.tsx",
+				}),
+				/Artifact.tsx/,
+			);
+		}
+		assert.equal((await store.get(data.artifact.id)).source, source);
+		assert.equal((await store.get(data.artifact.id)).revision, 1);
+		assert.equal((await store.list()).length, 1);
+	}
 });

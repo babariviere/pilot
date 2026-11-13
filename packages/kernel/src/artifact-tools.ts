@@ -6,7 +6,6 @@ import {
 	type ArtifactStore,
 	assertArtifactWriteKind,
 	captureNshSource,
-	compileNshSource,
 	imageSize,
 	loadArtifactImage,
 	MAX_IMAGE_SOURCE_BYTES,
@@ -82,10 +81,8 @@ export interface ArtifactToolOptions {
 	visuals?: boolean;
 	/** Trusted host session root, never a caller-supplied path. Not offered in Ask. */
 	nshSessionDirectory?: string;
-	/** Host-owned capture binding, never an executable/path selected by an artifact request. */
+	/** Host-owned capture+compile binding, never an executable/path selected by an artifact request. */
 	captureNsh?: (sourcePath: string, signal?: AbortSignal) => Promise<{ source: string; entry: string }>;
-	/** Host-owned compiler binding. Checks captured bytes, never a mutable source file. */
-	compileNsh?: (source: string, entry: string, signal?: AbortSignal) => Promise<void>;
 }
 
 function checkSource(write: ArtifactWrite): void {
@@ -302,7 +299,6 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 								: await captureNshSource(options.nshSessionDirectory!, params.sourcePath, signal);
 							write.source = captured.source;
 							write.entry = captured.entry;
-							await (options.compileNsh ?? compileNshSource)(write.source, write.entry, signal);
 							signal?.throwIfAborted();
 						}
 						if (write.kind === "image") {

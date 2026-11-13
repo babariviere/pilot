@@ -90,10 +90,12 @@ export function parseStoredArtifactRevision(
 	if (artifact.kind === "nsh") {
 		const actual = nshSource(artifact.source, artifact.nsh?.entry ?? "");
 		if (
-			!artifact.nsh ||
-			Object.keys(actual).some(
-				(key) => actual[key as keyof typeof actual] !== artifact.nsh?.[key as keyof typeof actual],
-			) ||
+			artifact.nsh?.api !== 1 ||
+			typeof artifact.nsh.runtime !== "string" ||
+			!artifact.nsh.runtime ||
+			artifact.nsh.runtime.length > 256 ||
+			artifact.nsh.sourceSha256 !== actual.sourceSha256 ||
+			artifact.nsh.sourceBytes !== actual.sourceBytes ||
 			artifact.html !== "" ||
 			artifact.libraries.length
 		)

@@ -5,7 +5,6 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ArtifactRevision } from "@pilot/protocol";
 
 const INSTALLED_HOST = fileURLToPath(new URL("../native/pilot-artifact-host", import.meta.url));
 const MAX_RESPONSE = 4 * 1024 * 1024;
@@ -114,74 +113,11 @@ export async function readArtifactHostBinding(executable = INSTALLED_HOST): Prom
 	}
 }
 
-export interface NshPreparation {
-	artifactId: string;
-	sourceSessionId: string;
-	revision: number;
-	sourceSha256: string;
-	code: string;
-	rendering: "unsupported";
-	reason: string;
-}
-
-/** Explicit host preparation of one saved revision, never a live file or a rendering permit. */
-export async function prepareNshRevision(
-	artifact: Pick<ArtifactRevision, "kind" | "nsh" | "id" | "sessionId" | "revision" | "source">,
-	signal?: AbortSignal,
-	executable?: string,
-): Promise<NshPreparation> {
-	if (
-		artifact.kind !== "nsh" ||
-		artifact.nsh?.api !== 1 ||
-		artifact.nsh.runtime !== "nsh 0.5.0" ||
-		artifact.nsh.rendering !== "unsupported"
-	)
-		throw new Error("Unsupported saved NSH revision");
-	const captured = {
-		artifactId: artifact.id,
-		sourceSessionId: artifact.sessionId,
-		revision: artifact.revision,
-		entry: artifact.nsh.entry,
-		source: artifact.source,
-		sourceSha256: artifact.nsh.sourceSha256,
-		sourceBytes: artifact.nsh.sourceBytes,
-	};
-	const value = (await callArtifactHost({ action: "compile", captured }, signal, executable)) as NshPreparation;
-	if (
-		!value ||
-		value.artifactId !== artifact.id ||
-		value.sourceSessionId !== artifact.sessionId ||
-		value.revision !== artifact.revision ||
-		value.sourceSha256 !== artifact.nsh.sourceSha256 ||
-		value.rendering !== "unsupported" ||
-		typeof value.code !== "string" ||
-		Buffer.byteLength(value.code) > 2 * 1024 * 1024 ||
-		typeof value.reason !== "string"
-	)
-		throw new Error("Invalid prepared NSH revision identity or result");
-	return value;
-}
-
 /** The build/package owns this executable location; tools and artifacts cannot select it. */
 export async function artifactHostAvailable(): Promise<boolean> {
 	try {
 		await readArtifactHostBinding();
-		// Establish compiled identity before even Ensure can touch session storage.
-		// This is a fixed source-only compilation, never authored JS execution.
-		const source = "export default function Artifact() { return null; }";
-		const value = (await callArtifactHost({
-			action: "compile",
-			captured: {
-				artifactId: "11111111-1111-1111-1111-111111111111",
-				sourceSessionId: "availability",
-				revision: 1,
-				entry: "Artifact.tsx",
-				source,
-				sourceBytes: Buffer.byteLength(source),
-				sourceSha256: createHash("sha256").update(source).digest("hex"),
-			},
-		})) as { rendering?: unknown };
-		return value?.rendering === "unsupported";
+		return true;
 	} catch {
 		return false;
 	}

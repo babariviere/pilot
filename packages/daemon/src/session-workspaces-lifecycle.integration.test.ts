@@ -113,7 +113,7 @@ test("NSH scratch survives archive and idle reclaim; explicit cleanup drains wor
 	assert.equal(existsSync(scratch), false);
 	assert.equal(f.workers[0]?.closed, true);
 	assert.equal((await f.sessions.artifact(created.id, published.id, 1)).source, published.source);
-	assert.equal((await f.sessions.artifact(created.id, published.id, 1)).nsh?.rendering, "unsupported");
+	assert.equal((await f.sessions.artifact(created.id, published.id, 1)).nsh?.rendering, undefined);
 });
 
 test("ignored files do not block reclamation, while tracked edits survive restore", async (t) => {

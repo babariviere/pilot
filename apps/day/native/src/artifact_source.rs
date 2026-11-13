@@ -111,17 +111,7 @@ pub fn prepare(input: CapturedSource) -> Result<PreparedSource, String> {
     {
         return Err("Invalid exact NSH source identity, bytes or digest".into());
     }
-    check_imports(&input.source)?;
-    let sets: Vec<_> = nsh_base::registry()
-        .sets()
-        .into_iter()
-        .map(nsh_core::element::description::SetDescription::from)
-        .collect();
-    let code = nsh_bundler::compile_module("Artifact.tsx", &input.source, &sets)
-        .map_err(|error| error.chars().take(4096).collect::<String>())?;
-    if code.len() > OUTPUT_BYTES {
-        return Err("Compiled NSH module exceeds limit".into());
-    }
+    let code = compile_source(&input.source, &input.entry)?;
     Ok(PreparedSource {
         artifact_id: input.artifact_id,
         source_session_id: input.source_session_id,
@@ -131,6 +121,25 @@ pub fn prepare(input: CapturedSource) -> Result<PreparedSource, String> {
         rendering: "unsupported",
         reason: "Native-memory bounds and preview fault containment are not qualified",
     })
+}
+
+/// Compile an exact in-memory source string. This neither resolves files nor evaluates code.
+pub fn compile_source(source: &str, entry: &str) -> Result<String, String> {
+    if !entry_ok(entry) || source.len() > SOURCE_BYTES || source.trim().is_empty() {
+        return Err("Invalid NSH source entry or bytes".into());
+    }
+    check_imports(source)?;
+    let sets: Vec<_> = nsh_base::registry()
+        .sets()
+        .into_iter()
+        .map(nsh_core::element::description::SetDescription::from)
+        .collect();
+    let code = nsh_bundler::compile_module("Artifact.tsx", source, &sets)
+        .map_err(|error| error.chars().take(4096).collect::<String>())?;
+    if code.len() > OUTPUT_BYTES {
+        return Err("Compiled NSH module exceeds limit".into());
+    }
+    Ok(code)
 }
 
 #[derive(Default)]
@@ -261,15 +270,17 @@ pub enum Request {
         entry: String,
     },
     Compile {
-        captured: CapturedSource,
+        source: String,
+        entry: String,
     },
 }
 
 /// The helper's only operations. It never mounts or evaluates a module.
 pub fn handle(request: Request) -> Result<Value, String> {
     match request {
-        Request::Compile { captured } => {
-            serde_json::to_value(prepare(captured)?).map_err(|_| "Artifact output failed".into())
+        Request::Compile { source, entry } => {
+            compile_source(&source, &entry)?;
+            Ok(Value::Null)
         }
         Request::Ensure { session_directory } => {
             directories(&session_directory, true)?;
@@ -286,7 +297,13 @@ pub fn handle(request: Request) -> Result<Value, String> {
             let mut file = open_at(&directory, &entry, false)?;
             let before = file.metadata().map_err(|_| "NSH source metadata failed")?;
             use std::os::unix::fs::MetadataExt;
-            if !before.is_file() || before.nlink() != 1 {
+            // SAFETY: geteuid has no arguments or memory preconditions.
+            let uid = unsafe { libc::geteuid() };
+            if !before.is_file()
+                || before.nlink() != 1
+                || before.uid() != uid
+                || before.mode() & 0o022 != 0
+            {
                 return Err("Unsafe NSH source file".into());
             }
             if before.len() > SOURCE_BYTES as u64 {
@@ -310,6 +327,7 @@ pub fn handle(request: Request) -> Result<Value, String> {
             if source.trim().is_empty() {
                 return Err("Empty NSH source".into());
             }
+            compile_source(&source, &entry)?;
             Ok(json!({"source": source}))
         }
     }

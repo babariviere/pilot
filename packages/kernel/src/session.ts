@@ -644,7 +644,7 @@ export class KernelSession {
 				sessionId: spec.sessionId,
 				projectId: spec.projectId,
 			});
-			let nshAvailable = !spec.pilot?.ask && (process.platform === "linux" || (await artifactHostAvailable()));
+			let nshAvailable = !spec.pilot?.ask && (await artifactHostAvailable());
 			if (nshAvailable) {
 				try {
 					await ensureArtifactScratch(dirname(spec.storageDir));

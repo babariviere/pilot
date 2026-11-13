@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { callArtifactHost, readArtifactHostBinding } from "./nsh-host.ts";
-import { compileNshSource, nshSource } from "./nsh-source.ts";
+import { compileNshSource } from "./nsh-source.ts";
 
 const host = process.env.NSH_ARTIFACT_TEST_HOST;
 const options = { skip: !host ? "Run apps/day/scripts/test-artifact-source.mjs for the native compiler" : false };
@@ -54,19 +54,6 @@ test("NSH installed helper binds exact runtime source and bytes, not a loose exe
 	await symlink(join(root, "runtime-build.json"), executable);
 	await assert.rejects(readArtifactHostBinding(executable));
 });
-function captured(source: string) {
-	const metadata = nshSource(source, "demo.tsx");
-	return {
-		artifactId: "11111111-1111-1111-1111-111111111111",
-		sourceSessionId: "owner",
-		revision: 2,
-		entry: metadata.entry,
-		source,
-		sourceSha256: metadata.sourceSha256,
-		sourceBytes: metadata.sourceBytes,
-	};
-}
-
 test("NSH prepublication compiler validates exact helper replies without saving or evaluating source", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "nsh-compile-check-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
@@ -84,7 +71,7 @@ process.stdin.on('data', chunk => input += chunk);
 process.stdin.on('end', () => {
   const request = JSON.parse(input);
   require('node:fs').writeFileSync(${JSON.stringify(requestFile)}, input);
-  const value = { ...request.captured, code: 'compiled, never evaluated', rendering: 'unsupported', reason: 'App preview is separate' };
+  let value = null;
   ${change}
   process.stdout.write(JSON.stringify({value}));
 });`,
@@ -94,12 +81,9 @@ process.stdin.on('end', () => {
 	assert.equal(await compileNshSource(source, "view.tsx", undefined, executable), undefined);
 	const request = JSON.parse(await readFile(requestFile, "utf8"));
 	assert.equal(request.action, "compile");
-	assert.equal(request.captured.source, source);
-	assert.equal(request.captured.entry, "view.tsx");
-	assert.equal(request.captured.sourceSha256, nshSource(source, "view.tsx").sourceSha256);
-	assert.equal(request.captured.sourceBytes, Buffer.byteLength(source));
-	await helper("value.sourceSha256 = '0'.repeat(64);");
-	await assert.rejects(compileNshSource(source, "view.tsx", undefined, executable), /Invalid prepared NSH revision/);
+	assert.deepEqual(request, { action: "compile", source, entry: "view.tsx" });
+	await helper("value = {code:'unexpected bytecode'};");
+	await assert.rejects(compileNshSource(source, "view.tsx", undefined, executable), /Invalid artifact compilation/);
 	const controller = new AbortController();
 	controller.abort();
 	await assert.rejects(compileNshSource(source, "view.tsx", controller.signal, executable), { name: "AbortError" });
@@ -116,37 +100,13 @@ test(
 	},
 );
 
-test("NSH production compiler consumes exact source only and never grants rendering", options, async () => {
+test("NSH production compiler consumes source only and returns no code or rendering permit", options, async () => {
 	const source =
 		"import { Text, signal } from 'nsh'; export default function Artifact() { const n=signal(1); return <Text>{n()}</Text>; }";
-	const request = captured(source);
-	const result = (await callArtifactHost({ action: "compile", captured: request }, undefined, host)) as {
-		artifactId: string;
-		revision: number;
-		sourceSha256: string;
-		code: string;
-		rendering: string;
-		reason: string;
-	};
-	assert.equal(result.artifactId, request.artifactId);
-	assert.equal(result.revision, 2);
-	assert.equal(result.sourceSha256, request.sourceSha256);
-	assert.equal(result.rendering, "unsupported");
-	assert.match(result.reason, /not qualified/);
-	assert.ok(!result.code.includes("<Text>"));
-	for (const change of [
-		{ source: `${source}\n` },
-		{ sourceSha256: "0".repeat(64) },
-		{ sourceBytes: 1 },
-		{ revision: 0 },
-		{ entry: "../demo.tsx" },
-		{ artifactId: "other" },
-		{ bytecode: [0, 1] },
-	])
-		await assert.rejects(
-			callArtifactHost({ action: "compile", captured: { ...request, ...change } }, undefined, host),
-			/Invalid/,
-		);
+	const request = { action: "compile", source, entry: "demo.tsx" };
+	assert.equal(await callArtifactHost(request, undefined, host), null);
+	for (const change of [{ source: "" }, { entry: "../demo.tsx" }, { captured: { source } }, { bytecode: [0, 1] }])
+		await assert.rejects(callArtifactHost({ ...request, ...change }, undefined, host), /Invalid/);
 });
 
 test("NSH production compiler rejects import/export reach-through without reading outside files", options, async () => {
@@ -168,15 +128,12 @@ test("NSH production compiler rejects import/export reach-through without readin
 		"export const A = 1;",
 	])
 		await assert.rejects(
-			callArtifactHost({ action: "compile", captured: captured(source) }, undefined, host),
+			callArtifactHost({ action: "compile", source, entry: "demo.tsx" }, undefined, host),
 			/Artifact.tsx/,
 		);
 	// Compiler preparation never runs top-level code or historical callbacks.
 	const source = "throw Error('not executed'); export default () => null;";
-	const result = (await callArtifactHost({ action: "compile", captured: captured(source) }, undefined, host)) as {
-		rendering: string;
-	};
-	assert.equal(result.rendering, "unsupported");
+	assert.equal(await callArtifactHost({ action: "compile", source, entry: "demo.tsx" }, undefined, host), null);
 });
 
 test(
@@ -190,16 +147,14 @@ test(
 			);
 			if (name === "mockup") {
 				await assert.rejects(
-					callArtifactHost({ action: "compile", captured: captured(source) }, undefined, host),
+					callArtifactHost({ action: "compile", source, entry: "demo.tsx" }, undefined, host),
 					/allowlist/,
 				);
 			} else {
-				const result = (await callArtifactHost(
-					{ action: "compile", captured: captured(source) },
-					undefined,
-					host,
-				)) as { rendering: string };
-				assert.equal(result.rendering, "unsupported");
+				assert.equal(
+					await callArtifactHost({ action: "compile", source, entry: "demo.tsx" }, undefined, host),
+					null,
+				);
 			}
 		}
 	},

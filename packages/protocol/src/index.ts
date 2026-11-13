@@ -870,11 +870,13 @@ export interface ArtifactRevision extends ArtifactSummary {
 
 export interface ArtifactNsh {
 	api: 1;
-	runtime: "nsh 0.5.0";
+	/** Write-time compiler provenance, not a current runtime requirement. */
+	runtime: string;
 	entry: string;
 	sourceSha256: string;
 	sourceBytes: number;
-	rendering: "unsupported";
+	/** Historical metadata only. Preview availability belongs to the app. */
+	rendering?: "unsupported";
 }
 
 /** A visual revision's runtime versions and publish-time check (docs/technical/native-visuals.md). */
