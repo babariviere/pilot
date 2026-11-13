@@ -406,6 +406,13 @@ fn entry() -> PathBuf {
             std::fs::copy(&path, dir.join(&name)).unwrap();
         }
     }
+    std::fs::create_dir(dir.join("icons")).unwrap();
+    for file in std::fs::read_dir(app.join("icons")).unwrap() {
+        let path = file.unwrap().path();
+        if path.extension().is_some_and(|ext| ext == "svg") {
+            std::fs::copy(&path, dir.join("icons").join(path.file_name().unwrap())).unwrap();
+        }
+    }
     std::fs::write(
         dir.join("nsh.json"),
         json!({"name":"Pilot","id":"dev.pilot.day","theme":"theme.json","capabilities":{"host":METHODS}})

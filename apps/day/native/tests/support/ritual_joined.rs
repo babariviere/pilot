@@ -167,7 +167,8 @@ impl Joined {
         )
         .unwrap();
         let changes = host.changes();
-        host.refresh().recv_blocking().unwrap().unwrap();
+        // The initial WS handshake advances the generation and triggers its
+        // own authoritative read. Join it before requesting another refresh.
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -182,6 +183,7 @@ impl Joined {
                 .expect("synthetic WS handshake and authoritative refresh joined");
             });
         assert_eq!(host.snapshot().freshness.state, FreshnessState::Live);
+        host.refresh().recv_blocking().unwrap().unwrap();
         self.bridge = Some(Bridge::new(DayRoot::new(host.clone())));
         self.host = Some(host);
     }
