@@ -138,6 +138,83 @@ fn two_project_creation_saved_draft_lost_ack_and_exact_cold_lookup_never_retarge
 }
 
 #[test]
+fn profile_and_project_reads_share_identity_protocol_errors_not_feature_requirements() {
+    let mut f = Fixture::new();
+    let b = f.bridge();
+    let list = projects(&f, &b);
+    let choice = select(&f, &b, &list[0], "build");
+    for (mode, profile_error, project_error) in [
+        ("hello-daemon", Some("identity"), Some("identity")),
+        ("hello-lineage", Some("identity"), Some("identity")),
+        (
+            "hello-identity-before-protocol",
+            Some("identity"),
+            Some("identity"),
+        ),
+        ("hello-minimum", Some("unavailable"), Some("unavailable")),
+        (
+            "hello-missing-minimum",
+            Some("unavailable"),
+            Some("unavailable"),
+        ),
+        ("hello-protocol", Some("unavailable"), Some("unavailable")),
+        (
+            "hello-string-protocol",
+            Some("unavailable"),
+            Some("unavailable"),
+        ),
+        ("hello-execution", Some("unavailable"), Some("unavailable")),
+        (
+            "hello-string-execution",
+            Some("unavailable"),
+            Some("unavailable"),
+        ),
+        ("hello-no-day", None, Some("unavailable")),
+        ("hello-no-controls", None, None),
+    ] {
+        f.stats(mode);
+        for (method, expected) in [
+            ("day.projects.read", profile_error),
+            ("day.intake.read", project_error),
+        ] {
+            let result = f.call(&b, method, json!({}));
+            if let Some(error) = expected {
+                assert_eq!(result["error"], error, "{mode} {method}: {result}");
+                assert!(
+                    result["value"].is_null(),
+                    "no successful empty read: {result}"
+                );
+            } else {
+                assert!(
+                    result["value"]["snapshot"].is_object(),
+                    "{mode} {method}: {result}"
+                );
+            }
+        }
+        if let Some(error) = profile_error {
+            assert_eq!(create(&f, &b, &choice)["error"], error, "{mode}");
+        }
+    }
+    f.stats("allow");
+    f.stats("delete-selected");
+    assert_eq!(
+        projects(&f, &b).len(),
+        1,
+        "profile reads do not require the old project"
+    );
+    assert_eq!(
+        f.call(&b, "day.intake.read", json!({}))["error"],
+        "identity"
+    );
+    let stats = f.stats("stats");
+    assert_eq!(stats["posts"], 0);
+    assert_eq!(stats["sessions"], 0);
+    assert_eq!(stats["lookups"], 0);
+    assert_eq!(stats["external"], 0);
+    close(b);
+}
+
+#[test]
 fn saved_window_read_is_exact_source_passive_and_refuses_changed_scope() {
     let mut f = Fixture::new();
     let b = f.bridge();
@@ -260,7 +337,7 @@ fn denied_offline_stale_choice_and_close_refuse_without_creating() {
     // Existing selected-project intake and chats are not changed by selection.
     f.read(&b);
     f.stats("deny");
-    assert_eq!(create(&f, &b, &choice)["error"], "unavailable");
+    assert_eq!(create(&f, &b, &choice)["error"], "identity");
     f.stats("offline");
     f.stats("allow");
     f.stats("offline");

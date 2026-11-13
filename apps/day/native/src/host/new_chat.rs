@@ -70,20 +70,7 @@ fn operations(t: &Transport, journal: &Journal) -> Vec<Value> {
 }
 async fn inventory(t: &Transport) -> Result<Value, Error> {
     // This profile identity is independent of the old selected project's existence.
-    let hello = t.get("/api/hello").await?;
-    if hello["daemonId"] != t.source.home.daemon_id
-        || hello["lineageId"] != t.source.home.lineage_id
-    {
-        return Err(Error::Identity);
-    }
-    if hello["minimumClientProtocolVersion"]
-        .as_u64()
-        .is_none_or(|v| v > 1)
-        || hello["protocolVersion"].as_u64().is_none_or(|v| v < 1)
-        || hello["capabilities"]["independentExecution"] != true
-    {
-        return Err(Error::Unavailable);
-    }
+    t.profile_gate().await?;
     let v = t.get("/api/native-projects").await?;
     let rows = v["projects"].as_array().ok_or(Error::Invalid)?;
     let mut ids = std::collections::HashSet::new();

@@ -117,10 +117,13 @@ impl Transport {
         result
     }
 
-    pub async fn gate(&self, controls: bool) -> Result<(), Error> {
+    /// Profile identity and protocol only; no selected project or feature requirement.
+    pub(super) async fn profile_gate(&self) -> Result<(), Error> {
         let v = self.get("/api/hello").await?;
-        self.controls
-            .store(v["capabilities"]["missionControls"] == 1, Ordering::SeqCst);
+        self.check_hello(&v)
+    }
+
+    fn check_hello(&self, v: &Value) -> Result<(), Error> {
         if v["daemonId"] != self.source.home.daemon_id
             || v["lineageId"] != self.source.home.lineage_id
         {
@@ -131,7 +134,18 @@ impl Transport {
             .is_none_or(|v| v > 1)
             || v["protocolVersion"].as_u64().is_none_or(|v| v < 1)
             || v["capabilities"]["independentExecution"] != true
-            || v["capabilities"]["dayOverview"] != 1
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
+
+    pub async fn gate(&self, controls: bool) -> Result<(), Error> {
+        let v = self.get("/api/hello").await?;
+        self.controls
+            .store(v["capabilities"]["missionControls"] == 1, Ordering::SeqCst);
+        self.check_hello(&v)?;
+        if v["capabilities"]["dayOverview"] != 1
             || (controls && v["capabilities"]["missionControls"] != 1)
         {
             return Err(Error::Unavailable);

@@ -22,6 +22,7 @@ let posts = 0,
 let linearMode = "issues",
 	linearReads = 0,
 	malformedLinear = "";
+let helloMode = "";
 f.tracking.register("linear", async () => {
 	linearReads++;
 	if (linearMode === "error") throw new SourceSignInRequired();
@@ -97,6 +98,46 @@ const proxy = createServer(async (req, res) => {
 			...(bytes.length ? { body: bytes } : {}),
 		});
 		let body = await reply.text();
+		if (req.url === "/api/hello" && helloMode) {
+			const v = JSON.parse(body);
+			switch (helloMode) {
+				case "hello-daemon":
+					v.daemonId = "different-daemon";
+					break;
+				case "hello-lineage":
+					v.lineageId = "different-lineage";
+					break;
+				case "hello-identity-before-protocol":
+					v.daemonId = "different-daemon";
+					v.protocolVersion = 0;
+					break;
+				case "hello-minimum":
+					v.minimumClientProtocolVersion = 2;
+					break;
+				case "hello-missing-minimum":
+					delete v.minimumClientProtocolVersion;
+					break;
+				case "hello-protocol":
+					v.protocolVersion = 0;
+					break;
+				case "hello-string-protocol":
+					v.protocolVersion = "1";
+					break;
+				case "hello-execution":
+					v.capabilities.independentExecution = false;
+					break;
+				case "hello-string-execution":
+					v.capabilities.independentExecution = "true";
+					break;
+				case "hello-no-day":
+					delete v.capabilities.dayOverview;
+					break;
+				case "hello-no-controls":
+					delete v.capabilities.missionControls;
+					break;
+			}
+			body = JSON.stringify(v);
+		}
 		if (req.url?.includes("saved-linear") && malformedLinear) {
 			const v = JSON.parse(body);
 			if (malformedLinear === "project") v.projectId = f.other.id;
@@ -158,10 +199,12 @@ for await (const line of createInterface({ input: process.stdin })) {
 	if (c.action === "restore-ledger") await chmod(ledger, 0o600);
 	if (c.action === "deny") denied = true;
 	if (c.action === "offline") offline = true;
+	if (c.action.startsWith("hello-")) helloMode = c.action;
 	if (c.action === "allow") {
 		denied = false;
 		offline = false;
 		malformedLinear = "";
+		helloMode = "";
 	}
 	if (c.action === "saved-linear" || c.action === "linear-empty" || c.action === "linear-error") {
 		linearMode = c.action === "linear-empty" ? "empty" : c.action === "linear-error" ? "error" : "issues";
