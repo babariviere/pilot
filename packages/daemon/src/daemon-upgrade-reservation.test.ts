@@ -137,6 +137,12 @@ async function fixture(t: TestContext) {
 
 test("native global preparation binds original target/capture and exposes lookup only", async (t) => {
 	const f = await fixture(t);
+	const hello = await (await fetch(`${f.base}/api/hello`)).json();
+	assert.equal(
+		hello.capabilities.globalUpdate,
+		1,
+		"base protocol alone cannot qualify the global update wire contract",
+	);
 	const host = { hostId: "daemon", daemonId: f.hello.daemonId, lineageId: f.hello.lineageId! };
 	const payload = canonicalJSON({ captureHash: "c".repeat(64), app: { source: "a".repeat(40), build: "1000.1" } });
 	const op = {

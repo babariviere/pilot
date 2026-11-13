@@ -47,6 +47,8 @@ export interface DaemonCapabilities {
 	coordinatorIsolation: boolean;
 	/** Agents and daemon-owned processes do not depend on a client connection. */
 	independentExecution: boolean;
+	/** Native global preparation/lookup/release, not legacy transient reservations or permission to update. */
+	globalUpdate?: 1;
 	/** Instance/boot-fenced workspace terminal handshake. Absent on older runtimes. */
 	workspaceTerminalProtocol?: 2;
 	/** Project environment setup (docs/technical/environment-setup.md). Absent on older runtimes and while the feature is off. */

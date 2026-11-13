@@ -182,7 +182,7 @@ async function get(s: Selection, path: string) {
 		lineageId?: string;
 		protocolVersion?: number;
 		minimumClientProtocolVersion?: number;
-		capabilities?: { independentExecution?: boolean; dayOverview?: number };
+		capabilities?: { independentExecution?: boolean; dayOverview?: number; globalUpdate?: number };
 		id?: string;
 		path?: string;
 	};
@@ -243,6 +243,10 @@ export async function preflight(s: Selection, verify = verifyApp) {
 			hello.minimumClientProtocolVersion <= 1 &&
 			hello.capabilities?.independentExecution === true,
 		"Existing daemon lacks the base native protocol. Its supported migration path must be verified first.",
+	);
+	requireThat(
+		hello.capabilities?.globalUpdate === 1,
+		"Existing daemon lacks native global-update support. Use the explicit legacy stop/start recovery; no handoff entered.",
 	);
 	return s;
 }

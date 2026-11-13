@@ -32,6 +32,7 @@ async function fixture() {
 	};
 	for (const [name, bytes] of Object.entries(files)) await writeFile(join(profile, name), bytes, { mode: 0o600 });
 	let compatible = true;
+	let globalUpdate = true;
 	const requests: string[] = [];
 	const server = createServer((req, res) => {
 		requests.push(`${req.method} ${req.url}`);
@@ -45,7 +46,11 @@ async function fixture() {
 							lineageId: "lineage",
 							protocolVersion: 1,
 							minimumClientProtocolVersion: compatible ? 1 : 2,
-							capabilities: { independentExecution: true, dayOverview: compatible ? 1 : 0 },
+							capabilities: {
+								independentExecution: true,
+								dayOverview: compatible ? 1 : 0,
+								globalUpdate: globalUpdate ? 1 : undefined,
+							},
 						}
 					: { id: "project", path: project },
 			),
@@ -82,6 +87,9 @@ async function fixture() {
 		verify,
 		incompatible() {
 			compatible = false;
+		},
+		legacyUpdates() {
+			globalUpdate = false;
 		},
 		async close() {
 			await new Promise<void>((done, reject) => server.close((e) => (e ? reject(e) : done())));
@@ -171,6 +179,29 @@ test("rejects a different profile, incompatible daemon, and changed bundle witho
 		f.incompatible();
 		await assert.rejects(install(f.selection, f.verify), /lacks the base native protocol/);
 		assert.deepEqual(await readdir(join(f.root, "installs")), []);
+	} finally {
+		await f.close();
+	}
+});
+
+test("legacy daemon with base protocol cannot enter a global handoff", async () => {
+	const f = await fixture();
+	const calls: string[] = [];
+	try {
+		f.legacyUpdates();
+		await assert.rejects(
+			migrate(f.selection, f.verify, (_s, action) => {
+				calls.push(action);
+				if (action === "preflight") return { state: "ready", changed: false };
+				throw new Error("Native apply: ActiveWork");
+			}),
+			/lacks native global-update support/,
+		);
+		assert.deepEqual(calls, [], "service preflight alone does not prove global-update support");
+		assert.deepEqual(await readdir(join(f.root, "installs")), []);
+		assert.deepEqual(f.requests, ["GET /api/hello"]);
+		for (const [name, bytes] of Object.entries(f.files))
+			assert.equal(await readFile(join(f.profile, name), "utf8"), bytes);
 	} finally {
 		await f.close();
 	}

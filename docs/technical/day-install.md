@@ -128,6 +128,55 @@ apply. Rollback completion is not successor success. Unknown or missing evidence
 never authorizes removal. Keep the installation, original app/runtime and state
 records for recovery; do not reset the marker or invent a fresh UUID to retry.
 
+## Recovery from a pre-global-update daemon
+
+The daemon at source `bf005fd7` supports base protocol 1, but not the native
+`globalUpdate` envelope. The original installer accepted its base handshake and
+staged the app before native preparation returned HTTP 409 (`ActiveWork`).
+That name does not establish that jobs caused the refusal. This legacy handler
+reads a missing top-level operation ID and rejects before admission/checkpoint
+effects. The installer now checks the separate `globalUpdate: 1` capability.
+Native service preflight alone does not establish this wire compatibility.
+
+For this diagnosed legacy source only, the prepared user-run recovery is:
+
+```sh
+node scripts/day-recover-legacy.ts inspect /absolute/original/install-attempt.json
+# Save and close the old GUI normally. Stop other installation/update tools.
+node scripts/day-recover-legacy.ts recover /absolute/original/install-attempt.json --gui-saved-and-closed
+```
+
+The recovery verifies the installed seal, original entered selection, exact old
+runtime source bytes, service definition, PID, boot, profile lease and signed
+native hello. It preserves the latest saved GUI state and original plist in
+separate private files beside the installed app. It exclusively records recovery
+entry before any shutdown. It never resends global preparation, changes the
+original UUID/selection/markers or writes a false original completion.
+
+It uses the old daemon's **ordinary launchd SIGTERM shutdown**, not an unavailable
+global-update protocol or a cooperative model pause. That shutdown fences new
+admissions, closes workers and joins pending saves. It provides no all-chat
+global preparation receipt and does not reconcile old broken lifecycle records.
+Interruption is expected. Durable Stop/user/mission holds and Unknown effects
+remain governed by the existing daemon/Harness recovery rules, not rewritten by
+this script. Escaped descendants and a clean flush of every worker are not
+independently proven. No Force, unrelated PID kill or lock unlink is used.
+
+Only after service unload, old PID exit, release of the unchanged permanent
+profile lease and a free listener does it replace that same service definition's
+two runtime paths and PATH entry. It keeps every other field, including profile,
+port, policy and logs. It bootstraps once, then requires a new boot, exact
+source/runtime/build, service PID, lease ownership and authenticated native
+hello. This is separate successor evidence, not original handoff success or an
+agent-resume/release receipt. A repeated invocation only reads recovery records,
+even after a lost reply. Every failure keeps the original apps, runtimes, state
+and recovery evidence; inspect rather than retry or automatically roll back.
+
+No GUI is launched and no app/runtime is retired. Open the existing installed
+`Launch Day.command` only after a verified successor. Retirement after this
+legacy transition needs separate qualification; the original installer's
+`retire` still correctly refuses its uncompleted global handoff.
+
 ## Optional old-app/runtime retirement
 
 Install does not remove the old app. After verified successor release and safe

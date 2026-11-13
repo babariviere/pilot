@@ -1927,6 +1927,7 @@ export function createDaemonServer(
 					...hello.capabilities,
 					questionReplies: 1,
 					durableInputGeneration: 1,
+					globalUpdate: globalUpdate ? 1 : undefined,
 					insights: missions && githubSetup && hello.lineageId ? 1 : undefined,
 					insightsEnable: insightsEnable && githubSetup ? 1 : undefined,
 					insightsSettings: insightsEnable && githubSetup ? 1 : undefined,
