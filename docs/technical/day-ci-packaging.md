@@ -2,7 +2,7 @@
 
 This prepares **unsigned build inputs**, not a release or desktop cutover.
 
-For the separate opt-in credential setup and its remaining material blocker,
+For the separate opt-in credential setup and qualification limits,
 see [Day signing secrets](day-signing-secrets.md). The manual readiness workflow
 does not sign bundles or change this unsigned workflow.
 The shipping GPUI path stays selected and usable. No Day lane publishes,

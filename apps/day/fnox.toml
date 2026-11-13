@@ -12,6 +12,6 @@ recipients = ["age12dtkz7h7fmgpm8znw6j3g044857xcwvpztnvkcaurecqx99hdvzqj9jvfk"]
 daemon_cache = false
 
 [secrets]
-# Missing until imported from the verified existing Ed25519 PEM, using stdin.
+# Dedicated Day Ed25519 PEM. Import over stdin, never as a command argument.
 # fnox set writes age ciphertext into value, never add plaintext by hand.
-DAY_UPDATER_PRIVATE_KEY = { provider = "age", if_missing = "error", env = false }
+DAY_UPDATER_PRIVATE_KEY= { provider = "age", value = "YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBqb2dTRnNNQ25vVWZtWERZd1RrbmhZR3A3ZVpjL1BiQ1c2bHhlcXROMHgwCjlFN1RnbmorMW1pV0Nobit5bmg0MXp0NC8rVklkS0hTZG44Z2M3ZDNWTFkKLT4gdXU3RnotZ3JlYXNlCml5UFM4bURkOUN4ZVUrenpsWnZRVkNaeEltNlh4cTBGQkZaRVAwWWtSSEFzcGYvYnFPRWRydWRDeTJNUUpneTgKbmMzcHJDK2o3MnlwUzBVOGhJRWgKLS0tIENBWUVhRWFpeVF3THpCbVowODJmUHBXK01Xa3p3Z3JsY3RnOHNLVVYxMGMK1UyN4gjGvzPdX38XxfHTDuh+een1tehArw4tTS91wd3LYh9eSxW2CJ9MRbc1wlRpwn04H2VXwiNtmNWTF52Y9IFhzPBTFL+h1yKtDCHs0BZmvlUihveqYOkJjNTkzGiJTYcxirkkRmlPjmIxh6SFzW60Fb9CmV23aEIjaLlOAGEJPYT3MDqQUyUngLS8+n41UL5jrvxO", if_missing = "error", env = false }

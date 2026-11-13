@@ -50,6 +50,11 @@ def main():
         )
     with tempfile.TemporaryDirectory(prefix="day-fnox-") as isolated:
         env = dict(os.environ, FNOX_CONFIG_DIR=isolated)
+        # Isolate config merging without moving the default identity lookup.
+        identity_dir = Path(
+            os.environ.get("FNOX_CONFIG_DIR", Path.home() / ".config/fnox")
+        )
+        env.setdefault("FNOX_AGE_KEY_FILE", str(identity_dir / "age.txt"))
         env.pop(SECRET, None)
         result = subprocess.run(
             [
@@ -69,9 +74,7 @@ def main():
         if result.returncode or not result.stdout.strip():
             raise ValueError("Could not decrypt the configured age ciphertext")
         key = result.stdout
-    public = run(
-        ["gh", "variable", "get", "PILOT_NEXT_UPDATER_PUBLIC_KEY", "--repo", REPO]
-    )
+    public = run(["gh", "variable", "get", "DAY_UPDATER_PUBLIC_KEY", "--repo", REPO])
     verify_key(key, public)
     # stdin, not argv, disk, shell tracing or logs. Never automatically retry a write.
     try:

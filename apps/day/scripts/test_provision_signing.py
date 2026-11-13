@@ -78,6 +78,9 @@ class SigningTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Unknown write outcome"):
                 signing.main()
             self.assertEqual(child.call_count, 2)
+            decrypt_env = child.call_args_list[0].kwargs["env"]
+            self.assertIn("FNOX_AGE_KEY_FILE", decrypt_env)
+            self.assertNotIn(signing.SECRET, decrypt_env)
             self.assertEqual(child.call_args.kwargs["input"], b"fixture-key")
             self.assertNotIn("fixture-key", " ".join(child.call_args.args[0]))
 

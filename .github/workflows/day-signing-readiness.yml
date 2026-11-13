@@ -22,7 +22,7 @@ jobs:
       - name: Verify Day updater credential without signing
         env:
           DAY_UPDATER_PRIVATE_KEY: ${{ secrets.DAY_UPDATER_PRIVATE_KEY }}
-          PUBLIC_KEY: ${{ vars.PILOT_NEXT_UPDATER_PUBLIC_KEY }}
+          PUBLIC_KEY: ${{ vars.DAY_UPDATER_PUBLIC_KEY }}
         run: |
           python3 - <<'PY'
           import importlib.util

@@ -18,13 +18,15 @@ GPUI's release selection, secrets and signing checks are unchanged.
 
 ## Import and provision
 
-The only new Actions secret is `DAY_UPDATER_PRIVATE_KEY`. It must be the
-**existing** Ed25519 PEM matching `PILOT_NEXT_UPDATER_PUBLIC_KEY`, not a new key.
-The config intentionally has no ciphertext until that material is available.
+The only new Actions secret is `DAY_UPDATER_PRIVATE_KEY`. It matches the
+dedicated `DAY_UPDATER_PUBLIC_KEY` repository variable. After the local-material
+audit, the user confirmed no existing PEM exists and explicitly authorized a
+new key. This does not rotate or overwrite GPUI's updater keys or variables.
+The Day private PEM is age-encrypted in `apps/day/fnox.toml`.
 Use a trusted local terminal or process stdin, never a chat or command argument:
 
 ```sh
-fnox --no-daemon --non-interactive -c apps/day/fnox.toml set DAY_UPDATER_PRIVATE_KEY --provider age < /secure/existing-updater.pem
+fnox --no-daemon --non-interactive -c apps/day/fnox.toml set DAY_UPDATER_PRIVATE_KEY --provider age < /secure/day-updater.pem
 python3 apps/day/scripts/provision-signing.py --write
 ```
 
@@ -48,9 +50,10 @@ push, tag or reusable-workflow caller receives this secret through this path.
 It verifies the key pair without signing anything. It is not dispatched by
 provisioning. Existing unsigned `day-qualification.yml` remains secret-free.
 
-Remaining: obtain the verified existing PEM, import its age ciphertext, get an
-acknowledged GitHub write, then separately authorize readiness execution and
-actual Day signed-bundle qualification. Native bundle/resource/helper identity,
+Provisioning verifies the generated key pair locally and records acknowledged
+GitHub secret and public-variable writes, without printing private material.
+Separately authorize readiness execution and actual Day signed-bundle
+qualification. Native bundle/resource/helper identity,
 official update archives, safe lifecycle/update recovery and native acceptance
 remain open. Apple Developer ID/notarization requires separately verified
 material and supported policy, not extra guessed secret names.
