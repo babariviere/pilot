@@ -71,7 +71,7 @@ The source-matched unsigned steps:
    `native_acceptance` as false. There is no archive upload.
    Unsigned debug executables alone have a 1 GiB diagnostic per-file limit,
    within the existing 2 GiB total closure limit. Resources/logs/runtime and
-   all shipping/assembly inventories keep their 256 MiB per-file limit.
+   signed/shared assembly inventories keep their 256 MiB per-file limit.
    Qualification never strips, re-signs or changes shared compiler outputs.
 
 The callers now schedule these checks automatically. Local checks and workflow
@@ -97,8 +97,27 @@ unsigned Day inputs. Adding **both** `--runtime RUNTIME --native HELPERS`
 checks the existing runtime version/source/resource contract and both native
 helper receipts before any assembly. Partial runtime/helper input is refused.
 This is package-input evidence only, never signature verification or an
-installed-payload acceptance receipt. Assembly itself signs the output and is
+installed-payload acceptance receipt. Default assembly signs the output and is
 not called by qualification.
+
+For unsigned CI only, the existing assembler has an explicit Day mode:
+
+```sh
+python3 apps/desktop/scripts/bundle_runtime.py bundle --unsigned-day \
+  --source "$SOURCE" --runtime "$RUNTIME" --executables "$INPUTS" \
+  --native "$HELPERS" --gui-resources "$INPUTS/nsh" \
+  --output "$OUTPUT/Pilot Next.app"
+python3 apps/desktop/scripts/bundle_runtime.py verify --unsigned-day "$OUTPUT/Pilot Next.app"
+```
+
+This requires development, unconfigured inputs and checked Day resources. It
+keeps source/runtime/helper receipts, native architecture/dependency checks and
+the copied helper's exact-byte binding, but invokes no signing command. The
+output manifest kind is `unsigned-day-bundled-runtime`; ordinary verification
+and shipping consumers refuse it. Only the four exact Day executable paths get
+the existing 1 GiB debug allowance. Resources, other binaries, runtime inputs
+and signed/shared inventories keep 256 MiB per file; the total stays 2 GiB.
+This is assembly evidence, not a signed, launchable or accepted release.
 
 ## Shipping workflow audit
 

@@ -13,8 +13,9 @@ import day_build_inputs as day
 BINARIES = ("pilot-desktop", "pilot-desktop-update-helper", "pilot-visual-worker", "pilot-artifact-host")
 # Global-default debug outputs can exceed a shipping file's 256 MiB limit.
 # This diagnostic-only allowance applies to these exact executables, not NSH
-# resources, logs, runtime inputs or the assembler. Total closure stays 2 GiB.
-DEBUG_FILE_CAPS = {name: 1024**3 for name in BINARIES}
+# resources, logs or runtime inputs. Explicit unsigned Day assembly reuses it.
+# Total closure stays 2 GiB; signed/shared assembly is unchanged.
+DEBUG_FILE_CAPS = bundle.DAY_DEBUG_FILE_CAPS
 
 
 def debug_inventory(inputs):

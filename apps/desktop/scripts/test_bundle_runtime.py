@@ -28,6 +28,58 @@ class SubprocessEnvironmentTests(unittest.TestCase):
         self.assertEqual(env["GH_TOKEN"], "api-only")
 
 
+class DayUnsignedInventoryTests(unittest.TestCase):
+    def test_exact_executable_boundaries_do_not_raise_shared_or_resource_caps(self):
+        # Sparse files exercise real size admission without hashing a GiB fixture.
+        with tempfile.TemporaryDirectory(prefix="day-inventory-") as directory, patch.object(bundle, "digest", return_value="a" * 64):
+            root = Path(directory)
+            for relative, cap in bundle.DAY_DEBUG_BUNDLE_CAPS.items():
+                with self.subTest(relative=relative):
+                    path = root / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.touch(mode=0o755)
+                    with path.open("wb") as stream:
+                        stream.truncate(cap)
+                    bundle.inventory(root, unsigned_day=True)
+                    with self.assertRaisesRegex(ValueError, "expanded byte policy"):
+                        bundle.inventory(root)
+                    with self.assertRaisesRegex(ValueError, "Unsupported capsule file"):
+                        bundle.capsule_identity(root)
+                    with path.open("wb") as stream:
+                        stream.truncate(cap + 1)
+                    with self.assertRaisesRegex(ValueError, "expanded byte policy"):
+                        bundle.inventory(root, unsigned_day=True)
+                    with path.open("wb") as stream:
+                        stream.truncate(256 * 1024**2 + 1)
+                    path.chmod(0o644)
+                    with self.assertRaisesRegex(ValueError, "expanded byte policy"):
+                        bundle.inventory(root, unsigned_day=True)
+                    path.unlink()
+            for relative in ("Contents/Resources/nsh/asset", "Contents/Resources/nsh/pilot-desktop",
+                             "Contents/MacOS/legacy-binary", "Contents/Helpers/PilotPower"):
+                with self.subTest(resource=relative):
+                    path = root / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.touch(mode=0o755)
+                    with path.open("wb") as stream:
+                        stream.truncate(256 * 1024**2)
+                    bundle.inventory(root, unsigned_day=True)
+                    with path.open("wb") as stream:
+                        stream.truncate(256 * 1024**2 + 1)
+                    with self.assertRaisesRegex(ValueError, "expanded byte policy"):
+                        bundle.inventory(root, unsigned_day=True)
+                    path.unlink()
+            self.assertEqual(bundle.CAP_BYTES, 2 * 1024**3)
+            with patch.object(bundle, "CAP_FILES", 0), self.assertRaisesRegex(ValueError, "entry policy"):
+                bundle.inventory(root, unsigned_day=True)
+            path = root / "Contents/MacOS/pilot-desktop"
+            path.touch(mode=0o755)
+            with path.open("wb") as stream:
+                stream.truncate(1024**3)
+            with patch.object(bundle, "CAP_BYTES", 1024**3 - 1), self.assertRaisesRegex(ValueError, "expanded byte policy"):
+                bundle.inventory(root, unsigned_day=True)
+
+
 class CapsuleIdentityTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="next-capsule-faux-")
@@ -515,6 +567,60 @@ class BundleRuntimeTests(unittest.TestCase):
         (self.output / "Contents/Resources/nsh/bundle.nshc").write_text("changed")
         with self.assertRaisesRegex(ValueError, "inventory"):
             bundle.verify(self.output)
+
+    def test_unsigned_day_assembly_is_explicit_and_never_signs(self):
+        resources, _ = self.gui_resources()
+        manifest = self.executables / "manifest.json"
+        value = bundle.read_json(manifest)
+        value.update(kind="development-rust-inputs", profile="dev", installable_update=False)
+        bundle.write_json(manifest, value)
+        with patch.object(bundle, "native_closure", return_value=[self.output / "Contents/MacOS/pilot-visual-worker"]) as closure, \
+                patch.object(bundle, "run") as command:
+            bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source,
+                            gui_resources=resources, unsigned_day=True)
+        closure.assert_called_once_with(self.output, unsigned_day=True)
+        command.assert_not_called()
+        self.assertEqual(bundle.read_json(self.output / bundle.MANIFEST)["kind"], "unsigned-day-bundled-runtime")
+        bundle.verify(self.output, unsigned_day=True)
+        with self.assertRaisesRegex(ValueError, "kind mismatch"):
+            bundle.verify(self.output)
+        main = self.output / "Contents/MacOS/pilot-desktop"
+        original = main.read_bytes()
+        main.write_bytes(b"changed main")
+        with self.assertRaisesRegex(ValueError, "inventory/hash mismatch"):
+            bundle.verify(self.output, unsigned_day=True)
+        main.write_bytes(original)
+        runtime = self.output / "Contents/Resources/runtime"
+        host_directory = runtime / "packages/artifacts/native"
+        descriptor = bundle.read_json(host_directory / "artifact-host.json")
+        self.assertEqual(descriptor["identity"]["source"], self.source)
+        self.assertEqual(descriptor["sha256"], bundle.digest(host_directory / day.ARTIFACT_HOST))
+        (host_directory / day.ARTIFACT_HOST).write_bytes(b"changed")
+        with self.assertRaisesRegex(ValueError, "inventory/hash mismatch"):
+            bundle.verify(self.output, unsigned_day=True)
+
+    def test_unsigned_day_refuses_legacy_release_and_configured_inputs_before_copy(self):
+        resources, _ = self.gui_resources()
+        manifest = self.executables / "manifest.json"
+        original = bundle.read_json(manifest)
+        development = original | {"kind": "development-rust-inputs", "profile": "dev", "installable_update": False}
+        for changes in ({"profile": "release"}, {"kind": "production-rust-inputs"}, {"installable_update": True}, {}):
+            bundle.write_json(manifest, development | changes if changes else original)
+            with self.assertRaisesRegex(ValueError, "development inputs"):
+                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source,
+                                gui_resources=resources, unsigned_day=True)
+            self.assertFalse(self.output.exists())
+        bundle.write_json(manifest, development)
+        for options in ({}, {"gui_resources": resources, "production": {}},
+                        {"gui_resources": resources, "accepted_capsules": ["a" * 64]}):
+            with self.assertRaisesRegex(ValueError, "no shipping configuration"):
+                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source,
+                                unsigned_day=True, **options)
+            self.assertFalse(self.output.exists())
+        bundle.write_json(manifest, development | {"updater_configuration": {"mode": "configured"}})
+        with self.assertRaisesRegex(ValueError, "explicit unconfigured"):
+            bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source,
+                            gui_resources=resources, unsigned_day=True)
 
     def test_nsh_resources_refuse_wrong_release_runner_source_and_changed_bytes(self):
         resources, original = self.gui_resources()

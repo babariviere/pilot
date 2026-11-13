@@ -18,6 +18,15 @@ ROOT = Path(__file__).resolve().parents[3]
 APP_ID = "com.babariviere.pilot-next"
 CAP_FILES = 30_000
 CAP_BYTES = 2 * 1024**3
+# Exact Day debug executables only. Shared shipping/resources stay at 256 MiB.
+DAY_DEBUG_FILE_CAPS = {name: 1024**3 for name in (
+    "pilot-desktop", "pilot-desktop-update-helper", "pilot-visual-worker", "pilot-artifact-host")}
+DAY_DEBUG_BUNDLE_CAPS = {
+    "Contents/MacOS/pilot-desktop": DAY_DEBUG_FILE_CAPS["pilot-desktop"],
+    "Contents/MacOS/pilot-visual-worker": DAY_DEBUG_FILE_CAPS["pilot-visual-worker"],
+    "Contents/Helpers/pilot-desktop-update-helper": DAY_DEBUG_FILE_CAPS["pilot-desktop-update-helper"],
+    "Contents/Resources/runtime/packages/artifacts/native/pilot-artifact-host": DAY_DEBUG_FILE_CAPS["pilot-artifact-host"],
+}
 MANIFEST = "Contents/Resources/bundled-runtime.json"
 REQUIRED = [
     "node/bin/node", "node/LICENSE", "package.json", "pnpm-lock.yaml",
@@ -76,7 +85,7 @@ def write_json(path, value):
     path.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
 
 
-def inventory(root):
+def inventory(root, *, unsigned_day=False):
     """Bound the entire closure, including relative symlinks. Never traverse directory links."""
     result, total = [], 0
     root = root.resolve(strict=True)
@@ -97,7 +106,8 @@ def inventory(root):
                 item = dict(path=relative, kind="directory", mode=mode)
             elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
                 total += info.st_size
-                if info.st_size > 256 * 1024**2 or total > CAP_BYTES:
+                cap = DAY_DEBUG_BUNDLE_CAPS.get(relative, 256 * 1024**2) if unsigned_day and mode & 0o111 else 256 * 1024**2
+                if info.st_size > cap or total > CAP_BYTES:
                     raise ValueError("Runtime exceeds expanded byte policy")
                 item = dict(path=relative, kind="file", bytes=info.st_size, mode=mode, sha256=digest(path))
             else:
@@ -226,7 +236,7 @@ def thin_universal(root):
             os.replace(thin, path)
 
 
-def native_closure(root):
+def native_closure(root, *, unsigned_day=False):
     if sys.platform != "darwin" or run("/usr/bin/uname", "-m") != "arm64":
         raise ValueError("App bundles require native arm64 macOS verification")
     root = root.resolve()
@@ -237,7 +247,7 @@ def native_closure(root):
         "Contents/Resources/runtime/node/bin/node", "Contents/Helpers/PilotPower",
         "Contents/Helpers/PilotSystemEvents.app/Contents/MacOS/PilotSystemEvents",
     }
-    for item in inventory(root):
+    for item in inventory(root, unsigned_day=unsigned_day):
         if item["kind"] != "file":
             continue
         path = root / item["path"]
@@ -320,7 +330,14 @@ def checked_gui_resources(resources, executables, expected_source):
     return value
 
 
-def assemble(runtime, executables, native, output, expected_source, updater=None, bundle_build=None, accepted_capsules=(), production=None, *, gui_resources=None):
+def assemble(runtime, executables, native, output, expected_source, updater=None, bundle_build=None, accepted_capsules=(), production=None, *, gui_resources=None, unsigned_day=False):
+    if unsigned_day:
+        if production is not None or gui_resources is None or accepted_capsules:
+            raise ValueError("Unsigned Day assembly requires explicit Day resources and no shipping configuration")
+        inputs = read_json(executables / "manifest.json")
+        if (inputs.get("kind") != "development-rust-inputs" or inputs.get("profile") != "dev"
+                or inputs.get("installable_update") is not False):
+            raise ValueError("Unsigned Day assembly requires development inputs, not a release")
     if output.exists() or output.is_symlink() or output.name != "Pilot Next.app":
         raise ValueError("Use a fresh output named Pilot Next.app")
     build = validate_runtime(runtime, expected_source)
@@ -411,12 +428,14 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
                                CFBundleURLTypes=[dict(CFBundleURLName=APP_ID + ".chat", CFBundleURLSchemes=["pilot"], CFBundleTypeRole="Viewer")]), stream)
         # Production private distribution requires an explicitly approved ad-hoc
         # policy plus independently signed update metadata. No ambient signing identity.
-        for binary in native_closure(output):
+        binaries = native_closure(output, unsigned_day=unsigned_day)
+        for binary in (() if unsigned_day else binaries):
             # Signing the bundle's main executable by its file path can also
             # create the enclosing app resource seal. Seal that only at the end.
             if binary != (contents / "MacOS/pilot-desktop").resolve():
                 run("/usr/bin/codesign", "--force", "--sign", "-", str(binary))
-        run("/usr/bin/codesign", "--force", "--sign", "-", str(helper.parent))
+        if not unsigned_day:
+            run("/usr/bin/codesign", "--force", "--sign", "-", str(helper.parent))
         if resources is not None:
             if host_input["identity"]["source"] != build["source"]:
                 raise ValueError("Artifact helper/runtime source mismatch")
@@ -424,23 +443,30 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
             # exact copied image. Write one final binding before the outer seal.
             write_json(host_directory / "artifact-host.json", dict(host_input,
                        bytes=host.stat().st_size, sha256=digest(host)))
-        # The main executable's outer signature seals resources and cannot hash itself.
-        payload = [item for item in inventory(output) if item["path"] != "Contents/MacOS/pilot-desktop"
+        # Only a signed main executable cannot hash itself. Unsigned evidence
+        # includes its exact bytes, rather than relying on a nonexistent seal.
+        payload = [item for item in inventory(output, unsigned_day=unsigned_day) if (unsigned_day or item["path"] != "Contents/MacOS/pilot-desktop")
                    and not item["path"].startswith("Contents/_CodeSignature")]
-        write_json(output / MANIFEST, dict(schema=1, kind="production-bundled-runtime" if production else "development-bundled-runtime", build=build, files=payload))
-        run("/usr/bin/codesign", "--force", "--sign", "-", str(output))
-        run("/usr/bin/codesign", "--verify", "--deep", "--strict", str(output))
-        verify(output)
+        kind = "unsigned-day-bundled-runtime" if unsigned_day else "production-bundled-runtime" if production else "development-bundled-runtime"
+        write_json(output / MANIFEST, dict(schema=1, kind=kind, build=build, files=payload))
+        if not unsigned_day:
+            run("/usr/bin/codesign", "--force", "--sign", "-", str(output))
+            run("/usr/bin/codesign", "--verify", "--deep", "--strict", str(output))
+        verify(output, unsigned_day=unsigned_day)
     except BaseException:
         shutil.rmtree(output)  # Only our fresh, never-installed staging directory.
         raise
 
 
-def verify(output, *, protocol=1):
+def verify(output, *, protocol=1, unsigned_day=False):
     value = read_json(output / MANIFEST)
-    actual = [item for item in inventory(output) if item["path"] not in (MANIFEST, "Contents/MacOS/pilot-desktop")
+    kinds = ("unsigned-day-bundled-runtime",) if unsigned_day else ("development-bundled-runtime", "production-bundled-runtime")
+    if value.get("schema") != 1 or value.get("kind") not in kinds:
+        raise ValueError("Bundle inventory kind mismatch")
+    actual = [item for item in inventory(output, unsigned_day=unsigned_day) if item["path"] != MANIFEST
+              and (unsigned_day or item["path"] != "Contents/MacOS/pilot-desktop")
               and not item["path"].startswith("Contents/_CodeSignature")]
-    if value.get("schema") != 1 or value.get("kind") not in ("development-bundled-runtime", "production-bundled-runtime") or value.get("files") != actual:
+    if value.get("files") != actual:
         expected = {item["path"]: item for item in value.get("files", [])}
         observed = {item["path"]: item for item in actual}
         changed = [name for name in sorted(expected.keys() | observed.keys()) if expected.get(name) != observed.get(name)]
@@ -585,17 +611,19 @@ def main():
     bundle.add_argument("--bundle-build")
     bundle.add_argument("--accepted-capsule", action="append", default=[])
     bundle.add_argument("--gui-resources", type=Path)
+    bundle.add_argument("--unsigned-day", action="store_true", help="Unsigned Day development bundle only; no shipping/signing policy changes")
     check = commands.add_parser("verify")
     check.add_argument("output", type=Path)
+    check.add_argument("--unsigned-day", action="store_true", help="Inspect unsigned Day development inventory, not shipping acceptance")
     args = parser.parse_args()
     if args.action == "rust":
         snapshot_rust(args.source, args.output.absolute(), gui=args.gui)
     elif args.action in ("runtime", "native"):
         snapshot_build(args.source, args.output.absolute(), args.action == "native")
     elif args.action == "bundle":
-        assemble(args.runtime, args.executables, args.native, args.output, args.source, args.updater, args.bundle_build, args.accepted_capsule, gui_resources=args.gui_resources)
+        assemble(args.runtime, args.executables, args.native, args.output, args.source, args.updater, args.bundle_build, args.accepted_capsule, gui_resources=args.gui_resources, unsigned_day=args.unsigned_day)
     else:
-        verify(args.output)
+        verify(args.output, unsigned_day=args.unsigned_day)
 
 
 if __name__ == "__main__":
