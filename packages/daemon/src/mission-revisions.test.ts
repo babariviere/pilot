@@ -41,6 +41,62 @@ function pauseFixture(store: MissionStore, id: string) {
 	);
 }
 
+test("Revisit re-preview after Pause creates fresh exact bytes, never confirms or resumes", async (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const { id } = store.create({ projectId: "p", title: "M", brief: "Kept agreement", tasks: [{ title: "Open" }] });
+	store.join("lead", id);
+	store.update(id, { coordinatorSessionId: "lead" });
+	const original = await proposal(store, id, { markdown: "Reviewed replacement" });
+	assert.equal(store.revisions.pending(id)?.proposal.id, original.id);
+	assert.equal(store.revisions.pending(id)?.current, true);
+	pauseFixture(store, id);
+	const control = store.controls.current(id);
+	assert.equal(store.revisions.pending(id)?.current, false);
+	await assert.rejects(
+		store.revisions.confirm(id, original.id, { digest: original.digest, humanSource: "user" }),
+		/source changed/,
+	);
+	const input = { operationId: randomUUID(), source: store.revisions.source(id), digest: original.digest };
+	const fresh = await store.revisions.repreview(id, original.id, input);
+	assert.deepEqual(store.revisions.lookup(id, input.operationId), fresh);
+	assert.equal(store.revisions.lookup(id, "missing"), null);
+	assert.notEqual(fresh.id, original.id);
+	assert.notEqual(fresh.digest, original.digest);
+	assert.deepEqual(fresh.delta, original.delta);
+	assert.deepEqual(fresh.repreviewOf, { id: original.id, digest: original.digest });
+	assert.equal(store.brief(id)?.markdown, "Kept agreement");
+	await store.revisions.confirm(id, fresh.id, { digest: fresh.digest, humanSource: "user:new-preview" });
+	assert.equal(store.brief(id)?.markdown, "Reviewed replacement");
+	assert.deepEqual(store.controls.current(id), control);
+	assert.equal(store.revisions.get(id, original.id).confirmation, undefined);
+	assert.equal(store.revisions.pending(id), null);
+	assert.deepEqual(store.revisions.lookup(id, input.operationId), store.revisions.get(id, fresh.id));
+	assert.deepEqual(await store.revisions.repreview(id, original.id, input), store.revisions.get(id, fresh.id));
+	await assert.rejects(store.revisions.repreview(id, original.id, { ...input, source: "changed" }), /different bytes/);
+	await assert.rejects(
+		store.revisions.repreview(id, fresh.id, { ...input, operationId: randomUUID(), digest: fresh.digest }),
+		/history/,
+	);
+});
+
+test("Revisit fresh preview still fences later edits, Stop, changed digests and task history", async (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const { id } = store.create({ projectId: "p", title: "M", tasks: [{ title: "Open" }] });
+	const original = await proposal(store, id, { tasks: [{ id: "1", title: "New title" }] });
+	const input = () => ({ operationId: randomUUID(), source: store.revisions.source(id), digest: original.digest });
+	await assert.rejects(store.revisions.repreview(id, original.id, { ...input(), digest: "wrong" }), /digest/);
+	const fresh = await store.revisions.repreview(id, original.id, input());
+	store.controls.stop(id);
+	await assert.rejects(
+		store.revisions.confirm(id, fresh.id, { digest: fresh.digest, humanSource: "user" }),
+		/source changed/,
+	);
+	store.updateTask(id, "1", { status: "done" });
+	await assert.rejects(store.revisions.repreview(id, original.id, input()), /historical/);
+});
+
 test("proposals are inert; exact user confirmation appends history and never edits completed work", async (t) => {
 	const store = new MissionStore(":memory:");
 	t.after(() => store.close());

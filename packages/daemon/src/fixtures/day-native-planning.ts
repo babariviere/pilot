@@ -125,12 +125,17 @@ for await (const line of createInterface({ input: process.stdin })) {
 	}
 	if (command.action === "owner") f.coordinator = undefined;
 	if (command.action === "next-round") await nextRound();
+	if (command.action === "revisit-round")
+		await f.questions(
+			[{ ...f.question, id: "revisit-gap", prompt: "Which new constraint changes this agreement?" }],
+			"revisit",
+		);
 	if (command.action === "missing-history") missingHistory = command.value;
 	if (command.action === "restart") {
 		for (const socket of sockets) socket.close();
 		await f.restart();
 	}
-	console.log(JSON.stringify({ posts, lookups, held: !!hold }));
+	console.log(JSON.stringify({ posts, lookups, held: !!hold, brief: f.store.brief(f.missionId) }));
 }
 for (const socket of sockets) socket.close();
 for (const client of wss.clients) client.close();

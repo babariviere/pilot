@@ -204,6 +204,9 @@ fn question(read: &Value, q: &Value, local: &Local) -> Question {
 
 fn round_kind(read: &Value) -> (RoundKind, String, String) {
     let view = &read["view"];
+    if view["interview"]["kind"] == "revisit" {
+        return (RoundKind::Revisit, String::new(), String::new());
+    }
     let plan = &view["plan"];
     let set = &view["interview"]["fence"]["questionSetRevision"];
     if plan["review"].is_object() && plan["review"]["questionSetRevision"] == *set {
@@ -662,7 +665,11 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
                 .collect();
             RoundLine {
                 id: s(&sub["operationId"]),
-                title: format!("Round {}", sub["fence"]["questionSetRevision"]),
+                title: if sub["kind"] == "revisit" {
+                    format!("Revisit, round {}", sub["fence"]["questionSetRevision"])
+                } else {
+                    format!("Round {}", sub["fence"]["questionSetRevision"])
+                },
                 line: format!("{} answers, submitted", arr(&sub["answers"]).len()),
                 state: RoundState::Submitted,
                 answers,

@@ -2535,7 +2535,7 @@ test("revision reads recheck coordinator identity after durability and reject fo
 	await assert.rejects(f.service.call(foreign.id, "revision-source", {}), /own project/);
 });
 
-test("local user revision route requires exact reviewed bytes and preserves history", async (t) => {
+test("Revisit local user revision routes discover pending and require fresh exact preview", async (t) => {
 	const f = await fixture(t);
 	const mission = f.store.create({ projectId: f.project.id, title: "Revisit", brief: "Original" });
 	const terminals = new TerminalManager();
@@ -2572,12 +2572,30 @@ test("local user revision route requires exact reviewed bytes and preserves hist
 	assert.equal(proposed.status, 201);
 	const p = (await proposed.json()) as { id: string; digest: string };
 	assert.equal(f.store.brief(mission.id)?.markdown, "Original");
+	let discovery = await fetch(base).then((r) => r.json());
+	assert.equal(discovery.pending.proposal.id, p.id);
+	assert.equal(discovery.pending.current, true);
+	f.store.update(mission.id, { title: "Changed during pause preparation" });
+	discovery = await fetch(base).then((r) => r.json());
+	assert.equal(discovery.pending.current, false);
+	const preview = await post(`/${p.id}/preview`, {
+		operationId: "fresh-preview",
+		source: discovery.source,
+		digest: p.digest,
+	});
+	assert.equal(preview.status, 201);
+	const fresh = await preview.json();
+	assert.deepEqual(fresh.repreviewOf, { id: p.id, digest: p.digest });
+	assert.deepEqual(await fetch(`${base}/operations/fresh-preview`).then((r) => r.json()), { proposal: fresh });
+	assert.deepEqual(await fetch(`${base}/operations/missing`).then((r) => r.json()), { proposal: null });
 	assert.equal((await post(`/${p.id}/confirm`, { digest: "stale", humanSource: "user:answer" })).status, 409);
-	const confirmed = await post(`/${p.id}/confirm`, { digest: p.digest, humanSource: "user:answer" });
+	assert.equal((await post(`/${p.id}/confirm`, { digest: p.digest, humanSource: "user:answer" })).status, 409);
+	const confirmed = await post(`/${fresh.id}/confirm`, { digest: fresh.digest, humanSource: "user:new-preview" });
 	assert.equal(confirmed.status, 200, await confirmed.text());
 	assert.equal(f.store.brief(mission.id)?.markdown, "Changed");
 	assert.equal(f.store.brief(mission.id, 1)?.markdown, "Original");
 	assert.equal((await fetch(`${base}/${p.id}`)).status, 200);
+	assert.equal((await fetch(base).then((r) => r.json())).pending, null);
 	assert.equal((await post("", { ...request, summary: "Conflicting reuse" })).status, 409);
 });
 

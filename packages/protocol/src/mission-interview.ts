@@ -26,6 +26,8 @@ export interface InterviewFence {
 	answerRevision: number;
 }
 export interface InterviewSubmission {
+	/** Revisit answers are evidence only, never a published agreement or approval. */
+	kind?: "revisit";
 	operationId: string;
 	fence: InterviewFence;
 	questions: InterviewQuestion[];
@@ -36,6 +38,8 @@ export interface InterviewSubmission {
 }
 export interface MissionInterview {
 	version: 1;
+	/** Absent on historical creation rounds. Once revisiting, later rounds stay inert. */
+	kind?: "revisit";
 	fence: InterviewFence;
 	/** Monotonic saved-state CAS, also fences duplicate submissions and amendments. */
 	revision: number;
@@ -46,7 +50,7 @@ export interface MissionInterview {
 }
 export type InterviewVersion = Pick<MissionInterview, "fence" | "revision">;
 export type InterviewWrite =
-	| { purpose: "interview-questions"; expected: InterviewVersion; questions: InterviewQuestion[] }
+	| { purpose: "interview-questions"; expected: InterviewVersion; questions: InterviewQuestion[]; kind?: "revisit" }
 	| { purpose: "interview-save"; expected: InterviewVersion; answers: InterviewAnswer[] }
 	| { purpose: "interview-submit"; expected: InterviewVersion };
 

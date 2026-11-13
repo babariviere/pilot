@@ -38,6 +38,9 @@ interface Port {
 	create(input: { projectId: string; title: string }, ownerSessionId: string): string;
 	ownerFence(missionId: string, ownerSessionId: string): MissionInterview["ownerFence"];
 	mapBrief(missionId: string, markdown: string): number;
+	currentBriefRevision(missionId: string): number;
+	/** Published native plans can only open inert Revisit rounds, never creation again. */
+	hasPublication(missionId: string): boolean;
 	publishedAgreement?(
 		missionId: string,
 		brief: { revision: number; markdown: string },
@@ -181,6 +184,11 @@ export class MissionInterviewStore {
 				throw new Conflict("Interview changed; reload saved answers");
 			if (request.purpose === "interview-questions") {
 				validateQuestions(request.questions);
+				if (request.kind !== undefined && request.kind !== "revisit") throw new Conflict("Unknown interview kind");
+				if (request.kind === "revisit" || state.kind === "revisit" || this.port.hasPublication(op.targetId)) {
+					this.assertNewQuestions(op.targetId, request.questions);
+					state.kind = "revisit";
+				}
 				state.questions = structuredClone(request.questions);
 				// Keep old meanings and custom drafts. Changed questions need explicit reconfirmation.
 				state.fence.questionSetRevision++;
@@ -194,8 +202,12 @@ export class MissionInterviewStore {
 			} else {
 				if (state.submission) throw new Conflict("Already submitted; reconcile the exact operation");
 				const markdown = agreementMarkdown(state);
-				const briefRevision = this.port.mapBrief(op.targetId, markdown);
+				const briefRevision =
+					state.kind === "revisit"
+						? this.port.currentBriefRevision(op.targetId)
+						: this.port.mapBrief(op.targetId, markdown);
 				const snapshot = {
+					...(state.kind === "revisit" ? { kind: "revisit" as const } : {}),
 					operationId: op.operationId,
 					fence: structuredClone(state.fence),
 					questions: structuredClone(state.questions),
@@ -215,6 +227,7 @@ export class MissionInterviewStore {
 	binding(missionId: string, brief: { revision: number; markdown: string }): InterviewAgreementBinding | undefined {
 		const state = this.latest(missionId);
 		if (!state) return undefined;
+		if (state.kind === "revisit") throw new Conflict("Revisit answers are not an agreement or build approval");
 		const s = state.submission;
 		const planning = s ? this.port.publishedAgreement?.(missionId, brief, s.digest) : undefined;
 		if (

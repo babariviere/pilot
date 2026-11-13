@@ -34,5 +34,7 @@ export interface MissionRevisionProposal {
 	summary: string;
 	delta: MissionRevisionDelta;
 	createdAt: number;
+	/** A trusted user requested a new full preview of these exact saved delta bytes. */
+	repreviewOf?: { id: string; digest: string };
 	confirmation?: { by: "user"; at: number; humanSource: string };
 }

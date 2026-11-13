@@ -274,6 +274,77 @@ fn all_submitted_rounds_survive_real_daemon_and_native_host_reopen() {
 }
 
 #[test]
+fn revisit_round_uses_saved_interview_without_publishing_agreement() {
+    let mut f = Fixture::with_quiet_events(true);
+    let host = f.open();
+    ready(&host);
+    let mission = f.mission();
+    let before = f.cmd("stats", true)["brief"].clone();
+    f.cmd("revisit-round", true);
+    let v = read(&host, &mission);
+    let iv = plan_host::page(&v, &[], &Local::default())
+        .interview
+        .unwrap();
+    assert_eq!(iv.kind, RoundKind::Revisit);
+    assert!(
+        plan_host::submit_request(
+            &v,
+            &SubmitIntent {
+                interview_id: iv.id,
+                revision: iv.revision,
+                proposal: String::new(),
+            }
+        )
+        .is_err(),
+        "a recommendation is not an answer"
+    );
+    let save = plan_host::save_request(&v, &intent(&v, Some("fix"), " exact gap\n💬 ")).unwrap();
+    assert_eq!(
+        send(&host, &mission, save).unwrap().status,
+        OutcomeStatus::Accepted
+    );
+    let v = read(&host, &mission);
+    let iv = plan_host::page(&v, &[], &Local::default())
+        .interview
+        .unwrap();
+    let submit = plan_host::submit_request(
+        &v,
+        &SubmitIntent {
+            interview_id: iv.id,
+            revision: iv.revision,
+            proposal: String::new(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        send(&host, &mission, submit).unwrap().status,
+        OutcomeStatus::Accepted
+    );
+    let v = read(&host, &mission);
+    assert_eq!(v["view"]["interview"]["submission"]["kind"], "revisit");
+    assert_eq!(
+        v["view"]["interviewHistory"][0]["interview"]["answers"][0]["text"],
+        " exact gap\n💬 "
+    );
+    assert_eq!(f.cmd("stats", true)["brief"], before);
+    let posts = f.cmd("stats", true)["posts"].clone();
+    reply(host.close()).unwrap();
+    let host = f.open();
+    ready(&host);
+    let reopened = read(&host, &mission);
+    assert_eq!(
+        reopened["view"]["interviewHistory"],
+        v["view"]["interviewHistory"]
+    );
+    assert_eq!(
+        f.cmd("stats", true)["posts"],
+        posts,
+        "opening and reading never replay submit"
+    );
+    reply(host.close()).unwrap();
+}
+
+#[test]
 fn saves_and_one_submission_go_through_the_exact_host_requests() {
     let mut f = Fixture::new();
     let host = f.open();

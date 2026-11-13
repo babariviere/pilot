@@ -843,6 +843,8 @@ export class MissionStore {
 		ownerFence: (id, owner) => this.interviewOwnerFence(id, owner),
 		submitted: (state, op) => this.planningWorkers.submitted(state, op),
 		mapBrief: (id, markdown) => this.writeBrief(id, markdown, this.require(id).briefRevision).revision,
+		currentBriefRevision: (id) => this.require(id).briefRevision,
+		hasPublication: (id) => this.plans.hasPublication(id),
 		publishedAgreement: (id, brief, submissionDigest) => {
 			const p = this.plans.get(id),
 				publication = p?.publication;

@@ -195,12 +195,13 @@ export async function nativePlanningFixture(options: { native?: boolean } = {}) 
 			});
 		},
 		/** Fixture-only authorized coordinator publication, never exposed by production HTTP. */
-		async questions(questions: InterviewQuestion[]) {
+		async questions(questions: InterviewQuestion[], kind?: "revisit") {
 			const current = store.interviews.latest(missionId)!;
 			const op = operation(missionId, {
 				purpose: "interview-questions",
 				expected: { fence: current.fence, revision: current.revision },
 				questions,
+				...(kind ? { kind } : {}),
 			} as { purpose: string });
 			assertAccepted(await journal.execute(op, (op, entry) => interviews().admit(op, entry.firstEntry)));
 		},

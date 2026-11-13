@@ -209,6 +209,44 @@ function continuation(state: MissionInterview) {
 	};
 	return operation(request.purpose, state.fence.missionId, request);
 }
+
+test("Revisit rounds keep exact answers/history without publishing agreement or allowing build", async (t) => {
+	const f = await fixture(t, true);
+	const prior = await f.submitted("Earlier answer");
+	const id = prior.fence.missionId;
+	const brief = f.store.brief(id)!;
+	const q = { ...question("gap"), prompt: "Which new constraint changes the agreed importer?" };
+	let result = await f.write(prior, "interview-questions", { kind: "revisit", questions: [q] });
+	assert.equal(result.receipt.state, "accepted");
+	assert.equal(result.state.kind, "revisit");
+	assert.equal(
+		(await f.write(result.state, "interview-submit")).receipt.state,
+		"rejected",
+		"old meanings are not new answers",
+	);
+	result = await f.write(result.state, "interview-save", { answers: [answer(q, "  keep exact\n💬  ")] });
+	const submitted = await f.write(result.state, "interview-submit");
+	assert.equal(submitted.receipt.state, "accepted");
+	assert.equal(submitted.state.submission?.kind, "revisit");
+	assert.equal(submitted.state.submission?.briefRevision, brief.revision);
+	assert.deepEqual(f.store.brief(id), brief);
+	assert.throws(() => f.store.interviews.binding(id, brief), /not an agreement/);
+	assert.equal(
+		(await f.run(continuation(submitted.state))).state,
+		"accepted",
+		"planning only continuation remains possible",
+	);
+	assert.equal(f.calls, 1);
+	await f.reopen();
+	assert.deepEqual(f.store.brief(id), brief);
+	const history = f.store.interviews.history(id);
+	assert.equal(history.length, 2);
+	assert.deepEqual(history[0]!.interview, prior);
+	assert.equal(history[1]!.interview.answers[0]!.text, "  keep exact\n💬  ");
+	const repeat = await f.write(submitted.state, "interview-questions", { questions: [q] });
+	assert.equal(repeat.receipt.state, "rejected", "later Revisit must not repeat settled questions");
+	assert.equal(f.calls, 1, "reopen never replays a planning turn");
+});
 function smallAsk() {
 	const request: SmallAskAdmission = {
 		purpose: "small-ask-start",

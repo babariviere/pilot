@@ -4218,11 +4218,17 @@ async function missionRoute(
 	const item = parts[4];
 	if (section === "revisions") {
 		await store.durable();
+		if (parts.length === 6 && item === "operations" && method === "GET") {
+			store.require(id);
+			json(res, 200, { proposal: store.revisions.lookup(id, parts[5]!) });
+			return true;
+		}
 		if (parts.length === 4 && method === "GET")
 			return (
 				json(res, 200, {
 					source: store.revisions.source(id),
 					latestConfirmed: store.revisions.latestConfirmed(id),
+					pending: store.revisions.pending(id),
 				}),
 				true
 			);
@@ -4240,6 +4246,18 @@ async function missionRoute(
 				true
 			);
 		if (parts.length === 5 && method === "GET") return (json(res, 200, store.revisions.get(id, item!)), true);
+		if (parts.length === 6 && parts[5] === "preview" && method === "POST") {
+			json(
+				res,
+				201,
+				await store.revisions.repreview(
+					id,
+					item!,
+					await readJson<Parameters<typeof store.revisions.repreview>[2]>(req),
+				),
+			);
+			return true;
+		}
 		if (parts.length === 6 && parts[5] === "confirm" && method === "POST")
 			return (
 				json(

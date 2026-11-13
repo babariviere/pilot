@@ -51,6 +51,15 @@ export class MissionRevisions {
 		if (!row) throw new NotFound("Unknown mission revision");
 		return JSON.parse(String(row.record));
 	}
+	/** Exact lookup after an unknown proposal/preview reply. Never creates a replacement operation. */
+	lookup(id: string, operationId: string): MissionRevisionProposal | null {
+		const row = this.port.one(
+			"SELECT record FROM mission_revision_proposals WHERE mission_id=? AND operation_id=?",
+			id,
+			operationId,
+		);
+		return row ? JSON.parse(String(row.record)) : null;
+	}
 	latestConfirmed(id: string): { id: string; summary: string } | undefined {
 		const row = this.port.one(
 			"SELECT record FROM mission_revision_proposals WHERE mission_id=? AND json_extract(record,'$.confirmation.by')='user' ORDER BY rowid DESC LIMIT 1",
@@ -60,10 +69,53 @@ export class MissionRevisions {
 		const proposal = JSON.parse(String(row.record)) as MissionRevisionProposal;
 		return { id: proposal.id, summary: proposal.summary };
 	}
+	/** Latest proposal after the last confirmation. Stale proposals remain inspectable, not applicable. */
+	pending(id: string): { proposal: MissionRevisionProposal; current: boolean } | null {
+		const row = this.port.one(
+			`SELECT record FROM mission_revision_proposals WHERE mission_id=?
+			AND rowid > COALESCE((SELECT MAX(rowid) FROM mission_revision_proposals
+			WHERE mission_id=? AND json_extract(record,'$.confirmation.by')='user'),0)
+			ORDER BY rowid DESC LIMIT 1`,
+			id,
+			id,
+		);
+		if (!row) return null;
+		const proposal = JSON.parse(String(row.record)) as MissionRevisionProposal;
+		return { proposal, current: proposal.source === this.source(id) };
+	}
+	/** Explicit user re-preview after Pause. Never alters/reconfirms the original or admits a turn. */
+	async repreview(
+		id: string,
+		proposalId: string,
+		input: { operationId: string; source: string; digest: string },
+	): Promise<MissionRevisionProposal> {
+		if (
+			!input ||
+			typeof input !== "object" ||
+			Object.keys(input).some((k) => !["operationId", "source", "digest"].includes(k))
+		)
+			throw new Error("Unknown re-preview field");
+		const original = this.get(id, proposalId);
+		if (input.digest !== original.digest) throw new Conflict("Saved revision digest changed");
+		return this.save(
+			id,
+			{ operationId: input.operationId, source: input.source, summary: original.summary, delta: original.delta },
+			{},
+			{ id: original.id, digest: original.digest },
+		);
+	}
 	async propose(
 		id: string,
 		input: { operationId: string; source: string; summary: string; delta: MissionRevisionDelta },
 		actor: { sessionId?: string },
+	): Promise<MissionRevisionProposal> {
+		return this.save(id, input, actor);
+	}
+	private async save(
+		id: string,
+		input: { operationId: string; source: string; summary: string; delta: MissionRevisionDelta },
+		actor: { sessionId?: string },
+		repreviewOf?: { id: string; digest: string },
 	): Promise<MissionRevisionProposal> {
 		this.port.assertPlanner(id, actor);
 		if (
@@ -75,7 +127,11 @@ export class MissionRevisions {
 		revisionText(input.operationId, 128);
 		revisionText(input.summary, 1000);
 		if (Buffer.byteLength(JSON.stringify(input.delta) ?? "") > 64 * 1024) throw new Error("Revision exceeds 64 KiB");
-		const request = structuredClone({ ...input, authorSessionId: actor.sessionId ?? null });
+		const request = structuredClone({
+			...input,
+			authorSessionId: actor.sessionId ?? null,
+			...(repreviewOf ? { repreviewOf } : {}),
+		});
 		const digest = revisionDigest(request);
 		const result = this.port.transaction(() => {
 			const prior = this.port.one(
@@ -88,6 +144,8 @@ export class MissionRevisions {
 				if (proposal.digest !== digest) throw new Conflict("Revision operationId has different bytes");
 				return proposal;
 			}
+			if (repreviewOf && this.get(id, repreviewOf.id).confirmation)
+				throw new Conflict("Confirmed revision is history, not a new proposal");
 			if (input.source !== this.source(id)) throw new Conflict("Mission revision source changed");
 			this.port.validate(id, request.delta);
 			const proposal: MissionRevisionProposal = {

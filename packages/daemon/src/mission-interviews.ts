@@ -122,7 +122,7 @@ export class MissionInterviews {
 					...(r.purpose === "interview-save"
 						? ["answers"]
 						: r.purpose === "interview-questions"
-							? ["questions"]
+							? ["questions", ...(Object.hasOwn(r, "kind") ? ["kind"] : [])]
 							: []),
 				]);
 				check = () => {
@@ -234,7 +234,9 @@ export class MissionInterviews {
 						s.digest !== request.submissionDigest
 					)
 						throw new Conflict("Exact complete submitted answers required");
-					this.deps.store.interviews.binding(op.targetId, this.deps.store.brief(op.targetId)!);
+					// Revisit continues planning from answers, not from a newly published agreement.
+					if (request.purpose === "agreement-start" || current.kind !== "revisit")
+						this.deps.store.interviews.binding(op.targetId, this.deps.store.brief(op.targetId)!);
 					const authorizedDigest = this.deps.authorize(
 						request.purpose,
 						projectId,

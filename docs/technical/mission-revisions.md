@@ -16,11 +16,15 @@ Nothing here runs a model, changes a live mission, resets a chat, or enables a s
   `mission_interviews`; `history` and `assertNewQuestions` preserve earlier rounds and reject
   repeated questions. Trusted grill-with-docs, Wayfinder, to-spec and to-tickets loaders remain
   unchanged. See [their review trail](skill-prompt-review.md).
-- Existing creation interviews publish an agreement on submit. **Do not reuse that write as
-  confirmation of a Revisit delta.** Existing native plan publication is creation-only and also
-  is not an amendment API. Legacy interview enrollment and Revisit UI integration are not
-  added by these routes. A later adapter must use canonical saved rounds without overwriting
-  current agreement on autosave/submission or granting approval from answers alone.
+- Creation interviews publish an agreement on submit. Canonical `interview-questions` accepts
+  `kind: "revisit"`; rounds opened after native plan publication also use that kind. Later
+  Revisit rounds stay Revisit rounds and reject repeated submitted questions. Save and submit
+  keep exact answers, digests and history without writing the agreement. The submitted
+  `agreementMarkdown` is an answer summary, not a publication; `briefRevision` identifies the
+  unchanged agreement. Revisit answers cannot bind a workflow/build approval. Existing
+  planning-only continuation can consume them under its unchanged independent gates.
+  Native plan publication remains creation-only, not an amendment API. No legacy enrollment
+  or automatic conversion of old interview records runs.
 - The new table stores only reviewed deltas and exact confirmation receipts. Current planning
   still lives in the existing mission, brief, tasks and decisions, not in that table.
 
@@ -35,9 +39,11 @@ Trusted local/user routes, under `/api/missions/:missionId/revisions`:
 
 | Method and suffix | Result |
 | --- | --- |
-| GET | Current opaque `source`, latest confirmed revision ID and summary |
+| GET | Current opaque `source`, latest confirmed summary and latest `pending` proposal (or null) with explicit source currentness |
 | POST | Save `{operationId, source, summary, delta}` without applying anything |
 | GET `/:id` | Exact saved proposal and any confirmation receipt |
+| GET `/operations/:operationId` | Exact proposal/preview lookup (or null) after a lost reply, never a resend |
+| POST `/:id/preview` | User requests a **new** full preview using `{operationId, source, digest}`; copies only the exact saved summary/delta and links `repreviewOf` |
 | POST `/:id/confirm` | Confirm `{digest, humanSource}` for that exact saved proposal |
 
 The coordinator tool exposes `revision-source`, `revision-propose` and `revision` (read by ID).
@@ -63,9 +69,25 @@ bytes conflict. The durable SQLite writer must finish before acknowledgement or 
 
 Application is one SQLite transaction. A live membership or owned open assignment requires an
 already **Paused**, durably held mission from the existing Mission Pause checkpoint protocol.
-Running, Pausing or Unknown is refused, not treated as a safe boundary. Pause before capturing
-the source/preview, since changing Pause or Stop invalidates it. This is a conservative backend
-gate, not a new automatic pause or checkpoint adapter.
+Running, Pausing or Unknown is refused, not treated as a safe boundary. Changing Pause or Stop
+invalidates a proposal's source. This is a conservative backend gate, not an automatic pause
+or checkpoint adapter.
+
+### Reachable post-Pause preview
+
+The coordinator can prepare and save an inert delta while already allowed to plan. The user
+then invokes existing Mission Pause and waits for its durable Paused result. No coordinator
+turn runs while held. The user can explicitly request `/:id/preview` using the saved proposal's
+exact digest and the **new post-Pause source**. This creates a new immutable proposal with a
+different ID/digest, without confirming anything or changing/renewing the old proposal.
+
+The client must display a full comparison against the current mission, including any changes
+since the old proposal, and require a fresh explicit confirmation of the **new** ID/digest.
+This is not approval carried across a source mismatch, an automatic rebase, or proof the old
+proposal still fits. If any referenced task has finished or decision has retired, normal
+validation refuses instead of substituting content. Any subsequent edit/Stop/Pause stales the
+new preview too. Exact operation retries return their original receipt; Unknown is lookup-only.
+An already confirmed revision cannot seed a fresh preview. Confirmation keeps all holds.
 
 Application does not cancel jobs, drop effects/drafts, clear user holds or Stop generations,
 resume workers, retry Unknown starts or change queued policy authority. Task/assignment and
@@ -114,21 +136,30 @@ Stale, unpaused and lost-answer cases refuse or stay Unknown; Check only reads.
 `plan.rs` mirrors the delta above; the mock rules are in `plan_revisit.rs` and
 `native/tests/revisit.rs`.
 
-The connected host does not bind these routes yet and shows Revisit as unavailable. Binding
-them needs these backend seams first:
+The connected host does not bind these routes yet and shows Revisit as unavailable. Connecting
+the complete journey still needs:
 
-- **Pending discovery.** GET `/revisions` returns only the source and latest confirmed
-  summary. The UI cannot find an unconfirmed proposal without its ID.
+- **Discovery binding.** GET `/revisions` now exposes the latest pending proposal after the
+  last confirmation, including explicit currentness. Day still needs to bind that read.
 - **User request.** No route lets the user ask the coordinator for a check-up.
-- **Revisit rounds.** `interview-submit` maps answers into the brief. A Revisit round must save
-  answers without writing the agreement.
-- **Pause and source.** The source includes the control state, and application needs a paused
-  mission when members exist (the coordinator is one). Pause holds admission for member
-  chats, so a paused coordinator cannot take a turn to propose, and pausing after a proposal
-  makes it stale. As written, a mission with a coordinator cannot reach a confirmable revision.
+- **Round binding.** Canonical inert Revisit rounds and the existing native interview mapper
+  are ready; the connected check-up producer still needs to open them through the trusted
+  planner. There is no legacy enrollment adapter.
+- **Preview binding.** The post-Pause user re-preview route makes a confirmable proposal
+  reachable without running a held coordinator. Day still needs to journal that new explicit
+  intent, display the complete fresh comparison and bind its exact confirmation/lookup.
 
-The host then reads `/revisions`, the pending proposal and `/api/missions/:id` (for current
-text), confirms with a fixed `humanSource`, and settles a lost reply by reading the proposal.
+The remaining request seam is not a generic send: `SessionManager.canSendNotice` explicitly
+excludes trusted planning sessions. A proposed extension would admit one explicitly requested
+planning-only check-up through `admitPlanning` only for an active, unheld published coordinator,
+with retained exact operation identity and lookup-only recovery. It would also expose inert
+revision output on that trusted planner's tool surface. It must not release interview holds,
+clear Stop/user holds, approve/start build work or use ordinary Build input as a fallback.
+That admission extension is not implemented here; already-held coordinators remain unavailable.
+
+A future host adapter must read `/revisions`, the pending proposal and `/api/missions/:id`
+(for current text), recheck the exact source, confirm with a fixed `humanSource`, and settle
+lost replies only through exact proposal/operation lookup.
 
 ## Verification
 
@@ -139,3 +170,15 @@ changes, safe-boundary refusal, assignment/report invalidation and durable reope
 current-only prompts, explicit history, live same-role coordinator refresh and queued/frozen/
 question-deferred retirement, without real providers. Existing planning, reports, continuation,
 pause and mission suites cover unchanged ownership and lifecycle gates.
+Focused Revisit cases also cover post-Pause re-preview identities, stale discovery, subsequent
+Stop/completed-task refusal, inert canonical/native submissions and exact history/receipt reopen.
+`native/tests/plan_host.rs::revisit_round_uses_saved_interview_without_publishing_agreement`
+exercises that existing bridge seam in an isolated daemon, not connected Revisit acceptance.
+
+Local checkpoint evidence (2026-11-13): eight narrowly selected Node tests passed on
+`41b59b2b`, plus scoped Biome/rustfmt checks. After reconciliation onto `81cd801e`, the single
+named native bridge test could not compile: upstream `57820b54` updated Day's SHA-2/base64
+requirements without updating its tracked Cargo lock. The supported MBX invocation with
+`--locked` refused before compilation; no lock/cache bypass or dependency rollback ran.
+That native regression and the new-head dependency updates remain unverified. Broader suites
+stay in CI. This is independently safe backend groundwork, not complete connected Revisit.

@@ -7,6 +7,49 @@ import { OperationJournal } from "./operation-journal.ts";
 
 const expected = (i: MissionInterview) => ({ fence: i.fence, revision: i.revision });
 
+test("Revisit native submit preserves agreement and exact receipt across reopen", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	const brief = f.store.brief(f.missionId);
+	const q = { ...f.question, id: "revisit-gap", prompt: "Which new constraint changes the agreement?" };
+	await f.questions([q], "revisit");
+	let read = await (await f.read()).json();
+	assert.equal(read.view.interview.kind, "revisit");
+	const save = f.operation(
+		f.missionId,
+		{
+			purpose: "interview-save",
+			expected: expected(read.view.interview),
+			answers: [
+				{
+					questionId: q.id,
+					questionDigest: interviewDigest(q),
+					selectedOption: q.options[0],
+					text: " exact gap\n ",
+				},
+			],
+		} as InterviewWrite,
+		read.contextDigest,
+	);
+	assert.equal((await (await f.post(save)).json()).state, "accepted");
+	read = await (await f.read()).json();
+	const submit = f.operation(
+		f.missionId,
+		{ purpose: "interview-submit", expected: expected(read.view.interview) } as InterviewWrite,
+		read.contextDigest,
+	);
+	const receipt = await (await f.post(submit)).json();
+	assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+	assert.deepEqual(f.store.brief(f.missionId), brief);
+	assert.equal(f.store.workflowConfirmations.latest(f.missionId, false), undefined);
+	await f.restart();
+	assert.deepEqual(await (await f.post(submit, true)).json(), receipt);
+	read = await (await f.read()).json();
+	assert.equal(read.view.interview.submission.kind, "revisit");
+	assert.equal(read.view.interviewHistory[0].interview.answers[0].text, " exact gap\n ");
+	assert.deepEqual(f.store.brief(f.missionId), brief);
+});
+
 test("native capability, exact project/home/owner and purpose are required for reads and receipts", async (t) => {
 	const f = await nativePlanningFixture();
 	t.after(() => f.close());
@@ -151,7 +194,7 @@ test("exact choices/text survive daemon restart; complete submission is separate
 	assert.deepEqual(await (await f.post(submit)).json(), submitted);
 });
 
-test("topic/context/proposal changes refuse stale answers; full proposal is available before explicit review", async (t) => {
+test("Revisit after publication is inert; topic/context/proposal changes refuse stale review answers", async (t) => {
 	const f = await nativePlanningFixture();
 	t.after(() => f.close());
 	await f.plan({
@@ -241,6 +284,43 @@ test("topic/context/proposal changes refuse stale answers; full proposal is avai
 	);
 	assert.equal((await (await f.post(submit)).json()).state, "accepted");
 	assert.equal(f.store.tasks(f.missionId).length, 0, "human proposal submission neither publishes nor admits workers");
+	await f.plan({ purpose: "plan-publish", expectedRevision: 5 });
+	const agreement = f.store.brief(f.missionId);
+	const tasks = f.store.tasks(f.missionId);
+	const gap = {
+		...f.question,
+		id: "post-publication-gap",
+		prompt: "Which new constraint changes this published agreement?",
+	};
+	await f.questions([gap]); // No caller-supplied kind can silently restart creation.
+	current = await (await f.read()).json();
+	assert.equal(current.view.interview.kind, "revisit");
+	const gapSave = f.operation(
+		f.missionId,
+		{
+			purpose: "interview-save",
+			expected: expected(current.view.interview),
+			answers: [
+				{
+					questionId: gap.id,
+					questionDigest: interviewDigest(gap),
+					selectedOption: gap.options[0],
+					text: "Gap only",
+				},
+			],
+		} as InterviewWrite,
+		current.contextDigest,
+	);
+	assert.equal((await (await f.post(gapSave)).json()).state, "accepted");
+	current = await (await f.read()).json();
+	const gapSubmit = f.operation(
+		f.missionId,
+		{ purpose: "interview-submit", expected: expected(current.view.interview) } as InterviewWrite,
+		current.contextDigest,
+	);
+	assert.equal((await (await f.post(gapSubmit)).json()).state, "accepted");
+	assert.deepEqual(f.store.brief(f.missionId), agreement);
+	assert.deepEqual(f.store.tasks(f.missionId), tasks);
 });
 
 test("authorization is checked after asynchronous durability; late changes cannot return accepted", async (t) => {

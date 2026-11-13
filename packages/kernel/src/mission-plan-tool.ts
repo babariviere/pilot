@@ -209,6 +209,7 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 					action: Type.Literal("questions"),
 					request: Type.Object({
 						purpose: Type.Literal("interview-questions"),
+						kind: Type.Optional(Type.Literal("revisit")),
 						expected: Type.Object({
 							fence: Type.Object({
 								missionId: key,
