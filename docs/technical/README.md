@@ -172,6 +172,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Day authenticated native host and control journal](day-native-host.md)
 - [Day Native Shell release qualification](day-nsh-release.md)
 - [Day released public JSON bridge and lifecycle limits](day-public-bridge.md)
+- [NSH artifact helpers and examples](nsh-artifact-helpers.md): trusted diagram/chart helpers, not a runtime.
 - [Reliability roadmap](reliability/roadmap.md) and [testing strategy](reliability/testing-strategy.md)
 - [Historical product reference](product-reference.md), preserved from the previous README
 - [Screenshot provenance](../screenshots/README.md)

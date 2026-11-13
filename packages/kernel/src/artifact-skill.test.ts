@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
-import { copyFile, mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
-import { ARTIFACT_SKILL_FILES, ARTIFACT_SKILL_PATH, ARTIFACT_SKILL_REFERENCES } from "./artifact-skill.ts";
+import {
+	ARTIFACT_NSH_FILES,
+	ARTIFACT_SKILL_FILES,
+	ARTIFACT_SKILL_PATH,
+	ARTIFACT_SKILL_REFERENCES,
+} from "./artifact-skill.ts";
 
 test("bundled artifact skill is valid and retains detailed authoring guidance outside the tool catalog", async () => {
 	const loaded = loadSkillsFromDir({ dir: dirname(ARTIFACT_SKILL_PATH), source: "pilot" });
@@ -44,6 +49,30 @@ test("bundled artifact skill is valid and retains detailed authoring guidance ou
 		/kind: "(?:html|react|swiftui)"|echarts\.init|ArtifactView|mermaid\.initialize|motion\.animate|THREE\.Scene/,
 	);
 	assert.ok(!ARTIFACT_SKILL_REFERENCES.some((path) => /\/(web|swiftui)\.md$/.test(path)));
+});
+
+test("NSH examples and trusted helpers are all readable and import only what artifacts get", async () => {
+	const nsh = join(dirname(ARTIFACT_SKILL_PATH), "nsh");
+	const listed = ARTIFACT_NSH_FILES.map((path) => relative(nsh, path)).sort();
+	const present = [
+		...(await readdir(join(nsh, "examples"))).map((name) => `examples/${name}`),
+		...(await readdir(join(nsh, "kit"))).map((name) => `kit/${name}`),
+	].sort();
+	assert.deepEqual(listed, present, "ARTIFACT_NSH_FILES must list every example and helper source");
+	const guide = await readFile(join(dirname(ARTIFACT_SKILL_PATH), "references", "nsh.md"), "utf8");
+	for (const name of present.filter((name) => name.startsWith("examples/")))
+		assert.ok(guide.includes(`](../nsh/${name})`), `nsh.md does not link ${name}`);
+	for (const path of ARTIFACT_NSH_FILES) {
+		const source = await readFile(path, "utf8");
+		const imports = [...source.matchAll(/^import[^;]*?from "([^"]+)";/gms)].map((match) => match[1]);
+		const allowed = path.includes("/kit/") ? /^(nsh|nsh\/base|\.\/[a-z]+)$/ : /^(nsh|nsh\/base|pilot-artifact\/ui)$/;
+		for (const name of imports) assert.match(name, allowed, `${relative(nsh, path)} imports ${name}`);
+		assert.doesNotMatch(
+			source,
+			/\b(host|Storage|Clipboard|Picker|openUrl|fetch|WebView)\b\s*[.(]/,
+			relative(nsh, path),
+		);
+	}
 });
 
 test("bundled skill location follows a relocated kernel package, not the session cwd or original checkout", async (t) => {

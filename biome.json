@@ -36,7 +36,7 @@
 	},
 	"overrides": [
 		{
-			"includes": ["apps/day/**"],
+			"includes": ["apps/day/**", "packages/kernel/skills/pilot-artifacts/nsh/**"],
 			"linter": {
 				"rules": {
 					"a11y": {

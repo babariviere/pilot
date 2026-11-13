@@ -1,0 +1,9 @@
+{
+	"name": "Pilot artifact examples",
+	"capabilities": {},
+	"resolve": {
+		"alias": {
+			"pilot-artifact/ui": "./kit/index.ts"
+		}
+	}
+}
