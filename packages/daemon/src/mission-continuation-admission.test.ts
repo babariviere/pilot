@@ -339,6 +339,35 @@ test("missing qualified current policy persists an explicit wait, never a permis
 	);
 });
 
+test("an explicitly unconfigured execution cap needs no invented budget authority ID", async (t) => {
+	const f = fixture(t);
+	f.policy.current = (record) => ({ ...fakePolicy(record), budget: { mode: "no-execution-cap" } });
+	const queued = await f.enqueue();
+	f.runner.start();
+	await f.runner.flush();
+	assert.equal(f.starts.length, 1);
+	assert.deepEqual(f.store.controls.continuation(queued.operationId)!.policySource!.budget, {
+		mode: "no-execution-cap",
+	});
+});
+
+test("no execution cap cannot substitute for missing dispatch or model source identity", async (t) => {
+	for (const gate of ["dispatch", "model"] as const) {
+		const f = fixture(t);
+		f.policy.current = (record) => {
+			const policy: AllowedContinuationPolicy = { ...fakePolicy(record), budget: { mode: "no-execution-cap" } };
+			if (gate === "dispatch") policy.dispatch.authorizationId = "";
+			else policy.model.sourceId = "";
+			return policy;
+		};
+		const queued = await f.enqueue();
+		f.runner.start();
+		await f.runner.flush();
+		assert.equal(f.starts.length, 0);
+		assert.match(f.store.controls.continuation(queued.operationId)!.reason, /source is incomplete/);
+	}
+});
+
 test("lost dispatch ACK stays Unknown until original-operation lookup finds exact admission", async (t) => {
 	const f = fixture(t);
 	let attempts = 0;

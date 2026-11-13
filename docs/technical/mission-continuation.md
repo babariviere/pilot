@@ -49,17 +49,23 @@ interface AllowedContinuationPolicy {
 	state: "allowed";
 	dispatch: { authorizationId: string; revision: number };
 	model: { sourceId: string; revision: string; model: string; thinking: string };
-	budget: { authorityId: string; revision: number };
+	budget: { mode: "no-execution-cap" } | { authorityId: string; revision: number };
 }
 ```
 
 These fields identify actual current authority/configuration records, not new grants.
 A qualified adapter must check exact task scope, dispatch permissions, pending/revoked
-authority, model scope/price/thinking and remaining budget synchronously. It must return
+authority, model scope/price/thinking and any configured execution cap synchronously. It must return
 blocked/unavailable for unsupported gates and emit an event when those gates change.
 Reapproval with a different authority ID or revision invalidates earlier selection even
 if the projected state still says allowed. This task adds no budget store, spending
 grant, workflow-approval shortcut or live runtime activation.
+
+`no-execution-cap` explicitly represents the absence of an optional execution cap; it
+needs no fabricated budget authority ID. It is not a fallback for unknown policy and
+does not replace dispatch/model authority. A source that cannot determine the applicable
+cap must still return `unavailable`. The optional diagnostic `AIUsageBudget`, whether
+unset or configured, is not an execution cap or a spending grant.
 
 The scheduler pins the allowed package before entering a start. It compares fresh policy
 again after preparation, at metadata commit and before initial kernel input dispatch.
@@ -67,6 +73,44 @@ The resolved model/thinking must match that package. Canonical owner/assignment/
 coordinator/project/scope, mission Stop/pause generations, persistent user Stop holds,
 archive state, current dependencies, phase gates, pinned order and two-worker capacity
 (including owned reviewers and uncertain starts) remain independent checks.
+
+## Production qualification audit
+
+Audited against main `3e2f3e54`, including the factual-report/status ownership changes.
+These are source findings, not new authority or a cancellation of authorized continuation.
+
+| Current source | Observed boundary |
+| --- | --- |
+| [ExecutionPermission](../../packages/kernel/src/tool-policy.ts#L5-L28) | Carries an inherited tool ceiling and an authorization ID. The audited runtime does not resolve that ID to a current, revocable mission delegated-start grant. Missing permission preserves legacy Build behavior; it is not proof of delegation. |
+| [Workflow confirmation package](../../packages/protocol/src/workflow-confirmations.ts#L50-L65) | Fixed actions are plan/classify/assign/assess/accept-outcome, not start. The package explicitly excludes subdelegate. [assertApproval](../../packages/daemon/src/workflow-confirmations.ts#L208-L220) checks the exact existing package; it cannot enlarge those powers. |
+| [Native published Start](../../packages/daemon/src/planning-workers.ts#L694-L781) | An authenticated human operation selects one exact published task and permanently reserves its session/task identity. It does not authorize another sibling or an automatic later start. [startView](../../packages/daemon/src/planning-workers.ts#L623-L640) refuses another Start after that reservation. |
+| [Model selection](../../packages/daemon/src/models.ts#L399-L427) | Validates scope, task price cap, model and thinking through asynchronous [settings snapshots](../../packages/daemon/src/model-settings.ts#L84-L99). [updateScope](../../packages/daemon/src/models.ts#L327-L336) clears in-flight lists but exposes no synchronous final-dispatch configuration witness/invalidation revision. A selected model ID alone is not that witness. |
+| [AIUsageBudget](../../packages/protocol/src/telemetry.ts#L1-L8) | Explicitly optional and diagnostic-only, never execution/provider-quota control. [compareAIUsageBudget](../../packages/daemon/src/ai-usage-budget.ts#L30-L43) returns no comparison when unset and marks configured comparisons informational. This is not a missing mandatory cap and does not require resolving the budget-increase policy. |
+
+The precise blocking source is a **current delegated-start authorization**, not a new
+mandatory USD cap. A production adapter cannot truthfully return an allowed dispatch ID
+from any of the sources above. User authorization to continue work is not withdrawn;
+the missing engineering link is its typed, host-verifiable representation.
+
+Minimum remaining qualification:
+
+1. Capture explicit ongoing authorization through trusted native ingress in an existing
+   approval/journal path. Bind the exact mission/project/coordinator and approved scope,
+   with current record identity/revision and revocation/expiry checks. Define whether an
+   explicit Continue confirmation extends an existing workflow package or uses a separate
+   versioned operation. Do not reinterpret old packages, decision prose, task todo state
+   or an earlier one-task Start as this grant. No new policy store is proposed here.
+2. Expose a prepared model-admission witness backed by the actual effective scope/auth/
+   price/thinking configuration, with synchronous invalidation at final dispatch and
+   events on changes. Reuse model selection; do not label an async cached selection as a
+   fresh synchronous witness or manufacture its revision.
+3. Bind those real sources to `ContinuationPolicySource`. Check any execution cap that
+   actually applies, or explicitly report `no-execution-cap`. An unknown or unsupported
+   configured cap stays blocked. This does not settle the optional budget-increase policy.
+
+The adapter remains unbound rather than fabricating these records. The queue, source
+fences and Unknown lookup-only recovery remain available for qualification with faux
+providers. This audit changes no current grants or live runtime state.
 
 ## Durability and recovery
 

@@ -28,7 +28,8 @@ export interface AllowedContinuationPolicy {
 	state: "allowed";
 	dispatch: { authorizationId: string; revision: number };
 	model: { sourceId: string; revision: string; model: string; thinking: string };
-	budget: { authorityId: string; revision: number };
+	/** No configured execution cap is not a missing grant. Diagnostics are not an execution cap. */
+	budget: { mode: "no-execution-cap" } | { authorityId: string; revision: number };
 }
 export type ContinuationPolicy =
 	| AllowedContinuationPolicy
@@ -218,9 +219,12 @@ export class MissionContinuations {
 			!policy.model.revision ||
 			!policy.model.model ||
 			!policy.model.thinking ||
-			!policy.budget.authorityId ||
-			!Number.isSafeInteger(policy.budget.revision) ||
-			policy.budget.revision < 0
+			!policy.budget ||
+			(!("mode" in policy.budget && policy.budget.mode === "no-execution-cap") &&
+				(!("authorityId" in policy.budget) ||
+					!policy.budget.authorityId ||
+					!Number.isSafeInteger(policy.budget.revision) ||
+					policy.budget.revision < 0))
 		)
 			throw new Conflict("Dispatch policy source is incomplete");
 		if (record.policySource && canonicalJSON(record.policySource) !== canonicalJSON(policy))
