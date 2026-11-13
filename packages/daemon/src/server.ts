@@ -143,7 +143,7 @@ import { type ReservationReceipt, UpdateReservation } from "./update-reservation
 import { UsageQueryCapacityError } from "./usage-history.ts";
 import { usageAnalyticsQuery } from "./usage-history-validation.ts";
 import { UserFeedbackService } from "./user-feedback.ts";
-import { FEEDBACK_WORK, UserFeedbackWorkService } from "./user-feedback-work.ts";
+import { FEEDBACK_WORK, isFeedbackAnswer, UserFeedbackWorkService } from "./user-feedback-work.ts";
 import { UserVerifications } from "./user-verification.ts";
 import { isWorkflowOperation, WorkflowConfirmations } from "./workflow-confirmations.ts";
 
@@ -955,7 +955,11 @@ export function createDaemonServer(
 		}
 		if (op.kind === "project-preferences-update") throw new Error("Preference outcome is unknown; Check only");
 		if (op.kind === "user-feedback") throw new Error("Feedback outcome is unknown; Check only");
-		if (op.kind === FEEDBACK_WORK) throw new Error("Feedback step outcome is unknown; Check only");
+		if (op.kind === FEEDBACK_WORK) {
+			// Only an answer settles, by exact accepted-input lookup; nothing is sent again.
+			if (!feedbackWork) throw new Error("Feedback step outcome is unknown; Check only");
+			return feedbackWork.recover(op);
+		}
 		if (op.kind === "user-verification") throw new Error("Verification outcome is unknown; Check only");
 		if (op.kind === "attention-answer") {
 			if (!nativeAttention) throw new OperationRejected("Native attention unavailable");
@@ -1667,6 +1671,15 @@ export function createDaemonServer(
 				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
+				if (parts[2] === "receipt" && saved?.state === "pending" && isFeedbackAnswer(operation)) {
+					// A lost answer: read whether its chat accepted that exact input. Never sent again.
+					const end = mutations.begin({ kind: "operation", id: operation.operationId });
+					try {
+						return json(res, 200, await journal.execute(operation, (op) => feedbackWork.recover(op)));
+					} finally {
+						end();
+					}
+				}
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
 				const end = mutations.begin({ kind: "operation", id: operation.operationId });
 				try {

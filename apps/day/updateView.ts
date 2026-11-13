@@ -26,7 +26,15 @@ import {
 	remindersOf,
 	savedReminders,
 } from "./deliveryView";
-import { feedbackOpen, forgetFeedback, restoreFeedback, savedFeedback } from "./feedbackView";
+import {
+	feedbackOpen,
+	feedbackProject,
+	forgetFeedback,
+	restoreAnswers,
+	restoreFeedback,
+	savedAnswers,
+	savedFeedback,
+} from "./feedbackView";
 import { forgetPlaces, lastField, restoreField, restoreScroll, scrollOf, todayScrollTo } from "./kept";
 import { focusIssue, linearOpen, linearProject, openIssue, restoreLinear, savedLinear } from "./linearView";
 import { flushAll } from "./planCommands";
@@ -209,6 +217,10 @@ export function captureView(today?: Today): SavedView {
 		// The feedback page and unsent feedback with its own origin. Restoring sends nothing.
 		feedbackOpen: feedbackOpen(),
 		feedback: savedFeedback(),
+		// The project the user chose for triage, and unsent answers to a
+		// triage's question by chat and question. Restoring starts and sends nothing.
+		feedbackProject: feedbackProject() ?? "",
+		feedbackAnswers: savedAnswers(),
 	};
 }
 
@@ -401,6 +413,8 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	// The page shows again only in a window that has it.
 	restoreFeedback(view.feedback ?? "");
 	feedbackOpen.set(view.feedbackOpen === true);
+	feedbackProject.set(view.feedbackProject || null);
+	restoreAnswers(view.feedbackAnswers ?? []);
 	// A thread comes back over its own mission only; its words always come back unsent.
 	const thread = view.thread ?? "";
 	restoreThreads(view.place === "mission" && thread.startsWith(`${view.id}/`) ? thread : "", view.threads ?? []);

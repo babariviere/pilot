@@ -51,6 +51,8 @@ fn view() -> SavedView {
         ],
         feedback_open: true,
         feedback: "mission/export\n  Exact feedback 日本語\nsecond line ".into(),
+        feedback_project: "pilot".into(),
+        feedback_answers: vec!["triage-1/42\n1,2\n  Exact answer 👩🏽‍💻\nsecond line ".into()],
     }
 }
 
@@ -354,6 +356,25 @@ fn an_oversized_view_is_refused_whole_before_anything_pauses() {
             start(&mut desk, odd),
             Err(OutcomeStatus::Rejected),
             "{thread} {threads:?}"
+        );
+    }
+    // The feedback project is an ID; an unsent answer names its triage chat, question and picks.
+    for (project, answers) in [
+        ("pro ject", vec![]),
+        ("", vec!["triage-1/42".to_owned()]),
+        ("", vec!["triage-1\n\ntext".to_owned()]),
+        ("", vec!["triage-1/0\n\ntext".to_owned()]),
+        ("", vec!["bad chat/42\n\ntext".to_owned()]),
+        ("", vec!["triage-1/42\none\ntext".to_owned()]),
+    ] {
+        let mut desk = UpdateDesk::new(UpdateScenario::Available);
+        let mut odd = view();
+        odd.feedback_project = project.into();
+        odd.feedback_answers = answers.clone();
+        assert_eq!(
+            start(&mut desk, odd),
+            Err(OutcomeStatus::Rejected),
+            "{project} {answers:?}"
         );
     }
     assert!(desk.view().run.is_none());

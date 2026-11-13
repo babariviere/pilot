@@ -34,6 +34,7 @@ None follows from another by itself.
 | `fix` | new chat ID | One Build chat for a finished triage's exact `fix` proposal. |
 | `link` | mission ID | Links an active mission and adds a user note to its activity. |
 | `resolve` / `reopen` | feedback ID | The user's own mark. Nothing else resolves feedback. |
+| `answer` | latest triage chat ID | The user's reply to the triage's pending question. |
 
 - Triage and fix payloads freeze the exact project selection that
   `GET /api/projects/:id/chat-profile` returned (`projectId`, `projectPath`,
@@ -48,6 +49,26 @@ None follows from another by itself.
 - A link refuses a missing or inactive mission and a repeat of the latest link. The
   mission note says the feedback is context, not a request to start work.
 - Recovery is lookup only, like Send: a lost ACK stays Unknown and is never resent.
+
+## Answers
+
+A triage that calls `ask_user` reads as `question`, and its step carries the pending
+question exactly as the chat saved it: `{id, question, context?, options, multiSelect?}`,
+where `id` is the question's history entry. A database access request is not shown.
+
+- An `answer` payload is exactly `{questionId, message}` (at most 8,000 UTF-16 units).
+  The daemon checks that the target is the item's latest triage, that it still waits on
+  that same question and is not paused, then sends the words with `sendDurable` as the
+  reply to that question entry (`followUp`, `questionReplyId`, `inputGeneration`),
+  the same input admission as any reply to an agent question. A newer question refuses an
+  older answer.
+- After the chat accepted the words, the daemon saves `{kind:"answer", sessionId,
+  questionId, text}` on the feedback. A failed save leaves the step Unknown, not refused.
+- A lost ACK stays Unknown. Startup recovery and the receipt lookup read only whether the
+  chat accepted that exact operation ID (`lookupNativeAttentionInput`); if it did, the
+  step is saved and accepted. Nothing is sent again.
+- An answer clarifies the feedback. It starts no fix, links no mission, approves no
+  proposal and resolves nothing. A fix chat's question is not answered here.
 
 ## Triage
 
@@ -80,24 +101,31 @@ the origin. No transcript, file or project is attached silently.
 - `day.feedback.check {operationId}` only looks up that saved Send's or step's receipt.
 
 "Agent triage in" names the project agents work in. Nothing is chosen for the user, and
-the choice lasts only while the window is open. While one is chosen, a saved Send also
-starts its triage there. Each saved item then shows its triage, the proposal with its
+the window keeps the user's choice across a close or update (`feedbackProject` in the
+saved view). While one is chosen, a saved Send also starts its triage there. Each saved
+item then shows its triage, the proposal with its
 one suggested command (Start fix, Link to this mission or Plan a new mission), a mission
 picker from Today's missions, the fix and link states, and Mark resolved / Reopen.
 Plan a new mission only fills New's empty goal and opens New; the existing planning flow
 creates the mission, and the user links it afterwards. A delivered fix leaves the
 feedback open until the user marks it resolved.
 
+A triage waiting on the user shows its question in place: the words, the context, the
+suggestions (one may be marked Suggested) and a field for the user's own words or detail.
+Picking and typing only keep a draft; Send answer sends it once. Picked suggestions come
+first, then the user's words, as Today's answers to agent questions read. The unsent
+answer stays with its own triage chat and question across a close or update
+(`feedbackAnswers`: `<chat>/<question>\n<picks from 1>\n<text>`). Only an accepted
+answer clears it. After it, the triage line shows "You answered: …".
+
 Only an accepted receipt clears the draft. Leaving the page, closing or updating keeps
 the draft and its origin in the saved view (`feedbackOpen`, `feedback`).
 
 ## Limits
 
-- Day has no chat screen: a triage question is answered in the chat
-  (`pilot://chat/<id>`), wherever Pilot shows it.
+- Day has no chat screen. A triage question is answered on the feedback page; a fix
+  chat's question is still answered in its chat (`pilot://chat/<id>`).
 - New does not link the mission it creates; the user links it from the feedback page.
-- The agent project choice is not saved across a close or update.
 - Checks: `user-feedback-work.test.ts` (real daemon HTTP, faux sessions/provider),
   `host::feedback` unit tests and `Feedback.test.tsx` on a scripted source. They do not
   run a real provider, a native window or a live triage.
-

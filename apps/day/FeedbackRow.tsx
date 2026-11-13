@@ -3,10 +3,26 @@
 // resolved mark. Every command here is one explicit step sent once; none
 // follows from another. A proposal is the agent's; nothing in it starts,
 // links or resolves anything until the user presses its command.
+// A triage that asks the user something shows its exact question here, with
+// its suggestions and a field for the user's own words. The answer is kept
+// as an unsent draft until the user sends it; it goes to that triage chat
+// once and only clarifies: it starts no fix and approves no proposal.
 import { type JSX, Text, View } from "nsh";
+import { Input, Toggle } from "nsh/base";
 import type { Day } from "./day";
-import type { FeedbackItem, FeedbackMirror, FeedbackView, StepIntent, UserFeedbackProposal } from "./feedbackFeed";
 import {
+	type FeedbackItem,
+	type FeedbackMirror,
+	type FeedbackView,
+	MAX_ANSWER_LENGTH,
+	type StepIntent,
+	type StepResult,
+	type UserFeedbackProposal,
+	type UserFeedbackQuestion,
+} from "./feedbackFeed";
+import {
+	answerKey,
+	answerMessage,
 	type ChatStep,
 	chatLine,
 	chatState,
@@ -14,10 +30,19 @@ import {
 	missionDraft,
 	missionLine,
 	proposalOf,
+	questionOf,
 	running,
 	stepsOf,
 } from "./feedbackSteps";
-import { closeFeedback, feedbackProject, setStepMessage, stepMessages } from "./feedbackView";
+import {
+	answerDrafts,
+	closeFeedback,
+	feedbackProject,
+	setAnswerDraft,
+	setStepMessage,
+	stepMessages,
+} from "./feedbackView";
+import { keepField } from "./kept";
 import { glide } from "./motion";
 import { goalDraft, openNew } from "./planView";
 import { Action, Mark, Picker } from "./ui";
@@ -189,6 +214,140 @@ function Proposal(props: {
 	);
 }
 
+/**
+ * The triage's question, exactly as it asked it, and the user's answer:
+ * picked suggestions and their own words. Typing only keeps a draft; Send
+ * answer sends it to this triage once. It clarifies; it starts nothing.
+ */
+function Clarify(props: {
+	item: FeedbackItem;
+	triage: ChatStep;
+	question: UserFeedbackQuestion;
+	busy: boolean;
+	sending: boolean;
+	send: (intent: StepIntent) => Promise<StepResult>;
+}) {
+	const q = () => props.question;
+	const key = answerKey(props.triage, props.question);
+	const draft = () => answerDrafts()[key] ?? { picks: [], text: "" };
+	const several = () => q().multiSelect === true;
+	const message = () => answerMessage(q(), draft().picks, draft().text);
+	const tooLong = () => message().length > MAX_ANSWER_LENGTH;
+	const canSend = () => message().trim() !== "" && !tooLong() && !props.busy;
+	const pick = (n: number) => {
+		const picks = draft().picks;
+		const on = picks.includes(n);
+		setAnswerDraft(key, {
+			...draft(),
+			picks: on ? picks.filter((p) => p !== n) : several() ? [...picks, n] : [n],
+		});
+	};
+	const send = async () => {
+		if (!canSend()) return;
+		const sent = answerDrafts()[key];
+		const r = await props.send({
+			action: "answer",
+			feedbackId: props.item.id,
+			triageSessionId: props.triage.sessionId,
+			questionId: q().id,
+			message: message(),
+		});
+		// Only an accepted answer clears the draft, and only the words that were sent.
+		if (r.status === "accepted" && answerDrafts()[key] === sent) setAnswerDraft(key, null);
+	};
+	const field = keepField(
+		`feedback-answer-${key}`,
+		() => "feedback",
+		() => draft().text,
+	);
+	const options = () => q().options.map((o, n) => ({ ...o, n }));
+	return (
+		<View testID={`feedback-question-${props.item.id}`} class="gap-3 rounded-xl bg-muted px-4 py-3">
+			<Text class="text-xs font-medium text-muted-foreground">The triage asks</Text>
+			<View selectable class="gap-1">
+				<Text class="text-sm leading-relaxed text-foreground">{q().question}</Text>
+				<If when={q().context}>
+					<Text class="text-sm leading-relaxed text-muted-foreground">{q().context ?? ""}</Text>
+				</If>
+			</View>
+			<If when={options().length > 0}>
+				<View class="gap-0.5" accessibilityLabel="Suggested answers">
+					<Each of={options()} key={(o) => String(o.n)}>
+						{(o) => (
+							<Toggle
+								testID={`feedback-option-${props.item.id}-${o().n + 1}`}
+								pressed={draft().picks.includes(o().n)}
+								disabled={props.sending}
+								accessibilityLabel={o().suggested ? `${o().label}, suggested` : o().label}
+								onChange={() => pick(o().n)}
+								class="flex-row items-start gap-2.5 rounded-lg px-2 py-1.5 hover:bg-accent aria-pressed:bg-selection aria-pressed:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
+							>
+								<View
+									class="mt-1 size-3.5 items-center justify-center border"
+									classList={{
+										"rounded-full": !several(),
+										"rounded-sm": several(),
+										"border-primary": draft().picks.includes(o().n),
+										"border-input": !draft().picks.includes(o().n),
+									}}
+								>
+									<View
+										class="size-1.5"
+										classList={{
+											"rounded-full": !several(),
+											"bg-primary": draft().picks.includes(o().n),
+										}}
+									/>
+								</View>
+								<View class="flex-1 gap-0.5">
+									<View class="flex-row flex-wrap items-baseline gap-2">
+										<Text class="text-sm text-foreground">{o().label}</Text>
+										<If when={o().suggested}>
+											<Text class="text-xs text-muted-foreground">Suggested</Text>
+										</If>
+									</View>
+									<If when={o().detail}>
+										<Text class="text-xs text-muted-foreground">{o().detail ?? ""}</Text>
+									</If>
+								</View>
+							</Toggle>
+						)}
+					</Each>
+				</View>
+			</If>
+			<Input
+				testID={`feedback-answer-${props.item.id}`}
+				ref={field.ref}
+				multiline
+				readonly={props.sending}
+				value={draft().text}
+				accessibilityLabel={`Your answer to: ${q().question}`}
+				placeholder={options().length > 0 ? "Add detail, or answer in your own words" : "Your answer"}
+				onChange={({ value }) => setAnswerDraft(key, { ...draft(), text: value })}
+				onFocus={field.focus}
+				onSelectionChange={field.select}
+				class="min-h-16 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
+			/>
+			<If when={tooLong()}>
+				<Text class="text-xs text-needs-ink">{`Too long. Keep it under ${MAX_ANSWER_LENGTH} characters.`}</Text>
+			</If>
+			<View class="flex-row flex-wrap items-center gap-3">
+				<Action
+					outline
+					label={props.sending ? "Sending…" : "Send answer"}
+					testID={`feedback-answer-send-${props.item.id}`}
+					disabled={!canSend()}
+					accessibilityLabel="Send this answer to the triage once. It starts no fix and approves nothing."
+					onPress={() => void send()}
+				/>
+				<Text class="flex-1 text-xs text-faint">
+					Goes to this triage only. It starts no fix and approves nothing.
+				</Text>
+			</View>
+		</View>
+	);
+}
+
 /** One saved piece of feedback with its steps. */
 export function FeedbackRow(props: { day: Day; mirror: FeedbackMirror; item: FeedbackItem; when: string }) {
 	const v = (): FeedbackView => props.mirror.view();
@@ -198,15 +357,23 @@ export function FeedbackRow(props: { day: Day; mirror: FeedbackMirror; item: Fee
 	const chosen = () => v().projects?.find((p) => p.projectId === feedbackProject()) ?? null;
 	const triage = () => steps().triage;
 	const proposal = () => (triage() && chatState(triage()!) === "done" ? proposalOf(triage()) : null);
-	const send = async (intent: StepIntent) => {
+	const question = () => questionOf(triage());
+	const send = async (intent: StepIntent): Promise<StepResult> => {
 		setStepMessage(props.item.id, "");
 		const r = await props.mirror.source.step(intent);
 		setStepMessage(props.item.id, r.status === "accepted" || r.status === "unknown" ? "" : r.message);
 		if (r.status === "accepted") glide();
+		return r;
 	};
 	const check = async (operationId: string) => {
+		const op = v().unsettledSteps.find((o) => o.operationId === operationId);
 		const r = await props.mirror.source.checkStep(operationId);
 		setStepMessage(props.item.id, r.status === "accepted" ? "Pilot did it." : r.message);
+		// A confirmed answer was sent: its unsent copy goes, like after an accepted Send answer.
+		const t = triage();
+		if (r.status === "accepted" && op?.step === "answer" && t)
+			for (const key of Object.keys(answerDrafts()))
+				if (key.startsWith(`${t.sessionId}/`)) setAnswerDraft(key, null);
 		void props.mirror.source.read();
 	};
 	/** Triage can start when nothing is triaging it and the user chose a project. */
@@ -230,8 +397,30 @@ export function FeedbackRow(props: { day: Day; mirror: FeedbackMirror; item: Fee
 						mark={running(t()) ? (chatState(t()) === "question" ? "needs" : "moving") : "unknown"}
 						text={chatLine(t())}
 					>
+						<If when={steps().answer && !question()}>
+							<View selectable>
+								<Text testID={`feedback-answered-${props.item.id}`} class="text-xs text-muted-foreground">
+									{`You answered: “${clip(steps().answer?.text ?? "", 120)}”`}
+								</Text>
+							</View>
+						</If>
 						<ChatLink step={t()} />
 					</Line>
+				)}
+			</Each>
+			<Each
+				of={question() && triage() ? [{ triage: triage()!, question: question()! }] : []}
+				key={(x) => answerKey(x.triage, x.question)}
+			>
+				{(x) => (
+					<Clarify
+						item={props.item}
+						triage={x().triage}
+						question={x().question}
+						busy={busy()}
+						sending={v().stepping === props.item.id}
+						send={send}
+					/>
 				)}
 			</Each>
 			<Each of={proposal() && triage() ? [{ triage: triage()!, ...proposal()! }] : []} key={(x) => x.digest}>

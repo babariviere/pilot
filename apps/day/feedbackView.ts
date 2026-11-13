@@ -4,6 +4,8 @@
 // draft with words keeps its own origin until the user picks another.
 // Leaving the page, closing or updating keeps the draft (updateView.ts);
 // only Send sends it, once.
+// Unsent answers to a triage's question and the project the user chose for
+// triage are kept the same way. Restoring them sends and starts nothing.
 import { signal } from "nsh";
 import type { UserFeedbackOriginRef } from "./feedbackFeed";
 import { glide } from "./motion";
@@ -31,9 +33,24 @@ export const feedbackMessage = signal("");
 /**
  * The project agents triage and fix feedback in, as the user chose it on
  * this page, or null. Nothing chooses it for the user. While one is chosen,
- * a saved Send also starts its triage there. Kept only while the window is open.
+ * a saved Send also starts its triage there. Kept across close and update.
  */
 export const feedbackProject = signal<string | null>(null);
+
+/** An unsent answer to one triage question: the suggestions picked (from 0) and the user's own words. */
+export type AnswerDraft = { picks: number[]; text: string };
+
+/** Unsent answers by "<triage chat>/<question>". Only an accepted answer clears one. */
+export const answerDrafts = signal<Record<string, AnswerDraft>>({});
+
+export function setAnswerDraft(key: string, draft: AnswerDraft | null) {
+	answerDrafts.update((all) => {
+		const next = { ...all };
+		if (draft && (draft.picks.length > 0 || draft.text !== "")) next[key] = draft;
+		else delete next[key];
+		return next;
+	});
+}
 
 /** What the last step on each saved item said, by feedback ID. */
 export const stepMessages = signal<Record<string, string>>({});
@@ -100,6 +117,27 @@ export function restoreFeedback(saved: string) {
 	feedbackMessage.set("");
 }
 
+/** Unsent answers as a saved window keeps them: "<chat>/<question>\n<picks from 1>\n<text>". */
+export function savedAnswers(): string[] {
+	return Object.entries(answerDrafts()).map(([key, d]) => `${key}\n${d.picks.map((n) => n + 1).join(",")}\n${d.text}`);
+}
+
+/** Shows kept answers again, each with its own question. Restoring sends nothing. */
+export function restoreAnswers(saved: string[]) {
+	const out: Record<string, AnswerDraft> = {};
+	for (const line of saved) {
+		const first = line.indexOf("\n");
+		const second = line.indexOf("\n", first + 1);
+		if (first <= 0 || second < 0) continue;
+		const picks = line.slice(first + 1, second);
+		out[line.slice(0, first)] = {
+			picks: picks === "" ? [] : picks.split(",").map((n) => Number(n) - 1),
+			text: line.slice(second + 1),
+		};
+	}
+	answerDrafts.set(out);
+}
+
 /** Starts from nothing, as a new window does. */
 export function forgetFeedback() {
 	feedbackOpen.set(false);
@@ -107,6 +145,7 @@ export function forgetFeedback() {
 	feedbackOffer.set(null);
 	feedbackMessage.set("");
 	feedbackProject.set(null);
+	answerDrafts.set({});
 	stepMessages.set({});
 }
 

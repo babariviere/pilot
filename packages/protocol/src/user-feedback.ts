@@ -49,7 +49,20 @@ export type UserFeedbackWork = {
 	| { kind: "fix"; sessionId: string; projectId: string; triageSessionId: string; proposalDigest: string }
 	| { kind: "mission"; missionId: string; projectId: string }
 	| { kind: "resolved" | "reopened" }
+	/** The user's answer to the triage's question `questionId`, as sent to that chat. It clarifies only. */
+	| { kind: "answer"; sessionId: string; questionId: number; text: string }
 );
+
+/** The question a triage waits on, as its chat saved it. Answering it starts and approves nothing. */
+export interface UserFeedbackQuestion {
+	/** The question's history entry. An answer names it; a newer question refuses an older answer. */
+	id: number;
+	question: string;
+	context?: string;
+	/** At most nine suggested answers, in order. Empty for an open question. */
+	options: Array<{ label: string; detail?: string; suggested?: boolean }>;
+	multiSelect?: boolean;
+}
 
 /** A work step as a read shows it: the saved step plus what Pilot reads about it now. */
 export type UserFeedbackWorkView = UserFeedbackWork & {
@@ -58,6 +71,8 @@ export type UserFeedbackWorkView = UserFeedbackWork & {
 		title: string;
 		state: "starting" | "working" | "question" | "done" | "failed" | "stopped" | "archived" | "missing";
 	};
+	/** A triage waiting on the user: its pending question. */
+	question?: UserFeedbackQuestion;
 	/** A linked mission now, or null when it is gone. */
 	mission?: { title: string; status: string; tasksDone: number; tasksTotal: number } | null;
 	/** A finished triage's proposal with its digest, or why it cannot be read. */
@@ -96,11 +111,15 @@ export interface UserFeedbackChatChoice {
  * Native generic operation kind feedback-work. Native capability authentication is required.
  * triage: targetId = the new read-only Ask chat. fix: targetId = the new Build chat, started from the
  * exact proposal digest the user saw. link: targetId = the mission. resolve / reopen: targetId = the
- * feedback. Accepted receipt.result is the saved UserFeedbackWork. Lost ACK: receipt lookup only.
+ * feedback. answer: targetId = the item's latest triage chat, sent as the reply to its pending question
+ * `questionId`; it starts no fix and approves no proposal. Accepted receipt.result is the saved
+ * UserFeedbackWork. Lost ACK: receipt lookup only; for an answer that lookup also reads whether the chat
+ * accepted that exact input, and never sends it again.
  */
 export type UserFeedbackWorkIntent = { purpose: "feedback-work"; feedbackId: string } & (
 	| ({ action: "triage" } & UserFeedbackChatChoice)
 	| ({ action: "fix"; triageSessionId: string; proposalDigest: string } & UserFeedbackChatChoice)
 	| { action: "link"; missionId: string }
 	| { action: "resolve" | "reopen" }
+	| { action: "answer"; questionId: number; message: string }
 );

@@ -187,3 +187,56 @@ test("a new-mission proposal opens New with its goal; linking a mission and reso
 	expect(app.shows("id:feedback")).toBe(false);
 	expect(steps(app)).toBe("Steps: [triage,link,resolve]");
 });
+
+test("a triage question is answered here: its exact words, a kept draft and one explicit Send answer that starts nothing else", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "The plan page hides who is working");
+	await app.waitFor("id:feedback-triage-f1");
+	await app.press("Triage asks");
+	await app.waitFor("id:feedback-question-f1");
+	expect(app.shows("Which page do you mean?")).toBe(true);
+	expect(app.shows("Plans and missions both list tasks.")).toBe(true);
+	expect(app.shows("The triage needs your answer before it can propose a next step.")).toBe(true);
+	expect(app.enabled("id:feedback-answer-send-f1")).toBe(false);
+	await app.press("id:feedback-option-f1-2");
+	await app.type("id:feedback-answer-f1", "The one with the task rows 日本語");
+	await app.waitUntil(() => app.enabled("id:feedback-answer-send-f1"));
+	// Picking and typing send nothing.
+	expect(steps(app)).toBe("Steps: [triage]");
+	// The unsent answer, its pick and the chosen project come back after a close or update.
+	await app.press("Save and reopen");
+	await app.waitFor("id:feedback-question-f1");
+	expect(app.value("id:feedback-answer-f1")).toBe("The one with the task rows 日本語");
+	await app.waitFor("id:feedback-project-none");
+	expect(steps(app)).toBe("Steps: [triage]");
+	await app.press("id:feedback-answer-send-f1");
+	await app.waitFor("id:feedback-answered-f1");
+	expect(app.shows("Answer: [Mission overview\n\nThe one with the task rows 日本語]")).toBe(true);
+	expect(app.shows("id:feedback-question-f1")).toBe(false);
+	// It only clarifies: no fix, link or mark follows.
+	expect(steps(app)).toBe("Steps: [triage,answer]");
+	expect(app.shows("id:feedback-fix-f1")).toBe(false);
+	expect(counts(app)).toBe("Sends: 1 · Checks: 0");
+});
+
+test("a lost answer stays Unknown with its words kept; Check reads it once and nothing is sent again", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "Search is slow");
+	await app.waitFor("id:feedback-triage-f1");
+	await app.press("Triage asks");
+	await app.waitFor("id:feedback-question-f1");
+	await app.type("id:feedback-answer-f1", "Only on large projects");
+	await app.waitUntil(() => app.enabled("id:feedback-answer-send-f1"));
+	await app.press("Next step unknown");
+	await app.press("id:feedback-answer-send-f1");
+	await app.waitFor("id:feedback-step-unknown-f1");
+	expect(app.value("id:feedback-answer-f1")).toBe("Only on large projects");
+	expect(app.enabled("id:feedback-answer-send-f1")).toBe(false);
+	await app.press("id:feedback-step-check-f1");
+	await app.waitFor("Pilot did it.");
+	expect(app.shows("id:feedback-question-f1")).toBe(false);
+	expect(steps(app)).toBe("Steps: [triage,answer]");
+	expect(counts(app)).toBe("Sends: 1 · Checks: 1");
+});

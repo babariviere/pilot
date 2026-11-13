@@ -4,7 +4,8 @@
 // pages, and "Save and reopen" keeps the window as a close or an update
 // saves it and shows it again in a fresh window state. "Triage …" finishes
 // the newest item's triage with a scripted proposal; "Next step …" picks
-// what the next step does.
+// what the next step does. "Triage asks" leaves it waiting on a question; an
+// answer puts it back to work, and "Answer:" shows the last words sent.
 import { mount, signal, Text, View } from "nsh";
 import {
 	type FeedbackItem,
@@ -40,6 +41,7 @@ class ScriptedFeedback implements FeedbackSource {
 	sends = signal(0);
 	checks = signal(0);
 	steps = signal<string[]>([]);
+	answer = signal("");
 	#saved: FeedbackItem[] = [];
 	#shown = 0;
 	#lost: { operationId: string; intent: SendIntent } | null = null;
@@ -179,8 +181,23 @@ class ScriptedFeedback implements FeedbackSource {
 				projectId: "pilot",
 				mission: { title: `Mission ${intent.missionId}`, status: "active", tasksDone: 1, tasksTotal: 4 },
 			};
-		else w = { ...base, kind: intent.action === "resolve" ? "resolved" : "reopened" };
-		this.#saved = this.#saved.map((i) => (i === item ? { ...i, work: [...i.work, w] } : i));
+		else if (intent.action === "answer") {
+			this.answer.set(intent.message);
+			w = {
+				...base,
+				kind: "answer",
+				sessionId: intent.triageSessionId,
+				questionId: intent.questionId,
+				text: intent.message,
+			};
+		} else w = { ...base, kind: intent.action === "resolve" ? "resolved" : "reopened" };
+		// An answered triage goes back to work, without its question.
+		const work = item.work.map((x): UserFeedbackWorkView => {
+			if (intent.action !== "answer" || x.kind !== "triage" || x.sessionId !== intent.triageSessionId) return x;
+			const { question: _question, ...rest } = x;
+			return { ...rest, chat: { title: "Triage", state: "working" } };
+		});
+		this.#saved = this.#saved.map((i) => (i === item ? { ...i, work: [...work, w] } : i));
 	}
 	async step(intent: StepIntent): Promise<StepResult> {
 		if (this.#lostStep) return refusedStep("unknown");
@@ -218,7 +235,19 @@ class ScriptedFeedback implements FeedbackSource {
 			i !== t
 				? x
 				: proposal === "asks"
-					? { ...w, chat: { title: "Triage", state: "question" } }
+					? {
+							...w,
+							chat: { title: "Triage", state: "question" },
+							question: {
+								id: 7,
+								question: "Which page do you mean?",
+								context: "Plans and missions both list tasks.",
+								options: [
+									{ label: "The plan page", suggested: true },
+									{ label: "Mission overview", detail: "The task list on a mission" },
+								],
+							},
+						}
 					: {
 							...w,
 							chat: { title: "Triage", state: "done" },
@@ -282,6 +311,7 @@ mount(() => (
 			/>
 			<Text testID="kept">{`Kept: [${kept()}]`}</Text>
 			<Text testID="goal-draft">{`New goal: [${goalDraft().split("\n")[0]}]`}</Text>
+			<Text testID="answer-sent">{`Answer: [${feedback.answer()}]`}</Text>
 		</View>
 		<MockDayScreen day={day} />
 	</View>

@@ -10,6 +10,8 @@
 //! triage or a small fix in a project the user chose, link a mission, or mark
 //! it resolved or open again. The host re-reads the project's chat setup right
 //! before saving a triage or fix, and sends each step once, like a Send.
+//! An answer is the user's reply to the triage's pending question, sent to
+//! that chat once. It clarifies the feedback; it starts and approves nothing.
 use super::{Error, Journal, Shared, Transport, planning, valid_id};
 use crate::bridge::{Command, Gate};
 use serde::Deserialize;
@@ -25,9 +27,19 @@ pub(crate) const MAX_TEXT: usize = 8192;
 /// At most this many saved items per page.
 const PAGE: usize = 20;
 const MAX_CURSOR: u64 = 9_007_199_254_740_991;
+/// At most this many UTF-16 units in an answer, as the service counts them.
+pub(crate) const MAX_ANSWER: usize = 8000;
 
 fn valid_text(text: &str) -> bool {
     !text.trim().is_empty() && text.len() <= MAX_TEXT && !text.contains('\0')
+}
+
+fn valid_answer(text: &str) -> bool {
+    !text.trim().is_empty() && text.encode_utf16().count() <= MAX_ANSWER && !text.contains('\0')
+}
+
+fn valid_question(n: u64) -> bool {
+    n > 0 && n <= MAX_CURSOR
 }
 
 fn valid_digest(s: &str) -> bool {
@@ -104,6 +116,12 @@ pub(crate) struct Step {
     proposal_digest: Option<String>,
     #[serde(default)]
     mission_id: Option<String>,
+    /// answer: the triage question's entry, as the read showed it.
+    #[serde(default)]
+    question_id: Option<u64>,
+    /// answer: the user's words, exactly as sent to the triage.
+    #[serde(default)]
+    message: Option<String>,
 }
 impl Step {
     pub(crate) fn validate(&self) -> Result<(), Error> {
@@ -111,7 +129,9 @@ impl Step {
         let digest = |v: &Option<String>| v.as_deref().is_some_and(valid_digest);
         let chat =
             id(&self.project_id) && digest(&self.context_digest) && self.mission_id.is_none();
+        let answer = self.question_id.is_some() || self.message.is_some();
         let ok = valid_id(&self.feedback_id)
+            && (self.action == "answer") == answer
             && match self.action.as_str() {
                 "triage" => {
                     chat && self.triage_session_id.is_none() && self.proposal_digest.is_none()
@@ -128,6 +148,16 @@ impl Step {
                     self.project_id.is_none()
                         && self.context_digest.is_none()
                         && self.triage_session_id.is_none()
+                        && self.proposal_digest.is_none()
+                        && self.mission_id.is_none()
+                }
+                // The answer names the triage chat; the service checks it is this item's current one.
+                "answer" => {
+                    id(&self.triage_session_id)
+                        && self.question_id.is_some_and(valid_question)
+                        && self.message.as_deref().is_some_and(valid_answer)
+                        && self.project_id.is_none()
+                        && self.context_digest.is_none()
                         && self.proposal_digest.is_none()
                         && self.mission_id.is_none()
                 }
@@ -179,6 +209,7 @@ fn step_fields(action: &str) -> Option<&'static [&'static str]> {
         "fix" => Some(FIX),
         "link" => Some(&["missionId"]),
         "resolve" | "reopen" => Some(&[]),
+        "answer" => Some(&["questionId", "message"]),
         _ => None,
     }
 }
@@ -216,6 +247,11 @@ pub(super) fn validate_step_record(op: &Value) -> Result<(), Error> {
                     && valid_digest(str_of("proposalDigest"))
             }
             "link" => valid_id(str_of("missionId")) && target == str_of("missionId"),
+            "answer" => {
+                valid_id(target)
+                    && p["questionId"].as_u64().is_some_and(valid_question)
+                    && valid_answer(str_of("message"))
+            }
             _ => target == str_of("feedbackId"),
         };
     if ok { Ok(()) } else { Err(Error::Storage) }
@@ -231,6 +267,7 @@ pub(super) fn exact_step(op: &Value, r: &Value) -> Result<(), Error> {
         Some("link") => "mission",
         Some("resolve") => "resolved",
         Some("reopen") => "reopened",
+        Some("answer") => "answer",
         _ => return Err(Error::Unknown),
     };
     let same = match kind {
@@ -238,6 +275,11 @@ pub(super) fn exact_step(op: &Value, r: &Value) -> Result<(), Error> {
             result["sessionId"] == op["targetId"] && result["projectId"] == p["projectId"]
         }
         "mission" => result["missionId"] == op["targetId"],
+        "answer" => {
+            result["sessionId"] == op["targetId"]
+                && result["questionId"] == p["questionId"]
+                && result["text"] == p["message"]
+        }
         _ => true,
     };
     if !same
@@ -425,6 +467,12 @@ pub(super) async fn handle(
                     request["missionId"] = json!(step.mission_id);
                     let digest = planning::hash(&request.to_string());
                     (step.mission_id.clone().unwrap_or_default(), digest)
+                }
+                "answer" => {
+                    request["questionId"] = json!(step.question_id);
+                    request["message"] = json!(step.message);
+                    let digest = planning::hash(&request.to_string());
+                    (step.triage_session_id.clone().unwrap_or_default(), digest)
                 }
                 _ => {
                     let digest = planning::hash(&request.to_string());
@@ -632,6 +680,13 @@ mod tests {
         assert!(step(json!({"feedbackId":"f","action":"link","missionId":"m"})).is_ok());
         assert!(step(json!({"feedbackId":"f","action":"resolve"})).is_ok());
         assert!(step(json!({"feedbackId":"f","action":"reopen"})).is_ok());
+        assert!(
+            step(
+                json!({"feedbackId":"f","action":"answer","triageSessionId":"s","questionId":42,
+                "message":"The plan page 日本語"})
+            )
+            .is_ok()
+        );
         for bad in [
             json!({"feedbackId":"f","action":"start"}),
             json!({"feedbackId":"f","action":"triage","projectId":"p"}),
@@ -646,9 +701,46 @@ mod tests {
             json!({"feedbackId":"f","action":"triage","projectId":"p","contextDigest":d,"model":"x"}),
             json!({"feedbackId":"f","action":"triage","projectId":"p","contextDigest":d,"mode":"build"}),
             json!({"feedbackId":"f","action":"resolve","message":"x"}),
+            // An answer names the chat, its question and words only, and only an answer has them.
+            json!({"feedbackId":"f","action":"answer","triageSessionId":"s","message":"x"}),
+            json!({"feedbackId":"f","action":"answer","triageSessionId":"s","questionId":0,"message":"x"}),
+            json!({"feedbackId":"f","action":"answer","triageSessionId":"s","questionId":1,"message":"  "}),
+            json!({"feedbackId":"f","action":"answer","triageSessionId":"s","questionId":1,"message":"x".repeat(MAX_ANSWER + 1)}),
+            json!({"feedbackId":"f","action":"answer","questionId":1,"message":"x"}),
+            json!({"feedbackId":"f","action":"answer","triageSessionId":"s","questionId":1,"message":"x","projectId":"p"}),
+            json!({"feedbackId":"f","action":"resolve","questionId":1}),
+            json!({"feedbackId":"f","action":"triage","projectId":"p","contextDigest":d,"questionId":1}),
         ] {
             assert!(step(bad.clone()).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn only_the_same_chat_question_and_words_settle_an_answer() {
+        let p = json!({"purpose":WORK_KIND,"action":"answer","feedbackId":"f","questionId":42,"message":"The plan page"});
+        let op = json!({"operationId":"op","targetId":"s1","kind":WORK_KIND,"bindingGeneration":1,
+            "bindingId":"a".repeat(64),"payload":p.to_string()});
+        assert_eq!(validate_step_record(&op), Ok(()));
+        let r = json!({"result":{"operationId":"op","kind":"answer","sessionId":"s1","questionId":42,
+            "text":"The plan page","recordedAt":1}});
+        assert_eq!(exact_step(&op, &r), Ok(()));
+        for (pointer, value) in [
+            ("/result/sessionId", json!("s2")),
+            ("/result/questionId", json!(43)),
+            ("/result/text", json!("Another page")),
+            ("/result/kind", json!("triage")),
+            ("/result/operationId", json!("other")),
+        ] {
+            let mut changed = r.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert_eq!(exact_step(&op, &changed), Err(Error::Unknown), "{pointer}");
+        }
+        let mut forged = op.clone();
+        forged["payload"] = json!(
+            json!({"purpose":WORK_KIND,"action":"answer","feedbackId":"f","questionId":42,"message":"x","start":true})
+                .to_string()
+        );
+        assert_eq!(validate_step_record(&forged), Err(Error::Storage));
     }
 
     #[test]

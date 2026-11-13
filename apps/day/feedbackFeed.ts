@@ -7,6 +7,8 @@
 // act of the user's on saved feedback: start an agent triage or a small fix
 // in a project the user chose, link a mission, or mark it resolved. Each is
 // sent once; a lost one stays Unknown until Check reads its receipt.
+// An answer is the user's reply to a triage's pending question, sent to that
+// triage chat once. It clarifies the feedback; it starts and approves nothing.
 import { type Signal, signal } from "nsh";
 import { call, type Refusal, type Reply } from "./bridge";
 import type {
@@ -14,14 +16,25 @@ import type {
 	UserFeedbackOrigin,
 	UserFeedbackOriginRef,
 	UserFeedbackProposal,
+	UserFeedbackQuestion,
 	UserFeedbackWorkView,
 } from "./feedbackContract";
 import { glide } from "./motion";
 
-export type { UserFeedback, UserFeedbackOrigin, UserFeedbackOriginRef, UserFeedbackProposal, UserFeedbackWorkView };
+export type {
+	UserFeedback,
+	UserFeedbackOrigin,
+	UserFeedbackOriginRef,
+	UserFeedbackProposal,
+	UserFeedbackQuestion,
+	UserFeedbackWorkView,
+};
 
 /** At most this many UTF-8 bytes of feedback, as the service counts them. */
 export const MAX_FEEDBACK_BYTES = 8192;
+
+/** At most this many characters (UTF-16 units) in an answer, as the service counts them. */
+export const MAX_ANSWER_LENGTH = 8000;
 
 /** One saved piece of feedback, its place in the list and the user's steps on it, oldest first. */
 export type FeedbackItem = UserFeedback & { sequence: number; work: UserFeedbackWorkView[] };
@@ -41,6 +54,7 @@ export type StepIntent = { feedbackId: string } & (
 	| { action: "fix"; projectId: string; contextDigest: string; triageSessionId: string; proposalDigest: string }
 	| { action: "link"; missionId: string }
 	| { action: "resolve" | "reopen" }
+	| { action: "answer"; triageSessionId: string; questionId: number; message: string }
 );
 
 /** What the feedback page shows. */
@@ -205,6 +219,17 @@ function proposalOf(x: unknown): UserFeedbackWorkView["proposal"] | null {
 	return { value: v as unknown as UserFeedbackProposal, digest: p.digest as string };
 }
 
+/** A triage's pending question, or null when it does not read. */
+function questionOf(x: unknown): UserFeedbackQuestion | null {
+	const q = x as Record<string, unknown> | null;
+	if (!q || typeof q !== "object" || typeof q.id !== "number" || !str(q.question)) return null;
+	if (q.context !== undefined && !str(q.context)) return null;
+	if (!Array.isArray(q.options) || q.options.length > 9) return null;
+	for (const o of q.options as Record<string, unknown>[])
+		if (!o || !str(o.label) || (o.detail !== undefined && !str(o.detail))) return null;
+	return q as unknown as UserFeedbackQuestion;
+}
+
 /** One saved step as a read shows it, or null when it does not read. */
 function workOf(x: unknown): UserFeedbackWorkView | null {
 	const w = x as Record<string, unknown> | null;
@@ -215,6 +240,7 @@ function workOf(x: unknown): UserFeedbackWorkView | null {
 		if (chat !== undefined && (!chat || !str(chat.title) || !STATES.includes(chat.state as string))) return null;
 		if (w.kind === "fix" && (!str(w.triageSessionId) || !str(w.proposalDigest))) return null;
 		if (w.proposal !== undefined && !proposalOf(w.proposal)) return null;
+		if (w.question !== undefined && !questionOf(w.question)) return null;
 		return w as unknown as UserFeedbackWorkView;
 	}
 	if (w.kind === "mission") {
@@ -223,6 +249,10 @@ function workOf(x: unknown): UserFeedbackWorkView | null {
 		if (m && (!str(m.title) || !str(m.status) || typeof m.tasksDone !== "number")) return null;
 		return w as unknown as UserFeedbackWorkView;
 	}
+	if (w.kind === "answer")
+		return str(w.sessionId) && typeof w.questionId === "number" && str(w.text)
+			? (w as unknown as UserFeedbackWorkView)
+			: null;
 	return w.kind === "resolved" || w.kind === "reopened" ? (w as unknown as UserFeedbackWorkView) : null;
 }
 

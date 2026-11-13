@@ -357,6 +357,17 @@ pub struct SavedView {
     /// Restoring it sends nothing, and it keeps its own origin.
     #[prop(default)]
     pub feedback: String,
+    /// The project the user chose for feedback triage, by project ID, or
+    /// empty for none. The user's own choice: nothing picks one for them,
+    /// and showing it again starts nothing.
+    #[prop(default)]
+    pub feedback_project: String,
+    /// Unsent answers to a feedback triage's question, as
+    /// "<triage chat>/<question>\n<picked options>\n<text>", where the picks
+    /// are option numbers from 1 separated by commas. Restoring one sends
+    /// nothing, and it stays with its own question.
+    #[prop(default)]
+    pub feedback_answers: Vec<String>,
 }
 
 impl SavedView {
@@ -371,6 +382,7 @@ impl SavedView {
             .chain(&self.reminders)
             .chain(&self.preferences)
             .chain(&self.threads)
+            .chain(&self.feedback_answers)
             .map(String::len)
             .sum::<usize>();
         self.goal.len()
@@ -387,6 +399,7 @@ impl SavedView {
             + self.today_project.len()
             + self.thread.len()
             + self.feedback.len()
+            + self.feedback_project.len()
             + lists
     }
 
@@ -399,6 +412,7 @@ impl SavedView {
             + self.reminders.len()
             + self.preferences.len()
             + self.threads.len()
+            + self.feedback_answers.len()
     }
 
     /// Whether its offsets are plain, non-negative numbers.
@@ -468,8 +482,26 @@ impl SavedView {
     }
 
     /// Whether `feedback` is empty, or names an empty, mission or chat origin
-    /// by a valid ID before its text.
+    /// by a valid ID before its text; `feedback_project` is empty or a valid
+    /// ID; and each unsent answer names a triage chat, a question and picks.
     pub fn feedback_valid(&self) -> bool {
+        let id = |s: &str| crate::host::valid_id(s);
+        let number = |s: &str| {
+            !s.is_empty() && s.len() <= 16 && s.bytes().all(|b| b.is_ascii_digit()) && s != "0"
+        };
+        let answers = self.feedback_answers.len() <= 16
+            && self.feedback_answers.iter().all(|line| {
+                let mut parts = line.splitn(3, '\n');
+                matches!(
+                    (parts.next(), parts.next(), parts.next()),
+                    (Some(at), Some(picks), Some(_))
+                        if at.split_once('/').is_some_and(|(chat, question)| id(chat) && number(question))
+                            && (picks.is_empty() || picks.split(',').all(number))
+                )
+            });
+        if !answers || !(self.feedback_project.is_empty() || id(&self.feedback_project)) {
+            return false;
+        }
         let Some((origin, _)) = self.feedback.split_once('\n') else {
             return self.feedback.is_empty();
         };

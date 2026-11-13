@@ -28,7 +28,8 @@ active, unheld planning coordinator; Later and Discard keep the history. Talking
 Feedback (in the header, or Send feedback on a mission) saves your words about Pilot, with the
 mission when you keep it. Choose the project with Pilot's code and a read-only agent triages what you
 send: it groups duplicates, may ask you a question and proposes a small fix, a mission or no change.
-Start fix, linking a mission and Plan a new mission are your own steps; only you mark feedback resolved.
+You answer its question on the same page; the answer only clarifies. Start fix, linking a mission and
+Plan a new mission are your own steps; only you mark feedback resolved.
 
 | Feature                                         | Guide                                         |
 | ----------------------------------------------- | --------------------------------------------- |

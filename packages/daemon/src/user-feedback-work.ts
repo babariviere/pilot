@@ -4,12 +4,16 @@
  * explicit native operation; none follows from another by itself. Triage and fix are ordinary
  * project chats created through NativeChat, so project, model, budget, Stop and lifecycle rules
  * are the existing ones. The proposal stays in the triage chat's own history; reads parse it.
+ * An answer is the user's reply to the triage's pending question, sent to that chat like any reply
+ * to an agent question. It clarifies the feedback; it starts no fix and approves no proposal.
  */
 import type {
+	AgentQuestion,
 	DurableOperation,
 	SessionSummary,
 	UserFeedback,
 	UserFeedbackProposal,
+	UserFeedbackQuestion,
 	UserFeedbackWork,
 	UserFeedbackWorkView,
 } from "@pilot/protocol";
@@ -18,6 +22,7 @@ import type { MissionStore } from "./missions.ts";
 import type { NativeChat, Selection } from "./native-chat.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
 import type { SessionManager } from "./sessions.ts";
+import { USER_FEEDBACK_LIMITS } from "./user-feedback-store.ts";
 
 export const FEEDBACK_WORK = "feedback-work";
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -27,15 +32,20 @@ const CONTEXT = { feedback: 30, missions: 30, text: 600 } as const;
 /** A proposal is the last assistant text of a finished triage, at most this many bytes. */
 const PROPOSAL_BYTES = 8192;
 const NEXT = ["fix", "existing-mission", "new-mission", "none"] as const;
+/** An answer is at most this many UTF-16 units, like any native reply to an agent question. */
+const ANSWER_LENGTH = 8000;
 
 type ChatAction = "triage" | "fix";
+type Answer = { action: "answer"; feedbackId: string; sessionId: string; questionId: number; message: string };
 type Intent =
 	| ({ action: ChatAction; feedbackId: string; triageSessionId?: string; proposalDigest?: string } & Omit<
 			Selection,
 			"mode"
 	  >)
 	| { action: "link"; feedbackId: string; missionId: string }
-	| { action: "resolve" | "reopen"; feedbackId: string };
+	| { action: "resolve"; feedbackId: string }
+	| { action: "reopen"; feedbackId: string }
+	| Answer;
 
 function fail(message: string): never {
 	throw new OperationRejected(message);
@@ -72,7 +82,9 @@ export function feedbackWorkIntent(op: DurableOperation): Intent {
 					? fields(value, [...base, "missionId"])
 					: action === "resolve" || action === "reopen"
 						? fields(value, base)
-						: fail("Invalid feedback step action");
+						: action === "answer"
+							? fields(value, [...base, "questionId", "message"])
+							: fail("Invalid feedback step action");
 	if (p.purpose !== FEEDBACK_WORK || op.kind !== FEEDBACK_WORK || op.bindingGeneration !== 1)
 		fail("Invalid feedback step scope");
 	const feedbackId = id(p.feedbackId, "feedback ID");
@@ -84,6 +96,14 @@ export function feedbackWorkIntent(op: DurableOperation): Intent {
 	if (action === "resolve" || action === "reopen") {
 		if (op.targetId !== feedbackId) fail("A mark names its feedback as the target");
 		return { action, feedbackId };
+	}
+	if (action === "answer") {
+		const { questionId, message } = p;
+		if (typeof questionId !== "number" || !Number.isSafeInteger(questionId) || questionId < 1)
+			fail("Invalid question ID");
+		if (typeof message !== "string" || !message.trim() || message.length > ANSWER_LENGTH || message.includes("\0"))
+			fail(`Invalid answer (at most ${ANSWER_LENGTH} characters)`);
+		return { action, feedbackId, sessionId: id(op.targetId, "triage chat ID"), questionId, message };
 	}
 	id(op.targetId, "chat ID");
 	if (
@@ -161,6 +181,15 @@ export function proposalDigest(p: UserFeedbackProposal): string {
 	return payloadHash(canonicalJSON(p));
 }
 
+/** Whether a saved feedback step is an answer, whose lost ACK an exact input lookup can settle. */
+export function isFeedbackAnswer(op: DurableOperation): boolean {
+	try {
+		return op.kind === FEEDBACK_WORK && JSON.parse(op.payload)?.action === "answer";
+	} catch {
+		return false;
+	}
+}
+
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
 function chatState(s: SessionSummary | undefined): NonNullable<UserFeedbackWorkView["chat"]>["state"] {
@@ -177,7 +206,7 @@ function chatState(s: SessionSummary | undefined): NonNullable<UserFeedbackWorkV
 interface Dependencies {
 	store: MissionStore;
 	chats: Pick<NativeChat, "qualify" | "spawn">;
-	sessions: Pick<SessionManager, "get" | "history">;
+	sessions: Pick<SessionManager, "get" | "history" | "pendingQuestion" | "sendDurable" | "lookupNativeAttentionInput">;
 }
 
 export class UserFeedbackWorkService {
@@ -225,6 +254,38 @@ export class UserFeedbackWorkService {
 		return result;
 	}
 
+	/** The question a triage waits on now, as its chat saved it. Passive; a database request is not one. */
+	private async question(sessionId: string): Promise<UserFeedbackQuestion | undefined> {
+		let entry: Awaited<ReturnType<SessionManager["pendingQuestion"]>>;
+		try {
+			entry = await this.deps.sessions.pendingQuestion(sessionId);
+		} catch {
+			return undefined;
+		}
+		const data = entry?.data as unknown as AgentQuestion | undefined;
+		if (
+			!entry ||
+			!data ||
+			typeof data.question !== "string" ||
+			!Array.isArray(data.options) ||
+			data.options.length > 9 ||
+			data.databaseAccess !== undefined ||
+			Buffer.byteLength(JSON.stringify(data)) > 32768
+		)
+			return undefined;
+		return {
+			id: entry.id,
+			question: data.question,
+			...(typeof data.context === "string" ? { context: data.context } : {}),
+			options: data.options.map((o) => ({
+				label: String(o.label),
+				...(typeof o.detail === "string" ? { detail: o.detail } : {}),
+				...(o.suggested === true ? { suggested: true } : {}),
+			})),
+			...(data.multiSelect === true ? { multiSelect: true } : {}),
+		};
+	}
+
 	/** One item's steps as a read shows them, oldest first. */
 	async view(feedbackId: string): Promise<UserFeedbackWorkView[]> {
 		const out: UserFeedbackWorkView[] = [];
@@ -235,6 +296,10 @@ export class UserFeedbackWorkService {
 				if (work.kind === "triage") {
 					const proposal = await this.proposal(work.sessionId);
 					if (proposal) view.proposal = proposal;
+					if (view.chat?.state === "question") {
+						const question = await this.question(work.sessionId);
+						if (question) view.question = question;
+					}
 				}
 				out.push(view);
 			} else if (work.kind === "mission") {
@@ -295,14 +360,73 @@ export class UserFeedbackWorkService {
 		].join("\n\n");
 	}
 
-	/** Journal recovery is lookup-only; a saved step cannot replace a missing outer ACK. */
+	/** The answer's saved step. Once the chat accepted the words, a failed save leaves the step Unknown. */
+	private async saveAnswer(p: Answer, operationId: string): Promise<UserFeedbackWork> {
+		const { store } = this.deps;
+		const saved = store.feedback.workByOperation(operationId);
+		if (saved) return saved;
+		const work: UserFeedbackWork = {
+			operationId,
+			recordedAt: Date.now(),
+			kind: "answer",
+			sessionId: p.sessionId,
+			questionId: p.questionId,
+			text: p.message,
+		};
+		try {
+			store.feedback.addWork(p.feedbackId, work, () => {});
+		} catch {
+			throw new Error("The answer reached the triage, but Pilot could not save it on the feedback");
+		}
+		await store.durable();
+		return work;
+	}
+
+	/**
+	 * Re-entry after a lost ACK. Only an answer can be settled, and only by reading whether its chat
+	 * accepted that exact input. Nothing is ever sent again; every other step stays Unknown.
+	 */
+	async recover(op: DurableOperation): Promise<UserFeedbackWork> {
+		const p = feedbackWorkIntent(op);
+		if (p.action !== "answer") throw new Error("Feedback step outcome is unknown; Check its exact receipt only");
+		await this.deps.store.durable();
+		if (this.deps.store.feedback.workByOperation(op.operationId)) return this.saveAnswer(p, op.operationId);
+		if (!(await this.deps.sessions.lookupNativeAttentionInput(p.sessionId, op.operationId)))
+			throw new Error("Answer outcome is unknown; it is never sent again");
+		return this.saveAnswer(p, op.operationId);
+	}
+
+	/** The reply to the item's latest triage question, sent once like a reply to any agent question. */
+	private async answer(p: Answer, op: DurableOperation): Promise<UserFeedbackWork> {
+		const { store, sessions } = this.deps;
+		const work = store.feedback.work(p.feedbackId);
+		const triage = work.findLast((w) => w.kind === "triage");
+		if (triage?.kind !== "triage" || triage.sessionId !== p.sessionId)
+			fail("That chat is not this feedback's current triage");
+		if (work.length >= USER_FEEDBACK_LIMITS.work)
+			fail(`This feedback already has ${USER_FEEDBACK_LIMITS.work} steps`);
+		const chat = sessions.get(p.sessionId);
+		if (!chat || chat.continuedTo || chatState(chat) !== "question") fail("The triage is not waiting for an answer");
+		if (chat.sleepPaused || chat.offlinePaused || chat.subscriptionPause) fail("The triage is paused");
+		const question = await this.question(p.sessionId);
+		if (!question || question.id !== p.questionId) fail("The triage's question changed. Read it again.");
+		// Same input admission as any reply to an agent question: Stop, pause and update gates apply.
+		await sessions.sendDurable(p.sessionId, p.message, "followUp", op.operationId, {
+			questionReplyId: question.id,
+			inputGeneration: chat.inputGeneration ?? 0,
+		});
+		return this.saveAnswer(p, op.operationId);
+	}
+
+	/** Journal re-entry is lookup-only; a saved step cannot replace a missing outer ACK. */
 	async admit(op: DurableOperation, journal: OperationJournal, firstEntry: boolean): Promise<UserFeedbackWork> {
-		if (!firstEntry) throw new Error("Feedback step outcome is unknown; Check its exact receipt only");
+		if (!firstEntry) return this.recover(op);
 		const p = feedbackWorkIntent(op);
 		if (!op.origin || !sameHost(op.origin, journal.destination)) fail("Invalid feedback step host");
 		const { store } = this.deps;
 		await store.durable();
 		const feedback = store.feedback.get(p.feedbackId) ?? fail("This feedback no longer exists");
+		if (p.action === "answer") return this.answer(p, op);
 		const { sequence: _sequence, ...saved } = feedback;
 		const base = { operationId: op.operationId, recordedAt: Date.now() };
 		const add = async (work: UserFeedbackWork, check: (current: UserFeedbackWork[]) => void = () => {}) => {

@@ -4,6 +4,7 @@ export type {
 	UserFeedbackOrigin,
 	UserFeedbackOriginRef,
 	UserFeedbackProposal,
+	UserFeedbackQuestion,
 	UserFeedbackWork,
 	UserFeedbackWorkView,
 } from "../../packages/protocol/src/user-feedback.ts";
