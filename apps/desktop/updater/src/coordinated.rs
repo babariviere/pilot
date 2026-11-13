@@ -11,6 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
 const FILE: &str = "coordinated-update.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

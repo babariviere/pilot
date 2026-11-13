@@ -27,6 +27,7 @@ impl Reservation {
     ) -> Result<Self, Failure> {
         Self::prepare_request(location, owner, purpose, binding, false, None, None)
     }
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
     pub(super) fn prepare_explicit(
         location: &Location,
         owner: &Value,
@@ -35,6 +36,7 @@ impl Reservation {
     ) -> Result<Self, Failure> {
         Self::prepare_request(location, owner, purpose, binding, true, None, None)
     }
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
     pub(super) fn prepare_replacement(
         location: &Location,
         owner: &Value,
