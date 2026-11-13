@@ -1,6 +1,27 @@
 //! The Day executable, not the stock NSH packaged runner.
 fn main() -> std::process::ExitCode {
     #[cfg(target_os = "macos")]
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|s| s == "--daemon-handoff")
+    {
+        let args = std::env::args_os().skip(2).collect();
+        // Security.framework verification must run off the AppKit main thread.
+        let result = std::thread::spawn(move || pilot_day_native::daemon_handoff::run(args)).join();
+        if let Ok(value) = result {
+            println!("{value}");
+            return if ["ready", "complete", "observed"]
+                .iter()
+                .any(|s| value["state"] == *s)
+            {
+                std::process::ExitCode::SUCCESS
+            } else {
+                std::process::ExitCode::FAILURE
+            };
+        }
+        return std::process::ExitCode::FAILURE;
+    }
+    #[cfg(target_os = "macos")]
     if pilot_desktop_updater::build_input::requested() {
         return if pilot_desktop_updater::build_input::write().is_ok() {
             std::process::ExitCode::SUCCESS

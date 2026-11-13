@@ -909,18 +909,20 @@ impl VerifiedApp {
             let fresh =
                 coordination::global_update(&location, &operation, GlobalUpdateAction::Verify)
                     .map_err(|_| Error::Unknown)?;
-            if fresh["receipt"] != receipt
-                || fresh["blockers"].as_array().is_none_or(|b| !b.is_empty())
-            {
+            if fresh["receipt"] != receipt {
                 return Err(Error::Busy);
             }
+            let uncertainty =
+                bundled_service::dogfood_uncertainty(&fresh).map_err(|_| Error::Busy)?;
             verify_processes(&fresh)?;
             // The official installer must never replace a GUI bundle while
             // its own daemon is still executing from that bundle. The native
             // module owns exact service identity, durable stop and lease exit.
             let stopped = bundled_service::stop(&connection, &self.runtime, &operation, &cancel)
                 .map_err(|_| Error::Unknown)?;
-            record.manifest = Some(json!({"phase":"install-entered","receipt":receipt}));
+            record.manifest = Some(
+                json!({"phase":"install-entered","receipt":receipt,"uncertainty":uncertainty}),
+            );
             record.revision += 1;
             journal.save_update(record.clone())?;
             // Both are unmodified public NSH APIs. Remember before its swap

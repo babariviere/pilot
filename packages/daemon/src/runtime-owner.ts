@@ -105,7 +105,9 @@ export interface RuntimeOwner {
 	identity(): { boot: string; build: RuntimeBuild | null; runtimeRoot?: string };
 	install(handler: RequestListener): void;
 	ready(hello: DaemonHello): void;
-	updates(handler: (action: "prepare" | "verify" | "cancel" | "inspect", value: unknown) => Promise<unknown>): void;
+	updates(
+		handler: (action: "prepare" | "verify" | "cancel" | "inspect" | "release", value: unknown) => Promise<unknown>,
+	): void;
 	close(): Promise<void>;
 }
 
@@ -194,7 +196,7 @@ export async function ownRuntime(
 						if (
 							value.boot !== boot ||
 							!/^[a-f0-9]{64}$/.test(value.nonce) ||
-							!["prepare", "verify", "cancel", "inspect"].includes(value.action)
+							!["prepare", "verify", "cancel", "inspect", "release"].includes(value.action)
 						)
 							throw new Error("identity");
 						const receipt = await updateHandler!(value.action, value.receipt);

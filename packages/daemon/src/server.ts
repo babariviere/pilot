@@ -644,8 +644,29 @@ export function createDaemonServer(
 		if ("globalUpdate" in value) {
 			// Existing native owner proof only. Never an agent/session or TSX route.
 			// A preparation receipt is not signature/process/replacement authority.
-			if (!globalUpdate || Object.keys(value).join() !== "globalUpdate") throw new Conflict("Invalid global update");
-			const operation = value.globalUpdate as DurableOperation;
+			if (!globalUpdate) throw new Conflict("Invalid global update");
+			const input = value as { globalUpdate: DurableOperation; release?: DurableOperation; runtime?: unknown };
+			const operation = input.globalUpdate;
+			if (action === "release") {
+				if (Object.keys(value).sort().join() !== "globalUpdate,release,runtime" || !input.release)
+					throw new Conflict("Invalid global release");
+				// The native service owner verifies the signed app and exact successor
+				// (or rollback) before sending. Compare process-captured identity here,
+				// never a mutable owner file, public hello or a matching version alone.
+				const verifyRuntime = async () => {
+					const current = bootstrap?.identity();
+					if (
+						!current?.build ||
+						!current.runtimeRoot ||
+						canonicalJSON(input.runtime) !==
+							canonicalJSON({ boot: current.boot, build: current.build, runtimeRoot: current.runtimeRoot })
+					)
+						throw new Conflict("Global release runtime changed");
+				};
+				await verifyRuntime();
+				return globalUpdate.release(input.release, operation, verifyRuntime);
+			}
+			if (Object.keys(value).join() !== "globalUpdate") throw new Conflict("Invalid global update");
 			if (action === "inspect") return (await globalUpdate.lookup(operation)) ?? null;
 			if (action === "prepare") return globalUpdate.prepare(operation);
 			if (action === "verify") return globalUpdate.verify(operation);

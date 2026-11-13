@@ -5,6 +5,12 @@ The earlier app-only/agents-running guidance in the historical pipeline audit no
 longer describes the required NSH flow. This document describes the implemented
 backend increment, not signed production or native acceptance.
 
+The [windowless daemon handoff](day-daemon-handoff.md) now uses these foundations.
+For personal dogfood, exact exited-kernel descendant uncertainty is kept but no
+longer an absolute update veto. Earlier independent-descendant-proof requirements
+in this document are superseded by that policy. Known shutdown, live resources,
+storage and signature failures still block; uncertain effects are never replayed.
+
 ## Implemented boundary
 
 `packages/daemon/src/global-update-preparation.ts` reuses `OperationJournal`,
@@ -184,14 +190,12 @@ It writes no consent, update operation, durable backup or preparation request.
 No inputs, or failed verification, leave the ordinary window usable with updates
 unavailable. Ordinary read-only startup still needs no update distribution.
 
-Even successful preflight cannot offer a normal or Force install: the native root
-has **no independent job/descendant shutdown verifier**. Its existing update
-status explains this precise failure; both modes refuse before confirmation,
-loss acceptance, capture, pause or close. Force is not advertised, and legacy
-staged inputs cannot provide a fallback installer. These are fail-closed input
-and root-routing seams, not a completed production update flow. A future qualified
-root must reverify immutable inputs and bind exact consent, capture/loss and the
-same mandatory process verifier before calling the existing official installer.
+Successful signed preflight now permits fresh dogfood consent. It does not itself
+pause work or install anything. The windowless service handoff provides a callable
+installer entry for an already installed full signed Day bundle. Connecting the
+GUI's ordinary update action to native capture/close and the official NSH app
+installer remains separate work. Neither mode waives known shutdown, signature
+or storage checks, and Force still needs its exact warned loss confirmation.
 
 The official adapter now supplies `NormalOffer` and `NormalConsent` for that
 future root binding. A normal offer pins the complete verified artifact

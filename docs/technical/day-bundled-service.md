@@ -1,5 +1,10 @@
 # App-owned daemon handoff
 
+For the executable dogfood handoff interface and reusable isolated driver, see
+[Day daemon handoff](day-daemon-handoff.md). Its exited-kernel uncertainty policy
+replaces the earlier absolute descendant-proof requirement below. Signature,
+known shutdown, profile ownership and Unknown/no-replay checks remain required.
+
 The NSH update path uses the verified GUI app's own
 `Contents/Resources/runtime`, not a published GPUI capsule. The small native
 adapter is `daemon_upgrade::bundled_service` in the renderer-independent updater
@@ -74,9 +79,10 @@ verification seam; they are not signed-distribution acceptance.
 
 Real signed app/rollback archives, joined service/official-install execution,
 startup/global release and native end-to-end qualification remain separate gates.
-The root's independent process-safety verifier remains unconfigured; this source
-increment does not enable a live update control. In particular,
-an empty host registry must not erase uncertain descendant history. No native
+The windowless Day entry now supplies the dogfood policy after verifying the full
+signed runtime. OfficialRoot permits fresh consent only after signed input checks;
+this is not a claim that the GUI update action is fully connected. An empty host
+registry must not erase uncertain descendant history. No native
 registration, live pause/update/restart, visible window or production cutover is
 authorized by these tests. Ordinary read-only bootstrap still needs only the
 running app's code seal and selected connection, not a full update distribution.

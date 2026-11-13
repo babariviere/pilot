@@ -849,7 +849,11 @@ pub fn global_update(
     operation: &Value,
     action: GlobalUpdateAction,
 ) -> Result<Value, Error> {
-    if operation["kind"] != "global-update-prepare" || operation["targetId"] != "global-update" {
+    if (operation["kind"] != "global-update-prepare"
+        && !(matches!(action, GlobalUpdateAction::Inspect)
+            && operation["kind"] == "global-update-release"))
+        || operation["targetId"] != "global-update"
+    {
         return Err(Error::Identity);
     }
     let owner = record(location)?;

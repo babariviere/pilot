@@ -121,7 +121,7 @@ fn op(target: &Runtime) -> (Value, Value) {
         "payloadHash":crate::transport::hex(&Sha256::digest(payload.as_bytes())),"payload":payload,"destination":{"daemonId":"daemon","lineageId":"lineage"}});
     let receipt = json!({"state":"accepted","operationId":operation["operationId"],"payloadHash":operation["payloadHash"],
         "targetId":operation["targetId"],"destination":operation["destination"],"result":{"target":serde_json::from_str::<Value>(&payload).unwrap(),
-        "sessions":[{"phase":"checkpointed"},{"phase":"unknown","hostExited":true,"interrupted":true}]}});
+        "sessions":[{"sessionId":"healthy","phase":"checkpointed","hostExited":true},{"sessionId":"broken","phase":"unknown","hostExited":true,"interrupted":true}]}});
     (operation, receipt)
 }
 #[test]
@@ -176,15 +176,39 @@ fn interrupted_state_is_not_a_veto_but_process_safety_is_mandatory() {
         json!([{"kind":"process","id":"owned-descendant"}]),
         json!([{"kind":"unknown","id":"exit-not-proven"}]),
     ] {
-        assert_eq!(
+        assert!(
             prepared(
                 &operation,
                 &json!({"receipt":receipt,"blockers":blockers}),
                 &runtime
-            ),
-            Err(Failure::Busy)
+            )
+            .is_err()
         );
     }
+}
+
+#[test]
+fn dogfood_accepts_only_exited_kernel_descendant_uncertainty() {
+    let (_temp, _app, runtime) = fixture();
+    let (operation, receipt) = op(&runtime);
+    let uncertainty =
+        json!({"kind":"unknown-process","id":"lifecycle:broken","sessionId":"broken"});
+    let fresh = json!({"receipt":receipt,"blockers":[uncertainty]});
+    assert_eq!(prepared(&operation, &fresh, &runtime), Ok(()));
+    assert_eq!(dogfood_uncertainty(&fresh).unwrap(), vec![uncertainty]);
+    for blocker in [
+        json!({"kind":"job","id":"owned","sessionId":"broken"}),
+        json!({"kind":"unknown-process","id":"broken","sessionId":"broken"}),
+        json!({"kind":"unknown-process","id":"lifecycle:other","sessionId":"other"}),
+        json!({"kind":"admission","id":"sessions"}),
+    ] {
+        let mut changed = fresh.clone();
+        changed["blockers"] = json!([blocker]);
+        assert!(dogfood_uncertainty(&changed).is_err());
+    }
+    let mut live = fresh;
+    live["receipt"]["result"]["sessions"][1]["hostExited"] = json!(false);
+    assert_eq!(dogfood_uncertainty(&live), Err(Failure::Busy));
 }
 
 #[derive(Default)]

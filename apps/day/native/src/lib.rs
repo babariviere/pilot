@@ -25,6 +25,8 @@ pub mod changes_feed;
 pub mod changes_project;
 pub mod contract;
 pub mod desk;
+#[cfg(all(target_os = "macos", feature = "macos-host"))]
+pub mod daemon_handoff;
 pub mod feed;
 pub mod fixture;
 mod handoff;

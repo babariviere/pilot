@@ -248,6 +248,9 @@ struct LaunchAgent<'a> {
 }
 
 fn service_pid(text: &str, path: &Path, arguments: &[Value]) -> Result<i32, Failure> {
+    service_state(text, path, arguments)?.ok_or(Failure::Unverified)
+}
+fn service_state(text: &str, path: &Path, arguments: &[Value]) -> Result<Option<i32>, Failure> {
     let mut pid = None;
     let mut actual = Vec::new();
     let mut in_arguments = false;
@@ -281,7 +284,7 @@ fn service_pid(text: &str, path: &Path, arguments: &[Value]) -> Result<i32, Fail
     {
         return Err(Failure::Unsupported);
     }
-    pid.filter(|pid| *pid > 1).ok_or(Failure::Unverified)
+    Ok(pid.filter(|pid| *pid > 1))
 }
 impl LaunchAgent<'_> {
     fn check_cancel(&self) -> Result<(), Failure> {
@@ -1030,6 +1033,22 @@ mod tests {
         assert_eq!(
             service_pid(text, Path::new("/agent.plist"), args.as_array().unwrap()),
             Ok(77)
+        );
+        assert_eq!(
+            service_state(
+                &text.replace(" pid = 77\n", ""),
+                Path::new("/agent.plist"),
+                args.as_array().unwrap()
+            ),
+            Ok(None)
+        );
+        assert!(
+            service_state(
+                &text.replace("/main.ts", "/evil.ts"),
+                Path::new("/agent.plist"),
+                args.as_array().unwrap()
+            )
+            .is_err()
         );
         assert_eq!(
             service_pid(text, Path::new("/other.plist"), args.as_array().unwrap()),

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 /// Only the native bootstrap selects official distribution inputs. Startup only
 /// records their location. The expensive signed preflight runs on an explicit
 /// Check. Even a verified target cannot enable installation without independent
-/// process proof.
+/// process checks under the dogfood update policy.
 #[derive(Clone, Default)]
 pub struct OfficialRoot {
     /// Selected input directory and journal path. Path hints, not trust.
@@ -59,16 +59,20 @@ impl OfficialRoot {
                 "The signed official update and rollback inputs are not checked yet. Check verifies them. Nothing was changed."
             }
             (_, Some(_), None) => {
-                "The signed update and rollback inputs were verified, but independent job and descendant shutdown proof is unavailable. Normal and Force update are disabled. Nothing was paused or changed."
+                "Signed update and rollback inputs verified. Updates stop known owned work; escaped descendants may remain. Nothing was paused or changed."
             }
         }
     }
 
     pub(super) fn authorize(&self, _mode: UpdateMode) -> Result<(), Error> {
-        // There is no approved native producer of descendant-exit proof yet.
-        // Do not replace this with empty blockers, root/lease/group exit, EOF,
-        // a cancellation ACK or retained JSON. Force changes preservation only.
-        Err(Error::Unavailable)
+        // This permits fresh consent/capture only. Install still checks signed
+        // inputs again, host-owned pause, known process exit and the same lease.
+        // Dogfood accepts escaped-descendant risk, not failure to stop known work.
+        if self.inputs.is_some() && self.target.is_some() && self.failure.is_none() {
+            Ok(())
+        } else {
+            Err(Error::Unavailable)
+        }
     }
 }
 
@@ -89,21 +93,18 @@ mod tests {
     }
 
     #[test]
-    fn verified_exact_target_still_cannot_authorize_normal_or_force() {
+    fn verified_exact_target_authorizes_dogfood_consent_not_process_success() {
         let target = serde_json::json!({"source":"a".repeat(40),"build":"2.0",
             "sha256":"b".repeat(64),"size":100,"version":"2.0.0","configHash":"c".repeat(64)});
         let root = OfficialRoot {
-            inputs: None,
+            inputs: Some((PathBuf::from("/inputs"), PathBuf::from("/journal"))),
             target: Some(target.clone()),
             failure: None,
         };
         assert_eq!(root.pin(), Some(&target));
-        assert!(
-            root.blocked()
-                .contains("descendant shutdown proof is unavailable")
-        );
+        assert!(root.blocked().contains("escaped descendants may remain"));
         for mode in [UpdateMode::Normal, UpdateMode::Force] {
-            assert_eq!(root.authorize(mode), Err(Error::Unavailable));
+            assert_eq!(root.authorize(mode), Ok(()));
         }
     }
 

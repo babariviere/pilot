@@ -211,10 +211,33 @@ fn preparation(operation: &Value, receipt: &Value, target: &Runtime) -> Result<(
 // Its blockers are independent process/resource evidence, which Force cannot waive.
 fn prepared(operation: &Value, fresh: &Value, target: &Runtime) -> Result<(), Failure> {
     preparation(operation, &fresh["receipt"], target)?;
-    if fresh["blockers"].as_array().is_none_or(|b| !b.is_empty()) {
-        return Err(Failure::Busy);
-    }
+    dogfood_uncertainty(fresh)?;
     Ok(())
+}
+
+/// Accept escaped-descendant uncertainty only after the exact kernel exited.
+/// This dogfood policy does not prove containment or waive live resource,
+/// storage, admission or known-process shutdown failures.
+pub fn dogfood_uncertainty(fresh: &Value) -> Result<Vec<Value>, Failure> {
+    let blockers = fresh["blockers"].as_array().ok_or(Failure::Unverified)?;
+    let sessions = fresh["receipt"]["result"]["sessions"]
+        .as_array()
+        .ok_or(Failure::Unverified)?;
+    if fresh["receipt"]["state"] != "accepted" {
+        return Err(Failure::Unverified);
+    }
+    for blocker in blockers {
+        let session = blocker["sessionId"].as_str().ok_or(Failure::Busy)?;
+        if blocker["kind"] != "unknown-process"
+            || blocker["id"] != format!("lifecycle:{session}")
+            || !sessions
+                .iter()
+                .any(|s| s["sessionId"] == session && s["hostExited"] == true)
+        {
+            return Err(Failure::Busy);
+        }
+    }
+    Ok(blockers.clone())
 }
 
 /// Fresh stop capability. Only the original native dispatch can create one.
@@ -225,6 +248,8 @@ pub struct Stopped<'a> {
     operation: Value,
     target: &'a Runtime,
     original_build: Value,
+    original_definition: Value,
+    uncertainty: Vec<Value>,
 }
 
 /// Stop the existing selected service after host-owned global preparation.
@@ -236,6 +261,43 @@ pub fn stop<'a>(
     cancel: &'a AtomicBool,
 ) -> Result<Stopped<'a>, Failure> {
     stop_owned(connection, target, operation, cancel, None)
+}
+
+/// Read-only qualification of the existing selected service and target bundle.
+/// No pause, lock creation, registration or service mutation occurs.
+pub fn preflight(
+    connection: &Connection,
+    target: &Runtime,
+    cancel: &AtomicBool,
+) -> Result<Value, Failure> {
+    super::super::native::no_incomplete_handoff(connection.location())?;
+    target.recheck(&target.installed)?;
+    let mut host = launch_agent(
+        connection.location().clone(),
+        &target.installed,
+        &target.trust,
+        connection.daemon(),
+        connection.lineage(),
+        cancel,
+    )?;
+    host.owner = verified(coordination::record(&host.location))?;
+    host.original = plist(&host.plist)?;
+    validate_definition(&host.original, &host.home, &host.location, &host.label)?;
+    if host.original["PilotNextManaged"] != true
+        || verified(coordination::private_json(
+            &host.plist.with_extension("plist.next-owner"),
+            4096,
+        ))? != json!({"schema":1,"profile":host.location.home,"port":host.location.port})
+    {
+        return Err(Failure::Unsupported);
+    }
+    host.revalidate()?;
+    verify_original(&host)?;
+    Lease::open(&host.location, host.pid()?)?;
+    Ok(
+        json!({"target":target.pin(),"previousRuntime":host.owner["runtimeRoot"],"previousBuild":host.owner["build"],
+        "boot":host.owner["boot"],"pid":host.owner["pid"]}),
+    )
 }
 
 fn stop_owned<'a>(
@@ -297,6 +359,7 @@ fn stop_owned<'a>(
         coordination::GlobalUpdateAction::Verify,
     ))?;
     prepared(operation, &fresh, target)?;
+    let uncertainty = dogfood_uncertainty(&fresh)?;
     host.revalidate()?;
     host.check_cancel()?;
     let original_build = rollback.map_or_else(
@@ -304,11 +367,13 @@ fn stop_owned<'a>(
         |r| r["originalBuild"].clone(),
     );
     let mut stopped = Stopped {
+        original_definition: host.original.clone(),
         host,
         lease,
         operation: operation.clone(),
         target,
         original_build,
+        uncertainty,
     };
     stop_steps(&mut stopped)?;
     Ok(stopped)
@@ -359,7 +424,8 @@ impl<'a> Stopped<'a> {
             "purpose":"bundled-service","operation":self.operation,"target":self.target.pin(),
             "daemonId":self.host.daemon,"lineageId":self.host.lineage,"profile":self.host.location.home,
             "port":self.host.location.port,"boot":self.host.owner["boot"],"pid":self.host.owner["pid"],
-            "previousDefinition":self.host.original,"completion":completion})).map_err(|_| Failure::Unknown)
+            "previousDefinition":self.original_definition,"completion":completion,
+            "uncertainty":self.uncertainty})).map_err(|_| Failure::Unknown)
     }
     /// One successor start, only after the official installer verified the swap.
     /// Failure consumes this capability and remains lookup-only.
@@ -378,6 +444,9 @@ impl<'a> Stopped<'a> {
         self.start_as("rollback")
     }
     fn start_as(mut self, role: &str) -> Result<Completed, Failure> {
+        self.start_inner(role)
+    }
+    fn start_inner(&mut self, role: &str) -> Result<Completed, Failure> {
         (|| {
             self.target.recheck(&self.target.installed)?;
             self.lease.released(&self.host.location)?;
@@ -394,7 +463,7 @@ impl<'a> Stopped<'a> {
                 .ok_or(Failure::Unverified)?;
             self.host.replacement["EnvironmentVariables"]["PATH"] =
                 json!(runtime_path(&runtime, path));
-            start_steps(&mut self)?;
+            start_steps(self)?;
             let owner = verified(coordination::record(&self.host.location))?;
             if owner["boot"] == self.host.owner["boot"]
                 || owner["build"] != self.target.build
@@ -414,11 +483,98 @@ impl<'a> Stopped<'a> {
                 self.host.lineage,
             )?;
             let completion = json!({"role":role,"boot":owner["boot"],"pid":owner["pid"],"originalBuild":self.original_build,
-                "runtime":self.target.replacement(),"app":self.target.pin()});
+                "runtime":self.target.replacement(),"app":self.target.pin(),"uncertainty":self.uncertainty});
             self.journal("complete", Some(completion.clone()))?;
             Ok(Completed(completion))
         })()
         .map_err(|_| Failure::Unknown)
+    }
+
+    /// Start a separately installed Day bundle. On a confirmed owned successor
+    /// failure, stop that exact service and restore the unchanged original
+    /// definition. Uncertain ownership/exit refuses rollback, never duplicates it.
+    pub fn start_or_rollback(mut self) -> Result<Completed, Failure> {
+        if definition_root(&self.host.original)? == self.target.installed {
+            return Err(Failure::Unsupported); // app swaps use the official installer rollback
+        }
+        match self.start_inner("successor") {
+            Ok(completed) => Ok(completed),
+            Err(_) => self.restore_original(),
+        }
+    }
+
+    fn restore_original(&mut self) -> Result<Completed, Failure> {
+        self.journal("rollback-stopping", None)?;
+        // Never bootout a label whose live arguments/PID no longer belong to us.
+        let output = command(
+            "/bin/launchctl",
+            &["print".as_ref(), self.host.service.as_ref()],
+        )?;
+        let pid = service_state(
+            std::str::from_utf8(&output).map_err(|_| Failure::Unknown)?,
+            &self.host.plist,
+            self.host.replacement["ProgramArguments"]
+                .as_array()
+                .ok_or(Failure::Unknown)?,
+        )?;
+        let watch = if let Some(pid) = pid {
+            verified(helper::process_owned(pid))?;
+            if verified(helper::process_executable(pid))?
+                != io(self
+                    .target
+                    .installed
+                    .join(crate::layout::RUNTIME)
+                    .join("node/bin/node")
+                    .canonicalize())?
+            {
+                return Err(Failure::Unknown);
+            }
+            Some(verified(helper::ParentWatch::new(pid))?)
+        } else {
+            None
+        };
+        command(
+            "/bin/launchctl",
+            &["bootout".as_ref(), self.host.service.as_ref()],
+        )?;
+        if let Some(watch) = watch {
+            verified(watch.wait(std::time::Duration::from_secs(120)))?;
+        }
+        self.lease.released(&self.host.location)?;
+        let original = self.host.original.clone();
+        let root = definition_root(&original)?;
+        let build = verified(coordination::code_build(&root))?;
+        verified(installer::MacPlatform.verify(&root, self.host.trust, &build, None))?;
+        if super::super::native::runtime_stamp(&root)? != self.original_build {
+            return Err(Failure::Unverified);
+        }
+        let meta = private_regular(&self.host.plist)?;
+        if plist(&self.host.plist)? != self.host.replacement {
+            return Err(Failure::Unknown);
+        }
+        self.host.original = self.host.replacement.clone();
+        self.host.replacement = original;
+        self.host.plist_stamp = Some((meta.dev(), meta.ino()));
+        self.journal("rollback-starting", None)?;
+        self.host.replace_definition()?;
+        self.host.bootstrap()?;
+        self.host.current = root.clone();
+        self.host.verify_started()?;
+        let owner = verified(coordination::record(&self.host.location))?;
+        if owner["build"] != self.original_build {
+            return Err(Failure::Unknown);
+        }
+        prove(
+            &self.host.location,
+            &owner,
+            self.host.daemon,
+            self.host.lineage,
+        )?;
+        let completion = json!({"role":"rollback","boot":owner["boot"],"pid":owner["pid"],
+            "originalBuild":self.original_build,"runtime":{"runtimeRoot":root.join(crate::layout::RUNTIME),"build":self.original_build},
+            "uncertainty":self.uncertainty});
+        self.journal("complete", Some(completion.clone()))?;
+        Ok(Completed(completion))
     }
 }
 
@@ -497,6 +653,42 @@ pub struct Completed(Value);
 impl Completed {
     pub fn evidence(&self) -> &Value {
         &self.0
+    }
+
+    /// Release only this verified successor or rollback's update-owned holds.
+    /// The caller must durably journal `release` before sending. This consumes
+    /// the capability even if the reply is lost; recovery is lookup-only.
+    pub fn release(
+        self,
+        connection: &Connection,
+        operation: &Value,
+        release: &Value,
+    ) -> Result<Value, Failure> {
+        let retained = lookup(connection, operation)?;
+        if retained["phase"] != "complete" || retained["completion"] != self.0 {
+            return Err(Failure::Unknown);
+        }
+        let owner = verified(coordination::record(connection.location()))?;
+        if owner["boot"] != self.0["boot"]
+            || owner["pid"] != self.0["pid"]
+            || owner["build"] != self.0["runtime"]["build"]
+            || owner["runtimeRoot"] != self.0["runtime"]["runtimeRoot"]
+        {
+            return Err(Failure::Unverified);
+        }
+        prove(
+            connection.location(),
+            &owner,
+            connection.daemon(),
+            connection.lineage(),
+        )?;
+        verified(coordination::signed_update(
+            connection.location(),
+            &owner,
+            &json!({"globalUpdate":operation,"release":release,"runtime":{
+                "boot":owner["boot"],"build":owner["build"],"runtimeRoot":owner["runtimeRoot"]}}),
+            "release",
+        ))
     }
 
     /// Fresh explicit rollback after a confirmed successor. This consumes the
