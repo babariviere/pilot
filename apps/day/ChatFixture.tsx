@@ -41,6 +41,13 @@ mount(() => (
 				</Text>
 				<Text testID="started">{`Started: ${chats.counts().chats >= 0 ? startedLine() : ""}`}</Text>
 				<View class="flex-row flex-wrap gap-1">
+					<Action
+						label="Profile-only window"
+						onPress={() => {
+							chats.current = null;
+							chats.publish();
+						}}
+					/>
 					<Action label="Lose next answer" onPress={() => (chats.script.loseNext = true)} />
 					<Action label="Hold selections" onPress={() => (chats.script.holdSelects = true)} />
 					<Action

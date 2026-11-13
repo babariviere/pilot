@@ -22,6 +22,49 @@ pub(super) struct Transport {
 }
 
 impl Transport {
+    /// A project view of this same connection. Never changes the root or grants controls.
+    pub(super) fn for_project(&self, project: &Value) -> Result<Self, Error> {
+        let mut source = self.source.clone();
+        source.project = Some(super::Project {
+            project_id: project["projectId"].as_str().ok_or(Error::Invalid)?.into(),
+            project_path: project["projectPath"]
+                .as_str()
+                .ok_or(Error::Invalid)?
+                .into(),
+        });
+        Ok(Self {
+            client: self.client.clone(),
+            source,
+            controls: AtomicBool::new(false),
+            planning_model: None,
+        })
+    }
+
+    /// Resolve only planning through the mission's current project, not Today's filter or New's choice.
+    pub(super) async fn mission_planning_transport(
+        &self,
+        mission: &str,
+    ) -> Result<Option<Self>, Error> {
+        if self.source.project.is_some() {
+            return Ok(None);
+        }
+        if !valid_id(mission) {
+            return Err(Error::Invalid);
+        }
+        let catalog = super::new_chat::inventory(self).await?;
+        let read = self.get(&format!("/api/missions/{mission}")).await?;
+        if read["mission"]["id"] != mission {
+            return Err(Error::Identity);
+        }
+        let project = catalog["projects"]
+            .as_array()
+            .ok_or(Error::Invalid)?
+            .iter()
+            .find(|p| p["projectId"] == read["mission"]["projectId"])
+            .ok_or(Error::Identity)?;
+        Ok(Some(self.for_project(project)?))
+    }
+
     pub fn new(source: Source) -> Result<Self, Error> {
         Ok(Self {
             source,

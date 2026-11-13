@@ -78,8 +78,26 @@ does not add missing capabilities to an older daemon.
 The preserved executable path is
 `Pilot Next.app/Contents/MacOS/pilot-desktop`. Use the explicit native launch
 selection in [Connected launch](day-package-inputs.md#connected-launch), keeping
-its private journal across reopen. Reading existing work needs no planning model;
-new work needs an explicit model and its separate permissions/confirmation.
+its private journal across reopen. Launch needs no project or model. In New,
+the user explicitly chooses a project. The native host reuses its existing chat
+profile/task-model policy and trusted planning profile, then rechecks that exact
+choice at Plan a mission. Selection only reads; enrollment and standalone Start
+remain explicit, journaled actions. A saved explicit draft choice comes back,
+but a fresh New never inherits Today's filter or a launch project.
+
+Profile-only planning reads resolve the mission's current project from canonical
+mission detail and the authenticated project catalog. Interview saves/submissions
+and Start work keep their existing context, owner, revision and admission checks.
+New's choice never retargets an existing mission. Unknown enrollment stays exact
+receipt lookup only across reopen, without creating a replacement operation.
+
+The global Today sections remain read-only outside this planning path. Mission
+detail/control actions, attention replies and human-action completion, intake
+Start, delivered-result verification, coordinator threads, project preferences,
+and other project-bound pages are not made profile-wide by this change. Their
+unavailable states are limits, not permission to infer a project or broaden
+access. Linear/Changes/Knowledge and standalone Insights parity are separate
+work. This is not full daily-driver or native appearance acceptance.
 
 `native/examples/connected_readonly.rs` checks the actual host and connected TSX
 without a signed app or visible native window. It accepts only an explicit native

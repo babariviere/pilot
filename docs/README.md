@@ -10,6 +10,9 @@ Day opens the global dashboard without a project or model selection. Today's
 header defaults to All projects and saves its filter per window. A project filter
 still counts attention elsewhere and never retargets work or New's draft. New
 requires an explicit project choice; saved choices stay with their drafts.
+In a profile-only window, New reads that project's configured model and trusted
+planning setup. Choosing starts nothing. Plan a mission starts planning only;
+building still needs the separate Start work confirmation.
 Today To check discovers new mission deliveries from a saved first-use cutoff.
 Older work stays in missions, without being accepted or deleted. Your saved
 checks stay available. Other projects' results are read-only in this window.

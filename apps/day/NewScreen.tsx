@@ -1,5 +1,5 @@
 // New: the user says what they want, then picks how it starts. A mission
-// starts with a complete saved interview in this window's project; build
+// starts with a complete saved interview in the chosen project; build
 // work needs a separate exact-plan Start. A small ask starts one chat in the
 // project the user chose, after they confirm the exact words, project and
 // access. Choosing a project only reads its setup: nothing starts, and no
@@ -198,22 +198,27 @@ export function NewScreen(props: { plans: Plans }) {
 	};
 	// The project the user chose, while Pilot still lists it. Null until they choose.
 	const picked = () => chatView().projects.find((p) => p.projectId === chatPick()?.projectId) ?? null;
-	// Missions start in this window's own project. Another project's choice
-	// says so, and so does a window whose own project Pilot did not name.
+	// Legacy project-bound windows keep their scope. Profile-only windows
+	// prepare planning from the user's explicit native project choice.
 	const elsewhere = () => {
 		const pick = picked();
-		return !!pick && pick.projectId !== chatView().current;
+		return !!pick && !!chatView().current && pick.projectId !== chatView().current;
 	};
 	const ownName = () => projectName(chatView(), chatView().current ?? "");
-	const canPlan = () => !!picked() && !elsewhere();
+	const canPlan = () => !!picked() && !!chatChoice() && !chatSelecting() && !elsewhere();
 	const canStartChat = () =>
 		chatView().availability === "live" && !!picked() && chatView().unsettled.length === 0 && !chatView().creating;
 	// Reopening New renews setup and reads projects: neither is execution authority or a pending send.
 	effect(() => {
 		untracked(() => {
-			void props.plans.feed.prepareNew?.();
 			void prepareChat(chats);
 		});
+	});
+	// A new or restored explicit choice only reads planning setup. Native code
+	// checks that same choice again at Plan; no enrollment happens here.
+	effect(() => {
+		chatChoice();
+		untracked(() => void props.plans.feed.prepareNew?.());
 	});
 	// Leaving New without words drops the project choice: nothing keeps it.
 	// Words keep it, as their draft's project.
@@ -315,12 +320,13 @@ export function NewScreen(props: { plans: Plans }) {
 						</If>
 						<If when={elsewhere()}>
 							<Text testID="mission-elsewhere" class="text-xs leading-relaxed text-muted-foreground">
-								{chatView().current
-									? `Missions start in ${ownName()} here. Choose ${ownName()} to plan one, or start this as one chat.`
-									: "Pilot did not say which project missions start in here. You can start this as one chat."}
+								{`Missions start in ${ownName()} here. Choose ${ownName()} to plan one, or start this as one chat.`}
 							</Text>
 						</If>
 						<If when={canPlan()}>
+							<Text class="text-xs text-faint">
+								{planning().canCreate ? `${planning().setup.access} · ${planning().setup.model}` : ""}
+							</Text>
 							<Text class="text-xs leading-relaxed text-faint">
 								Answer one question at a time, or use See all. Submit only when every question is answered.
 								Review and agree to the plan next; building needs a separate Start work confirmation.

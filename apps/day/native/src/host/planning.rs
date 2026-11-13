@@ -4,6 +4,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+/// A global root keeps all planning uncertainty in its authenticated home.
+pub(super) fn in_scope(source: &Source, root: &Source) -> bool {
+    source == root
+        || (root.project.is_none() && source.profile == root.profile && source.home == root.home)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct PlanningRecord {
     pub version: u32,
@@ -92,7 +98,10 @@ impl PlanningRecord {
         if o["kind"] == super::feedback::WORK_KIND {
             super::feedback::validate_step_record(o)?;
         }
-        if o["kind"].as_str().is_some_and(super::threads::is_thread_kind) {
+        if o["kind"]
+            .as_str()
+            .is_some_and(super::threads::is_thread_kind)
+        {
             super::threads::validate_record(o)?;
         }
         Ok(())
@@ -304,7 +313,11 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
     if op["kind"] == super::feedback::WORK_KIND && r["state"] == "accepted" {
         super::feedback::exact_step(op, &r)?;
     }
-    if op["kind"].as_str().is_some_and(super::threads::is_thread_kind) && r["state"] == "accepted" {
+    if op["kind"]
+        .as_str()
+        .is_some_and(super::threads::is_thread_kind)
+        && r["state"] == "accepted"
+    {
         super::threads::exact_result(op, &r)?;
     }
     Ok(r)

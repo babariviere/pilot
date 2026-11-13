@@ -4,6 +4,7 @@
 // confirmation names the revision and digest shown. Rust decides what
 // happens; the screens show what it publishes.
 import type { Interview, PlanPage, Question } from "pilot-day/native";
+import { dropChoice } from "./chatCommands";
 import type { Plans } from "./planning";
 import {
 	answerDrafts,
@@ -336,7 +337,10 @@ export async function planMission(plans: Plans) {
 	try {
 		const outcome = await plans.feed.plan({ goal, setup: plans.planning().setup.digest });
 		if (outcome.status === "accepted" && outcome.missionId) {
-			if (goalDraft() === goal) goalDraft.set("");
+			if (goalDraft() === goal) {
+				goalDraft.set("");
+				dropChoice();
+			}
 			openPlan(outcome.missionId);
 		} else {
 			newMessage.set(outcome.message);

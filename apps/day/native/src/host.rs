@@ -666,13 +666,22 @@ impl NativeHost {
     /// Display-only selection. No home, profile, owner or transport crosses the VM.
     pub fn planning_setup(&self) -> Option<crate::plan::Setup> {
         let shared = &self.0.shared;
+        let choice = shared
+            .chat_choice
+            .lock()
+            .expect("native chat choice poisoned")
+            .clone();
         let selection = shared
             .enrollment
             .lock()
             .expect("native enrollment poisoned");
         selection
             .as_ref()
-            .filter(|s| !s.used && s.epoch.is_some_and(|e| shared.current(e).is_ok()))
+            .filter(|s| {
+                !s.used
+                    && s.prepared.choice == choice
+                    && s.epoch.is_some_and(|e| shared.current(e).is_ok())
+            })
             .map(|s| s.prepared.setup.clone())
     }
     /// Creation summaries, including pending intents restored on cold open.
@@ -763,6 +772,8 @@ async fn read_planning(
         .planning_mission
         .lock()
         .expect("native planning selection poisoned") = Some(mission.into());
+    let selected = t.mission_planning_transport(mission).await?;
+    let t = selected.as_ref().unwrap_or(t);
     t.gate(false).await?;
     let view = t.planning(mission).await?;
     t.gate(false).await?;
@@ -922,7 +933,11 @@ async fn run(
             );
     }
     changes::restore(&journal, &t.source, &shared);
-    for record in journal.planning.values().filter(|r| r.source == t.source) {
+    for record in journal
+        .planning
+        .values()
+        .filter(|r| planning::in_scope(&r.source, &t.source))
+    {
         publish_planning(&shared, record);
     }
     if let Some(cache) = journal.cached(&t.source) {
@@ -1047,6 +1062,14 @@ async fn refresh(
         // Keep the profile stream and invalidations independent of any project.
         t.profile_gate().await?;
         shared.current(epoch)?;
+        let mission = shared
+            .planning_mission
+            .lock()
+            .expect("native planning selection poisoned")
+            .clone();
+        if let Some(mission) = mission {
+            let _ = read_planning(t, shared, epoch, &mission).await;
+        }
         shared.change(|_| ());
         return Ok(());
     }
@@ -1213,11 +1236,9 @@ async fn handle(
             digest,
             request,
         } => {
-            if journal
-                .planning
-                .values()
-                .any(|r| r.source == t.source && r.mission() == mission && r.pending())
-            {
+            if journal.planning.values().any(|r| {
+                planning::in_scope(&r.source, &t.source) && r.mission() == mission && r.pending()
+            }) {
                 return Err(Error::Unknown);
             }
             let mut record =
@@ -1268,10 +1289,14 @@ async fn handle(
             let mut record = journal
                 .planning
                 .get(&id)
-                .filter(|r| r.source == t.source)
+                .filter(|r| planning::in_scope(&r.source, &t.source))
                 .cloned()
                 .ok_or(Error::Unknown)?;
-            t.gate(false).await?;
+            if t.source.project.is_none() {
+                t.profile_gate().await?;
+            } else {
+                t.gate(false).await?;
+            }
             shared.open()?;
             // A matched terminal ACK cannot be erased by a later failed lookup.
             if record.pending() {

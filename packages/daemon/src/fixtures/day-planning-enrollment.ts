@@ -274,7 +274,7 @@ try {
 			for (const socket of sockets) socket.close();
 			await f.restart();
 		}
-		if (command.action === "close") {
+		if (command.action === "close" || command.action === "quit") {
 			console.log(JSON.stringify({ closing: true }));
 			break;
 		}

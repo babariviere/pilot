@@ -32,7 +32,11 @@ pub(super) fn validate_record(
     let r: PlanningEnrollment =
         serde_json::from_str(operation["payload"].as_str().ok_or(Error::Storage)?)
             .map_err(|_| Error::Storage)?;
-    if r.project_id != source.project()?.project_id
+    if !super::valid_id(&r.project_id)
+        || source
+            .project
+            .as_ref()
+            .is_some_and(|p| r.project_id != p.project_id)
         || operation["bindingId"] != r.configuration_digest
         || operation["bindingGeneration"] != 1
         || setup.is_none_or(|s| !hex(s, 64))
@@ -46,7 +50,7 @@ pub(super) fn validate_record(
     {
         return Err(Error::Storage);
     }
-    profile(&json!({"version":1,"projectId":r.project_id,"profile":r.profile,"configurationDigest":r.configuration_digest}), &source.project()?.project_id)
+    profile(&json!({"version":1,"projectId":r.project_id,"profile":r.profile,"configurationDigest":r.configuration_digest}), &r.project_id)
         .map_err(|_| Error::Storage)
 }
 
@@ -63,6 +67,7 @@ pub(super) struct Prepared {
     pub model: String,
     pub enrollment: String,
     pub owner: String,
+    pub choice: Option<crate::new_chat::ChatChoice>,
 }
 
 pub(super) fn profile(value: &Value, project: &str) -> Result<(), Error> {
@@ -109,6 +114,7 @@ impl Prepared {
             model: model.into(),
             enrollment,
             owner,
+            choice: None,
         })
     }
 
@@ -143,7 +149,10 @@ impl Prepared {
             &self.setup.digest,
             serde_json::to_value(PlanningEnrollment {
                 purpose: Purpose::Enroll,
-                project_id: source.project()?.project_id.clone(),
+                project_id: self.profile["projectId"]
+                    .as_str()
+                    .ok_or(Error::Invalid)?
+                    .into(),
                 owner_session_id: self.owner.clone(),
                 title,
                 goal: intent.goal.clone(),
@@ -173,30 +182,51 @@ pub(super) async fn prepare(
     {
         s.epoch = None;
     }
-    if journal
-        .planning
-        .values()
-        .any(|r| r.source == t.source && r.operation["kind"] == "planning-enroll" && r.pending())
-    {
+    if journal.planning.values().any(|r| {
+        planning::in_scope(&r.source, &t.source)
+            && r.operation["kind"] == "planning-enroll"
+            && r.pending()
+    }) {
         return Err(Error::Unknown);
     }
     shared.current(epoch)?;
-    let profile = t.planning_profile().await?;
+    let choice = shared
+        .chat_choice
+        .lock()
+        .expect("native chat choice poisoned")
+        .clone();
+    let selected = if let Some(choice) = &choice {
+        Some(choice_transport(t, choice).await?)
+    } else {
+        None
+    };
+    let transport = selected.as_ref().unwrap_or(t);
+    let profile = transport.planning_profile().await?;
     shared.current(epoch)?;
-    let model = t.planning_model.as_deref().ok_or(Error::Unavailable)?;
+    let model = transport
+        .planning_model
+        .as_deref()
+        .ok_or(Error::Unavailable)?;
     let mut slot = shared
         .enrollment
         .lock()
         .expect("native enrollment poisoned");
-    if let Some(s) = slot
-        .as_mut()
-        .filter(|s| !s.used && s.prepared.profile == profile && s.prepared.model == model)
-    {
+    if let Some(s) = slot.as_mut().filter(|s| {
+        !s.used
+            && s.prepared.profile == profile
+            && s.prepared.model == model
+            && s.prepared.choice == choice
+    }) {
         s.epoch = Some(epoch);
     } else {
+        let mut prepared = Prepared::new(&transport.source, model, profile)?;
+        prepared.setup.project = choice
+            .as_ref()
+            .map_or_else(|| "Selected project".into(), |c| c.project_path.clone());
+        prepared.choice = choice;
         *slot = Some(Selection {
             epoch: Some(epoch),
-            prepared: Prepared::new(&t.source, model, profile)?,
+            prepared,
             used: false,
         });
     }
@@ -214,10 +244,70 @@ async fn qualify(
     epoch: u64,
     prepared: &Prepared,
 ) -> Result<(), Error> {
-    if t.planning_profile().await? != prepared.profile {
+    let selected = if let Some(choice) = &prepared.choice {
+        if shared
+            .chat_choice
+            .lock()
+            .expect("native chat choice poisoned")
+            .as_ref()
+            != Some(choice)
+        {
+            return Err(Error::Stale);
+        }
+        Some(choice_transport(t, choice).await?)
+    } else {
+        None
+    };
+    if selected.as_ref().unwrap_or(t).planning_profile().await? != prepared.profile {
         return Err(Error::Stale);
     }
     shared.current(epoch)
+}
+
+/// Reuse the project's configured task-model policy. A saved choice alone is not authority.
+async fn choice_transport(
+    t: &super::Transport,
+    choice: &crate::new_chat::ChatChoice,
+) -> Result<super::Transport, Error> {
+    if !choice.validate()
+        || t.source
+            .project
+            .as_ref()
+            .is_some_and(|p| p.project_id != choice.project_id)
+    {
+        return Err(Error::Unavailable);
+    }
+    let catalog = super::new_chat::inventory(t).await?;
+    let project = catalog["projects"]
+        .as_array()
+        .ok_or(Error::Invalid)?
+        .iter()
+        .find(|p| {
+            p["projectId"] == choice.project_id
+                && p["projectPath"] == choice.project_path
+                && p["contextDigest"] == choice.context_digest
+        })
+        .ok_or(Error::Stale)?;
+    let current = super::new_chat::profile(
+        t,
+        &super::new_chat::Select {
+            project_id: choice.project_id.clone(),
+            context_digest: choice.context_digest.clone(),
+            mode: choice.mode.clone(),
+        },
+    )
+    .await?;
+    let mut expected = serde_json::to_value(choice).map_err(|_| Error::Invalid)?;
+    expected
+        .as_object_mut()
+        .ok_or(Error::Invalid)?
+        .remove("draftId");
+    if current != expected {
+        return Err(Error::Stale);
+    }
+    let mut selected = t.for_project(project)?;
+    selected.planning_model = Some(choice.model.clone());
+    Ok(selected)
 }
 
 pub(super) async fn send(
@@ -227,11 +317,9 @@ pub(super) async fn send(
     epoch: u64,
     intent: NewIntent,
 ) -> Result<crate::model::IntentOutcome, Error> {
-    if let Some(record) = journal
-        .planning
-        .values()
-        .find(|r| r.source == t.source && r.setup_digest.as_deref() == Some(&intent.setup))
-    {
+    if let Some(record) = journal.planning.values().find(|r| {
+        planning::in_scope(&r.source, &t.source) && r.setup_digest.as_deref() == Some(&intent.setup)
+    }) {
         let request: Value =
             serde_json::from_str(record.operation["payload"].as_str().ok_or(Error::Storage)?)
                 .map_err(|_| Error::Storage)?;
@@ -247,11 +335,11 @@ pub(super) async fn send(
     // Only the exact historical branch above ignores invalidations. A new
     // enrollment always needs current selection authority before any probe.
     shared.current(epoch)?;
-    if journal
-        .planning
-        .values()
-        .any(|r| r.source == t.source && r.operation["kind"] == "planning-enroll" && r.pending())
-    {
+    if journal.planning.values().any(|r| {
+        planning::in_scope(&r.source, &t.source)
+            && r.operation["kind"] == "planning-enroll"
+            && r.pending()
+    }) {
         return Err(Error::Unknown);
     }
     let prepared = {
@@ -266,7 +354,18 @@ pub(super) async fn send(
         selected.prepared.clone()
     };
     let mut record = prepared.record(&t.source, &intent)?;
-    qualify(t, shared, epoch, &prepared).await?;
+    if let Err(error) = qualify(t, shared, epoch, &prepared).await {
+        if let Some(selection) = shared
+            .enrollment
+            .lock()
+            .expect("native enrollment poisoned")
+            .as_mut()
+        {
+            selection.epoch = None;
+        }
+        shared.change(|_| ());
+        return Err(error);
+    }
     journal.save_planning(record.clone())?;
     if let Some(s) = shared
         .enrollment

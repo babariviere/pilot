@@ -53,6 +53,22 @@ test("New starts with no project: both starts wait for the user's choice, and ch
 	expect(counts(app)).toContain("Sends: 0");
 });
 
+test("a profile-only window plans in an explicit project, never a launch default", async () => {
+	const app = await ready();
+	await app.press("role:button[Profile-only window]");
+	await app.type("id:goal", "Clarify the website mission");
+	expect(app.enabled("role:button[Plan a mission]")).toBe(false);
+	await choose(app, "website");
+	await app.waitFor("/Users/you/src/website");
+	expect(app.enabled("role:button[Plan a mission]")).toBe(true);
+	expect(app.enabled("role:button[Start as one chat]")).toBe(true);
+	expect(counts(app)).toContain(COUNTS(1, 0, 0));
+	await app.press("role:button[Save and reopen]");
+	await app.waitFor("/Users/you/src/website");
+	expect(app.value("id:goal")).toBe("Clarify the website mission");
+	expect(counts(app)).toContain("Sends: 0");
+});
+
 test("a chat starts once in the chosen project, with the access chosen and the exact words, and uses its choice up", async () => {
 	const app = await ready();
 	await app.type("id:goal", "  Exact words\nkept  ");

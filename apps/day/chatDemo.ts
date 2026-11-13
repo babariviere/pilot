@@ -179,9 +179,9 @@ export class ScriptedChats implements ChatSource {
 			reason: "",
 		};
 		this.#saved.push({ op, choice: { ...choice }, message });
+		this.started.set(choice.draftId, { projectId: choice.projectId, mode: choice.mode, message });
 		this.#count("sends");
 		this.#count("chats");
-		this.started.set(choice.draftId, { projectId: choice.projectId, mode: choice.mode, message });
 		this.#creating = false;
 		if (!lost) this.#mine.push(op.operationId);
 		this.publish();
