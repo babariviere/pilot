@@ -15,7 +15,7 @@ export interface PlanningWorkerState {
 	goal: string;
 	configurationDigest: string;
 	revision: number;
-	phase: "setup" | "active" | "holding" | "held" | "continuing" | "revisiting";
+	phase: "setup" | "active" | "holding" | "held" | "continuing" | "revisiting" | "discussing";
 	hold: PlanningRound | null;
 	pendingHold: { operationId: string; authority: string } | null;
 	continuation: { operation: DurableOperation; entered: boolean } | null;
@@ -23,6 +23,8 @@ export interface PlanningWorkerState {
 	start?: { operation: DurableOperation; sessionId: string; taskId: string; admitted: boolean };
 	/** Explicit native check-up admission. An entered but unacknowledged turn is lookup-only. */
 	revisit?: { operation: DurableOperation; admitted: boolean };
+	/** User topic input, never a Start or permission to release a hold. */
+	discussion?: { operation: DurableOperation; admitted: boolean };
 }
 interface Port {
 	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;

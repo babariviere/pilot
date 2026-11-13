@@ -100,6 +100,7 @@ import { buildMissionCatalog, type MissionCatalogSources } from "./mission-catal
 import { parseMissionControl } from "./mission-controls.ts";
 import { parseMissionLifecycle } from "./mission-lifecycle.ts";
 import type { MissionService } from "./mission-service.ts";
+import { isThreadOperation, MissionThreads } from "./mission-threads.ts";
 import type { MissionStore } from "./missions.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
 import type { ModelCatalog } from "./models.ts";
@@ -784,6 +785,10 @@ export function createDaemonServer(
 					workers: planningWorkers,
 				})
 			: undefined;
+	const missionThreads =
+		journal && missions
+			? new MissionThreads({ store: missions.store, journal, projects, sessions, workers: planningWorkers })
+			: undefined;
 	const nativeIntake =
 		journal && tracking
 			? new NativeIntake({ journal, tracking, projects, sessions, missions: missions?.store })
@@ -914,6 +919,10 @@ export function createDaemonServer(
 				})
 			: undefined;
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
+		if (isThreadOperation(op.kind)) {
+			if (!missionThreads) throw new Error("Topic lookup unavailable");
+			return missionThreads.admit(op, false);
+		}
 		if (op.kind === "project-preferences-update") throw new Error("Preference outcome is unknown; Check only");
 		if (op.kind === "user-verification") throw new Error("Verification outcome is unknown; Check only");
 		if (op.kind === "attention-answer") {
@@ -1651,6 +1660,24 @@ export function createDaemonServer(
 					end();
 				}
 			}
+			if (isThreadOperation(operation?.kind)) {
+				res.setHeader("cache-control", "no-store");
+				if (!githubSetup || !missionThreads) throw new ServiceUnavailable("Native topics unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				const saved = await missionThreads.lookup(operation);
+				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					const receipt = await journal.execute(operation, (op, entry) =>
+						missionThreads.admit(op, entry.firstEntry),
+					);
+					await missionThreads.lookup(operation);
+					return json(res, 200, receipt);
+				} finally {
+					end();
+				}
+			}
 			if (isNativePlanningOperation(operation?.kind)) {
 				res.setHeader("cache-control", "no-store");
 				if (!githubSetup || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
@@ -1846,6 +1873,7 @@ export function createDaemonServer(
 					dayOverview: missions ? 1 : undefined,
 					missionControls: missions && githubSetup && hello.lineageId ? 1 : undefined,
 					nativePlanning: nativePlanning && githubSetup ? 1 : undefined,
+					nativeThreads: missionThreads && githubSetup ? 1 : undefined,
 					nativeAttention: nativeAttention && githubSetup ? 1 : undefined,
 					passiveFailedModel: hello?.lineageId ? true : undefined,
 					guardedQueue: true,
@@ -2262,6 +2290,29 @@ export function createDaemonServer(
 					error: error.message,
 				});
 			}
+		}
+		if (parts[1] === "projects" && parts[3] === "missions" && parts[5] === "threads") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Topics are read-only here");
+			if (!githubSetup || !missionThreads) throw new ServiceUnavailable("Native topics unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (parts.length === 6) return json(res, 200, await missionThreads.read(parts[2]!, parts[4]!));
+			if (parts.length === 8 && parts[7] === "history") {
+				const before = url.searchParams.get("before"),
+					limit = url.searchParams.get("limit");
+				return json(
+					res,
+					200,
+					await missionThreads.history(
+						parts[2]!,
+						parts[4]!,
+						parts[6]!,
+						before === null ? undefined : Number(before),
+						limit === null ? undefined : Number(limit),
+					),
+				);
+			}
+			throw new HttpError(404, "Not found");
 		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "planning-profile") {
 			res.setHeader("cache-control", "no-store");

@@ -112,6 +112,7 @@ import {
 	reviewResultWrite,
 } from "./mission-review-contract.ts";
 import { MISSION_REVISION_SCHEMA, MissionRevisions, revisionText } from "./mission-revisions.ts";
+import { MISSION_THREAD_SCHEMA, MissionThreadStore } from "./mission-thread-store.ts";
 import { nativeReviewProfile, nativeReviewRecord } from "./native-review-records.ts";
 import { reasonLine } from "./needs-you-reason.ts";
 import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
@@ -741,6 +742,12 @@ export class MissionStore {
 		durable: () => this.durable(),
 	});
 
+	readonly threads = new MissionThreadStore({
+		one: (sql, ...params) => this.one(sql, ...params),
+		all: (sql, ...params) => this.all(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+	});
 	readonly revisions = new MissionRevisions({
 		one: (sql, ...params) => this.one(sql, ...params),
 		run: (sql, ...params) => this.run(sql, ...params),
@@ -975,6 +982,7 @@ export class MissionStore {
 		}
 		this.db.exec(MISSION_CONTROL_SCHEMA);
 		this.db.exec(MISSION_REVISION_SCHEMA);
+		this.db.exec(MISSION_THREAD_SCHEMA);
 		this.db.exec(HUMAN_REVIEW_SCHEMA);
 		this.db.exec(CHANGE_LANDING_SCHEMA);
 		this.db.exec(RETAINED_PROJECTION_SCHEMA);

@@ -71,6 +71,8 @@ export interface DaemonCapabilities {
 	missionControls?: 1;
 	/** Authenticated saved native interview reads/answers. Does not imply enrollment or execution. */
 	nativePlanning?: 1;
+	/** Authenticated mission-owned topics and qualified planning discussion. */
+	nativeThreads?: 1;
 	/** Authenticated native attention reads and exact durable receipt lookup. No help/continuation grant. */
 	nativeAttention?: 1;
 }

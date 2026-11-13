@@ -36,6 +36,7 @@ export type * from "./mcp-setup.ts";
 export type * from "./mission-controls.ts";
 export type * from "./mission-reports.ts";
 export type * from "./mission-revision.ts";
+export type * from "./mission-thread.ts";
 export type * from "./model-scope.ts";
 export type * from "./native-attention.ts";
 export type * from "./native-review.ts";

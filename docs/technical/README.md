@@ -58,6 +58,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Mission grouping and contextual decisions](mission-grouping-context.md)
 - [Decision notice routing and durable batches](mission-decision-routing.md)
 - [Confirmed mission revisions and current-only context](mission-revisions.md)
+- [Focused mission discussion API and history](mission-threads.md)
 - [Authorized work continuation and current-policy source](mission-continuation.md)
 - [Mission Pause/Resume and versioned agent reports](mission-controls-reports.md)
 - [Mission results and failure visibility audit](day-results-visibility.md)

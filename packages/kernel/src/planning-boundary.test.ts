@@ -64,50 +64,58 @@ async function fixture(t: TestContext) {
 	return { storage, harness, conversation, binding, hold, input };
 }
 
-test("Revisit never releases a planning hold even without an exposed round", async (t) => {
-	const f = await fixture(t);
-	await f.conversation.commit(async (tx) => {
-		(await tx.doc(PlanningWorkerDoc, f.conversation.id)).hold = null;
-	}, context);
-	const input = {
-		...f.input,
-		hold: null,
-		operation: { ...f.input.operation, operationId: "revisit", kind: "plan-revisit" },
-	};
-	await assert.rejects(
-		admitPlanningInput(f.harness, f.conversation, input, async () => {}, context),
-		/held or busy/,
-	);
-	assert.equal((await f.harness.snapshot(HeldInputsDoc, f.conversation.id, context))?.planning, true);
-	assert.deepEqual((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))?.receipts, {});
-});
+for (const purpose of ["plan-revisit", "thread-send"])
+	test(`${purpose} never releases a planning hold even without an exposed round`, async (t) => {
+		const f = await fixture(t);
+		await f.conversation.commit(async (tx) => {
+			(await tx.doc(PlanningWorkerDoc, f.conversation.id)).hold = null;
+		}, context);
+		const input = {
+			...f.input,
+			hold: null,
+			operation: { ...f.input.operation, operationId: "revisit", kind: purpose },
+		};
+		await assert.rejects(
+			admitPlanningInput(f.harness, f.conversation, input, async () => {}, context),
+			/held or busy/,
+		);
+		assert.equal((await f.harness.snapshot(HeldInputsDoc, f.conversation.id, context))?.planning, true);
+		assert.deepEqual((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))?.receipts, {});
+	});
 
-test("unheld Revisit admits one exact planning input, without granting or releasing Stop", async (t) => {
-	const f = await fixture(t);
-	await f.conversation.commit(async (tx) => {
-		(await tx.doc(PlanningWorkerDoc, f.conversation.id)).hold = null;
-		(await tx.doc(HeldInputsDoc, f.conversation.id)).planning = false;
-	}, context);
-	const input = {
-		...f.input,
-		hold: null,
-		operation: { ...f.input.operation, operationId: "revisit", kind: "plan-revisit" },
-	};
-	await admitPlanningInput(f.harness, f.conversation, input, async () => {}, context);
-	await admitPlanningInput(
-		f.harness,
-		f.conversation,
-		input,
-		async () => {
-			throw new Error("Must not reenter");
-		},
-		context,
-	);
-	assert.deepEqual(Object.keys((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))!.receipts), [
-		"revisit",
-	]);
-	assert.equal((await f.harness.snapshot(HeldInputsDoc, f.conversation.id, context))?.stopped, false);
-});
+for (const purpose of ["plan-revisit", "thread-send"])
+	test(`unheld ${purpose} admits one exact planning input, without granting or releasing Stop`, async (t) => {
+		const f = await fixture(t);
+		await f.conversation.commit(async (tx) => {
+			(await tx.doc(PlanningWorkerDoc, f.conversation.id)).hold = null;
+			(await tx.doc(HeldInputsDoc, f.conversation.id)).planning = false;
+		}, context);
+		const input = {
+			...f.input,
+			hold: null,
+			operation: { ...f.input.operation, operationId: "revisit", kind: purpose },
+		};
+		await admitPlanningInput(f.harness, f.conversation, input, async () => {}, context);
+		await admitPlanningInput(
+			f.harness,
+			f.conversation,
+			input,
+			async () => {
+				throw new Error("Must not reenter");
+			},
+			context,
+		);
+		assert.deepEqual(
+			Object.keys((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))!.receipts),
+			["revisit"],
+		);
+		assert.equal((await f.harness.snapshot(HeldInputsDoc, f.conversation.id, context))?.stopped, false);
+		const entries = (await f.conversation.entries({}, 100, undefined, context)).items;
+		const placed = entries.filter((e) => e.kind === "pilot.planning-input");
+		assert.equal(placed.length, 1);
+		assert.deepEqual(placed[0]!.data, { operation: JSON.stringify(input.operation) });
+		assert.equal(placed[0]!.model?.[0]?.content, input.content);
+	});
 
 test("planning hold is durable and independent from Stop and ordinary input", async (t) => {
 	const f = await fixture(t);
@@ -131,6 +139,26 @@ test("planning hold is durable and independent from Stop and ordinary input", as
 	);
 	assert.equal((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))?.hold, planningJSON(f.hold));
 });
+
+for (const hold of ["stopped", "paused", "questionPending"] as const) {
+	test(`topic discussion keeps kernel ${hold} and appends no input`, async (t) => {
+		const f = await fixture(t);
+		await f.conversation.commit(async (tx) => {
+			(await tx.doc(PlanningWorkerDoc, f.conversation.id)).hold = null;
+			const held = await tx.doc(HeldInputsDoc, f.conversation.id);
+			held.planning = false;
+			held[hold] = true;
+		}, context);
+		const input = { ...f.input, hold: null, operation: { ...f.input.operation, kind: "thread-send" } };
+		await assert.rejects(
+			admitPlanningInput(f.harness, f.conversation, input, async () => {}, context),
+			/held or busy/,
+		);
+		assert.equal((await f.harness.snapshot(HeldInputsDoc, f.conversation.id, context))?.[hold], true);
+		assert.deepEqual((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))?.receipts, {});
+		assert.equal((await f.harness.snapshot(LiveDoc, f.conversation.id, context))?.run, undefined);
+	});
+}
 
 test("exact planning continuation clears only its own hold and dedupes atomically", async (t) => {
 	const f = await fixture(t);

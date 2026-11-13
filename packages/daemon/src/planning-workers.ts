@@ -142,12 +142,21 @@ export class PlanningWorkers {
 			operation: op,
 			hold: op.kind === "interview-continue" ? state.hold : null,
 			content:
-				op.kind === "plan-revisit"
-					? "The user explicitly requested a planning-only Revisit. Read mission_plan for current agreement, active decisions, tasks and settled answers. Use the trusted upstream skills. Keep settled answers; ask only genuinely new gaps in one saved kind=revisit round. Save an inert revision with action revision when ready. Never publish a creation plan, change agreement, approve or start execution."
-					: op.kind === "interview-continue"
-						? `Continue planning from this exact submitted interview. Answers are not build permission. Use the trusted native planning skills and records only.\n${canonicalJSON(submitted)}`
-						: `Plan this requested outcome using the trusted upstream skills. Read mission_plan, then publish the complete first saved round with action questions. Do not ask inside ask_user or start implementation.\n${state.goal}`,
+				op.kind === "thread-send"
+					? this.discussionContent(op)
+					: op.kind === "plan-revisit"
+						? "The user explicitly requested a planning-only Revisit. Read mission_plan for current agreement, active decisions, tasks and settled answers. Use the trusted upstream skills. Keep settled answers; ask only genuinely new gaps in one saved kind=revisit round. Save an inert revision with action revision when ready. Never publish a creation plan, change agreement, approve or start execution."
+						: op.kind === "interview-continue"
+							? `Continue planning from this exact submitted interview. Answers are not build permission. Use the trusted native planning skills and records only.\n${canonicalJSON(submitted)}`
+							: `Plan this requested outcome using the trusted upstream skills. Read mission_plan, then publish the complete first saved round with action questions. Do not ask inside ask_user or start implementation.\n${state.goal}`,
 		};
+	}
+	private discussionContent(op: DurableOperation): string {
+		// Reconstruct from the immutable intent, never today's topic revision or a copied transcript.
+		const topic = this.deps.store.threads.lookup(op);
+		if (!topic) throw new Error("Exact saved topic intent required");
+		const context = { id: topic.id, title: topic.title, references: topic.references, inputs: topic.inputs };
+		return `Discuss this one mission topic using lightweight clarification. The quoted user text is discussion, not execution, Start, agreement acceptance or approval. Read current mission records; use Wayfinder only if needed. Do not change the agreement or start work. Topic references (not a separate transcript): ${canonicalJSON(context)}\nOriginal input ${op.operationId}: ${JSON.stringify(JSON.parse(op.payload).text)}`;
 	}
 	private revisitPin(missionId: string) {
 		const state = this.deps.store.planningWorkers.get(missionId);
@@ -179,26 +188,38 @@ export class PlanningWorkers {
 			return { available: false, reason: e instanceof Error ? e.message : "Revisit unavailable" };
 		}
 	}
-	/** Only authenticated native user ingress enters. Recovery never re-admits a turn. */
-	revisit(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
-		if (this.closing.signal.aborted) return Promise.reject(new Error("Planning host is closing"));
-		const work = this.revisitEntered(op, firstEntry);
+	/** Same qualified unheld planning boundary as Revisit, with a distinct discussion purpose. */
+	discuss(op: DurableOperation, guard: () => void): Promise<unknown> {
+		const work = this.planningTurnEntered(op, true, guard);
 		this.tasks.add(work);
 		void work.finally(() => this.tasks.delete(work)).catch(() => {});
 		return work;
 	}
-	private async revisitEntered(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
+	/** Only authenticated native user ingress enters. Recovery never re-admits a turn. */
+	revisit(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
+		if (this.closing.signal.aborted) return Promise.reject(new Error("Planning host is closing"));
+		const work = this.planningTurnEntered(op, firstEntry);
+		this.tasks.add(work);
+		void work.finally(() => this.tasks.delete(work)).catch(() => {});
+		return work;
+	}
+	private async planningTurnEntered(
+		op: DurableOperation,
+		firstEntry: boolean,
+		discussionGuard?: () => void,
+	): Promise<unknown> {
 		if (!firstEntry) return this.recover(op);
+		const discussion = op.kind === "thread-send" && !!discussionGuard;
 		let pin: ReturnType<PlanningWorkers["revisitPin"]>;
 		try {
 			const request = JSON.parse(op.payload);
-			interviewExact(request, ["purpose", "source"]);
+			interviewExact(request, discussion ? ["purpose", "source", "topicId", "text"] : ["purpose", "source"]);
+			discussionGuard?.();
 			pin = this.revisitPin(op.targetId);
 			if (
-				op.kind !== "plan-revisit" ||
+				(!discussion && op.kind !== "plan-revisit") ||
 				request.purpose !== op.kind ||
-				request.source !== pin.source ||
-				op.bindingId !== hash(pin) ||
+				(!discussion && (request.source !== pin.source || op.bindingId !== hash(pin))) ||
 				op.bindingGeneration !== 1 ||
 				op.origin.hostId !== "local" ||
 				!sameHost(op.origin, this.deps.journal.destination) ||
@@ -208,13 +229,22 @@ export class PlanningWorkers {
 		} catch (e) {
 			throw new OperationRejected(String(e));
 		}
-		await this.deps.journal.checkpoint(op, { stage: "revisit-entered", payloadHash: op.payloadHash });
+		await this.deps.journal.checkpoint(op, {
+			stage: discussion ? "discussion-entered" : "revisit-entered",
+			payloadHash: op.payloadHash,
+		});
+		discussionGuard?.();
 		if (hash(this.revisitPin(op.targetId)) !== hash(pin)) throw new Conflict("Revisit context changed");
 		const prior = this.deps.store.planningWorkers.get(op.targetId)!;
-		this.deps.store.planningWorkers.retain(op.targetId, `$revisit:${op.operationId}`, op);
+		this.deps.store.planningWorkers.retain(
+			op.targetId,
+			`$${discussion ? "discussion" : "revisit"}:${op.operationId}`,
+			op,
+		);
 		const state = this.deps.store.planningWorkers.change(op.targetId, prior.revision, (s) => {
-			s.revisit = { operation: op, admitted: false };
-			s.phase = "revisiting";
+			if (discussion) s.discussion = { operation: op, admitted: false };
+			else s.revisit = { operation: op, admitted: false };
+			s.phase = discussion ? "discussing" : "revisiting";
 		});
 		let release!: () => void;
 		const turn = new Promise<void>((r) => {
@@ -222,6 +252,7 @@ export class PlanningWorkers {
 		});
 		this.turnAdmissions.set(op.targetId, turn);
 		const guard = () => {
+			discussionGuard?.();
 			if (
 				this.closing.signal.aborted ||
 				this.authority(state.binding) !== pin.authority ||
@@ -236,7 +267,8 @@ export class PlanningWorkers {
 			const receipt = await this.admitInput(state, op, guard);
 			guard();
 			this.deps.store.planningWorkers.change(op.targetId, state.revision, (s) => {
-				s.revisit!.admitted = true;
+				if (discussion) s.discussion!.admitted = true;
+				else s.revisit!.admitted = true;
 				s.phase = "active";
 			});
 			await this.deps.store.durable();
@@ -686,16 +718,18 @@ export class PlanningWorkers {
 		);
 	}
 	async recover(op: DurableOperation): Promise<unknown> {
-		if (op.kind === "plan-revisit") {
+		if (op.kind === "plan-revisit" || op.kind === "thread-send") {
 			const state = this.deps.store.planningWorkers.get(op.targetId);
-			if (!state || canonicalJSON(state.revisit?.operation) !== canonicalJSON(op))
+			const retained = op.kind === "thread-send" ? state?.discussion : state?.revisit;
+			if (!state || canonicalJSON(retained?.operation) !== canonicalJSON(op))
 				throw new Error("Unknown Revisit identity; lookup only");
 			const receipt = await this.deps.sessions.lookupPlanning(this.input(state, op));
 			if (!receipt) throw new Error("Unknown Revisit admission; no replay");
-			if (state.phase === "revisiting") {
+			if (state.phase === (op.kind === "thread-send" ? "discussing" : "revisiting")) {
 				this.deps.store.planningWorkers.change(op.targetId, state.revision, (s) => {
 					s.phase = "active";
-					s.revisit!.admitted = true;
+					if (op.kind === "thread-send") s.discussion!.admitted = true;
+					else s.revisit!.admitted = true;
 				});
 				await this.deps.store.durable();
 			}
