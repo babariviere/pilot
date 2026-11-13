@@ -38,6 +38,12 @@ fn view() -> SavedView {
         reminders: vec![format!("task/project/export/t1#{}\nreport", "a".repeat(64))],
         linear: "project/ln-219".into(),
         today_project: "project".into(),
+        settings: true,
+        preferences: vec![
+            "project\n3".into(),
+            "p-small\nKeep PRs small 🐦".into(),
+            "\nNew one".into(),
+        ],
     }
 }
 
@@ -305,6 +311,23 @@ fn an_oversized_view_is_refused_whole_before_anything_pauses() {
             start(&mut desk, odd),
             Err(OutcomeStatus::Rejected),
             "{linear}"
+        );
+    }
+    // Unsaved preferences name their project and revision; typed IDs are empty or valid.
+    for preferences in [
+        vec!["project".to_owned()],
+        vec!["pro ject\n3".to_owned()],
+        vec!["project\n-1".to_owned()],
+        vec!["project\n3".to_owned(), "no line break".to_owned()],
+        vec!["project\n3".to_owned(), "bad id\ntext".to_owned()],
+    ] {
+        let mut desk = UpdateDesk::new(UpdateScenario::Available);
+        let mut odd = view();
+        odd.preferences = preferences.clone();
+        assert_eq!(
+            start(&mut desk, odd),
+            Err(OutcomeStatus::Rejected),
+            "{preferences:?}"
         );
     }
     assert!(desk.view().run.is_none());

@@ -20,6 +20,7 @@ mod official_startup;
 pub mod official_update;
 pub(crate) mod plan_sources;
 mod planning;
+pub(crate) mod preferences;
 pub mod ritual;
 pub(crate) mod today_scope;
 mod transport;
@@ -705,7 +706,7 @@ impl NativeHost {
 fn publish_planning(shared: &Shared, record: &planning::PlanningRecord) {
     if matches!(
         record.operation["kind"].as_str(),
-        Some("native-chat-create" | "user-verification")
+        Some("native-chat-create" | "user-verification" | "project-preferences-update")
     ) {
         return;
     }

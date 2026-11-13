@@ -1,6 +1,6 @@
 // Where the window's one Back goes, and Pilot's way home. The app is a
 // tree: Today, then a mission's overview, then its interview and plan or a
-// result; Changes, Linear, New and the rituals hang off Today. Back goes up
+// result; Changes, Linear, Settings, New and the rituals hang off Today. Back goes up
 // one level of that tree, Escape does the same, and Pilot at the top left
 // always goes to Today. Moving around only changes where the user is: it
 // never drops a draft, sends, saves or starts anything.
@@ -11,6 +11,7 @@ import { closeDelivery, deliveryRoute, hideInspection } from "./deliveryView";
 import { closeLinear, linearOpen } from "./linearView";
 import type { Plans } from "./planning";
 import { closePlanning, planRoute } from "./planView";
+import { closeSettings, settingsOpen } from "./preferencesView";
 import { backFromStandup, closeRitual, ritualRoute } from "./ritualView";
 import { closeUpdate, updateEntry, updateOpen } from "./updateView";
 import { closeMission, openMission, route } from "./view";
@@ -47,6 +48,7 @@ export function planBack(day: Day | undefined, missionId: string): Back {
 export type Shown =
 	| "update"
 	| "ritual"
+	| "settings"
 	| "delivery"
 	| "linear"
 	| "change"
@@ -60,6 +62,7 @@ export type Shown =
 export function shown(places: Places): Shown {
 	if (updateEntry() && updateOpen()) return "update";
 	if (ritualRoute()) return "ritual";
+	if (places.day.preferences && settingsOpen()) return "settings";
 	if (places.day.delivery && deliveryRoute()) return "delivery";
 	if (places.day.linear && linearOpen()) return "linear";
 	const change = places.changes ? changesRoute() : null;
@@ -83,6 +86,8 @@ export function backTarget(places: Places): Back | null {
 			}
 			return to("Today", closeRitual);
 		}
+		case "settings":
+			return to("Today", closeSettings);
 		case "delivery": {
 			const id = route();
 			if (!id) return to("Today", closeDelivery);
@@ -114,6 +119,7 @@ export function backTarget(places: Places): Back | null {
 export function goHome() {
 	closeUpdate();
 	closeRitual();
+	closeSettings();
 	hideInspection();
 	if (deliveryRoute()) closeDelivery();
 	if (linearOpen()) closeLinear();

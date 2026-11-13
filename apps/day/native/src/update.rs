@@ -331,6 +331,15 @@ pub struct SavedView {
     /// draft or chat.
     #[prop(default)]
     pub today_project: String,
+    /// Whether Settings was open. Showing it again only reads.
+    #[prop(default)]
+    pub settings: bool,
+    /// Unsaved project preferences, exactly as typed: "<project>\n<revision>",
+    /// then one "<id>\n<text>" per preference ("" for a new one's ID).
+    /// Empty for none. Restoring them sends and saves nothing, and they stay
+    /// with their own project.
+    #[prop(default)]
+    pub preferences: Vec<String>,
 }
 
 impl SavedView {
@@ -343,6 +352,7 @@ impl SavedView {
             .chain(&self.see_all)
             .chain(&self.notes)
             .chain(&self.reminders)
+            .chain(&self.preferences)
             .map(String::len)
             .sum::<usize>();
         self.goal.len()
@@ -367,6 +377,7 @@ impl SavedView {
             + self.see_all.len()
             + self.notes.len()
             + self.reminders.len()
+            + self.preferences.len()
     }
 
     /// Whether its offsets are plain, non-negative numbers.
@@ -390,6 +401,29 @@ impl SavedView {
             || (parts.next().is_some_and(id)
                 && parts.next().is_none_or(id)
                 && parts.next().is_none())
+    }
+
+    /// Whether `preferences` is empty, or names one project and revision and
+    /// at most 32 typed preferences, each with an empty or valid ID.
+    pub fn preferences_valid(&self) -> bool {
+        let id = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 128
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        };
+        let Some((head, rest)) = self.preferences.split_first() else {
+            return true;
+        };
+        let header = head
+            .split_once('\n')
+            .is_some_and(|(project, revision)| id(project) && revision.parse::<u64>().is_ok());
+        header
+            && rest.len() <= 32
+            && rest.iter().all(|line| {
+                line.split_once('\n')
+                    .is_some_and(|(entry, _)| entry.is_empty() || id(entry))
+            })
     }
 }
 
@@ -876,7 +910,8 @@ impl UpdateDesk {
             && (view.text_bytes() > VIEW_LIMIT
                 || view.entries() > VIEW_ENTRIES
                 || !view.offsets_valid()
-                || !view.linear_valid())
+                || !view.linear_valid()
+                || !view.preferences_valid())
         {
             self.bump();
             return Err(outcome(

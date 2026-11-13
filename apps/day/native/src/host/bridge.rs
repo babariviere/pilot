@@ -170,6 +170,12 @@ async fn run(
     ) {
         return super::intake::handle(t, journal, shared, epoch, &call.command, &call.gate).await;
     }
+    if matches!(
+        call.command,
+        Command::PreferencesRead | Command::PreferencesSave(_) | Command::PreferencesCheck(_)
+    ) {
+        return super::preferences::handle(t, journal, shared, &call.command, &call.gate).await;
+    }
     if call.command.is_ritual() {
         return ritual(t, journal, shared, day, epoch, call).await;
     }
@@ -271,6 +277,9 @@ async fn run(
         | Command::IntakeWrite(_)
         | Command::IntakeCheck(_) => {
             unreachable!("handled intake command")
+        }
+        Command::PreferencesRead | Command::PreferencesSave(_) | Command::PreferencesCheck(_) => {
+            unreachable!("handled preferences command")
         }
         Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot => None,
         Command::WindowRead => unreachable!("handled saved window read"),

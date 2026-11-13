@@ -52,6 +52,13 @@ import {
 	submitting,
 	writing,
 } from "./planView";
+import {
+	preferencesDraft,
+	preferencesMessage,
+	restorePreferences,
+	savedPreferences,
+	settingsOpen,
+} from "./preferencesView";
 import { type RitualRoute, ritualRoute, startStep } from "./ritualView";
 import { todayProject } from "./todayScope";
 import type { Update } from "./updateFeed";
@@ -107,6 +114,7 @@ function place(): { place: PlaceKind; id: string } {
 /** The key of the screen shown under the update page, for its scroll and fields. */
 export function shownKey(): string {
 	if (ritualRoute()) return "ritual";
+	if (settingsOpen()) return "settings";
 	const delivery = deliveryRoute();
 	if (delivery) return `delivery/${delivery.key}`;
 	if (linearOpen()) return "linear";
@@ -184,6 +192,10 @@ export function captureView(today?: Today): SavedView {
 		linear: savedLinear(),
 		// The project Today shows, or "" for All projects. Showing it again only reads.
 		todayProject: todayProject() === "all" ? "" : todayProject(),
+		// Settings, and unsaved project preferences exactly as typed, with their
+		// project and revision. Restoring them sends and saves nothing.
+		settings: settingsOpen(),
+		preferences: savedPreferences(),
 	};
 }
 
@@ -288,6 +300,9 @@ export function startFresh() {
 	linearProject.set(null);
 	focusIssue.set(null);
 	todayProject.set("all");
+	settingsOpen.set(false);
+	preferencesDraft.set(null);
+	preferencesMessage.set("");
 	todayPlace.y = 0;
 	todayPlace.row = null;
 	forgetPlaces();
@@ -300,8 +315,10 @@ export function startFresh() {
  * or started. A ritual comes back only on the date it was for (`today`).
  * The Linear page comes back only in a window that has it (`linear`), on
  * the project it showed: a read for another project shows nothing.
+ * Settings comes back only in a window that has it (`settings`); unsaved
+ * preferences always come back as unsaved text, for their own project.
  */
-export function restoreView(view: SavedView, changes?: Changes, today?: Today, linear = false) {
+export function restoreView(view: SavedView, changes?: Changes, today?: Today, linear = false, settings = false) {
 	route.set(view.place === "mission" ? view.id : null);
 	planRoute.set(
 		view.place === "new" ? { kind: "new" } : view.place === "plan" ? { kind: "plan", missionId: view.id } : null,
@@ -361,6 +378,8 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	linearProject.set(null);
 	focusIssue.set(null);
 	if (linear && view.linear) restoreLinear(view.linear);
+	restorePreferences(view.preferences ?? []);
+	settingsOpen.set(settings && view.settings === true);
 	// Today's project scope comes back as a read; a view saved before it existed shows All projects.
 	todayProject.set(view.todayProject || "all");
 	todayPlace.y = Math.max(0, view.todayY ?? 0);

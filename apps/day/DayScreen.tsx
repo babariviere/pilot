@@ -1,5 +1,5 @@
 // The app's one window: Today, one mission's overview, New, one mission's
-// planning, Changes, or the start or end of the day. No sidebar. One header
+// planning, Changes, Settings, or the start or end of the day. No sidebar. One header
 // stays over every screen: Pilot goes to Today, Back goes up one level,
 // and Escape goes back too.
 
@@ -19,9 +19,11 @@ import { NewScreen } from "./NewScreen";
 import { PlanScreen } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { planRoute } from "./planView";
+import { settingsOpen } from "./preferencesView";
 import { RitualScreen } from "./RitualScreen";
 import { mockRituals, type Rituals } from "./ritualFeed";
 import { ritualEntry, ritualRoute } from "./ritualView";
+import { SettingsScreen } from "./SettingsScreen";
 import { TodayScreen } from "./TodayScreen";
 import { bindRestore, UpdateScreen } from "./UpdateScreen";
 import type { Update } from "./updateFeed";
@@ -107,6 +109,19 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 }
 
 function Screens(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
+	return (
+		<If
+			when={props.day.preferences && settingsOpen()}
+			else={<Results day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />}
+		>
+			<Arrive class="flex-1">
+				<SettingsScreen day={props.day} />
+			</Arrive>
+		</If>
+	);
+}
+
+function Results(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
 	return (
 		<If
 			when={props.day.delivery && deliveryRoute()}

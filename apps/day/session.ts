@@ -8,14 +8,18 @@ import { mirrorDelivery } from "./deliveryFeed";
 import { ScriptedLinear } from "./linearDemo";
 import { mirrorLinear } from "./linearFeed";
 import { openPlanning } from "./planning";
+import { ScriptedPreferences } from "./preferencesDemo";
+import { mirrorPreferences } from "./preferencesFeed";
 import { openUpdate } from "./updateFeed";
 
-/** The running app's feed: the decisions world, with demo results to check and demo saved Linear issues. */
+/** The running app's feed: the decisions world, with demo results to check, saved Linear issues and preferences. */
 export const day = mirrorDay(
 	new TodayFeed(),
 	undefined,
 	mirrorDelivery(new ScriptedDelivery()),
 	mirrorLinear(new ScriptedLinear()),
+	undefined,
+	mirrorPreferences(new ScriptedPreferences()),
 );
 /** The running app's planning feed: one mission interview in progress. */
 export const plans = openPlanning();

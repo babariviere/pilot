@@ -1,7 +1,7 @@
 # Small project preferences and context
 
-Status: backend and agent-tool slice. Day's Settings bridge/UI is separate. No live
-data conversion, provider call, app restart or activation is part of this change.
+Status: backend, agent tools and Day's Settings bridge/UI. No live data conversion,
+provider call, app restart or activation is part of this change.
 
 ## Source of truth
 
@@ -89,3 +89,26 @@ The existing mission section still carries agreement, relevant tasks and decisio
 Membership/project and record changes across read barriers fail instead of returning
 obsolete context. Reads never observe/check Knowledge or change its state. Ask and
 specialist profiles do not acquire a new broad project read or write capability.
+
+## Day Settings
+
+Day's header opens Settings (⌘,). Its one section shows the window's own project's
+preferences: the project name, each preference with its source (added by you, or
+recorded by a mission coordinator from your note, with the quoted words) and the
+list's last change. Settings has no permission or provider controls.
+
+- `day.preferences.read {}` reads the native root's project and its name. Reading
+  sends nothing. A failed read says so and is never shown as an empty list.
+- `day.preferences.save {projectId, expectedRevision, entries:[{id|null,text}]}`
+  sends the whole list once. The root refuses a project other than its own, rechecks
+  the revision, names new preferences, fixes the reason and journals the
+  `project-preferences-update` envelope before the one POST.
+- `day.preferences.check {operationId}` only looks up that saved envelope's receipt.
+
+Edits form one draft that names its project and starting revision. Save and Revert
+show only once the words differ from the saved list. Leaving Settings, closing or
+updating keeps the draft in the window's saved view (`settings`, `preferences`).
+A newer saved list never replaces typed text: the user keeps their version (then
+saves) or uses the saved one. A draft for another project is kept, never saved
+here, and discarded only on request. A lost answer stays Unknown and blocks another
+Save until Check reads a receipt.

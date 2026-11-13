@@ -24,13 +24,14 @@ import pause from "./icons/pause.svg";
 import play from "./icons/play.svg";
 import plus from "./icons/plus.svg";
 import refresh from "./icons/refresh.svg";
+import settings from "./icons/settings.svg";
 import sun from "./icons/sun.svg";
 import update from "./icons/update.svg";
 
 // One small family of line icons, drawn on a 16-point grid with the same
 // stroke. They are template images: the class's tint colors them. They
 // stand beside words, never in place of a label the user must guess.
-const ICONS = { back, changes, document, moon, notes, pause, play, plus, refresh, sun, update } as const;
+const ICONS = { back, changes, document, moon, notes, pause, play, plus, refresh, settings, sun, update } as const;
 
 /** The name of one of the app's icons. */
 export type IconName = keyof typeof ICONS;

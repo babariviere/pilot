@@ -8,6 +8,7 @@ import type { DayFeed } from "./feeds";
 import type { IntakeMirror } from "./intakeFeed";
 import type { LinearMirror } from "./linearFeed";
 import { glide } from "./motion";
+import type { PreferencesMirror } from "./preferencesFeed";
 import type { ScopeMirror } from "./todayScope";
 
 /** Today's read model as Rust last published it, and the feed to change it. */
@@ -36,6 +37,11 @@ export type Day = {
 	 * Today shows only the window's own project and offers no scope.
 	 */
 	scope?: ScopeMirror;
+	/**
+	 * The window's own project's preferences, for Settings. Without them the
+	 * window offers no Settings.
+	 */
+	preferences?: PreferencesMirror;
 	/** Stops listening and frees the feed. */
 	close: () => void;
 };
@@ -52,6 +58,7 @@ export function mirrorDay(
 	delivery?: DeliveryMirror,
 	linear?: LinearMirror,
 	scope?: ScopeMirror,
+	preferences?: PreferencesMirror,
 ): Day {
 	const today = signal(feed.snapshot());
 	const stop = feed.onChange((next) => {
@@ -67,12 +74,14 @@ export function mirrorDay(
 		delivery,
 		linear,
 		scope,
+		preferences,
 		close: () => {
 			stop();
 			feed.dispose();
 			intake?.close();
 			delivery?.close();
 			linear?.close();
+			preferences?.close();
 		},
 	};
 }

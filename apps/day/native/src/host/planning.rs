@@ -52,6 +52,7 @@ impl PlanningRecord {
                         | "intake-start"
                         | "native-chat-create"
                         | "user-verification"
+                        | "project-preferences-update"
                 )
             )
             || o["payload"]
@@ -76,6 +77,9 @@ impl PlanningRecord {
         if o["kind"] == "native-chat-create" {
             super::new_chat::validate_record(o)?;
         }
+        if o["kind"] == super::preferences::KIND {
+            super::preferences::validate_record(&self.source, o)?;
+        }
         Ok(())
     }
     pub fn summary(&self) -> Value {
@@ -92,7 +96,7 @@ impl PlanningRecord {
             "receipt":self.receipt})
     }
 }
-fn hash(text: &str) -> String {
+pub(super) fn hash(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 fn home(source: &Source, host: &str) -> Value {
@@ -141,6 +145,7 @@ fn record_pinned(
                     | "intake-start"
                     | "native-chat-create"
                     | "user-verification"
+                    | "project-preferences-update"
             )
         )
         || (!matches!(
@@ -154,6 +159,7 @@ fn record_pinned(
                     | "intake-start"
                     | "native-chat-create"
                     | "user-verification"
+                    | "project-preferences-update"
             )
         ) && request["expected"]["fence"]["missionId"] != mission)
     {
@@ -261,6 +267,9 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
         {
             return Err(Error::Unknown);
         }
+    }
+    if op["kind"] == super::preferences::KIND && r["state"] == "accepted" {
+        super::preferences::exact_result(op, &r)?;
     }
     Ok(r)
 }

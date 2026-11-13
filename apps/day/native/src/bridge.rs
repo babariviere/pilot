@@ -24,6 +24,9 @@ pub const METHODS: &[&str] = &[
     "day.chat.check",
     "day.intake.read",
     "day.linear.read",
+    "day.preferences.read",
+    "day.preferences.save",
+    "day.preferences.check",
     "day.intake.triage",
     "day.intake.start",
     "day.intake.check",
@@ -182,6 +185,9 @@ pub(crate) enum Command {
     ChatCheck(String),
     IntakeRead,
     LinearRead,
+    PreferencesRead,
+    PreferencesSave(crate::host::preferences::Intent),
+    PreferencesCheck(String),
     IntakeWrite(crate::host::intake::Intent),
     IntakeCheck(String),
     DeliveryRead(crate::host::delivery::Subject),
@@ -353,6 +359,27 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 return Err(Error::Invalid);
             }
             C::LinearRead
+        }
+        "day.preferences.read" => {
+            if args != json!({}) {
+                return Err(Error::Invalid);
+            }
+            C::PreferencesRead
+        }
+        "day.preferences.save" => {
+            let r: crate::host::preferences::Intent = exact(args)?;
+            r.validate()?;
+            C::PreferencesSave(r)
+        }
+        "day.preferences.check" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Lookup {
+                operation_id: String,
+            }
+            let r: Lookup = exact(args)?;
+            mission(&r.operation_id)?;
+            C::PreferencesCheck(r.operation_id)
         }
         "day.delivery.list" => {
             let r: crate::host::delivery::List = exact(args)?;
@@ -631,6 +658,7 @@ impl Command {
                     | Self::Projects
                     | Self::IntakeRead
                     | Self::LinearRead
+                    | Self::PreferencesRead
                     | Self::DeliveryRead(_)
                     | Self::DeliveryList(_)
                     | Self::DeliverySaved

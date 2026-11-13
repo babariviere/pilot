@@ -1,6 +1,6 @@
 // The window's one header: Pilot at the top left, which always goes to
 // Today; one Back that goes up a level; and the few places every screen can
-// reach: an update that needs the user, Changes and New. It stays put while
+// reach: an update that needs the user, Changes, Settings and New. It stays put while
 // the screens below it change, so the way out is always in the same place.
 import { keymap, Text, View, windowSize } from "nsh";
 import { Button } from "nsh/base";
@@ -10,6 +10,7 @@ import type { Day } from "./day";
 import { type Back, backTarget, goHome, type Places, shown } from "./nav";
 import type { Plans } from "./planning";
 import { openNew } from "./planView";
+import { openSettings } from "./preferencesView";
 import { updateLabel } from "./UpdateScreen";
 import { Action, Icon } from "./ui";
 import { showUpdate, updateEntry, updateOpen } from "./updateView";
@@ -17,6 +18,8 @@ import { dataSource } from "./view";
 
 /** The keystroke that opens New, as the platform writes it. */
 export const NEW_KEYS = keymap.label("mod+n");
+/** The keystroke that opens Settings, as the platform writes it. */
+export const SETTINGS_KEYS = keymap.label("mod+,");
 
 /** Below this width the header keeps its icons and drops their words. */
 const NARROW = 640;
@@ -31,6 +34,12 @@ function goNew() {
 function goChanges() {
 	goHome();
 	showChanges();
+}
+
+/** Opens Settings from wherever the user is. Drafts stay where they are. */
+function goSettings() {
+	goHome();
+	openSettings();
 }
 
 /** Pilot's mark and name: the way home. */
@@ -85,6 +94,7 @@ export function AppHeader(props: { day: Day; plans?: Plans; changes?: Changes })
 		return entry && !updateOpen() ? updateLabel(entry.service()) : "";
 	};
 	if (props.plans) keymap.bind("mod+n", goNew);
+	if (props.day.preferences) keymap.bind("mod+,", goSettings);
 	return (
 		<View testID="app-header" class="h-12 flex-row items-center gap-1 border-b border-border bg-background px-3">
 			<Home />
@@ -111,6 +121,16 @@ export function AppHeader(props: { day: Day; plans?: Plans; changes?: Changes })
 			</If>
 			<If when={props.changes && at() !== "changes"}>
 				<ChangesPlace changes={props.changes as Changes} narrow={narrow()} />
+			</If>
+			<If when={props.day.preferences && at() !== "settings"}>
+				<Action
+					label="Settings"
+					icon="settings"
+					iconOnly={narrow()}
+					shortcut={SETTINGS_KEYS}
+					testID="settings-open"
+					onPress={goSettings}
+				/>
 			</If>
 			<If when={props.plans && at() !== "new"}>
 				<View class="pl-1">
