@@ -1,156 +1,191 @@
-// Saved artifacts as rows: title, kind and exact revision, where each came
-// from, and its source or preview in place. A mission's overview groups its
-// links by task; the project's Artifacts page lists newest first. Each page
-// reads its list once when it opens and previews its newest NSH artifact; the
-// rest open on a press. The sandbox, not the press, is the safety boundary.
+// Saved artifacts as a gallery: one card per artifact with its kind, title
+// and exact revision. A mission's overview groups its links by task; the
+// project's Artifacts page lists newest first. Each page reads its list once
+// when it opens and starts no preview: opening a card reads that revision
+// once and shows it below its row, in the app's isolated preview for NSH or
+// as plain text otherwise. One artifact shows at a time on a page.
 // Nothing here is saved, sent or counted as anyone's check.
 import { type Signal, signal, Text, View, type ViewRef } from "nsh";
+import { Button } from "nsh/base";
 import { ArtifactPreview } from "./ArtifactPreview";
-import { type ArtifactList, type ArtifactRow, type ArtifactSource, MAX_PREVIEWS, type Shown } from "./artifactReads";
+import type { ArtifactList, ArtifactRow, ArtifactSource, Shown } from "./artifactReads";
 import { artifactPreviewsAvailable } from "./bridge";
 import { kindName } from "./deliveryView";
 import { glide } from "./motion";
 import { SourcePanel } from "./SourcePanel";
 import { Action, Mark, SectionTitle } from "./ui";
 
-type RowView = Shown & { generation: number };
+/** The artifact open on a page, by its card's key. */
+type Opened = Shown & { key: string; generation: number };
 
-/** What one page's rows show. It lives with the page and is never saved. */
+/** What one page's gallery shows. It lives with the page and is never saved. */
 export type Shelf = {
-	views: Signal<Record<string, RowView>>;
+	open: Signal<Opened | null>;
 	anchors: Map<string, ViewRef>;
-	/** Hides the source or preview opened last. False when none shows. */
+	/** Closes the open artifact and focuses its card. False when none is open. */
 	hideLast(): boolean;
 };
 
 export function createShelf(): Shelf {
-	const views = signal<Record<string, RowView>>({});
+	const open = signal<Opened | null>(null);
 	const anchors = new Map<string, ViewRef>();
 	return {
-		views,
+		open,
 		anchors,
 		hideLast() {
-			const last = Object.entries(views()).sort(([, a], [, b]) => b.generation - a.generation)[0];
-			if (!last) return false;
+			const now = open();
+			if (!now) return false;
 			glide();
-			hide(views, last[0]);
-			anchors.get(last[0])?.focus();
+			open.set(null);
+			anchors.get(now.key)?.focus();
 			return true;
 		},
 	};
 }
 
-/** A row's identity on its page: the same revision can be linked to two tasks. */
+/** A card's identity on its page: the same revision can be linked to two tasks. */
 function rowKey(row: ArtifactRow): string {
 	return [row.taskId ?? "", row.sessionId, row.artifactId, row.revision ?? ""].join("/");
 }
 
-function hide(views: Shelf["views"], key: string) {
-	if (!views()[key]) return;
-	views.update((all) => {
-		const next = { ...all };
-		delete next[key];
-		return next;
-	});
+/** Whether `row` opens in a preview here rather than as text. */
+function previews(row: ArtifactRow): boolean {
+	return row.kind === "nsh" && artifactPreviewsAvailable();
 }
 
 let generations = 0;
 
 /**
- * Reads `row`'s exact revision once, as text or for its preview. What the
- * row showed before goes first; a late answer for a hidden row is dropped.
- * A preview beyond `MAX_PREVIEWS` closes the page's oldest one.
+ * Opens `row`, reading its exact revision once. What was open before
+ * closes; a late answer for a card closed since is dropped.
  */
-async function show(shelf: Shelf, source: ArtifactSource, row: ArtifactRow, preview: boolean) {
-	if (row.revision === null || (preview && row.kind !== "nsh")) return;
+async function openRow(shelf: Shelf, source: ArtifactSource, row: ArtifactRow) {
+	if (row.revision === null) return;
 	const key = rowKey(row);
-	if (shelf.views()[key]?.state === "reading") return;
+	if (shelf.open()?.key === key && shelf.open()?.state === "reading") return;
 	const generation = ++generations;
-	const reading: RowView = {
+	const reading: Opened = {
+		key,
 		title: row.title,
 		kind: row.kind,
 		pin: { revision: row.revision },
 		state: "reading",
-		preview,
+		preview: previews(row),
 		artifact: null,
 		message: "",
 		generation,
 	};
 	glide();
-	shelf.views.update((all) => {
-		const next = { ...all, [key]: reading };
-		if (preview) {
-			const open = Object.entries(next)
-				.filter(([, v]) => v.preview)
-				.sort(([, a], [, b]) => a.generation - b.generation);
-			for (const [k] of open.slice(0, Math.max(0, open.length - MAX_PREVIEWS))) delete next[k];
-		}
-		return next;
-	});
+	shelf.open.set(reading);
 	const r = await source.read(row);
-	if (shelf.views()[key]?.generation !== generation) return;
-	shelf.views.update((all) => ({
-		...all,
-		[key]:
-			r.status === "shown"
-				? { ...reading, state: "shown", artifact: r.artifact }
-				: { ...reading, state: "refused", message: r.message },
-	}));
+	if (shelf.open()?.generation !== generation) return;
+	shelf.open.set(
+		r.status === "shown"
+			? { ...reading, state: "shown", artifact: r.artifact }
+			: { ...reading, state: "refused", message: r.message },
+	);
 }
 
-/** "NSH, revision 3". A mission link without a pin says it is the current one. */
+/** "NSH · revision 3". A mission link without a pin says it is the current one. */
 function revisionLine(row: ArtifactRow, inMission: boolean): string {
-	if (row.revision === null) return `${kindName(row.kind)}, no saved revision here`;
+	if (row.revision === null) return `${kindName(row.kind)} · no saved revision here`;
 	const current = inMission && !row.pinned ? " · current" : "";
-	return `${kindName(row.kind)}, revision ${row.revision}${current}`;
+	return `${kindName(row.kind)} · revision ${row.revision}${current}`;
 }
 
-function Row(props: { source: ArtifactSource; shelf: Shelf; row: ArtifactRow; inMission: boolean }) {
+/** One artifact's card. Its thumbnail names the kind; nothing runs until it opens. */
+function Card(props: { source: ArtifactSource; shelf: Shelf; row: ArtifactRow; inMission: boolean }) {
 	const key = rowKey(props.row);
-	const mine = () => props.shelf.views()[key] ?? null;
-	const reading = () => mine()?.state === "reading";
+	const isOpen = () => props.shelf.open()?.key === key;
 	const name = () => props.row.title || "the artifact";
-	const anchor = (node: ViewRef) => props.shelf.anchors.set(key, node);
-	const toggle = (preview: boolean) => {
-		if (mine() && !!mine()?.preview === preview) {
-			glide();
-			hide(props.shelf.views, key);
-		} else void show(props.shelf, props.source, props.row, preview);
+	const label = () => {
+		if (props.row.revision === null) return `${name()}. No saved revision can be read here.`;
+		if (isOpen()) return `Close ${name()}.`;
+		return previews(props.row)
+			? `Open ${name()}, revision ${props.row.revision}, in its isolated preview. Looking records nothing.`
+			: `Show the saved source of ${name()}, revision ${props.row.revision}, as plain text. Looking records nothing.`;
 	};
 	return (
-		<View class="gap-2 border-t border-border py-2.5">
-			<View class="flex-row items-center gap-3">
-				<Text class="flex-1 text-sm text-foreground">{props.row.title || "Artifact"}</Text>
-				<Text class="text-xs text-muted-foreground">{revisionLine(props.row, props.inMission)}</Text>
-				<If when={props.row.revision !== null}>
-					<Action
-						label={reading() ? "Reading…" : mine() && !mine()?.preview ? "Hide source" : "Inspect source"}
-						testID={`artifact-source-${key}`}
-						accessibilityLabel={
-							mine() && !mine()?.preview
-								? `Hide the source of ${name()}.`
-								: `Show the saved source of ${name()}, revision ${props.row.revision}, as plain text. Looking records nothing.`
-						}
-						disabled={reading()}
-						anchor={anchor}
-						onPress={() => toggle(false)}
-					/>
-					<If when={props.row.kind === "nsh" && artifactPreviewsAvailable()}>
-						<Action
-							label={mine()?.preview ? "Hide preview" : "Preview"}
-							testID={`artifact-preview-${key}`}
-							disabled={reading()}
-							anchor={anchor}
-							onPress={() => toggle(true)}
-						/>
-					</If>
-				</If>
+		<Button
+			ref={(node: ViewRef) => props.shelf.anchors.set(key, node)}
+			testID={`artifact-card-${key}`}
+			accessibilityLabel={label()}
+			disabled={props.row.revision === null}
+			onPress={() => {
+				if (isOpen()) props.shelf.hideLast();
+				else void openRow(props.shelf, props.source, props.row);
+			}}
+			class="group flex-1 gap-2 rounded-xl border p-2 transition duration-150 hover:bg-accent active:bg-accent disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-ring/40"
+			classList={{ "border-border-strong bg-accent": isOpen(), "border-border": !isOpen() }}
+		>
+			<View class="h-24 items-center justify-center rounded-lg bg-muted">
+				<Text class="text-xs font-semibold tracking-wide text-faint">{kindName(props.row.kind)}</Text>
 			</View>
-			<If when={mine()}>
-				<If when={mine()?.preview} else={<SourcePanel inspection={mine() as RowView} />}>
-					<ArtifactPreview inspection={mine() as RowView} />
+			<View class="gap-0.5 px-1 pb-1">
+				<Text class="truncate text-sm text-foreground group-hover:underline">{props.row.title || "Artifact"}</Text>
+				<Text class="truncate text-xs text-muted-foreground">{revisionLine(props.row, props.inMission)}</Text>
+			</View>
+		</Button>
+	);
+}
+
+/** The open artifact, under its row: its preview or saved source, and Close. */
+function Viewer(props: { shelf: Shelf }) {
+	const now = () => props.shelf.open() as Opened;
+	const toggle = () => {
+		glide();
+		props.shelf.open.set({ ...now(), preview: !now().preview });
+	};
+	return (
+		<View testID="artifact-viewer" class="gap-2 pt-1">
+			<View class="flex-row items-center justify-end gap-1">
+				<If when={now().kind === "nsh" && artifactPreviewsAvailable() && now().state === "shown"}>
+					<Action
+						label={now().preview ? "Inspect source" : "Show preview"}
+						testID="artifact-viewer-toggle"
+						onPress={toggle}
+					/>
 				</If>
+				<Action label="Close" testID="artifact-viewer-close" onPress={() => props.shelf.hideLast()} />
+			</View>
+			<If when={now().preview} else={<SourcePanel inspection={now()} />}>
+				<ArtifactPreview inspection={now()} />
 			</If>
+		</View>
+	);
+}
+
+const COLUMNS = 3;
+
+/** `rows` in runs of three cards, the last run padded so cards keep their width. */
+function runs(rows: ArtifactRow[]): ArtifactRow[][] {
+	const out: ArtifactRow[][] = [];
+	for (let i = 0; i < rows.length; i += COLUMNS) out.push(rows.slice(i, i + COLUMNS));
+	return out;
+}
+
+function Grid(props: { source: ArtifactSource; shelf: Shelf; rows: ArtifactRow[]; inMission: boolean }) {
+	return (
+		<View class="gap-3">
+			<Each of={runs(props.rows)} key={(run) => run.map(rowKey).join("|")}>
+				{(run) => (
+					<View class="gap-3">
+						<View class="flex-row gap-3">
+							<Each of={run()} key={rowKey}>
+								{(row) => (
+									<Card source={props.source} shelf={props.shelf} row={row()} inMission={props.inMission} />
+								)}
+							</Each>
+							<Each of={Array.from({ length: COLUMNS - run().length }, (_, i) => i)} key={String}>
+								{() => <View class="flex-1" />}
+							</Each>
+						</View>
+						<If when={run().some((row) => rowKey(row) === props.shelf.open()?.key)}>
+							<Viewer shelf={props.shelf} />
+						</If>
+					</View>
+				)}
+			</Each>
 		</View>
 	);
 }
@@ -172,10 +207,7 @@ function byTask(rows: ArtifactRow[]): Group[] {
 
 type Listing = { status: "reading" } | { status: "shown"; list: ArtifactList } | { status: "refused"; message: string };
 
-/**
- * The rows of the project, or of mission `missionId` grouped by task. It
- * reads once when it shows; its newest readable NSH artifact opens in a preview.
- */
+/** The cards of the project, or of mission `missionId` grouped by task. It reads once when it shows. */
 export function ArtifactShelf(props: {
 	source: ArtifactSource;
 	shelf: Shelf;
@@ -186,9 +218,6 @@ export function ArtifactShelf(props: {
 	const listing = signal<Listing>({ status: "reading" });
 	void props.source.list(props.missionId).then((r) => {
 		listing.set(r.ok ? { status: "shown", list: r.list } : { status: "refused", message: r.message });
-		if (!r.ok || !artifactPreviewsAvailable()) return;
-		const newest = r.list.rows.find((row) => row.kind === "nsh" && row.revision !== null);
-		if (newest) void show(props.shelf, props.source, newest, true);
 	});
 	const rows = () => {
 		const l = listing();
@@ -222,15 +251,11 @@ export function ArtifactShelf(props: {
 			</If>
 			<Each of={groups()} key={(g) => g.id}>
 				{(g) => (
-					<View>
+					<View class="gap-2 pb-3">
 						<If when={g().label}>
-							<Text class="pb-1 pt-3 text-xs text-faint">{g().label}</Text>
+							<Text class="pt-2 text-xs text-faint">{g().label}</Text>
 						</If>
-						<Each of={g().rows} key={rowKey}>
-							{(row) => (
-								<Row source={props.source} shelf={props.shelf} row={row()} inMission={!!props.missionId} />
-							)}
-						</Each>
+						<Grid source={props.source} shelf={props.shelf} rows={g().rows} inMission={!!props.missionId} />
 					</View>
 				)}
 			</Each>

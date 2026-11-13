@@ -57,7 +57,7 @@ export type Shown = {
 };
 
 /** How many previews one page keeps open. Opening another closes the oldest. */
-export const MAX_PREVIEWS = 2;
+export const MAX_PREVIEWS = 4;
 
 const KINDS = new Set(["html", "react", "image", "swiftui", "shader", "visual", "nsh"]);
 const REASONS = new Set(["missing", "oversize", "redacted", "unsupported", "invalid"]);

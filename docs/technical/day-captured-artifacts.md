@@ -89,11 +89,19 @@ pin. Opening the page, a restored window and a hot update read nothing.
 
 Each output keeps its own view: its source or its NSH preview, labelled with
 kind and revision. Previews run in the app's isolated native engine
-(`pilot/artifact-preview`). When the page opens, the first pinned NSH output
-opens in its preview without a press; the sandbox, not the press, is the
-safety boundary. This happens once per delivery: Hide keeps it closed, and a
-newer delivery opens its own first preview. At most two previews stay open on
-a page; opening another closes the oldest. Other outputs open on a press.
+(`pilot/artifact-preview`). When the page opens, every pinned NSH output, up
+to four, opens in its preview without a press; the sandbox, not the press, is
+the safety boundary. This happens once per delivery: Hide keeps one closed,
+and a newer delivery opens its own previews. At most four previews stay open
+on a page (native compiles at most four at once); opening another closes the
+oldest. Other outputs open on a press.
+
+A preview pauses out of view (`onScreen.ts`). The page hands its `Scroll`
+to `pageScroll`; 250 ms after scrolling rests, each preview measures itself
+against it and unmounts its native component when no part shows. Unmounting
+stops that engine (unmodified NSH 0.5 has no way to freeze one), so a preview
+that shows again starts over from the same captured revision with fresh local
+state. The compile cache makes the restart cheap.
 Text shows as plain monospaced text; the first 400 lines or 40,000 characters
 show until the user presses Show all, and the page says how much shows. An
 image shows its title and kind only. `missing`, `oversize`, `redacted`,
@@ -115,11 +123,16 @@ The header's **Artifacts** opens the window's project page: every artifact its
 chats saved, newest first (at most 100, then a note). A mission's overview has
 an **Artifacts** section with its `MissionArtifactLink` rows grouped by task. A
 pinned link keeps its revision; an unpinned link shows the current revision,
-read when the section opens. Both pages share `ArtifactShelf.tsx`: the same
-row, `SourcePanel.tsx` and `ArtifactPreview.tsx`, per-row views, at most two
-previews, and the newest readable NSH artifact opening in its preview once
-when the page opens. Reading, empty and refused lists each have their own
-state; a refused list never looks like an empty one. Nothing polls.
+read when the section opens. Both pages share `ArtifactShelf.tsx`, a gallery
+of cards in rows of three. A card shows the kind, title and revision; no
+thumbnail is drawn, since NSH 0.5 cannot render an artifact to a still image
+outside tests, and image bytes never reach Day. Opening the page starts no
+preview. Opening a card reads its revision once and shows it under its row:
+NSH in `ArtifactPreview.tsx` (with **Inspect source** to switch), other kinds
+in `SourcePanel.tsx`. One artifact is open per page; opening another closes
+it, and Escape closes it before leaving. Reading, empty and refused lists
+each have their own state; a refused list never looks like an empty one.
+Nothing polls.
 
 `day.artifacts.read` takes `{}` or `{missionId}`. Native chooses the project
 from its root, reads `GET /api/projects/:project/artifacts`, and for a mission

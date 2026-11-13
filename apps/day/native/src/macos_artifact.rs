@@ -21,6 +21,8 @@ use sha2::{Digest, Sha256};
 use crate::{artifact_runtime, artifact_source::CapturedSource};
 
 static COMPILING: AtomicUsize = AtomicUsize::new(0);
+/// As many compiles at once as a page keeps previews open (`MAX_PREVIEWS`).
+const MAX_COMPILING: usize = 4;
 thread_local! {
     static PREVIEWS: RefCell<HashMap<String, Weak<RefCell<State>>>> = RefCell::new(HashMap::new());
 }
@@ -130,7 +132,7 @@ impl NativeComponent for Preview {
         };
         if COMPILING
             .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < 2).then_some(n + 1)
+                (n < MAX_COMPILING).then_some(n + 1)
             })
             .is_err()
         {

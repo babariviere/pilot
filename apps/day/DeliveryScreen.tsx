@@ -9,12 +9,13 @@
 // only, until its own receipt says how it ended.
 // An artifact's pinned revision shows its saved source as plain text on a
 // press of Inspect source, read once. NSH opens in the app's isolated native
-// preview: the first pinned one on its own when the page opens, others on a
-// press. Each output keeps its own view. A newer result or lost read hides
-// them; looking records nothing.
+// preview: every pinned one, up to four, on its own when the page opens.
+// Each output keeps its own view; previews pause out of view. A newer
+// result or lost read hides them; looking records nothing.
 import { effect, keymap, Scroll, signal, Text, untracked, View, type ViewRef } from "nsh";
 import { Checkbox, Input } from "nsh/base";
 import { ArtifactPreview } from "./ArtifactPreview";
+import { MAX_PREVIEWS } from "./artifactReads";
 import { artifactPreviewsAvailable } from "./bridge";
 import type { Day } from "./day";
 import { artifactSelection } from "./deliveryArtifact";
@@ -62,6 +63,7 @@ import {
 } from "./deliveryView";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
+import { pageScroll, scrolled } from "./onScreen";
 import { SourcePanel } from "./SourcePanel";
 import { Action, Mark, RowLink, SectionTitle } from "./ui";
 import { setFor } from "./view";
@@ -664,16 +666,18 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 		const ok = fresh();
 		untracked(() => dropInspections(key, (i) => !!w && ok && inspectionCurrent(i, key, w)));
 	});
-	// The first pinned NSH output opens in its preview once per delivery: Hide
-	// keeps it closed, and a newer delivery opens its own. The sandbox, not a
-	// press, is the safety boundary. Others open on a press.
+	// Pinned NSH outputs, up to four, open in their previews once per delivery:
+	// Hide keeps one closed, and a newer delivery opens its own. The sandbox,
+	// not a press, is the safety boundary. Others open on a press.
 	let previewed = "";
 	effect(() => {
 		const w = work();
 		if (!w?.deliveryId || !fresh() || !artifactPreviewsAvailable() || w.deliveryId === previewed) return;
 		previewed = w.deliveryId;
-		const first = w.artifacts.find((a) => a.kind === "nsh" && artifactSelection(w, a));
-		if (first) untracked(() => void inspectArtifact(mirror.source, key, w, first, "preview"));
+		const shown = w.artifacts.filter((a) => a.kind === "nsh" && artifactSelection(w, a)).slice(0, MAX_PREVIEWS);
+		untracked(() => {
+			for (const link of shown) void inspectArtifact(mirror.source, key, w, link, "preview");
+		});
 	});
 	const anchors = new Map<string, ViewRef>();
 	// Escape works from the note too: the note closes first and keeps its words,
@@ -701,7 +705,11 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 			class="flex-1 bg-background"
 			contentOffset={scroll.contentOffset}
 			scrollEventThrottle={100}
-			onScroll={scroll.onScroll}
+			ref={pageScroll}
+			onScroll={(e) => {
+				scroll.onScroll(e);
+				scrolled();
+			}}
 		>
 			<View testID="delivery" class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
 				<View class="gap-2">

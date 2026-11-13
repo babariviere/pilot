@@ -13,6 +13,7 @@ import { openDelivery } from "./deliveryView";
 import { keepScroll, restoreScroll, scrollOf } from "./kept";
 import { glide } from "./motion";
 import { goHome } from "./nav";
+import { pageScroll, scrolled } from "./onScreen";
 import { mapSummary, stageMark, stageWord } from "./PlanScreen";
 import { Problems } from "./Problems";
 import { askRevisit } from "./planCommands";
@@ -535,7 +536,11 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 			class="flex-1 bg-background"
 			contentOffset={scroll.contentOffset}
 			scrollEventThrottle={100}
-			onScroll={scroll.onScroll}
+			ref={pageScroll}
+			onScroll={(e) => {
+				scroll.onScroll(e);
+				scrolled();
+			}}
 		>
 			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
 				<If when={readNote()}>
