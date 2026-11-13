@@ -10,7 +10,7 @@ fn main() -> std::process::ExitCode {
         let result = std::thread::spawn(move || pilot_day_native::daemon_handoff::run(args)).join();
         if let Ok(value) = result {
             println!("{value}");
-            return if ["ready", "complete", "observed"]
+            return if ["ready", "complete", "observed", "retired"]
                 .iter()
                 .any(|s| value["state"] == *s)
             {

@@ -32,6 +32,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Source-matched Day executable and package inputs](day-package-inputs.md)
 - [Day CI and release preparation, with unchanged shipping selection](day-ci-packaging.md)
 - [Connected native candidate preparation and launch](day-connected-candidate.md)
+- [Day installation preparation and current native handoff blockers](day-install.md)
 - [Tool access by role](tool-access-by-role.md)
 - [System prompts by role](system-prompts-by-role.md)
 - [Skill and prompt review index](skill-prompt-review.md)

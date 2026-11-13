@@ -25,8 +25,19 @@ required. `preflight` is read-only and does not read the saved-state file.
 supported owner. The private saved-state file (0600, at most 1 MiB) is fsynced and
 hashed before preparation. This file is caller-owned preservation, **not** a
 fabricated native capture/close acknowledgement. The CLI never closes a running
-GUI, accepts Force loss, or removes an old app/runtime. Do not invoke it as a
+GUI or accepts Force loss. Do not invoke it as a
 replacement for saving live drafts.
+
+The installer passes an explicit `--old-app /absolute/old/Pilot Next.app`.
+Apply records that app's exact byte identity and refuses if native inspection
+finds known users or cannot establish no observed use. The separate optional
+`retire` action uses the same flags and original UUID. It requires the original
+completed successor/release, fresh exact boot/PID/runtime proof, unchanged old
+app bytes/seal and native no-use inspection. It removes only that explicit app,
+then calls the existing limited obsolete-runtime cleanup for both known stores.
+It never removes profile data, local settings/drafts, unknown/live/other-profile
+users or permanent locks. Entered retirement is one-shot; completed repeats
+return observation. See [installer commands and limits](day-install.md).
 
 The executable resolves its own signed app and fixed Node/daemon runtime paths.
 The selected source/build must match its compiled trust and verified runtime.

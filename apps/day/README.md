@@ -12,6 +12,8 @@ include explicit native selection and a compatible existing daemon. Build inputs
 are not a connected daily-driver candidate.
 Use the [connected candidate recipe](../../docs/technical/day-connected-candidate.md)
 to prepare the real native app without installing or updating it.
+For personal connected use, see [installation preparation](../../docs/technical/day-install.md).
+It reuses the same profile, hands off the daemon and offers explicit legacy retirement.
 
 ## Run
 
