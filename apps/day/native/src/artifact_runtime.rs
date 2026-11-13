@@ -104,7 +104,7 @@ pub fn config(captured: CapturedSource) -> Result<EngineConfig, String> {
     ));
     chunks.push(Chunk::source("artifact-entry", prepared.code));
     let bundle = Bundle::source(
-        "import Artifact from 'artifact-entry'; import {mountArtifact} from 'pilot-artifact/kit/ui'; mountArtifact(Artifact);".into(),
+        "import {Text} from 'nsh'; import {mountArtifact} from 'pilot-artifact/kit/ui'; import('artifact-entry').then(module => mountArtifact(module.default)).catch(error => mountArtifact(() => Text({children: 'This artifact could not start: ' + String(error)})));".into(),
     ).with_chunks(chunks).with_policy(Policy {
         harden: true,
         declared: Some(Capabilities::default()),

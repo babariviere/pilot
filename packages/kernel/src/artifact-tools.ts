@@ -316,14 +316,14 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 							return published(
 								value,
 								write.kind === "nsh"
-									? ["Source compiled and saved. Interactive preview remains unsupported."]
+									? ["Source compiled and saved. Preview availability depends on your app."]
 									: [],
 							);
 						}
 						const value = await store.update(id!, write, params.expectedRevision, signal);
 						const warnings: string[] =
 							write.kind === "nsh"
-								? ["Source compiled and saved. Interactive preview remains unsupported."]
+								? ["Source compiled and saved. Preview availability depends on your app."]
 								: [];
 						if (params.expectedRevision === undefined)
 							warnings.unshift(

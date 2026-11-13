@@ -31,6 +31,8 @@ pub mod intake;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
 pub mod macos_app;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
+pub mod macos_artifact;
+#[cfg(all(target_os = "macos", feature = "macos-host"))]
 mod macos_capture;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
 pub mod macos_host;

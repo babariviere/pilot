@@ -147,7 +147,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
         unsafe { nsh_engine::Bundle::read_trusted(&bytecode) }.map_err(|_| Error::Unavailable)?;
     // All initial filesystem/signature reads precede AppKit's event loop.
     let main = MainThreadMarker::new().ok_or(Error::Unavailable)?;
-    nsh_platform_macos::set_ui_sets(vec![nsh_base::registry(), crate::__nsh_native_module()]);
+    nsh_platform_macos::set_ui_sets(crate::macos_host::ui_sets());
     let (source, journal, updates, planning_model) = match launch {
         Launch::Successor(receipt) => {
             let successor_trust = trust.clone();

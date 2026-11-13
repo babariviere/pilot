@@ -657,7 +657,7 @@ test("NSH tool captures only session scratch and keeps exact pins without execut
 	const result = await f.call("create", { title: "Preview", kind: "nsh", sourcePath: "view.tsx" });
 	const data = result.structuredContent as { artifact: { id: string; revision: number }; warnings: string[] };
 	assert.equal(data.artifact.revision, 1);
-	assert.match(data.warnings.join(), /unsupported/);
+	assert.match(data.warnings.join(), /Preview availability depends on your app/);
 	assert.equal((await store.get(data.artifact.id)).source, source);
 	await assert.rejects(
 		f.call("update", { id: data.artifact.id, title: "Next", kind: "nsh", sourcePath: "view.tsx" }),

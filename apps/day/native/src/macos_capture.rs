@@ -73,6 +73,9 @@ fn editors(root: &NSView) -> Result<Vec<Editor>, Error> {
     let mut count = 0;
     let mut result = Vec::new();
     while let Some(view) = pending.pop() {
+        if crate::macos_artifact::is_preview(&view) {
+            continue;
+        }
         count += 1;
         if count > MAX_VIEWS {
             return Err(Error::Capacity);

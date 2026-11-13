@@ -3,9 +3,9 @@
 Use this page only when the artifact tool accepts `kind: "nsh"`. Until it does, publish visuals
 ([visuals.md](visuals.md)), including Mermaid for diagrams.
 
-Pilot does not run NSH artifacts yet. A published one is saved exactly, and readers see its source marked
-unsupported, not a drawing. When the user needs to see something now, publish a visual. Publish an NSH
-artifact when one is asked for, and say that it shows as source only for now.
+The native Day app can open a saved NSH revision with Preview. Other clients may show source only.
+Use a visual when the user's current client cannot preview NSH. Preview interactions change only local
+state, which resets when closed; opening a preview does not accept the agent's work.
 
 An NSH artifact is one TSX file that Pilot draws with native views, in its own sandbox. It gets local state
 (signals, presses, text input) and nothing else: no files, network, storage, clipboard, processes, credentials

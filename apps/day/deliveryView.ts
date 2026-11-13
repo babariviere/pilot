@@ -52,6 +52,7 @@ export type Inspection = {
 	title: string;
 	generation: number;
 	state: "reading" | "shown" | "refused";
+	preview?: boolean;
 	artifact: CapturedArtifact | null;
 	message: string;
 };
@@ -83,7 +84,14 @@ export function inspects(i: Inspection | null, key: string, work: DeliveredWork,
  * What showed before goes first, before the read starts; only the newest
  * press's answer shows. A press while the same pin is reading does nothing.
  */
-export async function inspectArtifact(source: DeliverySource, key: string, shown: DeliveredWork, link: ArtifactLink) {
+export async function inspectArtifact(
+	source: DeliverySource,
+	key: string,
+	shown: DeliveredWork,
+	link: ArtifactLink,
+	mode: "source" | "preview" = "source",
+) {
+	if (mode === "preview" && link.kind !== "nsh") return;
 	const pin = artifactSelection(shown, link);
 	if (!pin) return;
 	const now = inspection();
@@ -96,6 +104,7 @@ export async function inspectArtifact(source: DeliverySource, key: string, shown
 		title: link.title,
 		generation,
 		state: "reading",
+		...(mode === "preview" ? { preview: true } : {}),
 		artifact: null,
 		message: "",
 	};

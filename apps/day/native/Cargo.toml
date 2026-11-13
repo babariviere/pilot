@@ -28,6 +28,12 @@ path = "tests/application_owner.rs"
 harness = false
 required-features = ["macos-host"]
 
+[[test]]
+name = "artifact_preview"
+path = "tests/artifact_preview.rs"
+harness = false
+required-features = ["macos-host"]
+
 [features]
 # Gates the Day-owned executable and native embedding. The platform crate is a
 # plain (macOS-only) dependency: the NSH CLI resolves every nsh crate's

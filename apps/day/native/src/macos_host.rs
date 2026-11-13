@@ -121,6 +121,7 @@ impl WindowOwner {
         // A caller may configure resources, never a second host channel.
         bridge.require_saved_view();
         configuration.host = bridge.channel();
+        crate::macos_artifact::register(main, &configuration.components, &configuration.host);
         let view = nsh_platform_macos::AppView::new(main, configuration);
         Self {
             view,
@@ -351,8 +352,12 @@ impl WindowOwner {
     }
 }
 
-/// Public AppOptions route. The runner and the app view use this exact channel.
-/// Native selection, credentials and paths are not launch parameters.
+/// The canonical Day registry, restored after loading an isolated artifact.
+pub(crate) fn ui_sets() -> Vec<nsh_core::element::Registry> {
+    vec![nsh_base::registry(), crate::__nsh_native_module()]
+}
+
+/// Public AppOptions route. Native credentials and paths are not launch parameters.
 pub fn options(bridge: &Bridge) -> AppOptions {
     AppOptions {
         title: "Pilot".into(),

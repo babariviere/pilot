@@ -80,6 +80,12 @@ export function windowId(): string | null {
 	return day && day.version === 1 && typeof day.window === "string" && day.window !== "" ? day.window : null;
 }
 
+/** Whether this app installed the local native preview component, not an access grant. */
+export function artifactPreviewsAvailable(): boolean {
+	const day = (host.params as { day?: { artifactPreview?: unknown } } | undefined)?.day;
+	return day?.artifactPreview === true;
+}
+
 /** One exact call. It never throws; a lost reply is "lost", never a refusal. */
 export async function call<T>(window: string, name: string, args: unknown): Promise<Reply<T>> {
 	let reply: unknown;

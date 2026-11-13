@@ -8,10 +8,12 @@
 // the window only. A command whose answer is lost stays Unknown, with Check
 // only, until its own receipt says how it ended.
 // An artifact's pinned revision shows its saved source as plain text on a
-// press of Inspect source, read once. It is never run, drawn or opened, a
-// newer result or a lost read hides it, and looking records nothing.
+// press of Inspect source, read once. NSH may open in the app's isolated
+// native preview. A newer result or lost read hides either; looking records nothing.
 import { effect, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
 import { Checkbox, Input } from "nsh/base";
+import { ArtifactPreview } from "./ArtifactPreview";
+import { artifactPreviewsAvailable } from "./bridge";
 import type { Day } from "./day";
 import { artifactSelection } from "./deliveryArtifact";
 import {
@@ -225,6 +227,8 @@ function ArtifactOutput(props: {
 	};
 	const reading = () => mine()?.state === "reading";
 	const name = () => props.link.title || "the artifact";
+	let sourceAnchor: ViewRef | undefined;
+	let previewAnchor: ViewRef | undefined;
 	return (
 		<View class="gap-2 border-t border-border py-2.5">
 			<View class="flex-row items-center gap-3">
@@ -239,26 +243,47 @@ function ArtifactOutput(props: {
 					}
 				>
 					<Action
-						label={reading() ? "Reading…" : mine() ? "Hide source" : "Inspect source"}
+						label={reading() ? "Reading…" : mine() && !mine()?.preview ? "Hide source" : "Inspect source"}
 						testID={`output-source-${props.link.artifactId}`}
 						accessibilityLabel={
-							mine()
+							mine() && !mine()?.preview
 								? `Hide the source of ${name()}.`
 								: `Show the saved source of ${name()}, revision ${props.link.revision}, as plain text. Looking records nothing.`
 						}
 						disabled={reading() || !props.fresh}
-						anchor={(node) => props.anchors.set(props.link.artifactId, node)}
+						anchor={(node) => {
+							sourceAnchor = node;
+							props.anchors.set(props.link.artifactId, node);
+						}}
 						onPress={() => {
-							if (mine()) {
+							if (sourceAnchor) props.anchors.set(props.link.artifactId, sourceAnchor);
+							if (mine() && !mine()?.preview) {
 								glide();
 								hideInspection();
 							} else void inspectArtifact(props.mirror.source, key(), props.work, props.link);
 						}}
 					/>
+					<If when={props.link.kind === "nsh" && artifactPreviewsAvailable()}>
+						<Action
+							label={mine()?.preview ? "Close preview" : "Preview"}
+							testID={`output-preview-${props.link.artifactId}`}
+							disabled={reading() || !props.fresh}
+							anchor={(node) => {
+								previewAnchor = node;
+							}}
+							onPress={() => {
+								if (previewAnchor) props.anchors.set(props.link.artifactId, previewAnchor);
+								if (mine()?.preview) hideInspection();
+								else void inspectArtifact(props.mirror.source, key(), props.work, props.link, "preview");
+							}}
+						/>
+					</If>
 				</If>
 			</View>
 			<If when={mine()}>
-				<SourcePanel inspection={mine() as Inspection} />
+				<If when={mine()?.preview} else={<SourcePanel inspection={mine() as Inspection} />}>
+					<ArtifactPreview inspection={mine() as Inspection} />
+				</If>
 			</If>
 		</View>
 	);
@@ -358,7 +383,7 @@ function Outputs(props: {
 			</If>
 			<If when={w().artifacts.length > 0}>
 				<Text class="text-xs text-faint">
-					Inspect source shows the saved text of a pinned revision. Pilot does not run or draw artifacts, and
+					Inspect source shows the saved text of a pinned revision. NSH previews change only their local state, and
 					looking records nothing.
 				</Text>
 			</If>

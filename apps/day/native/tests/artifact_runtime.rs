@@ -100,6 +100,16 @@ fn captured_component_errors_stay_inside_the_preview_boundary() {
 }
 
 #[test]
+fn captured_module_startup_errors_are_visible_without_entering_the_parent() {
+    let source = "throw Error('Startup fixture failed'); export default () => null;";
+    let mut app =
+        Headless::start(artifact_runtime::config(captured(source)).expect("valid source"))
+            .expect("isolated engine");
+    app.wait_for("This artifact could not start: Error: Startup fixture failed")
+        .expect("module evaluation error is visible");
+}
+
+#[test]
 fn captured_runtime_rejects_wrong_identity_and_host_imports_before_execution() {
     let mut input = captured("export default () => null;");
     input.source.push(' ');

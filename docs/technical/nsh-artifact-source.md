@@ -1,9 +1,10 @@
 # Captured NSH source foundation
 
-This is the production **source capture, revision and compiler boundary**, not
-an enabled interactive preview. Authored JavaScript is never executed by this
-path. Preview availability remains app-owned and Unsupported. Existing
-visual/Mermaid publication and all historical readers remain available.
+The artifact tool captures and compiles source without running it. The native
+Day app offers a separate local-state-only preview of saved NSH revisions.
+Passive readers still return source with `rendering: "unsupported"`; that wire
+value is not authority to execute code. Existing visual/Mermaid publication and
+all historical readers remain available.
 
 ## Publication and exact bytes
 
@@ -59,8 +60,24 @@ The configuration explicitly declares and grants no host capabilities, hardens
 the VM and sets heap, stack, time, node and operation limits. It installs only
 NSH's base registry, with no Day context, host channel advertisement, network,
 filesystem, assets, storage or credentials. Interpreter limits do not cover
-native/GPU allocations. This prepares the app runtime; the production viewer is
-not connected yet, and the existing reader still shows saved source only.
+native/GPU allocations.
+
+On macOS, the connected window registers `pilot/artifact-preview` on its own
+native component registry. Preview reads the displayed exact pin through the
+existing delivery reader, then passes those saved bytes as data to the native
+component. Compilation runs off AppKit with at most two active workers. Each
+preview starts a fresh AppView with an empty host and base-only UI sets. The
+app restores Day's canonical process-wide sets before returning to AppKit;
+the artifact engine keeps its isolated snapshot.
+
+Hiding the inspection, changing the result, losing read authority or closing
+the page disposes that preview. Generation checks reject late preparation
+results. Preview-local editors are not conversation drafts; native draft
+capture skips their subtree, while parent disposal still stops and joins the
+child view. AppView uses upstream's interrupt-and-join shutdown. This does not
+claim a native/GPU memory quota or native input/performance acceptance.
+Clients without the registered component continue to show source only.
+Historical non-NSH kinds are never run.
 
 ## Compiler and lifetime
 
