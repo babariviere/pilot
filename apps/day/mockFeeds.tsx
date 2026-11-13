@@ -1,9 +1,20 @@
 // Test-only mock feeds for the fixture entries (MockApp.tsx and the other
 // scenarios the *.test.tsx files open). Every project, chat and ritual mark
 // here is invented and saves nothing anywhere. The app's entry (App.tsx,
-// which runs Connected.tsx) never imports this module.
-import type { IntentOutcome, PlanScenario, RitualSnapshot, RitualVisit, RitualWrite, Today } from "pilot-day/native";
-import { PlanFeed } from "pilot-day/native";
+// which runs Connected.tsx) never imports this module. Importing it marks
+// the window as mock data.
+import { signal } from "nsh";
+import type {
+	ChangesScenario,
+	IntentOutcome,
+	PlanScenario,
+	RitualSnapshot,
+	RitualVisit,
+	RitualWrite,
+	Today,
+	UpdateScenario,
+} from "pilot-day/native";
+import { ChangesFeed, PlanFeed, UpdateFeed } from "pilot-day/native";
 import type { Changes } from "./changeFeed";
 import { DEMO_PROJECTS, ScriptedChats } from "./chatDemo";
 import { mirrorChats } from "./chatFeed";
@@ -12,6 +23,40 @@ import type { Day } from "./day";
 import { mirrorPlanning, type Plans } from "./planning";
 import { mirrorRituals, NO_PROGRESS, RECAP_LIMIT, type Recap, type RitualSource, type Rituals } from "./ritualFeed";
 import type { Update } from "./updateFeed";
+import { dataSource } from "./view";
+
+// Every window that uses these feeds says so in its header.
+dataSource.set("mock");
+
+/** Opens a mock Changes feed from `scenario` and mirrors its list. */
+export function openChanges(scenario?: ChangesScenario): Changes {
+	const feed = new ChangesFeed(scenario);
+	const list = signal(feed.snapshot());
+	const stop = feed.onChange((next) => list.set(next));
+	return {
+		feed,
+		list,
+		close: () => {
+			stop();
+			feed.dispose();
+		},
+	};
+}
+
+/** Opens a mock update feed from `scenario` and mirrors its view. Nothing real registers, updates or restarts. */
+export function openUpdate(scenario?: UpdateScenario): Update {
+	const feed = new UpdateFeed(scenario);
+	const service = signal(feed.snapshot());
+	const stop = feed.onChange((next) => service.set(next));
+	return {
+		feed,
+		service,
+		close: () => {
+			stop();
+			feed.dispose();
+		},
+	};
+}
 
 /**
  * Opens a mock planning feed from `scenario` and mirrors its read model.

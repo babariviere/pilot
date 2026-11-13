@@ -2,8 +2,7 @@
 // Check again only reads.
 import { mount } from "nsh";
 import { openDay } from "./day";
-import { MockDayScreen } from "./mockFeeds";
-import { openUpdate } from "./updateFeed";
+import { MockDayScreen, openUpdate } from "./mockFeeds";
 import { showUpdate } from "./updateView";
 
 const day = openDay("offline");

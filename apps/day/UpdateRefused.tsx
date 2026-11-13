@@ -2,8 +2,7 @@
 // save, then a job whose processes cannot be shown to have ended.
 import { mount } from "nsh";
 import { openDay } from "./day";
-import { MockDayScreen } from "./mockFeeds";
-import { openUpdate } from "./updateFeed";
+import { MockDayScreen, openUpdate } from "./mockFeeds";
 import { showUpdate } from "./updateView";
 
 const day = openDay("quiet");

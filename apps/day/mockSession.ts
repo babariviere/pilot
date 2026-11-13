@@ -2,18 +2,16 @@
 // every record invented. Kept in their own module so edits to the screens hot
 // update without restarting the feeds or losing Rust's state.
 import { TodayFeed } from "pilot-day/native";
-import { openChanges } from "./changeFeed";
 import { mirrorDay } from "./day";
 import { ScriptedDelivery } from "./deliveryDemo";
 import { mirrorDelivery } from "./deliveryFeed";
 import { ScriptedLinear } from "./linearDemo";
 import { mirrorLinear } from "./linearFeed";
-import { openPlanning } from "./mockFeeds";
+import { openChanges, openPlanning, openUpdate } from "./mockFeeds";
 import { ScriptedPreferences } from "./preferencesDemo";
 import { mirrorPreferences } from "./preferencesFeed";
 import { ScriptedThreads } from "./threadDemo";
 import { mirrorThreads } from "./threadFeed";
-import { openUpdate } from "./updateFeed";
 
 /** The mock app's feed: the decisions world, with demo results to check, saved Linear issues, preferences and threads. */
 export const day = mirrorDay(
