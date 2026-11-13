@@ -26,12 +26,11 @@ import { ConversationBusy, Harness, InboxDoc, type JsonObject, LiveDoc } from "@
 import type { SessionCompletion, SessionJob } from "@pilot/protocol";
 import { Type } from "typebox";
 import { userText } from "./attempts.ts";
-import { CoordinatorMemoryDoc } from "./coordinator-memory.ts";
-import type { MemoryModel } from "./coordinator-memory-model.ts";
 import { MAX_FAILURE_CHARS } from "./failure.ts";
 import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { PerformanceRecord } from "./performance.ts";
+import { PosthorseDoc } from "./posthorse.ts";
 import { queueGuardToken } from "./queue.ts";
 import { KernelSession } from "./session.ts";
 import { readSessionSnapshot } from "./snapshot.ts";
@@ -151,66 +150,83 @@ test("pi reload refuses a live run or child without emitting shutdown", async (t
 });
 
 for (const existing of [false, true])
-	test(`summary-tree default is wired for ${existing ? "existing" : "new"} coordinators without switching main models`, async (t) => {
+	test(`Posthorse rolls over ${existing ? "adopted" : "new"} coordinators and keeps raw history across restart`, async (t) => {
 		const f = await fixture(t);
-		t.mock.method(NativeAdapter.prototype, "resolveCoordinatorMemoryModel", async () => f.a.getModel("two"));
 		const mission = {
 			id: "fixture-mission",
 			title: "Offline",
-			goal: "Test memory",
+			goal: "Test context rollover",
 			status: "active" as const,
 			coordinator: "self" as const,
 			tasks: [],
 			decisions: ["No publishing"],
+			decisionState: [],
 		};
 		if (!existing) Object.assign(f.spec, { mission });
-		const session = await f.open();
-		if (existing) session.setMission(mission);
-		f.a.getModel("one")!.contextWindow = 1_000_000;
-		await seedLongConversation(session, Date.now());
-		f.a.setResponses(
-			Array.from({ length: 400 }, () =>
-				fauxAssistantMessage("Historical coordination detail, not current approval."),
-			),
-		);
-		await session.compact();
+		let session = await f.open();
+		if (existing) await session.setMission(mission);
+		f.a.getModel("one")!.contextWindow = 100_000;
+		await seedLongConversation(session, Date.now() - 2 * 60 * 60_000);
+		await session.conversation.commit(async (tx) => {
+			const answer = fauxAssistantMessage("Historical coordination detail, not current approval.");
+			answer.usage = { ...answer.usage, input: 95_000, totalTokens: 95_000 };
+			await tx.appendEntry(session.conversation.id, { kind: "pi.assistant", model: [answer] });
+		}, context);
+		f.a.setResponses([
+			(request) => {
+				const text = JSON.stringify(request.messages);
+				assert.match(text, /Automatic context rollover recovery record/);
+				assert.match(text, /WORKER_DELIVERY_CANARY/);
+				assert.match(text, /You coordinate this mission/);
+				assert.match(text, /No publishing/);
+				assert.doesNotMatch(text, /Coordinator memory v1/);
+				return fauxAssistantMessage("Delivery recorded, not user acceptance.");
+			},
+		]);
+		await session.submit("mission-notice:156", "WORKER_DELIVERY_CANARY", "followUp", false, true);
 		await session.conversation.waitForIdle(context);
-		const state = await session.harness.snapshot(CoordinatorMemoryDoc, session.conversation.id, context);
-		assert.ok(state?.states.length);
+		assert.equal(f.a.state.callCount, 1, "no separate summary request");
 		assert.equal(f.adapters[0]!.model.modelId, "one");
-		assert.ok(
-			(await session.conversation.context(context)).messages.some((m) =>
-				JSON.stringify(m).includes("Coordinator memory v1"),
-			),
+		assert.equal(f.adapters[0]!.posthorsePolicy()?.backgroundTokens, 0);
+		const before = (await session.conversation.entries({ order: "ascending" }, 1000, undefined, context)).items;
+		assert.equal(before.filter((entry) => entry.kind === "pi.compaction").length, 1);
+		assert.ok(before.some((entry) => JSON.stringify(entry).includes("Old context.")));
+		const state = await session.harness.snapshot(PosthorseDoc, session.conversation.id, context);
+		assert.ok(state?.header);
+		await session.close();
+		Object.assign(f.spec, { mission });
+		session = await f.open();
+		assert.deepEqual(await session.harness.snapshot(PosthorseDoc, session.conversation.id, context), state);
+		await session.submit("mission-notice:156", "WORKER_DELIVERY_CANARY", "followUp", false, true);
+		await session.conversation.waitForIdle(context);
+		assert.equal(f.a.state.callCount, 1, "lost delivery ACK/restart never replays work");
+		assert.deepEqual(
+			(await session.conversation.entries({ order: "ascending" }, 1000, undefined, context)).items,
+			before,
 		);
+		f.a.setResponses([
+			fauxAssistantMessage(
+				fauxToolCall("new_context", { handoff: "Read current mission records before continuing." }),
+				{
+					stopReason: "toolUse",
+				},
+			),
+			(request) => {
+				const text = JSON.stringify(request.messages);
+				assert.match(text, /Read current mission records before continuing/);
+				assert.match(text, /You coordinate this mission/);
+				assert.match(text, /No publishing/);
+				assert.doesNotMatch(text, /WORKER_DELIVERY_CANARY/);
+				return fauxAssistantMessage("Continued with current permissions.");
+			},
+		]);
+		await session.submit("user:reset", "Prepare fresh context", "followUp");
+		await session.conversation.waitForIdle(context);
+		const after = (await session.conversation.entries({ order: "ascending" }, 1000, undefined, context)).items;
+		assert.equal(after.filter((entry) => entry.kind === "pi.reset").length, 1);
+		assert.ok(after.some((entry) => JSON.stringify(entry).includes("WORKER_DELIVERY_CANARY")));
+		assert.equal(f.a.state.callCount, 3, "explicit reset continues the same foreground run");
 	});
-
-test("coordinator internal model role can be outside picker scope but cannot switch auth family or bypass availability", async (t) => {
-	const f = await fixture(t);
-	await f.open();
-	const adapter = f.adapters[0]!;
-	const before = adapter.session.settingsManager.getEnabledModels();
-	t.mock.getter(adapter, "model", () => ({ provider: "openai-codex", modelId: "gpt-6.1-sol" }));
-	const base = f.a.getModel(),
-		codex = { ...base, provider: "openai-codex", id: "gpt-6-luna", api: "openai-codex-responses" } as MemoryModel;
-	const available = t.mock.method(adapter.session.modelRuntime, "getAvailable", async () => [codex]);
-	assert.equal(await adapter.resolveCoordinatorMemoryModel("openai-codex"), codex);
-	await assert.rejects(adapter.resolveModel("openai-codex/gpt-6-luna"), /scope/);
-	const count = available.mock.callCount();
-	assert.equal(await adapter.resolveCoordinatorMemoryModel("openai"), undefined);
-	assert.equal(available.mock.callCount(), count);
-	available.mock.mockImplementation(async () => []);
-	assert.equal(await adapter.resolveCoordinatorMemoryModel("openai-codex"), undefined);
-	available.mock.mockImplementation(async () => [
-		{ ...codex, provider: "openai", api: "openai-responses" } as MemoryModel,
-	]);
-	assert.equal(await adapter.resolveCoordinatorMemoryModel("openai-codex"), undefined);
-	available.mock.mockImplementation(async () => {
-		throw new Error("authorization unavailable");
-	});
-	await assert.rejects(adapter.resolveCoordinatorMemoryModel("openai-codex"), /authorization/);
-	assert.deepEqual(adapter.session.settingsManager.getEnabledModels(), before);
-});
 
 test("guarded queued text edits are literal and stale capture cannot invoke input extensions", async (t) => {
 	const f = await fixture(t);

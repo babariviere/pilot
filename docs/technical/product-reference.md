@@ -372,13 +372,11 @@ permissions and continue independently; mission coordinators are unchanged.
 Mission discovery uses the cached, read-only `GET /api/mission-catalog` endpoint.
 Legacy Control databases remain on disk, but their runtime, tools, APIs and compaction are removed.
 
-Mission coordinators default to bounded summary-tree memory, including safe adoption by existing
-coordinators at normal compaction boundaries. Ordinary-chat automatic context management is described
-in [Posthorse](posthorse.md). The earlier automatic handoff and deterministic digest experiments
-are retired. Internal
-summaries use provider-matched Luna 6 or Haiku 5.5 only when authenticated and available; otherwise
-existing compaction remains in place. Originals and `history_recall` are preserved. See
-[coordinator memory](coordinator-memory.md) for model identities, safety and evidence limits.
+Mission coordinators and ordinary Build chats use the same [Posthorse](posthorse.md) adapter
+at blocking model boundaries. The coordinator summary-tree generator and idle-compaction timer
+are removed, alongside the earlier automatic handoff and deterministic digest experiments.
+Original transcripts and `history_recall` remain available. Historical summaries never replace
+current mission records or runtime permissions.
 
 Build chats support local changes, verification, task-branch pushes and opening/updating PRs under
 the normal project delivery policy, without a second publishing approval. Ask and Diagnostics remain

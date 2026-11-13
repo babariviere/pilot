@@ -7733,7 +7733,6 @@ test("passive task model HTTP validates scope and ACK after durability without r
 		},
 	);
 	const noticeSchedule = t.mock.method(f.service.notices as unknown as { schedule(): void }, "schedule", () => {});
-	const compactSchedule = t.mock.method(f.service.compaction as unknown as { schedule(): void }, "schedule", () => {});
 	const phases = t.mock.method(f.store as unknown as { reconcilePhases(id: string): void }, "reconcilePhases", () =>
 		assert.fail("no phase reconciliation"),
 	);
@@ -7846,7 +7845,6 @@ test("passive task model HTTP validates scope and ACK after durability without r
 	assert.equal(start.mock.calls.length, 0);
 	assert.ok(select.mock.calls.length > 0);
 	assert.equal(noticeSchedule.mock.calls.length, 0);
-	assert.equal(compactSchedule.mock.calls.length, 0);
 	assert.equal(phases.mock.calls.length, 0);
 	assert.equal(linear.mock.calls.length, 0);
 	phases.mock.restore();
@@ -9330,7 +9328,6 @@ test("retained brief reopens serialized input against restarted source store/ser
 	const service = new MissionService(store, f.sessions, f.projects);
 	t.after(async () => {
 		await service.notices.stop();
-		await service.compaction.stop();
 		await store.durable();
 		store.close();
 		await rm(root, { recursive: true, force: true });
@@ -9696,7 +9693,6 @@ test("retained artifact reopens against restarted mission service, source reader
 	const service = new MissionService(store, f.sessions, f.projects);
 	t.after(async () => {
 		await service.notices.stop();
-		await service.compaction.stop();
 		await store.durable();
 		store.close();
 		await rm(root, { recursive: true, force: true });

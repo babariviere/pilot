@@ -436,10 +436,10 @@ test("notes reject oversized reads and links escaping the private chat store", {
 	assert.doesNotMatch(JSON.stringify(results), /OUTSIDE_STORE_CANARY/);
 });
 
-test("coordinator role denies Posthorse reset and private note tools", { timeout: 15_000 }, async (t) => {
+test("ineligible role denies Posthorse reset and private note tools", { timeout: 15_000 }, async (t) => {
 	const chat = await fixture(t, { eligible: false });
-	await run(chat, "Keep coordinator memory", [
-		call("new_context", { handoff: "Must not replace coordinator memory" }),
+	await run(chat, "Keep original context", [
+		call("new_context", { handoff: "Must not replace ineligible context" }),
 		call("notes", { op: "list" }),
 		fauxAssistantMessage("Denied"),
 	]);

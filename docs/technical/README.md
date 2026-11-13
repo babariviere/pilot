@@ -46,7 +46,6 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Posthorse context management](posthorse.md)
 - [Passive model and thinking defaults](model-defaults.md)
 - [Shared context and independent task execution](shared-context.md)
-- [Coordinator summary-tree memory](coordinator-memory.md)
 - [Narrow coordinator repository inspection (design only)](coordinator-repository-inspection.md)
 
 ## Missions, delivery, and review

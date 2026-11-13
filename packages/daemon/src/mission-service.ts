@@ -19,7 +19,6 @@ import type {
 	StartMissionCoordinatorRequest,
 	StartMissionTaskRequest,
 } from "@pilot/protocol";
-import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import type { CriticalReviewVault } from "./critical-review-vault.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
@@ -219,7 +218,6 @@ export class MissionService {
 	readonly controls: MissionControls;
 	readonly continuations: MissionContinuations;
 	readonly reports: MissionReports;
-	readonly compaction: CoordinatorCompaction;
 	private readonly store: MissionStore;
 	private readonly sessions: SessionManager;
 	private readonly projects: ProjectStore;
@@ -252,7 +250,6 @@ export class MissionService {
 		this.sessions = sessions;
 		this.projects = projects;
 		this.notices = new MissionNotices(store, sessions);
-		this.compaction = new CoordinatorCompaction(store, sessions);
 		this.controls = new MissionControls(store, sessions);
 		this.continuations = new MissionContinuations(store, {
 			fence: (id) => {

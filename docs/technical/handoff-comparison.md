@@ -1,8 +1,9 @@
 # Ordinary-chat handoff comparison
 
 This is an offline evaluation harness, not an auto-handoff implementation or rollout.
-Production compaction, the deterministic-digest opt-in and coordinator OptChat-inspired
-memory remain unchanged. The harness itself makes no model requests, authenticates no
+At the time of the experiment, production compaction, the deterministic-digest opt-in and
+coordinator OptChat-inspired memory were unchanged. They are now replaced by [Posthorse](posthorse.md).
+The harness itself makes no model requests, authenticates no
 accounts, reads no live chats and has no network fallback. Model generation requires
 separate confirmation; the screening below was explicitly approved.
 
@@ -127,8 +128,7 @@ The next step is a separately approved model run of the exported requests and a 
 review, followed by successor-task trials if the packet comparison is promising. Do not
 enable deterministic compaction or replace ordinary-chat compaction from literal scores.
 
-Related: [existing compaction](context-compaction.md),
-[coordinator memory](coordinator-memory.md).
+Related: [retired compaction](context-compaction.md), [current context management](posthorse.md).
 
 ## Approved screening, 2026-10-30
 

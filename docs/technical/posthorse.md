@@ -1,7 +1,8 @@
 # Posthorse context management
 
 Pilot bundles `pi-posthorse@0.10.10`. It replaces the automatic-handoff writer and
-the optional deterministic-compaction implementation. There is no Pilot handoff
+the optional deterministic-compaction implementation and coordinator summary-tree
+generation. There is no Pilot handoff
 toggle or environment flag. Existing transcripts, compaction records and settings
 files are not deleted or rewritten. The old `autoHandoff` setting is inactive.
 
@@ -18,11 +19,21 @@ original entry IDs, queued messages, tool outcomes, Stop, context placement and
 restart recovery. Posthorse cannot reconstruct permissions, mission membership,
 pending answers or tool authority from historical text.
 
-Ordinary Build chats, including mission members, use the package at blocking model
-boundaries. Mission coordinators keep their existing summary-tree memory. Legacy
+Build chats, including mission members and coordinators, use the package at blocking model
+boundaries. Coordinators use the same adapter, settings and private per-attempt notes. Legacy
 Ask, explorers, diagnostics and Insights do not gain writable Posthorse tools.
 This bridge covers durable Pilot chats. Native SDK subagents keep their existing
 context policy; their separate execution loop is not replaced by this migration.
+
+The coordinator-only summary model, tree/cache hooks and daemon idle-compaction timer
+are removed. Existing stored tree documents are left alone and are no longer read or
+updated. Original session history remains available through `history`/`history_recall`;
+there is no summary import, archive or compatibility reader. Already placed compaction
+entries remain historical transcript data, not authority. Current mission records,
+Knowledge and project preferences remain separate canonical sources. Nothing resets a
+session, changes its permissions, answers a pending question or clears Stop/user holds.
+The removed OptChat adaptation's MIT notice stays in
+`packages/kernel/COORDINATOR_MEMORY_LICENSE` for attribution, not as a runtime dependency.
 
 Pi's effective `compaction` settings control automatic rollover. Per-model
 `reserveTokens` and `keepRecentTokens` are honored. Background compaction is off:
@@ -67,6 +78,16 @@ neutralizes framing, and redacts again before returning quoted text. The kept
 original transcript is unchanged.
 
 ## Recovery and verification
+
+Coordinator unification uses the existing pinned adapter, not a package upgrade.
+Focused offline checks cover new and adopted coordinators, automatic rollover without
+a summary-model request, explicit reset, unchanged raw history and delivery deduplication
+after SQLite reopen. The same pending-question fixture runs for ordinary chats and
+coordinators: automatic notices wait for the explicit user answer, including after restart.
+Live membership/role declarations, foreground sibling failure, Stop, late input/image
+fences and private-note ownership have focused regression coverage too. No GPUI consumer
+or source/build/release edit was needed. Broad suites, typechecking and native acceptance
+are left to their separate gates; these checks do not establish live-provider recall quality.
 
 Explicit reset intents are tied to their original assistant/tool round. Direct
 calls require their successful committed result. Nested calls additionally need

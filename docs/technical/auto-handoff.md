@@ -9,7 +9,7 @@ The recorded checks and measurements apply only to the retired implementation, n
 
 Enable **Settings → Chats → Automatic handoff (experimental)** in Pilot Next. The host-global
 setting is off by default. It changes ordinary chats, including mission members, without
-creating another chat or workspace. Mission coordinators keep their summary-tree memory.
+creating another chat or workspace. Coordinators now use the shared [Posthorse](posthorse.md) adapter too.
 The settings screen is daemon-backed, not a GUI-only preference or a pi settings edit.
 
 ## Trigger and continuation

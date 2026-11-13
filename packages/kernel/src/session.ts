@@ -55,7 +55,6 @@ import {
 import { reconcileCompletion } from "./attention.ts";
 import { autoCompactionThreshold, shouldAutoCompact } from "./auto-compaction.ts";
 import { chatEvents, compactionEvents } from "./chat-events.ts";
-import { CoordinatorMemory } from "./coordinator-memory.ts";
 import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
 import { createDiagnosticContextTool, type DiagnosticContextCall } from "./diagnostic-context-tool.ts";
 import { createDiagnosticHistoryTool, type DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
@@ -696,7 +695,7 @@ export class KernelSession {
 							},
 						}
 					: {}),
-				posthorseEligible: () => !spec.role && mission.current?.coordinator !== "self",
+				posthorseEligible: () => !spec.role,
 				onToolsRunningChanged: hooks.onToolsRunningChanged,
 				subscriptionPolicy: spec.subscriptionPolicy,
 				reportSubscriptionLimit: hooks.reportSubscriptionLimit,
@@ -799,8 +798,6 @@ export class KernelSession {
 					: (pinned?.thinkingLevel ?? spec.thinking),
 			});
 			// Only mission chats declare the tool. It stays registered so joining can enable it live.
-			adapter.coordinatorMemoryActive = () =>
-				!spec.pilot?.ask && !spec.role && !spec.planning && mission.current?.coordinator === "self";
 			if (missionTools.length) adapter.setToolActive(MISSION_TOOL, !!mission.current);
 			if (!spec.pilot?.ask) adapter.setToolActive("todo", mission.current?.coordinator !== "self");
 			// Likewise slack_status, declared once pilotd reports the chat attached to a Slack triage message.
@@ -825,22 +822,10 @@ export class KernelSession {
 					compactionEvents(provenance ? provenance.prepare(tracked) : tracked, () => harness),
 					() => harness,
 				);
-				return toolDrain.prepare(
-					coordinatorMemory.extension(spec.planning ? planningBoundary(events, () => harness) : events),
-					(context) => adapter!.waitForSubscription(context.abortSignal),
+				return toolDrain.prepare(spec.planning ? planningBoundary(events, () => harness) : events, (context) =>
+					adapter!.waitForSubscription(context.abortSignal),
 				);
 			};
-			const coordinatorMemory = new CoordinatorMemory({
-				scope: () =>
-					!spec.pilot?.ask && !spec.role && !spec.planning && mission.current?.coordinator === "self"
-						? mission.current.id
-						: undefined,
-				provider: () => adapter!.model.provider,
-				resolve: (provider, signal) => adapter!.resolveCoordinatorMemoryModel(provider, signal),
-				harness: () => harness,
-				diagnostic: (reason) => console.warn(`pilot: coordinator memory fallback (${reason})`),
-			});
-			await coordinatorMemory.refresh();
 			const registry = createRegistry();
 			let serializeCompaction = (work: () => Promise<boolean>) => work();
 			const compaction = createManualCompaction(async (id, requestId, context) => {
@@ -864,10 +849,6 @@ export class KernelSession {
 				// Progress is durable and drives display. Four checkpoints/sec bound page-write
 				// amplification while keeping streaming responsive; admissions/final results bypass it.
 				progress: { partialIntervalMs: 250, outputIntervalMs: 250, persistWithinMs: 0 },
-			};
-			const window = () => {
-				const ref = adapter!.model;
-				return adapter!.models.getModel(ref.provider, ref.modelId)?.contextWindow ?? 0;
 			};
 			const usageCapture =
 				spec.usageHistory && hooks.reportUsageHistory
@@ -895,7 +876,7 @@ export class KernelSession {
 					// The Harness reads settings on every resolution, so the getter follows model and window changes.
 					settings: Object.defineProperty({ ...settings }, "compaction", {
 						enumerable: true,
-						get: () => coordinatorMemory.policy(window()) ?? adapter!.posthorsePolicy(),
+						get: () => adapter!.posthorsePolicy(),
 					}),
 				},
 				context,

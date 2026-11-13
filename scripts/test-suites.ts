@@ -66,7 +66,6 @@ const fast = new Set([
 	"artifacts/image",
 	"daemon/backpressure",
 	"daemon/config",
-	"daemon/coordinator-compaction",
 	"daemon/databases",
 	"daemon/event-loop-watchdog",
 	"daemon/github",

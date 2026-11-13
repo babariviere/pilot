@@ -1463,7 +1463,7 @@ for (const ask of [false, true]) {
 				await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 				assert.ifError(requestFailure);
 				assert.equal(requestChecked, true);
-				if (todoAvailable) {
+				if (!ask) {
 					const saved = await session.harness.snapshot(PosthorseDoc, session.conversation.id, BACKGROUND_CONTEXT);
 					assert.ok(saved?.header);
 					const scope = saved.entries.find((entry) => entry.customType === "posthorse-notes-scope");

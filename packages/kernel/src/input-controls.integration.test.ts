@@ -28,7 +28,7 @@ function gate() {
 	return { promise, resolve };
 }
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, coordinator = false) {
 	const root = await mkdtemp(join(tmpdir(), "input-controls-"));
 	const started = gate(),
 		finish = gate();
@@ -90,7 +90,25 @@ async function fixture(t: TestContext) {
 	const awaited: (string | undefined)[] = [];
 	const open = () =>
 		KernelSession.open(
-			{ sessionId: "controls", cwd: root, storageDir: join(root, "durable"), agentDir: join(root, "agent") },
+			{
+				sessionId: "controls",
+				cwd: root,
+				storageDir: join(root, "durable"),
+				agentDir: join(root, "agent"),
+				...(coordinator
+					? {
+							mission: {
+								id: "offline",
+								title: "Offline",
+								goal: "Preserve pending answers",
+								status: "active" as const,
+								coordinator: "self" as const,
+								tasks: [],
+								decisions: [],
+							},
+						}
+					: {}),
+			},
 			{ onWorking: () => {}, onQuestionAwaited: (question) => awaited.push(question) },
 		);
 	let session = await open();
@@ -213,51 +231,53 @@ async function waitingQuestion(f: Awaited<ReturnType<typeof fixture>>, count = 1
 	assert.fail("question did not become pending");
 }
 
-test("automatic input preserves a pending question across reconnect and runs FIFO only after its answer", {
-	timeout: 20_000,
-}, async (t) => {
-	const f = await fixture(t);
-	const requests: string[] = [];
-	f.faux.setResponses([
-		fauxAssistantMessage(fauxToolCall("ask_user", { question: "Which checks?" }), { stopReason: "toolUse" }),
-		...Array.from({ length: 3 }, () => (view: { messages: unknown[] }) => {
-			requests.push(JSON.stringify(view.messages));
-			return fauxAssistantMessage("Finished.");
-		}),
-	]);
-	await f.session.submit("user:ask", "Ask me", "followUp");
-	await waitingQuestion(f);
-	const before = (await f.session.conversation.context(context)).entries;
-	assert.ok(before.some((entry) => entry.kind === QUESTION_ENTRY));
-	for (const [requestId, content, mode] of [
-		["mission:send:first", "first automatic", "followUp"],
-		["native:jobs.result:second", "second automatic", "steer"],
-	] as const) {
-		assert.deepEqual(await f.session.submit(requestId, content, mode, false, true), { delivery: "queued" });
-		assert.deepEqual(await f.session.submit(requestId, content, mode, false, true), { delivery: "queued" });
-	}
-	assert.equal(f.faux.state.callCount, 1, "no automatic answer or model request");
-	assert.deepEqual((await f.session.conversation.context(context)).entries, before);
-	await f.reopen();
-	assert.equal(f.faux.state.callCount, 1);
-	await f.session.sendHeldMessages();
-	await f.session.resumeInputs();
-	assert.equal(f.faux.state.callCount, 1, "queue controls cannot answer a question");
-	assert.equal((await f.session.harness.snapshot(InboxDoc, f.session.conversation.id, context))?.items.length, 0);
-	assert.equal((await f.session.harness.snapshot(LiveDoc, f.session.conversation.id, context))?.run, undefined);
-	await f.session.submit("user:answer", "Tests please", "followUp");
-	await f.session.conversation.waitForIdle(context);
-	assert.equal(f.faux.state.callCount, 4);
-	assert.doesNotMatch(requests[0]!, /first automatic|second automatic/);
-	assert.match(requests[0]!, /Tests please/);
-	assert.match(requests[1]!, /first automatic/);
-	assert.doesNotMatch(requests[1]!, /second automatic/);
-	assert.match(requests[2]!, /second automatic/);
-	await f.reopen();
-	await f.session.submit("user:answer", "Tests please", "followUp");
-	await f.session.submit("mission:send:first", "first automatic", "followUp");
-	assert.equal(f.faux.state.callCount, 4, "lost ACK retries never repeat accepted work");
-});
+for (const coordinator of [false, true]) {
+	test(`${coordinator ? "coordinator" : "ordinary"} automatic input preserves a pending question across reconnect and runs FIFO only after its answer`, {
+		timeout: 20_000,
+	}, async (t) => {
+		const f = await fixture(t, coordinator);
+		const requests: string[] = [];
+		f.faux.setResponses([
+			fauxAssistantMessage(fauxToolCall("ask_user", { question: "Which checks?" }), { stopReason: "toolUse" }),
+			...Array.from({ length: 3 }, () => (view: { messages: unknown[] }) => {
+				requests.push(JSON.stringify(view.messages));
+				return fauxAssistantMessage("Finished.");
+			}),
+		]);
+		await f.session.submit("user:ask", "Ask me", "followUp");
+		await waitingQuestion(f);
+		const before = (await f.session.conversation.context(context)).entries;
+		assert.ok(before.some((entry) => entry.kind === QUESTION_ENTRY));
+		for (const [requestId, content, mode] of [
+			["mission:send:first", "first automatic", "followUp"],
+			["native:jobs.result:second", "second automatic", "steer"],
+		] as const) {
+			assert.deepEqual(await f.session.submit(requestId, content, mode, false, true), { delivery: "queued" });
+			assert.deepEqual(await f.session.submit(requestId, content, mode, false, true), { delivery: "queued" });
+		}
+		assert.equal(f.faux.state.callCount, 1, "no automatic answer or model request");
+		assert.deepEqual((await f.session.conversation.context(context)).entries, before);
+		await f.reopen();
+		assert.equal(f.faux.state.callCount, 1);
+		await f.session.sendHeldMessages();
+		await f.session.resumeInputs();
+		assert.equal(f.faux.state.callCount, 1, "queue controls cannot answer a question");
+		assert.equal((await f.session.harness.snapshot(InboxDoc, f.session.conversation.id, context))?.items.length, 0);
+		assert.equal((await f.session.harness.snapshot(LiveDoc, f.session.conversation.id, context))?.run, undefined);
+		await f.session.submit("user:answer", "Tests please", "followUp");
+		await f.session.conversation.waitForIdle(context);
+		assert.equal(f.faux.state.callCount, 4);
+		assert.doesNotMatch(requests[0]!, /first automatic|second automatic/);
+		assert.match(requests[0]!, /Tests please/);
+		assert.match(requests[1]!, /first automatic/);
+		assert.doesNotMatch(requests[1]!, /second automatic/);
+		assert.match(requests[2]!, /second automatic/);
+		await f.reopen();
+		await f.session.submit("user:answer", "Tests please", "followUp");
+		await f.session.submit("mission:send:first", "first automatic", "followUp");
+		assert.equal(f.faux.state.callCount, 4, "lost ACK retries never repeat accepted work");
+	});
+}
 
 test("question publication fences already queued automatic input, including native notifications", {
 	timeout: 20_000,
