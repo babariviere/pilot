@@ -69,7 +69,9 @@ a signature, `ExpectedTarget`, READY/COMMIT, startup acknowledgement or proof
 that a package is installed.
 
 `--production` requires the existing explicit public updater configuration
-and approved distribution-policy setting through `gui_release.configuration`.
+and approved distribution-policy setting through Day's `configuration` adapter
+in `day_build_inputs.py`, which uses the unchanged `gui_release.configuration`
+validation.
 It builds the optimized release profile and compares the actual compiled
 configuration in both binaries. It neither creates a key nor accepts test
 keys as production evidence. Even configured inputs say
@@ -102,11 +104,38 @@ signature and ExpectedTarget checks remain required.
 
 ## Configured full bundle (separate, gated production action)
 
-The ordinary assembler now exposes `bundle --production`, using the **same**
-`gui_release.configuration(os.environ)` parser as `day_build_inputs.py
---production`. It is mutually exclusive with `--unsigned-day`. It does not
+The ordinary assembler exposes `bundle --production --gui-resources`, using
+the **same** Day configuration adapter as `day_build_inputs.py --production`.
+It is mutually exclusive with `--unsigned-day`. It does not
 select Day implicitly: keep `--gui-resources` explicit. Development and GPUI
 defaults are unchanged. No workflow enables production automatically.
+
+### Environment names and compatibility
+
+Use these canonical public inputs for Day:
+
+| Canonical name | Compatibility alias |
+| --- | --- |
+| `PILOT_SIGNING_POLICY` | `PILOT_NEXT_SIGNING_POLICY` |
+| `PILOT_UPDATER_PUBLIC_KEY` | `PILOT_NEXT_UPDATER_PUBLIC_KEY` |
+| `PILOT_UPDATER_REPOSITORY` | `PILOT_NEXT_UPDATER_REPOSITORY` |
+| `PILOT_UPDATER_BUILD` | `PILOT_NEXT_UPDATER_BUILD` |
+
+For each field, the canonical name wins **when present**, including an empty
+value. The alias is read only when the canonical name is absent. Empty or
+invalid selected values fail the existing validation; they never fall back
+to another value. Names can be mixed. Values are not trimmed or normalized.
+The application ID and code requirement remain fixed, derived native identities,
+not environment overrides. The validated tuple is translated to the shared
+updater crate's legacy compile-time names inside the isolated Day build.
+Ambient trust inputs and secrets are not forwarded. Receipts still must match
+the exact source, recipe and compiled tuple.
+
+This adapter applies to Day input compilation and production assembly with
+`--gui-resources`. Without that flag, the GPUI parser and behavior are unchanged.
+Repository/GitHub secrets, fnox entries, credentials, storage/profile names and
+bundle identities are unchanged. This does not rename `DAY_UPDATER_PRIVATE_KEY`
+or configure signing through a new private-key environment variable.
 
 Public trust checked on 2026-11-13 against `DAY_UPDATER_PUBLIC_KEY` in
 `babariviere/pilot` and the [approved policy](day-signing-secrets.md):
@@ -138,10 +167,10 @@ set -euo pipefail
 [[ "$SOURCE" =~ ^[0-9a-f]{40}$ ]]
 git merge-base --is-ancestor 29102eb5f20f735c208300769f65cd9227279986 "$SOURCE"
 export NSH_DAY_CARGO_MODE=mbx
-export PILOT_NEXT_SIGNING_POLICY=private-adhoc
-export PILOT_NEXT_UPDATER_PUBLIC_KEY='MbGhgDgZuJPyC81SSCJ8IVEyLks66acK5s9NKIudSsE='
-export PILOT_NEXT_UPDATER_REPOSITORY=babariviere/pilot
-export PILOT_NEXT_UPDATER_BUILD="$BUILD"
+export PILOT_SIGNING_POLICY=private-adhoc
+export PILOT_UPDATER_PUBLIC_KEY='MbGhgDgZuJPyC81SSCJ8IVEyLks66acK5s9NKIudSsE='
+export PILOT_UPDATER_REPOSITORY=babariviere/pilot
+export PILOT_UPDATER_BUILD="$BUILD"
 work=$(mktemp -d "${TMPDIR:-/tmp}/day-full.XXXXXX")
 python3 apps/desktop/scripts/bundle_runtime.py runtime --source "$SOURCE" --output "$work/runtime"
 python3 apps/desktop/scripts/bundle_runtime.py native --gui day --source "$SOURCE" --output "$work/native"
@@ -208,7 +237,7 @@ mv "$work/official/extended.json" "$work/official/latest.json"
 umask 077
 fnox --no-daemon --non-interactive -c apps/day/fnox.toml get DAY_UPDATER_PRIVATE_KEY > "$work/day-key.pem"
 openssl pkey -in "$work/day-key.pem" -pubout -outform DER -out "$work/day-public.der"
-test "$(tail -c 32 "$work/day-public.der" | openssl base64 -A)" = "$PILOT_NEXT_UPDATER_PUBLIC_KEY"
+test "$(tail -c 32 "$work/day-public.der" | openssl base64 -A)" = "$PILOT_UPDATER_PUBLIC_KEY"
 { printf 'nsh-updater-manifest\0'; cat "$work/official/latest.json"; } > "$work/framed-manifest"
 openssl pkeyutl -sign -rawin -inkey "$work/day-key.pem" \
   -in "$work/framed-manifest" -out "$work/manifest.sig"

@@ -18,6 +18,7 @@ TARGET = "aarch64-apple-darwin"
 CLI_VERSION = "nsh 0.5.0 (f4d68f7)"
 CLI_SHA256 = "694ab2f1e4b97871e42399ae55a916f4fb528df8319eb2c0965f9c68331ebdb8"
 TRUST_FIELDS = ("public_key", "repository", "application_id", "build", "code_requirement")
+CONFIG_INPUTS = ("SIGNING_POLICY", "UPDATER_PUBLIC_KEY", "UPDATER_REPOSITORY", "UPDATER_BUILD")
 ARTIFACT_HOST = "pilot-artifact-host"
 HOST_MODULE = "packages/artifacts/src/nsh-host.ts"
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
@@ -38,6 +39,20 @@ NSH_CHECKSUMS = {
     "nsh-testing": "54ac8c9e9d8205b03748bf3485689b3ea3bd1f8f1b8fbc0b6f66ff19c67d655f",
     "nsh-updater": "8b6df81dce14aadfd08fd2aaf9d6754e922e8537d360bc69dcb28a6e478921bd",
 }
+
+
+def configuration(env):
+    """Day names win by presence, including empty values; legacy is fallback only."""
+    import gui_release
+    supplied = {}
+    for suffix in CONFIG_INPUTS:
+        canonical, legacy = "PILOT_" + suffix, "PILOT_NEXT_" + suffix
+        value = env[canonical] if canonical in env else env.get(legacy, "")
+        if not value:
+            raise ValueError(f"Missing release configuration: {canonical}")
+        supplied[legacy] = value
+    # Keep the shared policy, validation and fixed native identity unchanged.
+    return gui_release.configuration(supplied)
 
 
 def execute(args, *, cwd, env):
@@ -72,12 +87,13 @@ def environment(work, tools, inherited, production):
     env["TMPDIR"] = str(work)
     env["DYLD_LIBRARY_PATH"] = str(tools["rustc"].parent.parent / "lib")
     if production is not None:
-        import gui_release
-        supplied = {"PILOT_NEXT_UPDATER_" + key.upper(): production[key] for key in TRUST_FIELDS}
-        supplied["PILOT_NEXT_SIGNING_POLICY"] = "private-adhoc"
-        if gui_release.configuration(supplied) != production:
+        supplied = {"PILOT_UPDATER_" + key.upper(): production[key] for key in TRUST_FIELDS}
+        supplied["PILOT_SIGNING_POLICY"] = "private-adhoc"
+        if configuration(supplied) != production:
             raise ValueError("Unexpected production updater configuration")
-        env.update({key: value for key, value in supplied.items() if key != "PILOT_NEXT_SIGNING_POLICY"})
+        # The shared updater crate still uses its legacy compile-time names.
+        # Translate only this validated tuple, never ambient aliases or secrets.
+        env.update({"PILOT_NEXT_UPDATER_" + key.upper(): production[key] for key in TRUST_FIELDS})
     return env
 
 
@@ -369,8 +385,7 @@ def main():
     args = parser.parse_args()
     config = None
     if args.production:
-        import gui_release
-        config = gui_release.configuration(os.environ)
+        config = configuration(os.environ)
     snapshot_day(args.source, args.output.absolute(), config)
 
 

@@ -24,15 +24,14 @@ class BundleCliTests(unittest.TestCase):
                 "--native", "/inputs/native", "--output", "/output/Pilot Next.app", *options]
 
     def test_production_uses_the_input_builder_configuration_parser(self):
-        import gui_release
-        env = dict(PILOT_NEXT_SIGNING_POLICY="private-adhoc",
-                   PILOT_NEXT_UPDATER_PUBLIC_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-                   PILOT_NEXT_UPDATER_REPOSITORY="owner/repo", PILOT_NEXT_UPDATER_BUILD="200.1")
+        env = dict(PILOT_SIGNING_POLICY="private-adhoc",
+                   PILOT_UPDATER_PUBLIC_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                   PILOT_UPDATER_REPOSITORY="owner/repo", PILOT_UPDATER_BUILD="200.1")
         with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", self.argv(
                 "--production", "--bundle-build", "200.1", "--gui-resources", "/inputs/day/nsh")), \
                 patch.object(bundle, "assemble") as assemble:
             bundle.main()
-        self.assertEqual(assemble.call_args.kwargs["production"], gui_release.configuration(env))
+        self.assertEqual(assemble.call_args.kwargs["production"], day.configuration(env))
         self.assertEqual(assemble.call_args.args[6], "200.1")
         self.assertEqual(assemble.call_args.kwargs["gui_resources"], Path("/inputs/day/nsh"))
         self.assertFalse(assemble.call_args.kwargs["unsigned_day"])
@@ -802,14 +801,14 @@ class BundleRuntimeTests(unittest.TestCase):
         bundle.verify(self.output)
 
     def test_production_day_cli_keeps_full_inventory_and_rejects_resource_tampering(self):
-        import gui_release
+        import day_build_inputs
         resources, _ = self.gui_resources()
-        env = dict(PILOT_NEXT_SIGNING_POLICY="private-adhoc",
-                   PILOT_NEXT_UPDATER_PUBLIC_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-                   PILOT_NEXT_UPDATER_REPOSITORY="owner/repo", PILOT_NEXT_UPDATER_BUILD="200.1")
+        env = dict(PILOT_SIGNING_POLICY="private-adhoc",
+                   PILOT_UPDATER_PUBLIC_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                   PILOT_UPDATER_REPOSITORY="owner/repo", PILOT_UPDATER_BUILD="200.1")
         manifest = self.executables / "manifest.json"
         bundle.write_json(manifest, bundle.read_json(manifest) | dict(
-            updater_configuration=gui_release.configuration(env), profile="release", kind="production-rust-inputs"))
+            updater_configuration=day_build_inputs.configuration(env), profile="release", kind="production-rust-inputs"))
         argv = ["bundle_runtime.py", "bundle", "--production", "--source", self.source,
                 "--runtime", str(self.runtime), "--executables", str(self.executables),
                 "--native", str(self.native), "--output", str(self.output),

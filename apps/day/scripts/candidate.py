@@ -20,14 +20,13 @@ DESKTOP = Path(__file__).resolve().parents[2] / "desktop/scripts"
 sys.path.insert(0, str(DESKTOP))
 import bundle_runtime as bundle
 import day_build_inputs as day
-import gui_release
 
 
 def configuration(value):
     """Reuse the existing public trust tuple, never generate/replace a key."""
-    env = {"PILOT_NEXT_SIGNING_POLICY": "private-adhoc"}
-    env.update({"PILOT_NEXT_UPDATER_" + key.upper(): value[key] for key in day.TRUST_FIELDS})
-    expected = gui_release.configuration(env)
+    env = {"PILOT_SIGNING_POLICY": "private-adhoc"}
+    env.update({"PILOT_UPDATER_" + key.upper(): value[key] for key in day.TRUST_FIELDS})
+    expected = day.configuration(env)
     if value != expected:
         raise ValueError("Existing updater configuration does not match its native identity")
     return expected

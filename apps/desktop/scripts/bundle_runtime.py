@@ -629,8 +629,12 @@ def main():
     elif args.action == "bundle":
         config = None
         if args.production:
-            import gui_release
-            config = gui_release.configuration(os.environ)
+            if args.gui_resources is not None:
+                import day_build_inputs
+                config = day_build_inputs.configuration(os.environ)
+            else:
+                import gui_release
+                config = gui_release.configuration(os.environ)
         assemble(args.runtime, args.executables, args.native, args.output, args.source, args.updater, args.bundle_build, args.accepted_capsule, production=config, gui_resources=args.gui_resources, unsigned_day=args.unsigned_day)
     else:
         verify(args.output, unsigned_day=args.unsigned_day)

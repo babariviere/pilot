@@ -1,6 +1,7 @@
 """Private offline recipe fixtures. Fake compilers/resources are NOT native acceptance."""
 import json
 import base64
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -13,6 +14,73 @@ from unittest.mock import patch
 
 import bundle_runtime as bundle
 import day_build_inputs as day
+
+
+class ConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        self.env = dict(PILOT_SIGNING_POLICY="private-adhoc",
+                        PILOT_UPDATER_PUBLIC_KEY=base64.b64encode(bytes([42]) * 32).decode(),
+                        PILOT_UPDATER_REPOSITORY="Owner/Repo.Name", PILOT_UPDATER_BUILD="100.1")
+        self.legacy = {key.replace("PILOT_", "PILOT_NEXT_", 1): value for key, value in self.env.items()}
+
+    def test_canonical_legacy_and_mixed_inputs_preserve_exact_values(self):
+        import gui_release
+        expected = gui_release.configuration(self.legacy)
+        self.assertEqual(day.configuration(self.env), expected)
+        self.assertEqual(day.configuration(self.legacy), expected)
+        mixed = self.legacy | {"PILOT_UPDATER_BUILD": "100.2"}
+        self.assertEqual(day.configuration(mixed), expected | {"build": "100.2"})
+        self.assertEqual(expected["repository"], self.env["PILOT_UPDATER_REPOSITORY"])
+        self.assertEqual(expected["public_key"], self.env["PILOT_UPDATER_PUBLIC_KEY"])
+
+    def test_canonical_presence_wins_even_when_empty_or_invalid(self):
+        conflicting = {name: "invalid" for name in self.legacy}
+        self.assertEqual(day.configuration(conflicting | self.env), day.configuration(self.env))
+        for name in self.env:
+            for value in ("", "invalid", self.env[name] + "\n"):
+                with self.subTest(name=name, value=value), self.assertRaises(ValueError):
+                    day.configuration(self.legacy | self.env | {name: value})
+        with self.assertRaisesRegex(ValueError, "PILOT_SIGNING_POLICY"):
+            day.configuration({})
+
+    def test_validated_tuple_only_reaches_shared_native_consumer(self):
+        config = day.configuration(self.env)
+        tools = {key: Path("/qualified") / key for key in ("nsh", "cargo", "rustc", "mbx")}
+        inherited = self.env | self.legacy | {"PILOT_UPDATER_PRIVATE_KEY": "not-forwarded"}
+        env = day.environment(Path("/private/work"), tools, inherited, config)
+        for field in day.TRUST_FIELDS:
+            self.assertEqual(env["PILOT_NEXT_UPDATER_" + field.upper()], config[field])
+        self.assertFalse(any(key.startswith("PILOT_") and not key.startswith("PILOT_NEXT_UPDATER_") for key in env))
+        for field in day.TRUST_FIELDS:
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                day.environment(Path("/private/work"), tools, {}, config | {field: "different"})
+
+    def test_day_production_cli_uses_alias_parser(self):
+        argv = ["day_build_inputs.py", "--production", "--source", "a" * 40, "--output", "/unused"]
+        for env in (self.env, self.legacy):
+            with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", argv), \
+                    patch.object(day, "snapshot_day") as build:
+                day.main()
+                self.assertEqual(build.call_args.args[2], day.configuration(self.env))
+
+    def test_bundle_cli_selects_day_adapter_without_changing_gpui(self):
+        argv = ["bundle_runtime.py", "bundle", "--production", "--source", "a" * 40,
+                "--runtime", "/runtime", "--executables", "/executables", "--native", "/native",
+                "--output", "/output"]
+        for env in (self.env, self.legacy):
+            with patch.dict(os.environ, env, clear=True), \
+                    patch.object(sys, "argv", argv + ["--gui-resources", "/nsh"]), \
+                    patch.object(bundle, "assemble") as assemble:
+                bundle.main()
+                self.assertEqual(assemble.call_args.kwargs["production"], day.configuration(self.env))
+        with patch.dict(os.environ, self.env, clear=True), patch.object(sys, "argv", argv), \
+                patch.object(bundle, "assemble") as assemble, self.assertRaises(ValueError):
+            bundle.main()
+        assemble.assert_not_called()
+        with patch.dict(os.environ, self.legacy, clear=True), patch.object(sys, "argv", argv), \
+                patch.object(bundle, "assemble") as assemble:
+            bundle.main()
+            self.assertEqual(assemble.call_args.kwargs["production"], day.configuration(self.env))
 
 
 class RecipeTests(unittest.TestCase):
@@ -57,9 +125,8 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(env["RUSTUP_AUTO_INSTALL"], "0")
 
     def test_missing_production_configuration_refuses_not_fixture_fallback(self):
-        import gui_release
         with self.assertRaisesRegex(ValueError, "Missing release configuration"):
-            gui_release.configuration({})
+            day.configuration({})
         with self.assertRaises(KeyError):
             day.environment(self.root, self.tools, {}, {})
 
@@ -292,14 +359,11 @@ class RecipeTests(unittest.TestCase):
             archive.write_bytes(b"fixture archive only")
         production = None
         if connected_only or configured:
-            import gui_release
-            production = gui_release.configuration(dict(
-                PILOT_NEXT_SIGNING_POLICY="private-adhoc",
-                PILOT_NEXT_UPDATER_PUBLIC_KEY=base64.b64encode(bytes([42]) * 32).decode(),
-                PILOT_NEXT_UPDATER_REPOSITORY="fixture/offline",
-                PILOT_NEXT_UPDATER_APPLICATION_ID=bundle.APP_ID,
-                PILOT_NEXT_UPDATER_BUILD="100.1",
-                PILOT_NEXT_UPDATER_CODE_REQUIREMENT=f'identifier "{bundle.APP_ID}"'))
+            production = day.configuration(dict(
+                PILOT_SIGNING_POLICY="private-adhoc",
+                PILOT_UPDATER_PUBLIC_KEY=base64.b64encode(bytes([42]) * 32).decode(),
+                PILOT_UPDATER_REPOSITORY="fixture/offline",
+                PILOT_UPDATER_BUILD="100.1"))
         config = production or dict(schema=1, mode="unconfigured")
         calls = []
         compiled = dict(schema=1, kind="compiled-build-input", source=self.source,
