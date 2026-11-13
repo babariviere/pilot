@@ -300,6 +300,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn(day.CLI_SHA256, native)
         self.assertIn("for file in App Plan Intake Update;", native)
         self.assertIn("--manifest-path apps/day/native/Cargo.toml --features macos-host --lib", native)
+        self.assertIn("--test boundary --test connected -- --test-threads=1", native)
         self.assertNotIn("nsh.sh test Native", native)
 
     def test_shared_ci_keeps_security_checks_without_gpui_jobs(self):
@@ -307,6 +308,8 @@ class WorkflowTests(unittest.TestCase):
         for phase in ("updater-check", "updater-linux-tests", "updater-mac-tests", "power-check"):
             self.assertIn("ci.sh " + phase, workflow)
         self.assertIn("verify_update_lifecycle.py", workflow)
+        self.assertIn("name: Shared Linux updater and power security", workflow)
+        self.assertIn("name: Shared macOS updater and power security", workflow)
         self.assertEqual(workflow.count("DESKTOP_CI_SHARED_ONLY: '1'"), 2)
         for obsolete in ("rust-macos-bundle:", "rust-macos-release:", "ci.sh check\n",
                          "ci.sh native\n", "ci.sh nsh-native\n", "ci.sh mac-tests\n"):

@@ -134,6 +134,7 @@ jobs:
 
   # Shared updater and power helper tests, without the GPUI workspace.
   rust:
+    name: Shared Linux updater and power security
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -166,6 +167,7 @@ jobs:
         run: bash apps/desktop/scripts/ci.sh power-check
 
   rust-macos-native:
+    name: Shared macOS updater and power security
     runs-on: macos-15
     timeout-minutes: 60
     env:
