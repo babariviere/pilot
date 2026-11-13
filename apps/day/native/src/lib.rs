@@ -7,6 +7,10 @@
 //! native methods in [`bridge::METHODS`]; the default mock app grants none.
 
 pub mod actions;
+#[cfg(unix)]
+pub mod artifact_runtime;
+#[cfg(unix)]
+pub mod artifact_source;
 mod attention_feed;
 pub mod attention_host;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]

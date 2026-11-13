@@ -45,6 +45,21 @@ do not follow edits to the scratch file or inherit later state. The existing
 exact delivery/member/owner pin reader can return NSH as inert source. It still
 returns `rendering: "unsupported"`, not compiled code, assets or callbacks.
 
+## App-side preview preparation
+
+`apps/day/native/src/artifact_runtime.rs` builds an isolated NSH engine
+configuration from captured source. It reuses the source compiler and supplies
+eight fixed, app-owned helper modules as in-memory source chunks. It uses no
+filesystem resolver or authored bytecode. The bootstrap mounts the default
+component through the existing helper error boundary.
+
+The configuration explicitly declares and grants no host capabilities, hardens
+the VM and sets heap, stack, time, node and operation limits. It installs only
+NSH's base registry, with no Day context, host channel advertisement, network,
+filesystem, assets, storage or credentials. Interpreter limits do not cover
+native/GPU allocations. This prepares the app runtime; the production viewer is
+not connected yet, and the existing reader still shows saved source only.
+
 ## Compiler and lifetime
 
 `compileNshSource` checks captured bytes before publication through the same
