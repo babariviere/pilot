@@ -6,7 +6,7 @@ import { expect, open, test } from "nsh/test";
 const DECIDE = "id:decision >> role:button[Decide]";
 
 test("Today renders natively and takes pointer, keyboard and text input", async () => {
-	const app = await open("./App.tsx", { platform: "macos", width: 1100, height: 900 });
+	const app = await open("./MockApp.tsx", { platform: "macos", width: 1100, height: 900 });
 	await app.waitFor("Three short things need you.");
 	await app.screenshot("output/today-light-1100.png");
 	await app.press("Say it simpler");
@@ -23,13 +23,13 @@ test("Today renders natively and takes pointer, keyboard and text input", async 
 });
 
 test("Today in dark appearance", async () => {
-	const app = await open("./App.tsx", { platform: "macos", width: 1100, height: 900, colorScheme: "dark" });
+	const app = await open("./MockApp.tsx", { platform: "macos", width: 1100, height: 900, colorScheme: "dark" });
 	await app.waitFor("Three short things need you.");
 	await app.screenshot("output/today-dark-1100.png");
 });
 
 test("keyboard triage on a real platform: focus, picks, help and a question draft", async () => {
-	const app = await open("./App.tsx", { platform: "macos", width: 1100, height: 900 });
+	const app = await open("./MockApp.tsx", { platform: "macos", width: 1100, height: 900 });
 	await app.waitFor("1 of 3");
 	await app.keyboard.press("j");
 	await app.waitFor("2 of 3");

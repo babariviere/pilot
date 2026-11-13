@@ -25,7 +25,7 @@ async function goTo(app: App, id: string) {
 }
 
 test("Today shows New and a mission whose questions wait", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.waitFor("Planning");
 	for (const text of ["Export a chat as Markdown", "Questions for you", "3 of 7 answered", "role:button[New]"]) {
 		expect(app.shows(text)).toBe(true);
@@ -34,7 +34,7 @@ test("Today shows New and a mission whose questions wait", async () => {
 });
 
 test("one question at a time, starting at the first without an answer; a recommendation is not an answer", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:plan-export");
 	await app.waitFor("id:interview");
 	expect(app.shows("Question 2 of 7 · 3 answered")).toBe(true);
@@ -53,7 +53,7 @@ test("one question at a time, starting at the first without an answer; a recomme
 });
 
 test("skipped questions stay unanswered and block the one Submit until every question is answered", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:plan-export");
 	await app.waitFor("Question 2 of 7 · 3 answered");
 	await app.press("role:button[Skip for now]");
@@ -104,7 +104,7 @@ test("skipped questions stay unanswered and block the one Submit until every que
 });
 
 test("See all shows every question to answer freely; it answers and submits nothing by itself", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:plan-export");
 	await app.waitFor("id:interview");
 	await app.press("id:see-all");
@@ -134,7 +134,7 @@ test("See all shows every question to answer freely; it answers and submits noth
 });
 
 test("switching suggestions keeps the text, and drafts come back after leaving", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:plan-export");
 	await app.waitFor("What should one export include?");
 	await app.press("Messages only");
@@ -154,7 +154,7 @@ test("switching suggestions keeps the text, and drafts come back after leaving",
 });
 
 test("typing keeps its focus and text while answers save", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:plan-export");
 	await goTo(app, "check");
 	await write(app, "check", "Opens");
@@ -545,7 +545,7 @@ test("planning intents are typed, name what was shown, need every answer and nev
 });
 
 test("keys answer fast: digits pick, 0 opens the text field, Return moves on and Escape comes back", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:plan-export");
 	await app.waitFor("Question 2 of 7 · 3 answered");
 	for (const hint of ["1–3", "pick", "write", "next"]) expect(app.shows(hint)).toBe(true);
@@ -590,7 +590,7 @@ test("earlier rounds are history with their answers, apart from the plan's appro
 });
 
 test("pressing the chosen suggestion again clears it, by click or by its key", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:plan-export");
 	await app.waitFor("Question 2 of 7 · 3 answered");
 	await app.press("Messages only");

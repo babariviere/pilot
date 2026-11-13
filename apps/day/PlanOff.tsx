@@ -1,9 +1,7 @@
 // Planning is not connected: New shows why and sends nothing.
 import { mount } from "nsh";
-import { DayScreen } from "./DayScreen";
-import { openDay } from "./day";
-import { openPlanning } from "./planning";
+import { MockDayScreen, openDay, openPlanning } from "./mockFeeds";
 
 const day = openDay("quiet");
 const plans = openPlanning("unavailable");
-mount(() => <DayScreen day={day} plans={plans} />);
+mount(() => <MockDayScreen day={day} plans={plans} />);

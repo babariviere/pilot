@@ -61,8 +61,8 @@ export function reportText(action: HumanAction): string {
 
 /** The mission whose overview is open, or null for Today. */
 export const route = signal<string | null>(null);
-/** Where the window's read models come from: mock worlds, or the Pilot service its native root chose. Only an entry sets it. */
-export const dataSource = signal<"mock" | "pilot">("mock");
+/** Where the window's read models come from: the Pilot service its native root chose, or mock worlds. Only the test-only mock fixtures (mockFeeds.tsx) switch it to "mock". */
+export const dataSource = signal<"mock" | "pilot">("pilot");
 /** The mission whose Pause waits for the user's confirmation, if any. */
 export const confirming = signal<string | null>(null);
 /** The last message a control intent returned, by mission. */

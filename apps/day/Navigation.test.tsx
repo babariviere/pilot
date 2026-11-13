@@ -19,7 +19,7 @@ async function openSearchPlan(app: App) {
 }
 
 test("Today, mission, interview and plan: one Back goes up one level at a time", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.waitFor(TODAY);
 	// Today is the top: Pilot is there, Back is not.
 	expect(app.shows("id:home")).toBe(true);
@@ -45,7 +45,7 @@ test("Today, mission, interview and plan: one Back goes up one level at a time",
 });
 
 test("Escape goes up the same single level as Back", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await openSearchPlan(app);
 	await app.keyboard.press("escape");
 	await app.waitFor("id:mission-plan");
@@ -55,7 +55,7 @@ test("Escape goes up the same single level as Back", async () => {
 });
 
 test("Pilot at the top left goes to Today from any depth", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await openSearchPlan(app);
 	await app.press("id:home");
 	await app.waitFor(TODAY);
@@ -69,7 +69,7 @@ test("Pilot at the top left goes to Today from any depth", async () => {
 });
 
 test("a mission in planning that Today does not list goes back to Today", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:plan-export");
 	await app.waitFor("What should one export include?");
 	expect(app.shows("role:button[Back to Today]")).toBe(true);
@@ -79,7 +79,7 @@ test("a mission in planning that Today does not list goes back to Today", async 
 });
 
 test("the header's places open from a nested page, and their Back goes to Today", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await openSearchPlan(app);
 	await app.press("id:new-open");
 	await app.waitFor("What do you want done?");
@@ -95,7 +95,7 @@ test("the header's places open from a nested page, and their Back goes to Today"
 });
 
 test("going home and back keeps New's goal and an interview answer exactly, and sends nothing", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:new-open");
 	await app.waitFor("id:goal");
 	await app.type("id:goal", "  Keep this goal 日本語 ✓\n");
@@ -140,7 +140,7 @@ test("a restored window comes back to the nested page, still one level below its
 });
 
 test("a narrow window keeps Pilot, one Back and every place, with words for screen readers", async () => {
-	const app = await open("./App.tsx", narrow);
+	const app = await open("./MockApp.tsx", narrow);
 	await app.waitFor(TODAY);
 	for (const control of ["id:home", "role:button[New]", "id:changes-open"]) {
 		expect(app.shows(control)).toBe(true);

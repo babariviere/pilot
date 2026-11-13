@@ -2,8 +2,8 @@
 // native root last confirmed, and the only way to save a step, Done or Skip,
 // or that the user saw Today. A connected window uses its root's ritual calls
 // (bridge.ts): Rust samples the clock, checks the exact context and revision,
-// and writes the local journal. Mock entries use an in-memory stand-in that
-// saves nothing anywhere. Escape never saves. A write whose answer is lost or
+// and writes the local journal. Test fixtures bring their own stand-in
+// (mockFeeds.tsx). Escape never saves. A write whose answer is lost or
 // Unknown is never sent again; only Read again (a passive read) settles it.
 import { type Signal, signal } from "nsh";
 import type {
@@ -17,7 +17,6 @@ import type {
 	RitualWrite,
 	Today,
 } from "pilot-day/native";
-import type { Day } from "./day";
 
 /** How many results a ritual lists. Today lists the rest. */
 export const RECAP_LIMIT = 5;
@@ -177,16 +176,6 @@ export function mirrorRituals(source: RitualSource, recap: (today: Today, progre
 	};
 }
 
-/** Results from Today's mock read, as the mock entries show them. */
-function todayRecap(today: Today): Recap {
-	return {
-		state: "live",
-		entries: today.done.slice(0, RECAP_LIMIT),
-		more: Math.max(0, today.done.length - RECAP_LIMIT) + today.doneHidden,
-		limited: false,
-	};
-}
-
 /** Results from the root's ritual read: kept-change evidence only, or "off". */
 export function rootRecap(_today: Today, progress: RitualSnapshot): Recap {
 	if (progress.resultsAvailability !== "available") return { state: "off" };
@@ -196,93 +185,4 @@ export function rootRecap(_today: Today, progress: RitualSnapshot): Recap {
 		more: Math.max(0, progress.results.length - RECAP_LIMIT),
 		limited: progress.resultsLimited,
 	};
-}
-
-/**
- * The mock entries' stand-in: marks in memory for this run, keyed by the
- * mock Today's date. It has the root's rules (exact context and revision,
- * final marks stay) but saves nothing anywhere. Mock data, never proof.
- */
-class MockRituals implements RitualSource {
-	#day: Day;
-	#revision = 0;
-	#marks = new Map<string, { start: RitualSnapshot["start"]; end: RitualSnapshot["end"] }>();
-	#listeners = new Map<number, (view: RitualSnapshot) => void>();
-	#next = 0;
-
-	constructor(day: Day) {
-		this.#day = day;
-	}
-
-	snapshot(): RitualSnapshot {
-		const today = this.#day.feed.snapshot();
-		const marks = this.#marks.get(today.date);
-		return {
-			...NO_PROGRESS,
-			availability: "available",
-			context: `mock/${today.date}`,
-			revision: this.#revision,
-			date: today.date,
-			part: today.part,
-			visit: today.visit,
-			start: marks?.start ?? NO_PROGRESS.start,
-			end: marks?.end ?? NO_PROGRESS.end,
-			resultsAvailability: "available",
-		};
-	}
-
-	onChange(listener: (view: RitualSnapshot) => void): () => void {
-		const id = this.#next++;
-		this.#listeners.set(id, listener);
-		return () => {
-			this.#listeners.delete(id);
-		};
-	}
-
-	#accepted(): IntentOutcome {
-		const view = this.snapshot();
-		for (const listener of this.#listeners.values()) listener(view);
-		return { status: "accepted", revision: this.#revision, message: "" };
-	}
-
-	refresh(): Promise<IntentOutcome> {
-		return Promise.resolve(this.#accepted());
-	}
-
-	refreshResults(): Promise<IntentOutcome> {
-		return Promise.resolve(this.#accepted());
-	}
-
-	visit(intent: RitualVisit): Promise<IntentOutcome> {
-		const now = this.snapshot();
-		if (intent.context !== now.context || intent.revision !== now.revision) return this.#stale();
-		this.#revision += 1;
-		return Promise.resolve(this.#accepted());
-	}
-
-	save(intent: RitualWrite): Promise<IntentOutcome> {
-		const now = this.snapshot();
-		const before = now[intent.ritual];
-		if (intent.context !== now.context || intent.revision !== now.revision || before.mark !== "unmarked") {
-			return this.#stale();
-		}
-		const marks = { start: now.start, end: now.end };
-		marks[intent.ritual] = { mark: intent.mark, step: intent.step };
-		this.#marks.set(now.date, marks);
-		this.#revision += 1;
-		return Promise.resolve(this.#accepted());
-	}
-
-	#stale(): Promise<IntentOutcome> {
-		return Promise.resolve({ status: "stale", revision: this.#revision, message: "" });
-	}
-
-	dispose(): void {
-		this.#listeners.clear();
-	}
-}
-
-/** The mock entries' ritual progress, from `day`'s mock Today. */
-export function mockRituals(day: Day): Rituals {
-	return mirrorRituals(new MockRituals(day), (today) => todayRecap(today));
 }

@@ -7,10 +7,10 @@
 // source once and shows it as plain text; nothing runs it.
 import { mount, Scroll, Text, View } from "nsh";
 import { DeliveryScreen } from "./DeliveryScreen";
-import { openDay } from "./day";
 import { ScriptedDelivery } from "./deliveryDemo";
 import { mirrorDelivery } from "./deliveryFeed";
 import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
+import { openDay } from "./mockFeeds";
 import { ToCheck } from "./ToCheck";
 import { Action } from "./ui";
 import { captureView, restoreView, startFresh } from "./updateView";

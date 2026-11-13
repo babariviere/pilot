@@ -14,7 +14,7 @@ import type { IntakeMirror, IntakeOp, IntakeResult, IntakeRow, IntakeView, Triag
 import { openLinear } from "./linearView";
 import { glide } from "./motion";
 import { Action, InlineAction, Mark, SectionTitle } from "./ui";
-import { placeRow } from "./view";
+import { dataSource, placeRow } from "./view";
 
 /** The request open in place, by ID. One at a time; it closes when the request leaves. */
 export const openRequest = signal<string | null>(null);
@@ -678,10 +678,16 @@ function ExampleIncoming(props: { day: Day }) {
  * New requests, newest first. Hidden when no request source is set up and
  * nothing waits. A source that cannot be read says so; rows a read does not
  * hold are counted, so the list never looks complete when it is not. The
- * connected window reads the selected project's request pages; the mock
- * window shows Today's examples and offers no writes.
+ * connected window reads the selected project's request pages. Without a
+ * request source it shows nothing; only the test-only mock windows show
+ * Today's examples, and they offer no writes.
  */
 export function Incoming(props: { day: Day }) {
 	const mirror = props.day.intake;
-	return mirror ? <LiveIncoming day={props.day} mirror={mirror} /> : <ExampleIncoming day={props.day} />;
+	if (mirror) return <LiveIncoming day={props.day} mirror={mirror} />;
+	return (
+		<If when={dataSource() === "mock"}>
+			<ExampleIncoming day={props.day} />
+		</If>
+	);
 }

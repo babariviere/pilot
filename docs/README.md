@@ -2,7 +2,7 @@
 
 Short guides for the desktop app. Start with [installation and setup](getting-started.md).
 
-For the upcoming interface, [launch the separate local development preview](development-preview.md).
+The upcoming interface can be prepared locally as a [connected candidate](technical/day-connected-candidate.md).
 Connected Day keeps earlier reads marked as older while it refreshes. An
 unavailable attention read never means that nothing needs you. Read again only
 reads; it does not resend an answer or start work.
@@ -15,6 +15,8 @@ answers and finished work stay kept. Revisit never starts work or changes permis
 A mission's overview lists threads with its coordinator, one subject each. A thread shows the
 coordinator's whole conversation and marks the messages it sent or linked. Send reaches only an
 active, unheld planning coordinator; Later and Discard keep the history. Talking never starts work.
+Feedback (in the header, or Send feedback on a mission) saves your words about Pilot, with the
+mission when you keep it. It lists what you sent. Nothing triages or routes it yet, and it never starts work.
 
 | Feature                                         | Guide                                         |
 | ----------------------------------------------- | --------------------------------------------- |

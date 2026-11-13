@@ -122,6 +122,7 @@ import { PROJECT_PREFERENCES_SCHEMA, ProjectPreferencesStore } from "./project-p
 import { RETAINED_PROJECTION_SCHEMA, RetainedReviewProjections } from "./retained-review-projections.ts";
 import { REVIEW_REQUEST_SCHEMA, ReviewRequestStore } from "./review-request-store.ts";
 import type { PullRequestBinding } from "./sessions.ts";
+import { USER_FEEDBACK_SCHEMA, UserFeedbackStore } from "./user-feedback-store.ts";
 import { DELIVERY_SOURCE_SCHEMA, USER_VERIFICATION_SCHEMA, UserVerificationStore } from "./user-verification-store.ts";
 import { WORKFLOW_CONFIRMATION_SCHEMA, WorkflowConfirmationStore } from "./workflow-confirmation-store.ts";
 
@@ -661,6 +662,13 @@ export class MissionStore {
 		run: (sql, ...params) => this.run(sql, ...params),
 		transaction: (work) => this.transaction(work, true),
 	});
+	/** The user's own feedback about Pilot, separate from agent Insights and findings. */
+	readonly feedback = new UserFeedbackStore({
+		all: (sql, ...params) => this.all(sql, ...params),
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+	});
 	/** Scoped tracking records share canonical tasks, transactions and disk durability. */
 	readonly insights = new InsightsBacklog({
 		all: (sql, ...params) => this.all(sql, ...params),
@@ -967,6 +975,7 @@ export class MissionStore {
 		this.db.exec(SCHEMA);
 		this.db.exec(KNOWLEDGE_SCHEMA);
 		this.db.exec(PROJECT_PREFERENCES_SCHEMA);
+		this.db.exec(USER_FEEDBACK_SCHEMA);
 		this.db.exec(INSIGHTS_SCHEMA);
 		this.db.exec(INSIGHTS_WORKSPACE_SCHEMA);
 		this.db.exec(INSIGHTS_OWNER_SCHEMA);

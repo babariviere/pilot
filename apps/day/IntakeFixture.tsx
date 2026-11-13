@@ -4,7 +4,6 @@
 // lost answer stays Unknown until Check reads it; Check never sends again.
 import { mount, Scroll, signal, Text, View } from "nsh";
 import type { Request } from "pilot-day/native";
-import { openDay } from "./day";
 import { Incoming } from "./Incoming";
 import {
 	type IntakeOp,
@@ -16,6 +15,7 @@ import {
 	type Triage,
 	type TriageIntent,
 } from "./intakeFeed";
+import { openDay } from "./mockFeeds";
 import { Action } from "./ui";
 
 type Item = {

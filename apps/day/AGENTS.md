@@ -2,8 +2,13 @@
 
 ## Working here
 
-- Keep the default entry mock-only. Do not enable live profiles or treat test
-  coverage as production or packaging acceptance.
+- The default entry (`App.tsx`) is the connected app and never shows mock data.
+  Missing or unreadable sources show an honest unavailable state.
+- Keep mock worlds test-only (`MockApp.tsx`, scenario and `*Fixture.tsx` entries,
+  `mockFeeds.tsx`, `mockSession.ts`, `*Demo.ts`, `native/src/fixture.rs`).
+  Runtime modules must not import them.
+- Do not enable live profiles or treat test coverage as production or packaging
+  acceptance.
 - Use `./nsh.sh` and `scripts/cargo` for NSH and Rust commands.
   Use `scripts/typecheck.sh` for the workspace TypeScript check, not `pnpm day`.
 - Use the verified NSH 0.5.0 (`f4d68f7`) distribution (`NSH_DAY_CLI` can select a local copy). Keep NSH dependencies

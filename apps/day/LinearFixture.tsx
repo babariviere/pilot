@@ -5,11 +5,10 @@
 // update saves it and shows it again in a fresh window state.
 import { mount, signal, Text, View } from "nsh";
 import type { Request } from "pilot-day/native";
-import { DayScreen } from "./DayScreen";
-import { openDay } from "./day";
 import { type IntakeSource, type IntakeView, mirrorIntake } from "./intakeFeed";
 import { type LinearDemoMode, ScriptedLinear } from "./linearDemo";
 import { mirrorLinear } from "./linearFeed";
+import { MockDayScreen, openDay } from "./mockFeeds";
 import { Action } from "./ui";
 import { captureView, restoreView, startFresh } from "./updateView";
 
@@ -83,6 +82,6 @@ mount(() => (
 			/>
 			<Text testID="kept">{`Kept: [${kept()}]`}</Text>
 		</View>
-		<DayScreen day={day} />
+		<MockDayScreen day={day} />
 	</View>
 ));

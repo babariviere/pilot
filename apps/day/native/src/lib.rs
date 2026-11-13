@@ -1,10 +1,12 @@
-//! Mock Pilot Day for the Native Shell TSX app. Rust owns the Today read
+//! Pilot Day for the Native Shell TSX app. Rust owns the Today read
 //! model and the rules for changing it ([`desk::Desk`]). Missions are
 //! projected ([`project`]) from the daemon's v1 contracts ([`contract`]). TSX receives typed
 //! read models and sends typed intents through [`TodayFeed`]; it has no
 //! transport of its own, and the app's capabilities deny network, sockets,
 //! files and processes. The isolated connected runner grants only the exact
-//! native methods in [`bridge::METHODS`]; the default mock app grants none.
+//! native methods in [`bridge::METHODS`]; the development config grants none.
+//! The mock worlds ([`fixture`] and the scenario feeds) are test support for
+//! the headless fixture entries; the connected host never reads them.
 
 pub mod actions;
 #[cfg(unix)]

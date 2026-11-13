@@ -1,7 +1,7 @@
 // The connected window's feeds: adapters over the exact JSON calls the
 // window's native root registered (bridge.ts). Screen code cannot choose a
 // service; without a root this window says so and never shows mock data.
-// Kept in its own module, like session.ts, so edits to the screens never
+// Kept in its own module, like mockSession.ts, so edits to the screens never
 // reopen the feeds.
 import { host, signal } from "nsh";
 import type { RitualSnapshot, SavedView, Setup, Today } from "pilot-day/native";
@@ -12,6 +12,7 @@ import { connectedUpdates } from "./connectedUpdates";
 import { type Day, mirrorDay } from "./day";
 import { ConnectedDelivery, deliveryKey, mirrorDelivery, type VerificationSubject } from "./deliveryFeed";
 import { deliveryTitles } from "./deliveryView";
+import { ConnectedFeedback, mirrorFeedback } from "./feedbackFeed";
 import { ConnectedIntake, mirrorIntake } from "./intakeFeed";
 import { ConnectedLinear, mirrorLinear } from "./linearFeed";
 import { flushAll } from "./planCommands";
@@ -209,8 +210,8 @@ async function connect() {
 		requests = now;
 		void intakeFeed.read();
 	});
-	// The saved Linear issues, the project's preferences, a mission's threads and
-	// saved artifacts are read only when their page opens.
+	// The saved Linear issues, the project's preferences, a mission's threads,
+	// the user's feedback and saved artifacts are read only when their page opens.
 	const day = mirrorDay(
 		today,
 		intake,
@@ -219,6 +220,7 @@ async function connect() {
 		mirrorScope(new ConnectedScope(window)),
 		mirrorPreferences(new ConnectedPreferences(window)),
 		mirrorThreads(new ConnectedThreads(window)),
+		mirrorFeedback(new ConnectedFeedback(window)),
 		new ConnectedArtifacts(window),
 	);
 	// New's projects are read when New opens; reading sends nothing.

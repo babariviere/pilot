@@ -1,4 +1,5 @@
-//! The mock worlds behind the Today screen. Every name, number and event is
+//! Test support: the mock worlds behind the headless fixture entries. The
+//! connected host never reads them. Every name, number and event is
 //! invented and matches the D prototype's synthetic data. Missions arrive as
 //! the daemon's v1 contracts (`DayOverview`, `MissionDetail`), so the same
 //! projection serves mock and real reads. A Rust-only Today screen can render

@@ -62,7 +62,7 @@ test("a returning day catches up, keeps where the user left off and what each re
 });
 
 test("a skipped start of day leaves every decision waiting and is not offered again", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:start-day");
 	await app.press("role:button[Next]");
 	await app.waitFor("Three things need you.");
@@ -82,7 +82,7 @@ test("a skipped start of day leaves every decision waiting and is not offered ag
 });
 
 test("Escape leaves a ritual unmarked, and Decide now only brings the first decision forward", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:start-day");
 	await app.waitFor("Good morning.");
 	await app.keyboard.press("escape");
@@ -100,7 +100,7 @@ test("Escape leaves a ritual unmarked, and Decide now only brings the first deci
 });
 
 test("a start of day resumes at the step the user left, and Escape marks nothing", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:start-day");
 	await app.press("role:button[Next]");
 	await app.waitFor("Step 2 of 3 · Needs you");
@@ -167,7 +167,7 @@ test("an evening with nothing waiting closes calmly with where the user left off
 });
 
 test("standup notes say what is done, next and waiting, each with its source", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:standup");
 	await app.waitFor("id:standup-notes");
 	for (const text of [

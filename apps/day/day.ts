@@ -2,9 +2,10 @@
 // mirrored in one signal, and typed intents on the feed. The feed has no
 // transport, and nsh.json denies network, sockets, files and processes.
 import { type Signal, signal } from "nsh";
-import { type Scenario, type Today, TodayFeed } from "pilot-day/native";
+import type { Today } from "pilot-day/native";
 import type { ArtifactSource } from "./artifactReads";
 import type { DeliveryMirror } from "./deliveryFeed";
+import type { FeedbackMirror } from "./feedbackFeed";
 import type { DayFeed } from "./feeds";
 import type { IntakeMirror } from "./intakeFeed";
 import type { LinearMirror } from "./linearFeed";
@@ -50,6 +51,11 @@ export type Day = {
 	 */
 	threads?: ThreadsMirror;
 	/**
+	 * The user's own feedback about Pilot, sent and kept by Pilot's service.
+	 * Without it the window offers no feedback page.
+	 */
+	feedback?: FeedbackMirror;
+	/**
 	 * Saved artifacts of the window's project and its missions. Without them
 	 * the window offers no Artifacts page or mission section.
 	 */
@@ -57,11 +63,6 @@ export type Day = {
 	/** Stops listening and frees the feed. */
 	close: () => void;
 };
-
-/** Opens a mock feed from `scenario` and mirrors its read model. */
-export function openDay(scenario?: Scenario): Day {
-	return mirrorDay(new TodayFeed(scenario));
-}
 
 /** Mirrors `feed`'s read model, mock or connected. Closing stops listening and frees the feeds. */
 export function mirrorDay(
@@ -72,6 +73,7 @@ export function mirrorDay(
 	scope?: ScopeMirror,
 	preferences?: PreferencesMirror,
 	threads?: ThreadsMirror,
+	feedback?: FeedbackMirror,
 	artifacts?: ArtifactSource,
 ): Day {
 	const today = signal(feed.snapshot());
@@ -90,6 +92,7 @@ export function mirrorDay(
 		scope,
 		preferences,
 		threads,
+		feedback,
 		artifacts,
 		close: () => {
 			stop();
@@ -99,6 +102,7 @@ export function mirrorDay(
 			linear?.close();
 			preferences?.close();
 			threads?.close();
+			feedback?.close();
 		},
 	};
 }

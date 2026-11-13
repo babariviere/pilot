@@ -5,9 +5,8 @@
 // the window's screen state, as an update or a close would.
 import { mount, Scroll, Text, View } from "nsh";
 import { TodayFeed } from "pilot-day/native";
-import { DayScreen } from "./DayScreen";
 import { mirrorDay } from "./day";
-import { openPlanning } from "./planning";
+import { MockDayScreen, openPlanning } from "./mockFeeds";
 import { ScriptedScope } from "./scopeDemo";
 import { mirrorScope } from "./todayScope";
 import { Action } from "./ui";
@@ -21,7 +20,7 @@ const plans = openPlanning();
 mount(() => (
 	<View class="flex-1 bg-background">
 		<View class="flex-1">
-			<DayScreen day={day} plans={plans} />
+			<MockDayScreen day={day} plans={plans} />
 		</View>
 		<Scroll class="max-h-40 border-t border-border">
 			<View class="gap-1 px-6 py-3">

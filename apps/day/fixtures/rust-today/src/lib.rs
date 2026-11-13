@@ -47,7 +47,7 @@ pub fn TodayRoot(props: TodayRootProps) -> impl IntoElement {
     screen::today(props.scenario.get_untracked(), props.pulse.get_untracked())
 }
 
-/// The decisions world (as `App.tsx`): `nsh.json`'s root.
+/// The decisions world (as `MockApp.tsx`): `nsh.json`'s root.
 #[component]
 pub fn TodayApp() -> impl IntoElement {
     screen::today(Scenario::Decisions, false)

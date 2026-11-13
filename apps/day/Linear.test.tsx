@@ -126,7 +126,7 @@ test("without an active cycle, the page says Pilot saved the open issues", async
 });
 
 test("the mock window offers the page with demo issues and points back to its example request", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.waitFor("id:incoming");
 	await app.press("id:linear-open");
 	await app.waitFor("Your issues in cycle 42");

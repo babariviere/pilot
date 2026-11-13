@@ -1,5 +1,5 @@
 // The app's one window: Today, one mission's overview, New, one mission's
-// planning, Changes, Settings, or the start or end of the day. No sidebar. One header
+// planning, Changes, Settings, Feedback, or the start or end of the day. No sidebar. One header
 // stays over every screen: Pilot goes to Today, Back goes up one level,
 // and Escape goes back too.
 
@@ -13,6 +13,8 @@ import { changesRoute } from "./changesView";
 import { DeliveryScreen } from "./DeliveryScreen";
 import type { Day } from "./day";
 import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
+import { FeedbackScreen } from "./FeedbackScreen";
+import { feedbackOpen } from "./feedbackView";
 import { LinearScreen } from "./LinearScreen";
 import { linearOpen } from "./linearView";
 import { MissionScreen } from "./MissionScreen";
@@ -23,7 +25,7 @@ import type { Plans } from "./planning";
 import { planRoute } from "./planView";
 import { settingsOpen } from "./preferencesView";
 import { RitualScreen } from "./RitualScreen";
-import { mockRituals, type Rituals } from "./ritualFeed";
+import type { Rituals } from "./ritualFeed";
 import { ritualEntry, ritualRoute } from "./ritualView";
 import { SettingsScreen } from "./SettingsScreen";
 import { ThreadScreen } from "./ThreadScreen";
@@ -64,13 +66,12 @@ function Planning(props: { day: Day; plans: Plans }) {
 
 /**
  * Today, or the mission, planning, Changes, ritual or update page the user
- * opened. Without `rituals` (the mock entries), ritual progress is an
- * in-memory mock that saves nothing anywhere.
+ * opened. Every feed comes from the caller; this screen invents no data.
  */
-export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; update?: Update; rituals?: Rituals }) {
+export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; update?: Update; rituals: Rituals }) {
 	updateEntry.set(props.update ?? null);
 	if (props.update) bindRestore(props.update, props.changes, props.day);
-	const rituals = props.rituals ?? mockRituals(props.day);
+	const rituals = props.rituals;
 	ritualEntry.set(rituals);
 	// Coming back to the window reads the saved progress again, with a fresh
 	// clock sample, so a new day or time zone shows. It writes nothing.
@@ -116,7 +117,16 @@ function Screens(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: C
 	return (
 		<If
 			when={props.day.preferences && settingsOpen()}
-			else={<Results day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />}
+			else={
+				<If
+					when={props.day.feedback && feedbackOpen()}
+					else={<Results day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />}
+				>
+					<Arrive class="flex-1">
+						<FeedbackScreen day={props.day} />
+					</Arrive>
+				</If>
+			}
 		>
 			<Arrive class="flex-1">
 				<SettingsScreen day={props.day} />

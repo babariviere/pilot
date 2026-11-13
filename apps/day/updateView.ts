@@ -26,6 +26,7 @@ import {
 	remindersOf,
 	savedReminders,
 } from "./deliveryView";
+import { feedbackOpen, forgetFeedback, restoreFeedback, savedFeedback } from "./feedbackView";
 import { forgetPlaces, lastField, restoreField, restoreScroll, scrollOf, todayScrollTo } from "./kept";
 import { focusIssue, linearOpen, linearProject, openIssue, restoreLinear, savedLinear } from "./linearView";
 import { flushAll } from "./planCommands";
@@ -117,6 +118,7 @@ function place(): { place: PlaceKind; id: string } {
 export function shownKey(): string {
 	if (ritualRoute()) return "ritual";
 	if (settingsOpen()) return "settings";
+	if (feedbackOpen()) return "feedback";
 	const delivery = deliveryRoute();
 	if (delivery) return `delivery/${delivery.key}`;
 	if (linearOpen()) return "linear";
@@ -204,6 +206,9 @@ export function captureView(today?: Today): SavedView {
 		// Restoring them sends nothing and never moves words to another thread.
 		thread: savedThread(),
 		threads: savedThreadDrafts(),
+		// The feedback page and unsent feedback with its own origin. Restoring sends nothing.
+		feedbackOpen: feedbackOpen(),
+		feedback: savedFeedback(),
 	};
 }
 
@@ -312,6 +317,7 @@ export function startFresh() {
 	settingsOpen.set(false);
 	preferencesDraft.set(null);
 	preferencesMessage.set("");
+	forgetFeedback();
 	forgetThreads();
 	todayPlace.y = 0;
 	todayPlace.row = null;
@@ -391,6 +397,10 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	if (linear && view.linear) restoreLinear(view.linear);
 	restorePreferences(view.preferences ?? []);
 	settingsOpen.set(settings && view.settings === true);
+	// Unsent feedback always comes back as unsent words with their own origin.
+	// The page shows again only in a window that has it.
+	restoreFeedback(view.feedback ?? "");
+	feedbackOpen.set(view.feedbackOpen === true);
 	// A thread comes back over its own mission only; its words always come back unsent.
 	const thread = view.thread ?? "";
 	restoreThreads(view.place === "mission" && thread.startsWith(`${view.id}/`) ? thread : "", view.threads ?? []);
