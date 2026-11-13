@@ -172,7 +172,10 @@ async fn run(
     }
     if matches!(
         call.command,
-        Command::PreferencesRead | Command::PreferencesSave(_) | Command::PreferencesCheck(_)
+        Command::PreferencesRead
+            | Command::PreferencesSave(_)
+            | Command::PreferencesCheck(_)
+            | Command::PreferencesHistory(_)
     ) {
         return super::preferences::handle(t, journal, shared, &call.command, &call.gate).await;
     }
@@ -278,7 +281,10 @@ async fn run(
         | Command::IntakeCheck(_) => {
             unreachable!("handled intake command")
         }
-        Command::PreferencesRead | Command::PreferencesSave(_) | Command::PreferencesCheck(_) => {
+        Command::PreferencesRead
+        | Command::PreferencesSave(_)
+        | Command::PreferencesCheck(_)
+        | Command::PreferencesHistory(_) => {
             unreachable!("handled preferences command")
         }
         Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot => None,

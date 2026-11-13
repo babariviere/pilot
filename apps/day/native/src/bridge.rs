@@ -27,6 +27,7 @@ pub const METHODS: &[&str] = &[
     "day.preferences.read",
     "day.preferences.save",
     "day.preferences.check",
+    "day.preferences.history",
     "day.intake.triage",
     "day.intake.start",
     "day.intake.check",
@@ -188,6 +189,7 @@ pub(crate) enum Command {
     PreferencesRead,
     PreferencesSave(crate::host::preferences::Intent),
     PreferencesCheck(String),
+    PreferencesHistory(crate::host::preferences::History),
     IntakeWrite(crate::host::intake::Intent),
     IntakeCheck(String),
     DeliveryRead(crate::host::delivery::Subject),
@@ -380,6 +382,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: Lookup = exact(args)?;
             mission(&r.operation_id)?;
             C::PreferencesCheck(r.operation_id)
+        }
+        "day.preferences.history" => {
+            let r: crate::host::preferences::History = exact(args)?;
+            r.validate()?;
+            C::PreferencesHistory(r)
         }
         "day.delivery.list" => {
             let r: crate::host::delivery::List = exact(args)?;
@@ -659,6 +666,7 @@ impl Command {
                     | Self::IntakeRead
                     | Self::LinearRead
                     | Self::PreferencesRead
+                    | Self::PreferencesHistory(_)
                     | Self::DeliveryRead(_)
                     | Self::DeliveryList(_)
                     | Self::DeliverySaved

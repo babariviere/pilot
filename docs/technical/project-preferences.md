@@ -104,6 +104,10 @@ list's last change. Settings has no permission or provider controls.
   the revision, names new preferences, fixes the reason and journals the
   `project-preferences-update` envelope before the one POST.
 - `day.preferences.check {operationId}` only looks up that saved envelope's receipt.
+- `day.preferences.history {before?}` reads one page of saved revisions (at most 20,
+  newest first, strictly older than `before`) for the root's project. It is read only:
+  Settings shows who saved each revision, when, its reason, the quoted note and the
+  list it saved, with no restore action. A failed read is not an empty history.
 
 Edits form one draft that names its project and starting revision. Save and Revert
 show only once the words differ from the saved list. Leaving Settings, closing or

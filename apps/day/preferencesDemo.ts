@@ -4,6 +4,7 @@
 // refusal. `saves` and `checks` count calls, to prove nothing is resent.
 import { signal } from "nsh";
 import {
+	type HistoryRead,
 	type PreferencesSource,
 	type PreferencesView,
 	type ProjectPreference,
@@ -63,7 +64,36 @@ function theirs(base: ProjectPreferences): ProjectPreferences {
 		entries: [...base.entries, noted("p-friday", "No releases on Fridays.", "please never release on a friday", NOW)],
 		updatedAt: NOW,
 		author: { type: "coordinator", sessionId: "s-coordinator", missionId: "m-search" },
+		source: { type: "mission_note", missionId: "m-search", eventId: 52, quote: "please never release on a friday" },
+		reason: "Recorded from your note in Faster search",
 	};
+}
+
+/** The two revisions before `saved()`: the first preference, then a coordinator's note. */
+function earlier(): ProjectPreferences[] {
+	const now = saved();
+	const [small, tests] = now.entries as [ProjectPreference, ProjectPreference];
+	return [
+		{
+			projectId: PROJECT,
+			revision: 1,
+			entries: [small],
+			updatedAt: small.recordedAt,
+			author: { type: "user" },
+			source: { type: "user" },
+			reason: "Edited in Pilot Settings",
+		},
+		{
+			projectId: PROJECT,
+			revision: 2,
+			entries: [small, tests],
+			updatedAt: tests.recordedAt,
+			author: tests.author,
+			source: tests.source,
+			reason: "Recorded from your note in Faster search",
+		},
+		{ ...now, reason: "Edited in Pilot Settings" },
+	];
 }
 
 let minted = 0;
@@ -75,7 +105,11 @@ export class ScriptedPreferences implements PreferencesSource {
 	readonly saves = signal(0);
 	readonly checks = signal(0);
 	readonly reads = signal(0);
-	#list: ProjectPreferences = saved();
+	/** How many revisions a history page holds. */
+	readonly page = signal(20);
+	readonly historyFails = signal(false);
+	#revisions: ProjectPreferences[] = earlier();
+	#list: ProjectPreferences = this.#revisions[2] as ProjectPreferences;
 	#shown: ProjectPreferences | null = null;
 	#refused = false;
 	#pending: { operationId: string; intent: SaveIntent } | null = null;
@@ -84,7 +118,7 @@ export class ScriptedPreferences implements PreferencesSource {
 
 	constructor(mode: PreferencesDemoMode = "saved") {
 		this.mode.set(mode);
-		if (mode === "empty") this.#list = { projectId: PROJECT, revision: 0, entries: [] };
+		if (mode === "empty") this.empty();
 	}
 
 	view(): PreferencesView {
@@ -135,7 +169,24 @@ export class ScriptedPreferences implements PreferencesSource {
 	/** Starts over with a project that has no preferences yet. */
 	empty() {
 		this.#list = { projectId: PROJECT, revision: 0, entries: [] };
+		this.#revisions = [];
 		this.mode.set("saved");
+	}
+
+	/** The service committed `next`: it is the list now and the newest revision. */
+	#set(next: ProjectPreferences) {
+		this.#list = next;
+		this.#revisions.push(next);
+	}
+
+	async history(before?: number): Promise<HistoryRead> {
+		if (this.historyFails()) return { ok: false, reason: "Pilot could not reach its service." };
+		const older = this.#revisions
+			.filter((r) => before === undefined || r.revision < before)
+			.sort((a, b) => b.revision - a.revision);
+		const revisions = older.slice(0, this.page());
+		const more = older.length > revisions.length;
+		return { ok: true, page: { revisions, more, before: more ? (revisions.at(-1)?.revision ?? null) : null } };
 	}
 
 	/** The list with `intent`'s words, as the service would commit it. */
@@ -154,6 +205,7 @@ export class ScriptedPreferences implements PreferencesSource {
 			updatedAt: NOW,
 			author: { type: "user" },
 			source: { type: "user" },
+			reason: "Edited in Pilot Settings",
 		};
 	}
 
@@ -179,7 +231,7 @@ export class ScriptedPreferences implements PreferencesSource {
 		this.next.set("accept");
 		if (next === "stale") {
 			// Someone else saved first: the service's revision check refuses this one.
-			this.#list = theirs(this.#list);
+			this.#set(theirs(this.#list));
 			this.#shown = this.#list;
 			this.#publish();
 			return {
@@ -209,11 +261,11 @@ export class ScriptedPreferences implements PreferencesSource {
 		if (next === "unknown") {
 			// The service saved it, but the answer was lost.
 			this.#pending = { operationId, intent };
-			this.#list = this.#commit(intent);
+			this.#set(this.#commit(intent));
 			this.#publish();
 			return { status: "unknown", message: UNKNOWN_SAVE, operationId, saved: null };
 		}
-		this.#list = this.#commit(intent);
+		this.#set(this.#commit(intent));
 		this.#shown = this.#list;
 		this.#publish();
 		return { status: "accepted", message: "Saved.", operationId, saved: this.#list };

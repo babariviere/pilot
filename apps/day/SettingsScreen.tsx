@@ -7,12 +7,13 @@
 // silently replaces typed text, and a draft for another project is never
 // saved here. A Save whose answer was lost stays Unknown: Check only reads
 // its result. Leaving, closing or updating keeps the draft (updateView.ts).
-import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
-import { Input } from "nsh/base";
+import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, untracked, View } from "nsh";
+import { Button, Collapsible, Input } from "nsh/base";
 import type { Day } from "./day";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
 import {
+	type HistoryPage,
 	MAX_ENTRIES,
 	MAX_TEXT_BYTES,
 	type PreferencesMirror,
@@ -32,6 +33,8 @@ import {
 	preferencesDraft,
 	preferencesMessage,
 	quoteOf,
+	revisionLine,
+	revisionQuote,
 	sourceLine,
 } from "./preferencesView";
 import { Action, Mark, SectionTitle } from "./ui";
@@ -393,6 +396,129 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 	);
 }
 
+/** Whether the history shows, the pages read and why a read failed. Reads only. */
+const historyOpen = signal(false);
+const historyPages = signal<HistoryPage[]>([]);
+const historyError = signal("");
+const historyReading = signal(false);
+const openRevision = signal<number | null>(null);
+
+/** The list's saved revisions, newest first, read only. Nothing here restores or saves. */
+function History(props: { mirror: PreferencesMirror }) {
+	const current = () => props.mirror.view().preferences?.revision ?? null;
+	let asked = 0;
+	const load = async (before?: number) => {
+		const mine = ++asked;
+		historyReading.set(true);
+		historyError.set("");
+		const r = await props.mirror.source.history(before);
+		if (mine !== asked) return;
+		historyReading.set(false);
+		if (!r.ok) {
+			historyError.set(r.reason);
+			return;
+		}
+		glide();
+		historyPages.set(before === undefined ? [r.page] : [...historyPages(), r.page]);
+	};
+	// A newer saved list makes the history shown older: read it again from the newest.
+	let seen = untracked(current);
+	effect(() => {
+		const now = current();
+		if (now === seen) return;
+		seen = now;
+		if (untracked(historyOpen)) void load();
+	});
+	const revisions = () => historyPages().flatMap((p) => p.revisions);
+	const next = () => historyPages().at(-1);
+	return (
+		<View testID="preferences-history" class="gap-3">
+			<View class="flex-row items-center gap-2 border-t border-border pt-3">
+				<Text class="flex-1 text-sm text-muted-foreground">History</Text>
+				<Action
+					label={historyOpen() ? "Hide history" : "Show history"}
+					testID="preferences-history-toggle"
+					accessibilityLabel={
+						historyOpen()
+							? "Hide this project's earlier preferences"
+							: "Show this project's earlier preferences. This only reads."
+					}
+					onPress={() => {
+						glide();
+						const open = !historyOpen();
+						historyOpen.set(open);
+						if (open) void load();
+					}}
+				/>
+			</View>
+			<If when={historyOpen()}>
+				<If when={historyError()}>
+					<Note
+						testID="preferences-history-off"
+						text={historyError()}
+						detail="This is not the same as having no history."
+					/>
+				</If>
+				<If when={!historyError() && !historyReading() && revisions().length === 0}>
+					<Text testID="preferences-history-empty" class="text-sm text-muted-foreground">
+						No saved changes yet.
+					</Text>
+				</If>
+				<View>
+					<Each of={revisions()} key={(r) => String(r.revision)}>
+						{(r) => (
+							<Collapsible
+								open={openRevision() === r().revision}
+								class="border-t border-border"
+								content={
+									<View testID={`preferences-revision-detail-${r().revision}`} class="gap-1 pb-3">
+										<If when={r().entries.length === 0}>
+											<Text class="text-sm text-muted-foreground">No preferences.</Text>
+										</If>
+										<Each of={r().entries} key={(e) => e.id}>
+											{(e) => <Text class="text-sm text-muted-foreground">{`• ${e().text}`}</Text>}
+										</Each>
+										<If when={revisionQuote(r())}>
+											<Text class="text-xs text-faint">{`From your note: “${revisionQuote(r())}”`}</Text>
+										</If>
+									</View>
+								}
+							>
+								<Button
+									testID={`preferences-revision-${r().revision}`}
+									accessibilityLabel={`${revisionLine(r())}. ${openRevision() === r().revision ? "Hide" : "Show"} the list it saved.`}
+									onPress={() => {
+										glide();
+										openRevision.set(openRevision() === r().revision ? null : r().revision);
+									}}
+									class="group gap-0.5 rounded-md py-2.5 focus-visible:ring-2 focus-visible:ring-ring/40"
+								>
+									<Text class="text-sm text-foreground group-hover:underline">{revisionLine(r())}</Text>
+									<If when={r().reason}>
+										<Text class="text-xs text-faint">{r().reason ?? ""}</Text>
+									</If>
+								</Button>
+							</Collapsible>
+						)}
+					</Each>
+				</View>
+				<If when={historyReading()}>
+					<Text class="text-sm text-muted-foreground">Reading history…</Text>
+				</If>
+				<If when={!historyReading() && next()?.more && next()?.before}>
+					<View class="flex-row">
+						<Action
+							label="Show earlier"
+							testID="preferences-history-more"
+							onPress={() => void load(next()?.before ?? undefined)}
+						/>
+					</View>
+				</If>
+			</If>
+		</View>
+	);
+}
+
 /** Settings over the window's preferences. Opening it only reads. */
 export function SettingsScreen(props: { day: Day }) {
 	const mirror = props.day.preferences as PreferencesMirror;
@@ -424,6 +550,7 @@ export function SettingsScreen(props: { day: Day }) {
 					Settings
 				</Text>
 				<Preferences mirror={mirror} />
+				<History mirror={mirror} />
 				<Text class="border-t border-border pt-5 text-xs text-faint">
 					Preferences are what you chose. Pilot's approvals, Stop and spending limits still apply.
 				</Text>

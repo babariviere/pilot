@@ -176,6 +176,74 @@ pub(super) async fn read(t: &Transport) -> Result<Value, Error> {
     Ok(json!({"version":1,"projectId":project,"projectName":name,"preferences":list}))
 }
 
+/// At most this many saved revisions per history page.
+const HISTORY_PAGE: usize = 20;
+
+/// One older page of history, newest first. Read only.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct History {
+    before: Option<u64>,
+}
+impl History {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
+        if self.before.is_some_and(|n| n == 0 || n > MAX_REVISION) {
+            return Err(Error::Invalid);
+        }
+        Ok(())
+    }
+}
+
+/// A history page is the root's project's saved revisions, strictly older
+/// than `before`, newest first, with an exact cursor. Anything else is refused.
+fn valid_history(v: &Value, project: &str, before: Option<u64>) -> bool {
+    let Some(list) = v["revisions"].as_array() else {
+        return false;
+    };
+    let Some(more) = v["more"].as_bool() else {
+        return false;
+    };
+    let mut previous = before.unwrap_or(u64::MAX);
+    for r in list {
+        let Some(n) = r["revision"].as_u64() else {
+            return false;
+        };
+        if n == 0 || n >= previous || !valid_list(r, project) {
+            return false;
+        }
+        previous = n;
+    }
+    list.len() <= HISTORY_PAGE
+        && if more {
+            !list.is_empty() && v["before"].as_u64() == Some(previous)
+        } else {
+            v["before"].is_null()
+        }
+}
+
+async fn history(t: &Transport, request: &History) -> Result<Value, Error> {
+    request.validate()?;
+    t.gate(false).await?;
+    let project = &t.source.project_id;
+    let after = request
+        .before
+        .map(|n| format!("&before={n}"))
+        .unwrap_or_default();
+    let v = t
+        .get(&format!(
+            "/api/projects/{project}/preferences/history?limit={HISTORY_PAGE}{after}"
+        ))
+        .await?;
+    if !valid_history(&v, project, request.before) {
+        return Err(Error::Invalid);
+    }
+    t.gate(false).await?;
+    Ok(
+        json!({"version":1,"projectId":project,"revisions":v["revisions"],
+        "more":v["more"],"before":v["before"]}),
+    )
+}
+
 pub(super) async fn handle(
     t: &Transport,
     journal: &mut Journal,
@@ -190,6 +258,11 @@ pub(super) async fn handle(
     };
     let mut outcome = Value::Null;
     match command {
+        Command::PreferencesHistory(request) => {
+            let snapshot = history(t, request).await?;
+            check()?;
+            return Ok(json!({"snapshot":snapshot,"outcome":null}));
+        }
         Command::PreferencesRead => {}
         Command::PreferencesSave(intent) => {
             intent.validate()?;
@@ -334,5 +407,39 @@ mod tests {
                 "{pointer}"
             );
         }
+    }
+
+    #[test]
+    fn a_history_page_is_older_newest_first_and_names_its_cursor() {
+        let rev = |n: u64| {
+            json!({"projectId":"p","revision":n,"entries":[{"id":"a","text":"t","recordedAt":1,
+                "source":{"type":"user"},"author":{"type":"user"}}]})
+        };
+        let page = json!({"revisions":[rev(5),rev(4)],"more":true,"before":4});
+        assert!(valid_history(&page, "p", Some(6)));
+        assert!(valid_history(&page, "p", None));
+        assert!(!valid_history(&page, "p", Some(5)));
+        assert!(!valid_history(&page, "other", None));
+        for (pointer, value) in [
+            ("/before", json!(5)),
+            ("/before", Value::Null),
+            ("/revisions/1/revision", json!(5)),
+            ("/revisions/1/revision", json!(0)),
+            ("/revisions/0/projectId", json!("other")),
+            ("/more", Value::Null),
+        ] {
+            let mut changed = page.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert!(!valid_history(&changed, "p", None), "{pointer}");
+        }
+        let last = json!({"revisions":[rev(1)],"more":false,"before":null});
+        assert!(valid_history(&last, "p", Some(2)));
+        let empty = json!({"revisions":[],"more":false,"before":null});
+        assert!(valid_history(&empty, "p", None));
+        let mut many = last.clone();
+        many["revisions"] = json!((1..=21).rev().map(rev).collect::<Vec<_>>());
+        assert!(!valid_history(&many, "p", None));
+        assert!(serde_json::from_value::<History>(json!({"before":3,"projectId":"p"})).is_err());
+        assert_eq!(History { before: Some(0) }.validate(), Err(Error::Invalid));
     }
 }

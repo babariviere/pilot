@@ -129,3 +129,35 @@ test("an unreadable list is not shown as empty, and an empty project says so", a
 	await app.waitFor("id:preferences-empty");
 	expect(app.shows("id:preferences-off")).toBe(false);
 });
+
+test("history lists saved revisions newest first, pages older ones and changes nothing", async () => {
+	const app = await open("./PreferencesFixture.tsx", desktop);
+	await app.press("History pages of 2");
+	await app.press("id:settings-open");
+	await app.waitFor("id:preference-p-small");
+	await app.press("id:preferences-history-toggle");
+	await app.waitFor("id:preferences-revision-3");
+	expect(app.shows("id:preferences-revision-2")).toBe(true);
+	expect(app.shows("id:preferences-revision-1")).toBe(false);
+	expect(app.shows("Recorded from your note in Faster search")).toBe(true);
+	await app.press("id:preferences-history-more");
+	await app.waitFor("id:preferences-revision-1");
+	expect(app.shows("id:preferences-history-more")).toBe(false);
+	await app.press("id:preferences-revision-2");
+	await app.waitFor("id:preferences-revision-detail-2");
+	expect(app.shows("From your note: “just run the tests the change touches, CI does the rest”")).toBe(true);
+	// A new save shows at the top once it is saved.
+	await app.type("id:preference-p-names", " Always.");
+	await app.press("id:preferences-save");
+	await app.waitFor("id:preferences-revision-4");
+	expect(counts(app)).toBe("Saves: 1 · Checks: 0");
+});
+
+test("a failed history read is not an empty history", async () => {
+	const app = await settings();
+	await app.press("History fails");
+	await app.press("id:preferences-history-toggle");
+	await app.waitFor("id:preferences-history-off");
+	expect(app.shows("This is not the same as having no history.")).toBe(true);
+	expect(app.shows("id:preferences-history-empty")).toBe(false);
+});

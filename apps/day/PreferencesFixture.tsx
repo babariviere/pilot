@@ -28,6 +28,8 @@ mount(() => (
 				{(n) => <Action label={`Next ${n()}`} onPress={() => preferences.next.set(n())} />}
 			</Each>
 			<Action label="Unreadable" onPress={() => preferences.mode.set("unreadable")} />
+			<Action label="History pages of 2" onPress={() => preferences.page.set(2)} />
+			<Action label="History fails" onPress={() => preferences.historyFails.set(true)} />
 			<Action label="Empty project" onPress={() => preferences.empty()} />
 			<Action
 				label="Draft elsewhere"

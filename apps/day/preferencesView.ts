@@ -131,3 +131,15 @@ export function changedLine(p: ProjectPreferences): string {
 	if (!who) return when ? `Last changed ${when}.` : "";
 	return when ? `Last changed by ${who} · ${when}.` : `Last changed by ${who}.`;
 }
+
+/** One saved revision's heading: its number, who saved it and when. */
+export function revisionLine(p: ProjectPreferences): string {
+	const who = p.author?.type === "coordinator" ? "a mission coordinator" : p.author ? "you" : "";
+	const when = dayOf(p.updatedAt);
+	return [`Revision ${p.revision}`, who ? `by ${who}` : "", when].filter(Boolean).join(" · ");
+}
+
+/** The note a revision was recorded from, or "". */
+export function revisionQuote(p: ProjectPreferences): string {
+	return p.source?.type === "mission_note" ? p.source.quote : "";
+}

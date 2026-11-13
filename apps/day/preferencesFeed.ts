@@ -61,6 +61,12 @@ export type SaveResult = {
 	saved: ProjectPreferences | null;
 };
 
+/** One page of saved revisions, newest first. `before` asks for the next older page; null when none is left. */
+export type HistoryPage = { revisions: ProjectPreferences[]; more: boolean; before: number | null };
+
+/** A history page, or why none could be read. A failed read is never an empty history. */
+export type HistoryRead = { ok: true; page: HistoryPage } | { ok: false; reason: string };
+
 /** The preferences' source. The connected window asks its root; the mock window has a script. */
 export interface PreferencesSource {
 	view(): PreferencesView;
@@ -71,6 +77,8 @@ export interface PreferencesSource {
 	save(intent: SaveIntent): Promise<SaveResult>;
 	/** Reads one unsettled write's saved receipt. Never sends it again. */
 	check(operationId: string): Promise<SaveResult>;
+	/** Reads saved revisions older than `before` (from the newest, without it). Passive. */
+	history(before?: number): Promise<HistoryRead>;
 	dispose(): void;
 }
 
@@ -101,6 +109,21 @@ export function preferencesReason(refusal: Refusal): string {
 			return "Pilot's service answered in a way this app does not understand.";
 		default:
 			return "Pilot could not read this project's preferences.";
+	}
+}
+
+/** Why the history could not be read. It is never the same as having none. */
+export function historyReason(refusal: Refusal): string {
+	switch (refusal) {
+		case "offline":
+			return "Pilot could not reach its service.";
+		case "denied":
+		case "unavailable":
+			return "This Pilot service cannot show preference history here yet.";
+		case "invalid":
+			return "Pilot's service answered in a way this app does not understand.";
+		default:
+			return "Pilot could not read this project's preference history.";
 	}
 }
 
@@ -165,6 +188,24 @@ export function preferencesOf(x: unknown, project: string): ProjectPreferences |
 
 /** The root's read: the project it chose, its name and the list. */
 type Snapshot = { version: 1; projectId: string; projectName: string; preferences: ProjectPreferences };
+
+/** A history page for `project`, checked again: older than `before`, newest first. Else null. */
+export function historyOf(x: unknown, project: string, before?: number): HistoryPage | null {
+	const h = x as { projectId?: unknown; revisions?: unknown; more?: unknown; before?: unknown } | null;
+	if (!h || typeof h !== "object" || h.projectId !== project || !Array.isArray(h.revisions)) return null;
+	if (typeof h.more !== "boolean" || h.revisions.length > 20) return null;
+	const revisions: ProjectPreferences[] = [];
+	let previous = before ?? Number.MAX_SAFE_INTEGER;
+	for (const raw of h.revisions) {
+		const r = preferencesOf(raw, project);
+		if (!r || r.revision <= 0 || r.revision >= previous) return null;
+		previous = r.revision;
+		revisions.push(r);
+	}
+	const next = h.more && typeof h.before === "number" ? h.before : null;
+	if (h.more && next !== previous) return null;
+	return { revisions, more: h.more, before: next };
+}
 
 function snapshotOf(x: unknown): Snapshot | null {
 	const s = x as Snapshot | null;
@@ -388,6 +429,15 @@ export class ConnectedPreferences implements PreferencesSource {
 			result.message = "Pilot's service has no result for it yet. Nothing was sent again.";
 		}
 		return result;
+	}
+
+	async history(before?: number): Promise<HistoryRead> {
+		const project = this.#snapshot?.projectId ?? "";
+		if (!project) return { ok: false, reason: "Pilot has not read this project's preferences yet." };
+		const r = await call<unknown>(this.#window, "day.preferences.history", before === undefined ? {} : { before });
+		if (!r.ok) return { ok: false, reason: historyReason(r.refusal) };
+		const page = historyOf(r.snapshot, project, before);
+		return page ? { ok: true, page } : { ok: false, reason: historyReason("invalid") };
 	}
 
 	dispose(): void {
