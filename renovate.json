@@ -82,6 +82,9 @@
 		}
 	],
 	"skipArtifactsUpdate": false,
+	"lockFileMaintenance": {
+		"enabled": true
+	},
 	"statusCheckWhen": {
 		"artifactError": "always"
 	}

@@ -23,8 +23,11 @@ no longer carries an extension patch; these APIs are maintained upstream.
 Cargo discovers the desktop workspace (`apps/desktop/Cargo.toml`), its
 `visual-worker` member and the independent `updater` workspace. The desktop and
 updater each retain their own committed `Cargo.lock`. Ordinary exact dependency
-requirements remain exact when updated; this change upgrades no dependencies or
-lockfiles and does not enable lockfile maintenance.
+requirements remain exact when updated. Native artifact generation keeps
+`Cargo.lock` and `pnpm-lock.yaml` in sync with manifest updates. Lockfile
+maintenance also refreshes locked versions without requiring manifest changes,
+using Renovate's default weekly schedule (before 04:00 on Monday, UTC).
+Maintenance PRs require review, just like dependency updates.
 
 Intentional exceptions:
 

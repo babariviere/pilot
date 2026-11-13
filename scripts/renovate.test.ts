@@ -21,6 +21,13 @@ test("Renovate uses native npm Git updates with pnpm artifact generation", () =>
 	assert.equal(extensions.enabled, true, "upstream includes the embedding and lifecycle APIs");
 });
 
+test("Renovate refreshes Cargo and pnpm lockfiles even without manifest updates", () => {
+	assert.deepEqual(config.enabledManagers, ["npm", "cargo"]);
+	assert.deepEqual(config.lockFileMaintenance, { enabled: true });
+	assert.equal(config.skipArtifactsUpdate, false);
+	assert.equal(config.automerge, false);
+});
+
 test("the compatible bundled pin matches the lockfile's specifier and resolution", () => {
 	const manifest = JSON.parse(readFileSync(new URL("../packages/kernel/package.json", import.meta.url), "utf8"));
 	const value = manifest.dependencies[name];
