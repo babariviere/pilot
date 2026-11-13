@@ -28,6 +28,7 @@ Docs to use when the task touches them:
 
 ## Working conventions
 
+- For code review, read [CODING_STANDARDS.md](CODING_STANDARDS.md).
 - TypeScript, ESM, `.ts` import extensions, strict mode. Node 24+.
 - The Harness owns history and the model loop. The native SDK session never runs its own loop.
 - Native tools are replay-unsafe: a crash during a tool yields an interrupted result.
