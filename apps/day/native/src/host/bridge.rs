@@ -135,6 +135,10 @@ async fn run(
     call.command
         .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
     shared.open()?;
+    if let Command::TodayScope(request) = &call.command {
+        let snapshot = super::today_scope::read(t, journal, shared, request, &call.gate).await?;
+        return Ok(json!({"snapshot":snapshot,"outcome":null}));
+    }
     if matches!(call.command, Command::WindowRead) {
         // One passive capture from this exact source, not an update receipt or
         // authority to replay anything. Recheck the selected home/project first.
@@ -245,6 +249,7 @@ async fn run(
     let mut value = Value::Null;
     let mut enrollment = None;
     let work = match &call.command {
+        Command::TodayScope(_) => unreachable!("handled scoped Today read"),
         Command::DeliveryArtifact(_) => unreachable!("handled captured artifact read"),
         Command::DeliveryRead(_)
         | Command::DeliverySaved

@@ -344,12 +344,22 @@ pub(super) async fn read(t: &Transport, shared: &Shared, epoch: u64) -> Result<V
 }
 
 async fn read_current(t: &Transport, shared: &Shared, epoch: u64) -> Result<Value, Error> {
+    let mut value = snapshot(t).await?;
+    shared.current(epoch)?;
+    value["canOpenUrl"] = json!(shared.url_opener.is_some());
+    value["epoch"] = json!(epoch);
+    *shared.attention.lock().expect("attention read poisoned") = Some(value.clone());
+    shared.change(|_| ());
+    Ok(value)
+}
+
+/// Passive canonical read, without selecting a page or changing the root's cache.
+pub(super) async fn snapshot(t: &Transport) -> Result<Value, Error> {
     t.gate(false).await?;
     if t.get("/api/hello").await?["capabilities"]["nativeAttention"] != 1 {
         return Err(Error::Unavailable);
     }
     let reply = t.attention_call(&json!({"version":1,"home":home(&t.source),"projectId":t.source.project_id,"kind":"read"}),false).await?;
-    shared.current(epoch)?;
     if reply["ok"] != true
         || reply["value"]["version"] != 1
         || reply["value"]["projectId"] != t.source.project_id
@@ -358,12 +368,7 @@ async fn read_current(t: &Transport, shared: &Shared, epoch: u64) -> Result<Valu
     {
         return Err(Error::Unavailable);
     }
-    let mut value = reply["value"].clone();
-    value["canOpenUrl"] = json!(shared.url_opener.is_some());
-    value["epoch"] = json!(epoch);
-    *shared.attention.lock().expect("attention read poisoned") = Some(value.clone());
-    shared.change(|_| ());
-    Ok(value)
+    Ok(reply["value"].clone())
 }
 
 fn qualifies(request: &Value, read: &Value) -> Result<(), Error> {

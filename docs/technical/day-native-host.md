@@ -52,6 +52,42 @@ The cache is private, byte-limited and replaced atomically after file sync.
 See [Connected Today read refresh](day-read-refresh.md) for notice-race handling,
 stale display data, stable status regions and the deterministic regression loop.
 
+### Today project scope
+
+`day.today.scope` is a passive read on the same native worker and authenticated
+profile. Its exact arguments are `{scope: "all" | projectId, generation: number}`.
+The UI defaults to `all` and increases the generation on **every** read. Admission
+fences an entered older read immediately. The host also checks the invalidation
+epoch and re-reads the complete configured project inventory before replying.
+A timeout, removed project, changed configuration or late reply refuses the read,
+not an empty dashboard. Scope never changes the root's source or any draft,
+selects a model, sends user input, admits work or supplies a New default.
+
+The snapshot echoes `scope` and `generation`. `projects` contains each configured
+project's `id`, `name`, `selected`, `observedAt`, `currentness`, `needsYou` and section
+errors. Only selected projects include `today`, `planning`, `intake` and `results`.
+Projected rows carry `projectId` and `projectName`. A temporary transport view shares
+the pinned client/profile/port/home; it uses each canonical service's existing
+project, owner and membership checks. It never opens another host or daemon.
+The read grants no action authority (`canAct: false`); existing root-bound action
+and detail feeds are not retargeted by it.
+
+`needsYou` and `outsideNeedsYou` have `{count, complete}`. Count is `null` when the
+attention, host-problem or planning read is unavailable/incomplete, or the update
+stream is disconnected. Known counts include question/action cards (including
+saved unconfirmed operations), distinct host problems, and planning interviews
+or plan reviews needing answers. A question's matching host ask is counted once.
+Outside projects expose counts, not hidden section content. Unsent local words
+not yet saved remain the UI's responsibility; this read cannot infer them.
+
+`catalogComplete` only describes configured projects. Overall `complete` remains
+false: `results` reuses only saved verification subjects and acknowledged native
+starts, at most 20 per project, and explicitly says it is **not all delivered work**.
+An empty results list or `today.done` is not proof that nothing awaits checking.
+The native host does not yet have a complete delivery or Coming up inventory.
+No live integrations, source polling, provider calls or credential exposure are
+added. The UI owns the saved per-window scope and rejects late replies too.
+
 ## Controls and recovery
 
 One native worker serializes commands. Each new explicit intent binds the shown

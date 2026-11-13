@@ -20,6 +20,7 @@ pub mod official_update;
 pub(crate) mod plan_sources;
 mod planning;
 pub mod ritual;
+pub(crate) mod today_scope;
 mod transport;
 pub mod update_loss;
 pub mod updates;
@@ -279,6 +280,16 @@ impl NativeHost {
         gate: Arc<Mutex<crate::bridge::Gate>>,
         reply: Box<dyn FnOnce(Result<serde_json::Value, Error>) + Send>,
     ) {
+        if let crate::bridge::Command::TodayScope(request) = &command {
+            let selection = {
+                let mut gate = gate.lock().expect("bridge gate poisoned");
+                command.admit(&gate).and_then(|_| request.select(&mut gate))
+            };
+            if let Err(error) = selection {
+                reply(Err(error));
+                return;
+            }
+        }
         let call = bridge::Call {
             command,
             window,

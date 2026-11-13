@@ -36,6 +36,7 @@ pub const METHODS: &[&str] = &[
     "day.delivery.reopen",
     "day.delivery.check",
     "day.today.read",
+    "day.today.scope",
     "day.mission.read",
     "day.mission.pause",
     "day.mission.resume",
@@ -92,6 +93,7 @@ pub fn restrict(mut bundle: nsh_engine::Bundle) -> Result<nsh_engine::Bundle, Er
 
 #[derive(Default)]
 pub(crate) struct Gate {
+    pub today_scope: Option<(u64, String)>,
     pub require_saved_view: bool,
     pub update_requested: Option<String>,
     pub update_app: bool,
@@ -172,6 +174,7 @@ struct Envelope {
 }
 
 pub(crate) enum Command {
+    TodayScope(crate::host::today_scope::Request),
     Projects,
     ChatSelect(crate::host::new_chat::Select),
     ChatCreate(crate::host::new_chat::Create),
@@ -437,6 +440,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 C::UpdateRestored(r)
             }
         }
+        "day.today.scope" => {
+            let r: crate::host::today_scope::Request = exact(args)?;
+            r.validate()?;
+            C::TodayScope(r)
+        }
         "day.today.read"
         | "day.window.read"
         | "day.plan.prepare"
@@ -611,6 +619,7 @@ impl Command {
                 Self::Save { .. }
                     | Self::Draft(_)
                     | Self::Today
+                    | Self::TodayScope(_)
                     | Self::WindowRead
                     | Self::Projects
                     | Self::IntakeRead
@@ -673,7 +682,7 @@ impl Bridge {
                         *sequence = gate.save_sequence;
                     }
                     command.admit(&gate)?;
-                    if matches!(command, Command::Today) {
+                    if matches!(command, Command::Today | Command::TodayScope(_)) {
                         gate.notice_pending = false;
                     }
                     if matches!(command, Command::Save { .. } | Command::Draft(_)) {
@@ -1004,7 +1013,14 @@ mod tests {
 
     #[test]
     fn inventory_snapshot_obeys_the_passive_read_close_fence() {
-        for command in [Command::PlanningInventorySnapshot, Command::WindowRead] {
+        for command in [
+            Command::PlanningInventorySnapshot,
+            Command::WindowRead,
+            Command::TodayScope(crate::host::today_scope::Request {
+                scope: "all".into(),
+                generation: 1,
+            }),
+        ] {
             let mut gate = Gate {
                 flushing: true,
                 ..Gate::default()

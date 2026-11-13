@@ -136,7 +136,7 @@ async fn read_linear(t: &Transport) -> Result<Value, Error> {
     Ok(v)
 }
 
-async fn read(t: &Transport) -> Result<Value, Error> {
+pub(super) async fn read(t: &Transport) -> Result<Value, Error> {
     t.gate(false).await?;
     let mut v = t
         .get(&format!("/api/projects/{}/intake", t.source.project_id))

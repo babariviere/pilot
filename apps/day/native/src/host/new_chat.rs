@@ -68,7 +68,7 @@ fn operations(t: &Transport, journal: &Journal) -> Vec<Value> {
                 "receipt":r.receipt})
         }).collect()
 }
-async fn inventory(t: &Transport) -> Result<Value, Error> {
+pub(super) async fn inventory(t: &Transport) -> Result<Value, Error> {
     // This profile identity is independent of the old selected project's existence.
     t.profile_gate().await?;
     let v = t.get("/api/native-projects").await?;
