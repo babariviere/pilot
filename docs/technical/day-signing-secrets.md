@@ -23,17 +23,27 @@ dedicated `DAY_UPDATER_PUBLIC_KEY` repository variable. After the local-material
 audit, the user confirmed no existing PEM exists and explicitly authorized a
 new key. This does not rotate or overwrite GPUI's updater keys or variables.
 The Day private PEM is age-encrypted in `apps/day/fnox.toml`.
-Use a trusted local terminal or process stdin, never a chat or command argument:
+Provisioning is already complete. For a separately authorized future reprovision,
+use a trusted terminal, stdin and the explicit repository. Do not regenerate or
+overwrite keys just to run these commands:
 
 ```sh
-fnox --no-daemon --non-interactive -c apps/day/fnox.toml set DAY_UPDATER_PRIVATE_KEY --provider age < /secure/day-updater.pem
-python3 apps/day/scripts/provision-signing.py --write
+set -euo pipefail
+test "$(gh repo view babariviere/pilot --json nameWithOwner --jq .nameWithOwner)" = babariviere/pilot
+key=$(fnox --no-daemon --non-interactive -c apps/day/fnox.toml get DAY_UPDATER_PRIVATE_KEY)
+test -n "$key"
+printf '%s' "$key" | gh secret set DAY_UPDATER_PRIVATE_KEY --repo babariviere/pilot
+unset key
 ```
 
 fnox writes encrypted ciphertext, not the plaintext PEM, to its configuration.
-Review that only age ciphertext was added before committing. The script checks
-repository access and the derived public key before sending plaintext directly
-to `gh secret set` over stdin. It logs only a successful write acknowledgment.
+Use `fnox set --provider age` over stdin only when an authorized import is needed.
+Review that only age ciphertext was added before committing. Before writing,
+verify the locally derived public key matches `DAY_UPDATER_PUBLIC_KEY`, using
+the direct OpenSSL check in the readiness workflow. The pipeline sends plaintext
+directly to `gh secret set` over stdin, without a custom provisioning wrapper.
+The non-exported shell variable prevents a failed decryption from starting an
+empty-key write. Keep shell tracing off; unset the variable when finished.
 An interrupted, timed-out or unacknowledged write is **Unknown**. Never retry it
 automatically or claim success from a later secret-name listing.
 
@@ -45,7 +55,7 @@ does not need the age identity or access to other encrypted local secrets.
 ## Qualification boundary
 
 `.github/workflows/day-signing-readiness.yml` is manual, main-only, read-only,
-and uses immutable source with no persisted checkout credentials. No PR,
+and runs only direct OpenSSL commands, without checkout or repository code. No PR,
 push, tag or reusable-workflow caller receives this secret through this path.
 It verifies the key pair without signing anything. It is not dispatched by
 provisioning. Existing unsigned `day-qualification.yml` remains secret-free.

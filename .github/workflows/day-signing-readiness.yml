@@ -4,8 +4,7 @@ name: Day signing readiness (no signing)
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   readiness:
@@ -13,28 +12,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Check credential handoff guards without secrets
-        run: PYTHONDONTWRITEBYTECODE=1 python3 apps/day/scripts/test_provision_signing.py
       - name: Verify Day updater credential without signing
         env:
           DAY_UPDATER_PRIVATE_KEY: ${{ secrets.DAY_UPDATER_PRIVATE_KEY }}
           PUBLIC_KEY: ${{ vars.DAY_UPDATER_PUBLIC_KEY }}
         run: |
-          python3 - <<'PY'
-          import importlib.util
-          import os
-          import sys
-          spec = importlib.util.spec_from_file_location('signing', 'apps/day/scripts/provision-signing.py')
-          module = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(module)
-          try:
-              module.verify_key(os.environ['DAY_UPDATER_PRIVATE_KEY'].encode(), os.environ['PUBLIC_KEY'].encode())
-          except Exception:
-              sys.exit('Day signing credential missing, invalid or mismatched. No secret values logged.')
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('Day updater key matches configured public key. No bundle signing, notarization, release or native acceptance performed.\n')
-          PY
+          set -euo pipefail
+          test -n "$DAY_UPDATER_PRIVATE_KEY" && test -n "$PUBLIC_KEY"
+          # Public DER only. Exact Ed25519 prefix and 32-byte key, not a suffix match.
+          actual=$(printf '%s' "$DAY_UPDATER_PRIVATE_KEY" | openssl pkey -pubout -outform DER 2>/dev/null | od -An -v -tx1 | tr -d ' \n')
+          expected=$(printf '%s' "$PUBLIC_KEY" | openssl base64 -d -A | od -An -v -tx1 | tr -d ' \n')
+          [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+          test "$actual" = "302a300506032b6570032100$expected"
+          echo 'Day updater key matches configured public key. No bundle signing, notarization, release or native acceptance performed.' >> "$GITHUB_STEP_SUMMARY"
