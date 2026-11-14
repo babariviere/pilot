@@ -1,6 +1,6 @@
 // Feedback attention in Today's New section. Reading and Later send no work intent.
 import { Keyboard, signal, Text, View } from "nsh";
-import { Collapsible } from "nsh/base";
+import { Button, Collapsible } from "nsh/base";
 import type { Day } from "./day";
 import { FeedbackRow } from "./FeedbackRow";
 import type { FeedbackItem } from "./feedbackFeed";
@@ -59,18 +59,20 @@ export function FeedbackIncoming(props: { day: Day }) {
 					>
 						<View class="flex-row items-center gap-2.5 py-2.5">
 							<Mark kind={questionOf(stepsOf(item()).triage) ? "needs" : "new"} />
-							<View class="flex-1">
-								<Action
-									label={clip(item().text, 100)}
+							<View class="min-w-0 flex-1">
+								<Button
 									testID={`feedback-new-${item().id}`}
 									accessibilityLabel={`${clip(item().text, 100)}. Feedback. ${questionOf(stepsOf(item()).triage) ? "The triage asks" : "Triage finished"}. Show or hide details.`}
+									class="min-h-8 flex-row items-center rounded-lg px-3 py-1 transition duration-150 hover:bg-accent active:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
 									onPress={() => {
 										Keyboard.dismiss();
 										const opening = open() !== item().id;
 										open.set(opening ? item().id : null);
 										if (opening) void mirror.source.readProjects();
 									}}
-								/>
+								>
+									<Text class="min-w-0 shrink text-sm text-muted-foreground">{clip(item().text, 100)}</Text>
+								</Button>
 								<Text class="text-xs text-faint">
 									{questionOf(stepsOf(item()).triage)
 										? "Feedback · The triage asks"
@@ -93,7 +95,7 @@ export function FeedbackIncoming(props: { day: Day }) {
 						<Each of={kept()} key={(i) => i.id}>
 							{(item) => (
 								<View class="flex-row items-center gap-2.5 border-t border-border py-2.5">
-									<Text class="flex-1 text-sm text-foreground">{clip(item().text, 100)}</Text>
+									<Text class="min-w-0 flex-1 text-sm text-foreground">{clip(item().text, 100)}</Text>
 									<Action
 										label="Bring back"
 										testID={`feedback-bring-back-${item().id}`}
