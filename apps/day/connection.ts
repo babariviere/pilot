@@ -87,8 +87,10 @@ let ritualFeed: ConnectedRituals | null = null;
 let todayFeed: ConnectedToday | null = null;
 let planFeed: ConnectedPlans | null = null;
 let pendingFlush: number | null = null;
-/** A root change that arrived while the window was opening. */
-let changedWhileOpening = false;
+/** The next automatic read after a passing failure, and its delay. */
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
+let retryDelay = 1000;
+const RETRY_MAX = 30_000;
 let scopeReading = false;
 let scopeAgain = false;
 
@@ -158,15 +160,7 @@ function flushPending() {
 // proof yet: keep the newest flush until the feeds/forms exist, never ACK empty.
 if (window) {
 	host.on("day.changed", (payload) => {
-		if (!forWindow(payload, window)) return;
-		// The root read its service again (for example, it started or came
-		// back), so a first read that could not reach it is tried once more.
-		// The root sends one change until Today is read again, so one that
-		// arrives while opening is kept for when the outcome is known.
-		const now = connection();
-		if (now.state === "opening") changedWhileOpening = true;
-		else if (now.state === "none" && now.canRead) void readAgain();
-		else refresh();
+		if (forWindow(payload, window)) refresh();
 	});
 	host.on("day.flush", (payload) => {
 		if (!forWindow(payload, window) || typeof payload.generation !== "number") return;
@@ -285,8 +279,14 @@ async function connect() {
 		if (!current()) return;
 		if (!saved.ok) {
 			// Do not admit forms or a close capture that could overwrite a draft
-			// whose saved window we could not read. Recovery is a fresh open.
-			connection.set({ state: "none", reason: unreadable(saved.refusal), canRead: false });
+			// whose saved window we could not read. Reading again opens afresh and
+			// reads the saved window first. A service that is still starting
+			// refuses for a moment, so a passing refusal can be read again.
+			connection.set({
+				state: "none",
+				reason: unreadable(saved.refusal),
+				canRead: !["denied", "identity", "closed", "busy"].includes(saved.refusal),
+			});
 			return;
 		}
 		if (saved.snapshot) restoreView(saved.snapshot, undefined, day.today(), !!day.linear, !!day.preferences);
@@ -296,6 +296,27 @@ async function connect() {
 	// Changes received while opening are not lost: read the cached views once
 	// more after the feeds exist. This reads no service.
 	refresh();
+}
+
+/**
+ * A window that could not open for a passing reason (its service is down or
+ * still starting) reads again on its own after 1 s, then 2, 4… up to 30 s,
+ * like the root's own reconnect. It stops once the window opens. Changes from
+ * the root are not used for this: the window's own startup reads cause them,
+ * and a service that becomes ready may send none.
+ */
+function retryLater() {
+	const now = connection();
+	if (now.state !== "none" || !now.canRead) {
+		retryDelay = 1000;
+		return;
+	}
+	if (retryTimer !== undefined) return;
+	retryTimer = setTimeout(() => {
+		retryTimer = undefined;
+		void read();
+	}, retryDelay);
+	retryDelay = Math.min(retryDelay * 2, RETRY_MAX);
 }
 
 function read(): Promise<void> {
@@ -314,17 +335,19 @@ function read(): Promise<void> {
 			opening = null;
 			// A close asked for while opening is answered once the outcome is known.
 			flushPending();
-			const changed = changedWhileOpening;
-			changedWhileOpening = false;
-			if (changed) void readAgain();
+			retryLater();
 		});
 	return opening;
 }
 
-/** Explicit recovery of the failed first cached read, not a startup retry. */
+/** Read Again: reads at once and resets the automatic delay. */
 export function readAgain(): Promise<void> {
 	const now = connection();
-	return now.state === "none" && now.canRead ? read() : (opening ?? Promise.resolve());
+	if (now.state !== "none" || !now.canRead) return opening ?? Promise.resolve();
+	if (retryTimer !== undefined) clearTimeout(retryTimer);
+	retryTimer = undefined;
+	retryDelay = 1000;
+	return read();
 }
 
 void read();

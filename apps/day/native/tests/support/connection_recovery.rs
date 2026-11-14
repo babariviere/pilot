@@ -81,17 +81,16 @@ fn no_effects(root: &FakeRoot) {
 }
 
 #[test]
-fn failed_first_read_reads_again_on_a_change_or_explicitly_without_repeating_startup() {
+fn failed_first_read_reads_again_after_a_delay_or_explicitly_without_repeating_startup() {
     let entry = recovery_entry();
     let root = FakeRoot::new();
     root.refuse("day.today.read", "offline");
     let mut app = open_on(&entry, root.channel.clone());
     wait(&mut app, "id:connection-read");
     assert!(app.shows("Pilot could not reach its service. Nothing is shown rather than a guess."));
-    // A change from the root (its service started or came back) reads once
-    // more. Still refused, the window says so again.
-    root.changed();
-    until(&mut app, "a change reads again", || {
+    // A passing failure reads again on its own after a short delay. Still
+    // refused, the window says so again.
+    until(&mut app, "a delayed read", || {
         root.count("day.today.read") == 2
     });
     wait(&mut app, "id:connection-read");
@@ -163,15 +162,47 @@ fn failed_first_read_reads_again_on_a_change_or_explicitly_without_repeating_sta
 }
 
 #[test]
-fn a_change_while_the_first_read_fails_reads_again_once_it_has_failed() {
+fn a_saved_view_refused_while_the_service_starts_is_read_again_without_a_loop() {
+    let entry = recovery_entry();
+    let root = FakeRoot::new();
+    root.reply("day.plan.inventory", inventory(vec![]));
+    root.refuse("day.window.read", "unavailable");
+    let mut app = open_on(&entry, root.channel.clone());
+    wait(
+        &mut app,
+        "Pilot could not read its service. Nothing is shown rather than a guess.",
+    );
+    assert!(
+        has(&app, "id:connection-read"),
+        "a passing refusal can be read again"
+    );
+    // The window's own startup reads make the root send changes; they never
+    // start another read. Only the delayed retry does.
+    app.wait(Duration::from_millis(500)).unwrap();
+    assert_eq!(root.count("day.window.read"), 1, "no read loop");
+    // The service finished starting: the delayed read opens the window, and
+    // the saved window is read before anything opens.
+    root.reply("day.window.read", Value::Null);
+    wait(&mut app, "role:button[New]");
+    assert_eq!(
+        root.count("day.attention.read"),
+        1,
+        "startup is not repeated"
+    );
+    no_effects(&root);
+    drop(app);
+    std::fs::remove_dir_all(entry.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_first_read_that_fails_while_opening_is_read_again_after_a_delay() {
     let entry = recovery_entry();
     let root = FakeRoot::new();
     root.reply("day.plan.inventory", inventory(vec![]));
     let held = hold_next(&root);
     let mut app = open_on(&entry, root.channel.clone());
     until(&mut app, "first read", || held.lock().unwrap().is_some());
-    // The root's one change arrives while the window is still opening; it
-    // sends no other until Today is read again.
+    // A change while opening does not matter: the delayed read recovers.
     root.changed();
     app.wait(Duration::from_millis(100)).unwrap();
     held.lock()
@@ -192,7 +223,7 @@ fn a_change_while_the_first_read_fails_reads_again_once_it_has_failed() {
 }
 
 #[test]
-fn a_window_whose_first_read_failed_closes_with_its_saved_view_and_reads_again_on_a_change() {
+fn a_window_whose_first_read_failed_closes_with_its_saved_view_and_reads_again_later() {
     let root = FakeRoot::new();
     root.refuse("day.today.read", "offline");
     // The window's saved view holds an unsent goal from an earlier session.
@@ -217,12 +248,11 @@ fn a_window_whose_first_read_failed_closes_with_its_saved_view_and_reads_again_o
     // The saved view comes back unchanged (numbers may differ only as 0 / 0.0).
     assert_eq!(ack["view"]["place"], "new");
     assert_eq!(ack["view"]["goal"], saved.goal.as_str());
-    // The service came back: the root's next change reads again by itself.
+    // The service came back: the delayed read opens the window by itself.
     root.reply(
         "day.today.read",
         serde_json::to_value(Desk::new(Scenario::Quiet).today()).unwrap(),
     );
-    root.changed();
     // It opens where the saved view was: New, with the kept goal.
     wait(&mut app, "What do you want done?");
     assert!(!app.shows(failed));
