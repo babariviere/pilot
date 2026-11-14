@@ -72,6 +72,17 @@ fn summary(a: &Value, project: &str) -> Option<Value> {
     )
 }
 
+/// The project's rows. A row that is off (for example an old artifact saved
+/// without its project) is left out; it never hides the others.
+fn project_rows(all: &Value, project: &str) -> Result<Vec<Value>, Error> {
+    Ok(all
+        .as_array()
+        .ok_or(Error::Invalid)?
+        .iter()
+        .filter_map(|a| summary(a, project))
+        .collect())
+}
+
 /// The project's artifacts, newest first, or one mission's linked artifacts
 /// with their task. A mission link without a pin names the current revision,
 /// read now; a link whose chat is not in this project has no revision.
@@ -80,12 +91,7 @@ pub(super) async fn list(t: &Transport, r: &List) -> Result<Value, Error> {
     t.gate(false).await?;
     let project = &t.source.project()?.project_id;
     let all = t.get(&format!("/api/projects/{project}/artifacts")).await?;
-    let all: Vec<Value> = all
-        .as_array()
-        .ok_or(Error::Invalid)?
-        .iter()
-        .map(|a| summary(a, project).ok_or(Error::Invalid))
-        .collect::<Result<_, _>>()?;
+    let all = project_rows(&all, project)?;
     let mut rows = match &r.mission_id {
         None => all,
         Some(mission) => {
@@ -187,6 +193,12 @@ mod tests {
             changed[field] = value;
             assert!(summary(&changed, "p").is_none(), "{field}");
         }
+        // One row without its project is left out; the others still show.
+        let mut legacy = a.clone();
+        legacy["projectId"] = Value::Null;
+        let rows = project_rows(&json!([a, legacy]), "p").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(project_rows(&json!({}), "p").is_err());
         assert!(
             List {
                 mission_id: Some("a/b".into())
