@@ -744,7 +744,11 @@ export class ConnectedPlans implements PlanningFeed {
 		const questions = iv.questions.map((q) =>
 			this.#saving.has(`${iv.id}/${q.id}`) ? { ...q, saving: "sending" as const } : q,
 		);
-		return { ...page, interview: { ...iv, questions } };
+		// A save this window still waits for is on its way, not unconfirmed. Counting it
+		// would fix the interview during every save: the field turned read-only, losing
+		// focus, and the interview jumped to its review and back. A lost save stays unconfirmed.
+		const sending = [...this.#saving].some((key) => key.startsWith(`${iv.id}/`));
+		return { ...page, interview: { ...iv, questions, unconfirmed: iv.unconfirmed && !sending } };
 	}
 
 	/** Reads the setup for New again: passive, it creates nothing. */

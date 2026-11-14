@@ -712,6 +712,8 @@ struct FakeRoot {
     pending: Arc<Mutex<bool>>,
     hold_snapshot: Arc<Mutex<bool>>,
     held_snapshot: Arc<Mutex<Option<(HostCall, Value)>>>,
+    hold_save: Arc<Mutex<bool>>,
+    held_save: Arc<Mutex<Option<(HostCall, Value)>>>,
 }
 fn answer(snapshot: Value) -> Value {
     json!({"version":1,"value":{"snapshot":snapshot,"outcome":null}})
@@ -738,6 +740,8 @@ impl FakeRoot {
         let pending: Arc<Mutex<bool>> = Arc::default();
         let hold_snapshot: Arc<Mutex<bool>> = Arc::default();
         let held_snapshot: Arc<Mutex<Option<(HostCall, Value)>>> = Arc::default();
+        let hold_save: Arc<Mutex<bool>> = Arc::default();
+        let held_save: Arc<Mutex<Option<(HostCall, Value)>>> = Arc::default();
         for &name in METHODS {
             let (calls, replies, by_mission, pending, events) = (
                 calls.clone(),
@@ -747,6 +751,7 @@ impl FakeRoot {
                 channel.clone(),
             );
             let (hold_snapshot, held_snapshot) = (hold_snapshot.clone(), held_snapshot.clone());
+            let (hold_save, held_save) = (hold_save.clone(), held_save.clone());
             channel.handle(name, move |call: HostCall| {
                 let data = call.data().clone();
                 calls.lock().unwrap().push((name.to_owned(), data.clone()));
@@ -793,6 +798,9 @@ impl FakeRoot {
                     && std::mem::take(&mut *hold_snapshot.lock().unwrap())
                 {
                     *held_snapshot.lock().unwrap() = Some((call, reply));
+                } else if name == "day.plan.save" && std::mem::take(&mut *hold_save.lock().unwrap())
+                {
+                    *held_save.lock().unwrap() = Some((call, reply));
                 } else {
                     call.resolve(reply);
                 }
@@ -806,6 +814,8 @@ impl FakeRoot {
             pending,
             hold_snapshot,
             held_snapshot,
+            hold_save,
+            held_save,
         };
         root.reply(
             "day.today.read",
@@ -839,6 +849,23 @@ impl FakeRoot {
             .lock()
             .unwrap()
             .insert(name.into(), json!({"version":1,"error":error}));
+    }
+    /// Keeps the next `day.plan.save` waiting until `release_save`.
+    fn hold_save(&self) {
+        *self.hold_save.lock().unwrap() = true;
+    }
+    /// Answers the held save with what `day.plan.save` replies now.
+    fn release_save(&self) {
+        if let Some((call, _)) = self.held_save.lock().unwrap().take() {
+            let reply = self
+                .replies
+                .lock()
+                .unwrap()
+                .get("day.plan.save")
+                .cloned()
+                .unwrap();
+            call.resolve(reply);
+        }
     }
     fn count(&self, name: &str) -> usize {
         self.calls
@@ -1364,6 +1391,65 @@ fn an_unknown_start_without_a_new_page_stays_check_only_after_navigation() {
     wait(&mut app, "role:button[Check Start]");
     assert!(!has(&app, "role:button[Start work]"));
     assert_eq!(root.count("day.plan.startWork"), 1);
+    drop(app);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+/// A save on its way is not unconfirmed: while the root reads the page again
+/// during the save, the question stays open and editable instead of jumping
+/// to the review and back (which flickered and took the field's focus).
+#[test]
+fn an_answer_on_its_way_keeps_its_question_open_while_the_page_is_read_again() {
+    let entry = entry();
+    let root = FakeRoot::new();
+    let (first, identity) = export_page();
+    root.reply(
+        "day.plan.inventory",
+        inventory(vec![plan_row(
+            "export",
+            "Export a chat as Markdown",
+            PlanStage::Questions,
+            identity,
+        )]),
+    );
+    root.reply_for("day.plan.read", "export", first.clone());
+    root.reply("day.plan.save", first.clone());
+    // While the save is on its way, the root's page lists it as not settled.
+    let mut saving = first.clone();
+    saving["interview"]["unconfirmed"] = json!(true);
+    root.reply("day.plan.snapshot", saving);
+    let mut app = open_on(&entry, root.channel.clone());
+    wait(&mut app, "id:plan-export");
+    app.press("id:plan-export").unwrap();
+    wait(&mut app, "id:interview");
+    app.press("id:own-what").unwrap();
+    root.hold_save();
+    app.type_text("id:answer-what", "Only the messages")
+        .unwrap();
+    app.wait_until("the save on its way", WAIT, |_| {
+        root.count("day.plan.save") == 1
+    })
+    .unwrap();
+    let reads = root.count("day.plan.snapshot");
+    let question = "What should one export include?";
+    assert!(app.shows(question) && app.shows("Your own words"));
+    root.changed();
+    // Only a call count changes here, so wait by time, not for a new screen.
+    let end = std::time::Instant::now() + WAIT;
+    while root.count("day.plan.snapshot") <= reads {
+        assert!(
+            std::time::Instant::now() < end,
+            "the page was never read again"
+        );
+        app.wait(Duration::from_millis(25)).unwrap();
+    }
+    app.wait(Duration::from_millis(300)).unwrap();
+    assert!(
+        app.shows(question) && app.shows("Your own words"),
+        "the question stays open: {:?}",
+        app.screen().texts()
+    );
+    root.release_save();
     drop(app);
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }
