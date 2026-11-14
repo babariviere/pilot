@@ -4,12 +4,14 @@
 // lost answer stays Unknown until Check reads it; Check never sends again.
 import { mount, Scroll, signal, Text, View } from "nsh";
 import type { Request } from "pilot-day/native";
+import type { Refusal } from "./bridge";
 import { Incoming } from "./Incoming";
 import {
 	type IntakeOp,
 	type IntakeResult,
 	type IntakeSource,
 	type IntakeView,
+	intakeReason,
 	mirrorIntake,
 	type StartIntent,
 	type Triage,
@@ -47,7 +49,7 @@ const sending = new Set<string>();
 const counts = signal({ sends: 0, checks: 0, reads: 0 });
 const lose = signal(false);
 const hold = signal(false);
-const unreadable = signal(false);
+const unreadable = signal<Refusal | null>(null);
 const trouble = signal(false);
 const incomplete = signal(false);
 const changeOnSend = signal(false);
@@ -81,7 +83,7 @@ function view(): IntakeView {
 	if (!readOnce || unreadable()) {
 		return {
 			availability: readOnce ? "unavailable" : "reading",
-			reason: readOnce ? "Pilot could not reach its service." : "",
+			reason: readOnce ? intakeReason(unreadable() ?? "offline") : "",
 			contextDigest: "",
 			projectId: "",
 			intake: { watched: false, sources: [], requests: [], trouble: [], more: "" },
@@ -232,6 +234,7 @@ mount(() => (
 		<View class="w-full max-w-2xl self-center gap-6 px-6 py-6">
 			<Incoming day={day} />
 			<Text testID="counts">{`Sends: ${counts().sends} · Checks: ${counts().checks}`}</Text>
+			<Text>{`Reads: ${counts().reads}`}</Text>
 			<View class="flex-row flex-wrap gap-1">
 				<Action label="Lose next answer" onPress={() => lose.set(true)} />
 				<Action label="Hold answers" onPress={() => hold.set(true)} />
@@ -269,14 +272,28 @@ mount(() => (
 				<Action
 					label="Unreadable"
 					onPress={() => {
-						unreadable.set(true);
+						unreadable.set("offline");
 						publish();
 					}}
 				/>
 				<Action
 					label="Readable"
 					onPress={() => {
-						unreadable.set(false);
+						unreadable.set(null);
+						publish();
+					}}
+				/>
+				<Action
+					label="Access denied"
+					onPress={() => {
+						unreadable.set("denied");
+						publish();
+					}}
+				/>
+				<Action
+					label="Service unavailable"
+					onPress={() => {
+						unreadable.set("unavailable");
 						publish();
 					}}
 				/>

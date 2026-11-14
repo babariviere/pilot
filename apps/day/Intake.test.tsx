@@ -1,10 +1,39 @@
 // The New section's writes as a user takes them, on a scripted source with
 // the connected rules (IntakeFixture.tsx). No daemon, provider or storage.
 import { expect, open, test } from "nsh/test";
+import { intakeReason } from "./intakeFeed";
 
 const desktop = { platform: "macos", width: 1100, height: 1000 } as const;
 const NORTHWIND = "Northwind can't export invoices to CSV";
 const STRIPE = "Update the Stripe SDK to v15";
+
+test("intake read failures distinguish denied access from generic unavailability", () => {
+	expect(intakeReason("denied")).toBe("Pilot does not have access to read new requests here.");
+	expect(intakeReason("unavailable")).toBe("Pilot could not read new requests right now.");
+});
+
+for (const [control, reason] of [
+	["Access denied", "Pilot does not have access to read new requests here."],
+	["Service unavailable", "Pilot could not read new requests right now."],
+]) {
+	test(`${control} is not empty; Read again only reads`, async () => {
+		const app = await ready();
+		await app.press(control);
+		await app.waitFor(`Pilot cannot show new requests here. ${reason}`);
+		expect(app.shows("This is not the same as having none.")).toBe(true);
+		expect(app.shows("No new requests. Slack and Linear are quiet.")).toBe(false);
+		expect(app.shows("No new requests in what Pilot read.")).toBe(false);
+		expect(app.shows(NORTHWIND)).toBe(false);
+		await app.waitFor("Reads: 1");
+		await app.press("role:button[Read new requests again. This sends nothing.]");
+		await app.waitFor("Reads: 2");
+		expect(app.shows(`Pilot cannot show new requests here. ${reason}`)).toBe(true);
+		expect(app.shows("Sends: 0 · Checks: 0")).toBe(true);
+		await app.press("Readable");
+		await app.waitFor(NORTHWIND);
+		expect(app.shows("id:incoming-off")).toBe(false);
+	});
+}
 
 async function ready() {
 	const app = await open("./IntakeFixture.tsx", desktop);

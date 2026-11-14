@@ -142,8 +142,9 @@ export function intakeReason(refusal: Refusal): string {
 		case "busy":
 			return "Pilot is closing.";
 		case "denied":
+			return "Pilot does not have access to read new requests here.";
 		case "unavailable":
-			return "This Pilot service cannot show requests here yet.";
+			return "Pilot could not read new requests right now.";
 		case "invalid":
 			return "Pilot's service answered in a way this app does not understand.";
 		default:
