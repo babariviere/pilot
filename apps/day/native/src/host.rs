@@ -247,6 +247,11 @@ enum Work {
         action: crate::model::LifecycleAction,
         check: bool,
     },
+    Rename {
+        mission: String,
+        title: String,
+        check: bool,
+    },
 }
 struct Request {
     epoch: u64,
@@ -633,6 +638,17 @@ impl NativeHost {
         self.request(Work::Lifecycle {
             mission: intent.mission_id,
             action,
+            check: intent.check,
+        })
+    }
+    /// Rename once, or with `check` only read the title again.
+    pub fn rename(
+        &self,
+        intent: crate::model::RenameIntent,
+    ) -> Receiver<Result<IntentOutcome, Error>> {
+        self.request(Work::Rename {
+            mission: intent.mission_id,
+            title: intent.title,
             check: intent.check,
         })
     }
@@ -1462,6 +1478,11 @@ async fn handle(
             action,
             check,
         } => return lifecycle(t, journal, shared, epoch, &mission, action, check).await,
+        Work::Rename {
+            mission,
+            title,
+            check,
+        } => return rename(t, journal, shared, epoch, &mission, &title, check).await,
         Work::StopReplanning { mission, successor } => {
             if !valid_id(&mission) || !valid_id(&successor) {
                 return Err(Error::Invalid);
@@ -1766,6 +1787,80 @@ async fn lifecycle(
         shared.outcome(
             OutcomeStatus::Rejected,
             &format!("The mission is now {status}. Nothing was sent again."),
+        )
+    })
+}
+
+/// Rename a mission once, or only read its title after a lost answer. The
+/// daemon's refusal is shown as it said it; nothing is resent.
+async fn rename(
+    t: &Transport,
+    journal: &mut Journal,
+    shared: &Shared,
+    epoch: u64,
+    mission: &str,
+    title: &str,
+    check: bool,
+) -> Result<IntentOutcome, Error> {
+    if !valid_id(mission) {
+        return Err(Error::Invalid);
+    }
+    let title = match crate::model::mission_title(title) {
+        Ok(title) => title,
+        Err(message) => return Ok(shared.outcome(OutcomeStatus::Rejected, message)),
+    };
+    let now = if check {
+        // Exact title read only. Never sends the rename again.
+        let read = async {
+            t.gate(false).await?;
+            t.mission_title(mission).await
+        }
+        .await;
+        match read {
+            Ok(now) => now,
+            Err(_) => {
+                return Ok(shared.outcome(
+                    OutcomeStatus::Unknown,
+                    "Pilot could not read the mission's title. The outcome is still unknown.",
+                ));
+            }
+        }
+    } else {
+        let listed = {
+            let desk = shared.desk.lock().expect("native Desk poisoned");
+            desk.today().freshness.state == FreshnessState::Live
+                && desk
+                    .native_overview()
+                    .is_some_and(|o| o.dashboard.missions.items.iter().any(|m| m.id == mission))
+        };
+        if !listed {
+            return Ok(shared.outcome(
+                OutcomeStatus::Stale,
+                "This mission changed since you looked. Nothing was sent.",
+            ));
+        }
+        t.gate(false).await?;
+        shared.current(epoch)?;
+        match t.rename(mission, title).await {
+            Ok(Ok(())) => title.to_owned(),
+            Ok(Err(message)) => return Ok(shared.outcome(OutcomeStatus::Rejected, &message)),
+            Err(_) => {
+                return Ok(shared.outcome(
+                    OutcomeStatus::Unknown,
+                    "The answer was lost, so the new title is not confirmed. Check reads the mission again; nothing is sent again.",
+                ));
+            }
+        }
+    };
+    // Read again: the page and Today show the title the service holds.
+    let next = shared.epoch.load(Ordering::SeqCst);
+    let _ = refresh(t, journal, shared, next, Some(mission)).await;
+    Ok(if now == title {
+        shared.outcome(OutcomeStatus::Accepted, "")
+    } else {
+        shared.outcome(
+            OutcomeStatus::Rejected,
+            "Not renamed: the mission keeps its title. Nothing was sent again.",
         )
     })
 }

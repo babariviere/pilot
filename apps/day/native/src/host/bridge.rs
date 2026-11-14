@@ -377,6 +377,11 @@ async fn run(
             action: *action,
             check: r.check,
         }),
+        Command::Rename(r) => Some(Work::Rename {
+            mission: r.mission_id.clone(),
+            title: r.title.clone(),
+            check: r.check,
+        }),
         Command::Plan(id) => Some(Work::ReadPlanning(id.clone())),
         Command::PlanningInventory => Some(Work::PlanningInventory),
         Command::Prepare => Some(Work::PreparePlanning),

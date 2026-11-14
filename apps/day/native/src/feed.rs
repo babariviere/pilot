@@ -13,8 +13,8 @@ use crate::{
     model::{
         ActionAsk, ActionCheck, ActionRef, AnswerRef, AskIntent, CompleteIntent, DecideIntent,
         DecisionRef, Draft, DraftIntent, IntentOutcome, LifecycleAction, LifecycleIntent,
-        MissionPage, MissionRef, OutcomeStatus, PauseIntent, ProgressIntent, ReplyIntent,
-        ResumeIntent, Scenario, StopReplanningIntent, Today,
+        MissionPage, MissionRef, OutcomeStatus, PauseIntent, ProgressIntent, RenameIntent,
+        ReplyIntent, ResumeIntent, Scenario, StopReplanningIntent, Today,
     },
 };
 
@@ -692,6 +692,21 @@ impl TodayFeed {
     /// status again.
     pub async fn reopen(this: Instance<Self>, intent: LifecycleIntent) -> IntentOutcome {
         Self::lifecycle(this, intent, LifecycleAction::Reopen).await
+    }
+
+    /// Renames a mission once. Rust trims the title and refuses an empty or
+    /// too long one before sending. With `check`, only reads the title again
+    /// after a lost answer. A refusal carries the service's own words.
+    pub async fn rename(this: Instance<Self>, intent: RenameIntent) -> IntentOutcome {
+        if let Some(host) = this.with(|f| f.native.clone()) {
+            let result = host.rename(intent);
+            return Self::native_result(host, result).await;
+        }
+        this.with_mut(|feed| {
+            let outcome = feed.desk.rename(&intent);
+            feed.publish();
+            outcome
+        })
     }
 
     /// Runs the update workload: one pulse every `everyMs` (100 when left

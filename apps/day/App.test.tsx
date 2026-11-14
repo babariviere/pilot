@@ -282,7 +282,7 @@ test("an old mission offers a re-plan: New opens with a draft from it and nothin
 	await app.press("id:mission-replan-start");
 	await app.waitFor("id:goal");
 	expect(app.shows("Re-plans “Docs refresh”. That mission stays as it is.")).toBe(true);
-	const draft = app.value("id:goal");
+	const draft = app.value("id:goal") ?? "";
 	for (const text of [
 		"Re-plan the old mission “Docs refresh”",
 		"D1: Plain words only.",
@@ -371,6 +371,87 @@ test("a refused archive shows the service's words and keeps the mission", async 
 	await app.waitFor("A chat archive is already in progress. Wait and review the mission again");
 	expect(app.shows("id:mission-archived")).toBe(false);
 	expect(app.shows("id:mission-archive")).toBe(true);
+});
+
+test("Rename turns the title into a field; Enter saves it and the page and Today show the new title", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:mission-notify");
+	await app.press("id:mission-rename");
+	await app.waitFor("id:mission-title");
+	expect(app.value("id:mission-title")).toBe("Quieter notifications");
+	expect(app.shows("id:mission-rename")).toBe(false);
+	await app.clear("id:mission-title");
+	await app.type("id:mission-title", "  Calmer notifications ");
+	await app.keyboard.press("enter");
+	await app.waitUntil(() => !app.shows("id:mission-title"));
+	expect(app.shows("Calmer notifications")).toBe(true);
+	expect(app.shows("id:mission-rename-message")).toBe(false);
+	await app.waitFor("id:mission-rename");
+	await app.keyboard.press("escape");
+	await app.waitFor("Three short things need you.");
+	expect(app.shows("Calmer notifications")).toBe(true);
+});
+
+test("an empty or too long title is refused with a short message and the field stays open", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:mission-notify");
+	await app.press("id:mission-rename");
+	await app.clear("id:mission-title");
+	await app.type("id:mission-title", "   ");
+	await app.press("id:mission-rename-save");
+	await app.waitFor("Write a title. Nothing was sent.");
+	expect(app.shows("id:mission-title")).toBe(true);
+	await app.clear("id:mission-title");
+	await app.type("id:mission-title", "a".repeat(201));
+	await app.press("id:mission-rename-save");
+	await app.waitFor("That title is too long. Keep it to 200 characters. Nothing was sent.");
+	await app.press("id:mission-rename-cancel");
+	await app.waitFor("id:mission-rename");
+	expect(app.shows("Quieter notifications")).toBe(true);
+});
+
+test("Cancel and Escape put the title back and change nothing", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:mission-notify");
+	await app.press("id:mission-rename");
+	await app.clear("id:mission-title");
+	await app.type("id:mission-title", "Something else");
+	await app.press("id:mission-rename-cancel");
+	await app.waitFor("id:mission-rename");
+	expect(app.shows("id:mission-title")).toBe(false);
+	expect(app.shows("Quieter notifications")).toBe(true);
+	expect(app.shows("Something else")).toBe(false);
+	// The words are not kept: the field opens with the title again.
+	await app.press("id:mission-rename");
+	await app.waitFor("id:mission-title");
+	expect(app.value("id:mission-title")).toBe("Quieter notifications");
+	await app.type("id:mission-title", " later");
+	// Escape closes the field first and keeps the page open.
+	await app.keyboard.press("escape");
+	await app.waitFor("id:mission-rename");
+	expect(app.shows("Quieter notifications")).toBe(true);
+	expect(app.shows("id:mission-archive")).toBe(true);
+});
+
+test("a lost rename answer offers only Check, which reads the title again", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:mission-docs");
+	await app.press("id:mission-rename");
+	await app.clear("id:mission-title");
+	await app.type("id:mission-title", "Setup docs");
+	await app.press("id:mission-rename-save");
+	await app.waitFor("id:mission-rename-check");
+	expect(
+		app.shows(
+			"The answer was lost, so the new title is not confirmed. Check reads the mission again; nothing is sent again.",
+		),
+	).toBe(true);
+	expect(app.shows("id:mission-rename-save")).toBe(false);
+	expect(app.shows("id:mission-rename")).toBe(false);
+	await app.press("id:mission-rename-check");
+	await app.waitFor("id:mission-rename");
+	expect(app.shows("id:mission-rename-check")).toBe(false);
+	expect(app.shows("Setup docs")).toBe(true);
 });
 
 test("a planned mission shows its plan, not a re-plan", async () => {

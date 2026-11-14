@@ -82,6 +82,34 @@ export type Lifecycle = {
 	message: string;
 };
 export const lifecycles = signal<Record<string, Lifecycle>>({});
+/**
+ * A mission title as this window renames it, by mission. "editing" shows the
+ * field with the user's words; "busy" waits for the one send; "unknown"
+ * waits for Check, which only reads the mission again.
+ */
+export type Rename = {
+	draft: string;
+	state: "editing" | "busy" | "unknown";
+	message: string;
+};
+export const renames = signal<Record<string, Rename>>({});
+
+/** Sets or drops one mission's rename. */
+export function setRename(id: string, rename: Rename | null) {
+	renames.update((all) => {
+		const next = { ...all };
+		if (rename) next[id] = rename;
+		else delete next[id];
+		return next;
+	});
+}
+
+/** Closes open title fields. A rename on its way or waiting for Check stays. */
+function stopEditing() {
+	const all = renames();
+	if (Object.values(all).some((r) => r.state === "editing"))
+		renames.set(Object.fromEntries(Object.entries(all).filter(([, r]) => r.state !== "editing")));
+}
 
 /**
  * Where the user was on Today when they opened a mission, its planning or
@@ -118,6 +146,7 @@ export function placeRow(testID: string, open: () => void) {
 export function openMission(id: string) {
 	confirming.set(null);
 	archiving.set(null);
+	stopEditing();
 	// A mission opens on its overview, never on a thread left open earlier.
 	closeThread();
 	route.set(id);
@@ -127,6 +156,7 @@ export function openMission(id: string) {
 export function closeMission() {
 	confirming.set(null);
 	archiving.set(null);
+	stopEditing();
 	closeThread();
 	route.set(null);
 }

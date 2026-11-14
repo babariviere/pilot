@@ -1147,6 +1147,39 @@ pub struct LifecycleIntent {
     pub check: bool,
 }
 
+/// Rename one mission. With `check`, only read its title again after a lost
+/// answer: nothing is sent.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct RenameIntent {
+    /// The mission.
+    pub mission_id: String,
+    /// The new title as the user wrote it. Rust trims and checks it.
+    pub title: String,
+    /// Read the title again instead of sending.
+    pub check: bool,
+}
+
+/// The daemon's longest mission title (`MAX_TITLE` in missions.ts), in
+/// UTF-16 units as JavaScript counts them.
+pub const MAX_MISSION_TITLE: usize = 200;
+
+/// The title a rename sends: trimmed as JavaScript trims, not empty and
+/// within the daemon's limit. A refusal is a short message for the user.
+pub fn mission_title(title: &str) -> Result<&str, &'static str> {
+    // JavaScript's trim: Unicode white space and U+FEFF, but not U+0085.
+    let title =
+        title.trim_matches(|c: char| (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}');
+    if title.is_empty() {
+        Err("Write a title. Nothing was sent.")
+    } else if title.encode_utf16().count() > MAX_MISSION_TITLE {
+        Err("That title is too long. Keep it to 200 characters. Nothing was sent.")
+    } else {
+        Ok(title)
+    }
+}
+
 /// Which passive lifecycle change a `LifecycleIntent` asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LifecycleAction {

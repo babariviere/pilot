@@ -88,6 +88,10 @@ pub struct World {
 /// one of the mission's chats is being archived.
 pub const ARCHIVE_REFUSED: &[&str] = &["native"];
 
+/// Missions whose rename the mock service applies but whose answer is lost,
+/// so the page shows Check.
+pub const RENAME_LOST: &[&str] = &["docs"];
+
 /// The world for `scenario`.
 pub fn world(scenario: Scenario) -> World {
     match scenario {

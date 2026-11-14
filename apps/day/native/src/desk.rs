@@ -18,7 +18,7 @@ use crate::{
         Answer, AnswerRef, AnswerState, AskIntent, ControlAsk, DecideIntent, Decision,
         DecisionKind, DecisionRef, Delivery, DoneEntry, Evidence, FreshnessState, IntentOutcome,
         LifecycleAction, LifecycleIntent, MissionPage, MissionRef, OutcomeStatus, PauseIntent,
-        ResumeIntent, Scenario, StopReplanningIntent, Today, Tone,
+        RenameIntent, ResumeIntent, Scenario, StopReplanningIntent, Today, Tone,
     },
     project::{self, ControlLocal, Inputs},
 };
@@ -387,6 +387,51 @@ impl Desk {
             _ => {}
         }
         self.changed();
+        self.outcome(OutcomeStatus::Accepted, "")
+    }
+
+    /// The mock service's rename: the title changes on Today and the page.
+    /// Nothing else changes. Missions in [`fixture::RENAME_LOST`] change but
+    /// their answer is lost; Check only reads the title.
+    pub fn rename(&mut self, intent: &RenameIntent) -> IntentOutcome {
+        let title = match crate::model::mission_title(&intent.title) {
+            Ok(title) => title.to_owned(),
+            Err(message) => return self.outcome(OutcomeStatus::Rejected, message),
+        };
+        let id = intent.mission_id.as_str();
+        let Some(overview) = self.overview.as_mut() else {
+            return self.outcome(OutcomeStatus::Rejected, "Nothing was read yet.");
+        };
+        let Some(mission) = overview
+            .dashboard
+            .missions
+            .items
+            .iter_mut()
+            .find(|m| m.id == id)
+        else {
+            return self.outcome(OutcomeStatus::Rejected, "That mission is gone.");
+        };
+        if intent.check {
+            return if mission.title == title {
+                self.outcome(OutcomeStatus::Accepted, "")
+            } else {
+                self.outcome(
+                    OutcomeStatus::Rejected,
+                    "Not renamed: the mission keeps its title. Nothing was sent again.",
+                )
+            };
+        }
+        mission.title = title.clone();
+        for detail in self.details.iter_mut().filter(|d| d.mission.id == id) {
+            detail.mission.title = title.clone();
+        }
+        self.changed();
+        if fixture::RENAME_LOST.contains(&id) {
+            return self.outcome(
+                OutcomeStatus::Unknown,
+                "The answer was lost, so the new title is not confirmed. Check reads the mission again; nothing is sent again.",
+            );
+        }
         self.outcome(OutcomeStatus::Accepted, "")
     }
 
@@ -1731,6 +1776,43 @@ mod tests {
         // A service without missionReplanning offers no re-plan.
         desk.native_replanning(false);
         assert!(!desk.mission("docs").unwrap().can_replan);
+    }
+
+    #[test]
+    fn rename_trims_refuses_empty_and_check_only_reads() {
+        use crate::model::RenameIntent;
+        let mut desk = Desk::new(Scenario::Decisions);
+        let rename = |id: &str, title: &str, check: bool| RenameIntent {
+            mission_id: id.into(),
+            title: title.into(),
+            check,
+        };
+        let before = desk.today().revision;
+        let empty = desk.rename(&rename("search", "  \n", false));
+        assert_eq!(empty.status, OutcomeStatus::Rejected);
+        assert_eq!(desk.today().revision, before, "nothing changed");
+        assert_eq!(
+            desk.rename(&rename("search", "  Quick search ", false))
+                .status,
+            OutcomeStatus::Accepted
+        );
+        assert_eq!(desk.mission("search").unwrap().row.title, "Quick search");
+        // A lost answer: Check only reads, and finds the new title.
+        assert_eq!(
+            desk.rename(&rename("docs", "Setup docs", false)).status,
+            OutcomeStatus::Unknown
+        );
+        let revision = desk.today().revision;
+        assert_eq!(
+            desk.rename(&rename("docs", "Setup docs", true)).status,
+            OutcomeStatus::Accepted
+        );
+        assert_eq!(
+            desk.rename(&rename("docs", "Other words", true)).status,
+            OutcomeStatus::Rejected
+        );
+        assert_eq!(desk.today().revision, revision, "Check sends nothing");
+        assert_eq!(desk.mission("docs").unwrap().row.title, "Setup docs");
     }
 
     #[test]

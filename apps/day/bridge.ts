@@ -28,6 +28,7 @@ import type {
 	PlanPage,
 	PlanRow,
 	ProgressIntent,
+	RenameIntent,
 	ReplyIntent,
 	ResumeIntent,
 	RitualSnapshot,
@@ -405,6 +406,11 @@ export class ConnectedToday implements DayFeed {
 
 	reopen(intent: LifecycleIntent): Promise<IntentOutcome> {
 		return this.#lifecycle("day.mission.reopen", intent);
+	}
+
+	/** Rename names the mission and the words; the root checks and sends them. Today and the page are read again after. */
+	rename(intent: RenameIntent): Promise<IntentOutcome> {
+		return this.#control(intent.missionId, "day.mission.rename", intent);
 	}
 
 	pulse(_everyMs?: number | null, _count?: number | null): Promise<number> {

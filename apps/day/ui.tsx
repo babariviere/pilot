@@ -25,6 +25,7 @@ import pause from "./icons/pause.svg";
 import play from "./icons/play.svg";
 import plus from "./icons/plus.svg";
 import refresh from "./icons/refresh.svg";
+import rename from "./icons/rename.svg";
 import settings from "./icons/settings.svg";
 import sun from "./icons/sun.svg";
 import update from "./icons/update.svg";
@@ -43,6 +44,7 @@ const ICONS = {
 	play,
 	plus,
 	refresh,
+	rename,
 	settings,
 	sun,
 	update,

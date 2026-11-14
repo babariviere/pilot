@@ -501,17 +501,63 @@ impl Transport {
 
     /// The mission's status now, read again. Sends nothing.
     pub async fn mission_status(&self, mission: &str) -> Result<String, Error> {
+        self.mission_field(mission, "status").await
+    }
+
+    /// The mission's title now, read again. Sends nothing.
+    pub async fn mission_title(&self, mission: &str) -> Result<String, Error> {
+        self.mission_field(mission, "title").await
+    }
+
+    async fn mission_field(&self, mission: &str, field: &str) -> Result<String, Error> {
         let v = self.get(&format!("/api/missions/{mission}")).await?;
         if v["mission"]["id"] != mission
             || v["mission"]["projectId"] != self.source.project()?.project_id
         {
             return Err(Error::Identity);
         }
-        v["mission"]["status"]
+        v["mission"][field]
             .as_str()
             .map(str::to_owned)
             .ok_or(Error::Invalid)
     }
+
+    /// Rename `mission` once (`PATCH /api/missions/:id`). `Ok(Err(message))`
+    /// is the daemon's refusal (400, 404 or 409, before any change); every
+    /// other failure is Unknown and only a title read can settle it.
+    pub async fn rename(&self, mission: &str, title: &str) -> Result<Result<(), String>, Error> {
+        let token = self.local()?;
+        let bytes = serde_json::to_vec(&rename_body(title)).map_err(|_| Error::Invalid)?;
+        let r = self
+            .client
+            .patch(self.url(&format!("/api/missions/{mission}")))
+            .header("x-pilot-github-capability", token)
+            .header("content-type", "application/json")
+            .body(bytes)
+            .send()
+            .await
+            .map_err(|_| Error::Unknown)?;
+        if matches!(r.status().as_u16(), 400 | 404 | 409) {
+            let v = json_body(r).await.map_err(|_| Error::Unknown)?;
+            let message = v["error"].as_str().unwrap_or("The service refused it.");
+            return Ok(Err(message.chars().take(300).collect()));
+        }
+        let v = body(r).await.map_err(|_| Error::Unknown)?;
+        self.local().map_err(|_| Error::Unknown)?;
+        if v["id"] != mission
+            || v["projectId"] != self.source.project()?.project_id
+            || v["title"] != title
+        {
+            return Err(Error::Unknown);
+        }
+        Ok(Ok(()))
+    }
+}
+
+/// The exact rename body the daemon accepts (`UpdateMissionRequest`): only
+/// the title, so no other field changes.
+pub(super) fn rename_body(title: &str) -> Value {
+    serde_json::json!({ "title": title })
 }
 
 /// The exact lifecycle body the daemon accepts (`parseMissionLifecycle`).
@@ -652,5 +698,24 @@ mod tests {
             ..source
         };
         assert!(lifecycle_body(&global, LifecycleAction::Archive, id).is_err());
+    }
+
+    #[test]
+    fn the_rename_body_names_only_the_checked_title() {
+        use crate::model::mission_title;
+        let title = mission_title("  Quieter notes 💬\n").unwrap();
+        assert_eq!(
+            rename_body(title),
+            serde_json::json!({"title":"Quieter notes 💬"})
+        );
+        assert_eq!(
+            serde_json::to_string(&rename_body(title)).unwrap(),
+            r#"{"title":"Quieter notes 💬"}"#
+        );
+        assert!(mission_title(" \u{feff}\t ").is_err());
+        // The daemon counts UTF-16 units: 100 emoji are 200, 101 are too many.
+        assert!(mission_title(&"💬".repeat(100)).is_ok());
+        assert!(mission_title(&"💬".repeat(101)).is_err());
+        assert!(mission_title(&format!("  {}  ", "a".repeat(200))).is_ok());
     }
 }

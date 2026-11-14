@@ -60,6 +60,7 @@ pub const METHODS: &[&str] = &[
     "day.mission.stopReplanning",
     "day.mission.archive",
     "day.mission.reopen",
+    "day.mission.rename",
     "day.plan.read",
     "day.plan.snapshot",
     "day.plan.source",
@@ -231,6 +232,7 @@ pub(crate) enum Command {
     ControlCheck(String),
     StopReplanning(crate::model::StopReplanningIntent),
     Lifecycle(crate::model::LifecycleIntent, crate::model::LifecycleAction),
+    Rename(crate::model::RenameIntent),
     Plan(String),
     PlanSnapshot(String),
     PlanSource(crate::host::plan_sources::Request),
@@ -660,6 +662,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 crate::model::LifecycleAction::Reopen
             };
             C::Lifecycle(r, action)
+        }
+        "day.mission.rename" => {
+            let r: crate::model::RenameIntent = decode(&args)?;
+            mission(&r.mission_id)?;
+            C::Rename(r)
         }
         "day.plan.create" => C::Create(decode(&args)?),
         "day.plan.startWork" => {

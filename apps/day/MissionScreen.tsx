@@ -5,6 +5,7 @@
 // builds and fences the command; this screen names only the mission, the
 // revision it showed and, for Resume, the Pause it showed.
 import { computed, keymap, Scroll, signal, Text, View } from "nsh";
+import { Input } from "nsh/base";
 import type { Decision, MissionPage, MissionRow, PlanPage, PlanRow, ReportLine, TaskLine } from "pilot-day/native";
 import { createShelf, MissionArtifacts, type Shelf } from "./ArtifactShelf";
 import { decisionMark } from "./DecisionCard";
@@ -34,7 +35,9 @@ import {
 	type Lifecycle,
 	lifecycles,
 	openMission,
+	renames,
 	setFor,
+	setRename,
 	todayPlace,
 } from "./view";
 import { controlLine, memberWord, provenance, rowLine, taskWord } from "./words";
@@ -197,6 +200,123 @@ function ArchiveConfirm(props: { day: Day; page: MissionPage }) {
 				</View>
 			</If>
 		</View>
+	);
+}
+
+/**
+ * Rename once with the words in the field, or with `check` only read the
+ * title again after a lost answer. Rust trims the words and refuses an empty
+ * or too long title with a short message; a refusal keeps the field open.
+ */
+async function rename(day: Day, id: string, shown: string, check: boolean) {
+	const r = renames()[id];
+	if (!r || r.state === "busy" || (r.state === "unknown") !== check) return;
+	const title = r.draft.trim();
+	if (!check && title === shown) {
+		// Nothing to change, so nothing is sent.
+		setRename(id, null);
+		return;
+	}
+	setRename(id, { ...r, state: "busy", message: "" });
+	const outcome = await day.feed.rename({ missionId: id, title, check });
+	if (outcome.status === "accepted") setRename(id, null);
+	else if (outcome.status === "unknown") setRename(id, { ...r, state: "unknown", message: outcome.message });
+	else setRename(id, { ...r, state: "editing", message: outcome.message });
+}
+
+/** Rename, beside Pause and Archive: quiet. It opens the title for editing and sends nothing. */
+function RenameButton(props: { page: MissionPage }) {
+	const row = () => props.page.row;
+	return (
+		<If when={!renames()[row().id]}>
+			<Action
+				label="Rename mission"
+				icon="rename"
+				iconOnly
+				testID="mission-rename"
+				onPress={() => {
+					glide();
+					confirming.set(null);
+					archiving.set(null);
+					setRename(row().id, { draft: row().title, state: "editing", message: "" });
+				}}
+			/>
+		</If>
+	);
+}
+
+/**
+ * The mission's title, or the field that renames it. Enter saves and Escape
+ * cancels. Save sends once; after a lost answer only Check is offered, and it
+ * only reads the mission again.
+ */
+function MissionTitle(props: { day: Day; page: MissionPage }) {
+	const row = () => props.page.row;
+	const r = () => renames()[row().id];
+	const editing = () => r()?.state === "editing" || r()?.state === "busy";
+	const busy = () => r()?.state === "busy";
+	const save = () => void rename(props.day, row().id, row().title, false);
+	return (
+		<If
+			when={editing()}
+			else={
+				<View class="gap-2">
+					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
+						{row().title}
+					</Text>
+					<If when={r()?.state === "unknown"}>
+						<Text testID="mission-rename-message" role="alert" class="text-sm text-needs-ink">
+							{r()?.message ?? ""}
+						</Text>
+						<View class="flex-row">
+							<Action
+								label="Check"
+								testID="mission-rename-check"
+								accessibilityLabel="Read the mission's title again. This sends nothing."
+								onPress={() => void rename(props.day, row().id, row().title, true)}
+							/>
+						</View>
+					</If>
+				</View>
+			}
+		>
+			<View class="gap-2">
+				<Input
+					testID="mission-title"
+					autoFocus
+					readonly={busy()}
+					value={r()?.draft ?? ""}
+					accessibilityLabel="Mission title"
+					onChange={({ value }) => {
+						const now = r();
+						if (now?.state === "editing") setRename(row().id, { ...now, draft: value });
+					}}
+					onSubmit={save}
+					class="min-h-11 rounded-lg border border-input bg-background px-3 py-1.5 text-2xl font-semibold tracking-tight text-foreground focus:border-primary"
+				/>
+				<If when={r()?.message}>
+					<Text testID="mission-rename-message" role="alert" class="text-sm text-needs-ink">
+						{r()?.message ?? ""}
+					</Text>
+				</If>
+				<View class="flex-row flex-wrap items-center gap-2">
+					<Action
+						primary
+						label={busy() ? "Saving…" : "Save"}
+						testID="mission-rename-save"
+						disabled={busy()}
+						onPress={save}
+					/>
+					<Action
+						label="Cancel"
+						testID="mission-rename-cancel"
+						disabled={busy()}
+						accessibilityLabel="Keep the title as it is. Nothing is sent."
+						onPress={() => setRename(row().id, null)}
+					/>
+				</View>
+			</View>
+		</If>
 	);
 }
 
@@ -638,9 +758,7 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 			<View class="gap-3">
 				<View class="flex-row items-start gap-4">
 					<View class="flex-1 gap-2">
-						<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-							{row().title}
-						</Text>
+						<MissionTitle day={props.day} page={props.page} />
 						<View class="flex-row flex-wrap items-center gap-x-2 gap-y-1">
 							<MissionStatus row={row()} />
 							<If when={row().stage}>
@@ -654,6 +772,7 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 						</View>
 					</View>
 					<View class="flex-row items-center gap-1 pt-1">
+						<RenameButton page={props.page} />
 						<PauseButton page={props.page} />
 						<ArchiveButton page={props.page} />
 					</View>
@@ -783,14 +902,16 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 		reading.set(false);
 		readNote.set(outcome.status === "accepted" ? "" : outcome.message);
 	});
-	// Escape puts away what is open first: a confirmation, then the new
-	// thread's title (its words stay, as Cancel keeps them), then the artifact
-	// source or preview opened last, then the page. It works from the title field too.
+	// Escape puts away what is open first: a confirmation, then the title
+	// being renamed (nothing is sent), then the new thread's title (its words
+	// stay, as Cancel keeps them), then the artifact source or preview opened
+	// last, then the page. It works from the title fields too.
 	keymap.bind(
 		"escape",
 		() => {
 			if (confirming()) confirming.set(null);
 			else if (archiving()) archiving.set(null);
+			else if (renames()[props.missionId]?.state === "editing") setRename(props.missionId, null);
 			else if (props.day.threads && naming()[props.missionId]) {
 				glide();
 				naming.update((all) => ({ ...all, [props.missionId]: false }));

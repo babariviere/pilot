@@ -30,6 +30,7 @@ export type DayFeed = Pick<
 	| "stopReplanning"
 	| "archive"
 	| "reopen"
+	| "rename"
 	| "pulse"
 	| "dispose"
 >;
