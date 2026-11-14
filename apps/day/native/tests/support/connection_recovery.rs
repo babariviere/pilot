@@ -81,19 +81,24 @@ fn no_effects(root: &FakeRoot) {
 }
 
 #[test]
-fn failed_first_read_recovers_explicitly_once_without_repeating_startup() {
+fn failed_first_read_reads_again_on_a_change_or_explicitly_without_repeating_startup() {
     let entry = recovery_entry();
     let root = FakeRoot::new();
     root.refuse("day.today.read", "offline");
     let mut app = open_on(&entry, root.channel.clone());
     wait(&mut app, "id:connection-read");
     assert!(app.shows("Pilot could not reach its service. Nothing is shown rather than a guess."));
+    // A change from the root (its service started or came back) reads once
+    // more. Still refused, the window says so again.
     root.changed();
-    app.wait(Duration::from_millis(100)).unwrap();
+    until(&mut app, "a change reads again", || {
+        root.count("day.today.read") == 2
+    });
+    wait(&mut app, "id:connection-read");
     assert_eq!(
-        root.count("day.today.read"),
+        root.count("day.attention.read"),
         1,
-        "no automatic startup retry"
+        "startup is not repeated"
     );
     assert_eq!(root.count("day.plan.prepare"), 0);
     assert_eq!(root.count("day.update.read"), 0);
@@ -114,7 +119,7 @@ fn failed_first_read_recovers_explicitly_once_without_repeating_startup() {
     app.wait(Duration::from_millis(100)).unwrap();
     assert_eq!(
         root.count("day.today.read"),
-        2,
+        3,
         "no overlap or queued retries"
     );
     held.lock()
@@ -124,7 +129,7 @@ fn failed_first_read_recovers_explicitly_once_without_repeating_startup() {
         .resolve(root.replies.lock().unwrap()["day.today.read"].clone());
     wait(&mut app, "role:button[New]");
     until(&mut app, "opening catch-up read", || {
-        root.count("day.today.read") == 3
+        root.count("day.today.read") == 4
     });
     retry(&root);
     app.wait(Duration::from_millis(100)).unwrap();
@@ -158,7 +163,34 @@ fn failed_first_read_recovers_explicitly_once_without_repeating_startup() {
 }
 
 #[test]
-fn close_during_opening_waits_through_a_failed_read_and_explicit_recovery() {
+fn a_window_whose_first_read_failed_closes_without_a_view_and_reads_again_on_a_change() {
+    let root = FakeRoot::new();
+    root.refuse("day.today.read", "offline");
+    let entry = entry();
+    let mut app = open_on(&entry, root.channel.clone());
+    let failed = "Pilot could not reach its service. Nothing is shown rather than a guess.";
+    wait(&mut app, failed);
+    // A close while nothing is shown is answered at once, with no view: the
+    // root keeps the window's last saved one. It used to wait forever.
+    root.flush(1);
+    until(&mut app, "close answered", || {
+        root.count("day.flush.ack") == 1
+    });
+    assert_eq!(root.args("day.flush.ack"), [json!({"generation": 1})]);
+    // The service came back: the root's next change reads again by itself.
+    root.reply(
+        "day.today.read",
+        serde_json::to_value(Desk::new(Scenario::Quiet).today()).unwrap(),
+    );
+    root.changed();
+    wait(&mut app, "Monday 9 November, 09:12");
+    assert!(!app.shows(failed));
+    drop(app);
+    std::fs::remove_dir_all(entry.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn close_during_opening_is_answered_without_a_view_once_the_read_fails() {
     let entry = recovery_entry();
     let root = FakeRoot::new();
     let held = hold_next(&root);
@@ -178,30 +210,32 @@ fn close_during_opening_waits_through_a_failed_read_and_explicit_recovery() {
         .unwrap()
         .resolve(json!({"version":1,"error":"offline"}));
     wait(&mut app, "id:connection-read");
+    // Nothing was shown, so nothing is saved: the newest close is answered
+    // with no view, and the root keeps the last saved one.
+    until(&mut app, "pending close answered", || {
+        root.count("day.flush.ack") == 1
+    });
     assert_eq!(
-        root.count("day.flush.ack"),
-        0,
-        "failure is not an empty saved view"
+        root.args("day.flush.ack"),
+        [json!({"generation": 5})],
+        "only the newest generation, and never an empty view"
     );
     root.reply("day.plan.inventory", inventory(vec![]));
     app.press("id:connection-read").unwrap();
     wait(&mut app, "role:button[New]");
-    until(&mut app, "pending close answered", || {
-        root.count("day.flush.ack") == 1
-    });
-    let ack = &root.args("day.flush.ack")[0];
+    app.wait(Duration::from_millis(100)).unwrap();
     assert_eq!(
-        ack["generation"], 5,
-        "only the newest generation is answered"
+        root.count("day.flush.ack"),
+        1,
+        "an answered close is not answered again"
     );
-    assert_eq!(ack["view"]["place"], "today");
     no_effects(&root);
     drop(app);
     std::fs::remove_dir_all(entry.parent().unwrap()).unwrap();
 }
 
 #[test]
-fn a_channel_rejection_settles_without_restarting_or_acknowledging_close() {
+fn a_channel_rejection_settles_without_restarting_and_answers_close_without_a_view() {
     let entry = recovery_entry();
     let root = FakeRoot::new();
     let held = hold_next(&root);
@@ -224,7 +258,7 @@ fn a_channel_rejection_settles_without_restarting_or_acknowledging_close() {
     app.wait(Duration::from_millis(100)).unwrap();
     assert!(!has(&app, "id:connection-read"));
     assert_eq!(root.count("day.today.read"), 1);
-    assert_eq!(root.count("day.flush.ack"), 0);
+    assert_eq!(root.args("day.flush.ack"), [json!({"generation": 6})]);
     no_effects(&root);
     drop(app);
     std::fs::remove_dir_all(entry.parent().unwrap()).unwrap();

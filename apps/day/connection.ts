@@ -124,7 +124,18 @@ function refresh() {
 
 function flushPending() {
 	const open = connection();
-	if (!window || !todayFeed || open.state !== "open" || pendingFlush === null || !current()) return;
+	if (!window || pendingFlush === null || !current()) return;
+	if (open.state === "none") {
+		// No feeds or forms were opened, so there is nothing to save. The answer
+		// carries no view: the root keeps the window's last saved one.
+		const generation = pendingFlush;
+		pendingFlush = null;
+		call(window, "day.flush.ack", { generation }).catch((error: unknown) => {
+			console.error("Day could not answer a close while it shows no data:", error);
+		});
+		return;
+	}
+	if (!todayFeed || open.state !== "open") return;
 	const generation = pendingFlush;
 	pendingFlush = null;
 	flushForms(window, generation, todayFeed, open.plans, open.day).catch((error: unknown) => {
@@ -136,7 +147,12 @@ function flushPending() {
 // proof yet: keep the newest flush until the feeds/forms exist, never ACK empty.
 if (window) {
 	host.on("day.changed", (payload) => {
-		if (forWindow(payload, window)) refresh();
+		if (!forWindow(payload, window)) return;
+		// The root read its service again (for example, it started or came
+		// back), so a first read that could not reach it is tried once more.
+		const now = connection();
+		if (now.state === "none" && now.canRead) void readAgain();
+		else refresh();
 	});
 	host.on("day.flush", (payload) => {
 		if (!forWindow(payload, window) || typeof payload.generation !== "number") return;
@@ -282,6 +298,8 @@ function read(): Promise<void> {
 		})
 		.finally(() => {
 			opening = null;
+			// A close asked for while opening is answered once the outcome is known.
+			flushPending();
 		});
 	return opening;
 }
