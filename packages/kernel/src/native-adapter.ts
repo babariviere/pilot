@@ -36,6 +36,8 @@ import {
 	type DefaultResourceLoader,
 	type ExtensionFactory,
 	getAgentDir,
+	type LoadSkillsResult,
+	loadSkills,
 	type McpExtensionOptions,
 	type McpTransportFactory,
 	ProjectTrustStore,
@@ -284,6 +286,30 @@ export function createTrackedMcpExtension(
 				return transport;
 			},
 		})(pi);
+	};
+}
+
+/**
+ * Pi keeps the first skill of a name, so a personal skill with an upstream name (for example an installed copy of
+ * the same upstream skills) hides the bundled file. In a host-selected profile session only, the pinned bundled
+ * file wins and the personal skill of that name is left out. A missing bundled file still fails the assertions.
+ */
+function preferBundledSkills(
+	loaded: LoadSkillsResult,
+	paths: readonly string[],
+	cwd: string,
+	agentDir: string,
+): LoadSkillsResult {
+	const hidden = paths.filter((path) => !loaded.skills.some((skill) => skill.filePath === path));
+	if (!hidden.length) return loaded;
+	const bundled = loadSkills({ cwd, agentDir, skillPaths: hidden, includeDefaults: false });
+	const names = new Set(bundled.skills.map((skill) => skill.name));
+	return {
+		skills: [...loaded.skills.filter((skill) => !names.has(skill.name)), ...bundled.skills],
+		diagnostics: [
+			...loaded.diagnostics.filter((diagnostic) => !hidden.includes(diagnostic.collision?.loserPath ?? "")),
+			...bundled.diagnostics,
+		],
 	};
 }
 
@@ -600,7 +626,15 @@ export class NativeAdapter {
 						...(options.coordinatorSources
 							? {
 									skillsOverride: (loaded: ReturnType<DefaultResourceLoader["getSkills"]>) => {
-										const selected = options.loaderOptions?.skillsOverride?.(loaded) ?? loaded;
+										const selected = preferBundledSkills(
+											options.loaderOptions?.skillsOverride?.(loaded) ?? loaded,
+											[
+												...(missionInterview ? INTERVIEW_SKILL_PATHS : []),
+												...(options.missionPlanning ? PLANNING_SKILL_PATHS : []),
+											],
+											cwd,
+											agentDir,
+										);
 										if (missionInterview) assertInterviewSkills(selected.skills);
 										if (options.missionPlanning) assertPlanningSkills(selected.skills);
 										coordinatorSkills = snapshotCoordinatorSkills(selected.skills, agentDir);

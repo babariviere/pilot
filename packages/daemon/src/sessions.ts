@@ -1210,14 +1210,16 @@ export class Worker implements SessionWorker {
 		// Expected IPC teardown must not turn an intentional close into a session failure.
 		// The close deadline still waits for confirmed exit and escalates if necessary.
 		if (this.unavailable || this.exited || this.shutdownRequested) return;
-		this.unavailable = error;
-		this.error = error.message;
+		// The kernel reports its own startup failure, then exits. Keep that reason, not the IPC teardown after it.
+		const reported = !this.initialized && this.state === "failed" ? this.error : undefined;
+		this.unavailable = reported ? new WorkerUnavailable(reported, { cause: error }) : error;
+		this.error = this.unavailable.message;
 		this.state = "failed";
 		clearTimeout(this.startupTimer);
-		this.failReady(error);
-		for (const id of [...this.pending.keys()]) this.settle(id, error);
+		this.failReady(this.unavailable);
+		for (const id of [...this.pending.keys()]) this.settle(id, this.unavailable);
 		this.armKillDeadline();
-		this.onPacket({ type: "error", message: error.message });
+		this.onPacket({ type: "error", message: this.unavailable.message });
 		// Give SDK shutdown/process-exit hooks a chance to reap detached MCP transport groups.
 		if (!this.exited) this.child.kill("SIGTERM");
 	}

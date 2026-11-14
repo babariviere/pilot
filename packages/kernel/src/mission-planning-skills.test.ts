@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -315,5 +315,74 @@ test("actual NativeAdapter planning profile reads upstream but blocks direct and
 			},
 		}),
 		/trusted coordinator host/,
+	);
+});
+
+test("same-named personal skills cannot block or replace the trusted planning profile", async (t) => {
+	const home = await realpath(await mkdtemp(join(tmpdir(), "native-planning-shadow-")));
+	const main = join(home, "main"),
+		scratch = join(home, "scratch"),
+		agentDir = join(home, "agent");
+	for (const path of [main, scratch, agentDir]) await mkdir(path);
+	// A user who installed the same upstream skills, or personal edits of them, under the same names.
+	const required = [...INTERVIEW_SKILL_PATHS, ...PLANNING_SKILL_PATHS];
+	for (const name of [...required.map((path) => basename(dirname(path))), "my-own"]) {
+		await mkdir(join(agentDir, "skills", name), { recursive: true });
+		await writeFile(
+			join(agentDir, "skills", name, "SKILL.md"),
+			`---\nname: ${name}\ndescription: Personal ${name}.\n---\n\nPersonal imitation.\n`,
+		);
+	}
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	t.after(() => {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+	});
+	await installCredentialBrokerHooks();
+	const runtime = await ModelRuntime.create({
+		credentials: new InMemoryCredentialStore(),
+		modelsStore: new InMemoryModelsStore(),
+		modelsPath: null,
+		allowModelNetwork: false,
+		refreshOnCreate: false,
+	});
+	const faux = fauxProvider();
+	runtime.registerNativeProvider(faux.provider);
+	const adapter = await NativeAdapter.open({
+		cwd: scratch,
+		agentDir,
+		sessionFile: join(home, "native.session"),
+		sessionId: "planning-shadow-test",
+		projectTrusted: false,
+		missionPlanning: {
+			read: async () => ({}),
+			knowledge: async () => ({}),
+			receipt: async () => ({}),
+			write: async () => ({}),
+		},
+		coordinatorSources: async () => ({ main, members: [], scratch }),
+		settingsManager: SettingsManager.inMemory(),
+		loaderOptions: { cwd: scratch, agentDir, noContextFiles: true },
+		sessionOptions: { modelRuntime: runtime, model: faux.getModel() },
+	});
+	t.after(async () => {
+		await adapter.close();
+		await rm(home, { recursive: true, force: true });
+	});
+	const { skills } = adapter.session.resourceLoader.getSkills();
+	assertPlanningSkills(skills);
+	assertInterviewSkills(skills);
+	for (const path of required) {
+		const name = basename(dirname(path));
+		assert.deepEqual(
+			skills.filter((skill) => skill.name === name).map((skill) => skill.filePath),
+			[path],
+			name,
+		);
+	}
+	assert.ok(
+		skills.some((skill) => skill.name === "my-own"),
+		"unrelated personal skills stay available",
 	);
 });

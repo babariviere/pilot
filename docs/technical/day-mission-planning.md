@@ -38,7 +38,7 @@ No setup skill, global installation or personal skill overwrite is needed.
 | Imported content | Repo [SKILL.md](../../packages/kernel/skills/mission-planning/upstream/prototype/SKILL.md), [LOGIC.md](../../packages/kernel/skills/mission-planning/upstream/prototype/LOGIC.md), [UI.md](../../packages/kernel/skills/mission-planning/upstream/prototype/UI.md). Upstream [prototype directory at the pinned commit](https://github.com/mattpocock/skills/tree/4ae2317ddb22b046e26455e4f9c9b3aaaf62212d/skills/engineering/prototype). |
 | Source/version/license | [UPSTREAM.md](../../packages/kernel/skills/mission-planning/UPSTREAM.md), [MIT license](../../packages/kernel/skills/mission-planning/upstream/LICENSE), Copyright 2026 Matt Pocock. No second vendor copy. |
 | Pilot adaptation template | `PLANNING_SKILL_ADAPTATION` in [mission-planning-skills.ts](../../packages/kernel/src/mission-planning-skills.ts). Its source interpolates runtime skill paths; it is not a saved complete session prompt. |
-| Loading and assembly | [native-adapter.ts](../../packages/kernel/src/native-adapter.ts) adds the trusted paths to `DefaultResourceLoader`, refuses shadowed/missing skills and appends the adaptation for `missionPlanning` only. The SDK composes the final runtime prompt with other loaded context. [coordinator-skill-resources.ts](../../packages/kernel/src/coordinator-skill-resources.ts) captures the read allowlist for skill-relative resources. |
+| Loading and assembly | [native-adapter.ts](../../packages/kernel/src/native-adapter.ts) adds the trusted paths to `DefaultResourceLoader`, uses them instead of same-named personal skills, refuses missing skills and appends the adaptation for `missionPlanning` only. The SDK composes the final runtime prompt with other loaded context. [coordinator-skill-resources.ts](../../packages/kernel/src/coordinator-skill-resources.ts) captures the read allowlist for skill-relative resources. |
 | Native records and tool | [mission-plan-tool.ts](../../packages/kernel/src/mission-plan-tool.ts) provides the typed output schema; [mission-plans.ts](../../packages/daemon/src/mission-plans.ts) validates and saves it. [planning-workers.ts](../../packages/daemon/src/planning-workers.ts) binds the trusted coordinator and exact call envelopes. |
 | Validation and gaps | [mission-planning-skills.test.ts](../../packages/kernel/src/mission-planning-skills.test.ts) checks exact source hashes, attribution, real loader/resource reads and denied effects. [mission-plans.test.ts](../../packages/daemon/src/mission-plans.test.ts) checks persisted outputs/authority. Native preview execution and its sandbox remain a separate unavailable integration, not proven by these tests. |
 
@@ -48,7 +48,8 @@ is separate documentation work.
 
 `NativeAdapterOptions.missionPlanning` is a trusted `NativePlanningPort`, not a model flag.
 It requires the existing non-read-only coordinator source profile, loads the real resources,
-refuses missing/shadowed entries, installs `mission_plan` and appends an explicit native adapter.
+uses them instead of same-named personal skills, refuses missing entries, installs `mission_plan` and
+appends an explicit native adapter.
 Paths resolve relative to the runtime module after packaging/relocation.
 
 The dedicated profile denies generic mission writes, shell/file tools, jobs, subagents, updates

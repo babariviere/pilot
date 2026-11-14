@@ -146,6 +146,20 @@ test("unexpected disconnect still fails an idle worker", async (t) => {
 	assert.deepEqual(child.killed, ["SIGTERM"]);
 });
 
+test("the disconnect after a kernel startup failure keeps the kernel's reason", async (t) => {
+	const { child, worker, packets } = supervisedWorker(t);
+	const reason = "Kernel failed to start: Required upstream interview skill unavailable or shadowed: /x/SKILL.md";
+	child.emit("message", { type: "error", message: reason });
+	child.connected = false;
+	child.emit("disconnect");
+	await assert.rejects(worker.ready, new RegExp(reason));
+	assert.equal(worker.state, "failed");
+	assert.equal(worker.error, reason);
+	assert.equal(worker.transportUnavailable, true);
+	assert.deepEqual(packets.filter((packet) => packet.type === "error").at(-1), { type: "error", message: reason });
+	assert.deepEqual(child.killed, ["SIGTERM"]);
+});
+
 test("intentional close ignores disconnect but waits for confirmed exit", async (t) => {
 	const { child, worker, ready, packets } = supervisedWorker(t);
 	ready();

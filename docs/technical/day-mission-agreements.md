@@ -85,8 +85,9 @@ the latter's format references. The pinned source, version and MIT attribution a
 
 The explicit host-only `NativeAdapterOptions.missionInterview` requires the trusted coordinator
 profile. It adds the actual entries through Pi's normal resource loader and captures their paths
-in the existing coordinator skill-reader allowlist. Missing/shadowed upstream entries fail closed;
-personal skills are not overwritten. Ask/read-only profiles cannot enable it. Runtime packaging
+in the existing coordinator skill-reader allowlist. A personal skill with the same name is left out of
+this session only, so the bundled entry runs; personal skill files are not changed. Missing upstream
+entries fail closed. Ask/read-only profiles cannot enable it. Runtime packaging
 already copies the kernel skills tree; paths resolve relative to the relocated module.
 
 The adapter tells Pi to read the actual dependencies instead of invoking an unavailable Skill tool.
