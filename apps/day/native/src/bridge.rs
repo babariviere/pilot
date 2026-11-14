@@ -22,6 +22,9 @@ pub const METHODS: &[&str] = &[
     "day.chat.select",
     "day.chat.create",
     "day.chat.check",
+    "day.chat.read",
+    "day.chat.snapshot",
+    "day.chat.close",
     "day.intake.read",
     "day.linear.read",
     "day.preferences.read",
@@ -204,6 +207,15 @@ pub(crate) enum Command {
     ChatSelect(crate::host::new_chat::Select),
     ChatCreate(crate::host::new_chat::Create),
     ChatCheck(String),
+    /// Opens a chat Pilot started and reads its newest rows, or older ones. Passive.
+    ChatRead {
+        session: String,
+        older: bool,
+    },
+    /// The open chat as last read. No I/O.
+    ChatSnapshot(String),
+    /// The chat page closed. Local only: nothing is sent.
+    ChatClose(String),
     IntakeRead,
     LinearRead,
     PreferencesRead,
@@ -397,6 +409,34 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: Lookup = exact(args)?;
             mission(&r.operation_id)?;
             C::ChatCheck(r.operation_id)
+        }
+        "day.chat.read" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Read {
+                session_id: String,
+                older: bool,
+            }
+            let r: Read = exact(args)?;
+            mission(&r.session_id)?;
+            C::ChatRead {
+                session: r.session_id,
+                older: r.older,
+            }
+        }
+        "day.chat.snapshot" | "day.chat.close" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Chat {
+                session_id: String,
+            }
+            let r: Chat = exact(args)?;
+            mission(&r.session_id)?;
+            if name == "day.chat.snapshot" {
+                C::ChatSnapshot(r.session_id)
+            } else {
+                C::ChatClose(r.session_id)
+            }
         }
         "day.intake.read" => {
             if args != json!({}) {
@@ -837,6 +877,9 @@ impl Command {
                     | Self::TodayScope(_)
                     | Self::WindowRead
                     | Self::Projects
+                    | Self::ChatRead { .. }
+                    | Self::ChatSnapshot(_)
+                    | Self::ChatClose(_)
                     | Self::IntakeRead
                     | Self::LinearRead
                     | Self::PreferencesRead
@@ -1277,6 +1320,36 @@ mod tests {
         gate.save_sequence += 1; // Another form save was enqueued behind this ACK.
         assert_eq!(ack.admit(&gate), Err(Error::Stale));
         assert_eq!(Command::Flush(1, 8, None).admit(&gate), Ok(()));
+    }
+
+    #[test]
+    fn chat_reads_are_passive_and_args_are_exact() {
+        let gate = Gate {
+            flushing: true,
+            ..Gate::default()
+        };
+        for (name, args) in [
+            ("day.chat.read", json!({"sessionId":"s-1","older":false})),
+            ("day.chat.snapshot", json!({"sessionId":"s-1"})),
+            ("day.chat.close", json!({"sessionId":"s-1"})),
+        ] {
+            let read = command(name, args).unwrap();
+            assert_eq!(read.admit(&gate), Ok(()), "{name}");
+        }
+        for (name, args) in [
+            ("day.chat.read", json!({"sessionId":"s-1"})),
+            ("day.chat.read", json!({"sessionId":"../s","older":true})),
+            (
+                "day.chat.read",
+                json!({"sessionId":"s","older":false,"before":3}),
+            ),
+            (
+                "day.chat.snapshot",
+                json!({"sessionId":"s","projectId":"p"}),
+            ),
+        ] {
+            assert!(command(name, args.clone()).is_err(), "{name} {args}");
+        }
     }
 
     #[test]

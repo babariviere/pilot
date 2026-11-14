@@ -24,6 +24,8 @@ export type ChatOp = {
 	delivery: "unknown" | "checking" | "accepted" | "rejected";
 	/** Why the service refused it, exactly as written. */
 	reason: string;
+	/** The chat it started, once its receipt names it. */
+	sessionId?: string;
 };
 
 /** What New shows about projects and creations. */
@@ -154,8 +156,10 @@ type Summary = {
 	draftId: string;
 	projectId: string;
 	state: string;
-	receipt?: { state?: string; reason?: string } | null;
+	receipt?: { state?: string; reason?: string; result?: { sessionId?: unknown } | null } | null;
 };
+
+const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 function projectsOf(x: unknown): ChatProject[] | null {
 	const s = x as { version?: unknown; complete?: unknown; projects?: unknown } | null;
@@ -249,6 +253,11 @@ export class ConnectedChats implements ChatSource {
 						? "checking"
 						: "unknown",
 			reason: o.receipt?.reason ?? "",
+			...(o.state === "accepted" &&
+			typeof o.receipt?.result?.sessionId === "string" &&
+			SESSION_ID.test(o.receipt.result.sessionId)
+				? { sessionId: o.receipt.result.sessionId }
+				: {}),
 		});
 		const sent = this.#ops.filter((o) => o.state !== "not-sent");
 		const settledState = (o: Summary) => o.state === "accepted" || o.state === "rejected";

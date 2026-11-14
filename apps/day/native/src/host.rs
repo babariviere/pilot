@@ -26,6 +26,7 @@ mod planning;
 mod planning_chat;
 pub(crate) mod preferences;
 pub mod ritual;
+mod session_chat;
 pub(crate) mod threads;
 pub(crate) mod today_scope;
 mod transport;
@@ -143,6 +144,9 @@ struct Shared {
     planning_mission: Mutex<Option<String>>,
     /// The open planning chat. Read again with the planning page while open.
     planning_chat: Mutex<Option<planning_chat::ChatState>>,
+    /// The one open chat Pilot started, read only. Read again on every
+    /// refresh while its page is open.
+    session_chat: Mutex<Option<session_chat::ChatState>>,
     /// Whether a planning page shows. Activity notices read only a shown page.
     planning_shown: AtomicBool,
     /// Set by every invalidation except a planning activity notice, which
@@ -466,6 +470,7 @@ impl NativeHost {
             planning: Mutex::new(std::collections::BTreeMap::new()),
             planning_mission: Mutex::new(None),
             planning_chat: Mutex::new(None),
+            session_chat: Mutex::new(None),
             planning_shown: AtomicBool::new(false),
             full_refresh: AtomicBool::new(true),
             focus: Mutex::new(None),
@@ -808,6 +813,29 @@ impl NativeHost {
             .planning_chat
             .lock()
             .expect("native planning chat poisoned") = None;
+    }
+    /// The open chat `session` as read, or None when it is not open.
+    pub fn session_chat(&self, session: &str) -> Option<serde_json::Value> {
+        self.0
+            .shared
+            .session_chat
+            .lock()
+            .expect("native session chat poisoned")
+            .as_ref()
+            .filter(|c| c.session == session)
+            .map(session_chat::ChatState::view)
+    }
+    /// Closes chat `session` when it is open: it is no longer read or kept.
+    pub fn close_session_chat(&self, session: &str) {
+        let mut chat = self
+            .0
+            .shared
+            .session_chat
+            .lock()
+            .expect("native session chat poisoned");
+        if chat.as_ref().is_some_and(|c| c.session == session) {
+            *chat = None;
+        }
     }
     /// `mission`'s planning page closed: activity notices stop reading it,
     /// and its chat closes. Another mission's page, opened since, stays.
@@ -1322,6 +1350,7 @@ async fn refresh(
         shared.current(epoch)?;
         feedback::refresh(t, shared).await;
         planning_live(t, shared, epoch).await;
+        session_chat::live(t, shared).await;
         shared.change(|_| ());
         return Ok(());
     }
@@ -1393,6 +1422,7 @@ async fn refresh(
     // WS only invalidates. A fresh authenticated GET, never the event body,
     // advances a preparing bootstrap to the coordinator's complete round.
     planning_live(t, shared, epoch).await;
+    session_chat::live(t, shared).await;
     if shared.planning_inventory_wanted.load(Ordering::SeqCst) {
         let _ = inventory::read(t, shared, epoch).await;
     }

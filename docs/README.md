@@ -41,6 +41,10 @@ feedback starts no work and approves nothing.
 Use Add image… or Paste image to attach screenshots (up to four PNGs, 8 MiB each).
 Pilot keeps the images with your feedback so its triage agent can read them after a restart.
 An upload failure keeps the image for Retry upload. Sending feedback still happens only with Send.
+Open the triage chat or Open the fix chat shows that chat read only: your messages, Pilot's replies,
+one line per tool step and whether it works, finished or failed. A chat started from New, and a
+mission's coordinator, task and working chats on its overview, open the same way. Reading a chat sends
+nothing.
 
 | Feature                                         | Guide                                         |
 | ----------------------------------------------- | --------------------------------------------- |

@@ -610,6 +610,7 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
                 status,
                 report,
                 outputs: detail.map_or_else(Vec::new, |d| outputs(d, &task.id, inputs.now)),
+                session_id: task.session_id.clone(),
             })
         })
         .collect();
@@ -655,6 +656,10 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
         tasks_known: detail.is_some(),
         tasks,
         chats,
+        // The detail's coordinator, else the dashboard's.
+        coordinator_session_id: detail
+            .and_then(|d| d.mission.coordinator_session_id.clone())
+            .or_else(|| mission.coordinator_session_id.clone()),
         freshness,
         problems,
         can_replan: !replan_draft.is_empty() && replanning_as.is_none(),

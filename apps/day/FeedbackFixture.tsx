@@ -6,7 +6,10 @@
 // the newest item's triage with a scripted proposal; "Next step …" picks
 // what the next step does. "Triage asks" leaves it waiting on a question; an
 // answer puts it back to work, and "Answer:" shows the last words sent.
+// A triage or fix chat opens as a scripted read-only chat: a triage chat
+// works, a fix chat is done and has an earlier page.
 import { mount, signal, Text, View } from "nsh";
+import type { ChatRow } from "pilot-day/native";
 import {
 	type FeedbackItem,
 	type FeedbackSource,
@@ -25,6 +28,7 @@ import {
 } from "./feedbackFeed";
 import { MockDayScreen, openDay } from "./mockFeeds";
 import { goalDraft } from "./planView";
+import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessionChat";
 import { Action } from "./ui";
 import { captureView, restoreView, startFresh } from "./updateView";
 
@@ -275,7 +279,68 @@ class ScriptedFeedback implements FeedbackSource {
 }
 
 const feedback = new ScriptedFeedback();
-const day = { ...openDay(), feedback: mirrorFeedback(feedback) };
+
+const row = (key: string, role: ChatRow["role"], text: string): ChatRow => ({
+	key,
+	role,
+	text,
+	shortened: false,
+	running: false,
+	failed: false,
+});
+
+/** Invented chats in memory, read only. A fix chat has one earlier page. */
+class ScriptedChat implements SessionChatSource {
+	#chat: SessionChat | null = null;
+	#listeners = new Set<(chat: SessionChat | null) => void>();
+	chat() {
+		return this.#chat;
+	}
+	onChange(listener: (chat: SessionChat | null) => void) {
+		this.#listeners.add(listener);
+		return () => this.#listeners.delete(listener);
+	}
+	#set(chat: SessionChat | null) {
+		this.#chat = chat;
+		for (const l of this.#listeners) l(chat);
+	}
+	async open(sessionId: string) {
+		this.#set(null);
+		await Promise.resolve();
+		const fix = sessionId.startsWith("fix-");
+		this.#set({
+			sessionId,
+			title: fix ? "Fix: show plan assignees" : "Triage",
+			state: fix ? "done" : "working",
+			stateReason: "",
+			rows: fix
+				? [
+						row("10", "you", "Show the assignee on each plan row."),
+						row("11", "pilot", "I added the assignee to each plan row."),
+						row("11.0", "step", "Read apps/day/PlanScreen.tsx"),
+						row("12", "pilot", "Plan.test.tsx passes."),
+					]
+				: [row("4", "you", "Triage this feedback.")],
+			more: fix,
+			reading: false,
+			reason: "",
+		});
+	}
+	async earlier() {
+		const now = this.#chat;
+		if (!now?.more) return;
+		this.#set({ ...now, rows: [row("3", "you", "Earlier words"), ...now.rows], more: false });
+	}
+	async refresh() {}
+	close(sessionId: string) {
+		if (this.#chat?.sessionId === sessionId) this.#set(null);
+	}
+	dispose() {
+		this.#listeners.clear();
+	}
+}
+
+const day = { ...openDay(), feedback: mirrorFeedback(feedback), chat: mirrorSessionChat(new ScriptedChat()) };
 
 const NEXT: Next[] = ["unknown", "reject"];
 

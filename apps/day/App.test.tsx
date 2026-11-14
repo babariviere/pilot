@@ -269,6 +269,30 @@ test("a mission opens with its report, tasks and working chats, and Escape goes 
 	await app.waitFor("Three short things need you.");
 });
 
+test("a mission's coordinator, task and working chats open read only, and Back returns to the mission", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:mission-search");
+	await app.waitFor("id:mission-coordinator-chat");
+	// Task 3's chat is under Working now, so it has one link, there.
+	expect(app.shows("id:mission-chat-w-search")).toBe(true);
+	expect(app.shows("id:task-chat-search-3")).toBe(false);
+	expect(app.shows("id:task-chat-search-1")).toBe(false);
+	await app.press("id:mission-coordinator-chat");
+	await app.waitFor("I am checking the open tasks.");
+	expect(app.shows("Mission coordinator")).toBe(true);
+	expect(app.shows("Read only. Reading it sends nothing and changes nothing.")).toBe(true);
+	expect(app.shows("Working.")).toBe(true);
+	expect(app.shows("id:mission-coordinator-chat")).toBe(false);
+	await app.press("role:button[Back to Faster search]");
+	await app.waitFor("id:mission-coordinator-chat");
+	expect(app.shows("id:chat")).toBe(false);
+	await app.press("id:mission-chat-w-search");
+	await app.waitFor("The task is done.");
+	await app.press("id:back");
+	await app.waitFor("id:mission-coordinator-chat");
+	expect(app.shows("Show search results in under 200 ms for large workspaces.")).toBe(true);
+});
+
 test("an old mission offers a re-plan: New opens with a draft from it and nothing is sent", async () => {
 	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-docs");

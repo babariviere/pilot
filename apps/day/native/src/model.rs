@@ -637,6 +637,8 @@ pub struct TaskLine {
     /// What its agents linked to it: pull requests first, then artifacts,
     /// then other links. Linked is not checked or accepted.
     pub outputs: Vec<Output>,
+    /// The chat that owns it, when one does. Opening it only reads.
+    pub session_id: Option<String>,
 }
 
 /// What an output is.
@@ -718,6 +720,8 @@ pub struct MissionPage {
     pub tasks: Vec<TaskLine>,
     /// Chats working on it now.
     pub chats: Vec<ChatLine>,
+    /// The mission's coordinator chat, when it has one. Opening it only reads.
+    pub coordinator_session_id: Option<String>,
     /// How fresh the read is.
     pub freshness: Freshness,
     /// Host-owned problems needing human attention for this mission.

@@ -10,14 +10,21 @@ const PAGE: u64 = 32;
 /// At most this many rows are kept. Older ones leave; Show earlier reads them again.
 const MAX_ROWS: usize = 400;
 
+/// The rows of one open chat as read so far. The planning chat and a chat
+/// Pilot started (`session_chat`) page the same way.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Pages {
+    /// Compact rows, oldest first, each with a unique `key`.
+    pub rows: Vec<Value>,
+    pub more: bool,
+    pub next_before: Option<u64>,
+}
+
 /// The open chat of one mission.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ChatState {
     pub mission: String,
-    /// Daemon rows, oldest first, each with a unique `key`.
-    pub rows: Vec<Value>,
-    pub more: bool,
-    pub next_before: Option<u64>,
+    pub pages: Pages,
     pub reading: bool,
     /// Why the last read failed. Empty after a good read.
     pub reason: String,
@@ -26,7 +33,7 @@ pub(crate) struct ChatState {
 impl ChatState {
     /// What the feed projects.
     pub fn view(&self) -> Value {
-        json!({"missionId":self.mission,"rows":self.rows,"more":self.more,
+        json!({"missionId":self.mission,"rows":self.pages.rows,"more":self.pages.more,
             "reading":self.reading,"reason":self.reason})
     }
 }
@@ -63,7 +70,7 @@ pub(crate) fn valid_page(v: &Value, mission: &str) -> bool {
 /// Joins a page into what shows. Rows never move, so pages join by key; a
 /// newer read of a row (a step that finished) replaces it. A newest page
 /// with no overlap may leave a gap, so it starts again from that page.
-pub(crate) fn merge(state: &mut ChatState, page: &Value, older: bool) {
+pub(crate) fn merge(state: &mut Pages, page: &Value, older: bool) {
     let rows: Vec<Value> = page["rows"].as_array().cloned().unwrap_or_default();
     let keys: std::collections::HashSet<&str> =
         rows.iter().filter_map(|r| r["key"].as_str()).collect();
@@ -141,7 +148,7 @@ pub(super) async fn read(
                 chat.as_mut().expect("just set")
             }
         };
-        let before = if older { state.next_before } else { None };
+        let before = if older { state.pages.next_before } else { None };
         if older && before.is_none() {
             return Ok(());
         }
@@ -160,11 +167,11 @@ pub(super) async fn read(
             state.reading = false;
             match &result {
                 Ok(v) => {
-                    merge(state, v, older);
+                    merge(&mut state.pages, v, older);
                     state.reason.clear();
                 }
                 Err(_) => {
-                    state.reason = if state.rows.is_empty() {
+                    state.reason = if state.pages.rows.is_empty() {
                         "Pilot could not read the planning chat. Nothing was sent.".into()
                     } else {
                         "Pilot could not read the newest part of the planning chat. What shows is from an earlier read.".into()
@@ -205,7 +212,7 @@ mod tests {
     fn page(rows: Vec<Value>, more: bool, before: Option<u64>) -> Value {
         json!({"version":1,"missionId":"m","sessionId":"s","rows":rows,"more":more,"nextBefore":before})
     }
-    fn keys(s: &ChatState) -> Vec<&str> {
+    fn keys(s: &Pages) -> Vec<&str> {
         s.rows.iter().filter_map(|r| r["key"].as_str()).collect()
     }
 
@@ -236,10 +243,7 @@ mod tests {
 
     #[test]
     fn newer_reads_replace_rows_and_older_pages_join_before() {
-        let mut s = ChatState {
-            mission: "m".into(),
-            ..ChatState::default()
-        };
+        let mut s = Pages::default();
         merge(
             &mut s,
             &page(vec![row(5, "5.0", true), row(6, "6", false)], true, Some(5)),
@@ -287,10 +291,7 @@ mod tests {
 
     #[test]
     fn only_the_newest_rows_are_kept() {
-        let mut s = ChatState {
-            mission: "m".into(),
-            ..ChatState::default()
-        };
+        let mut s = Pages::default();
         let rows: Vec<Value> = (1..=(MAX_ROWS as u64 + 10))
             .map(|n| row(n, &n.to_string(), false))
             .collect();
@@ -303,10 +304,7 @@ mod tests {
 
     #[test]
     fn steps_keep_their_order_within_one_message() {
-        let mut s = ChatState {
-            mission: "m".into(),
-            ..ChatState::default()
-        };
+        let mut s = Pages::default();
         let rows = vec![
             row(1, "1.10", false),
             row(1, "1", false),

@@ -57,6 +57,10 @@ fn plan_chat(host: &NativeHost, mission: &str) -> Result<Value, Error> {
             .map(|v| crate::plan_activity::chat(&v)),
     )
 }
+/// The open chat `session` as read, or null when it is not open.
+fn session_chat(host: &NativeHost, session: &str) -> Value {
+    host.session_chat(session).unwrap_or(Value::Null)
+}
 fn planning_request(
     host: &NativeHost,
     mission: &str,
@@ -95,6 +99,8 @@ pub(super) fn cached(
             | Command::PlanningInventorySnapshot
             | Command::PlanChatSnapshot(_)
             | Command::PlanLeave { .. }
+            | Command::ChatSnapshot(_)
+            | Command::ChatClose(_)
     ) {
         return None;
     }
@@ -105,6 +111,12 @@ pub(super) fn cached(
             Command::Today => encode(today(host))?,
             Command::PlanSnapshot(id) => planning(host, id)?,
             Command::PlanChatSnapshot(id) => plan_chat(host, id)?,
+            Command::ChatSnapshot(id) => session_chat(host, id),
+            // Local only: the chat is no longer read or kept.
+            Command::ChatClose(id) => {
+                host.close_session_chat(id);
+                Value::Null
+            }
             // Local only: closes the chat, or stops reading the page on notices.
             Command::PlanLeave { mission, chat_only } => {
                 if !*chat_only {
@@ -317,6 +329,14 @@ async fn run(
             .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
         return Ok(json!({"snapshot":plan_chat(&call.host, mission)?,"outcome":null}));
     }
+    if let Command::ChatRead { session, older } = &call.command {
+        // Passive. A failed read keeps what shows; the chat says why.
+        let _ = super::session_chat::read(t, shared, session, *older).await;
+        shared.open()?;
+        call.command
+            .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
+        return Ok(json!({"snapshot":session_chat(&call.host, session),"outcome":null}));
+    }
     use super::updates::Command as U;
     if let Command::UpdateForceConfirm(request) = &call.command {
         if !super::valid_id(&request.id) {
@@ -415,6 +435,9 @@ async fn run(
         Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot => None,
         Command::PlanChat { .. } | Command::PlanChatSnapshot(_) | Command::PlanLeave { .. } => {
             unreachable!("handled planning chat command")
+        }
+        Command::ChatRead { .. } | Command::ChatSnapshot(_) | Command::ChatClose(_) => {
+            unreachable!("handled read-only chat command")
         }
         Command::WindowRead => unreachable!("handled saved window read"),
         Command::PlanSource(_) => unreachable!("handled passive source read"),

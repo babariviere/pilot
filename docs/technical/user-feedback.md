@@ -152,8 +152,8 @@ the draft and its origin in the saved view (`feedbackOpen`, `feedback`).
 
 ## Limits
 
-- Day has no chat screen. A triage question is answered on the feedback page; a fix
-  chat's question is still answered in its chat (`pilot://chat/<id>`).
+- Day shows triage and fix chats read only (`day.chat.read`). A triage question is answered
+  on the feedback page; a fix chat's question is still answered in Pilot's chat view.
 - New does not link the mission it creates; the user links it from the feedback page.
 - Checks: `user-feedback-work.test.ts` (real daemon HTTP, faux sessions/provider),
   `host::feedback` unit tests and `Feedback.test.tsx` on a scripted source. They do not

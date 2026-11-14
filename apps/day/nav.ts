@@ -1,13 +1,15 @@
 // Where the window's one Back goes, and Pilot's way home. The app is a
 // tree: Today, then a mission's overview, then its interview and plan, a
 // thread or a result; Changes, Linear, Artifacts, Settings, Feedback, New and the rituals hang off Today.
-// Feedback opened from a mission lies over that mission. Back goes up
+// Feedback opened from a mission lies over that mission, and a chat Pilot
+// started lies over the screen it was opened from. Back goes up
 // one level of that tree, Escape does the same, and Pilot at the top left
 // always goes to Today. Moving around only changes where the user is: it
 // never drops a draft, sends, saves or starts anything.
 import { artifactsOpen, closeArtifacts, openArtifacts } from "./artifactReads";
 import type { Changes } from "./changeFeed";
 import { changesRoute, showChanges } from "./changesView";
+import { chatRoute, closeChat } from "./chatView";
 import type { Day } from "./day";
 import { closeDelivery, deliveryRoute, hideInspection } from "./deliveryView";
 import { closeFeedback, feedbackOpen, openFeedback } from "./feedbackView";
@@ -52,6 +54,7 @@ export function planBack(day: Day | undefined, missionId: string): Back {
 export type Shown =
 	| "update"
 	| "ritual"
+	| "chat"
 	| "settings"
 	| "feedback"
 	| "delivery"
@@ -69,6 +72,7 @@ export type Shown =
 export function shown(places: Places): Shown {
 	if (updateEntry() && updateOpen()) return "update";
 	if (ritualRoute()) return "ritual";
+	if (places.day.chat && chatRoute()) return "chat";
 	if (places.day.preferences && settingsOpen()) return "settings";
 	if (places.day.feedback && feedbackOpen()) return "feedback";
 	if (places.day.delivery && deliveryRoute()) return "delivery";
@@ -97,6 +101,9 @@ export function backTarget(places: Places): Back | null {
 			}
 			return to("Today", closeRitual);
 		}
+		case "chat":
+			// A chat lies over the screen it was opened from.
+			return to(chatRoute()?.from || "Today", closeChat);
 		case "settings":
 			return to("Today", closeSettings);
 		case "feedback": {
@@ -143,6 +150,7 @@ export function backTarget(places: Places): Back | null {
 export function goHome() {
 	closeUpdate();
 	closeRitual();
+	closeChat();
 	closeSettings();
 	closeFeedback();
 	hideInspection();

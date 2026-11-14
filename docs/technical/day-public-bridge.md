@@ -103,6 +103,9 @@ intent types, not daemon request envelopes:
 | `day.chat.select` | `{projectId,contextDigest,mode}` | passive `ChatChoice`; no session starts |
 | `day.chat.create` | `{choice:ChatChoice,message}` | null; exact creation outcome and operation ID |
 | `day.chat.check` | `{operationId}` | null; exact receipt lookup, never creation |
+| `day.chat.read` | `{sessionId,older}` | read-only chat (state, title, `ChatRow` rows); opens it and reads its newest rows or the page before; passive, re-read on daemon changes while open |
+| `day.chat.snapshot` | `{sessionId}` | the open chat as last read, or null; no I/O |
+| `day.chat.close` | `{sessionId}` | null; stops reading and keeping the chat; local only |
 | `day.today.read` | `{}` | `Today` |
 | `day.window.read` | `{}` | exact-source `SavedView` or null when no capture exists; no update ACK |
 | `day.mission.read` | `MissionRef` | `MissionPage` or null |

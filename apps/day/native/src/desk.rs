@@ -1727,6 +1727,11 @@ mod tests {
         );
         assert_eq!(page.chats.len(), 1);
         assert_eq!(page.chats[0].since, "34 min ago");
+        // Every chat the page names can open read only.
+        assert_eq!(page.chats[0].id, "w-search");
+        assert_eq!(page.coordinator_session_id.as_deref(), Some("c-search"));
+        let owners: Vec<_> = page.tasks.iter().map(|t| t.session_id.as_deref()).collect();
+        assert_eq!(owners, [None, None, Some("w-search"), None]);
         assert_eq!(page.row.stage, "Verify");
         let notify = desk.mission("notify").unwrap();
         assert!(!notify.tasks_known && notify.tasks.is_empty());

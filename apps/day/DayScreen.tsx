@@ -7,9 +7,11 @@ import { effect, lifecycle, untracked, View } from "nsh";
 import { ArtifactsScreen } from "./ArtifactsScreen";
 import { type ArtifactSource, artifactsOpen } from "./artifactReads";
 import { ChangesScreen } from "./ChangesScreen";
+import { ChatScreen } from "./ChatScreen";
 import { AppHeader } from "./Chrome";
 import type { Changes } from "./changeFeed";
 import { changesRoute } from "./changesView";
+import { chatRoute } from "./chatView";
 import { DeliveryScreen } from "./DeliveryScreen";
 import type { Day } from "./day";
 import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
@@ -58,7 +60,7 @@ function Planning(props: { day: Day; plans: Plans }) {
 			}
 		>
 			<Arrive class="flex-1">
-				<NewScreen plans={props.plans} />
+				<NewScreen plans={props.plans} day={props.day} />
 			</Arrive>
 		</If>
 	);
@@ -116,21 +118,36 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 function Screens(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
 	return (
 		<If
-			when={props.day.preferences && settingsOpen()}
+			when={props.day.chat && chatRoute()}
 			else={
 				<If
-					when={props.day.feedback && feedbackOpen()}
-					else={<Results day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />}
+					when={props.day.preferences && settingsOpen()}
+					else={
+						<If
+							when={props.day.feedback && feedbackOpen()}
+							else={
+								<Results day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />
+							}
+						>
+							<Arrive class="flex-1">
+								<FeedbackScreen day={props.day} />
+							</Arrive>
+						</If>
+					}
 				>
 					<Arrive class="flex-1">
-						<FeedbackScreen day={props.day} />
+						<SettingsScreen day={props.day} />
 					</Arrive>
 				</If>
 			}
 		>
-			<Arrive class="flex-1">
-				<SettingsScreen day={props.day} />
-			</Arrive>
+			<Each of={chatRoute() ? [chatRoute()?.sessionId as string] : []} key={(id) => id}>
+				{(id) => (
+					<Arrive class="flex-1">
+						<ChatScreen day={props.day} sessionId={id()} />
+					</Arrive>
+				)}
+			</Each>
 		</If>
 	);
 }

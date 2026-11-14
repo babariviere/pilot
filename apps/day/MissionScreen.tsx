@@ -1,6 +1,7 @@
 // One mission in full. The top says what it is, how it stands and what it
 // waits for; then what its agents report, its interview and plan, its tasks
-// and the chats working on it now. Chats are supporting detail. Reports are
+// and the chats working on it now. Chats are supporting detail; the
+// coordinator's chat, a task's chat and a working chat open read only. Reports are
 // agent words, never verified progress. Pause and Resume are intents: Rust
 // builds and fences the command; this screen names only the mission, the
 // revision it showed and, for Resume, the Pause it showed.
@@ -8,6 +9,7 @@ import { computed, keymap, Scroll, signal, Text, View } from "nsh";
 import { Input } from "nsh/base";
 import type { Decision, MissionPage, MissionRow, PlanPage, PlanRow, ReportLine, TaskLine } from "pilot-day/native";
 import { createShelf, MissionArtifacts, type Shelf } from "./ArtifactShelf";
+import { openChat } from "./chatView";
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
@@ -582,6 +584,21 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
 					/>
 				</View>
 			</If>
+			{/* A chat already under Working now keeps its one link there. */}
+			<If
+				when={
+					props.task.sessionId && props.day.chat && !props.page.chats.some((c) => c.id === props.task.sessionId)
+				}
+			>
+				<View class="flex-row pl-10 pt-1">
+					<RowLink
+						testID={`task-chat-${props.task.id}`}
+						title="Open its chat"
+						accessibilityLabel={`Open the chat of #${props.task.number} ${props.task.title}, read only. Opening it sends nothing.`}
+						onPress={() => openMemberChat(props.page, props.task.sessionId ?? "")}
+					/>
+				</View>
+			</If>
 		</View>
 	);
 }
@@ -789,6 +806,16 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 				<Control day={props.day} page={props.page} />
 				<ArchiveConfirm day={props.day} page={props.page} />
 				<Waiting day={props.day} row={row()} />
+				<If when={props.page.coordinatorSessionId && props.day.chat}>
+					<View class="flex-row">
+						<RowLink
+							testID="mission-coordinator-chat"
+							title="Open the coordinator's chat"
+							accessibilityLabel="Open the mission coordinator's chat, read only. Opening it sends nothing."
+							onPress={() => openMemberChat(props.page, props.page.coordinatorSessionId ?? "")}
+						/>
+					</View>
+				</If>
 			</View>
 
 			<Problems
@@ -852,10 +879,26 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 					</View>
 					<Each of={props.page.chats} key={(c) => c.id}>
 						{(c) => (
-							<View class="flex-row items-baseline gap-3 py-1.5">
-								<Text class="flex-1 text-sm text-foreground">{c().title}</Text>
-								<Text class="text-xs text-faint">{`since ${c().since}`}</Text>
-							</View>
+							<If
+								when={props.day.chat}
+								else={
+									<View class="flex-row items-baseline gap-3 py-1.5">
+										<Text class="flex-1 text-sm text-foreground">{c().title}</Text>
+										<Text class="text-xs text-faint">{`since ${c().since}`}</Text>
+									</View>
+								}
+							>
+								<View class="py-1.5">
+									<RowLink
+										testID={`mission-chat-${c().id}`}
+										title={c().title}
+										accessibilityLabel={`Open the chat “${c().title}”, read only. Opening it sends nothing.`}
+										onPress={() => openMemberChat(props.page, c().id)}
+									>
+										<Text class="text-xs text-faint">{`since ${c().since}`}</Text>
+									</RowLink>
+								</View>
+							</If>
 						)}
 					</Each>
 				</View>
@@ -960,4 +1003,10 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 			</View>
 		</Scroll>
 	);
+}
+/** Opens one of the mission's chats, read only. Back returns to this page where it was. */
+function openMemberChat(page: MissionPage, sessionId: string) {
+	const missionId = page.row.id;
+	restoreScroll(`mission/${missionId}`, scrollOf(`mission/${missionId}`));
+	openChat(sessionId, page.row.title || "Mission overview");
 }

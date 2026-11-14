@@ -6,6 +6,7 @@
 import { signal } from "nsh";
 import type {
 	ChangesScenario,
+	ChatRow,
 	IntentOutcome,
 	PlanScenario,
 	RitualSnapshot,
@@ -23,11 +24,70 @@ import { DayScreen } from "./DayScreen";
 import { type Day, mirrorDay } from "./day";
 import { mirrorPlanning, type Plans } from "./planning";
 import { mirrorRituals, NO_PROGRESS, RECAP_LIMIT, type Recap, type RitualSource, type Rituals } from "./ritualFeed";
+import { mirrorSessionChat, type SessionChat, type SessionChatMirror, type SessionChatSource } from "./sessionChat";
 import type { Update } from "./updateFeed";
 import { dataSource } from "./view";
 
 // Every window that uses these feeds says so in its header.
 dataSource.set("mock");
+
+/**
+ * Any chat a mock page opens, read only: a few invented rows. A coordinator
+ * chat (`c-<mission>`) works; other chats are done.
+ */
+class MockChat implements SessionChatSource {
+	#chat: SessionChat | null = null;
+	#listeners = new Set<(chat: SessionChat | null) => void>();
+	chat() {
+		return this.#chat;
+	}
+	onChange(listener: (chat: SessionChat | null) => void) {
+		this.#listeners.add(listener);
+		return () => this.#listeners.delete(listener);
+	}
+	#set(chat: SessionChat | null) {
+		this.#chat = chat;
+		for (const l of this.#listeners) l(chat);
+	}
+	async open(sessionId: string) {
+		const coordinator = sessionId.startsWith("c-");
+		const row = (key: string, role: ChatRow["role"], text: string): ChatRow => ({
+			key,
+			role,
+			text,
+			shortened: false,
+			running: false,
+			failed: false,
+		});
+		this.#set({
+			sessionId,
+			title: coordinator ? "Mission coordinator" : "Mission chat",
+			state: coordinator ? "working" : "done",
+			stateReason: "",
+			rows: [
+				row("1", "you", "Keep the mission moving."),
+				row("2", "pilot", coordinator ? "I am checking the open tasks." : "The task is done."),
+				row("2.0", "step", "Read docs/missions.md"),
+			],
+			more: false,
+			reading: false,
+			reason: "",
+		});
+	}
+	async earlier() {}
+	async refresh() {}
+	close(sessionId: string) {
+		if (this.#chat?.sessionId === sessionId) this.#set(null);
+	}
+	dispose() {
+		this.#listeners.clear();
+	}
+}
+
+/** A mock chat page source: every chat opens read only with invented rows. */
+export function openMockChat(): SessionChatMirror {
+	return mirrorSessionChat(new MockChat());
+}
 
 /** Opens a mock Today feed from `scenario` and mirrors its read model. */
 export function openDay(scenario?: Scenario): Day {

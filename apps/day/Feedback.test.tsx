@@ -366,3 +366,39 @@ test("a lost answer stays Unknown with its words kept; Check reads it once and n
 	expect(steps(app)).toBe("Steps: [triage,answer]");
 	expect(counts(app)).toBe("Sends: 1 · Checks: 1");
 });
+
+test("the fix and triage chats open read only with their rows and state; Back and Escape return to Feedback", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "The plan page hides who is working");
+	await app.waitFor("id:feedback-open-triage-f1");
+	await app.press("id:feedback-open-triage-f1");
+	await app.waitFor("Triage this feedback.");
+	expect(app.shows("id:chat-state")).toBe(true);
+	expect(app.shows("Working.")).toBe(true);
+	await app.keyboard.press("escape");
+	await app.waitFor("id:feedback-triage-f1");
+	expect(app.shows("id:chat")).toBe(false);
+	await app.press("Triage fix");
+	await app.waitFor("id:feedback-fix-f1");
+	await app.press("id:feedback-fix-f1");
+	await app.waitFor("id:feedback-open-fix-f1");
+	expect(app.shows("text:Fix chat: pilot://chat/fix-1")).toBe(false);
+	await app.press("id:feedback-open-fix-f1");
+	await app.waitFor("I added the assignee to each plan row.");
+	expect(app.shows("id:feedback")).toBe(false);
+	expect(app.shows("Fix: show plan assignees")).toBe(true);
+	expect(app.shows("Show the assignee on each plan row.")).toBe(true);
+	expect(app.shows("Read apps/day/PlanScreen.tsx")).toBe(true);
+	expect(app.shows("Done. What it says below is its own report, not a checked result.")).toBe(true);
+	expect(app.shows("Earlier words")).toBe(false);
+	await app.press("id:chat-earlier");
+	await app.waitFor("Earlier words");
+	expect(app.shows("id:chat-earlier")).toBe(false);
+	await app.press("id:back");
+	await app.waitFor("id:feedback-fixing-f1");
+	expect(app.shows("id:chat")).toBe(false);
+	// Reading chats sends nothing.
+	expect(steps(app)).toBe("Steps: [triage,fix]");
+	expect(counts(app)).toBe("Sends: 1 · Checks: 0");
+});

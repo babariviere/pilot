@@ -20,6 +20,7 @@ import { mirrorPlanning, type Plans } from "./planning";
 import { answerDrafts, answerPicks } from "./planView";
 import { ConnectedPreferences, mirrorPreferences } from "./preferencesFeed";
 import { mirrorRituals, type Rituals, rootRecap } from "./ritualFeed";
+import { ConnectedSessionChat, mirrorSessionChat } from "./sessionChat";
 import { ConnectedThreads, mirrorThreads } from "./threadFeed";
 import { ConnectedScope, mirrorScope, todayProject } from "./todayScope";
 import type { Update } from "./updateFeed";
@@ -123,12 +124,17 @@ function current(): boolean {
 
 function refresh() {
 	if (connection().state !== "open" || !current()) return;
+	const open = connection();
 	// These are cached native projections, not service/provider startup.
-	void Promise.all([todayFeed?.refresh(), planFeed?.refresh(), ritualFeed?.sync(), feedbackFeed?.read(true)]).catch(
-		(error: unknown) => {
-			console.error("Pilot could not read this window again:", error);
-		},
-	);
+	void Promise.all([
+		todayFeed?.refresh(),
+		planFeed?.refresh(),
+		ritualFeed?.sync(),
+		feedbackFeed?.read(true),
+		open.state === "open" ? open.day.chat?.source.refresh() : undefined,
+	]).catch((error: unknown) => {
+		console.error("Pilot could not read this window again:", error);
+	});
 	void refreshScope().catch((error: unknown) => console.error("Pilot could not read its project scope:", error));
 }
 
@@ -261,8 +267,9 @@ async function connect() {
 		void intakeFeed.read();
 	});
 	// The saved Linear issues, the project's preferences, a mission's threads,
-	// and saved artifacts are read only when their page opens. Feedback also
-	// supplies Today's New section and follows the same stream invalidations.
+	// saved artifacts and a chat Pilot started are read only when their page
+	// opens. Feedback also supplies Today's New section and follows the same
+	// stream invalidations.
 	feedbackFeed = new ConnectedFeedback(window);
 	void feedbackFeed.read();
 	const day = mirrorDay(
@@ -275,6 +282,7 @@ async function connect() {
 		mirrorThreads(new ConnectedThreads(window)),
 		mirrorFeedback(feedbackFeed),
 		new ConnectedArtifacts(window),
+		mirrorSessionChat(new ConnectedSessionChat(window)),
 	);
 	// New's projects are read when New opens; reading sends nothing.
 	const plans = mirrorPlanning(planFeed, mirrorChats(new ConnectedChats(window)));

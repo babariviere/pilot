@@ -10,6 +10,7 @@ import type { PlaceKind, SavedView, Today } from "pilot-day/native";
 import { closeArtifacts } from "./artifactReads";
 import type { Changes } from "./changeFeed";
 import { changeMessages, changesRoute, changeTabs, detailsOpen, listMessage } from "./changesView";
+import { closeChat } from "./chatView";
 import { saveActionDraft, saveDecisionDraft } from "./commands";
 import type { Day } from "./day";
 import { subjectOf } from "./deliveryFeed";
@@ -345,6 +346,7 @@ export function startFresh() {
 	preferencesDraft.set(null);
 	preferencesMessage.set("");
 	forgetFeedback();
+	closeChat();
 	forgetThreads();
 	todayPlace.y = 0;
 	todayPlace.row = null;

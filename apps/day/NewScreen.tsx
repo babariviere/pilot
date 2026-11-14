@@ -17,6 +17,8 @@ import {
 	startNewChat,
 } from "./chatCommands";
 import type { ChatMode } from "./chatFeed";
+import { openChat } from "./chatView";
+import type { Day } from "./day";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
 import { stageMark, stageWord } from "./PlanScreen";
@@ -186,7 +188,7 @@ function Unconfirmed(props: { plans: Plans }) {
 }
 
 /** The New screen. */
-export function NewScreen(props: { plans: Plans }) {
+export function NewScreen(props: { plans: Plans; day?: Day }) {
 	const planning = () => props.plans.planning();
 	const chats = props.plans.chats;
 	const chatView = () => chats.view();
@@ -372,11 +374,27 @@ export function NewScreen(props: { plans: Plans }) {
 						</View>
 						<Each of={chatView().settled.filter((o) => o.delivery === "accepted")} key={(o) => o.operationId}>
 							{(o) => (
-								<View class="flex-row items-center gap-2.5 py-1.5">
-									<Mark kind="done" />
-									<Text class="flex-1 text-sm text-foreground">{`A chat in ${projectName(chatView(), o().projectId)}`}</Text>
-									<Text class="text-xs text-faint">Works on its own</Text>
-								</View>
+								<If
+									when={o().sessionId && props.day?.chat}
+									else={
+										<View class="flex-row items-center gap-2.5 py-1.5">
+											<Mark kind="done" />
+											<Text class="flex-1 text-sm text-foreground">{`A chat in ${projectName(chatView(), o().projectId)}`}</Text>
+											<Text class="text-xs text-faint">Works on its own</Text>
+										</View>
+									}
+								>
+									<View class="py-1.5">
+										<RowLink
+											testID={`new-started-${o().operationId}`}
+											title={`A chat in ${projectName(chatView(), o().projectId)}`}
+											accessibilityLabel="Open this chat, read only. Opening it sends nothing."
+											onPress={() => openChat(o().sessionId ?? "", "New")}
+										>
+											<Text class="text-xs text-faint">Works on its own</Text>
+										</RowLink>
+									</View>
+								</If>
 							)}
 						</Each>
 					</View>

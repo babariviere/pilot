@@ -9,6 +9,7 @@
 // once and only clarifies: it starts no fix and approves no proposal.
 import { type JSX, Text, View } from "nsh";
 import { Input, Toggle } from "nsh/base";
+import { openChat } from "./chatView";
 import type { Day } from "./day";
 import {
 	type FeedbackItem,
@@ -45,15 +46,34 @@ import {
 import { keepField } from "./kept";
 import { glide } from "./motion";
 import { goalDraft, openNew } from "./planView";
-import { Action, Mark, Picker } from "./ui";
+import { Action, Mark, Picker, RowLink } from "./ui";
 import { openMission } from "./view";
 
-/** A chat's address, for the user to open it in Pilot. */
-function ChatLink(props: { step: ChatStep }) {
+/**
+ * The way into a triage or fix chat, read only. Without a chat page, its
+ * address, for the user to open it in Pilot.
+ */
+function ChatLink(props: { day: Day; item: FeedbackItem; step: ChatStep }) {
+	const kind = () => props.step.kind;
+	const label = () => (kind() === "triage" ? "Open the triage chat" : "Open the fix chat");
 	return (
-		<View selectable>
-			<Text class="text-xs text-faint">{`${props.step.kind === "triage" ? "Triage" : "Fix"} chat: pilot://chat/${props.step.sessionId}`}</Text>
-		</View>
+		<If
+			when={props.day.chat}
+			else={
+				<View selectable>
+					<Text class="text-xs text-faint">{`${kind() === "triage" ? "Triage" : "Fix"} chat: pilot://chat/${props.step.sessionId}`}</Text>
+				</View>
+			}
+		>
+			<View class="flex-row">
+				<RowLink
+					testID={`feedback-open-${kind()}-${props.item.id}`}
+					title={label()}
+					accessibilityLabel={`${label()}, read only. Opening it sends nothing.`}
+					onPress={() => openChat(props.step.sessionId, "Feedback")}
+				/>
+			</View>
+		</If>
 	);
 }
 
@@ -404,7 +424,7 @@ export function FeedbackRow(props: { day: Day; mirror: FeedbackMirror; item: Fee
 								</Text>
 							</View>
 						</If>
-						<ChatLink step={t()} />
+						<ChatLink day={props.day} item={props.item} step={t()} />
 					</Line>
 				)}
 			</Each>
@@ -446,7 +466,7 @@ export function FeedbackRow(props: { day: Day; mirror: FeedbackMirror; item: Fee
 						mark={running(f()) ? "moving" : chatState(f()) === "done" ? "ready" : "unknown"}
 						text={chatLine(f())}
 					>
-						<ChatLink step={f()} />
+						<ChatLink day={props.day} item={props.item} step={f()} />
 					</Line>
 				)}
 			</Each>

@@ -7,13 +7,16 @@ import { ScriptedDelivery } from "./deliveryDemo";
 import { mirrorDelivery } from "./deliveryFeed";
 import { ScriptedLinear } from "./linearDemo";
 import { mirrorLinear } from "./linearFeed";
-import { openChanges, openPlanning, openUpdate } from "./mockFeeds";
+import { openChanges, openMockChat, openPlanning, openUpdate } from "./mockFeeds";
 import { ScriptedPreferences } from "./preferencesDemo";
 import { mirrorPreferences } from "./preferencesFeed";
 import { ScriptedThreads } from "./threadDemo";
 import { mirrorThreads } from "./threadFeed";
 
-/** The mock app's feed: the decisions world, with demo results to check, saved Linear issues, preferences and threads. */
+/**
+ * The mock app's feed: the decisions world, with demo results to check, saved Linear issues, preferences,
+ * threads and read-only chats.
+ */
 export const day = mirrorDay(
 	new TodayFeed(),
 	undefined,
@@ -22,6 +25,9 @@ export const day = mirrorDay(
 	undefined,
 	mirrorPreferences(new ScriptedPreferences()),
 	mirrorThreads(new ScriptedThreads()),
+	undefined,
+	undefined,
+	openMockChat(),
 );
 /** The mock app's planning feed: one mission interview in progress. */
 export const plans = openPlanning();

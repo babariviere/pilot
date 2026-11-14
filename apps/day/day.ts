@@ -11,6 +11,7 @@ import type { IntakeMirror } from "./intakeFeed";
 import type { LinearMirror } from "./linearFeed";
 import { glide } from "./motion";
 import type { PreferencesMirror } from "./preferencesFeed";
+import type { SessionChatMirror } from "./sessionChat";
 import type { ThreadsMirror } from "./threadFeed";
 import type { ScopeMirror } from "./todayScope";
 
@@ -60,6 +61,11 @@ export type Day = {
 	 * the window offers no Artifacts page or mission section.
 	 */
 	artifacts?: ArtifactSource;
+	/**
+	 * One chat Pilot started, read only, for the chat page. Without it the
+	 * window offers no way into such chats.
+	 */
+	chat?: SessionChatMirror;
 	/** Stops listening and frees the feed. */
 	close: () => void;
 };
@@ -75,6 +81,7 @@ export function mirrorDay(
 	threads?: ThreadsMirror,
 	feedback?: FeedbackMirror,
 	artifacts?: ArtifactSource,
+	chat?: SessionChatMirror,
 ): Day {
 	const today = signal(feed.snapshot());
 	const stop = feed.onChange((next) => {
@@ -94,6 +101,7 @@ export function mirrorDay(
 		threads,
 		feedback,
 		artifacts,
+		chat,
 		close: () => {
 			stop();
 			feed.dispose();
@@ -103,6 +111,7 @@ export function mirrorDay(
 			preferences?.close();
 			threads?.close();
 			feedback?.close();
+			chat?.close();
 		},
 	};
 }
