@@ -125,6 +125,20 @@ fn wait(app: &mut Headless, what: &str) {
         .unwrap_or_else(|e| panic!("{what}: {e}\n{:?}", app.screen().texts()));
 }
 
+/// New picks no project. Choose the fixture's only one, as the user does.
+/// Choosing only reads its setup.
+fn choose_project(app: &mut Headless, f: &Fixture) {
+    const PICKER: &str = "label:Project for a new chat";
+    let path = f.info["source"]["project_path"].as_str().unwrap();
+    let name = Path::new(path).file_name().unwrap().to_str().unwrap();
+    app.wait_until("projects listed", WAIT, |s| {
+        s.enabled(PICKER).unwrap_or(false)
+    })
+    .unwrap();
+    app.press(PICKER).unwrap();
+    app.press(&format!("text:{name}")).unwrap();
+}
+
 #[test]
 fn an_unreadable_service_shows_its_state_and_forms_save_before_close() {
     let dir = std::env::temp_dir().join(format!("day-connected-root-{}", uuid::Uuid::new_v4()));
@@ -276,6 +290,7 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
     app.press("role:button[New]").unwrap();
     wait(&mut app, "What do you want done?");
     app.type_text("id:goal", "Clarify this exact goal").unwrap();
+    choose_project(&mut app, &f);
     app.wait_until("setup ready", WAIT, |s| {
         s.enabled("role:button[Plan a mission]").unwrap_or(false)
     })
@@ -442,6 +457,7 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
         Ok(Some("Check the importer without live effects"))
     );
     assert_eq!(f.cmd("stats", false)["posts"], 0);
+    choose_project(&mut app, &f);
     app.wait_until("creation ready", WAIT, |s| {
         s.enabled("role:button[Plan a mission]").unwrap_or(false)
     })
@@ -612,6 +628,7 @@ fn a_lost_new_creation_is_checked_after_reopen_and_never_adopts_the_previous_mis
     wait(&mut app, "role:button[New]");
     app.press("role:button[New]").unwrap();
     app.type_text("id:goal", "First mission").unwrap();
+    choose_project(&mut app, &f);
     app.wait_until("setup", WAIT, |s| {
         s.enabled("role:button[Plan a mission]").unwrap_or(false)
     })
@@ -625,6 +642,7 @@ fn a_lost_new_creation_is_checked_after_reopen_and_never_adopts_the_previous_mis
     app.press("label:Pilot. Go to Today").unwrap();
     app.press("role:button[New]").unwrap();
     app.type_text("id:goal", "A different exact goal").unwrap();
+    choose_project(&mut app, &f);
     app.wait_until("next setup", WAIT, |s| {
         s.enabled("role:button[Plan a mission]").unwrap_or(false)
     })
@@ -660,6 +678,8 @@ fn a_lost_new_creation_is_checked_after_reopen_and_never_adopts_the_previous_mis
 
 /// The fake root's window ID, as a native root would pass it.
 const FAKE_WINDOW: &str = "inventory-window";
+/// The project the fake root's window acts on.
+const FAKE_PROJECT: &str = "fake-project";
 /// What the connected adapter says over a planning page older than the latest reads.
 const OLDER: &str = "This is an older read. Pilot checks again before it saves anything.";
 
@@ -680,6 +700,16 @@ struct FakeRoot {
 }
 fn answer(snapshot: Value) -> Value {
     json!({"version":1,"value":{"snapshot":snapshot,"outcome":null}})
+}
+/// Today's scope read of a window bound to one project, as the native root
+/// answers it: All projects holds only the window's own project, so Today
+/// shows its own sections. The handler copies the asked scope and generation.
+fn own_scope() -> Value {
+    json!({"version":1,"scope":"all","generation":0,"own":FAKE_PROJECT,
+        "catalogComplete":true,"complete":true,"outsideNeedsYou":{"count":0,"complete":true},
+        "projects":[{"id":FAKE_PROJECT,"name":"This project","selected":true,"currentness":"live",
+            "observedAt":"","needsYou":{"count":0,"complete":true},"today":null,"planning":null,
+            "results":null,"canAct":false,"errors":{}}]})
 }
 impl FakeRoot {
     fn new() -> Self {
@@ -773,6 +803,7 @@ impl FakeRoot {
         root.reply("day.plan.prepare", Value::Null);
         root.reply("day.window.read", Value::Null);
         root.reply("day.plan.inventorySnapshot", not_current());
+        root.reply("day.today.scope", own_scope());
         root
     }
     fn reply(&self, name: &str, snapshot: Value) {
@@ -1240,14 +1271,24 @@ fn a_cached_snapshot_from_before_a_later_notice_cannot_renew_the_interview() {
     }
     let calls = root.count("day.plan.snapshot");
     root.refuse("day.plan.snapshot", "stale");
+    let reads = root.count("day.today.read");
     root.changed();
-    wait(&mut app, OLDER);
+    // The same notice refreshes Today and planning. Once Today's read is
+    // asked for, planning knows of the later notice.
+    while root.count("day.today.read") <= reads {
+        assert!(std::time::Instant::now() < deadline);
+        app.wait(Duration::from_millis(50)).unwrap();
+    }
+    // A notice does not mark the open page older while its read waits (no
+    // flicker). The held reply is from before the later notice, so it cannot
+    // renew the page; the later read is refused, so the page says it is older.
     let (call, old_reply) = root.held_snapshot.lock().unwrap().take().unwrap();
     call.resolve(old_reply);
     while root.count("day.plan.snapshot") <= calls {
         assert!(std::time::Instant::now() < deadline);
         app.wait(Duration::from_millis(50)).unwrap();
     }
+    wait(&mut app, OLDER);
     assert!(app.shows(OLDER));
     assert!(!app.screen().enabled("id:choice-what-messages").unwrap());
     app.press_key("1").unwrap();

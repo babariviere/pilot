@@ -113,6 +113,16 @@ struct Root {
 fn answer(snapshot: Value) -> Value {
     json!({"version":1,"value":{"snapshot":snapshot,"outcome":null}})
 }
+/// Today's scope read of a window bound to one project, as the native root
+/// answers it: All projects holds only the window's own project, so Today
+/// shows its own sections. The handler copies the asked scope and generation.
+fn own_scope() -> Value {
+    json!({"version":1,"scope":"all","generation":0,"own":"proj-a",
+        "catalogComplete":true,"complete":true,"outsideNeedsYou":{"count":0,"complete":true},
+        "projects":[{"id":"proj-a","name":"Project A","selected":true,"currentness":"live",
+            "observedAt":"","needsYou":{"count":0,"complete":true},"today":null,"planning":null,
+            "results":null,"canAct":false,"errors":{}}]})
+}
 impl Root {
     fn new(today: Scenario) -> Self {
         let channel = HostChannel::new();
@@ -125,13 +135,19 @@ impl Root {
             let (calls, replies) = (calls.clone(), replies.clone());
             channel.handle(name, move |call: HostCall| {
                 let data = call.data().clone();
-                calls.lock().unwrap().push((name.to_owned(), data));
-                let reply = replies
+                calls.lock().unwrap().push((name.to_owned(), data.clone()));
+                let mut reply = replies
                     .lock()
                     .unwrap()
                     .get(name)
                     .cloned()
                     .unwrap_or(json!({"version":1,"error":"unavailable"}));
+                if name == "day.today.scope"
+                    && let Some(snapshot) = reply.pointer_mut("/value/snapshot")
+                {
+                    snapshot["generation"] = data["args"]["generation"].clone();
+                    snapshot["scope"] = data["args"]["scope"].clone();
+                }
                 call.resolve(reply);
             });
         }
@@ -146,6 +162,7 @@ impl Root {
         root.reply("day.attention.draft", today);
         root.reply("day.plan.prepare", Value::Null);
         root.reply("day.window.read", Value::Null);
+        root.reply("day.today.scope", own_scope());
         root
     }
     fn reply(&self, name: &str, snapshot: Value) {
@@ -189,6 +206,10 @@ impl Root {
                     && n != "day.ritual.results"
                     && !n.ends_with(".inventory")
                     && n != "day.plan.prepare"
+                    // Passive: Today's scope reads only.
+                    && n != "day.today.scope"
+                    // Passive: the delivered results list Today shows.
+                    && n != "day.delivery.list"
                     && n != "day.update.check"
                     && n != "day.update.restored"
                     && n != "day.flush.ack"

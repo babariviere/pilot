@@ -27,6 +27,15 @@ fn entry() -> PathBuf {
             std::fs::copy(&path, dir.join(&name)).unwrap();
         }
     }
+    // Shared chrome imports its packaged SVGs. Keep this isolated source copy
+    // complete rather than removing icons or granting filesystem capabilities.
+    std::fs::create_dir(dir.join("icons")).unwrap();
+    for file in std::fs::read_dir(app.join("icons")).unwrap() {
+        let path = file.unwrap().path();
+        if path.extension().is_some_and(|e| e == "svg") {
+            std::fs::copy(&path, dir.join("icons").join(path.file_name().unwrap())).unwrap();
+        }
+    }
     std::fs::write(
         dir.join("nsh.json"),
         json!({"name":"Pilot","id":"dev.pilot.day","theme":"theme.json","capabilities":{"host":METHODS}})

@@ -82,6 +82,18 @@ fn automatic_refresh_races_and_outage_recovery_keep_today_stable_and_send_nothin
     pump(&mut app, || {
         host.planning_inventory_snapshot().availability == PlanAvailability::Live
     });
+    // Delivered results load on their own; an empty list then hides its
+    // section. Measure after that first read, not during it.
+    let end = std::time::Instant::now() + WAIT;
+    while contains(&app, "Reading new deliveries") {
+        assert!(
+            std::time::Instant::now() < end,
+            "{:?}",
+            app.screen().texts()
+        );
+        app.wait(Duration::from_millis(25)).unwrap();
+    }
+    app.wait(Duration::from_millis(100)).unwrap();
     let initial = status_nodes(&app);
     assert_eq!(initial.len(), 3, "status regions must have stable owners");
     for _ in 0..5 {
@@ -136,7 +148,8 @@ fn automatic_refresh_races_and_outage_recovery_keep_today_stable_and_send_nothin
     wait(&mut app, "id:goal");
     app.type_text("id:goal", "Keep 👩🏽‍💻  this\nunsent draft")
         .unwrap();
-    app.set_viewport(Size::new(Points(1100.0), Points(500.0)))
+    // New without a chosen project is short: keep the view smaller than it.
+    app.set_viewport(Size::new(Points(1100.0), Points(300.0)))
         .unwrap();
     let scroll = app
         .screen()
