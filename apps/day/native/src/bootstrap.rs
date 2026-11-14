@@ -22,10 +22,8 @@ use crate::{
 use nsh_platform_macos::{AssetBase, objc2::MainThreadMarker};
 use pilot_desktop_updater::{
     coordination::Location,
-    daemon_upgrade::control::{self, Command, State},
     helper::compiled_trust,
     installer::{NativePlatform, Platform},
-    manifest::Trust,
 };
 use serde_json::json;
 use std::{
@@ -33,8 +31,6 @@ use std::{
     ffi::OsString,
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
-    sync::atomic::AtomicBool,
-    time::Duration,
 };
 
 /// Explicit native launch selection, never inferred from development state.
@@ -281,7 +277,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
     )
     .map_err(|error| refused("host", error))?;
     if let Some(location) = service {
-        start_service(location, trust.clone());
+        start_service(location);
     }
     let bridge = Bridge::new(DayRoot::new(host));
     let mut configuration = crate::macos_host::options(&bridge);
@@ -294,32 +290,23 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
         .run(main)
 }
 
-/// Starts the service when nothing answers on its port, off the main thread.
-/// It uses the same checked path as GPUI's Daemon > Start: only the managed
-/// launch agent for this profile and port, with its definition, owner and
-/// signed runtime verified first. A running, busy or unmanaged service is left
-/// alone. One try per launch; the connection's own reconnect picks it up.
-fn start_service(location: Location, trust: Trust) {
+/// Starts this app's own service when it is stopped, off the main thread
+/// (see [`crate::service_start`]). The result is logged as `service.start`.
+fn start_service(location: Location) {
     let spawned = std::thread::Builder::new()
         .name("day-service-start".into())
         .spawn(move || {
-            let address = (std::net::Ipv4Addr::LOCALHOST, location.port).into();
-            if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(500)).is_ok() {
+            let result = pilot_desktop_updater::layout::running_root()
+                .map_err(|_| "no app root".to_owned())
+                .and_then(|app| crate::service_start::start(&location, &app));
+            if result == Ok("running") {
                 return;
             }
-            let result =
-                control::inspect(location, &trust).and_then(|target| match target.state() {
-                    State::Running => Ok("running"),
-                    State::Stopped => {
-                        control::execute(&target, Command::Start, &trust, &AtomicBool::new(false))
-                            .map(|_| "started")
-                    }
-                });
             crate::day_log::event(
                 "service.start",
                 match result {
                     Ok(state) => json!({"result": state}),
-                    Err(error) => json!({"result": "failed", "error": format!("{error:?}")}),
+                    Err(error) => json!({"result": "failed", "error": error}),
                 },
             );
         });
