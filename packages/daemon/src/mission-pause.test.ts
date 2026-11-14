@@ -147,6 +147,12 @@ test("mission Pause proves ACK, census and joined exit; unrelated work stays run
 	assert.equal(saved.lifecycleCheckpoint.quiescent, true);
 	assert.equal(saved.lifecycleCheckpoint.children[0].conversationId, "child-conversation");
 	assert.equal(saved.lifecycleCheckpoint.purpose, "mission-pause");
+	// The paused chat keeps its turn for Resume (saved as working), but nothing runs.
+	const held = f.sessions["metas"].get(f.a.id)!;
+	const kept = held.working;
+	held.working = true;
+	assert.equal(f.sessions.get(f.a.id)?.working, false, "a chat its mission paused is not working");
+	held.working = kept;
 	const inputs = f.commands.filter((c) => c.command.type === "input").length;
 	await f.sessions.resumeMaintenance();
 	assert.equal(f.opened.filter((id) => id === f.a.id).length, 1, "upgrade release cannot resume mission-owned work");

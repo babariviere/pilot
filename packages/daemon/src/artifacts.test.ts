@@ -130,6 +130,9 @@ test("artifact reads use committed storage and leave sessions parked", async (t)
 	});
 	assert.deepEqual(await sessions.projectArtifacts(project.id), [{ ...summary, projectId: project.id }]);
 	assert.equal(list.mock.callCount(), 1);
+	// An older record saved without projectId is named by its chat's project.
+	list.mock.mockImplementation(async () => [{ ...summary, projectId: undefined }]);
+	assert.deepEqual(await sessions.projectArtifacts(project.id), [{ ...summary, projectId: project.id }]);
 	assert.ok(sessions.list().every((session) => session.state === "parked"));
 });
 
@@ -527,7 +530,10 @@ test("archived owners retain project-visible artifacts and pinned revisions acro
 test("HTTP artifact routes return lists, latest and pinned revisions, and 404s", async (t) => {
 	const { base, project } = await api(t);
 	assert.deepEqual(await (await fetch(`${base}/api/sessions/${sessionId}/artifacts`)).json(), [summary]);
-	assert.deepEqual(await (await fetch(`${base}/api/projects/${project.id}/artifacts`)).json(), [summary]);
+	// A project's rows always name the project, even when the record was saved without it.
+	assert.deepEqual(await (await fetch(`${base}/api/projects/${project.id}/artifacts`)).json(), [
+		{ ...summary, projectId: project.id },
+	]);
 	const path = `${base}/api/sessions/${sessionId}/artifacts/${artifactId}`;
 	assert.deepEqual(await (await fetch(path)).json(), revision);
 	assert.deepEqual(await (await fetch(`${path}?revision=1`)).json(), { ...revision, revision: 1 });

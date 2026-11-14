@@ -6384,7 +6384,12 @@ ${run.excerpt}`,
 		const lists = await Promise.all(
 			[...this.metas.values()].filter((meta) => meta.projectId === projectId).map((meta) => this.artifacts(meta.id)),
 		);
-		return lists.flat().sort((a, b) => b.updatedAt - a.updatedAt);
+		// Every row comes from a chat of this project. Older records were saved without
+		// projectId; name it here so clients do not drop them. Saved data is unchanged.
+		return lists
+			.flat()
+			.map((artifact) => (artifact.projectId ? artifact : { ...artifact, projectId }))
+			.sort((a, b) => b.updatedAt - a.updatedAt);
 	}
 
 	private artifactStore(id: string): ArtifactStore {
@@ -14029,6 +14034,8 @@ ${run.excerpt}`,
 			!meta.recoveryStopped &&
 			(mainBusy || (childrenWorking && !questionWaits));
 		const toolPauses: DiagnosticPauseReason[] = [];
+		// Its mission paused or archived it: the turn is kept for a resume, but nothing runs.
+		const missionHeld = !worker && meta.lifecycleCheckpoint?.purpose === "mission-pause";
 		if (paused) toolPauses.push("sleep");
 		if (meta.updatePaused) toolPauses.push("update");
 		if (quotaPaused) toolPauses.push("quota");
@@ -14046,6 +14053,7 @@ ${run.excerpt}`,
 			!meta.recoveryStopped &&
 			!paused &&
 			!offlinePaused &&
+			!missionHeld &&
 			(this.workspaceSetups.has(meta.id) ||
 				this.postRunTasks.get(meta.id)?.checking ||
 				this.actionRunner?.isWorking(meta.id) ||
