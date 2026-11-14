@@ -12,6 +12,7 @@ use std::{
 };
 
 struct State {
+    feedback: Value,
     inventory: Value,
     inventory_status: u16,
     requests: usize,
@@ -36,6 +37,7 @@ impl InventoryFixture {
         let port = listener.local_addr().unwrap().port();
         let f = Fixture::selected(port, true);
         let state = Arc::new(Mutex::new(State {
+            feedback: json!({"items":[],"more":false,"before":null}),
             inventory: inventory("First interview"),
             inventory_status: 200,
             requests: 0,
@@ -96,7 +98,9 @@ impl InventoryFixture {
                     state.websocket = Some(stream);
                     continue;
                 }
-                let body = if request.starts_with("GET /api/hello ") {
+                let body = if request.starts_with("GET /api/feedback?limit=20 ") {
+                    state.feedback.clone()
+                } else if request.starts_with("GET /api/hello ") {
                     json!({"daemonId":"synthetic-daemon","lineageId":"synthetic-lineage","protocolVersion":1,
                         "minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"dayOverview":1}})
                 } else if request.starts_with("GET /api/projects/synthetic-project ") {
@@ -159,6 +163,46 @@ impl InventoryFixture {
             Fixture::caps(),
         )
     }
+}
+
+#[test]
+fn feedback_cache_reads_do_not_get_or_write_and_follow_daemon_events() {
+    let fixture = InventoryFixture::new();
+    let first = fixture
+        .f
+        .run("return await call('day.feedback.read');", Fixture::caps());
+    assert_eq!(first["value"]["snapshot"]["items"], json!([]));
+    let requests = fixture.state.lock().unwrap().requests;
+    let journal = std::fs::read(fixture.f.path.join("journal")).unwrap();
+    let replies = fixture.f.run("const replies=[]; for(let i=0;i<10;i++) replies.push(await call('day.feedback.read',{cached:true})); return replies;", Fixture::caps());
+    for reply in replies.as_array().unwrap() {
+        assert_eq!(reply["value"]["snapshot"], first["value"]["snapshot"]);
+    }
+    assert_eq!(fixture.state.lock().unwrap().requests, requests);
+    assert_eq!(
+        std::fs::read(fixture.f.path.join("journal")).unwrap(),
+        journal
+    );
+    fixture.state.lock().unwrap().feedback = json!({"items":[{
+        "id":"f1","operationId":"op1","sequence":1,"recordedAt":1,
+        "text":"Feedback arrived","origin":null,"work":[]
+    }],"more":false,"before":null});
+    fixture.invalidate(inventory("Feedback refreshed"));
+    fixture.wait(|read| {
+        read.plans
+            .first()
+            .is_some_and(|p| p.title == "Feedback refreshed")
+    });
+    let requests = fixture.state.lock().unwrap().requests;
+    let next = fixture.f.run(
+        "return await call('day.feedback.read',{cached:true});",
+        Fixture::caps(),
+    );
+    assert_eq!(
+        next["value"]["snapshot"]["items"][0]["text"],
+        "Feedback arrived"
+    );
+    assert_eq!(fixture.state.lock().unwrap().requests, requests);
 }
 
 #[test]

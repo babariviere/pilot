@@ -34,6 +34,10 @@ mission when you keep it. Choose the project with Pilot's code and a read-only a
 send: it groups duplicates, may ask you a question and proposes a small fix, a mission or no change.
 You answer its question on the same page; the answer only clarifies. Start fix, linking a mission and
 Plan a new mission are your own steps; only you mark feedback resolved.
+Today's New section also shows finished triages and triage questions. Open a row to read the
+proposal or answer the question. Later keeps it out of New across reopening this window;
+Bring back restores it. A new question or finished triage returns to New. Reading or deferring
+feedback starts no work and approves nothing.
 
 | Feature                                         | Guide                                         |
 | ----------------------------------------------- | --------------------------------------------- |

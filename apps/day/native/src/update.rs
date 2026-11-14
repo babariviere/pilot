@@ -368,6 +368,9 @@ pub struct SavedView {
     /// nothing, and it stays with its own question.
     #[prop(default)]
     pub feedback_answers: Vec<String>,
+    /// Feedback attention keys deferred in this window. Restoring starts nothing.
+    #[prop(default)]
+    pub feedback_later: Vec<String>,
 }
 
 impl SavedView {
@@ -383,6 +386,7 @@ impl SavedView {
             .chain(&self.preferences)
             .chain(&self.threads)
             .chain(&self.feedback_answers)
+            .chain(&self.feedback_later)
             .map(String::len)
             .sum::<usize>();
         self.goal.len()
@@ -413,6 +417,7 @@ impl SavedView {
             + self.preferences.len()
             + self.threads.len()
             + self.feedback_answers.len()
+            + self.feedback_later.len()
     }
 
     /// Whether its offsets are plain, non-negative numbers.
@@ -499,7 +504,11 @@ impl SavedView {
                             && (picks.is_empty() || picks.split(',').all(number))
                 )
             });
-        if !answers || !(self.feedback_project.is_empty() || id(&self.feedback_project)) {
+        let later = self.feedback_later.iter().all(|key| {
+            let parts: Vec<_> = key.split('/').collect();
+            matches!(parts.as_slice(), [feedback, triage, event] if id(feedback) && id(triage) && (*event == "done" || number(event)))
+        });
+        if !later || !answers || !(self.feedback_project.is_empty() || id(&self.feedback_project)) {
             return false;
         }
         let Some((origin, _)) = self.feedback.split_once('\n') else {

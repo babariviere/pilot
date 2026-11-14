@@ -10,6 +10,7 @@ import { effect, signal, Text, View, type ViewRef } from "nsh";
 import { Button, Collapsible, Radio, RadioGroup } from "nsh/base";
 import type { MissionRow, Request, Today } from "pilot-day/native";
 import type { Day } from "./day";
+import { FeedbackIncoming, incomingFeedback, newFeedback } from "./FeedbackIncoming";
 import type { IntakeMirror, IntakeOp, IntakeResult, IntakeRow, IntakeView, Triage } from "./intakeFeed";
 import { openLinear } from "./linearView";
 import { glide } from "./motion";
@@ -524,10 +525,17 @@ function LiveIncoming(props: { day: Day; mirror: IntakeMirror }) {
 		}
 	};
 	return (
-		<If when={visible()}>
+		<If
+			when={
+				visible() ||
+				incomingFeedback(props.day).length > 0 ||
+				!!props.day.feedback?.view().reason ||
+				!!props.day.feedback?.view().more
+			}
+		>
 			<View testID="incoming" class="gap-1">
 				<View class="pb-1">
-					<SectionTitle title="New" count={v().fresh.length}>
+					<SectionTitle title="New" count={v().fresh.length + newFeedback(props.day).length}>
 						<If when={v().intake.sources.length > 0}>
 							<Text class="text-xs text-faint">{`From ${joined(v().intake.sources)}`}</Text>
 						</If>
@@ -614,6 +622,7 @@ function LiveIncoming(props: { day: Day; mirror: IntakeMirror }) {
 						{`${v().intake.more} Pilot reads up to 100 requests from each source.`}
 					</Text>
 				</If>
+				<FeedbackIncoming day={props.day} />
 				<Kept mirror={props.mirror} state="later" rows={v().later} busy={busy} />
 				<Kept mirror={props.mirror} state="discarded" rows={v().discarded} busy={busy} />
 			</View>
@@ -659,10 +668,17 @@ function ExampleIncoming(props: { day: Day }) {
 			? "No new requests in what Pilot read."
 			: `No new requests. ${joined(intake().sources)} ${intake().sources.length === 1 ? "is" : "are"} quiet.`;
 	return (
-		<If when={intake().watched}>
+		<If
+			when={
+				intake().watched ||
+				incomingFeedback(props.day).length > 0 ||
+				!!props.day.feedback?.view().more ||
+				!!props.day.feedback?.view().reason
+			}
+		>
 			<View testID="incoming" class="gap-1">
 				<View class="pb-1">
-					<SectionTitle title="New" count={shown().length}>
+					<SectionTitle title="New" count={shown().length + newFeedback(props.day).length}>
 						<Text class="text-xs text-faint">{`From ${joined(intake().sources)}`}</Text>
 						<LinearEntry day={props.day} sources={intake().sources} />
 					</SectionTitle>
@@ -675,6 +691,7 @@ function ExampleIncoming(props: { day: Day }) {
 						</View>
 					)}
 				</Each>
+				<FeedbackIncoming day={props.day} />
 				<If when={shown().length > 0} else={<Text class="text-sm text-muted-foreground">{empty()}</Text>}>
 					<Each of={shown()} key={(r) => r.id}>
 						{(r) => <ExampleRow request={r()} />}

@@ -52,7 +52,25 @@ fn view() -> SavedView {
         feedback_open: true,
         feedback: "mission/export\n  Exact feedback 日本語\nsecond line ".into(),
         feedback_project: "pilot".into(),
+        feedback_later: vec!["f1/op1/done".into(), "f2/op2/42".into()],
         feedback_answers: vec!["triage-1/42\n1,2\n  Exact answer 👩🏽‍💻\nsecond line ".into()],
+    }
+}
+
+#[test]
+fn deferred_feedback_round_trips_and_old_windows_default_to_none() {
+    let original = view();
+    let mut json = serde_json::to_value(&original).unwrap();
+    let restored: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert_eq!(restored.feedback_later, original.feedback_later);
+    assert!(restored.feedback_valid());
+    json.as_object_mut().unwrap().remove("feedbackLater");
+    let old: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert!(old.feedback_later.is_empty());
+    for key in ["f/op", "bad id/op/done", "f/op/0", "f/op/done/extra"] {
+        let mut invalid = view();
+        invalid.feedback_later = vec![key.into()];
+        assert!(!invalid.feedback_valid(), "{key}");
     }
 }
 

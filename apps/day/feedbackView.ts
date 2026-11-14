@@ -13,6 +13,9 @@ import { glide } from "./motion";
 /** Whether the feedback page is open, over the screen it was opened from. */
 export const feedbackOpen = signal(false);
 
+/** Attention keys deferred in this window, saved across close and update. */
+export const feedbackLater = signal<string[]>([]);
+
 /** Unsent feedback, exactly as typed, and the origin the user kept. */
 export type FeedbackDraft = { text: string; origin: UserFeedbackOriginRef | null };
 
@@ -147,6 +150,7 @@ export function forgetFeedback() {
 	feedbackProject.set(null);
 	answerDrafts.set({});
 	stepMessages.set({});
+	feedbackLater.set([]);
 }
 
 /** A local date such as "9 Nov", or "" when it cannot be read. */

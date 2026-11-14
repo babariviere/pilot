@@ -121,6 +121,8 @@ pub(crate) fn valid_id(s: &str) -> bool {
 }
 
 struct Shared {
+    /// Latest feedback page, refreshed by daemon events after the first read.
+    feedback: Mutex<Option<Result<serde_json::Value, Error>>>,
     saved_window: Mutex<Option<window::SavedWindow>>,
     chat_choice: Mutex<Option<crate::new_chat::ChatChoice>>,
     updates: Mutex<crate::update::ServiceView>,
@@ -446,6 +448,7 @@ impl NativeHost {
             return Err(Error::Identity);
         }
         let shared = Arc::new(Shared {
+            feedback: Mutex::new(None),
             saved_window: Mutex::new(None),
             chat_choice: Mutex::new(None),
             updates: Mutex::new(updates::State::new(None).snapshot()),
@@ -1317,6 +1320,7 @@ async fn refresh(
         // Keep the profile stream and invalidations independent of any project.
         t.profile_gate().await?;
         shared.current(epoch)?;
+        feedback::refresh(t, shared).await;
         planning_live(t, shared, epoch).await;
         shared.change(|_| ());
         return Ok(());
@@ -1329,6 +1333,7 @@ async fn refresh(
             .clone()
     });
     t.gate(false).await?;
+    feedback::refresh(t, shared).await;
     let overview = t.overview().await?;
     if detail.is_some_and(|id| {
         !valid_id(id) || !overview.dashboard.missions.items.iter().any(|m| m.id == id)

@@ -14,6 +14,48 @@ async function feedback() {
 const counts = (app: { texts(): string[] }) => app.texts().find((t) => t.startsWith("Sends:"));
 const steps = (app: { texts(): string[] }) => app.texts().find((t) => t.startsWith("Steps:"));
 
+test("finished triage joins New; opening and saved Later start nothing", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "Show feedback in Today");
+	await app.press("Triage fix");
+	await app.waitFor("id:feedback-proposal-f1");
+	await app.keyboard.press("escape");
+	await app.waitFor("id:feedback-new-f1");
+	await app.press("id:feedback-new-f1");
+	await app.waitFor("id:feedback-proposal-f1");
+	expect(steps(app)).toBe("Steps: [triage]");
+	await app.press("id:feedback-later-f1");
+	await app.waitUntil(() => !app.shows("id:feedback-new-f1"));
+	await app.press("Save and reopen");
+	await app.waitFor("id:feedback-later-show");
+	expect(app.shows("id:feedback-new-f1")).toBe(false);
+	await app.press("id:feedback-later-show");
+	await app.press("id:feedback-bring-back-f1");
+	await app.waitFor("id:feedback-new-f1");
+	expect(steps(app)).toBe("Steps: [triage]");
+});
+
+test("a triage question joins New and a later proposal returns after deferral", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "Which plan shows people?");
+	await app.keyboard.press("escape");
+	expect(app.shows("id:feedback-new-f1")).toBe(false);
+	await app.press("Triage asks");
+	await app.waitFor("id:feedback-new-f1");
+	await app.press("id:feedback-new-f1");
+	await app.waitFor("id:feedback-question-f1");
+	expect(steps(app)).toBe("Steps: [triage]");
+	await app.press("id:feedback-later-f1");
+	await app.press("Save and reopen");
+	await app.waitFor("id:feedback-later-show");
+	expect(app.shows("id:feedback-new-f1")).toBe(false);
+	await app.press("Triage fix");
+	await app.waitFor("id:feedback-new-f1");
+	expect(steps(app)).toBe("Steps: [triage]");
+});
+
 async function chooseProject(app: Awaited<ReturnType<typeof feedback>>) {
 	await app.press("label:Project where agents triage and fix your feedback");
 	await app.press("text:Pilot code");

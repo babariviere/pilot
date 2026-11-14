@@ -27,6 +27,7 @@ import {
 	savedReminders,
 } from "./deliveryView";
 import {
+	feedbackLater,
 	feedbackOpen,
 	feedbackProject,
 	forgetFeedback,
@@ -222,6 +223,7 @@ export function captureView(today?: Today): SavedView {
 		// triage's question by chat and question. Restoring starts and sends nothing.
 		feedbackProject: feedbackProject() ?? "",
 		feedbackAnswers: savedAnswers(),
+		feedbackLater: feedbackLater(),
 	};
 }
 
@@ -419,6 +421,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	feedbackOpen.set(view.feedbackOpen === true);
 	feedbackProject.set(view.feedbackProject || null);
 	restoreAnswers(view.feedbackAnswers ?? []);
+	feedbackLater.set(view.feedbackLater ?? []);
 	// A thread comes back over its own mission only; its words always come back unsent.
 	const thread = view.thread ?? "";
 	restoreThreads(view.place === "mission" && thread.startsWith(`${view.id}/`) ? thread : "", view.threads ?? []);

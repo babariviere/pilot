@@ -383,6 +383,7 @@ export class ConnectedFeedback implements FeedbackSource {
 	#checking = new Set<string>();
 	#reading: Promise<void> | null = null;
 	#again = false;
+	#freshRequested = false;
 	#asked = false;
 	#sending = false;
 	#stepping: string | null = null;
@@ -479,7 +480,8 @@ export class ConnectedFeedback implements FeedbackSource {
 		return r;
 	}
 
-	read(): Promise<void> {
+	read(cached = false): Promise<void> {
+		if (!cached) this.#freshRequested = true;
 		if (this.#reading) {
 			this.#again = true;
 			return this.#reading;
@@ -488,7 +490,9 @@ export class ConnectedFeedback implements FeedbackSource {
 		this.#reading = (async () => {
 			do {
 				this.#again = false;
-				await this.#call("day.feedback.read", {});
+				const fresh = this.#freshRequested;
+				this.#freshRequested = false;
+				await this.#call("day.feedback.read", fresh ? {} : { cached: true });
 				this.#publish();
 			} while (this.#again && !this.#closed);
 		})().finally(() => {

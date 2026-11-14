@@ -90,10 +90,14 @@ impl Intent {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Read {
     before: Option<u64>,
+    #[serde(default)]
+    cached: bool,
 }
 impl Read {
     pub(crate) fn validate(&self) -> Result<(), Error> {
-        if self.before.is_some_and(|n| n == 0 || n > MAX_CURSOR) {
+        if self.before.is_some_and(|n| n == 0 || n > MAX_CURSOR)
+            || (self.cached && self.before.is_some())
+        {
             return Err(Error::Invalid);
         }
         Ok(())
@@ -371,16 +375,29 @@ fn valid_page(v: &Value, before: Option<u64>) -> bool {
 
 /// One page of the user's saved feedback. A failed read is never an empty list.
 async fn read(t: &Transport, before: Option<u64>) -> Result<Value, Error> {
-    t.gate(false).await?;
+    t.profile_gate().await?;
     let after = before.map(|n| format!("&before={n}")).unwrap_or_default();
     let v = t.get(&format!("/api/feedback?limit={PAGE}{after}")).await?;
     if !valid_page(&v, before) {
         return Err(Error::Invalid);
     }
-    t.gate(false).await?;
+    t.profile_gate().await?;
     Ok(
         json!({"version":1,"items":v["items"],"more":v["more"],"before":v["before"],"older":before.is_some()}),
     )
+}
+
+/// Event-driven refresh. Bridge change notices only read this cached page.
+pub(super) async fn refresh(t: &Transport, shared: &Shared) {
+    let wanted = shared
+        .feedback
+        .lock()
+        .expect("native feedback poisoned")
+        .is_some();
+    if wanted {
+        let snapshot = read(t, None).await;
+        *shared.feedback.lock().expect("native feedback poisoned") = Some(snapshot);
+    }
 }
 
 pub(super) async fn handle(
@@ -501,7 +518,26 @@ pub(super) async fn handle(
         }
         _ => return Err(Error::Invalid),
     }
-    let snapshot = read(t, before).await;
+    let cached = if matches!(command, Command::FeedbackRead(request) if request.cached) {
+        shared
+            .feedback
+            .lock()
+            .expect("native feedback poisoned")
+            .clone()
+    } else {
+        None
+    };
+    let snapshot = if let Some(snapshot) = cached {
+        if !shared.connected.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::Offline);
+        }
+        snapshot
+    } else {
+        read(t, before).await
+    };
+    if before.is_none() {
+        *shared.feedback.lock().expect("native feedback poisoned") = Some(snapshot.clone());
+    }
     if matches!(command, Command::FeedbackRead(_)) {
         let snapshot = snapshot?;
         check()?;
@@ -654,7 +690,14 @@ mod tests {
         ));
         let many = json!({"items":(1..=21).rev().map(item).collect::<Vec<_>>(),"more":false,"before":null});
         assert!(!valid_page(&many, None));
-        assert_eq!(Read { before: Some(0) }.validate(), Err(Error::Invalid));
+        assert_eq!(
+            Read {
+                before: Some(0),
+                cached: false
+            }
+            .validate(),
+            Err(Error::Invalid)
+        );
     }
 
     fn step(v: Value) -> Result<Step, Error> {

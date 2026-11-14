@@ -88,6 +88,7 @@ let began = false;
 let ritualFeed: ConnectedRituals | null = null;
 let todayFeed: ConnectedToday | null = null;
 let planFeed: ConnectedPlans | null = null;
+let feedbackFeed: ConnectedFeedback | null = null;
 let pendingFlush: number | null = null;
 /** The next automatic read after a passing failure, and its delay. */
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -123,9 +124,11 @@ function current(): boolean {
 function refresh() {
 	if (connection().state !== "open" || !current()) return;
 	// These are cached native projections, not service/provider startup.
-	void Promise.all([todayFeed?.refresh(), planFeed?.refresh(), ritualFeed?.sync()]).catch((error: unknown) => {
-		console.error("Pilot could not read this window again:", error);
-	});
+	void Promise.all([todayFeed?.refresh(), planFeed?.refresh(), ritualFeed?.sync(), feedbackFeed?.read(true)]).catch(
+		(error: unknown) => {
+			console.error("Pilot could not read this window again:", error);
+		},
+	);
 	void refreshScope().catch((error: unknown) => console.error("Pilot could not read its project scope:", error));
 }
 
@@ -258,7 +261,10 @@ async function connect() {
 		void intakeFeed.read();
 	});
 	// The saved Linear issues, the project's preferences, a mission's threads,
-	// the user's feedback and saved artifacts are read only when their page opens.
+	// and saved artifacts are read only when their page opens. Feedback also
+	// supplies Today's New section and follows the same stream invalidations.
+	feedbackFeed = new ConnectedFeedback(window);
+	void feedbackFeed.read();
 	const day = mirrorDay(
 		today,
 		intake,
@@ -267,7 +273,7 @@ async function connect() {
 		mirrorScope(new ConnectedScope(window)),
 		mirrorPreferences(new ConnectedPreferences(window)),
 		mirrorThreads(new ConnectedThreads(window)),
-		mirrorFeedback(new ConnectedFeedback(window)),
+		mirrorFeedback(feedbackFeed),
 		new ConnectedArtifacts(window),
 	);
 	// New's projects are read when New opens; reading sends nothing.
