@@ -393,8 +393,6 @@ export function launcher(s: Selection) {
 		s.daemonId,
 		"--lineage-id",
 		s.lineageId,
-		"--journal",
-		join(s.installDirectory, "window-journal"),
 	];
 	return `#!/bin/bash\nset -euo pipefail\n# Native bootstrap rechecks trust, identity and credentials on every launch.\nexec ${args.map(quote).join(" ")}\n`;
 }

@@ -23,9 +23,9 @@ Use the [connected candidate recipe](../../docs/technical/day-connected-candidat
 to prepare the real native app without installing or updating it.
 For personal connected use, see [installation preparation](../../docs/technical/day-install.md).
 It reuses the same profile, hands off the daemon and offers explicit legacy retirement.
-Opening `Pilot.app` from Finder reuses the last launcher selection
-(`~/Library/Application Support/Pilot Day/launch.json`) or discovers the profile like GPUI,
-with the journal in that folder. Logs: `~/Library/Logs/Pilot/day.log` (`.1`-`.3`) and `pilotd.log`.
+Opening `Pilot.app` from Finder discovers the profile like GPUI. Every launch without `--journal`
+keeps its window and drafts in `~/Library/Application Support/Pilot Day/window-journal`.
+Logs: `~/Library/Logs/Pilot/day.log` (`.1`-`.3`) and `pilotd.log`.
 New Day distributions are named `Pilot.app`, display Pilot, and can install at
 `~/Applications/Pilot.app`. Legacy app paths and all profile/service identities stay unchanged.
 

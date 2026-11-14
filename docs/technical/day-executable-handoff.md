@@ -18,7 +18,8 @@ same `macos_host::WindowOwner`, `Bridge` and sole `DayRoot` as the native
 fixtures. It does not call stock `run_app`. All application screens remain TSX.
 
 Bootstrap requires an explicit native selection: `--profile`, `--port`,
-`--daemon-id`, `--lineage-id`, `--project-id`, `--project-path` and `--journal`.
+`--daemon-id`, `--lineage-id`, `--project-id` and `--project-path`, with an
+optional `--journal` (default `~/Library/Application Support/Pilot Day/window-journal`).
 These are native launch arguments, not screen inputs or credentials. There is
 no inferred profile or live registration. The production path first checks the
 fixed executable layout, compiled trust and existing `NativePlatform` signature,

@@ -22,8 +22,10 @@ settings remain in canonical storage. Day may not expose every old editor.
 GPUI's local saved drafts, pending sends and GUI settings remain in
 `~/Library/Application Support/Pilot Next` on macOS. They are **not imported into
 Day**. Keep that data even when removing the old app/runtimes. Day keeps its own
-saved drafts, selection and pending operations in `window-journal` beside its
-installed app. Never replay GPUI pending sends or clear uncertain Day operations.
+saved drafts, selection and pending operations in
+`~/Library/Application Support/Pilot Day/window-journal` (older installs kept
+one beside the installed app). Never replay GPUI pending sends or clear
+uncertain Day operations.
 
 Native credentials stay in the existing profile, outside TSX. Read-only
 preflight checks the private capability and authenticated loopback hello.
@@ -116,10 +118,9 @@ seal, then publishes only the separate install directory. It calls the new
 app's native driver, not a GPUI updater or another service manager. The existing
 daemon is fenced/paused, known work canceled, handed off and selectively released.
 
-After success, open `Pilot/Launch Day.command` when separately ready to launch.
-It supplies the exact profile/service identity and the installer's Day journal.
-After one launcher start, opening `Pilot.app` from Finder reuses that selection
-(see [Normal launch](#normal-launch)).
+After success, open `Pilot/Launch Day.command` or the app from Finder when
+separately ready to launch. Both use the same journal (see
+[Normal launch](#normal-launch)).
 
 Historical selection files may still contain project/model fields. The installer
 keeps those bytes in its exact selection binding for recovery but does not use
@@ -140,21 +141,19 @@ records for recovery; do not reset the marker or invent a fresh UUID to retry.
 
 ## Normal launch
 
-A Finder launch passes no arguments (or only `-psn_*`). Pilot then selects:
+A Finder launch passes no arguments (or only `-psn_*`). Pilot then uses the same
+profile as GPUI: `PILOT_HOME`, else `$XDG_DATA_HOME/pilot`, else
+`~/.local/share/pilot`; port `PILOT_PORT`, else 4319; ids from the profile
+files.
 
-1. `~/Library/Application Support/Pilot Day/launch.json`, if it is a private
-   (0600, owned, not a symlink, at most 4 KiB) file and its `daemonId` and
-   `lineageId` still match the profile's `daemon-id` and `storage-lineage`.
-   Each explicit global launch (such as `Launch Day.command`) rewrites it
-   atomically with `{version, profile, port, daemonId, lineageId, journal}`.
-   It keeps the journal the installer chose. It never holds a token.
-2. Otherwise the same profile as GPUI: `PILOT_HOME`, else
-   `$XDG_DATA_HOME/pilot`, else `~/.local/share/pilot`; port `PILOT_PORT`, else
-   4319; ids from the profile files. The journal is
-   `~/Library/Application Support/Pilot Day/window-journal` (directory 0700).
+Every launch without `--journal` (Finder or the installer's launcher) uses one
+journal: `~/Library/Application Support/Pilot Day/window-journal` (directory
+0700). It holds the window's place, unsent drafts and records of sent actions.
+It is not in the profile: the profile belongs to the service, and the service's
+first registration requires an empty profile. `--journal` stays an explicit
+override for tests and candidates.
 
 Signature, identity and credential checks are the same for every launch kind.
-Explicit arguments keep their existing behavior.
 
 ## Logs
 
@@ -162,7 +161,7 @@ Pilot Day writes JSON lines to `~/Library/Logs/Pilot/day.log` and rotates at
 1 MiB to `day.log.1` to `day.log.3`. Only the app executable writes it; tests
 do not. Files are private (0600). Events:
 
-- `startup`, `launch.selected`, `launch.refused`, `launch.saved`, `exit.failed`:
+- `startup`, `launch.selected`, `launch.refused`, `exit.failed`:
   version, build, launch kind, profile, port, journal, selection source, failed stage.
 - `host.open`, `connection.open` (daemon version, protocol), `connection.lost`:
   the daemon connection. Pilot reconnects with a 1 to 30 second backoff.

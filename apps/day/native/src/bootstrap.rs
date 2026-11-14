@@ -1,9 +1,9 @@
 //! Production bootstrap. No development resource override, mock root, credential
 //! in JS or live registration. Missing signed identity refuses load.
 //!
-//! A normal launch (Finder, no arguments) reuses the last explicit global
-//! selection from `launch.json` while its ids still match the profile files.
-//! Otherwise it discovers the profile like GPUI's local client. It never reads
+//! A normal launch (Finder, no arguments) discovers the profile like GPUI's
+//! local client. Every launch without `--journal` uses the same journal,
+//! `~/Library/Application Support/Pilot Day/window-journal`. It never reads
 //! or saves a token.
 use crate::{
     bridge::Bridge,
@@ -21,19 +21,20 @@ use pilot_desktop_updater::{
     helper::compiled_trust,
     installer::{NativePlatform, Platform},
 };
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     collections::BTreeMap,
     ffi::OsString,
-    fs::OpenOptions,
-    io::{Read, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
 };
 
 /// Explicit native launch selection, never inferred from development state.
-fn selection(args: Vec<OsString>) -> Result<(Source, PathBuf), Error> {
+/// Without `--journal`, the launch uses the shared Day journal.
+fn selection(
+    args: Vec<OsString>,
+    shared_journal: impl FnOnce() -> Result<PathBuf, Error>,
+) -> Result<(Source, PathBuf), Error> {
     let mut values = BTreeMap::new();
     let mut args = args.into_iter();
     while let Some(key) = args.next() {
@@ -69,7 +70,10 @@ fn selection(args: Vec<OsString>) -> Result<(Source, PathBuf), Error> {
     let lineage_id = take("--lineage-id")?
         .into_string()
         .map_err(|_| Error::Invalid)?;
-    let journal = PathBuf::from(take("--journal")?);
+    let journal = match values.remove("--journal") {
+        Some(journal) => PathBuf::from(journal),
+        None => shared_journal()?,
+    };
     let project = match (
         values.remove("--project-id"),
         values.remove("--project-path"),
@@ -251,9 +255,6 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
             "project": source.project.is_some(),
         }),
     );
-    // Only a global explicit launch becomes the normal launch's selection.
-    let saved = (origin == Some(Origin::Args) && source.project.is_none())
-        .then(|| (source.clone(), journal.clone()));
     let host = NativeHost::open_with_options(
         source,
         journal,
@@ -265,16 +266,6 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
         },
     )
     .map_err(|error| refused("host", error))?;
-    if let Some((source, journal)) = saved {
-        // A failed save never blocks this launch; the next normal launch discovers.
-        let result = user_home()
-            .map_err(|error| format!("{error:?}"))
-            .and_then(|home| save_launch(&home, &source, &journal).map_err(|e| e.to_string()));
-        crate::day_log::event(
-            "launch.saved",
-            json!({"ok": result.is_ok(), "error": result.err()}),
-        );
-    }
     let bridge = Bridge::new(DayRoot::new(host));
     let mut configuration = crate::macos_host::options(&bridge);
     configuration.app_id = trust.application_id.clone();
@@ -318,47 +309,36 @@ struct NativeSelection {
     origin: Origin,
 }
 
-/// Where a selected launch's profile and journal came from.
+/// Where a selected launch's profile came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Origin {
     Args,
-    Saved,
     Discovered,
 }
 impl Origin {
     fn name(self) -> &'static str {
         match self {
             Self::Args => "args",
-            Self::Saved => "launch.json",
             Self::Discovered => "discovered",
         }
     }
 }
 
-/// The last explicit global selection. It never holds a token.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SavedLaunch {
-    version: u32,
-    profile: PathBuf,
-    port: u16,
-    daemon_id: String,
-    lineage_id: String,
-    journal: PathBuf,
-}
-const SAVED_LAUNCH_MAX: u64 = 4096;
-
 fn support_directory(home: &Path) -> PathBuf {
     home.join("Library/Application Support/Pilot Day")
 }
 
-fn create_support_directory(home: &Path) -> std::io::Result<PathBuf> {
+/// The one Day journal (window state, drafts, sent-action records). It lives
+/// beside the app's other state, not in the profile: the profile belongs to
+/// the service, whose first registration requires it to be empty.
+fn day_journal(home: &Path) -> Result<PathBuf, Error> {
     let dir = support_directory(home);
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
-        .create(&dir)?;
-    Ok(dir)
+        .create(&dir)
+        .map_err(|_| Error::Storage)?;
+    Ok(dir.join("window-journal"))
 }
 
 fn user_home() -> Result<PathBuf, Error> {
@@ -399,99 +379,17 @@ fn global_source(profile: PathBuf, port: u16, daemon_id: String, lineage_id: Str
     }
 }
 
-/// Normal launch: the saved selection while it names this profile's daemon,
-/// else the same profile discovery as GPUI with Day's own journal.
+/// Normal launch: the same profile discovery as GPUI, with the Day journal.
 fn normal_launch(home: &Path, env: impl Fn(&str) -> Option<OsString>) -> Result<Launch, Error> {
-    let (source, journal, origin) = match saved_launch(home) {
-        Ok((source, journal)) => (source, journal, Origin::Saved),
-        Err(reason) => {
-            if reason != "missing" {
-                crate::day_log::event("launch.saved_ignored", json!({"reason": reason}));
-            }
-            let (source, journal) = discover(home, env)?;
-            (source, journal, Origin::Discovered)
-        }
-    };
+    let (source, journal) = discover(home, env)?;
     Ok(Launch::Selected(Box::new(NativeSelection {
         source,
         journal,
         app: None,
         planning_model: None,
         official_inputs: None,
-        origin,
+        origin: Origin::Discovered,
     })))
-}
-
-fn saved_launch(home: &Path) -> Result<(Source, PathBuf), &'static str> {
-    let path = support_directory(home).join("launch.json");
-    let mut file = match OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
-        .open(path)
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err("missing"),
-        Err(_) => return Err("unreadable"),
-    };
-    let meta = file.metadata().map_err(|_| "unreadable")?;
-    if !meta.is_file()
-        || meta.uid() != unsafe { libc::geteuid() }
-        || meta.mode() & 0o077 != 0
-        || meta.len() > SAVED_LAUNCH_MAX
-    {
-        return Err("not private");
-    }
-    let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .take(SAVED_LAUNCH_MAX + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "unreadable")?;
-    let saved: SavedLaunch = serde_json::from_slice(&bytes).map_err(|_| "invalid")?;
-    if saved.version != 1
-        || saved.port == 0
-        || !saved.profile.is_absolute()
-        || !saved.journal.is_absolute()
-    {
-        return Err("invalid");
-    }
-    if profile_id(&saved.profile, "daemon-id").ok().as_ref() != Some(&saved.daemon_id)
-        || profile_id(&saved.profile, "storage-lineage").ok().as_ref() != Some(&saved.lineage_id)
-    {
-        return Err("identity changed");
-    }
-    Ok((
-        global_source(saved.profile, saved.port, saved.daemon_id, saved.lineage_id),
-        saved.journal,
-    ))
-}
-
-/// Writes launch.json atomically (private temp file, then rename).
-fn save_launch(home: &Path, source: &Source, journal: &Path) -> std::io::Result<()> {
-    let dir = create_support_directory(home)?;
-    let bytes = serde_json::to_vec(&SavedLaunch {
-        version: 1,
-        profile: source.profile.clone(),
-        port: source.port,
-        daemon_id: source.home.daemon_id.clone(),
-        lineage_id: source.home.lineage_id.clone(),
-        journal: journal.to_path_buf(),
-    })?;
-    let temp = dir.join(format!(".launch.json.{}", uuid::Uuid::new_v4()));
-    let result = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(&temp)
-        .and_then(|mut file| {
-            file.write_all(&bytes)?;
-            file.sync_all()
-        })
-        .and_then(|()| std::fs::rename(&temp, dir.join("launch.json")));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    result
 }
 
 /// Same profile and port rules as GPUI's `LocalOptions::discover`.
@@ -518,10 +416,10 @@ fn discover(
     }
     let daemon_id = profile_id(&profile, "daemon-id")?;
     let lineage_id = profile_id(&profile, "storage-lineage")?;
-    let journal = create_support_directory(home)
-        .map_err(|_| Error::Storage)?
-        .join("window-journal");
-    Ok((global_source(profile, port, daemon_id, lineage_id), journal))
+    Ok((
+        global_source(profile, port, daemon_id, lineage_id),
+        day_journal(home)?,
+    ))
 }
 
 /// A profile identity file (`daemon-id`, `storage-lineage`), trimmed.
@@ -574,7 +472,7 @@ fn launch(args: Vec<OsString>) -> Result<Launch, Error> {
             selected.extend([key, value]);
         }
     }
-    let (source, journal) = selection(selected)?;
+    let (source, journal) = selection(selected, || user_home().and_then(|h| day_journal(&h)))?;
     let official_inputs = native
         .remove(&OsString::from("--official-update-inputs"))
         .map(PathBuf::from);
@@ -643,6 +541,7 @@ fn launch(args: Vec<OsString>) -> Result<Launch, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::MetadataExt;
 
     #[test]
     fn signature_preparation_runs_off_appkit_and_keeps_refusals() {
@@ -688,11 +587,13 @@ mod tests {
         );
         for flag in ["--app-dir", "--chunk-dir"] {
             assert!(matches!(
-                selection(vec![flag.into(), "/tmp/untrusted".into()]),
+                selection(vec![flag.into(), "/tmp/untrusted".into()], || {
+                    Ok("/tmp/j".into())
+                }),
                 Err(Error::Unavailable)
             ));
         }
-        assert!(selection(vec![]).is_err());
+        assert!(selection(vec![], || Ok("/tmp/j".into())).is_err());
     }
 
     fn selected_args() -> Vec<OsString> {
@@ -911,57 +812,18 @@ mod tests {
     }
 
     #[test]
-    fn saved_launch_is_used_only_while_private_and_matching_the_profile() {
+    fn explicit_launch_without_journal_uses_the_shared_day_journal() {
         let home = temp_home();
-        let profile = home.join(".local/share/pilot");
-        let journal = home.join("Applications/Pilot/window-journal");
-        let source = global_source(
-            profile.clone(),
-            24680,
-            "daemon-1".into(),
-            "lineage-1".into(),
-        );
-        save_launch(&home, &source, &journal).unwrap();
-        let path = support_directory(&home).join("launch.json");
-        assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
-        let saved: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(
-            saved,
-            json!({"version": 1, "profile": profile, "port": 24680, "daemonId": "daemon-1",
-                "lineageId": "lineage-1", "journal": journal})
-        );
-        let entries = std::fs::read_dir(support_directory(&home)).unwrap().count();
-        assert_eq!(entries, 1, "no temporary file left");
-
-        let selected = normal(&home);
-        assert_eq!(selected.origin, Origin::Saved);
-        assert_eq!(selected.source, source);
-        assert_eq!(selected.journal, journal);
-
-        // Changed profile identity: discover again, with Day's own journal.
-        write_profile(&profile, "daemon-2", "lineage-1");
-        let selected = normal(&home);
-        assert_eq!(selected.origin, Origin::Discovered);
-        assert_eq!(selected.source.home.daemon_id, "daemon-2");
-        assert_eq!(selected.source.port, 4319);
-        write_profile(&profile, "daemon-1", "lineage-1");
-        assert_eq!(normal(&home).origin, Origin::Saved);
-
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert_eq!(normal(&home).origin, Origin::Discovered, "not private");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-
-        let real = support_directory(&home).join("real.json");
-        std::fs::rename(&path, &real).unwrap();
-        std::os::unix::fs::symlink(&real, &path).unwrap();
-        assert_eq!(normal(&home).origin, Origin::Discovered, "symlink");
-        std::fs::remove_file(&path).unwrap();
-
-        std::fs::write(&path, "{\"version\":1}").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert_eq!(normal(&home).origin, Origin::Discovered, "incomplete");
+        let args: Vec<OsString> = selected_args()
+            .chunks(2)
+            .filter(|p| p[0] != "--journal")
+            .flatten()
+            .cloned()
+            .collect();
+        let (_, journal) = selection(args, || day_journal(&home)).unwrap();
+        assert_eq!(journal, normal(&home).journal, "same journal as Finder");
+        let (_, journal) = selection(selected_args(), || panic!("not needed")).unwrap();
+        assert_eq!(journal, PathBuf::from("/tmp/window-journal"));
         std::fs::remove_dir_all(home).unwrap();
     }
 }
