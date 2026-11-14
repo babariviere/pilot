@@ -61,9 +61,9 @@ measurement and ethics. It is platform-agnostic, so most of it applies directly 
   do not add telemetry or run live actions on real data to fill gaps.
 - **Deliverables.** The skills write Markdown or HTML files to the working directory. Here, keep them out of the
   repository (reply in chat, attach them to the task or use a temporary directory) unless the user names a path.
-  Prefer Markdown and native visual artifacts (`ui.mermaid`, tables, charts) for flows, maps and blueprints. Pilot Next
-  is native-only and does not render HTML, so build the HTML wireframe viewer, reveal.js or `.pptx` decks (which need
-  CDN scripts or `python-pptx`), Figma or Pencil output only when the user asks.
+  Prefer Markdown and NSH artifacts (flow and sequence diagrams, tables, charts) for flows, maps and blueprints. Pilot
+  Next is native-only and does not render HTML, so build the HTML wireframe viewer, reveal.js or `.pptx` decks (which
+  need CDN scripts or `python-pptx`), Figma or Pencil output only when the user asks.
 - **Platforms.** macOS comes first; Linux is a later Wayland-only target and iOS is deferred, so `transpose` work for
   those is planning only. In `include`, keyboard navigation, focus, IME, Unicode editing, selection/copy, contrast
   and reduced motion are in scope; dedicated screen-reader work is deferred. WCAG guidance maps to macOS conventions.

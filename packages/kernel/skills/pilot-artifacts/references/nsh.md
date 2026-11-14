@@ -1,11 +1,10 @@
 # NSH TSX artifacts
 
-Use this page only when the artifact tool accepts `kind: "nsh"`. Until it does, publish visuals
-([visuals.md](visuals.md)), including Mermaid for diagrams.
+Use this page when the artifact tool accepts `kind: "nsh"`.
 
-The native Day app can open a saved NSH revision with Preview. Other clients may show source only.
-Use a visual when the user's current client cannot preview NSH. Preview interactions change only local
-state, which resets when closed; opening a preview does not accept the agent's work.
+The native Day app can open a saved NSH revision with Preview. Other clients may show source only; say so when the
+user's client cannot preview NSH. Preview interactions change only local state, which resets when closed; opening a
+preview does not accept the agent's work.
 
 An NSH artifact is one TSX file that Pilot draws with native views, in its own sandbox. It gets local state
 (signals, presses, text input) and nothing else: no files, network, storage, clipboard, processes, credentials
@@ -14,7 +13,9 @@ or Pilot actions. Calls that need them fail. Pressing things in an artifact chan
 ## Write, publish, clean up
 
 1. Write the file in the session's `scratch/artifacts/` folder, for example `scratch/artifacts/release-plan.tsx`.
-   It is session scratch, not repository source.
+   It is session scratch, not repository source. In Ask, which has no write tool, pass the file's text as `source`
+   with `sourcePath: "release-plan.tsx"` on every create and update; the artifact tool writes the file, then
+   publishes it.
 2. Publish it with the artifact tool. The tool compiles the captured bytes first. Fix reported compile errors
    and retry; failed compilation saves nothing. Success saves those exact bytes as a new revision. Every reader,
    and any later preview, uses that saved revision, never the file. Editing the file changes nothing until you
@@ -74,7 +75,14 @@ part of it. Fix the data and publish again. The exact types are in [nsh/kit/inde
 - `SequenceDiagram` draws a reply dashed. A message to the same participant loops. `over` takes one id or two.
 - Wide diagrams scroll sideways. Boxes grow with the reader's text size.
 - They cover flowcharts and sequences. For other diagram kinds (Gantt, class, state, entity), draw with
-  `Canvas` and views, or use a visual.
+  `Canvas` and views.
+
+## Mockups
+
+- Fixed-size views are artboards: a phone (390 x 844), a tablet or a desktop window. Put alternatives side by side in
+  a wrapping row (`flex-row flex-wrap`), and switch screen, width or theme from local state.
+- Use mock data that looks real: names, dates and counts the product would show.
+- Images, photos and other assets do not load inside NSH. Publish an image artifact beside the mockup instead.
 
 ## Examples
 

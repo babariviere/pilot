@@ -100,7 +100,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Automations (design)](automations.md)
 - [Recurring schedules (design)](recurring-schedules.md)
 - [Project environment setup (design)](environment-setup.md)
-- [Native agent visuals (design proposal)](native-visuals.md)
+- [Native agent visuals (retired design)](native-visuals.md)
 - [Native Mermaid renderer evaluation](native-mermaid-evaluation.md)
 - [Host-owned workspace terminals and maintenance barriers](workspace-terminals.md)
 - [Linear pull request safety](linear-pr-safety.md)

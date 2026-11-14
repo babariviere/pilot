@@ -645,7 +645,8 @@ export class KernelSession {
 				sessionId: spec.sessionId,
 				projectId: spec.projectId,
 			});
-			let nshAvailable = !spec.pilot?.ask && (await artifactHostAvailable());
+			// Ask too: NSH source goes only to this session's scratch/artifacts, never the project.
+			let nshAvailable = await artifactHostAvailable();
 			if (nshAvailable) {
 				try {
 					await ensureArtifactScratch(dirname(spec.storageDir));

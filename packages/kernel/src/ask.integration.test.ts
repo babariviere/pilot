@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -221,11 +221,9 @@ test("Ask exposes only codemode and publishes nested artifacts while direct tool
 }, async (t) => {
 	const f = await fixture(t);
 	const artifactStore = new ArtifactStore(f.root, { sessionId: "ask-integration" });
-	const seeded = await artifactStore.create({
-		title: "Existing artifact",
-		kind: "visual",
-		source: 'function visual({ui}) { return () => ui.text("Host-seeded existing artifact"); }',
-	});
+	const png =
+		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==";
+	const seeded = await artifactStore.create({ title: "Existing artifact", kind: "image", source: png });
 	const create = t.mock.method(ArtifactStore.prototype, "create");
 	const update = t.mock.method(ArtifactStore.prototype, "update");
 	const open = NativeAdapter.open;
@@ -304,7 +302,7 @@ test("Ask exposes only codemode and publishes nested artifacts while direct tool
 					fauxToolCall("codemode", {
 						code: `
 for (const action of ['create', 'update']) {
-  text(await tools.artifact({action, id:${JSON.stringify(seeded.id)}, title:'Script diagram', kind:'visual', source:"function visual({ui}) { return () => ui.text('Script explanatory diagram'); }"}));
+  text(await tools.artifact({action, id:${JSON.stringify(seeded.id)}, title:'Script diagram', kind:'image', source:${JSON.stringify(png)}}));
 }
 try { await tools.artifact({action:'create', title:'Escape', kind:'image', source:${JSON.stringify(join(f.root, "secret.txt"))}}); }
 catch { text('denied:artifact-image-create'); }
@@ -328,9 +326,9 @@ for (const path of ['../secret.txt','escape']) {
 }
 text(await tools.read({path:'hello.txt'}));
 text(await tools.read({path:${JSON.stringify(ARTIFACT_SKILL_PATH)}}));
-text(await tools['arti'+'fact']({action:'cre'+'ate',title:'Nested diagram',kind:'visual',source:"function visual({ui}) { return () => ui.text('Nested explanatory diagram'); }"}));
-text(await tools['arti'+'fact']({action:'up'+'date',id:${JSON.stringify(seeded.id)},expectedRevision:2,title:'Nested update',kind:'visual',source:"function visual({ui}) { return () => ui.text('Nested session update'); }"}));
-for (const kind of ['html','react','swiftui']) {
+text(await tools['arti'+'fact']({action:'cre'+'ate',title:'Nested diagram',kind:'image',source:${JSON.stringify(png)}}));
+text(await tools['arti'+'fact']({action:'up'+'date',id:${JSON.stringify(seeded.id)},expectedRevision:2,title:'Nested session update',kind:'image',source:${JSON.stringify(png)}}));
+for (const kind of ['html','react','swiftui','visual','shader']) {
   for (const action of ['create','update','preview']) {
     try { await tools['arti'+'fact']({action,id:${JSON.stringify(seeded.id)},title:'Retired',kind,source:'while(true){}'}); text('UNSAFE:legacy'); }
     catch { text('retired:'+kind+':'+action); }
@@ -354,7 +352,7 @@ text(await tools.artifact({action:'list'}));
 	assert.equal(session.completion?.outcomeReason, undefined);
 	assert.match(prompt, /Ask mode, read-only/);
 	assert.doesNotMatch(prompt, /gh pr create|git switch/);
-	assert.match(prompt, /without being asked|simple Mermaid diagram/);
+	assert.match(prompt, /without being asked.*FlowDiagram/);
 	assert.match(prompt, /<name>pilot-artifacts<\/name>/);
 	assert.ok(prompt.includes(ARTIFACT_SKILL_PATH));
 	assert.doesNotMatch(prompt, /echarts\.init|mermaid\.initialize|@StateObject/);
@@ -387,7 +385,7 @@ text(await tools.artifact({action:'list'}));
 	for (const action of ["create", "update", "preview"])
 		assert.ok(output.includes(`denied:artifact-image-${action}`), output);
 	assert.match(output, /Nested session update/);
-	for (const kind of ["html", "react", "swiftui"])
+	for (const kind of ["html", "react", "swiftui", "visual", "shader"])
 		for (const action of ["create", "update", "preview"]) assert.ok(output.includes(`retired:${kind}:${action}`));
 	assert.doesNotMatch(output, /UNSAFE|ESCAPED|BROWSER STARTED/);
 	assert.ok(!results.some((m) => m.toolName === "pilot_report_status"));
@@ -397,7 +395,7 @@ text(await tools.artifact({action:'list'}));
 	const artifacts = await artifactStore.list();
 	assert.equal(artifacts.length, 3);
 	assert.equal((await artifactStore.get(seeded.id))?.revision, 3);
-	assert.match((await artifactStore.get(seeded.id))?.source, /Nested session update/);
+	assert.equal((await artifactStore.get(seeded.id))?.title, "Nested session update");
 	const publications = view.entries.filter((entry) => entry.kind === "pilot.artifact");
 	assert.equal(publications.length, 4, "script publications each admit a durable pinned reference");
 	for (const publication of publications) {
@@ -458,6 +456,101 @@ text(await tools.artifact({action:'list'}));
 		JSON.stringify(await read.execute("host-skill", { path: ARTIFACT_SKILL_PATH }, undefined)),
 		/pilot-artifacts/,
 	);
+});
+
+test("Ask is offered NSH, publishes from its own scratch folder and still cannot write project files", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const scratch = join(f.root, "scratch", "artifacts");
+	// The kernel asks the installed host to create this folder; tests have no installed host.
+	await mkdir(scratch, { recursive: true });
+	const projectBefore = (await readdir(f.source)).sort();
+	const captured: string[] = [];
+	const open = NativeAdapter.open;
+	let native: NativeAdapter | undefined;
+	t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
+		assert.ok(options.askArtifacts, "Ask sessions get the artifact tool");
+		native = await open.call(NativeAdapter, {
+			...options,
+			...f.options,
+			sessionOptions: f.options.sessionOptions,
+			askArtifacts: {
+				...options.askArtifacts,
+				nshSessionDirectory: f.root,
+				// Stands in for the installed host capture: the exact bytes in this session's scratch file.
+				captureNsh: async (sourcePath) => {
+					captured.push(sourcePath);
+					return { source: await readFile(join(scratch, sourcePath), "utf8"), entry: sourcePath };
+				},
+			},
+		});
+		return native;
+	});
+	let settle!: (completion: SessionCompletion) => void;
+	const completed = new Promise<SessionCompletion>((resolve) => {
+		settle = resolve;
+	});
+	const session = await KernelSession.open(
+		{
+			sessionId: "ask-nsh",
+			cwd: f.source,
+			storageDir: join(f.root, "storage"),
+			pilot: { ask: { source: f.source } },
+		},
+		{
+			onWorking: (working, completion) => {
+				if (!working && completion) settle(completion);
+			},
+		},
+	);
+	f.cleanup.push(() => session.close());
+	const tsx = 'import { Text } from "nsh";\nexport default function Artifact() {\n\treturn <Text>Plan</Text>;\n}\n';
+	const outside = join(f.source, "planted.tsx");
+	f.faux.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("codemode", {
+				code: `
+text(await tools.artifact({action:'create',title:'Plan',kind:'nsh',sourcePath:'plan.tsx',source:${JSON.stringify(tsx)}}));
+for (const sourcePath of ['../planted.tsx', ${JSON.stringify(outside)}, 'nested/plan.tsx']) {
+  try { await tools.artifact({action:'create',title:'Escape',kind:'nsh',sourcePath,source:'bad'}); text('UNSAFE:'+sourcePath); }
+  catch { text('refused:'+sourcePath); }
+}
+for (const name of ['wr'+'ite','edit','ba'+'sh']) {
+  try { await tools[name]({path:${JSON.stringify(outside)},content:'bad',command:'touch planted.tsx'}); text('UNSAFE:'+name); }
+  catch { text('denied:'+name); }
+}
+`,
+			}),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("Published."),
+	]);
+	await session.submit("nsh", "Draw the plan", "followUp");
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	assert.equal((await completed).outcome, "done");
+	assert.ok(native);
+	const artifactTool = native.session.getAllTools().find((tool) => tool.name === "artifact");
+	assert.ok(artifactTool);
+	assert.deepEqual((artifactTool.parameters as { properties: { kind: { enum: string[] } } }).properties.kind.enum, [
+		"image",
+		"nsh",
+	]);
+	const view = await session.conversation.context(BACKGROUND_CONTEXT);
+	const script = view.messages.find((m) => m.role === "toolResult" && m.toolName === "codemode");
+	assert.ok(script?.role === "toolResult" && !script.isError, JSON.stringify(script));
+	const output = JSON.stringify(script);
+	assert.doesNotMatch(output, /UNSAFE/);
+	for (const name of ["write", "edit", "bash"]) assert.ok(output.includes(`denied:${name}`), output);
+	assert.equal((output.match(/refused:/g) ?? []).length, 3, output);
+	assert.equal(await readFile(join(scratch, "plan.tsx"), "utf8"), tsx);
+	assert.deepEqual(await readdir(scratch), ["plan.tsx"]);
+	assert.deepEqual(captured, ["plan.tsx"]);
+	const [saved] = await new ArtifactStore(f.root, { sessionId: "ask-nsh" }).list();
+	assert.equal(saved?.kind, "nsh");
+	assert.equal((await new ArtifactStore(f.root, { sessionId: "ask-nsh" }).get(saved!.id)).source, tsx);
+	assert.deepEqual((await readdir(f.source)).sort(), projectBefore, "the project is unchanged");
+	assert.equal(existsSync(outside), false);
 });
 
 test("Ask retains models.json static endpoints and merged project model preferences", async (t) => {

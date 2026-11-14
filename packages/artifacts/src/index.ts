@@ -6,6 +6,7 @@ export {
 	ensureArtifactScratch,
 	NSH_SOURCE_BYTES,
 	nshSource,
+	writeNshScratchSource,
 } from "./nsh-source.ts";
 export { previewArtifact } from "./preview.ts";
 export { assertArtifactWriteKind, prepareArtifact } from "./render.ts";

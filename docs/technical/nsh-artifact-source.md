@@ -12,7 +12,12 @@ The existing `artifact` tool offers `kind: "nsh"` only when its host has a
 capture binding. An agent writes one UTF-8 `.tsx` file in its own session's
 `scratch/artifacts/`, then passes `sourcePath` (a basename or an absolute path
 inside that directory). The request cannot select a source root, executable,
-module resolver, credentials or bytecode. Ask does not offer file capture.
+module resolver, credentials or bytecode. Ask has no write tool, so in Ask the
+request also carries the TSX as `source`: the artifact tool writes that one
+basename into the session's own `scratch/artifacts/` (`O_NOFOLLOW`, a plain file
+with one link, and a folder that resolves where the host created it), then
+captures it the same way. This is the only file Ask writes; project files stay
+read-only.
 An update must name the current `expectedRevision`. NSH identities cannot
 change kind. One helper call captures and compiles the string before creating or updating
 a revision. Syntax/import errors publish nothing and leave earlier revisions

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -13,8 +13,9 @@ import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.
 
 const write: ArtifactWrite = {
 	title: "Chart",
-	kind: "visual",
-	source: 'function visual({ ui }) { return () => ui.text("Editable"); }',
+	kind: "image",
+	source:
+		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==",
 };
 const revision: ArtifactRevision = {
 	...write,
@@ -77,16 +78,16 @@ test("retired kinds are absent from write schemas and forged writes fail before 
 	const f = fixture();
 	const tool = f.tools[0]!;
 	const schema = tool.parameters as { properties: { kind: { enum: string[] }; action: { enum: string[] } } };
-	assert.deepEqual(schema.properties.kind.enum, ["image", "shader", "visual"]);
+	assert.deepEqual(schema.properties.kind.enum, ["image"]);
 	assert.deepEqual(schema.properties.action.enum, ["create", "update", "get", "list"]);
-	for (const kind of ["html", "react", "swiftui"]) {
+	for (const kind of ["html", "react", "swiftui", "visual", "shader"]) {
 		for (const action of ["create", "update", "preview"]) {
 			const args = { action, id: revision.id, title: "Legacy", kind, source: "while(true){}" };
 			assert.throws(
 				() => validateToolArguments(tool, { type: "toolCall", id: "old", name: "artifact", arguments: args }),
 				/Validation failed/,
 			);
-			await assert.rejects(execute(tool, args), /Supported kinds: image, visual, shader/);
+			await assert.rejects(execute(tool, args), /is read-only\. Publish kind nsh or image instead/);
 		}
 		const stored = {
 			...revision,
@@ -176,7 +177,10 @@ test("artifact tools declare structured output, sequential execution and a compa
 		assert.ok(tool.description.length < 1600, `description bloated to ${tool.description.length} characters`);
 		assert.match(tool.description, /512 KiB|16 MiB/);
 		assert.match(tool.description, /expectedRevision/);
-		assert.doesNotMatch(tool.description, /echarts\.init|mermaid\.initialize|motion\.animate|@StateObject/);
+		assert.doesNotMatch(
+			tool.description,
+			/echarts\.init|mermaid\.initialize|motion\.animate|@StateObject|String\(fn\)|mainImage/,
+		);
 	}
 });
 
@@ -252,7 +256,7 @@ test("create awaits committed publication before notification and returns only a
 	assert.deepEqual(result.structuredContent, expected);
 	assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify(expected) }]);
 	assert.ok(!JSON.stringify(result).includes("COMPILED_HTML"));
-	assert.ok(!JSON.stringify(result).includes("Editable"));
+	assert.ok(!JSON.stringify(result).includes(write.source));
 });
 
 test("update forwards the full write and expected revision, notifying only after success", async () => {
@@ -374,14 +378,19 @@ test("image actions forward embedded sources and do not expose image bytes in pu
 	assert.equal(f.notifications, 2);
 });
 
-test("write and preview reject source above the UTF-8 byte limit before side effects", async () => {
-	const f = fixture();
-	for (const name of ["create", "update"]) {
-		await assert.rejects(f.call(name, { id: "artifact-1", ...write, source: "😀".repeat(131_073) }), /512 KiB UTF-8/);
-	}
+test("NSH writes reject captured source above the UTF-8 byte limit before side effects", async () => {
+	let source = "😀".repeat(131_073);
+	const f = fixture({
+		nshSessionDirectory: "/host/session",
+		captureNsh: async () => ({ source, entry: "view.tsx" }),
+	});
+	const nsh = { title: "Big", kind: "nsh", sourcePath: "view.tsx", expectedRevision: 3 };
+	for (const name of ["create", "update"])
+		await assert.rejects(f.call(name, { id: "artifact-1", ...nsh }), /512 KiB UTF-8/);
 	assert.deepEqual(f.calls, []);
 	assert.equal(f.notifications, 0);
-	await f.call("create", { ...write, source: "x".repeat(512 * 1024) });
+	source = "x".repeat(512 * 1024);
+	await f.call("create", nsh);
 	assert.equal(f.notifications, 1, "exact byte limit is allowed");
 });
 
@@ -420,6 +429,8 @@ test("publication waits for asynchronous durable admission before returning and 
 test("image publications pass their header size for display only; the model result is unchanged", async () => {
 	const published: unknown[][] = [];
 	const f = fixture({
+		nshSessionDirectory: "/host/session",
+		captureNsh: async () => ({ source: "export default () => null;", entry: "view.tsx" }),
 		onArtifactPublished: async (...args) => {
 			published.push(args);
 		},
@@ -433,7 +444,14 @@ test("image publications pass their header size for display only; the model resu
 	};
 	f.store.create = async () => image;
 	const result = await f.call("create", { title: "Image", kind: "image", source: image.source });
-	await f.call("update", { id: revision.id, expectedRevision: 3, ...write });
+	f.store.update = async () => ({ ...revision, kind: "nsh", source: "export default () => null;" });
+	await f.call("update", {
+		id: revision.id,
+		expectedRevision: 3,
+		title: "Chart",
+		kind: "nsh",
+		sourcePath: "view.tsx",
+	});
 	const artifact = { id: "artifact-1", sessionId: "session-1", title: "Chart", revision: 3 };
 	assert.deepEqual(published, [
 		[artifact, { mimeType: "image/png", width: 3, height: 2 }],
@@ -455,80 +473,49 @@ test("committed publication keeps its metadata fallback when display admission f
 	assert.equal(warnings.mock.callCount(), 1);
 });
 
-test("shader publication returns compile errors with source lines and saves nothing", async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "pilot-shader-artifact-"));
+test("visual and shader writes are refused, while saved revisions stay readable as saved", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-old-visual-artifact-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
-	const store = new ArtifactStore(root, { sessionId: "shader-session" });
-	const f = fixture({ store });
-	const broken =
-		"void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n\tfloat glow = 1;\n\tfragColor = vec4(glow);\n}";
-	await assert.rejects(
-		f.call("create", { title: "Glow", kind: "shader", source: broken }),
-		/line 2: .*float glow = 1;/s,
-	);
-	assert.deepEqual(await store.list(), []);
-	assert.equal(f.notifications, 0);
-	const created = await f.call("create", { title: "Glow", kind: "shader", source: broken.replace("= 1;", "= 1.0;") });
-	const { artifact } = created.structuredContent as { artifact: { id: string } };
-	const saved = await store.get(artifact.id);
-	assert.equal(saved.kind, "shader");
-	assert.match(saved.html, /pilot-shader/);
-	assert.equal(f.notifications, 1);
-});
-
-test("visual artifacts stay hidden until enabled", async () => {
-	const [tool] = fixture({ visuals: false }).tools;
-	assert.ok(tool);
-	assert.doesNotMatch(tool.description, /kind visual/);
-	assert.throws(
-		() =>
-			validateToolArguments(tool, {
-				type: "toolCall",
-				id: "hidden",
-				name: "artifact",
-				arguments: { action: "create", title: "V", kind: "visual", source: "() => null" },
-			}),
-		/Validation failed/,
-	);
-	await assert.rejects(
-		fixture({ visuals: false }).call("create", { title: "V", kind: "visual", source: "() => null" }),
-		/not available yet/,
-	);
-});
-
-test("visual publication returns the check, get returns source and data, errors carry lines", async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "pilot-visual-artifact-"));
-	t.after(() => rm(root, { recursive: true, force: true }));
-	const store = new ArtifactStore(root, { sessionId: "visual-session" });
-	const f = fixture({ store, visuals: true });
+	const store = new ArtifactStore(root, { sessionId: "old-session" });
+	// The store still saves these kinds, as older Pilot versions did through the tool.
+	const source = "function visual({ ui, data }) {\n  return () => ui.column(data.map((row) => ui.text(row.name)));\n}";
+	const data = [{ name: "Builds" }];
+	const visual = await store.create({ title: "Stats", kind: "visual", source, data });
+	const shader = await store.create({
+		title: "Glow",
+		kind: "shader",
+		source: "void mainImage(out vec4 fragColor, in vec2 fragCoord) { fragColor = vec4(1.0); }",
+	});
+	const f = fixture({ store, nshSessionDirectory: root, captureNsh: async () => assert.fail("never captured") });
 	const [tool] = f.tools;
-	assert.match(tool!.description, /Visuals \(kind visual\) come first for charts.*source String\(fn\)/);
-	const source =
-		"function visual({ ui, data }) {\n  return () => ui.column(data.map((row) => ui.stat({ label: row.name, value: row.value })));\n}";
-	const data = [
-		{ name: "Builds", value: 42 },
-		{ name: "Failures", value: 3 },
-	];
-	await assert.rejects(f.call("create", { title: "Stats", kind: "visual" }), /source: String\(visual\)/);
-	await assert.rejects(f.call("preview", { title: "Stats", kind: "visual", source, data }), /preview is unavailable/);
-	await assert.rejects(
-		f.call("create", { title: "Stats", kind: "visual", source: source.replace("row.name", "row.missing") }),
-		/Nothing was published\. line 2: TypeError/,
-	);
+	const schema = tool!.parameters as { properties: { kind: { enum: string[] } } };
+	assert.deepEqual(schema.properties.kind.enum, ["image", "nsh"]);
+	assert.match(tool!.description, /New artifacts use kind nsh or image/);
+	for (const old of [visual, shader])
+		for (const action of ["create", "update"])
+			await assert.rejects(
+				f.call(action, { id: old.id, expectedRevision: 1, title: "Again", kind: old.kind, source: old.source }),
+				new RegExp(`Artifact kind "${old.kind}" is read-only\\. Publish kind nsh or image instead`),
+			);
 	assert.equal(f.notifications, 0);
-	const created = await f.call("create", { title: "Stats", kind: "visual", source, data });
-	const result = created.structuredContent as { artifact: { id: string }; check: unknown };
-	assert.deepEqual(result.check, { nodes: 3, controls: 0, interactions: 0 });
-	assert.equal(f.notifications, 1);
-	const read = await f.call("get", { id: result.artifact.id });
+	assert.deepEqual(await store.get(visual.id), visual);
+	assert.deepEqual(await store.get(shader.id), shader);
+	const read = await f.call("get", { id: visual.id });
 	assert.deepEqual((read.structuredContent as { artifact: unknown }).artifact, {
-		...(await store.list())[0],
+		...(await store.list()).find((summary) => summary.id === visual.id),
 		source,
 		libraries: [],
 		libraryVersions: {},
 		data,
 		visual: { api: 1, engine: "quickjs-ng 0.17.0" },
 	});
+	const shaderRead = (await f.call("get", { id: shader.id })).structuredContent as {
+		artifact: { kind: string; source: string };
+	};
+	assert.equal(shaderRead.artifact.kind, "shader");
+	assert.equal(shaderRead.artifact.source, shader.source);
+	const listed = (await f.call("list", {})).structuredContent as { artifacts: Array<{ kind: string }> };
+	assert.deepEqual(listed.artifacts.map((summary) => summary.kind).sort(), ["shader", "visual"]);
 });
 
 test("updates without expectedRevision succeed with a warning", async () => {
@@ -538,6 +525,100 @@ test("updates without expectedRevision succeed with a warning", async () => {
 	assert.match(warnings[0] ?? "", /without expectedRevision.*\(3\)/);
 	const pinned = await f.call("update", { id: "artifact-1", expectedRevision: 2, ...write });
 	assert.ok(!("warnings" in (pinned.structuredContent as object)));
+});
+
+test("Ask offers NSH and writes source only to this session's scratch/artifacts", async (t) => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "nsh-ask-tool-")));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const scratch = join(root, "scratch", "artifacts");
+	const project = join(root, "project");
+	await mkdir(scratch, { recursive: true });
+	await mkdir(project);
+	await writeFile(join(project, "secret.tsx"), "project file");
+	await symlink(join(project, "secret.tsx"), join(scratch, "linked.tsx"));
+	const store = new ArtifactStore(root, { sessionId: "ask-owner" });
+	const captured: string[] = [];
+	const f = fixture({
+		store,
+		ask: true,
+		nshSessionDirectory: root,
+		// Stands in for the host capture: it reads the exact file the tool wrote.
+		captureNsh: async (path) => {
+			captured.push(path);
+			return { source: await readFile(join(scratch, path), "utf8"), entry: path };
+		},
+	});
+	const [tool] = f.tools;
+	const schema = tool!.parameters as { properties: { kind: { enum: string[] } } };
+	assert.deepEqual(schema.properties.kind.enum, ["image", "nsh"]);
+	assert.match(tool!.description, /the tool writes that one file in .*scratch\/artifacts.*Ask writes nothing else/);
+	const source = "export default () => null;\n";
+	const result = await f.call("create", { title: "Plan", kind: "nsh", sourcePath: "plan.tsx", source });
+	const { artifact } = result.structuredContent as { artifact: { id: string } };
+	assert.equal(await readFile(join(scratch, "plan.tsx"), "utf8"), source);
+	assert.equal((await store.get(artifact.id)).source, source);
+	assert.equal((await store.get(artifact.id)).nsh?.entry, "plan.tsx");
+	const next = "export default () => 1;\n";
+	await f.call("update", {
+		id: artifact.id,
+		expectedRevision: 1,
+		title: "Plan",
+		kind: "nsh",
+		sourcePath: "plan.tsx",
+		source: next,
+	});
+	assert.equal(await readFile(join(scratch, "plan.tsx"), "utf8"), next);
+	for (const sourcePath of [
+		"../escape.tsx",
+		"sub/plan.tsx",
+		".hidden.tsx",
+		"plan.ts",
+		join(project, "plan.tsx"),
+		join(root, "scratch", "plan.tsx"),
+	])
+		await assert.rejects(
+			f.call("create", { title: "Escape", kind: "nsh", sourcePath, source }),
+			/sourcePath must name one file in session scratch\/artifacts/,
+			sourcePath,
+		);
+	await assert.rejects(f.call("create", { title: "Linked", kind: "nsh", sourcePath: "linked.tsx", source }), /ELOOP/);
+	await assert.rejects(
+		f.call("create", { title: "No source", kind: "nsh", sourcePath: "plan.tsx" }),
+		/require source/,
+	);
+	await assert.rejects(
+		f.call("update", { id: artifact.id, title: "Plan", kind: "nsh", sourcePath: "plan.tsx", source: "changed" }),
+		/expectedRevision/,
+	);
+	assert.equal(await readFile(join(scratch, "plan.tsx"), "utf8"), next, "a refused update writes nothing");
+	assert.equal(await readFile(join(project, "secret.tsx"), "utf8"), "project file");
+	assert.deepEqual((await readdir(project)).sort(), ["secret.tsx"]);
+	assert.deepEqual((await readdir(scratch)).sort(), ["linked.tsx", "plan.tsx"]);
+	assert.deepEqual(captured, ["plan.tsx", "plan.tsx"]);
+	// Build keeps file capture: the agent writes the file itself, the tool never takes inline source.
+	await assert.rejects(
+		fixture({ store, nshSessionDirectory: root, captureNsh: async () => assert.fail("never captured") }).call(
+			"create",
+			{ title: "Inline", kind: "nsh", sourcePath: "plan.tsx", source },
+		),
+		/sourcePath only, not source/,
+	);
+});
+
+test("Ask NSH refuses a scratch folder that resolves elsewhere", async (t) => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "nsh-ask-swapped-")));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const elsewhere = join(root, "elsewhere");
+	await mkdir(elsewhere);
+	await mkdir(join(root, "session", "scratch"), { recursive: true });
+	await symlink(elsewhere, join(root, "session", "scratch", "artifacts"));
+	const f = fixture({ ask: true, nshSessionDirectory: join(root, "session"), captureNsh: async () => assert.fail() });
+	await assert.rejects(
+		f.call("create", { title: "Plan", kind: "nsh", sourcePath: "plan.tsx", source: "export default () => null;" }),
+		/must be a plain folder/,
+	);
+	assert.deepEqual(await readdir(elsewhere), []);
+	assert.deepEqual(f.calls, []);
 });
 
 test("NSH tool refuses compile errors before creating or updating any revision", async () => {
@@ -671,7 +752,7 @@ test("NSH tool captures only session scratch and keeps exact pins without execut
 			kind: "nsh",
 			sourcePath: "view.tsx",
 		}),
-		/unavailable/,
+		/Ask NSH artifacts require source/,
 	);
 	assert.equal((await store.list()).length, 1);
 	const read = await f.call("get", { id: data.artifact.id, revision: 1 });

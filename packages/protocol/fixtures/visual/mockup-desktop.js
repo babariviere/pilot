@@ -1,4 +1,4 @@
-// biome-ignore lint/correctness/noUnusedVariables: a visual function, published with String(visual).
+// biome-ignore lint/correctness/noUnusedVariables: a stored visual function, read as text by its checks.
 function visual({ ui, state }) {
 	// A desktop release dashboard in a macOS-style window. The toggle switches the
 	// window's palette, the slider sets its width (below 720 pt the sidebar collapses

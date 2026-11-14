@@ -655,8 +655,8 @@ text(await tools.read({path:${JSON.stringify(ARTIFACT_SKILL_PATH)}}));
 					"namespace instructions locate the skill even with an older cached prompt",
 				);
 				// The skill root routes to per-kind references instead of inlining every kind's details.
-				assert.match(description, /references\/mockup-mobile\.js/);
-				assert.match(description, /references\/visuals\.md/);
+				assert.match(description, /references\/nsh\.md/);
+				assert.match(description, /references\/images\.md/);
 				assert.match(description, /expectedRevision/);
 				return fauxAssistantMessage(
 					fauxToolCall("codemode", {
@@ -859,7 +859,7 @@ test("busy codemode publications and automatic completion survive native tool re
 		fauxAssistantMessage(
 			fauxToolCall("codemode", {
 				code: `
-const created = await tools.artifact({action:"create",title:"Graph",kind:"visual",source:"function visual({ui}) { return () => ui.text('Graph'); }"});
+const created = await tools.artifact({action:"create",title:"Graph",kind:"image",source:"data:image/png;base64,${png}"});
 await tools.artifact({action:"update",id:created.artifact.id,expectedRevision:1,title:"Graph updated",kind:"image",source:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB0gX7h/C5SAAAAABJRU5ErkJggg=="});
 text("Published two revisions");
 `,
@@ -912,7 +912,10 @@ text("Published two revisions");
 	assert.deepEqual(
 		entries.map((entry) => entry.data),
 		[
-			{ artifact: { id: summary.id, sessionId: spec.sessionId, title: "Graph", revision: 1 } },
+			{
+				artifact: { id: summary.id, sessionId: spec.sessionId, title: "Graph", revision: 1 },
+				image: { mimeType: "image/png", width: 1, height: 1 },
+			},
 			{
 				artifact: { id: summary.id, sessionId: spec.sessionId, title: "Graph updated", revision: 2 },
 				// Image revisions carry their header size so apps reserve layout before reading the source.

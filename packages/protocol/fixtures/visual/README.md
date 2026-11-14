@@ -15,8 +15,11 @@ in the app. Design: [docs/technical/native-visuals.md](../../../../docs/technica
   draws after the last step with their input and the recorded `commands`, `ops` and `strings` (see Canvas below).
   `errors` gives the first error of failing visuals as `line N: message` (seed text `""`, now 0), after the first
   view, its `draws` (with the per-frame limit `drawMs` when set, else 8 ms) and its `events`, in that order.
+- `mockup-mobile.js`, `mockup-desktop.js`: two complete UI mockup visuals. The desktop app's visual pane probe renders
+  them, and `packages/artifacts/src/visual/mockups.test.ts` runs the publication check on them. Agents no longer
+  create visuals; these files stay as examples of stored revisions.
 
-Regenerate both after an intended change, then review the diff:
+Regenerate the schema and conformance cases after an intended change, then review the diff:
 
 ```sh
 PILOT_UPDATE_VISUAL_FIXTURES=1 node --test packages/artifacts/src/visual/fixtures.test.ts

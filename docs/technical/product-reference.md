@@ -925,14 +925,13 @@ workspace, but does not rebind those PRs automatically.
 
 ### Artifacts and integrations
 
-Native visual artifacts use the chat's fonts and appearance, grow to their full content height and scroll
-with the conversation, without a nested scroll area. Charts, canvases and shaders retain their explicit heights.
-New artifacts use images or native visuals. HTML, React and SwiftUI authoring and screenshot preview
+New artifacts use NSH or images. Native visual, shader, HTML, React and SwiftUI writing and screenshot preview
 are removed. Historical sources, kinds, revisions and library provenance remain readable as inert data.
+Older native visual artifacts use the chat's fonts and appearance, grow to their full content height and scroll
+with the conversation, without a nested scroll area. Charts, canvases and shaders keep their explicit heights.
 Published revisions are retained: a chat card opens the revision sent there, while the sidebar opens the latest version.
 Inline `artifact://<id>` links open the latest revision directly in the artifact popup, with an artifact
 icon beside the label. They work across chats, including archived artifact owners.
-The existing standalone shader publication contract remains, but shader rendering is deferred in Pilot Next.
 
 Pilot bundles a pinned subset of [pi-extensions](https://github.com/babariviere/pi-extensions): sandbox,
 patch editing, web, browser, subscription usage, background jobs and persistent subagents.

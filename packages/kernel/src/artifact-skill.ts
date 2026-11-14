@@ -4,15 +4,9 @@ import { fileURLToPath } from "node:url";
 export const ARTIFACT_SKILL_PATH = fileURLToPath(new URL("../skills/pilot-artifacts/SKILL.md", import.meta.url));
 
 /** Per-kind references SKILL.md routes to, so agents read only the part a task needs. */
-export const ARTIFACT_SKILL_REFERENCES = [
-	"visuals.md",
-	"visual.d.ts",
-	"mockup-mobile.js",
-	"mockup-desktop.js",
-	"images.md",
-	"shaders.md",
-	"nsh.md",
-].map((name) => fileURLToPath(new URL(`../skills/pilot-artifacts/references/${name}`, import.meta.url)));
+export const ARTIFACT_SKILL_REFERENCES = ["nsh.md", "images.md"].map((name) =>
+	fileURLToPath(new URL(`../skills/pilot-artifacts/references/${name}`, import.meta.url)),
+);
 
 /** NSH artifact examples and the trusted helper sources nsh.md links to. */
 export const ARTIFACT_NSH_FILES = [

@@ -35,8 +35,8 @@ Docs to use when the task touches them:
 - Keep the daemon bound to loopback until authentication exists.
 - Shared Swift helpers build through `apps/desktop/scripts/build-native-helpers.sh`; the obsolete Swift GUI
   is removed. `apps/macos/Package.swift` now covers helpers only. Preserve shared consumers in `apps/macos`.
-- Show user-visible UI changes with a native visual artifact built from mock data (the `pilot-artifacts` skill has
-  the details). It is a mockup, not the real views: say so, and say when no visual check was possible.
+- Show user-visible UI changes with an NSH artifact (or an image) built from mock data (the `pilot-artifacts` skill
+  has the details). It is a mockup, not the real views: say so, and say when no visual check was possible.
 
 ## Performance
 

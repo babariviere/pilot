@@ -1,4 +1,4 @@
-// biome-ignore lint/correctness/noUnusedVariables: a visual function, published with String(visual).
+// biome-ignore lint/correctness/noUnusedVariables: a stored visual function, read as text by its checks.
 function visual({ ui, state }) {
 	// Two directions for a running coach's home screen, side by side on phone artboards.
 	// Tap the tab bar inside either phone; the width slider resizes both artboards.

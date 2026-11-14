@@ -66,7 +66,7 @@ See the [reliability roadmap](reliability/roadmap.md) for current risks and veri
 
 See [testing](testing.md) for suite selection and offline fixtures, and the
 [CPU/memory](performance-check.md) and [I/O](io-performance-check.md) audits for measurement methods.
-Artifact authoring uses images and native visuals. There is no screenshot preview host,
+Agents publish NSH and image artifacts. There is no screenshot preview host,
 browser installation or generated SwiftUI compilation. Use authorized GPUI fixtures for fidelity checks.
 
 ### Dependency updates

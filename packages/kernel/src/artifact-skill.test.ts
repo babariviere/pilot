@@ -12,21 +12,25 @@ import {
 	ARTIFACT_SKILL_REFERENCES,
 } from "./artifact-skill.ts";
 
-test("bundled artifact skill is valid and retains detailed authoring guidance outside the tool catalog", async () => {
+test("bundled artifact skill is valid and keeps detailed writing guidance outside the tool catalog", async () => {
 	const loaded = loadSkillsFromDir({ dir: dirname(ARTIFACT_SKILL_PATH), source: "pilot" });
 	assert.deepEqual(loaded.diagnostics, []);
 	assert.equal(loaded.skills.length, 1);
 	assert.equal(loaded.skills[0]!.name, "pilot-artifacts");
 	assert.equal(loaded.skills[0]!.filePath, ARTIFACT_SKILL_PATH);
-	assert.match(loaded.skills[0]!.description, /native visuals and images/);
+	assert.match(loaded.skills[0]!.description, /NSH and image artifacts/);
 	assert.match(loaded.skills[0]!.description, /Use before creating or updating/);
 	assert.equal(loaded.skills[0]!.disableModelInvocation, false);
 	const root = await readFile(ARTIFACT_SKILL_PATH, "utf8");
-	// The root routes to every per-kind reference, and every route exists.
+	// The root routes to every per-kind reference, and every reference file is listed.
 	for (const reference of ARTIFACT_SKILL_REFERENCES) {
 		const relative = `references/${reference.split("/").at(-1)}`;
 		assert.ok(root.includes(`](${relative})`), `SKILL.md does not route to ${relative}`);
 	}
+	assert.deepEqual(
+		(await readdir(join(dirname(ARTIFACT_SKILL_PATH), "references"))).sort(),
+		ARTIFACT_SKILL_REFERENCES.map((path) => path.split("/").at(-1)).sort(),
+	);
 	const source = (await Promise.all(ARTIFACT_SKILL_FILES.map((path) => readFile(path, "utf8")))).join("\n");
 	for (const guidance of [
 		"Ask image sources must be inline base64",
@@ -34,10 +38,10 @@ test("bundled artifact skill is valid and retains detailed authoring guidance ou
 		"512 KiB UTF-8",
 		"16 MiB",
 		"expectedRevision",
-		"ui.mermaid",
-		"String(visual)",
-		"interface UI",
-		"onChange",
+		'kind: "nsh"',
+		'kind: "image"',
+		"sourcePath",
+		"FlowDiagram",
 		"workspace/credential access",
 		"arbitrary npm imports",
 		"read-only",
@@ -46,9 +50,8 @@ test("bundled artifact skill is valid and retains detailed authoring guidance ou
 		assert.ok(source.includes(guidance), `missing ${guidance}`);
 	assert.doesNotMatch(
 		source,
-		/kind: "(?:html|react|swiftui)"|echarts\.init|ArtifactView|mermaid\.initialize|motion\.animate|THREE\.Scene/,
+		/kind: "(?:html|react|swiftui|visual|shader)"|String\(visual\)|ui\.mermaid|mainImage|echarts\.init|ArtifactView|mermaid\.initialize|motion\.animate|THREE\.Scene/,
 	);
-	assert.ok(!ARTIFACT_SKILL_REFERENCES.some((path) => /\/(web|swiftui)\.md$/.test(path)));
 });
 
 test("NSH examples and trusted helpers are all readable and import only what artifacts get", async () => {

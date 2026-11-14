@@ -1,8 +1,9 @@
-# Native agent visuals (design proposal)
+# Native agent visuals (retired design)
 
-Status: design decided. The kernel side of phase 1 is implemented: the `visual` kind, the pre-check and the node
-tree API 1 (`packages/artifacts/src/visual`, fixtures in `packages/protocol/fixtures/visual`). The decisions are
-listed at the end.
+Status: retired for new artifacts. Agents now create NSH and image artifacts only; the artifact tool refuses
+`visual` and `shader` writes. Stored visuals stay readable, and the desktop app still renders them with the runtime
+in `packages/artifacts/src/visual` (fixtures in `packages/protocol/fixtures/visual`). The rest of this page records
+the original design and its decisions.
 
 ## Goal
 

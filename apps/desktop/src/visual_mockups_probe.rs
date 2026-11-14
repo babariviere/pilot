@@ -1,4 +1,4 @@
-//! Bundled UI mockup examples rendered by the production native visual pane.
+//! Two UI mockup visuals (packages/protocol/fixtures/visual) rendered by the production native visual pane.
 //! Trees come from the real confined helper (the shared runtime), never from
 //! hand-written fixtures; controls go through the pane's own event path. No
 //! daemon, real data, writes or visible window.
@@ -8,10 +8,8 @@ use gpui_kit::{
     size, test::TestWindowExt,
 };
 
-const MOBILE: &str =
-    include_str!("../../../packages/kernel/skills/pilot-artifacts/references/mockup-mobile.js");
-const DESKTOP: &str =
-    include_str!("../../../packages/kernel/skills/pilot-artifacts/references/mockup-desktop.js");
+const MOBILE: &str = include_str!("../../../packages/protocol/fixtures/visual/mockup-mobile.js");
+const DESKTOP: &str = include_str!("../../../packages/protocol/fixtures/visual/mockup-desktop.js");
 
 /// The example files hold one visual function after a lint comment.
 fn function(file: &str) -> String {

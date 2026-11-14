@@ -426,11 +426,12 @@ test("deliverable guard blocks mission references in commits, bookmarks and pull
 test("Pilot diagram guidance is conditional on artifact availability", () => {
 	const enabled = pilotPrompt({}, true);
 	assert.match(enabled, /publish one with the artifact tool without being asked/);
-	assert.match(enabled, /simple Mermaid diagram/);
+	assert.match(enabled, /simple FlowDiagram or SequenceDiagram in an NSH artifact/);
 	assert.match(enabled, /short explanation/);
 	assert.match(enabled, /Skip it for simple answers/);
 	assert.match(enabled, /text only/);
-	assert.match(enabled, /Mermaid diagram in a visual artifact \(ui\.mermaid\)/);
+	assert.match(enabled, /does not accept kind nsh/);
+	assert.doesNotMatch(enabled, /Mermaid|ui\.mermaid|visual artifact/);
 	assert.doesNotMatch(enabled, /Artifact preview|artifact_preview/);
 	for (const prompt of [pilotPrompt({}), pilotPrompt({}, false)])
 		assert.doesNotMatch(prompt, /artifact|diagram|Mermaid|preview/);
@@ -481,10 +482,11 @@ test("memory guidance is short and limited to project chats with memory, never A
 		assert.doesNotMatch(pilotPrompt(context), /memory\(|anything lasting worth saving/);
 });
 
-test("Ask permits proactive session-local diagrams and sandboxed previews without repository mutation", () => {
+test("Ask permits proactive NSH diagrams and session-local artifacts without repository mutation", () => {
 	const prompt = pilotPrompt({ ask: { source: "/source" } }, true);
 	assert.match(prompt, /without being asked/);
-	assert.match(prompt, /simple Mermaid diagram/);
+	assert.match(prompt, /simple FlowDiagram or SequenceDiagram in an NSH artifact/);
+	assert.match(prompt, /NSH source the artifact tool writes to this session's scratch\/artifacts/);
 	assert.match(prompt, /Creating, updating and previewing host-owned session-local artifacts is allowed/);
 	assert.match(prompt, /installed sandboxed renderers/);
 	assert.match(prompt, /artifacts do not modify the repository/);
