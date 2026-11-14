@@ -9,8 +9,8 @@ use crate::{
     contract as c,
     model::{
         ChatLine, ControlAsk, ControlState, ControlView, Currentness, Decision, DecisionKind,
-        Delivery, Freshness, FreshnessState, MemberLine, MemberState, MissionPage, MissionRow,
-        MissionState, Movement, Output, OutputKind, Problem, Progress, ReportLine,
+        Delivery, Freshness, FreshnessState, MemberLine, MemberState, MissionLink, MissionPage,
+        MissionRow, MissionState, Movement, Output, OutputKind, Problem, Progress, ReportLine,
         ReportedDelivery, TaskLine, TaskStatus,
     },
 };
@@ -636,6 +636,19 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
     let replan_draft = detail
         .filter(|d| d.mission.planning_version.is_none())
         .map_or_else(String::new, |d| replan_draft(d, &problems));
+    let link = |l: &c::SuccessorLink| MissionLink {
+        mission_id: l.mission_id.clone(),
+        title: inputs
+            .overview
+            .dashboard
+            .missions
+            .items
+            .iter()
+            .find(|m| m.id == l.mission_id)
+            .map_or_else(String::new, |m| m.title.clone()),
+    };
+    let replanning_as = mission.successor.as_ref().filter(|l| l.open()).map(link);
+    let replaces = mission.replaces.as_ref().filter(|l| l.open()).map(link);
     Some(MissionPage {
         row,
         goal: detail.map_or_else(String::new, |d| d.mission.goal.clone()),
@@ -644,7 +657,10 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
         chats,
         freshness,
         problems,
+        can_replan: !replan_draft.is_empty() && replanning_as.is_none(),
         replan_draft,
+        replanning_as,
+        replaces,
     })
 }
 

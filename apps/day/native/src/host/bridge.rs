@@ -368,6 +368,15 @@ async fn run(
             pause: Some(r.pause_operation_id.clone()),
         }),
         Command::ControlCheck(id) => Some(Work::Check(id.clone())),
+        Command::StopReplanning(r) => Some(Work::StopReplanning {
+            mission: r.mission_id.clone(),
+            successor: r.successor_id.clone(),
+        }),
+        Command::Lifecycle(r, action) => Some(Work::Lifecycle {
+            mission: r.mission_id.clone(),
+            action: *action,
+            check: r.check,
+        }),
         Command::Plan(id) => Some(Work::ReadPlanning(id.clone())),
         Command::PlanningInventory => Some(Work::PlanningInventory),
         Command::Prepare => Some(Work::PreparePlanning),

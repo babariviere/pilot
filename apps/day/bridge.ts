@@ -17,6 +17,7 @@ import type {
 	DraftIntent,
 	IntentOutcome,
 	InterviewRef,
+	LifecycleIntent,
 	MissionPage,
 	MissionRef,
 	NewIntent,
@@ -33,6 +34,7 @@ import type {
 	RitualVisit,
 	RitualWrite,
 	Setup,
+	StopReplanningIntent,
 	SubmitIntent,
 	Today,
 } from "pilot-day/native";
@@ -383,6 +385,26 @@ export class ConnectedToday implements DayFeed {
 
 	checkControl(intent: MissionRef): Promise<IntentOutcome> {
 		return this.#control(intent.missionId, "day.mission.check", intent);
+	}
+
+	stopReplanning(intent: StopReplanningIntent): Promise<IntentOutcome> {
+		return this.#control(intent.missionId, "day.mission.stopReplanning", intent);
+	}
+
+	/** Archive and Reopen name only the mission; the root builds the request. Today is read again after. */
+	async #lifecycle(name: string, intent: LifecycleIntent): Promise<IntentOutcome> {
+		const r = await call<null>(this.#window, name, intent);
+		await this.refresh();
+		if (!r.ok) return refusalOutcome(r.refusal, this.#today.revision);
+		return r.outcome ?? { status: "accepted", revision: this.#today.revision, message: "" };
+	}
+
+	archive(intent: LifecycleIntent): Promise<IntentOutcome> {
+		return this.#lifecycle("day.mission.archive", intent);
+	}
+
+	reopen(intent: LifecycleIntent): Promise<IntentOutcome> {
+		return this.#lifecycle("day.mission.reopen", intent);
 	}
 
 	pulse(_everyMs?: number | null, _count?: number | null): Promise<number> {

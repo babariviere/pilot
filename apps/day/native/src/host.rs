@@ -238,6 +238,15 @@ enum Work {
     CheckPlanning(String),
     PreparePlanning,
     EnrollPlanning(crate::plan::NewIntent),
+    StopReplanning {
+        mission: String,
+        successor: String,
+    },
+    Lifecycle {
+        mission: String,
+        action: crate::model::LifecycleAction,
+        check: bool,
+    },
 }
 struct Request {
     epoch: u64,
@@ -604,6 +613,28 @@ impl NativeHost {
     /// Exact saved-operation GET only. Missing records stay Unknown.
     pub fn check(&self, id: String) -> Receiver<Result<IntentOutcome, Error>> {
         self.request(Work::Check(id))
+    }
+    /// Explicit user intent naming the new mission the page showed.
+    pub fn stop_replanning(
+        &self,
+        intent: crate::model::StopReplanningIntent,
+    ) -> Receiver<Result<IntentOutcome, Error>> {
+        self.request(Work::StopReplanning {
+            mission: intent.mission_id,
+            successor: intent.successor_id,
+        })
+    }
+    /// Archive or reopen once, or with `check` only read the status again.
+    pub fn lifecycle(
+        &self,
+        intent: crate::model::LifecycleIntent,
+        action: crate::model::LifecycleAction,
+    ) -> Receiver<Result<IntentOutcome, Error>> {
+        self.request(Work::Lifecycle {
+            mission: intent.mission_id,
+            action,
+            check: intent.check,
+        })
     }
     /// Read the complete saved interview and planning proposal. Never starts a worker.
     pub fn read_planning(&self, mission: String) -> Receiver<Result<IntentOutcome, Error>> {
@@ -1234,6 +1265,7 @@ async fn refresh(
     shared.current(epoch)?;
     shared.change(|desk| {
         desk.native_capability(t.controls.load(Ordering::SeqCst));
+        desk.native_replanning(t.replanning.load(Ordering::SeqCst));
         desk.set_now(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -1425,6 +1457,51 @@ async fn handle(
             ));
         }
         Work::Refresh => refresh(t, journal, shared, epoch, None).await?,
+        Work::Lifecycle {
+            mission,
+            action,
+            check,
+        } => return lifecycle(t, journal, shared, epoch, &mission, action, check).await,
+        Work::StopReplanning { mission, successor } => {
+            if !valid_id(&mission) || !valid_id(&successor) {
+                return Err(Error::Invalid);
+            }
+            let open = {
+                let desk = shared.desk.lock().expect("native Desk poisoned");
+                desk.today().freshness.state == FreshnessState::Live
+                    && desk.native_overview().is_some_and(|o| {
+                        o.dashboard.missions.items.iter().any(|m| {
+                            m.id == mission
+                                && m.successor
+                                    .as_ref()
+                                    .is_some_and(|l| l.open() && l.mission_id == successor)
+                        })
+                    })
+            };
+            if !open {
+                return Ok(shared.outcome(
+                    OutcomeStatus::Stale,
+                    "Re-planning changed since you looked. Nothing was stopped.",
+                ));
+            }
+            t.gate(false).await?;
+            shared.current(epoch)?;
+            let sent = t.stop_replanning(&mission, &successor).await;
+            // Read again either way: the mission page shows whether it stopped.
+            let next = shared.epoch.load(Ordering::SeqCst);
+            let _ = refresh(t, journal, shared, next, Some(&mission)).await;
+            return Ok(match sent {
+                Ok(()) => shared.outcome(OutcomeStatus::Accepted, ""),
+                Err(Error::Stale) => shared.outcome(
+                    OutcomeStatus::Stale,
+                    "Re-planning changed since you looked. Nothing was stopped.",
+                ),
+                Err(_) => shared.outcome(
+                    OutcomeStatus::Unknown,
+                    "Stop re-planning is not confirmed. The next read shows whether it stopped; nothing was sent again.",
+                ),
+            });
+        }
         Work::Detail(id) => {
             let result = refresh(t, journal, shared, epoch, Some(&id)).await;
             let current = shared.epoch.load(Ordering::SeqCst);
@@ -1599,6 +1676,98 @@ async fn handle(
         }
     }
     Ok(shared.outcome(OutcomeStatus::Accepted, ""))
+}
+
+/// Archive or reopen a mission once, or only read its status after a lost
+/// answer. The daemon's refusal is shown as it said it; nothing is resent.
+async fn lifecycle(
+    t: &Transport,
+    journal: &mut Journal,
+    shared: &Shared,
+    epoch: u64,
+    mission: &str,
+    action: crate::model::LifecycleAction,
+    check: bool,
+) -> Result<IntentOutcome, Error> {
+    use crate::model::LifecycleAction as A;
+    if !valid_id(mission) {
+        return Err(Error::Invalid);
+    }
+    let applied = match action {
+        A::Archive => "Archived. Today drops it on its next read.",
+        A::Reopen => "Reopened. It is active again.",
+    };
+    let status = if check {
+        // Exact status read only. Never sends the change again.
+        let read = async {
+            t.gate(false).await?;
+            t.mission_status(mission).await
+        }
+        .await;
+        match read {
+            Ok(status) => status,
+            Err(_) => {
+                return Ok(shared.outcome(
+                    OutcomeStatus::Unknown,
+                    "Pilot could not read the mission's status. The outcome is still unknown.",
+                ));
+            }
+        }
+    } else {
+        if action == A::Archive {
+            let listed = {
+                let desk = shared.desk.lock().expect("native Desk poisoned");
+                desk.today().freshness.state == FreshnessState::Live
+                    && desk
+                        .native_overview()
+                        .is_some_and(|o| o.dashboard.missions.items.iter().any(|m| m.id == mission))
+            };
+            if !listed {
+                return Ok(shared.outcome(
+                    OutcomeStatus::Stale,
+                    "This mission changed since you looked. Nothing was sent.",
+                ));
+            }
+        }
+        t.gate(false).await?;
+        shared.current(epoch)?;
+        match t.lifecycle(mission, action).await {
+            Ok(Ok(())) => action.target().to_owned(),
+            Ok(Err(message)) => return Ok(shared.outcome(OutcomeStatus::Rejected, &message)),
+            Err(_) => {
+                return Ok(shared.outcome(
+                    OutcomeStatus::Unknown,
+                    "The answer was lost. Check reads the mission again; nothing is sent again.",
+                ));
+            }
+        }
+    };
+    // Read again: Today drops an archived mission and lists a reopened one.
+    let next = shared.epoch.load(Ordering::SeqCst);
+    let _ = refresh(
+        t,
+        journal,
+        shared,
+        next,
+        (status == "active").then_some(mission),
+    )
+    .await;
+    Ok(if status == action.target() {
+        shared.outcome(OutcomeStatus::Accepted, applied)
+    } else if status == action.expected() {
+        shared.outcome(
+            OutcomeStatus::Rejected,
+            match action {
+                A::Archive => "Not archived: the mission is still active. Nothing was sent again.",
+                A::Reopen => "Not reopened: the mission is still archived. Nothing was sent again.",
+            },
+        )
+    } else {
+        shared.outcome(
+            OutcomeStatus::Rejected,
+            &format!("The mission is now {status}. Nothing was sent again."),
+        )
+    })
 }
 
 fn validate_action(before: &c::Control, command: &ControlCommand) -> Result<(), Error> {

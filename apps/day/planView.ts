@@ -14,6 +14,11 @@ export const planRoute = signal<PlanRoute>(null);
 
 /** What the user wrote on New, exactly. */
 export const goalDraft = signal("");
+/**
+ * The old mission New's words re-plan, set by its "Re-plan as a new mission".
+ * Only Plan sends it, and it goes when the words go.
+ */
+export const replacesDraft = signal<{ missionId: string; title: string } | null>(null);
 /** Whether New waits for the user to confirm a direct start. */
 export const confirmingStart = signal(false);
 /** The last message New's intents returned. */

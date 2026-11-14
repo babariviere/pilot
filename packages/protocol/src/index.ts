@@ -1671,6 +1671,19 @@ export interface DashboardMission {
 	/** Needs-you rows belonging to the mission: its question count plus member chats with an unreviewed result. */
 	needsYou: number;
 	coordinatorSessionId?: string;
+	/** Day overview only: the new mission that re-plans this old one. */
+	successor?: MissionSuccessorLink;
+	/** Day overview only: the old mission this new one re-plans. */
+	replaces?: MissionSuccessorLink;
+}
+
+/**
+ * One side of a re-planning link between an old mission and the new mission that re-plans it.
+ * `planning` is open; `abandoned` means the user stopped re-planning; `finished` means the migration ended.
+ */
+export interface MissionSuccessorLink {
+	missionId: string;
+	state: "planning" | "finished" | "abandoned";
 }
 
 export interface DashboardRecentItem {

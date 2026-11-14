@@ -153,6 +153,7 @@ export class NativeMissionPlanning {
 								: !interview.questions.length || this.deps.workers?.status(missionId).continuation === 1
 									? "planning"
 									: "submitted";
+					const replaces = store.replaced(missionId);
 					const item: PlanningInventoryItem = {
 						missionId,
 						title: store.require(missionId).title,
@@ -161,6 +162,7 @@ export class NativeMissionPlanning {
 						round: interview.fence,
 						interviewRevision: interview.revision,
 						planRevision: plan?.revision ?? null,
+						...(replaces ? { replaces } : {}),
 					};
 					return { item, ownerFence };
 				}),

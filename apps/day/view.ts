@@ -67,6 +67,21 @@ export const dataSource = signal<"mock" | "pilot">("pilot");
 export const confirming = signal<string | null>(null);
 /** The last message a control intent returned, by mission. */
 export const controlMessages = signal<Record<string, string>>({});
+/** The mission whose Archive waits for the user's confirmation, if any. */
+export const archiving = signal<string | null>(null);
+/**
+ * Archive and Reopen as this window saw them, by mission. "archived" shows
+ * the archived page with Reopen (Today drops the mission on its next read);
+ * "unknown" waits for Check, which only reads the status again; "active"
+ * keeps the normal page with the last message.
+ */
+export type Lifecycle = {
+	title: string;
+	state: "active" | "busy" | "archived" | "unknown";
+	action: "archive" | "reopen";
+	message: string;
+};
+export const lifecycles = signal<Record<string, Lifecycle>>({});
 
 /**
  * Where the user was on Today when they opened a mission, its planning or
@@ -102,6 +117,7 @@ export function placeRow(testID: string, open: () => void) {
 /** Opens the overview of mission `id`. */
 export function openMission(id: string) {
 	confirming.set(null);
+	archiving.set(null);
 	// A mission opens on its overview, never on a thread left open earlier.
 	closeThread();
 	route.set(id);
@@ -110,6 +126,7 @@ export function openMission(id: string) {
 /** Goes back to Today. */
 export function closeMission() {
 	confirming.set(null);
+	archiving.set(null);
 	closeThread();
 	route.set(null);
 }

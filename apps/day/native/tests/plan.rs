@@ -454,6 +454,7 @@ fn new_names_the_setup_shown_and_small_asks_start_directly() {
     let stale = NewIntent {
         goal: "Fix the flaky test".into(),
         setup: "old".into(),
+        replaces: None,
     };
     assert_eq!(
         desk.begin_start(&stale).unwrap_err().status,
@@ -462,6 +463,7 @@ fn new_names_the_setup_shown_and_small_asks_start_directly() {
     let blank = NewIntent {
         goal: "  ".into(),
         setup: setup.clone(),
+        replaces: None,
     };
     assert_eq!(
         desk.begin_plan(&blank).unwrap_err().status,
@@ -470,6 +472,7 @@ fn new_names_the_setup_shown_and_small_asks_start_directly() {
     let ask = NewIntent {
         goal: "Fix the flaky test".into(),
         setup: setup.clone(),
+        replaces: None,
     };
     let id = desk.begin_start(&ask).unwrap();
     desk.settle_start(&id);
@@ -478,6 +481,7 @@ fn new_names_the_setup_shown_and_small_asks_start_directly() {
     let goal = NewIntent {
         goal: "Let people export a chat".into(),
         setup,
+        replaces: None,
     };
     let mission = desk.begin_plan(&goal).unwrap();
     assert_eq!(desk.page(&mission).unwrap().interview, None);
@@ -495,6 +499,7 @@ fn unavailable_planning_sends_nothing() {
     let goal = NewIntent {
         goal: "Anything".into(),
         setup,
+        replaces: None,
     };
     assert_eq!(
         desk.begin_plan(&goal).unwrap_err().message,

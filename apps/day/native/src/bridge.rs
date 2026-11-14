@@ -57,6 +57,9 @@ pub const METHODS: &[&str] = &[
     "day.mission.pause",
     "day.mission.resume",
     "day.mission.check",
+    "day.mission.stopReplanning",
+    "day.mission.archive",
+    "day.mission.reopen",
     "day.plan.read",
     "day.plan.snapshot",
     "day.plan.source",
@@ -226,6 +229,8 @@ pub(crate) enum Command {
     Pause(crate::model::PauseIntent),
     Resume(crate::model::ResumeIntent),
     ControlCheck(String),
+    StopReplanning(crate::model::StopReplanningIntent),
+    Lifecycle(crate::model::LifecycleIntent, crate::model::LifecycleAction),
     Plan(String),
     PlanSnapshot(String),
     PlanSource(crate::host::plan_sources::Request),
@@ -639,6 +644,22 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             mission(&r.mission_id)?;
             mission(&r.pause_operation_id)?;
             C::Resume(r)
+        }
+        "day.mission.stopReplanning" => {
+            let r: crate::model::StopReplanningIntent = decode(&args)?;
+            mission(&r.mission_id)?;
+            mission(&r.successor_id)?;
+            C::StopReplanning(r)
+        }
+        "day.mission.archive" | "day.mission.reopen" => {
+            let r: crate::model::LifecycleIntent = decode(&args)?;
+            mission(&r.mission_id)?;
+            let action = if name == "day.mission.archive" {
+                crate::model::LifecycleAction::Archive
+            } else {
+                crate::model::LifecycleAction::Reopen
+            };
+            C::Lifecycle(r, action)
         }
         "day.plan.create" => C::Create(decode(&args)?),
         "day.plan.startWork" => {

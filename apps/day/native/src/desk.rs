@@ -17,7 +17,8 @@ use crate::{
     model::{
         Answer, AnswerRef, AnswerState, AskIntent, ControlAsk, DecideIntent, Decision,
         DecisionKind, DecisionRef, Delivery, DoneEntry, Evidence, FreshnessState, IntentOutcome,
-        MissionPage, MissionRef, OutcomeStatus, PauseIntent, ResumeIntent, Scenario, Today, Tone,
+        LifecycleAction, LifecycleIntent, MissionPage, MissionRef, OutcomeStatus, PauseIntent,
+        ResumeIntent, Scenario, StopReplanningIntent, Today, Tone,
     },
     project::{self, ControlLocal, Inputs},
 };
@@ -48,6 +49,10 @@ pub fn limit_done(today: &mut Today) {
 pub struct Desk {
     native: bool,
     native_controls: bool,
+    /// Whether the service links re-plans (`missionReplanning`).
+    native_replanning: bool,
+    /// Missions the mock service archived, for Reopen.
+    archived: Vec<c::DashboardMission>,
     today: Today,
     overview: Option<DayOverview>,
     details: Vec<MissionDetail>,
@@ -105,6 +110,8 @@ impl Desk {
         let mut desk = Desk {
             native: false,
             native_controls: true,
+            native_replanning: true,
+            archived: Vec::new(),
             today,
             overview: world.overview,
             details: world.details,
@@ -230,7 +237,7 @@ impl Desk {
     /// The overview of mission `id`, or None when it is not in the read.
     pub fn mission(&self, id: &str) -> Option<MissionPage> {
         let overview = self.overview.as_ref()?;
-        project::page(
+        let mut page = project::page(
             &Inputs {
                 overview,
                 details: &self.details,
@@ -241,7 +248,9 @@ impl Desk {
             },
             id,
             self.today.freshness.clone(),
-        )
+        )?;
+        page.can_replan &= self.native_replanning;
+        Some(page)
     }
 
     /// The read model.
@@ -254,6 +263,7 @@ impl Desk {
         let mut desk = Self::new(Scenario::Unreadable);
         desk.native = true;
         desk.native_controls = false;
+        desk.native_replanning = false;
         desk.today = Today::default();
         desk.overview = None;
         desk.details.clear();
@@ -276,6 +286,108 @@ impl Desk {
 
     pub(crate) fn native_capability(&mut self, allowed: bool) {
         self.native_controls = allowed;
+    }
+
+    pub(crate) fn native_replanning(&mut self, allowed: bool) {
+        self.native_replanning = allowed;
+    }
+
+    /// The mock service's Stop re-planning: the open link becomes
+    /// abandoned, on both missions' rows. Nothing else changes.
+    pub fn stop_replanning(&mut self, intent: &StopReplanningIntent) -> IntentOutcome {
+        let Some(overview) = self.overview.as_mut() else {
+            return self.outcome(OutcomeStatus::Rejected, "Nothing was read yet.");
+        };
+        let missions = &mut overview.dashboard.missions.items;
+        let open = missions.iter().any(|m| {
+            m.id == intent.mission_id
+                && m.successor
+                    .as_ref()
+                    .is_some_and(|l| l.open() && l.mission_id == intent.successor_id)
+        });
+        if !open {
+            return self.outcome(
+                OutcomeStatus::Stale,
+                "Re-planning changed since you looked. Nothing was stopped.",
+            );
+        }
+        for m in missions.iter_mut() {
+            let id = m.id.clone();
+            for link in [m.successor.as_mut(), m.replaces.as_mut()]
+                .into_iter()
+                .flatten()
+            {
+                if (id == intent.mission_id && link.mission_id == intent.successor_id)
+                    || (id == intent.successor_id && link.mission_id == intent.mission_id)
+                {
+                    link.state = "abandoned".into();
+                }
+            }
+        }
+        self.changed();
+        self.outcome(OutcomeStatus::Accepted, "")
+    }
+
+    /// The mock service's archive and reopen: an archived mission leaves the
+    /// overview and Reopen brings it back. Nothing else changes. Missions in
+    /// [`fixture::ARCHIVE_REFUSED`] are refused with the service's words.
+    pub fn lifecycle(
+        &mut self,
+        intent: &LifecycleIntent,
+        action: LifecycleAction,
+    ) -> IntentOutcome {
+        let id = intent.mission_id.as_str();
+        let Some(overview) = self.overview.as_mut() else {
+            return self.outcome(OutcomeStatus::Rejected, "Nothing was read yet.");
+        };
+        let listed = overview
+            .dashboard
+            .missions
+            .items
+            .iter()
+            .position(|m| m.id == id);
+        let archived = self.archived.iter().position(|m| m.id == id);
+        let status = match (listed, archived) {
+            (Some(_), _) => "active",
+            (None, Some(_)) => "archived",
+            (None, None) => return self.outcome(OutcomeStatus::Rejected, "That mission is gone."),
+        };
+        if intent.check {
+            return if status == action.target() {
+                self.outcome(OutcomeStatus::Accepted, "")
+            } else {
+                self.outcome(
+                    OutcomeStatus::Rejected,
+                    "It did not change. Nothing was sent again.",
+                )
+            };
+        }
+        if status != action.expected() {
+            return self.outcome(
+                OutcomeStatus::Rejected,
+                "The confirmed mission has changed; review it again",
+            );
+        }
+        if action == LifecycleAction::Archive && fixture::ARCHIVE_REFUSED.contains(&id) {
+            return self.outcome(
+                OutcomeStatus::Rejected,
+                "A chat archive is already in progress. Wait and review the mission again",
+            );
+        }
+        let missions = &mut overview.dashboard.missions;
+        match (action, listed, archived) {
+            (LifecycleAction::Archive, Some(i), _) => {
+                self.archived.push(missions.items.remove(i));
+                missions.total -= 1;
+            }
+            (LifecycleAction::Reopen, _, Some(i)) => {
+                missions.items.push(self.archived.remove(i));
+                missions.total += 1;
+            }
+            _ => {}
+        }
+        self.changed();
+        self.outcome(OutcomeStatus::Accepted, "")
     }
 
     /// Restore or show one exact journaled operation. Never sends it.
@@ -1574,6 +1686,51 @@ mod tests {
         let notify = desk.mission("notify").unwrap();
         assert!(!notify.tasks_known && notify.tasks.is_empty());
         assert!(desk.mission("nope").is_none());
+    }
+
+    #[test]
+    fn re_planning_names_both_missions_and_stop_only_ends_the_link() {
+        use crate::model::{MissionLink, StopReplanningIntent};
+        let mut desk = Desk::new(Scenario::Decisions);
+        let docs = desk.mission("docs").unwrap();
+        let search = MissionLink {
+            mission_id: "search".into(),
+            title: "Faster search".into(),
+        };
+        assert_eq!(docs.replanning_as, Some(search));
+        assert!(!docs.can_replan && !docs.replan_draft.is_empty());
+        assert_eq!(
+            desk.mission("search").unwrap().replaces.map(|l| l.title),
+            Some("Docs refresh".to_owned())
+        );
+        let needs_you = desk.today().decisions.len();
+        let stop = |successor: &str| StopReplanningIntent {
+            mission_id: "docs".into(),
+            successor_id: successor.into(),
+        };
+        assert_eq!(
+            desk.stop_replanning(&stop("native")).status,
+            OutcomeStatus::Stale
+        );
+        assert_eq!(
+            desk.stop_replanning(&stop("search")).status,
+            OutcomeStatus::Accepted
+        );
+        assert_eq!(
+            desk.stop_replanning(&stop("search")).status,
+            OutcomeStatus::Stale
+        );
+        let docs = desk.mission("docs").unwrap();
+        assert!(docs.replanning_as.is_none() && docs.can_replan);
+        assert!(desk.mission("search").unwrap().replaces.is_none());
+        assert_eq!(
+            desk.today().decisions.len(),
+            needs_you,
+            "neither needs the user"
+        );
+        // A service without missionReplanning offers no re-plan.
+        desk.native_replanning(false);
+        assert!(!desk.mission("docs").unwrap().can_replan);
     }
 
     #[test]

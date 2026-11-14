@@ -19,12 +19,24 @@ import { mapSummary, stageMark, stageWord } from "./PlanScreen";
 import { Problems } from "./Problems";
 import { askRevisit } from "./planCommands";
 import type { Plans } from "./planning";
-import { goalDraft, openNew, openPlan } from "./planView";
+import { goalDraft, openNew, openPlan, replacesDraft } from "./planView";
 import { MissionThreadsSection } from "./ThreadScreen";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
 import { naming } from "./threadView";
 import { Action, EvidenceChip, Mark, RowLink, SectionTitle, Track } from "./ui";
-import { closeMission, confirming, controlMessages, focused, focusFront, setFor, todayPlace } from "./view";
+import {
+	archiving,
+	closeMission,
+	confirming,
+	controlMessages,
+	focused,
+	focusFront,
+	type Lifecycle,
+	lifecycles,
+	openMission,
+	setFor,
+	todayPlace,
+} from "./view";
 import { controlLine, memberWord, provenance, rowLine, taskWord } from "./words";
 
 function total(row: MissionRow): number {
@@ -92,6 +104,137 @@ function PauseButton(props: { page: MissionPage }) {
 				}}
 			/>
 		</If>
+	);
+}
+
+function setLifecycle(id: string, life: Lifecycle | null) {
+	lifecycles.update((all) => {
+		const next = { ...all };
+		if (life) next[id] = life;
+		else delete next[id];
+		return next;
+	});
+}
+
+/**
+ * Archive or Reopen once, or with `check` only read the status again after a
+ * lost answer. A refusal keeps the page as it was, with the service's words.
+ */
+async function changeLifecycle(day: Day, id: string, title: string, action: Lifecycle["action"], check: boolean) {
+	setLifecycle(id, { title, state: "busy", action, message: "" });
+	const intent = { missionId: id, check };
+	const outcome = await (action === "archive" ? day.feed.archive(intent) : day.feed.reopen(intent));
+	if (outcome.status === "unknown") {
+		setLifecycle(id, { title, state: "unknown", action, message: outcome.message });
+	} else if (outcome.status === "accepted") {
+		if (action === "archive") setLifecycle(id, { title, state: "archived", action, message: "" });
+		else {
+			setLifecycle(id, { title, state: "active", action, message: "Reopened. It is active again." });
+			void day.feed.openMission({ missionId: id });
+		}
+	} else {
+		// Nothing changed: archive leaves it active, reopen leaves it archived.
+		const state = action === "archive" ? "active" : "archived";
+		setLifecycle(id, { title, state, action, message: outcome.message });
+	}
+}
+
+/** Archive, beside Pause: quiet, and asks first. Only an active mission has it. */
+function ArchiveButton(props: { page: MissionPage }) {
+	const row = () => props.page.row;
+	const life = () => lifecycles()[row().id];
+	return (
+		<If when={archiving() !== row().id && (!life() || life()?.state === "active")}>
+			<Action
+				label="Archive mission"
+				icon="archive"
+				iconOnly
+				testID="mission-archive"
+				onPress={() => {
+					glide();
+					confirming.set(null);
+					archiving.set(row().id);
+				}}
+			/>
+		</If>
+	);
+}
+
+/**
+ * The Archive confirmation. Archive is passive: chats that are working keep
+ * working and nothing is stopped. The service stops waking the coordinator
+ * and archives the coordinator chat once it is idle.
+ */
+function ArchiveConfirm(props: { day: Day; page: MissionPage }) {
+	const row = () => props.page.row;
+	const message = () => {
+		const life = lifecycles()[row().id];
+		return life?.state === "active" ? life.message : "";
+	};
+	const archive = () => {
+		archiving.set(null);
+		void changeLifecycle(props.day, row().id, row().title, "archive", false);
+	};
+	return (
+		<View class="gap-3">
+			<If when={message()}>
+				<Text testID="mission-lifecycle-message" role="alert" class="text-sm text-needs-ink">
+					{message()}
+				</Text>
+			</If>
+			<If when={archiving() === row().id}>
+				<View testID="mission-archive-confirm" class="gap-2 rounded-xl bg-muted px-4 py-3.5">
+					<Text class="text-sm text-foreground">{`Archive “${row().title}”?`}</Text>
+					<Text class="text-xs text-muted-foreground">
+						It leaves Today. Its history, tasks, decisions and chats stay. Chats that are working keep working:
+						nothing is stopped. Pilot stops waking its coordinator and archives the coordinator chat once it is
+						idle. You can reopen it.
+					</Text>
+					<View class="flex-row flex-wrap items-center gap-2 pt-1">
+						<Action primary label="Archive" icon="archive" testID="mission-archive-yes" onPress={archive} />
+						<Action label="Cancel" testID="mission-archive-cancel" onPress={() => archiving.set(null)} />
+					</View>
+				</View>
+			</If>
+		</View>
+	);
+}
+
+/** An archived mission as this window archived it: Reopen, or Check after a lost answer. */
+function Archived(props: { day: Day; missionId: string; life: Lifecycle }) {
+	const busy = () => props.life.state === "busy";
+	const run = (action: Lifecycle["action"], check: boolean) =>
+		void changeLifecycle(props.day, props.missionId, props.life.title, action, check);
+	return (
+		<View testID="mission-archived" class="gap-3">
+			<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
+				{props.life.title}
+			</Text>
+			<If when={props.life.state === "archived"}>
+				<Text class="text-sm font-medium text-foreground">Archived</Text>
+				<Text class="text-sm text-muted-foreground">
+					Today drops it on its next read. Its history, tasks, decisions and chats stay.
+				</Text>
+			</If>
+			<If when={busy()}>
+				<Text class="text-sm text-muted-foreground">
+					{props.life.action === "archive" ? "Archiving…" : "Reopening…"}
+				</Text>
+			</If>
+			<If when={props.life.message}>
+				<Text role="alert" class="text-sm text-needs-ink">
+					{props.life.message}
+				</Text>
+			</If>
+			<View class="flex-row flex-wrap items-center gap-2">
+				<If when={props.life.state === "archived"}>
+					<Action label="Reopen" testID="mission-reopen" onPress={() => run("reopen", false)} />
+				</If>
+				<If when={props.life.state === "unknown"}>
+					<Action label="Check" testID="mission-lifecycle-check" onPress={() => run(props.life.action, true)} />
+				</If>
+			</View>
+		</View>
 	);
 }
 
@@ -333,9 +476,12 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
  * An old mission (started before planning interviews) cannot be revisited.
  * Re-planning opens New with a draft goal from this mission. It sends,
  * changes and archives nothing; the user edits the draft and plans there.
+ * Once planned, the page names the new mission until the user stops
+ * re-planning. Neither state needs the user.
  */
-function Replan(props: { page: MissionPage }) {
+function Replan(props: { day: Day; page: MissionPage }) {
 	const note = signal("");
+	const busy = signal(false);
 	const start = () => {
 		if (goalDraft().trim() !== "") {
 			note.set("New already holds other words. They stay; nothing was copied.");
@@ -343,23 +489,64 @@ function Replan(props: { page: MissionPage }) {
 		}
 		glide();
 		goalDraft.set(props.page.replanDraft);
+		replacesDraft.set({ missionId: props.page.row.id, title: props.page.row.title });
 		openNew();
+	};
+	const next = () => props.page.replanningAs;
+	const stop = async () => {
+		const successorId = next()?.missionId;
+		if (!successorId || busy()) return;
+		busy.set(true);
+		note.set("");
+		try {
+			const outcome = await props.day.feed.stopReplanning({ missionId: props.page.row.id, successorId });
+			note.set(outcome.message);
+		} finally {
+			busy.set(false);
+		}
 	};
 	return (
 		<View testID="mission-replan" class="gap-2">
 			<SectionTitle title="Plan" />
-			<Text class="text-sm text-muted-foreground">
-				This mission started before planning interviews, so it cannot be revisited. Re-plan it as a new mission:
-				New opens with a draft from this mission. Choose its project there. This mission does not change.
-			</Text>
-			<View class="flex-row">
-				<Action
-					label="Re-plan as a new mission"
-					testID="mission-replan-start"
-					accessibilityLabel="Open New with a draft goal from this mission. Nothing is sent."
-					onPress={start}
+			<If
+				when={next()}
+				else={
+					<View class="gap-2">
+						<Text class="text-sm text-muted-foreground">
+							{props.page.canReplan
+								? "This mission started before planning interviews, so it cannot be revisited. Re-plan it as a new mission: New opens with a draft from this mission. Plan it in this mission's project. This mission does not change."
+								: "This mission started before planning interviews, so it cannot be revisited."}
+						</Text>
+						<If when={props.page.canReplan}>
+							<View class="flex-row">
+								<Action
+									label="Re-plan as a new mission"
+									testID="mission-replan-start"
+									accessibilityLabel="Open New with a draft goal from this mission. Nothing is sent."
+									onPress={start}
+								/>
+							</View>
+						</If>
+					</View>
+				}
+			>
+				<RowLink
+					testID="mission-replanning"
+					title={`Re-planning as “${next()?.title || "a new mission"}”`}
+					accessibilityLabel="Open the new mission that re-plans this one."
+					onPress={() => openMission(next()?.missionId ?? "")}
 				/>
-			</View>
+				<Text class="text-sm text-muted-foreground">This mission stays as it is while the new one is planned.</Text>
+				<View class="flex-row">
+					<Action
+						label="Stop re-planning"
+						testID="mission-replan-stop"
+						disabled={busy()}
+						accessibilityLabel="Stop re-planning. Both missions stay; only the link between them ends."
+						onPress={() => void stop()}
+					/>
+				</View>
+			</If>
 			<If when={note()}>
 				<Text role="alert" class="text-sm text-needs-ink">
 					{note()}
@@ -466,15 +653,25 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 							</If>
 						</View>
 					</View>
-					<View class="pt-1">
+					<View class="flex-row items-center gap-1 pt-1">
 						<PauseButton page={props.page} />
+						<ArchiveButton page={props.page} />
 					</View>
 				</View>
 				<If when={props.page.goal}>
 					<Text class="text-base leading-relaxed text-muted-foreground">{props.page.goal}</Text>
 				</If>
+				<If when={props.page.replaces}>
+					<RowLink
+						testID="mission-replaces"
+						title={`Replaces “${props.page.replaces?.title || "an old mission"}”`}
+						accessibilityLabel="Open the old mission this one re-plans."
+						onPress={() => openMission(props.page.replaces?.missionId ?? "")}
+					/>
+				</If>
 				<FreshnessNote day={props.day} />
 				<Control day={props.day} page={props.page} />
+				<ArchiveConfirm day={props.day} page={props.page} />
 				<Waiting day={props.day} row={row()} />
 			</View>
 
@@ -509,7 +706,7 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 					</View>
 				}
 			>
-				<Replan page={props.page} />
+				<Replan day={props.day} page={props.page} />
 			</If>
 
 			<View class="gap-1">
@@ -576,6 +773,11 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 	});
 	const readNote = signal("");
 	const reading = signal(true);
+	// Archive, Reopen and their Check replace the page; a refusal keeps it.
+	const archived = () => {
+		const life = lifecycles()[props.missionId];
+		return life && life.state !== "active" ? life : null;
+	};
 	const shelf = createShelf();
 	void props.day.feed.openMission({ missionId: props.missionId }).then((outcome) => {
 		reading.set(false);
@@ -588,6 +790,7 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 		"escape",
 		() => {
 			if (confirming()) confirming.set(null);
+			else if (archiving()) archiving.set(null);
 			else if (props.day.threads && naming()[props.missionId]) {
 				glide();
 				naming.update((all) => ({ ...all, [props.missionId]: false }));
@@ -616,18 +819,25 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 					</Text>
 				</If>
 				<If
-					when={page()}
+					when={archived()}
 					else={
-						<Text class="text-base text-muted-foreground">
-							{reading()
-								? "Reading this mission…"
-								: "This mission is not in the latest read. It may have finished or been archived."}
-						</Text>
+						<If
+							when={page()}
+							else={
+								<Text class="text-base text-muted-foreground">
+									{reading()
+										? "Reading this mission…"
+										: "This mission is not in the latest read. It may have finished or been archived."}
+								</Text>
+							}
+						>
+							<Each of={page() ? [page() as MissionPage] : []} key={(p) => p.row.id}>
+								{(p) => <Body day={props.day} plans={props.plans} page={p()} shelf={shelf} />}
+							</Each>
+						</If>
 					}
 				>
-					<Each of={page() ? [page() as MissionPage] : []} key={(p) => p.row.id}>
-						{(p) => <Body day={props.day} plans={props.plans} page={p()} shelf={shelf} />}
-					</Each>
+					<Archived day={props.day} missionId={props.missionId} life={archived() as Lifecycle} />
 				</If>
 			</View>
 		</Scroll>

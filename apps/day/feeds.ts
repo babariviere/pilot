@@ -27,6 +27,9 @@ export type DayFeed = Pick<
 	| "pause"
 	| "resume"
 	| "checkControl"
+	| "stopReplanning"
+	| "archive"
+	| "reopen"
 	| "pulse"
 	| "dispose"
 >;

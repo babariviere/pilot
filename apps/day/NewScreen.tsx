@@ -34,6 +34,7 @@ import {
 	newMessage,
 	openPlan,
 	projectsOpen,
+	replacesDraft,
 } from "./planView";
 import { Action, Mark, Picker, RadioRow, RowLink, SectionTitle } from "./ui";
 
@@ -263,6 +264,7 @@ export function NewScreen(props: { plans: Plans }) {
 						value={goalDraft()}
 						onChange={({ value }) => {
 							goalDraft.set(value);
+							if (value.trim() === "") replacesDraft.set(null);
 							confirmingStart.set(false);
 						}}
 						onFocus={goal.focus}
@@ -271,6 +273,11 @@ export function NewScreen(props: { plans: Plans }) {
 						class="min-h-20 rounded-xl border border-input bg-background px-3.5 py-2.5 text-base text-foreground focus:border-primary"
 					/>
 					<ProjectRow plans={props.plans} />
+					<If when={replacesDraft()}>
+						<Text testID="new-replaces" class="text-xs text-faint">
+							{`Re-plans “${replacesDraft()?.title ?? ""}”. That mission stays as it is.`}
+						</Text>
+					</If>
 				</View>
 				<If when={off()}>
 					<View testID="planning-off" class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">

@@ -18,6 +18,7 @@ import {
 	openPlan,
 	planMessages,
 	put,
+	replacesDraft,
 	revisionShown,
 	revisitBusy,
 	revisitMessages,
@@ -334,11 +335,13 @@ export async function planMission(plans: Plans) {
 	newBusy.set(true);
 	newMessage.set("");
 	const goal = goalDraft();
+	const replaces = replacesDraft()?.missionId ?? null;
 	try {
-		const outcome = await plans.feed.plan({ goal, setup: plans.planning().setup.digest });
+		const outcome = await plans.feed.plan({ goal, setup: plans.planning().setup.digest, replaces });
 		if (outcome.status === "accepted" && outcome.missionId) {
 			if (goalDraft() === goal) {
 				goalDraft.set("");
+				replacesDraft.set(null);
 				dropChoice();
 			}
 			openPlan(outcome.missionId);

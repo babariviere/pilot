@@ -1956,6 +1956,7 @@ export function createDaemonServer(
 					nativePlanning: nativePlanning && githubSetup ? 1 : undefined,
 					nativeThreads: missionThreads && githubSetup ? 1 : undefined,
 					nativeAttention: nativeAttention && githubSetup ? 1 : undefined,
+					missionReplanning: planningWorkers && githubSetup ? 1 : undefined,
 					passiveFailedModel: hello?.lineageId ? true : undefined,
 					guardedQueue: true,
 					sessionPathCandidates: hello.lineageId ? 1 : undefined,
@@ -2468,6 +2469,24 @@ export function createDaemonServer(
 			const write = parseMissionLifecycle(await readJson(req), catalogHost);
 			const mission = missions.service.lifecycle(parts[2]!, write);
 			return json(res, 200, { operationId: write.operationId, mission });
+		}
+		if (missions && parts[1] === "missions" && parts.length === 4 && parts[3] === "successor") {
+			// Stop re-planning. Only the link changes; both missions stay as they are.
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
+			if (!githubSetup) throw new ServiceUnavailable("Mission re-planning unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			const body = await readJson<{ action?: unknown; newMissionId?: unknown }>(req, 4096);
+			if (
+				!body ||
+				Object.keys(body).sort().join(",") !== "action,newMissionId" ||
+				body.action !== "abandon" ||
+				typeof body.newMissionId !== "string"
+			)
+				throw new HttpError(400, "Expected { action: 'abandon', newMissionId }");
+			const successor = missions.store.abandonSuccessor(parts[2]!, body.newMissionId);
+			await missions.store.durable();
+			return json(res, 200, { missionId: parts[2]!, successor });
 		}
 		if (
 			missions &&
@@ -3267,12 +3286,19 @@ export function createDaemonServer(
 			const projectId = parts[2]!,
 				observedAt = Date.now(),
 				list = missions.store.list(projectId);
+			const dashboard = dashboards.dashboard(projectId, Number.MAX_SAFE_INTEGER);
 			const overview: import("@pilot/protocol").DayOverview = {
 				version: 1,
 				projectId,
 				observedAt,
 				complete: true,
-				dashboard: dashboards.dashboard(projectId, Number.MAX_SAFE_INTEGER),
+				dashboard: {
+					...dashboard,
+					missions: {
+						...dashboard.missions,
+						items: dashboard.missions.items.map((m) => ({ ...m, ...missions.store.successorLinks(m.id) })),
+					},
+				},
 				reports: list.flatMap((mission) => missions.service.reports.viewsNow(mission.id, observedAt)),
 				controls: list.map((mission) => missions.store.controls.current(mission.id)),
 			};

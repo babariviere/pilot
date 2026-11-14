@@ -945,6 +945,9 @@ pub struct NewIntent {
     pub goal: String,
     /// The setup's digest the screen showed.
     pub setup: String,
+    /// The old mission this plan re-plans, when New was opened from its
+    /// "Re-plan as a new mission". Only Plan sends it.
+    pub replaces: Option<String>,
 }
 
 /// Save one answer as a draft. It never submits or starts anything.

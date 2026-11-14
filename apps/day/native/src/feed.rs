@@ -12,8 +12,9 @@ use crate::{
     desk::{Desk, PULSE_COUNT, PULSE_EVERY},
     model::{
         ActionAsk, ActionCheck, ActionRef, AnswerRef, AskIntent, CompleteIntent, DecideIntent,
-        DecisionRef, Draft, DraftIntent, IntentOutcome, MissionPage, MissionRef, OutcomeStatus,
-        PauseIntent, ProgressIntent, ReplyIntent, ResumeIntent, Scenario, Today,
+        DecisionRef, Draft, DraftIntent, IntentOutcome, LifecycleAction, LifecycleIntent,
+        MissionPage, MissionRef, OutcomeStatus, PauseIntent, ProgressIntent, ReplyIntent,
+        ResumeIntent, Scenario, StopReplanningIntent, Today,
     },
 };
 
@@ -153,6 +154,22 @@ impl TodayFeed {
             Ok(Ok(outcome)) => outcome,
             error => IntentOutcome { status: if matches!(error, Ok(Err(crate::host::Error::Unknown))) { crate::model::OutcomeStatus::Unknown } else { crate::model::OutcomeStatus::Rejected }, revision: host.snapshot().revision, message: "This request could not be confirmed. Refresh or check the saved operation; nothing is resent.".into() }
         }
+    }
+
+    async fn lifecycle(
+        this: Instance<Self>,
+        intent: LifecycleIntent,
+        action: LifecycleAction,
+    ) -> IntentOutcome {
+        if let Some(host) = this.with(|f| f.native.clone()) {
+            let result = host.lifecycle(intent, action);
+            return Self::native_result(host, result).await;
+        }
+        this.with_mut(|feed| {
+            let outcome = feed.desk.lifecycle(&intent, action);
+            feed.publish();
+            outcome
+        })
     }
 }
 
@@ -644,6 +661,37 @@ impl TodayFeed {
             feed.publish();
             outcome
         })
+    }
+
+    /// Stops re-planning an old mission, named with the new mission the
+    /// page showed. Only the link ends; both missions stay as they are. A
+    /// lost answer is `unknown`; the next read shows whether it stopped.
+    pub async fn stop_replanning(
+        this: Instance<Self>,
+        intent: StopReplanningIntent,
+    ) -> IntentOutcome {
+        if let Some(host) = this.with(|f| f.native.clone()) {
+            let result = host.stop_replanning(intent);
+            return Self::native_result(host, result).await;
+        }
+        this.with_mut(|feed| {
+            let outcome = feed.desk.stop_replanning(&intent);
+            feed.publish();
+            outcome
+        })
+    }
+
+    /// Archives an active mission: it leaves Today, its history stays and no
+    /// work is stopped. With `check`, only reads its status again after a
+    /// lost answer. A refusal carries the service's own words.
+    pub async fn archive(this: Instance<Self>, intent: LifecycleIntent) -> IntentOutcome {
+        Self::lifecycle(this, intent, LifecycleAction::Archive).await
+    }
+
+    /// Reopens a mission this page archived. With `check`, only reads its
+    /// status again.
+    pub async fn reopen(this: Instance<Self>, intent: LifecycleIntent) -> IntentOutcome {
+        Self::lifecycle(this, intent, LifecycleAction::Reopen).await
     }
 
     /// Runs the update workload: one pulse every `everyMs` (100 when left

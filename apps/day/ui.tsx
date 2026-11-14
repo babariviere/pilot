@@ -15,6 +15,7 @@ import {
 	Toggle,
 } from "nsh/base";
 import type { Bar, Evidence, Progress } from "pilot-day/native";
+import archive from "./icons/archive.svg";
 import back from "./icons/back.svg";
 import changes from "./icons/changes.svg";
 import document from "./icons/document.svg";
@@ -31,7 +32,21 @@ import update from "./icons/update.svg";
 // One small family of line icons, drawn on a 16-point grid with the same
 // stroke. They are template images: the class's tint colors them. They
 // stand beside words, never in place of a label the user must guess.
-const ICONS = { back, changes, document, moon, notes, pause, play, plus, refresh, settings, sun, update } as const;
+const ICONS = {
+	archive,
+	back,
+	changes,
+	document,
+	moon,
+	notes,
+	pause,
+	play,
+	plus,
+	refresh,
+	settings,
+	sun,
+	update,
+} as const;
 
 /** The name of one of the app's icons. */
 export type IconName = keyof typeof ICONS;

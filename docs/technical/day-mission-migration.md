@@ -1,8 +1,8 @@
 # Re-plan an old mission (plan)
 
-Status: part 1 (Old plan label and prefill) is built; parts 2 and 3 are
-proposals. Facts checked against the code at `402b0307` and read-only reads of
-the live daemon on 2026-11-14.
+Status: parts 1 (Old plan label and prefill) and 2 (successor link) are built;
+part 3 is a proposal. Facts checked against the code at `402b0307` and
+read-only reads of the live daemon on 2026-11-14.
 
 ## Goal
 
@@ -122,7 +122,11 @@ only. A lost reply shows Unknown with Check.
 1. Built. Old plan label and prefill (Day only, no daemon change). The mission
    page decides "old" from `mission.planningVersion` in its detail read; Today
    rows from a live planning inventory. `project::replan_draft` builds the text.
-2. Successor link and Re-planning label (daemon + Day, service restart).
+2. Built. Successor link and Re-planning label (daemon + Day, service restart).
+   Stop re-planning is `POST /api/missions/:oldId/successor`
+   `{action: "abandon", newMissionId}` (authenticated, repeatable, no
+   journal: a lost reply shows Unknown and the next read shows the link).
+   A restored window keeps New's words but not which mission they re-plan.
 3. Finish migration (daemon + Day).
 
 ## Open questions

@@ -31,6 +31,8 @@ export interface PlanningEnrollment {
 	model: string;
 	profile: typeof PLANNING_PROFILE;
 	configurationDigest: string;
+	/** An old mission this one re-plans. Linked in the enrollment transaction; the old mission is not changed. */
+	replaces?: string;
 }
 interface Dependencies {
 	home: string;
@@ -294,7 +296,7 @@ export class PlanningWorkers {
 		let request: PlanningEnrollment;
 		try {
 			request = JSON.parse(op.payload);
-			interviewExact(request, [
+			const keys = [
 				"purpose",
 				"projectId",
 				"ownerSessionId",
@@ -303,10 +305,13 @@ export class PlanningWorkers {
 				"model",
 				"profile",
 				"configurationDigest",
-			]);
+			];
+			if (request && typeof request === "object" && Object.hasOwn(request, "replaces")) keys.push("replaces");
+			interviewExact(request, keys);
 			interviewId(op.targetId);
 			interviewId(request.projectId);
 			interviewId(request.ownerSessionId);
+			if (request.replaces !== undefined) interviewId(request.replaces);
 			interviewText(request.title, 200);
 			interviewText(request.goal, 12000);
 			interviewText(request.model, 256);
@@ -332,11 +337,12 @@ export class PlanningWorkers {
 				this.deps.store.membership(request.ownerSessionId)
 			)
 				throw new Conflict("Fresh planning enrollment changed");
+			if (request.replaces !== undefined) this.deps.store.assertReplaceable(request.replaces, request.projectId);
 		};
 		try {
 			check();
 		} catch (e) {
-			throw new OperationRejected(String(e));
+			throw new OperationRejected(e instanceof Error ? e.message : String(e));
 		}
 		await this.deps.journal.checkpoint(op, { stage: "planning-enrollment-entered", payloadHash: op.payloadHash });
 		check();
@@ -347,6 +353,13 @@ export class PlanningWorkers {
 				{ projectId: request.projectId, title: request.title },
 				request.ownerSessionId,
 			);
+			if (request.replaces !== undefined)
+				this.deps.store.linkSuccessor(
+					request.replaces,
+					interview.fence.missionId,
+					request.projectId,
+					op.operationId,
+				);
 			return {
 				version: 1,
 				binding: {

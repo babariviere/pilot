@@ -11,8 +11,8 @@ use crate::{
         ArtifactLink, Brief, Control, ControlState, Currentness, Dashboard, DashboardMission,
         DayOverview, Home, MissionDecision, MissionDetail, MissionHead, Movement, Phase,
         Provenance, PullRequest, PullRequestState, Report, ReportView, ReportWrite, Resource,
-        Section, SlackTriage, SourceStatus, Task, TaskStatus, TrackedItem, TrackedSource,
-        WorkingItem,
+        Section, SlackTriage, SourceStatus, SuccessorLink, Task, TaskStatus, TrackedItem,
+        TrackedSource, WorkingItem,
     },
     model::{
         Bar, DayPart, Decision, DecisionKind, DecisionOption, Delivery, DoneBasis, DoneEntry,
@@ -84,6 +84,10 @@ pub struct World {
     pub actions: Actions,
 }
 
+/// Missions the mock service refuses to archive, as the real one does while
+/// one of the mission's chats is being archived.
+pub const ARCHIVE_REFUSED: &[&str] = &["native"];
+
 /// The world for `scenario`.
 pub fn world(scenario: Scenario) -> World {
     match scenario {
@@ -151,6 +155,8 @@ fn dash(id: &str, title: &str, counts: [u32; 5], working: u32, needs_you: u32) -
         working,
         needs_you,
         coordinator_session_id: Some(format!("c-{id}")),
+        successor: None,
+        replaces: None,
     }
 }
 
@@ -882,6 +888,18 @@ fn decisions() -> World {
     );
     let mut overview = overview;
     overview.dashboard.tracked = requests(SourceStatus::Idle);
+    // Docs refresh (an old mission) is being re-planned as Faster search.
+    let link = |id: &str| SuccessorLink {
+        mission_id: s(id),
+        state: s("planning"),
+    };
+    for m in &mut overview.dashboard.missions.items {
+        match m.id.as_str() {
+            "docs" => m.successor = Some(link("search")),
+            "search" => m.replaces = Some(link("docs")),
+            _ => {}
+        }
+    }
     World {
         today,
         overview: Some(overview),

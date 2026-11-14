@@ -1,3 +1,4 @@
+import type { MissionSuccessorLink } from "./index.ts";
 import type { InterviewFence } from "./mission-interview.ts";
 
 /** Passive native planning list. No answer, receipt or execution capability. */
@@ -9,6 +10,8 @@ export interface PlanningInventoryItem {
 	round: InterviewFence;
 	interviewRevision: number;
 	planRevision: number | null;
+	/** The old mission this one re-plans, when it was planned as a re-plan. */
+	replaces?: MissionSuccessorLink;
 }
 
 /** A successful inventory is complete. Capacity and authority failures are non-2xx, not empty lists. */

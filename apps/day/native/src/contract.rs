@@ -214,6 +214,28 @@ pub struct DashboardMission {
     pub working: u32,
     pub needs_you: u32,
     pub coordinator_session_id: Option<String>,
+    /// The new mission that re-plans this old one (Day overview only).
+    #[serde(default)]
+    pub successor: Option<SuccessorLink>,
+    /// The old mission this new one re-plans (Day overview only).
+    #[serde(default)]
+    pub replaces: Option<SuccessorLink>,
+}
+
+/// `MissionSuccessorLink`: one side of a re-planning link. `state` is
+/// "planning" while open, then "abandoned" or "finished".
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuccessorLink {
+    pub mission_id: String,
+    pub state: String,
+}
+
+impl SuccessorLink {
+    /// Whether re-planning is still going on.
+    pub fn open(&self) -> bool {
+        self.state == "planning"
+    }
 }
 
 /// `DashboardWorkingItem`: a chat working now.

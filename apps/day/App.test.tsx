@@ -272,13 +272,22 @@ test("a mission opens with its report, tasks and working chats, and Escape goes 
 test("an old mission offers a re-plan: New opens with a draft from it and nothing is sent", async () => {
 	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-docs");
+	// The mock world starts with Docs refresh being re-planned; stop that first.
+	await app.waitFor("id:mission-replan-stop");
+	await app.press("id:mission-replan-stop");
+	await app.waitFor("id:mission-replan-start");
 	await app.waitFor("id:mission-replan");
 	expect(app.shows("· Old plan")).toBe(true);
 	expect(app.shows("Interview and plan")).toBe(false);
 	await app.press("id:mission-replan-start");
 	await app.waitFor("id:goal");
+	expect(app.shows("Re-plans “Docs refresh”. That mission stays as it is.")).toBe(true);
 	const draft = app.value("id:goal");
-	for (const text of ["Re-plan the old mission “Docs refresh”", "D1: Plain words only.", "#1 Rewrite setup (blocked)"]) {
+	for (const text of [
+		"Re-plan the old mission “Docs refresh”",
+		"D1: Plain words only.",
+		"#1 Rewrite setup (blocked)",
+	]) {
 		expect(draft.includes(text)).toBe(true);
 	}
 	expect(draft.includes("Old intro")).toBe(false);
@@ -289,12 +298,88 @@ test("an old mission offers a re-plan: New opens with a draft from it and nothin
 	await app.waitFor("New already holds other words. They stay; nothing was copied.");
 });
 
+test("an old mission being re-planned names the new mission, and Stop re-planning only ends the link", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:mission-docs");
+	await app.waitFor("id:mission-replanning");
+	expect(app.shows("Re-planning as “Faster search”")).toBe(true);
+	expect(app.shows("Re-plan as a new mission")).toBe(false);
+	expect(app.shows("· Old plan")).toBe(true);
+	await app.press("id:mission-replanning");
+	await app.waitFor("Replaces “Docs refresh”");
+	await app.press("id:mission-replaces");
+	await app.waitFor("id:mission-replan-stop");
+	await app.press("id:mission-replan-stop");
+	await app.waitFor("id:mission-replan-start");
+	expect(app.shows("Re-planning as “Faster search”")).toBe(false);
+	await app.keyboard.press("escape");
+	await app.waitFor("Three short things need you.");
+	await app.press("id:mission-search");
+	await app.waitFor("id:mission-plan");
+	expect(app.shows("Replaces “Docs refresh”")).toBe(false);
+});
+
+test("Archive asks first, then the page says Archived with Reopen and Today drops the mission", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:mission-notify");
+	await app.waitFor("id:mission-archive");
+	await app.press("id:mission-archive");
+	await app.waitFor("Archive “Quieter notifications”?");
+	expect(
+		app.shows(
+			"It leaves Today. Its history, tasks, decisions and chats stay. Chats that are working keep working: nothing is stopped. Pilot stops waking its coordinator and archives the coordinator chat once it is idle. You can reopen it.",
+		),
+	).toBe(true);
+	expect(app.shows("id:mission-archive")).toBe(false);
+	await app.press("id:mission-archive-cancel");
+	await app.waitFor("id:mission-archive");
+	expect(app.shows("Archive “Quieter notifications”?")).toBe(false);
+	await app.press("id:mission-archive");
+	await app.press("id:mission-archive-yes");
+	await app.waitFor("id:mission-archived");
+	expect(app.shows("Archived")).toBe(true);
+	// Only an active mission offers Archive.
+	expect(app.shows("id:mission-archive")).toBe(false);
+	await app.keyboard.press("escape");
+	await app.waitFor("Three short things need you.");
+	expect(app.shows("id:mission-notify")).toBe(false);
+	await app.press("id:mission-search");
+	await app.waitFor("id:mission-archive");
+	await app.keyboard.press("escape");
+	await app.waitFor("Three short things need you.");
+});
+
+test("Reopen brings an archived mission back to Today with its Archive button", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:mission-notify");
+	await app.press("id:mission-archive");
+	await app.press("id:mission-archive-yes");
+	await app.waitFor("id:mission-reopen");
+	await app.press("id:mission-reopen");
+	await app.waitFor("Reopened. It is active again.");
+	await app.waitFor("id:mission-archive");
+	expect(app.shows("id:mission-archived")).toBe(false);
+	await app.keyboard.press("escape");
+	await app.waitFor("id:mission-notify");
+});
+
+test("a refused archive shows the service's words and keeps the mission", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:mission-native");
+	await app.press("id:mission-archive");
+	await app.press("id:mission-archive-yes");
+	await app.waitFor("A chat archive is already in progress. Wait and review the mission again");
+	expect(app.shows("id:mission-archived")).toBe(false);
+	expect(app.shows("id:mission-archive")).toBe(true);
+});
+
 test("a planned mission shows its plan, not a re-plan", async () => {
 	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-search");
 	await app.waitFor("id:mission-plan");
 	expect(app.shows("· Old plan")).toBe(false);
 	expect(app.shows("Re-plan as a new mission")).toBe(false);
+	expect(app.shows("Replaces “Docs refresh”")).toBe(true);
 });
 
 test("a mission's overview leads to its interview and plan, which says when there is none", async () => {

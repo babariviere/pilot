@@ -33,6 +33,7 @@ import type {
 	MissionResourceWrite,
 	MissionRole,
 	MissionStatus,
+	MissionSuccessorLink,
 	MissionTask,
 	MissionTaskStatus,
 	MissionTaskWrite,
@@ -163,6 +164,19 @@ const MAX_URL = 2_048;
 const MAX_LINEAR_KEY = 256;
 const DETAIL_EVENTS = 50;
 const DETAIL_RESOLVED_COMMENTS = 20;
+
+/** Re-planning links: an old mission (no planningVersion) and the new mission that re-plans it. */
+const MISSION_SUCCESSOR_SCHEMA = `
+CREATE TABLE IF NOT EXISTS mission_successors (
+	old_mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE,
+	new_mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+	operation_id TEXT NOT NULL,
+	state TEXT NOT NULL CHECK (state IN ('planning', 'finished', 'abandoned')),
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mission_successors_by_new ON mission_successors(new_mission_id);
+`;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS missions (
@@ -996,6 +1010,7 @@ export class MissionStore {
 		this.db.exec(CHANGE_LANDING_SCHEMA);
 		this.db.exec(RETAINED_PROJECTION_SCHEMA);
 		this.db.exec(REVIEW_REQUEST_SCHEMA);
+		this.db.exec(MISSION_SUCCESSOR_SCHEMA);
 		// Startup only, on disk before the in-memory replica opens. Never replay a saved placement.
 		this.insights.reviews.recover();
 		this.insightsOwner.reviews.recover();
@@ -2481,6 +2496,87 @@ export class MissionStore {
 			: this.all(`${MISSION_SELECT} ORDER BY updated_at DESC`);
 		return rows.map(missionFrom);
 	}
+
+	/** The re-planning link of an old mission, if any. */
+	successor(oldMissionId: string): MissionSuccessorLink | undefined {
+		const row = this.one(
+			"SELECT new_mission_id, state FROM mission_successors WHERE old_mission_id = ?",
+			oldMissionId,
+		);
+		return row
+			? { missionId: str(row.new_mission_id!), state: str(row.state!) as MissionSuccessorLink["state"] }
+			: undefined;
+	}
+
+	/** The old mission a new mission re-plans, if any. */
+	replaced(newMissionId: string): MissionSuccessorLink | undefined {
+		const row = this.one(
+			"SELECT old_mission_id, state FROM mission_successors WHERE new_mission_id = ? ORDER BY updated_at DESC LIMIT 1",
+			newMissionId,
+		);
+		return row
+			? { missionId: str(row.old_mission_id!), state: str(row.state!) as MissionSuccessorLink["state"] }
+			: undefined;
+	}
+
+	/** Both sides of a mission's re-planning links, for reads. Absent sides are omitted. */
+	successorLinks(missionId: string): { successor?: MissionSuccessorLink; replaces?: MissionSuccessorLink } {
+		const successor = this.successor(missionId),
+			replaces = this.replaced(missionId);
+		return { ...(successor ? { successor } : {}), ...(replaces ? { replaces } : {}) };
+	}
+
+	/** Refuses a re-plan the user cannot start: only an active old mission of the same project, once at a time. */
+	assertReplaceable(oldMissionId: string, projectId: string): void {
+		const old = this.get(oldMissionId);
+		if (!old) throw new Conflict("The mission to re-plan does not exist");
+		if (old.projectId !== projectId) throw new Conflict("The mission to re-plan is in another project");
+		if (old.status !== "active") throw new Conflict("Only an active mission can be re-planned");
+		if (old.planningVersion !== undefined)
+			throw new Conflict("This mission already has a planning interview; revisit it instead");
+		if (this.successor(oldMissionId)?.state === "planning")
+			throw new Conflict("This mission is already being re-planned");
+	}
+
+	/** Saves the link in the caller's transaction, after the new mission row exists. A finished or abandoned link is replaced. */
+	linkSuccessor(oldMissionId: string, newMissionId: string, projectId: string, operationId: string): void {
+		this.transaction(() => {
+			this.assertReplaceable(oldMissionId, projectId);
+			const now = Date.now();
+			this.run(
+				`INSERT INTO mission_successors (old_mission_id, new_mission_id, operation_id, state, created_at, updated_at)
+				VALUES (?, ?, ?, 'planning', ?, ?)
+				ON CONFLICT(old_mission_id) DO UPDATE SET new_mission_id = excluded.new_mission_id,
+				operation_id = excluded.operation_id, state = 'planning', created_at = excluded.created_at,
+				updated_at = excluded.updated_at`,
+				oldMissionId,
+				newMissionId,
+				operationId,
+				now,
+				now,
+			);
+		});
+	}
+
+	/** Stop re-planning: the link becomes abandoned and nothing else changes. Repeating it is harmless. */
+	abandonSuccessor(oldMissionId: string, newMissionId: string): MissionSuccessorLink {
+		const link = this.transaction(() => {
+			const link = this.successor(oldMissionId);
+			if (!link || link.missionId !== newMissionId) throw new Conflict("This re-planning link has changed");
+			if (link.state === "finished") throw new Conflict("This re-planning already finished");
+			if (link.state === "planning")
+				this.run(
+					"UPDATE mission_successors SET state = 'abandoned', updated_at = ? WHERE old_mission_id = ?",
+					Date.now(),
+					oldMissionId,
+				);
+			return { missionId: newMissionId, state: "abandoned" as const };
+		});
+		this.changed(oldMissionId, [], true);
+		this.changed(newMissionId, [], true);
+		return link;
+	}
+
 	/** Inventory candidates only. Read one sentinel beyond the limit; never claim a partial list is complete. */
 	planningCandidates(projectId: string, limit: number): string[] {
 		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Conflict("Invalid planning limit");

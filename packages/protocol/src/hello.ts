@@ -77,4 +77,6 @@ export interface DaemonCapabilities {
 	nativeThreads?: 1;
 	/** Authenticated native attention reads and exact durable receipt lookup. No help/continuation grant. */
 	nativeAttention?: 1;
+	/** `planning-enroll` accepts `replaces` (an old mission), reads carry the link, and Stop re-planning exists. */
+	missionReplanning?: 1;
 }

@@ -18,6 +18,8 @@ pub(super) struct Transport {
     pub client: reqwest::Client,
     pub source: Source,
     pub controls: AtomicBool,
+    /// Whether the service links re-plans (`missionReplanning`).
+    pub replanning: AtomicBool,
     pub planning_model: Option<String>,
     /// A global window's current project. Missions of other projects still
     /// resolve through their own project, as they do without a focus.
@@ -39,6 +41,7 @@ impl Transport {
             client: self.client.clone(),
             source,
             controls: AtomicBool::new(false),
+            replanning: AtomicBool::new(false),
             planning_model: None,
             focused: false,
         })
@@ -53,6 +56,7 @@ impl Transport {
             client: self.client.clone(),
             source,
             controls: AtomicBool::new(false),
+            replanning: AtomicBool::new(false),
             planning_model: self.planning_model.clone(),
             focused: true,
         }
@@ -87,6 +91,7 @@ impl Transport {
         Ok(Self {
             source,
             controls: AtomicBool::new(false),
+            replanning: AtomicBool::new(false),
             planning_model: None,
             focused: false,
             client: reqwest::Client::builder()
@@ -217,6 +222,10 @@ impl Transport {
         let v = self.get("/api/hello").await?;
         self.controls
             .store(v["capabilities"]["missionControls"] == 1, Ordering::SeqCst);
+        self.replanning.store(
+            v["capabilities"]["missionReplanning"] == 1,
+            Ordering::SeqCst,
+        );
         self.check_hello(&v)?;
         if v["capabilities"]["dayOverview"] != 1
             || (controls && v["capabilities"]["missionControls"] != 1)
@@ -425,6 +434,99 @@ impl Transport {
         self.local().map_err(|_| Error::Unknown)?;
         exact(v, id, command)
     }
+
+    /// Stop re-planning `mission`: one POST naming the new mission shown.
+    /// A refusal (the link changed) is Stale; any other failure is Unknown.
+    pub async fn stop_replanning(&self, mission: &str, successor: &str) -> Result<(), Error> {
+        let token = self.local()?;
+        let bytes = serde_json::to_vec(
+            &serde_json::json!({"action": "abandon", "newMissionId": successor}),
+        )
+        .map_err(|_| Error::Invalid)?;
+        let r = self
+            .client
+            .post(self.url(&format!("/api/missions/{mission}/successor")))
+            .header("x-pilot-github-capability", token)
+            .header("content-type", "application/json")
+            .body(bytes)
+            .send()
+            .await
+            .map_err(|_| Error::Unknown)?;
+        if r.status().as_u16() == 409 {
+            return Err(Error::Stale);
+        }
+        let v = body(r).await.map_err(|_| Error::Unknown)?;
+        self.local().map_err(|_| Error::Unknown)?;
+        if v["missionId"] != mission
+            || v["successor"]["missionId"] != successor
+            || v["successor"]["state"] != "abandoned"
+        {
+            return Err(Error::Unknown);
+        }
+        Ok(())
+    }
+
+    /// Archive or reopen `mission` once (`POST /api/missions/:id/lifecycle`).
+    /// `Ok(Err(message))` is the daemon's refusal (409); every other failure
+    /// is Unknown and only a status read can settle it.
+    pub async fn lifecycle(
+        &self,
+        mission: &str,
+        action: crate::model::LifecycleAction,
+    ) -> Result<Result<(), String>, Error> {
+        let token = self.local()?;
+        let request = lifecycle_body(&self.source, action, &uuid::Uuid::new_v4().to_string())?;
+        let bytes = serde_json::to_vec(&request).map_err(|_| Error::Invalid)?;
+        let r = self
+            .client
+            .post(self.url(&format!("/api/missions/{mission}/lifecycle")))
+            .header("x-pilot-github-capability", token)
+            .header("content-type", "application/json")
+            .body(bytes)
+            .send()
+            .await
+            .map_err(|_| Error::Unknown)?;
+        if r.status().as_u16() == 409 {
+            let v = json_body(r).await.map_err(|_| Error::Unknown)?;
+            let message = v["error"].as_str().unwrap_or("The service refused it.");
+            return Ok(Err(message.chars().take(300).collect()));
+        }
+        let v = body(r).await.map_err(|_| Error::Unknown)?;
+        self.local().map_err(|_| Error::Unknown)?;
+        if v["mission"]["id"] != mission || v["mission"]["status"] != action.target() {
+            return Err(Error::Unknown);
+        }
+        Ok(Ok(()))
+    }
+
+    /// The mission's status now, read again. Sends nothing.
+    pub async fn mission_status(&self, mission: &str) -> Result<String, Error> {
+        let v = self.get(&format!("/api/missions/{mission}")).await?;
+        if v["mission"]["id"] != mission
+            || v["mission"]["projectId"] != self.source.project()?.project_id
+        {
+            return Err(Error::Identity);
+        }
+        v["mission"]["status"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or(Error::Invalid)
+    }
+}
+
+/// The exact lifecycle body the daemon accepts (`parseMissionLifecycle`).
+pub(super) fn lifecycle_body(
+    source: &Source,
+    action: crate::model::LifecycleAction,
+    operation_id: &str,
+) -> Result<Value, Error> {
+    Ok(serde_json::json!({
+        "action": action.name(),
+        "expectedStatus": action.expected(),
+        "projectId": source.project()?.project_id,
+        "operationId": operation_id,
+        "home": {"daemonId": source.home.daemon_id, "lineageId": source.home.lineage_id},
+    }))
 }
 
 pub(super) fn exact(
@@ -515,4 +617,40 @@ async fn json_body(mut r: reqwest::Response) -> Result<Value, Error> {
         bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes).map_err(|_| Error::Invalid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::LifecycleAction;
+
+    #[test]
+    fn the_lifecycle_body_is_exactly_what_the_daemon_accepts() {
+        let source = Source {
+            profile: std::env::temp_dir(),
+            port: 1,
+            home: c::Home {
+                daemon_id: "daemon".into(),
+                lineage_id: "lineage".into(),
+            },
+            project: Some(super::super::Project {
+                project_id: "project".into(),
+                project_path: "/project".into(),
+            }),
+        };
+        let id = "6f1c2b8e-3d4a-4b5c-9d6e-7f8091a2b3c4";
+        assert_eq!(
+            lifecycle_body(&source, LifecycleAction::Archive, id).unwrap(),
+            serde_json::json!({"action":"archive","expectedStatus":"active","projectId":"project",
+                "operationId":id,"home":{"daemonId":"daemon","lineageId":"lineage"}})
+        );
+        let reopen = lifecycle_body(&source, LifecycleAction::Reopen, id).unwrap();
+        assert_eq!(reopen["action"], "reopen");
+        assert_eq!(reopen["expectedStatus"], "archived");
+        let global = Source {
+            project: None,
+            ..source
+        };
+        assert!(lifecycle_body(&global, LifecycleAction::Archive, id).is_err());
+    }
 }

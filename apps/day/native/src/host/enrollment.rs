@@ -17,6 +17,9 @@ pub(super) struct PlanningEnrollment {
     model: String,
     profile: Value,
     configuration_digest: String,
+    /// The old mission this plan re-plans. The daemon links both missions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    replaces: Option<String>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 enum Purpose {
@@ -47,6 +50,7 @@ pub(super) fn validate_record(
         || r.goal.len() > 12000
         || r.model.trim().is_empty()
         || r.model.len() > 256
+        || r.replaces.as_deref().is_some_and(|id| !super::valid_id(id))
     {
         return Err(Error::Storage);
     }
@@ -129,6 +133,10 @@ impl Prepared {
         if intent.goal.trim().is_empty()
             || intent.goal.len() > 12000
             || intent.goal.chars().count() > crate::plan_desk::MAX_TEXT
+            || intent
+                .replaces
+                .as_deref()
+                .is_some_and(|id| !super::valid_id(id))
         {
             return Err(Error::Invalid);
         }
@@ -162,6 +170,7 @@ impl Prepared {
                     .as_str()
                     .ok_or(Error::Invalid)?
                     .into(),
+                replaces: intent.replaces.clone(),
             })
             .map_err(|_| Error::Invalid)?,
         )
@@ -323,7 +332,10 @@ pub(super) async fn send(
         let request: Value =
             serde_json::from_str(record.operation["payload"].as_str().ok_or(Error::Storage)?)
                 .map_err(|_| Error::Storage)?;
-        if request["goal"] != intent.goal || record.not_sent {
+        if request["goal"] != intent.goal
+            || request["replaces"].as_str() != intent.replaces.as_deref()
+            || record.not_sent
+        {
             return Err(Error::Stale);
         }
         // A duplicate intent returns only the retained outcome. It never enters POST again.
@@ -414,5 +426,48 @@ pub(super) async fn send(
             crate::model::OutcomeStatus::Unknown,
             "No exact acknowledgement. Check; do not resend.",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_replan_enrollment_names_the_old_mission_only_when_asked() {
+        let source = Source {
+            profile: std::env::temp_dir(),
+            port: 1,
+            home: crate::contract::Home {
+                daemon_id: "daemon".into(),
+                lineage_id: "lineage".into(),
+            },
+            project: Some(super::super::Project {
+                project_id: "project".into(),
+                project_path: "/project".into(),
+            }),
+        };
+        let profile = json!({"version":1,"projectId":"project","configurationDigest":"b".repeat(64),
+            "profile":{"version":1,"id":"native-mission-planning","source":"skills","commit":"a".repeat(40)}});
+        let prepared = Prepared::new(&source, "faux/faux-1", profile).unwrap();
+        let intent = |replaces: Option<&str>| NewIntent {
+            goal: "Re-plan the docs".into(),
+            setup: prepared.setup.digest.clone(),
+            replaces: replaces.map(Into::into),
+        };
+        let payload = |r: &planning::PlanningRecord| -> Value {
+            serde_json::from_str(r.operation["payload"].as_str().unwrap()).unwrap()
+        };
+        let plain = prepared.record(&source, &intent(None)).unwrap();
+        assert!(payload(&plain).get("replaces").is_none());
+        let replan = prepared
+            .record(&source, &intent(Some("old-mission")))
+            .unwrap();
+        assert_eq!(payload(&replan)["replaces"], "old-mission");
+        assert!(validate_record(&source, &replan.operation, Some(&prepared.setup.digest)).is_ok());
+        assert_eq!(
+            prepared.record(&source, &intent(Some("../old"))).err(),
+            Some(Error::Invalid)
+        );
     }
 }

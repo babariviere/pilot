@@ -726,6 +726,23 @@ pub struct MissionPage {
     /// is filled with to re-plan it. Empty for planned missions or when the
     /// detail could not be read.
     pub replan_draft: String,
+    /// Whether "Re-plan as a new mission" is offered: an old mission, a
+    /// service that links re-plans, and no re-plan already open.
+    pub can_replan: bool,
+    /// The new mission that re-plans this old one, while re-planning is open.
+    pub replanning_as: Option<MissionLink>,
+    /// The old mission this new one re-plans, while re-planning is open.
+    pub replaces: Option<MissionLink>,
+}
+
+/// Another mission a mission page names.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionLink {
+    /// The mission.
+    pub mission_id: String,
+    /// Its title. Empty when this read does not list it.
+    pub title: String,
 }
 
 /// Passive projection of canonical dashboard attention. Never a retry intent.
@@ -1105,6 +1122,62 @@ pub struct ResumeIntent {
 pub struct MissionRef {
     /// The mission.
     pub mission_id: String,
+}
+
+/// Stop re-planning an old mission. Only the link ends: both missions stay.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct StopReplanningIntent {
+    /// The old mission.
+    pub mission_id: String,
+    /// The new mission the page showed.
+    pub successor_id: String,
+}
+
+/// Archive or reopen one mission. With `check`, only read its status again
+/// after a lost answer: nothing is sent.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct LifecycleIntent {
+    /// The mission.
+    pub mission_id: String,
+    /// Read the status again instead of sending.
+    pub check: bool,
+}
+
+/// Which passive lifecycle change a `LifecycleIntent` asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleAction {
+    /// Active to archived.
+    Archive,
+    /// Archived to active.
+    Reopen,
+}
+
+impl LifecycleAction {
+    /// The daemon's action name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Archive => "archive",
+            Self::Reopen => "reopen",
+        }
+    }
+    /// The status the mission must have before.
+    pub fn expected(self) -> &'static str {
+        match self {
+            Self::Archive => "active",
+            Self::Reopen => "archived",
+        }
+    }
+    /// The status the mission has after.
+    pub fn target(self) -> &'static str {
+        match self {
+            Self::Archive => "archived",
+            Self::Reopen => "active",
+        }
+    }
 }
 
 /// What an intent did.
