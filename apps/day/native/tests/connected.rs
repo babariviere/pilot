@@ -501,6 +501,11 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
     f.cmd("block-plan-read", true);
     f.cmd("hold-events", false);
     f.cmd("entered", false);
+    // A change alone never flickers the page: while its re-read is due, it
+    // stays editable and says nothing. Only a read that lags shows as older.
+    app.wait(Duration::from_millis(1000)).unwrap();
+    assert!(!app.shows(OLDER), "no older note within the grace");
+    assert!(app.screen().enabled("id:choice-outcome-yes").unwrap());
     wait(&mut app, OLDER);
     assert!(!app.screen().enabled("id:choice-outcome-yes").unwrap());
     app.press_key("1").unwrap();

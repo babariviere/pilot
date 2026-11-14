@@ -502,6 +502,13 @@ export class ConnectedRituals implements RitualSource {
 
 /** Says a planning page is older than the latest read, as Rust says it for its own pages. */
 const OLDER = "This is an older read. Pilot checks again before it saves anything.";
+/**
+ * How long a page may lag behind a change before it shows as older. A
+ * normal re-read lands well within it, so the page keeps its focus and
+ * stays editable instead of flickering on every change. Saves are still
+ * checked by the root, which refuses one from an older page.
+ */
+const OLDER_AFTER_MS = 4000;
 
 /**
  * The missions in planning as the root last read them. Complete earlier
@@ -550,6 +557,9 @@ export class ConnectedPlans implements PlanningFeed {
 	#pageAt = new Map<string, number>();
 	/** Pages a change may have made older, until they are read again. */
 	#older = new Set<string>();
+	/** Since when each page has not been current, while it is not. */
+	#lagSince = new Map<string, number>();
+	#lagTimer: ReturnType<typeof setTimeout> | null = null;
 	#inventory: Inventory = { state: "off", refusal: "unavailable" };
 	#inventoryReading: Promise<void> | null = null;
 	#inventoryVersion = 0;
@@ -676,6 +686,23 @@ export class ConnectedPlans implements PlanningFeed {
 	 * names a newer interview revision or round than the page shows. An
 	 * inventory that only lags behind a newer page read does not age it.
 	 */
+	/**
+	 * Whether a page that is not current has lagged for OLDER_AFTER_MS. Until
+	 * then it shows as it was; one timer publishes again when the time is up.
+	 */
+	#lagging(missionId: string): boolean {
+		const now = Date.now();
+		const since = this.#lagSince.get(missionId) ?? now;
+		this.#lagSince.set(missionId, since);
+		const left = since + OLDER_AFTER_MS - now;
+		if (left <= 0) return true;
+		this.#lagTimer ??= setTimeout(() => {
+			this.#lagTimer = null;
+			this.#publish();
+		}, left);
+		return false;
+	}
+
 	#current(missionId: string, page: PlanPage): boolean {
 		if (this.#older.has(missionId) || !page.fresh) return false;
 		const inventory = this.#inventory;
@@ -689,9 +716,15 @@ export class ConnectedPlans implements PlanningFeed {
 	page(missionId: string): PlanPage | null {
 		const read = this.#pages.get(missionId);
 		if (!read) return null;
+		const current = this.#current(missionId, read);
+		if (current) this.#lagSince.delete(missionId);
+		// While a re-read is due, the page stays as it was: editable, without the older note.
+		const older = !current && this.#lagging(missionId);
 		// The older-read words come first, so a page with its own note still says it is older.
-		let page = this.#current(missionId, read)
-			? read
+		let page = !older
+			? read.fresh
+				? read
+				: { ...read, fresh: true }
 			: { ...read, fresh: false, note: read.note ? `${OLDER} ${read.note}` : OLDER };
 		if (page.work)
 			page = {

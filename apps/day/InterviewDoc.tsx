@@ -218,7 +218,8 @@ function QuestionView(props: {
 							class="group flex-row items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-accent aria-pressed:bg-selection aria-pressed:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
 						>
 							<KeyCap label={keyOf(q(), c().id)} on={choice() === c().id} />
-							<View class="flex-1 flex-row flex-wrap items-baseline gap-2">
+							{/* min-w-0 lets a long answer wrap inside the card instead of running past it. */}
+							<View class="min-w-0 flex-1 gap-0.5">
 								<Text class="text-base text-foreground">{c().meaning}</Text>
 								<If when={c().recommended}>
 									<Text class="text-xs text-muted-foreground">Recommended</Text>

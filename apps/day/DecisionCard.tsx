@@ -109,13 +109,12 @@ function AnswerLine(props: { day: Day; decision: Decision; answer: Answer }) {
 function OptionText(props: { decision: Decision; option: DecisionOption }) {
 	const o = () => props.option;
 	return (
-		<View class="flex-1 gap-0.5">
-			<View class="flex-row flex-wrap items-baseline gap-2">
-				<Text class="text-sm font-medium text-card-foreground">{o().label}</Text>
-				<If when={o().recommended}>
-					<Text class="text-xs text-muted-foreground">{props.decision.reply ? "Suggested" : "Recommended"}</Text>
-				</If>
-			</View>
+		// min-w-0 lets a long label wrap inside the card instead of running past it.
+		<View class="min-w-0 flex-1 gap-0.5">
+			<Text class="text-sm font-medium text-card-foreground">{o().label}</Text>
+			<If when={o().recommended}>
+				<Text class="text-xs text-muted-foreground">{props.decision.reply ? "Suggested" : "Recommended"}</Text>
+			</If>
 			<If when={o().detail}>
 				<Text class="text-xs text-muted-foreground">{o().detail}</Text>
 			</If>
