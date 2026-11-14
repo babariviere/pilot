@@ -366,6 +366,8 @@ export interface SessionWorker {
 	toolStallKey?: string;
 	/** Committed chat todo count, supplied on ready and after every mutation. */
 	openTodoCount?: number;
+	/** Epoch ms when this worker last reported a run start. Absent while idle. */
+	workingSince?: number;
 	/** The live run awaits this blocking ask_user question. Presentation only; cleared with the worker. */
 	awaitedQuestion?: { text: string; at: number };
 	/** Live-worker work continues between the last job ending and its result turn completing. */
@@ -907,6 +909,7 @@ export class Worker implements SessionWorker {
 	readonly ready: Promise<void>;
 	state: SessionState = "starting";
 	error?: string;
+	workingSince?: number;
 	/** Ephemeral context estimate and physical provider, reported by the live kernel. */
 	usage?: KernelUsage;
 	runningJobs?: SessionJob[];
@@ -955,6 +958,13 @@ export class Worker implements SessionWorker {
 		return this.unavailable !== undefined;
 	}
 
+	/** Keeps when the current run started, for passive activity reads. */
+	private setWorking(working: boolean): void {
+		if (!working) this.workingSince = undefined;
+		else if (this.state !== "working") this.workingSince = Date.now();
+		this.state = working ? "working" : "idle";
+	}
+
 	private readonly onPacket: (packet: KernelPacket) => void;
 
 	constructor(
@@ -993,7 +1003,7 @@ export class Worker implements SessionWorker {
 				this.toolsRunning = packet.toolsRunning;
 				this.openTodoCount = packet.openTodoCount;
 				this.initialized = true;
-				this.state = packet.working ? "working" : "idle";
+				this.setWorking(packet.working);
 				this.compacting = packet.compacting === true;
 				markReady();
 			} else if (packet.type === "todos.changed") {
@@ -1007,7 +1017,7 @@ export class Worker implements SessionWorker {
 			} else if (packet.type === "usage") {
 				this.usage = packet.usage;
 			} else if (packet.type === "working") {
-				this.state = packet.working ? "working" : "idle";
+				this.setWorking(packet.working);
 			} else if (packet.type === "modelChanged") {
 				this.usage = packet.usage;
 				this.settle(packet.requestId);
@@ -1650,6 +1660,7 @@ export class SessionManager {
 	private readonly watchers = new Map<string, Map<string, EventListener>>();
 	private readonly coldWatches = new Map<string, () => void>();
 	private readonly changeListeners = new Set<(session: SessionSummary) => void>();
+	private readonly toolActivityListeners = new Set<(sessionId: string) => void>();
 	private internetOnline?: boolean;
 	private internetObservedAt?: number;
 	private telemetry?: KernelTelemetryConfiguration;
@@ -4689,6 +4700,23 @@ ${run.excerpt}`,
 	onChange(listener: (session: SessionSummary) => void): () => void {
 		this.changeListeners.add(listener);
 		return () => this.changeListeners.delete(listener);
+	}
+
+	/** Hears a live worker's tool steps start, progress and end. Notices carry no tool names or arguments. */
+	onToolActivity(listener: (sessionId: string) => void): () => void {
+		this.toolActivityListeners.add(listener);
+		return () => this.toolActivityListeners.delete(listener);
+	}
+
+	/** In-memory run facts for one chat: when its run started and its newest tool progress. Never wakes a worker. */
+	liveRun(id: string): { workingSince?: number; toolProgressAt?: number } {
+		const worker = this.workers.get(id);
+		const calls = worker?.toolActivity?.enabled ? worker.toolActivity.calls : [];
+		const progress = calls.reduce((at, call) => Math.max(at, call.progressAt), 0);
+		return {
+			...(worker?.workingSince !== undefined ? { workingSince: worker.workingSince } : {}),
+			...(progress > 0 ? { toolProgressAt: progress } : {}),
+		};
 	}
 
 	readonly diagnosticReadBroker = new DiagnosticReadBroker();
@@ -13729,6 +13757,7 @@ ${run.excerpt}`,
 			if (this.workers.get(meta.id) === worker) {
 				worker.toolActivity = packet.activity;
 				this.refreshToolStallWatch(meta, worker);
+				for (const listener of this.toolActivityListeners) listener(meta.id);
 			}
 			return;
 		}

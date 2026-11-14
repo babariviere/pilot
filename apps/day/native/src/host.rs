@@ -23,6 +23,7 @@ mod official_startup;
 pub mod official_update;
 pub(crate) mod plan_sources;
 mod planning;
+mod planning_chat;
 pub(crate) mod preferences;
 pub mod ritual;
 pub(crate) mod threads;
@@ -138,6 +139,13 @@ struct Shared {
     detail: Mutex<Option<String>>,
     planning: Mutex<std::collections::BTreeMap<String, (u64, serde_json::Value)>>,
     planning_mission: Mutex<Option<String>>,
+    /// The open planning chat. Read again with the planning page while open.
+    planning_chat: Mutex<Option<planning_chat::ChatState>>,
+    /// Whether a planning page shows. Activity notices read only a shown page.
+    planning_shown: AtomicBool,
+    /// Set by every invalidation except a planning activity notice, which
+    /// reads only the open planning page and chat.
+    full_refresh: AtomicBool,
     /// A global window's current project: chosen in Today's header or by
     /// opening one of its missions. Never set for a project-bound window.
     focus: Mutex<Option<Project>>,
@@ -238,6 +246,10 @@ enum Work {
     CheckPlanning(String),
     PreparePlanning,
     EnrollPlanning(crate::plan::NewIntent),
+    PlanningChat {
+        mission: String,
+        older: bool,
+    },
     StopReplanning {
         mission: String,
         successor: String,
@@ -448,6 +460,9 @@ impl NativeHost {
             detail: Mutex::new(None),
             planning: Mutex::new(std::collections::BTreeMap::new()),
             planning_mission: Mutex::new(None),
+            planning_chat: Mutex::new(None),
+            planning_shown: AtomicBool::new(false),
+            full_refresh: AtomicBool::new(true),
             focus: Mutex::new(None),
             planning_inventory: Mutex::new(None),
             planning_inventory_wanted: AtomicBool::new(false),
@@ -659,6 +674,7 @@ impl NativeHost {
     /// Read the complete saved interview and planning proposal. Never starts a worker.
     pub fn read_planning(&self, mission: String) -> Receiver<Result<IntentOutcome, Error>> {
         if valid_id(&mission) && self.0.shared.open().is_ok() {
+            self.0.shared.planning_shown.store(true, Ordering::SeqCst);
             *self
                 .0
                 .shared
@@ -759,6 +775,56 @@ impl NativeHost {
     ) -> Receiver<Result<IntentOutcome, Error>> {
         self.request(Work::EnrollPlanning(intent))
     }
+    /// Opens `mission`'s planning chat and reads its newest rows, or the
+    /// rows before what shows. Passive: it sends nothing to the agent.
+    pub fn read_planning_chat(
+        &self,
+        mission: String,
+        older: bool,
+    ) -> Receiver<Result<IntentOutcome, Error>> {
+        self.request(Work::PlanningChat { mission, older })
+    }
+    /// The open planning chat of `mission`, as read. None when it is not open.
+    pub fn planning_chat(&self, mission: &str) -> Option<serde_json::Value> {
+        self.0
+            .shared
+            .planning_chat
+            .lock()
+            .expect("native planning chat poisoned")
+            .as_ref()
+            .filter(|c| c.mission == mission)
+            .map(planning_chat::ChatState::view)
+    }
+    /// Closes the planning chat: it is no longer read or kept.
+    pub fn close_planning_chat(&self) {
+        *self
+            .0
+            .shared
+            .planning_chat
+            .lock()
+            .expect("native planning chat poisoned") = None;
+    }
+    /// `mission`'s planning page closed: activity notices stop reading it,
+    /// and its chat closes. Another mission's page, opened since, stays.
+    pub fn leave_planning(&self, mission: &str) {
+        let shared = &self.0.shared;
+        let current = shared
+            .planning_mission
+            .lock()
+            .expect("native planning selection poisoned")
+            .as_deref()
+            == Some(mission);
+        if current {
+            shared.planning_shown.store(false, Ordering::SeqCst);
+        }
+        let mut chat = shared
+            .planning_chat
+            .lock()
+            .expect("native planning chat poisoned");
+        if chat.as_ref().is_some_and(|c| c.mission == mission) {
+            *chat = None;
+        }
+    }
     /// Fence immediately, then join entered HTTP, WS, journal and worker off-thread.
     /// Closing never stops/resumes daemon agents or replays a historical command.
     pub fn close(&self) -> Receiver<Result<(), Error>> {
@@ -813,6 +879,28 @@ fn planning_status(record: &planning::PlanningRecord) -> OutcomeStatus {
         Some("accepted") => OutcomeStatus::Accepted,
         Some("rejected") => OutcomeStatus::Rejected,
         _ => OutcomeStatus::Unknown,
+    }
+}
+/// Reads the open planning page again, and its chat when it is open.
+/// Failures keep the last read on screen; they never fail Today's read.
+async fn planning_live(t: &Transport, shared: &Shared, epoch: u64) {
+    let mission = shared
+        .planning_mission
+        .lock()
+        .expect("native planning selection poisoned")
+        .clone();
+    let Some(mission) = mission else {
+        return;
+    };
+    let _ = read_planning(t, shared, epoch, &mission).await;
+    let chat_open = shared
+        .planning_chat
+        .lock()
+        .expect("native planning chat poisoned")
+        .as_ref()
+        .is_some_and(|c| c.mission == mission);
+    if chat_open {
+        let _ = planning_chat::read(t, shared, &mission, false).await;
     }
 }
 async fn read_planning(
@@ -1189,7 +1277,10 @@ async fn run(
                 if shared.closed.load(Ordering::SeqCst) { break; }
                 let epoch = shared.epoch.load(Ordering::SeqCst);
                 let t = focused.as_ref().unwrap_or(&root);
-                if shared.connected.load(Ordering::SeqCst) && let Err(e) = refresh(t, &journal, &shared, epoch, None).await {
+                if !shared.full_refresh.swap(false, Ordering::SeqCst) {
+                    // Only a planning activity notice: read the open planning page and chat.
+                    if shared.connected.load(Ordering::SeqCst) { planning_live(t, &shared, epoch).await; }
+                } else if shared.connected.load(Ordering::SeqCst) && let Err(e) = refresh(t, &journal, &shared, epoch, None).await {
                     if e != Error::Stale { crate::day_log::event("refresh.failed", serde_json::json!({"trigger":"daemon-event","error":e.to_string()})); }
                     fail(&shared, e);
                 }
@@ -1224,14 +1315,7 @@ async fn refresh(
         // Keep the profile stream and invalidations independent of any project.
         t.profile_gate().await?;
         shared.current(epoch)?;
-        let mission = shared
-            .planning_mission
-            .lock()
-            .expect("native planning selection poisoned")
-            .clone();
-        if let Some(mission) = mission {
-            let _ = read_planning(t, shared, epoch, &mission).await;
-        }
+        planning_live(t, shared, epoch).await;
         shared.change(|_| ());
         return Ok(());
     }
@@ -1299,16 +1383,9 @@ async fn refresh(
             );
         }
     });
-    let planning = shared
-        .planning_mission
-        .lock()
-        .expect("native planning selection poisoned")
-        .clone();
-    if let Some(mission) = planning {
-        // WS only invalidates. A fresh authenticated GET, never the event body,
-        // advances a preparing bootstrap to the coordinator's complete round.
-        let _ = read_planning(t, shared, epoch, &mission).await;
-    }
+    // WS only invalidates. A fresh authenticated GET, never the event body,
+    // advances a preparing bootstrap to the coordinator's complete round.
+    planning_live(t, shared, epoch).await;
     if shared.planning_inventory_wanted.load(Ordering::SeqCst) {
         let _ = inventory::read(t, shared, epoch).await;
     }
@@ -1329,7 +1406,10 @@ async fn handle(
 ) -> Result<IntentOutcome, Error> {
     // A queued passive detail read carries no displayed action authority.
     // Start from the latest epoch; every GET and the final publication still requalify it.
-    let epoch = if matches!(&work, Work::Detail(_) | Work::PlanningInventory) {
+    let epoch = if matches!(
+        &work,
+        Work::Detail(_) | Work::PlanningInventory | Work::PlanningChat { .. }
+    ) {
         shared.open()?;
         shared.epoch.load(Ordering::SeqCst)
     } else {
@@ -1380,6 +1460,11 @@ async fn handle(
         }
         Work::EnrollPlanning(intent) => {
             return enrollment::send(t, journal, shared, epoch, intent).await;
+        }
+        Work::PlanningChat { mission, older } => {
+            // Passive. A failed read keeps what shows; the chat says why.
+            let _ = planning_chat::read(t, shared, &mission, older).await;
+            return Ok(shared.outcome(OutcomeStatus::Accepted, ""));
         }
         Work::ReadPlanning(mission) => {
             let result = read_planning(t, shared, epoch, &mission).await;
@@ -1933,6 +2018,7 @@ async fn watch(source: Source, shared: Arc<Shared>, invalidated: Sender<()>) {
             if let Err(e) = result {
                 fail(&shared, e);
             }
+            shared.full_refresh.store(true, Ordering::SeqCst);
             let _ = invalidated.try_send(());
             shown_offline = true;
         }
@@ -1981,6 +2067,7 @@ async fn watch_once(
     );
     shared.connected.store(true, Ordering::SeqCst);
     shared.invalidate(FreshnessState::Stale);
+    shared.full_refresh.store(true, Ordering::SeqCst);
     let _ = invalidated.try_send(());
     while let Some(frame) = ws.next().await {
         let frame = frame.map_err(|_| Error::Offline)?;
@@ -1990,12 +2077,27 @@ async fn watch_once(
                 // Structural changes fence actions bound to the shown read.
                 Some("mission-catalog.changed" | "missions" | "mission" | "projects") => {
                     shared.epoch.fetch_add(1, Ordering::SeqCst);
+                    shared.full_refresh.store(true, Ordering::SeqCst);
                     let _ = invalidated.try_send(());
                 }
                 // Frequent while agents work. Read again without marking the
                 // shown read stale first: that repainted the window each time.
                 // The channel holds one wakeup, so bursts cost one read.
                 Some("session" | "sessions" | "dashboard") => {
+                    shared.full_refresh.store(true, Ordering::SeqCst);
+                    let _ = invalidated.try_send(());
+                }
+                // A planning agent's steps changed. Only the open planning
+                // page reads again; the daemon sends at most one a second.
+                Some("planning.activity")
+                    if shared.planning_shown.load(Ordering::SeqCst)
+                        && shared
+                            .planning_mission
+                            .lock()
+                            .expect("native planning selection poisoned")
+                            .as_deref()
+                            .is_some_and(|m| v["missionId"] == m) =>
+                {
                     let _ = invalidated.try_send(());
                 }
                 _ => {}

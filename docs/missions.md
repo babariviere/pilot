@@ -7,6 +7,10 @@ keeps the earlier page visibly stale until a fresh read succeeds. If creation is
 **Check creation** looks up its saved receipt, including after reopening. It never creates it again.
 
 Approving and publishing a plan do not start implementation.
+While Pilot plans, the planning page shows the agent's current step, such as "Reading
+docs/missions.md", how long it has worked and when it last saved a step. After 5 minutes with no
+new step, it says so. **Show planning chat** opens the agent's conversation and steps, read only.
+Neither sends anything, stops the agent or tries again.
 After publication, **Start work** asks you to confirm one ready task and its model. **Start task**
 admits one background worker under existing project permissions and limits. Other tasks do not start
 automatically. If the acknowledgement is lost, use **Check Start**, not another Start. Admission is not

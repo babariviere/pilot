@@ -74,6 +74,9 @@ pub const METHODS: &[&str] = &[
     "day.plan.checkWork",
     "day.plan.check",
     "day.plan.checkNew",
+    "day.plan.chat",
+    "day.plan.chatSnapshot",
+    "day.plan.leave",
     "day.attention.read",
     "day.attention.reply",
     "day.attention.action",
@@ -235,6 +238,18 @@ pub(crate) enum Command {
     Rename(crate::model::RenameIntent),
     Plan(String),
     PlanSnapshot(String),
+    /// Opens a mission's planning chat and reads its newest rows, or older ones. Passive.
+    PlanChat {
+        mission: String,
+        older: bool,
+    },
+    /// The open planning chat as last read. No I/O.
+    PlanChatSnapshot(String),
+    /// The planning page or only its chat closed. Local only: nothing is sent.
+    PlanLeave {
+        mission: String,
+        chat_only: bool,
+    },
     PlanSource(crate::host::plan_sources::Request),
     PlanningInventory,
     PlanningInventorySnapshot,
@@ -624,14 +639,47 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             r.validate()?;
             C::PlanSource(r)
         }
-        "day.mission.read" | "day.mission.check" | "day.plan.read" | "day.plan.snapshot"
-        | "day.plan.checkWork" => {
+        "day.plan.chat" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Chat {
+                mission_id: String,
+                older: bool,
+            }
+            let r: Chat = exact(args)?;
+            mission(&r.mission_id)?;
+            C::PlanChat {
+                mission: r.mission_id,
+                older: r.older,
+            }
+        }
+        "day.plan.leave" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Leave {
+                mission_id: String,
+                chat_only: bool,
+            }
+            let r: Leave = exact(args)?;
+            mission(&r.mission_id)?;
+            C::PlanLeave {
+                mission: r.mission_id,
+                chat_only: r.chat_only,
+            }
+        }
+        "day.mission.read"
+        | "day.mission.check"
+        | "day.plan.read"
+        | "day.plan.snapshot"
+        | "day.plan.checkWork"
+        | "day.plan.chatSnapshot" => {
             let r: crate::model::MissionRef = decode(&args)?;
             mission(&r.mission_id)?;
             match name {
                 "day.mission.read" => C::Mission(r.mission_id),
                 "day.mission.check" => C::ControlCheck(r.mission_id),
                 "day.plan.snapshot" => C::PlanSnapshot(r.mission_id),
+                "day.plan.chatSnapshot" => C::PlanChatSnapshot(r.mission_id),
                 "day.plan.checkWork" => C::CheckWork(r.mission_id),
                 _ => C::Plan(r.mission_id),
             }
@@ -791,6 +839,9 @@ impl Command {
                     | Self::Mission(_)
                     | Self::Plan(_)
                     | Self::PlanSnapshot(_)
+                    | Self::PlanChat { .. }
+                    | Self::PlanChatSnapshot(_)
+                    | Self::PlanLeave { .. }
                     | Self::PlanningInventory
                     | Self::PlanningInventorySnapshot
                     | Self::Attention

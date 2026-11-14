@@ -8,12 +8,12 @@
 //! trusted native host binds them behind the same read model.
 
 use crate::plan::{
-    AnswerIntent, Choice, ConfirmRevisionIntent, ConfirmState, Delivery, Exploration, FogArea,
-    Interview, InterviewRef, MapInfo, NewIntent, OutcomeStatus, PauseNeed, PlanAvailability,
-    PlanOutcome, PlanPage, PlanRoute, PlanRow, PlanScenario, PlanStage, Planning, Proposal,
-    PrototypeSupport, Question, QuestionSection, QuestionState, RevisionRef, RevisitIntent,
-    RevisitStage, RoundAnswer, RoundKind, RoundLine, RoundState, Setup, StartedChat, Step,
-    StepState, SubmitIntent, SubmitState,
+    AnswerIntent, ChatRole, ChatRow, Choice, ConfirmRevisionIntent, ConfirmState, Delivery,
+    Exploration, FogArea, Interview, InterviewRef, MapInfo, NewIntent, OutcomeStatus, PauseNeed,
+    PlanActivity, PlanAvailability, PlanChat, PlanOutcome, PlanPage, PlanRoute, PlanRow,
+    PlanScenario, PlanStage, Planning, Proposal, PrototypeSupport, Question, QuestionSection,
+    QuestionState, RevisionRef, RevisitIntent, RevisitStage, RoundAnswer, RoundKind, RoundLine,
+    RoundState, Setup, StartedChat, Step, StepState, SubmitIntent, SubmitState,
 };
 use crate::plan_revisit::{ConfirmAck, RevisitDesk};
 use crate::plan_world;
@@ -495,6 +495,7 @@ impl Plan {
     }
 
     fn page(&self) -> PlanPage {
+        let stage = self.stage();
         PlanPage {
             mission_id: self.mission_id.clone(),
             title: self.title.clone(),
@@ -503,7 +504,7 @@ impl Plan {
             fresh: true,
             goal: self.goal.clone(),
             route: self.route,
-            stage: self.stage(),
+            stage,
             destination: self.destination.clone(),
             interview: self.round.as_ref().map(Round::view),
             rounds: self.rounds.clone(),
@@ -516,6 +517,19 @@ impl Plan {
             work: None,
             revisit: self.revisit.as_ref().map(RevisitDesk::view),
             note: self.note.clone(),
+            // The mock coordinator always reads the same guide while it plans,
+            // started two minutes before the page is read.
+            activity: (stage == PlanStage::Planning).then(|| {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis() as u64);
+                PlanActivity {
+                    working: true,
+                    step: "Reading docs/missions.md".into(),
+                    working_since: Some(now.saturating_sub(120_000)),
+                    last_step_at: Some(now.saturating_sub(10_000)),
+                }
+            }),
         }
     }
 }
@@ -605,6 +619,51 @@ impl PlanDesk {
             .iter()
             .find(|p| p.mission_id == mission_id)
             .map(Plan::page)
+    }
+
+    /// The mock planning chat of `mission_id`: the same few invented rows
+    /// for every mission in planning.
+    pub fn chat(&self, mission_id: &str) -> Option<PlanChat> {
+        let plan = self.plans.iter().find(|p| p.mission_id == mission_id)?;
+        let row = |key: &str, role: ChatRole, text: &str, running: bool| ChatRow {
+            key: key.into(),
+            role,
+            text: text.into(),
+            shortened: false,
+            running,
+            failed: false,
+        };
+        let working = plan.stage() == PlanStage::Planning;
+        Some(PlanChat {
+            reading: false,
+            reason: String::new(),
+            rows: vec![
+                row(
+                    "1",
+                    ChatRole::Request,
+                    "Pilot sent it a planning request.",
+                    false,
+                ),
+                row(
+                    "2",
+                    ChatRole::Pilot,
+                    "I will read how missions are planned first.",
+                    false,
+                ),
+                row("2.0", ChatRole::Step, "Read the mission map", false),
+                row(
+                    "2.1",
+                    ChatRole::Step,
+                    if working {
+                        "Reading docs/missions.md"
+                    } else {
+                        "Read docs/missions.md"
+                    },
+                    working,
+                ),
+            ],
+            more: false,
+        })
     }
 
     /// How many continuations the mock coordinator admitted for `mission_id`.

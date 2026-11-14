@@ -83,6 +83,13 @@ pub fn world(scenario: PlanScenario) -> PlanWorld {
             world.plans.push(plan);
         }
         PlanScenario::Long => world.plans.push(long()),
+        PlanScenario::Working => world.plans.push(Plan::new(
+            "working",
+            "Import bank statements",
+            "Import CSV bank statements into the ledger.",
+            PlanRoute::Interview,
+            "",
+        )),
         PlanScenario::Revisit => world.plans.push(revisit::notify("notify", PauseNeed::None)),
         PlanScenario::RevisitTrouble => {
             // Someone changes the mission while the user confirms.

@@ -56,4 +56,6 @@ export type PlanningFeed = Pick<
 		shown: Pick<NonNullable<PlanPage["work"]>, "revision" | "digest" | "taskId" | "context">,
 	) => Promise<PlanOutcome>;
 	checkWork?: (missionId: string) => Promise<PlanOutcome>;
-} & Partial<Pick<PlanFeed, "revisit" | "confirmRevision" | "checkRevision">>;
+} & Partial<
+		Pick<PlanFeed, "revisit" | "confirmRevision" | "checkRevision" | "chat" | "readChat" | "closeChat" | "leave">
+	>;

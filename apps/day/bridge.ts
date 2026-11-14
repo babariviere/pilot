@@ -26,6 +26,7 @@ import type {
 	Planning,
 	PlanOutcome,
 	PlanPage,
+	PlanChat,
 	PlanRow,
 	ProgressIntent,
 	RenameIntent,
@@ -560,6 +561,9 @@ export class ConnectedPlans implements PlanningFeed {
 	#revision = 0;
 	#listeners = new Map<number, (planning: Planning) => void>();
 	#next = 0;
+	/** The open planning chat, by mission. Only one is open at a time. */
+	#chats = new Map<string, PlanChat>();
+	#chatOpen: string | null = null;
 
 	constructor(window: string, setup: Setup | null, refusal: Refusal | null = null) {
 		this.#window = window;
@@ -793,6 +797,12 @@ export class ConnectedPlans implements PlanningFeed {
 			this.#older.add(id);
 			this.#publish();
 		}
+		// The open chat, as the root last read it with this page.
+		if (this.#chatOpen !== id) return;
+		const chat = await call<PlanChat | null>(this.#window, "day.plan.chatSnapshot", { missionId: id });
+		if (this.#chatOpen !== id || !chat.ok || !chat.snapshot) return;
+		this.#chats.set(id, chat.snapshot);
+		this.#publish();
 	}
 
 	#outcome(o: IntentOutcome | null, missionId: string | null): PlanOutcome {
@@ -931,6 +941,56 @@ export class ConnectedPlans implements PlanningFeed {
 		if (!r.ok) return this.#refused(r.refusal, missionId);
 		this.#take(missionId, r.snapshot);
 		return this.#outcome(r.outcome, missionId);
+	}
+
+	/** The open planning chat of `missionId` as read, or null. */
+	chat(missionId: string): PlanChat | null {
+		return this.#chats.get(missionId) ?? null;
+	}
+
+	/** Opens the planning chat and reads its newest rows, or the rows before what shows. Sends nothing to the agent. */
+	async readChat(missionId: string, older: boolean): Promise<PlanOutcome> {
+		this.#chatOpen = missionId;
+		const prior = this.#chats.get(missionId);
+		this.#chats.set(missionId, {
+			reading: true,
+			reason: prior?.reason ?? "",
+			rows: prior?.rows ?? [],
+			more: prior?.more ?? false,
+		});
+		this.#publish();
+		const r = await call<PlanChat | null>(this.#window, "day.plan.chat", { missionId, older });
+		// Closed or another chat opened meanwhile: drop the answer.
+		if (this.#chatOpen !== missionId) return this.#outcome(null, missionId);
+		const now = this.#chats.get(missionId);
+		if (r.ok && r.snapshot) this.#chats.set(missionId, r.snapshot);
+		else
+			this.#chats.set(missionId, {
+				reading: false,
+				reason: "Pilot could not read the planning chat. Nothing was sent.",
+				rows: now?.rows ?? [],
+				more: now?.more ?? false,
+			});
+		this.#publish();
+		return r.ok ? this.#outcome(r.outcome, missionId) : this.#refused(r.refusal, missionId);
+	}
+
+	/** Closes the planning chat. Pilot no longer reads or keeps it. */
+	closeChat(): void {
+		const id = this.#chatOpen;
+		if (!id) return;
+		this.#chatOpen = null;
+		this.#chats.delete(id);
+		void call(this.#window, "day.plan.leave", { missionId: id, chatOnly: true });
+	}
+
+	/** `missionId`'s planning page closed: Pilot stops reading it as its agent works. */
+	leave(missionId: string): void {
+		if (this.#chatOpen === missionId) {
+			this.#chatOpen = null;
+			this.#chats.delete(missionId);
+		}
+		void call(this.#window, "day.plan.leave", { missionId, chatOnly: false });
 	}
 
 	dispose(): void {

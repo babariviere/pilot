@@ -13,6 +13,8 @@ requires an explicit project choice; saved choices stay with their drafts.
 In a profile-only window, New reads that project's configured model and trusted
 planning setup. Choosing starts nothing. Plan a mission starts planning only;
 building still needs the separate Start work confirmation.
+While Pilot plans, the planning page shows the agent's current step and time, and
+Show planning chat opens its conversation, read only.
 Command+K opens a palette over any screen. Search to go to a place or to a mission
 that Today or Planning lists. It only navigates: answers, sends and starts stay on their pages.
 Today To check discovers new mission deliveries from a saved first-use cutoff.

@@ -56,6 +56,8 @@ export const planMessages = signal<Record<string, string>>({});
 export const submitting = signal<Record<string, boolean>>({});
 /** Whether the fog of war is open, by mission. */
 export const fogOpen = signal<Record<string, boolean>>({});
+/** Whether the planning chat is open, by mission. */
+export const chatOpen = signal<Record<string, boolean>>({});
 /** Whether a map question shows its full record, by mission and question. */
 export const mapOpen = signal<Record<string, boolean>>({});
 /** Whether the map's settled questions are open, by mission. */

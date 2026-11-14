@@ -50,6 +50,13 @@ fn planning(host: &NativeHost, mission: &str) -> Result<Value, Error> {
         &plan_host::Local::default(),
     ))
 }
+/// The open planning chat of `mission` as read, or null when it is not open.
+fn plan_chat(host: &NativeHost, mission: &str) -> Result<Value, Error> {
+    encode(
+        host.planning_chat(mission)
+            .map(|v| crate::plan_activity::chat(&v)),
+    )
+}
 fn planning_request(
     host: &NativeHost,
     mission: &str,
@@ -83,7 +90,11 @@ pub(super) fn cached(
 ) -> Option<Result<Value, Error>> {
     if !matches!(
         command,
-        Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot
+        Command::Today
+            | Command::PlanSnapshot(_)
+            | Command::PlanningInventorySnapshot
+            | Command::PlanChatSnapshot(_)
+            | Command::PlanLeave { .. }
     ) {
         return None;
     }
@@ -93,6 +104,16 @@ pub(super) fn cached(
         let value = match command {
             Command::Today => encode(today(host))?,
             Command::PlanSnapshot(id) => planning(host, id)?,
+            Command::PlanChatSnapshot(id) => plan_chat(host, id)?,
+            // Local only: closes the chat, or stops reading the page on notices.
+            Command::PlanLeave { mission, chat_only } => {
+                if !*chat_only {
+                    host.leave_planning(mission);
+                } else if host.planning_chat(mission).is_some() {
+                    host.close_planning_chat();
+                }
+                Value::Null
+            }
             _ => encode(host.planning_inventory_snapshot())?,
         };
         Ok(json!({"snapshot":value,"outcome":null}))
@@ -287,6 +308,14 @@ async fn run(
             .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
         return Ok(json!({"snapshot":snapshot,"outcome":null}));
     }
+    if let Command::PlanChat { mission, older } = &call.command {
+        // Passive. A failed read keeps what shows; the chat says why.
+        let _ = super::planning_chat::read(t, shared, mission, *older).await;
+        shared.open()?;
+        call.command
+            .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
+        return Ok(json!({"snapshot":plan_chat(&call.host, mission)?,"outcome":null}));
+    }
     use super::updates::Command as U;
     if let Command::UpdateForceConfirm(request) = &call.command {
         if !super::valid_id(&request.id) {
@@ -382,6 +411,9 @@ async fn run(
             unreachable!("handled mission thread command")
         }
         Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot => None,
+        Command::PlanChat { .. } | Command::PlanChatSnapshot(_) | Command::PlanLeave { .. } => {
+            unreachable!("handled planning chat command")
+        }
         Command::WindowRead => unreachable!("handled saved window read"),
         Command::PlanSource(_) => unreachable!("handled passive source read"),
         Command::Mission(id) => Some(Work::Detail(id.clone())),

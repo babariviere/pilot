@@ -120,6 +120,9 @@ intent types, not daemon request envelopes:
 | `day.plan.submit` | `{missionId,intent:SubmitIntent}` | `PlanPage` |
 | `day.plan.check` | `{missionId,intent:InterviewRef}` | `PlanPage` or null; host selects exact saved operation |
 | `day.plan.checkNew` | `{}` | `{missionId,page}` or null; host selects saved enrollment |
+| `day.plan.chat` | `{missionId,older}` | `PlanChat`; opens and reads the planning chat, newest rows or the page before; passive |
+| `day.plan.chatSnapshot` | `MissionRef` | cached `PlanChat` or null when closed; no I/O |
+| `day.plan.leave` | `{missionId,chatOnly}` | null; closes the chat, or stops reading the page on activity notices; local only |
 | `day.attention.read` | `{}` | `Today` |
 | `day.attention.reply` | `ReplyIntent` | `Today` |
 | `day.attention.action` | `{action:ActionRef,ask:ActionAsk,text}` | `Today` |

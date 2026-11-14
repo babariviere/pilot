@@ -41,6 +41,9 @@ pub enum PlanScenario {
     /// Revisits in trouble: a revision the mission outgrew, one that needs
     /// a paused mission, and a confirmation whose answer is lost.
     RevisitTrouble,
+    /// A new mission whose planning agent is still writing its first
+    /// questions, with its steps and chat.
+    Working,
 }
 
 /// Whether planning can be used at all.
@@ -597,6 +600,70 @@ pub struct Step {
     pub line: String,
 }
 
+/// What Pilot's planning agent does now. Activity, not progress: a step
+/// is not a result and its time is not an estimate.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanActivity {
+    /// Whether it is working now.
+    pub working: bool,
+    /// Its step now, as a sentence, such as "Reading docs/missions.md".
+    /// Empty between steps, while idle or when unknown.
+    pub step: String,
+    /// Epoch ms when its current run started, when Pilot saw it start.
+    /// The screen words how long it has worked against its own clock.
+    pub working_since: Option<u64>,
+    /// Epoch ms of its newest saved message or tool progress.
+    pub last_step_at: Option<u64>,
+}
+
+/// Who wrote one row of the planning chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatRole {
+    /// The user.
+    #[default]
+    You,
+    /// Pilot's planning agent.
+    Pilot,
+    /// Pilot's own planning request, such as passing answers on.
+    Request,
+    /// One tool step of the planning agent.
+    Step,
+}
+
+/// One row of the planning chat, oldest first.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatRow {
+    /// Stable for the row's life.
+    pub key: String,
+    /// Who wrote it.
+    pub role: ChatRole,
+    /// Its words. A step reads as a sentence.
+    pub text: String,
+    /// Pilot shows only the start of a long message.
+    pub shortened: bool,
+    /// A step with no saved result yet.
+    pub running: bool,
+    /// A step whose saved result is an error.
+    pub failed: bool,
+}
+
+/// The planning agent's chat, read only. Reading it sends nothing.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanChat {
+    /// Whether a read is on its way.
+    pub reading: bool,
+    /// Why the chat or its newest part cannot be shown. Empty when it can.
+    pub reason: String,
+    /// The rows read so far, oldest first.
+    pub rows: Vec<ChatRow>,
+    /// Whether earlier rows can be read.
+    pub more: bool,
+}
+
 /// One mission's planning, in full.
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -642,6 +709,8 @@ pub struct PlanPage {
     pub revisit: Option<Revisit>,
     /// One notice about a change, such as a plan that changed during review.
     pub note: String,
+    /// What Pilot's planning agent does now. Absent when Pilot cannot tell.
+    pub activity: Option<PlanActivity>,
 }
 
 /// Native Start read model. No host, credentials, operation IDs or new grants.

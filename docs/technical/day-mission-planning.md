@@ -282,6 +282,30 @@ Historical settlements remain references to saved submitted rounds, not new answ
 Gaps: Pilot's native app has no Decision or Knowledge detail screen, so those sources show as
 labels with their currentness, not links. Legacy missions without a saved interview have no map.
 
+## Live activity and planning chat
+
+The planning read (`GET /api/projects/:project/missions/:mission/planning`) also returns
+`activity` (`PlanningActivity` in `planning-activity.ts`) for the current enrolled owner:
+`working`, `workingSince` (when this daemon saw the run start), `lastStepAt` (newest saved message
+or tool progress) and the current run's newest tool `step`. A step keeps only the tool name, a
+`mission_plan` action and one short target (a project-relative path, a search pattern, a query or a
+URL, at most 200 characters). Other arguments and results never leave. The daemon reads the newest
+8 history entries only while the owner works, from storage, without waking or subscribing to it.
+An unreadable history leaves the step empty; it never hides that the owner works.
+
+`GET /api/projects/:project/missions/:mission/planning/history?before=N&limit=N` (default 32,
+at most 100) returns the owner's chat as compact rows: your messages, the agent's text (at most
+8000 bytes, marked when cut), Pilot's own planning requests and one row per tool step. Only the
+newest page can have a running step. It uses the same native capability and owner checks as the
+planning read and is read only.
+
+While a planning owner's tool steps start, progress or end, `/api/ws` sends
+`{type: "planning.activity", missionId}`: the first at once, then at most one a second per mission,
+with a trailing one. It is invalidation only. Day reads only the shown planning page (and its chat
+when open) again, not Today. Day words steps in Rust (`plan_activity.rs`) and times against its own
+clock (`activityWords.ts`). After 5 minutes with no saved step it says so and points to the chat.
+Activity is not progress: a step is not a result, and a quiet agent is not stopped or retried.
+
 ## Focused verification
 
 `mission-planning-skills.test.ts` exercises the normal loader, trusted reader, exact upstream hashes,

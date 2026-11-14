@@ -2,7 +2,7 @@
 // map of what is still unknown, the proposed plan in full, and each step
 // from answers to work. Submitting, approving, publishing and starting work
 // are separate steps. Only the exact-plan confirmation starts one task.
-import { computed, type JSX, keymap, Scroll, signal, Text, View } from "nsh";
+import { cleanup, computed, type JSX, keymap, Scroll, signal, Text, View } from "nsh";
 import { Collapsible } from "nsh/base";
 import type {
 	Exploration,
@@ -21,6 +21,7 @@ import { InterviewDoc } from "./InterviewDoc";
 import { keepScroll } from "./kept";
 import { MapSources } from "./MapSources";
 import { planBack } from "./nav";
+import { ActivityLine } from "./PlanActivity";
 import { flush, unsavedCount } from "./planCommands";
 import type { Plans } from "./planning";
 import { fogOpen, mapOpen, put, roundOpen, settledOpen } from "./planView";
@@ -691,6 +692,15 @@ function Body(props: {
 						</Text>
 					</View>
 				</If>
+				<If when={p().activity}>
+					<View class="mt-2">
+						<ActivityLine
+							plans={props.plans}
+							page={p()}
+							activity={p().activity as NonNullable<PlanPage["activity"]>}
+						/>
+					</View>
+				</If>
 			</View>
 			<If when={asking()}>
 				<Each of={asking() ? [asking() as NonNullable<PlanPage["interview"]>] : []} key={(iv) => iv.id}>
@@ -730,6 +740,8 @@ function Body(props: {
  * answers, submits and starts nothing.
  */
 export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; title?: string }) {
+	// Leaving stops reading this page as its agent works, and closes its chat.
+	cleanup(() => props.plans.feed.leave?.(props.missionId));
 	const page = computed(() => {
 		props.plans.planning();
 		return props.plans.feed.page(props.missionId) ?? null;

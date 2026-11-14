@@ -14,8 +14,8 @@ use crate::{
     host::{Error, NativeHost},
     model::IntentOutcome,
     plan::{
-        AnswerIntent, ConfirmRevisionIntent, InterviewRef, NewIntent, OutcomeStatus, PlanOutcome,
-        PlanPage, PlanScenario, Planning, RevisionRef, RevisitIntent, SubmitIntent,
+        AnswerIntent, ConfirmRevisionIntent, InterviewRef, NewIntent, OutcomeStatus, PlanChat,
+        PlanOutcome, PlanPage, PlanScenario, Planning, RevisionRef, RevisitIntent, SubmitIntent,
     },
     plan_desk::PlanDesk,
     plan_host::{self, Local},
@@ -357,6 +357,58 @@ impl PlanFeed {
         match &self.native {
             Some(side) => side.page(&mission_id, &side.state.borrow()),
             None => self.desk.page(&mission_id),
+        }
+    }
+
+    /// One mission's planning chat as read, or null before `readChat`.
+    /// Read it again after every change.
+    pub fn chat(&self, mission_id: String) -> Option<PlanChat> {
+        match &self.native {
+            Some(side) => side
+                .host
+                .planning_chat(&mission_id)
+                .map(|v| crate::plan_activity::chat(&v)),
+            None => self.desk.chat(&mission_id),
+        }
+    }
+
+    /// Opens the planning chat and reads its newest rows, or with `older`
+    /// the rows before what shows. Reading sends nothing to the agent.
+    /// While it is open, Pilot reads it again as the agent works.
+    pub async fn read_chat(this: Instance<Self>, mission_id: String, older: bool) -> PlanOutcome {
+        let Some(side) = this.with(|f| f.native.clone()) else {
+            return outcome(OutcomeStatus::Accepted, "", Some(mission_id));
+        };
+        let reply = side
+            .host
+            .read_planning_chat(mission_id.clone(), older)
+            .recv()
+            .await;
+        if !this.is_disposed() {
+            this.with(Self::changed);
+        }
+        match reply {
+            Ok(Ok(_)) => outcome(OutcomeStatus::Accepted, "", Some(mission_id)),
+            _ => outcome(
+                OutcomeStatus::Rejected,
+                "Pilot could not read the planning chat. Nothing was sent.",
+                Some(mission_id),
+            ),
+        }
+    }
+
+    /// Closes the planning chat. Pilot no longer reads or keeps it.
+    pub fn close_chat(&self) {
+        if let Some(side) = &self.native {
+            side.host.close_planning_chat();
+        }
+    }
+
+    /// `mission_id`'s planning page closed. Pilot stops reading it as its
+    /// agent works and closes its chat. Another mission's page stays.
+    pub fn leave(&self, mission_id: String) {
+        if let Some(side) = &self.native {
+            side.host.leave_planning(&mission_id);
         }
     }
 

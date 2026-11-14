@@ -116,6 +116,7 @@ import {
 import { canonicalJSON, durableJSON, OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import { PathCompletionReader } from "./path-completion.ts";
+import { PlanningActivityNotices } from "./planning-activity.ts";
 import { PlanningWorkers } from "./planning-workers.ts";
 import type { PowerService } from "./power.ts";
 import { type DashboardProviders, ProjectDashboardService } from "./project-dashboard.ts";
@@ -2433,6 +2434,30 @@ export function createDaemonServer(
 			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
 			return json(res, 200, await nativePlanning.read(parts[2]!, parts[4]!));
 		}
+		if (
+			parts[1] === "projects" &&
+			parts.length === 7 &&
+			parts[3] === "missions" &&
+			parts[5] === "planning" &&
+			parts[6] === "history"
+		) {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "The planning chat is read-only");
+			if (!githubSetup || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			const before = url.searchParams.get("before"),
+				limit = url.searchParams.get("limit");
+			return json(
+				res,
+				200,
+				await nativePlanning.chat(
+					parts[2]!,
+					parts[4]!,
+					before === null ? undefined : Number(before),
+					limit === null ? undefined : Number(limit),
+				),
+			);
+		}
 		if (missions && parts[1] === "missions" && parts[3] === "controls") {
 			missions.store.require(parts[2]!);
 			if (req.method === "GET" && parts.length === 4) {
@@ -3975,7 +4000,23 @@ export function createDaemonServer(
 	};
 	// A durable change only invalidates native state. Never publish proposal paths or drive maintenance here.
 	const stopRuntimeUpdateWatch = liveUpdate?.service.onChange(() => broadcast({ type: "runtime-update.changed" }));
-	server.once("close", () => stopRuntimeUpdateWatch?.());
+	// Open planning pages read again while a planning coordinator works. A notice names only the mission.
+	const planningNotices = new PlanningActivityNotices((missionId) =>
+		broadcast({ type: "planning.activity", missionId }),
+	);
+	// Test doubles may lack live workers; then nothing sends notices.
+	const stopPlanningActivity = missions
+		? sessions.onToolActivity?.((sessionId) => {
+				if (clients.size === 0) return;
+				const member = missions.store.membership(sessionId);
+				if (member?.active && member.role === "coordinator") planningNotices.touch(member.missionId);
+			})
+		: undefined;
+	server.once("close", () => {
+		stopRuntimeUpdateWatch?.();
+		stopPlanningActivity?.();
+		planningNotices.close();
+	});
 	const nextControl = (): Extract<ServerMessage, { type: "diagnostics.next-control" }> | undefined => {
 		if (!hello?.lineageId || !telemetry) return;
 		const settings = telemetry.settings();

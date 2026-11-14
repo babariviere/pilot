@@ -4,6 +4,7 @@
 // (native/tests/plan_host.rs maps the real host's reads and writes).
 import { expect, open, test } from "nsh/test";
 import { PlanFeed, type PlanPage, type PlanRow } from "pilot-day/native";
+import { activityQuiet, activityTime, QUIET_MS, span } from "./activityWords";
 import { olderThanList } from "./planCurrent";
 
 const desktop = { platform: "macos", width: 1100, height: 1400 } as const;
@@ -610,4 +611,47 @@ test("pressing the chosen suggestion again clears it, by click or by its key", a
 	await app.wait(1200);
 	expect(app.shows("Question 2 of 7 · 4 answered")).toBe(true);
 	expect(app.value("id:answer-what")).toBe("Skip images");
+});
+
+test("while Pilot plans, the page says what its agent does now and opens its chat only on request", async () => {
+	const app = await open("./PlanWorking.tsx", desktop);
+	await app.press("id:plan-working");
+	await app.waitFor("id:plan-activity");
+	expect(app.shows("Reading docs/missions.md")).toBe(true);
+	expect(app.shows("Working for 2 min · last step 10 s ago")).toBe(true);
+	expect(app.shows("id:plan-activity-quiet")).toBe(false);
+	expect(app.shows("id:plan-chat")).toBe(false);
+	await app.press("id:plan-chat-toggle");
+	await app.waitFor("id:plan-chat");
+	for (const text of [
+		"Read only. Reading it sends nothing and changes nothing.",
+		"Pilot sent it a planning request.",
+		"I will read how missions are planned first.",
+		"Read the mission map",
+	]) {
+		expect(app.shows(text)).toBe(true);
+	}
+	// The running step shows in the chat too, still in the present.
+	expect(app.count("text:Reading docs/missions.md")).toBe(2);
+	await app.press("id:plan-chat-toggle");
+	await app.waitFor("Show planning chat");
+	expect(app.shows("id:plan-chat")).toBe(false);
+});
+
+test("activity times use the window's clock and a long quiet says what to do", () => {
+	const base = { working: true, step: "", workingSince: 0, lastStepAt: 0 };
+	expect(span(59_999)).toBe("59 s");
+	expect(span(61_000)).toBe("1 min");
+	expect(span(3_960_000)).toBe("1 h 6 min");
+	expect(span(-5_000)).toBe("0 s");
+	expect(activityTime({ ...base, lastStepAt: 220_000 }, 240_000)).toBe("Working for 4 min · last step 20 s ago");
+	expect(activityTime({ ...base, workingSince: null }, 1_000)).toBe("Last step 1 s ago");
+	expect(activityTime({ ...base, lastStepAt: null }, 60_000)).toBe("Working for 1 min");
+	expect(activityTime({ ...base, workingSince: null, lastStepAt: null }, 1)).toBe("");
+	expect(activityTime({ ...base, working: false }, 1)).toBe("");
+	expect(activityQuiet({ ...base, lastStepAt: 1 }, QUIET_MS)).toBe("");
+	expect(activityQuiet({ ...base, lastStepAt: 0 }, QUIET_MS)).toBe(
+		"No new step for 5 min. A long answer can take this long. Open the planning chat to see its last step.",
+	);
+	expect(activityQuiet({ ...base, working: false }, QUIET_MS * 2)).toBe("");
 });

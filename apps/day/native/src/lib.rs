@@ -47,6 +47,7 @@ pub mod macos_host;
 pub mod model;
 pub mod new_chat;
 pub mod plan;
+pub mod plan_activity;
 pub mod plan_desk;
 pub mod plan_feed;
 pub mod plan_host;

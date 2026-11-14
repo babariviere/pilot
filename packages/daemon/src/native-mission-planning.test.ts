@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { test } from "node:test";
 import type { InterviewWrite, MissionInterview } from "@pilot/protocol";
+import { WebSocket } from "ws";
 import { interviewDigest } from "./mission-interview-contract.ts";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 import { OperationJournal } from "./operation-journal.ts";
@@ -449,4 +451,82 @@ test("Stop/configuration change during journal I/O refuses before saving human a
 	assert.equal(receipt.state, "rejected", JSON.stringify(receipt));
 	assert.match(receipt.reason, /context changed/);
 	assert.equal(f.store.interviews.latest(f.missionId)!.revision, read.view.interview.revision);
+});
+
+test("planning reads carry the coordinator's live step; its chat and notices are passive", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	const idle = await (await f.read()).json();
+	assert.equal(idle.activity.working, false);
+	assert.equal(idle.activity.step, null);
+	assert.equal(idle.activity.sessionId, f.owner);
+	f.coordinator = { ...f.coordinator!, state: "working", working: true };
+	const reads: number[] = [];
+	t.mock.method(f.sessions, "liveRun", () => ({ workingSince: 1_000 }));
+	t.mock.method(f.sessions, "history", async (_id: string, before: number, limit: number) => {
+		reads.push(before, limit);
+		return {
+			entries: [
+				{ id: 7, kind: "pi.user", model: [{ role: "user", content: "Plan it" }] },
+				{
+					id: 8,
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							timestamp: 2_000,
+							content: [
+								{ type: "text", text: "Reading the guide." },
+								{ type: "toolCall", id: "c", name: "read", arguments: { path: `${f.project.path}/docs/a.md` } },
+							],
+						},
+					],
+				},
+			],
+			more: false,
+		};
+	});
+	const live = await (await f.read()).json();
+	assert.deepEqual(live.activity, {
+		sessionId: f.owner,
+		working: true,
+		workingSince: 1_000,
+		lastStepAt: 2_000,
+		step: { tool: "read", running: true, failed: false, target: "docs/a.md" },
+	});
+	const chat = (path: string, token = f.capability, method = "GET") =>
+		fetch(`${f.root}/api/projects/${f.project.id}/missions/${f.missionId}/planning/history${path}`, {
+			method,
+			headers: { "x-pilot-github-capability": token },
+		});
+	assert.equal((await chat("", "")).status, 403);
+	assert.equal((await chat("", f.capability, "POST")).status, 405);
+	assert.notEqual((await chat("?limit=500")).status, 200);
+	const page = await (await chat("?before=9&limit=2")).json();
+	assert.deepEqual(reads.slice(-2), [9, 2]);
+	assert.equal(page.sessionId, f.owner);
+	assert.deepEqual(
+		page.rows.map((r: { role: string }) => r.role),
+		["you", "pilot", "step"],
+	);
+	assert.equal(page.rows[2].step.running, false, "an older page never claims a running step");
+	assert.equal(page.nextBefore, 7);
+
+	const ws = new WebSocket(`${f.root.replace("http", "ws")}/api/ws`);
+	const notice = new Promise<unknown>((resolve) =>
+		ws.on("message", (raw) => {
+			const message = JSON.parse(String(raw));
+			if (message.type === "planning.activity") resolve(message);
+		}),
+	);
+	await once(ws, "open");
+	const listeners = (f.sessions as unknown as { toolActivityListeners: Set<(id: string) => void> })
+		.toolActivityListeners;
+	for (const listener of listeners) listener("unrelated-chat");
+	for (const listener of listeners) listener(f.owner);
+	assert.deepEqual(await notice, { type: "planning.activity", missionId: f.missionId });
+	assert.equal(f.store.tasks(f.missionId).length, 0);
+	// The server waits for open sockets on close.
+	ws.close();
+	await once(ws, "close");
 });

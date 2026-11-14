@@ -521,6 +521,7 @@ fn step(label: &str, state: StepState, line: &str) -> Step {
 
 /// The planning page of the host's read, or an honest unavailable page.
 pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
+    let activity = crate::plan_activity::activity(read);
     let mission_id = s(&read["missionId"]);
     let fresh = read["fresh"].as_bool().unwrap_or(false);
     if read["status"] == "preparing" {
@@ -531,6 +532,7 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
             fresh,
             stage: PlanStage::Planning,
             note: "Pilot is writing the questions. Nothing is asked yet.".into(),
+            activity,
             ..PlanPage::default()
         };
     }
@@ -728,6 +730,7 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
         // `fresh` carries an older read. The connected window words it once
         // (bridge.ts), with its own reasons for an older page.
         note: String::new(),
+        activity,
     }
 }
 

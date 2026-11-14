@@ -1,11 +1,20 @@
 /** Authenticated native human ingress. Interviews never admit builders; explicit Start is separate. */
-import type { DurableOperation, OperationReceipt, PlanningInventory, PlanningInventoryItem } from "@pilot/protocol";
+import type {
+	DurableOperation,
+	EntryRecord,
+	OperationReceipt,
+	PlanningActivity,
+	PlanningChatPage,
+	PlanningInventory,
+	PlanningInventoryItem,
+} from "@pilot/protocol";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { interviewDigest, interviewExact } from "./mission-interview-contract.ts";
 import { isInterviewOperation, MissionInterviews } from "./mission-interviews.ts";
 import { isPlanOperation, MissionPlans } from "./mission-plans.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
+import { planningActivity, planningChatPage } from "./planning-activity.ts";
 import type { PlanningWorkers } from "./planning-workers.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
@@ -176,6 +185,49 @@ export class NativeMissionPlanning {
 		return { version: 1, projectId, status: "available", limit, total: items.length, items };
 	}
 
+	/** The coordinator's live run. Passive: it reads the newest saved history only while the coordinator works. */
+	private async activity(missionId: string): Promise<PlanningActivity> {
+		const { coordinator } = this.scope(missionId);
+		const working = coordinator.working ?? coordinator.state === "working";
+		let entries: EntryRecord[] = [];
+		if (working)
+			try {
+				entries = (await this.deps.sessions.history(coordinator.id, Number.MAX_SAFE_INTEGER, 8)).entries;
+			} catch {
+				// An unreadable history leaves the run without a step. It never hides that the coordinator works.
+			}
+		return planningActivity(
+			// Test doubles may lack live workers; then times stay unknown.
+			{ sessionId: coordinator.id, working, cwd: coordinator.cwd, ...this.deps.sessions.liveRun?.(coordinator.id) },
+			entries,
+		);
+	}
+
+	/** One compact page of the current planning coordinator's chat, oldest first. Never wakes or subscribes to it. */
+	async chat(
+		projectId: string,
+		missionId: string,
+		before = Number.MAX_SAFE_INTEGER,
+		limit = 32,
+	): Promise<PlanningChatPage> {
+		if (!Number.isSafeInteger(before) || before < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+			throw new Error("Invalid planning chat cursor or limit");
+		await this.deps.store.durable();
+		const { coordinator } = this.scope(missionId, projectId);
+		const history = await this.deps.sessions.history(coordinator.id, before, limit);
+		if (this.scope(missionId, projectId).coordinator.id !== coordinator.id)
+			throw new Conflict("Planning owner changed during read");
+		return planningChatPage(
+			{
+				missionId,
+				sessionId: coordinator.id,
+				cwd: coordinator.cwd,
+				newest: before === Number.MAX_SAFE_INTEGER,
+			},
+			history,
+		);
+	}
+
 	async read(projectId: string, missionId: string) {
 		const mission = this.deps.store.require(missionId);
 		this.deps.projects.require(projectId);
@@ -215,6 +267,7 @@ export class NativeMissionPlanning {
 		const plans = new MissionPlans({ ...this.deps, authorize: check });
 		const view = await plans.view(missionId);
 		const start = await this.deps.workers?.startView(missionId);
+		const activity = await this.activity(missionId);
 		const revision = this.revisionView(missionId);
 		await this.deps.store.durable();
 		check();
@@ -233,6 +286,7 @@ export class NativeMissionPlanning {
 				reason: "Trusted Revisit owner unavailable",
 			},
 			revision,
+			activity,
 			view: view.interview.questions.length ? view : null,
 			capabilities: {
 				answers: worker && worker.phase !== "held" ? "unavailable" : 1,
