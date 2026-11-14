@@ -191,7 +191,26 @@ function Proposal(props: {
 						onPress={plan}
 					/>
 				</If>
-				<If when={p().next === "fix" && !project()}>
+				<If when={p().next === "new-mission" && !fixed()}>
+					<Action
+						outline
+						label="Start as one chat"
+						testID={`feedback-chat-${props.item.id}`}
+						disabled={props.busy || !project() || running(steps().fix)}
+						accessibilityLabel="Start one Build chat for this, tied to no mission, under the project's usual limits."
+						onPress={() =>
+							props.send({
+								action: "fix",
+								feedbackId: props.item.id,
+								projectId: props.triage.projectId,
+								contextDigest: project()?.contextDigest ?? "",
+								triageSessionId: props.triage.sessionId,
+								proposalDigest: props.digest,
+							})
+						}
+					/>
+				</If>
+				<If when={(p().next === "fix" || p().next === "new-mission") && !project()}>
 					<Text class="text-xs text-faint">Its project is not in your project list.</Text>
 				</If>
 			</View>

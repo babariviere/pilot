@@ -161,6 +161,29 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	);
 	assert.equal(notFix.state, "rejected");
 
+	// A proposed new mission can also be done as one chat, tied to no mission.
+	answer = JSON.stringify({
+		...JSON.parse(answer),
+		next: "new-mission",
+		goal: "Show who owns each plan row",
+		detail: "A few steps across plans and Today.",
+	});
+	t.mock.method(f.sessions, "get", (sid: string) => {
+		const s = real(sid);
+		if (sid === fix.targetId && s) return { ...s, working: false, outcome: "done", outcomeAt: 9 } as SessionSummary;
+		return sid === triage.targetId && s
+			? ({ ...s, working: false, outcome: "done", outcomeAt: 10 } as SessionSummary)
+			: s;
+	});
+	const planned = (await page()).items.find((i) => i.id === id)!.work[0]!.proposal!;
+	assert("value" in planned, JSON.stringify(planned));
+	const chat = step({ action: "fix", ...build, triageSessionId: triage.targetId, proposalDigest: planned.digest });
+	const chatAck = await post(chat);
+	assert.equal(chatAck.state, "accepted", JSON.stringify(chatAck));
+	const chatMeta = JSON.parse(await readFile(join(f.home, "sessions", chat.targetId, "meta.json"), "utf8"));
+	assert.match(chatMeta.pending[0].content, /as one chat instead of planning a mission/);
+	assert.equal(f.stats().sessions, 3);
+
 	// Linking adds context to the mission; it starts nothing.
 	const mission = f.store.create({ projectId: f.project.id, title: "Plan clarity", goal: "Clearer plans" });
 	const link = step({ action: "link", missionId: mission.id }, mission.id);
@@ -168,7 +191,7 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	assert.equal((await post(step({ action: "link", missionId: mission.id }, mission.id))).state, "rejected");
 	assert.equal((await post(step({ action: "link", missionId: "missing" }, "missing"))).state, "rejected");
 	assert(f.store.events(mission.id).some((e) => e.text.includes("context, not a request to start work")));
-	assert.equal(f.stats().sessions, 2);
+	assert.equal(f.stats().sessions, 3);
 
 	// Only the user's mark resolves it; a mark repeats nothing.
 	assert.equal((await post(step({ action: "reopen" }, id))).state, "rejected");
@@ -179,9 +202,9 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	shown = (await page()).items.find((i) => i.id === id)!;
 	assert.deepEqual(
 		shown.work.map((w) => w.kind),
-		["triage", "fix", "mission", "resolved", "reopened"],
+		["triage", "fix", "fix", "mission", "resolved", "reopened"],
 	);
-	const linked = shown.work[2]!;
+	const linked = shown.work[3]!;
 	assert.deepEqual(linked.mission, { title: "Plan clarity", status: "active", tasksDone: 0, tasksTotal: 0 });
 	assert.deepEqual((await page()).items.find((i) => i.id === older)!.work, []);
 });

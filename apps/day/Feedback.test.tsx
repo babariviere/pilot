@@ -174,6 +174,8 @@ test("a new-mission proposal opens New with its goal; linking a mission and reso
 	await app.waitFor("id:feedback-triage-f1");
 	await app.press("Triage new mission");
 	await app.waitFor("Proposed: plan a new mission");
+	// It can also be done as one chat, tied to no mission.
+	expect(app.shows("id:feedback-chat-f1")).toBe(true);
 	await app.press("label:Mission to link this feedback to");
 	await app.press("text:Faster search");
 	await app.waitFor("id:feedback-mission-f1");
