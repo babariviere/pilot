@@ -9,6 +9,7 @@ import type { Decision, HumanAction, MissionRow, Planning } from "pilot-day/nati
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { waitsForCheck } from "./deliveryView";
+import { openRequestIn } from "./Incoming";
 import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { openPlan } from "./planView";
@@ -451,7 +452,11 @@ export function otherNewShown(ctx: TodayScope): boolean {
 		.some((p) => requestsOf(p).length > 0 || (p.today?.intake.trouble.length ?? 0) > 0 || !!p.errors.intake);
 }
 
-/** Other projects' new requests: nothing starts, defers or discards from them here. */
+/**
+ * Other projects' new requests. Pressing one switches Today to its project and
+ * opens it in New, where it can be started, put off or discarded. Pressing
+ * sends nothing.
+ */
 export function OtherNew(props: { ctx: TodayScope }) {
 	const shown = () =>
 		props.ctx
@@ -476,10 +481,17 @@ export function OtherNew(props: { ctx: TodayScope }) {
 					<Each of={requestsOf(p())} key={(r) => r.id}>
 						{(r) => (
 							<View class="gap-0.5 py-1.5">
-								<View class="flex-row items-center gap-2.5">
+								<RowLink
+									testID={`scope-request-${r().id}`}
+									title={r().title}
+									accessibilityLabel={`${r().title} in ${p().name}. Open it to start work, put it off or discard it.`}
+									onPress={() => {
+										openRequestIn(p().id, r().id);
+										todayProject.set(p().id);
+									}}
+								>
 									<Mark kind="new" />
-									<Text class="flex-1 text-sm text-foreground">{r().title}</Text>
-								</View>
+								</RowLink>
 								<Text class="pl-4 text-xs text-faint">
 									{[r().sourceLabel, r().place, r().age].filter(Boolean).join(" · ")}
 								</Text>

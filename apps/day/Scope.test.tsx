@@ -113,6 +113,19 @@ test("pressing another project's mission opens it, and sends nothing", async () 
 	expect(sent(app)).toContain("Sent: 0");
 });
 
+test("pressing another project's request switches Today to that project, and sends nothing", async () => {
+	const app = await ready();
+	await app.waitFor("id:scope-new-demo-website");
+	await app.press(
+		"label:Northwind can't export invoices to CSV in website. Open it to start work, put it off or discard it.",
+	);
+	// Today now shows website only. In the connected window the root then makes
+	// website the window's own project, so its requests can be acted on in New.
+	await app.waitFor("Showing website.");
+	expect(app.shows("Northwind can't export invoices to CSV")).toBe(true);
+	expect(sent(app)).toContain("Sent: 0");
+});
+
 test("an unchanged scope read does not change the view", async () => {
 	const app = await ready();
 	await app.waitFor("pilot · this window");

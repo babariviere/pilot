@@ -18,6 +18,17 @@ import { dataSource, placeRow } from "./view";
 
 /** The request open in place, by ID. One at a time; it closes when the request leaves. */
 export const openRequest = signal<string | null>(null);
+
+/**
+ * A request chosen from another project's row on Today. It opens once that
+ * project's requests are read here (Today switches to the project first).
+ */
+const pendingRequest = signal<{ projectId: string; id: string } | null>(null);
+
+/** Opens `id` in New once `projectId`'s requests are the ones shown. Sends nothing. */
+export function openRequestIn(projectId: string, id: string) {
+	pendingRequest.set({ projectId, id });
+}
 /** Where the user chose to start each request: a mission ID, or "" for standalone work. Choosing sends nothing. */
 export const routes = signal<Record<string, string>>({});
 /** The Start the user is about to confirm: the exact request, revision, context and place shown. */
@@ -476,6 +487,11 @@ function LiveIncoming(props: { day: Day; mirror: IntakeMirror }) {
 	const busy = (id: string) => v().sending.includes(id) || v().unsettled.some((o) => o.itemId === id);
 	// A request that left (started, put off, read again) closes, and so does its Start.
 	effect(() => {
+		const pending = pendingRequest();
+		if (pending && v().projectId === pending.projectId) {
+			pendingRequest.set(null);
+			if (v().fresh.some((r) => r.request.id === pending.id)) openRequest.set(pending.id);
+		}
 		const id = openRequest();
 		if (id && !v().fresh.some((r) => r.request.id === id)) openRequest.set(null);
 		const c = confirming();
