@@ -725,11 +725,9 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
             line: s(&read["start"]["reason"]),
         }),
         revisit: published.then(|| crate::plan_revision_host::view(read, ops)),
-        note: if fresh {
-            String::new()
-        } else {
-            "This is an older read. Pilot checks again before it saves anything.".into()
-        },
+        // `fresh` carries an older read. The connected window words it once
+        // (bridge.ts), with its own reasons for an older page.
+        note: String::new(),
     }
 }
 

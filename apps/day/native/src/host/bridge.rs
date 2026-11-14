@@ -1,4 +1,5 @@
-//! JSON calls run on the same serialized worker as native feed requests.
+//! JSON calls run on the same serialized worker as native feed requests,
+//! except reads of cached projections (`cached`), which only read memory.
 use super::{Error, Journal, NativeHost, Shared, Transport, Work};
 use crate::{
     attention_host as ah,
@@ -68,6 +69,35 @@ fn attention_read(host: &NativeHost) -> Result<Value, Error> {
         return Err(Error::Stale);
     }
     Ok(read)
+}
+
+/// Answers a read of the root's cached projections without the worker:
+/// Today, the opened planning page and the planning list. They read only
+/// shared memory, so a slow service read must not hold them back. A page
+/// whose read is older than the latest change says so (`fresh` is false)
+/// while the worker still reads. `None` for every other command.
+pub(super) fn cached(
+    host: &NativeHost,
+    command: &Command,
+    gate: &Mutex<Gate>,
+) -> Option<Result<Value, Error>> {
+    if !matches!(
+        command,
+        Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot
+    ) {
+        return None;
+    }
+    let read = || {
+        command.admit(&gate.lock().expect("bridge gate poisoned"))?;
+        host.0.shared.open()?;
+        let value = match command {
+            Command::Today => encode(today(host))?,
+            Command::PlanSnapshot(id) => planning(host, id)?,
+            _ => encode(host.planning_inventory_snapshot())?,
+        };
+        Ok(json!({"snapshot":value,"outcome":null}))
+    };
+    Some(read())
 }
 
 pub(super) async fn handle(

@@ -139,6 +139,16 @@ fn choose_project(app: &mut Headless, f: &Fixture) {
     app.press(&format!("text:{name}")).unwrap();
 }
 
+/// Waits until a new mission's page finished its own first read. A read that
+/// lands after the fixture writes the round would show that round at once.
+fn first_planning_read(app: &mut Headless) {
+    app.wait_until("first planning read", WAIT, |s| {
+        s.enabled("label:Read this mission's planning again. This sends nothing.")
+            .unwrap_or(false)
+    })
+    .unwrap();
+}
+
 #[test]
 fn an_unreadable_service_shows_its_state_and_forms_save_before_close() {
     let dir = std::env::temp_dir().join(format!("day-connected-root-{}", uuid::Uuid::new_v4()));
@@ -308,6 +318,7 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
         !has(&app, "id:interview"),
         "preparing is not an empty interview"
     );
+    first_planning_read(&mut app);
     let mission = host.planning_enrollments()[0]["missionId"]
         .as_str()
         .unwrap()
@@ -464,6 +475,7 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
     .unwrap();
     app.press("role:button[Plan a mission]").unwrap();
     wait(&mut app, "Pilot is planning");
+    first_planning_read(&mut app);
     let mission = host.planning_enrollments()[0]["missionId"]
         .as_str()
         .unwrap()

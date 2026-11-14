@@ -327,6 +327,10 @@ impl NativeHost {
                 return;
             }
         }
+        if let Some(result) = bridge::cached(self, &command, &gate) {
+            reply(result);
+            return;
+        }
         let call = bridge::Call {
             command,
             window,

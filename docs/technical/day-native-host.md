@@ -103,7 +103,10 @@ a scripted read (`scopeDemo.ts`).
 
 ## Controls and recovery
 
-One native worker serializes commands. Each new explicit intent binds the shown
+One native worker serializes commands. Reads of cached projections
+(`day.today.read`, `day.plan.snapshot`, `day.plan.inventorySnapshot`) are answered
+from memory without it, so a slow service read cannot hide that a page is older.
+Each new explicit intent binds the shown
 revision, exact project/home/coordinator, a fresh operation UUID, and, for Resume,
 the exact Pause UUID. It checks current detail and controls, saves the entire
 command in a private append-only journal, calls `sync_all`, then repeats authority
