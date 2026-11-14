@@ -23,10 +23,10 @@ import type {
 	NewIntent,
 	OutcomeStatus,
 	PauseIntent,
+	PlanChat,
 	Planning,
 	PlanOutcome,
 	PlanPage,
-	PlanChat,
 	PlanRow,
 	ProgressIntent,
 	RenameIntent,
@@ -424,7 +424,7 @@ export class ConnectedToday implements DayFeed {
 	}
 }
 
-const NO_SETUP: Setup = { project: "", model: "", access: "", digest: "" };
+const NO_SETUP: Setup = { project: "", model: "", access: "", digest: "", unconfirmed: false };
 
 /**
  * The start and end of day's saved progress over the root. Reads sample the
@@ -579,9 +579,10 @@ export class ConnectedPlans implements PlanningFeed {
 			availability: inventory.state === "off" ? "unavailable" : inventory.state,
 			reason: inventory.state === "off" ? inventoryReason(inventory.refusal) : inventory.reason,
 			setup: setup ?? NO_SETUP,
-			canCreate: setup !== null && !this.#newUnknown,
+			// An unconfirmed creation can be checked; it never blocks a new one.
+			canCreate: setup !== null,
 			createReason: this.#newUnknown
-				? "Mission creation is not confirmed. Check its saved receipt; do not create it again."
+				? "An earlier mission creation is not confirmed. Check it, or plan a new one anyway."
 				: setup
 					? ""
 					: "This Pilot service has no planning setup for new missions here.",
@@ -727,7 +728,7 @@ export class ConnectedPlans implements PlanningFeed {
 		if (version !== this.#setupRead) return this.#refused("stale", null);
 		if (r.ok) {
 			this.#setup = r.snapshot ?? null;
-			this.#newUnknown = false;
+			this.#newUnknown = r.snapshot?.unconfirmed === true;
 		} else {
 			this.#setup = null;
 			// A lost passive setup read cannot itself have created a mission.
@@ -754,6 +755,16 @@ export class ConnectedPlans implements PlanningFeed {
 		this.#publish();
 		void this.prepare();
 		return this.#outcome(r.outcome, r.outcome?.status === "accepted" ? (made?.missionId ?? null) : null);
+	}
+
+	/** Dismisses unconfirmed creations on New. It sends nothing to the service. */
+	async dismissNew(): Promise<PlanOutcome> {
+		const r = await call<null>(this.#window, "day.plan.dismissNew", {});
+		if (!r.ok) return this.#refused(r.refusal, null);
+		this.#newUnknown = false;
+		this.#publish();
+		void this.prepare();
+		return this.#outcome(r.outcome, null);
 	}
 
 	/**

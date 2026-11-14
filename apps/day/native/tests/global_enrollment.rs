@@ -75,7 +75,8 @@ fn profile_only_explicit_choice_stale_setup_lost_ack_and_restart_are_lookup_only
         f.call(&b, "day.plan.create", intent.clone())["value"]["outcome"]["status"],
         "unknown"
     );
-    assert_eq!(prepare(&f, &b)["error"], "unknown");
+    // The lost creation can be checked; it no longer blocks a new setup.
+    assert_eq!(prepare(&f, &b)["value"]["snapshot"]["unconfirmed"], true);
     let operation = host.planning_enrollments()[0]["operationId"].clone();
     close(b);
     let (host, b) = global(&f);
@@ -83,7 +84,8 @@ fn profile_only_explicit_choice_stale_setup_lost_ack_and_restart_are_lookup_only
         host.planning_setup().is_none(),
         "reopen grants no fresh selection"
     );
-    assert_eq!(prepare(&f, &b)["error"], "unknown");
+    // No project is chosen yet; the saved creation can still be checked.
+    assert_eq!(prepare(&f, &b)["error"], "unavailable");
     assert_eq!(host.planning_enrollments()[0]["operationId"], operation);
     let checked = f.call(&b, "day.plan.checkNew", json!({}));
     assert_eq!(
@@ -166,7 +168,7 @@ fn changed_project_and_unavailable_configured_model_never_fall_back_or_enroll() 
 }
 
 #[test]
-fn legacy_enrollment_uncertainty_blocks_profile_only_creation_until_exact_lookup() {
+fn legacy_enrollment_uncertainty_is_shown_and_checked_by_exact_lookup() {
     let mut f = Fixture::with_daemon("day-planning-enrollment.ts");
     command(&mut f, "quiet", true);
     let source: Source = serde_json::from_value(f.info["source"].clone()).unwrap();
@@ -185,7 +187,7 @@ fn legacy_enrollment_uncertainty_blocks_profile_only_creation_until_exact_lookup
     assert_eq!(sent["value"]["outcome"]["status"], "unknown", "{sent}");
     close(b);
     let (_, b) = global(&f);
-    assert_eq!(prepare(&f, &b)["error"], "unknown");
+    assert_eq!(prepare(&f, &b)["error"], "unavailable");
     assert_eq!(
         f.call(&b, "day.plan.create", intent)["value"]["outcome"]["status"],
         "unknown"
@@ -200,6 +202,51 @@ fn legacy_enrollment_uncertainty_blocks_profile_only_creation_until_exact_lookup
         1,
         "startup never re-enters enrollment"
     );
+    close(b);
+    f.stats("close");
+    assert!(f.child.wait().unwrap().success());
+}
+
+#[test]
+fn a_dismissed_unconfirmed_creation_sends_nothing_and_lets_a_new_one_start() {
+    let mut f = Fixture::with_daemon("day-planning-enrollment.ts");
+    command(&mut f, "quiet", true);
+    let source: Source = serde_json::from_value(f.info["source"].clone()).unwrap();
+    let host = f.host_for_options(
+        source,
+        pilot_day_native::host::Options {
+            planning_model: Some("faux/faux-1".into()),
+            ..Default::default()
+        },
+    );
+    let b = Bridge::new(DayRoot::new(host.clone()));
+    let setup = prepare(&f, &b)["value"]["snapshot"].clone();
+    command(&mut f, "lost", true);
+    let lost = f.call(
+        &b,
+        "day.plan.create",
+        json!({"setup":setup["digest"],"goal":"Lost goal"}),
+    );
+    assert_eq!(lost["value"]["outcome"]["status"], "unknown", "{lost}");
+    assert_eq!(prepare(&f, &b)["value"]["snapshot"]["unconfirmed"], true);
+    let posts = f.stats("stats")["posts"].clone();
+    let dismissed = f.call(&b, "day.plan.dismissNew", json!({}));
+    assert_eq!(
+        dismissed["value"]["outcome"]["status"], "accepted",
+        "{dismissed}"
+    );
+    assert_eq!(host.planning_enrollments()[0]["state"], "dismissed");
+    assert_eq!(f.stats("stats")["posts"], posts, "dismiss sends nothing");
+    // A new creation goes through.
+    let setup = prepare(&f, &b)["value"]["snapshot"].clone();
+    assert_eq!(setup["unconfirmed"], false);
+    command(&mut f, "lost", false);
+    let made = f.call(
+        &b,
+        "day.plan.create",
+        json!({"setup":setup["digest"],"goal":"A new goal"}),
+    );
+    assert_eq!(made["value"]["outcome"]["status"], "accepted", "{made}");
     close(b);
     f.stats("close");
     assert!(f.child.wait().unwrap().success());

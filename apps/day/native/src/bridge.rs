@@ -74,6 +74,7 @@ pub const METHODS: &[&str] = &[
     "day.plan.checkWork",
     "day.plan.check",
     "day.plan.checkNew",
+    "day.plan.dismissNew",
     "day.plan.chat",
     "day.plan.chatSnapshot",
     "day.plan.leave",
@@ -273,6 +274,7 @@ pub(crate) enum Command {
         interview: String,
     },
     CheckNew,
+    DismissNew,
     Attention,
     Reply(crate::model::ReplyIntent),
     Action {
@@ -600,6 +602,7 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
         | "day.plan.prepare"
         | "day.attention.read"
         | "day.plan.checkNew"
+        | "day.plan.dismissNew"
         | "day.plan.inventory"
         | "day.plan.inventorySnapshot"
         | "day.ritual.read"
@@ -613,6 +616,7 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 "day.window.read" => C::WindowRead,
                 "day.plan.prepare" => C::Prepare,
                 "day.plan.checkNew" => C::CheckNew,
+                "day.plan.dismissNew" => C::DismissNew,
                 "day.plan.inventory" => C::PlanningInventory,
                 "day.plan.inventorySnapshot" => C::PlanningInventorySnapshot,
                 "day.ritual.read" => C::RitualRead,

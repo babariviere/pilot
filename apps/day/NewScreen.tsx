@@ -20,7 +20,7 @@ import type { ChatMode } from "./chatFeed";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
 import { stageMark, stageWord } from "./PlanScreen";
-import { checkCreation, planMission } from "./planCommands";
+import { checkCreation, dismissCreation, planMission } from "./planCommands";
 import type { Plans } from "./planning";
 import {
 	chatChoice,
@@ -279,18 +279,31 @@ export function NewScreen(props: { plans: Plans }) {
 						</Text>
 					</If>
 				</View>
-				<If when={off()}>
+				<If when={off() || canCheck()}>
 					<View testID="planning-off" class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
 						<Mark kind="unknown" />
 						<Text class="flex-1 text-sm text-foreground">
-							{chatsOff()
-								? `${planning().createReason} Nothing can be sent from here.`
-								: `${planning().createReason} You can still start one chat.`}
+							{!off()
+								? planning().createReason
+								: chatsOff()
+									? `${planning().createReason} Nothing can be sent from here.`
+									: `${planning().createReason} You can still start one chat.`}
 						</Text>
 					</View>
 				</If>
 				<If when={canCheck()}>
-					<Action label="Check creation" disabled={newBusy()} onPress={() => void checkCreation(props.plans)} />
+					<View class="flex-row flex-wrap gap-2">
+						<Action label="Check creation" disabled={newBusy()} onPress={() => void checkCreation(props.plans)} />
+						<If when={props.plans.feed.dismissNew}>
+							<Action
+								label="Dismiss"
+								testID="new-dismiss-unconfirmed"
+								disabled={newBusy()}
+								accessibilityLabel="Stop showing the unconfirmed creation. Nothing is sent."
+								onPress={() => void dismissCreation(props.plans)}
+							/>
+						</If>
+					</View>
 				</If>
 				<If when={off() && !canCheck() && props.plans.feed.prepareNew}>
 					<Action label="Read again" disabled={newBusy()} onPress={() => void props.plans.feed.prepareNew?.()} />

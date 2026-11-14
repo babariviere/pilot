@@ -199,7 +199,7 @@ test("a new-mission proposal opens New with its goal; linking a mission and reso
 	await app.press("Triage new mission");
 	await app.waitFor("Proposed: plan a new mission");
 	// It can also be done as one chat, tied to no mission.
-	expect(app.shows("id:feedback-chat-f1")).toBe(true);
+	expect(app.shows("id:feedback-fix-f1")).toBe(true);
 	await app.press("label:Mission to link this feedback to");
 	await app.press("text:Faster search");
 	await app.waitFor("id:feedback-mission-f1");
@@ -209,11 +209,11 @@ test("a new-mission proposal opens New with its goal; linking a mission and reso
 	expect(steps(app)).toBe("Steps: [triage,link,resolve]");
 	expect(app.shows("id:feedback-proposal-f1")).toBe(false);
 	expect(app.shows("id:feedback-plan-f1")).toBe(false);
-	expect(app.shows("id:feedback-chat-f1")).toBe(false);
+	expect(app.shows("id:feedback-fix-f1")).toBe(false);
 	expect(app.shows("id:feedback-link-f1")).toBe(false);
 	await app.press("id:feedback-reopen-f1");
 	await app.waitFor("id:feedback-proposal-f1");
-	expect(app.shows("id:feedback-chat-f1")).toBe(true);
+	expect(app.shows("id:feedback-fix-f1")).toBe(true);
 	expect(app.shows("id:feedback-link-f1")).toBe(true);
 	expect(steps(app)).toBe("Steps: [triage,link,resolve,reopen]");
 	await app.press("id:feedback-plan-f1");

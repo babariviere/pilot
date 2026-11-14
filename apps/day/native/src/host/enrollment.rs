@@ -113,6 +113,7 @@ impl Prepared {
                 model: model.into(),
                 access: "Planning only".into(),
                 digest: format!("{:x}", Sha256::digest(bytes)),
+                unconfirmed: false,
             },
             profile,
             model: model.into(),
@@ -195,13 +196,13 @@ pub(super) async fn prepare(
     {
         s.epoch = None;
     }
-    if journal.planning.values().any(|r| {
+    // An unconfirmed earlier creation does not block a new one: the user
+    // decides. New offers to check its saved receipt.
+    let unconfirmed = journal.planning.values().any(|r| {
         planning::in_scope(&r.source, &t.source)
             && r.operation["kind"] == "planning-enroll"
             && r.pending()
-    }) {
-        return Err(Error::Unknown);
-    }
+    });
     shared.current(epoch)?;
     let choice = shared
         .chat_choice
@@ -231,11 +232,13 @@ pub(super) async fn prepare(
             && s.prepared.choice == choice
     }) {
         s.epoch = Some(epoch);
+        s.prepared.setup.unconfirmed = unconfirmed;
     } else {
         let mut prepared = Prepared::new(&transport.source, model, profile)?;
         prepared.setup.project = choice
             .as_ref()
             .map_or_else(|| "Selected project".into(), |c| c.project_path.clone());
+        prepared.setup.unconfirmed = unconfirmed;
         prepared.choice = choice;
         *slot = Some(Selection {
             epoch: Some(epoch),
@@ -351,13 +354,6 @@ pub(super) async fn send(
     // Only the exact historical branch above ignores invalidations. A new
     // enrollment always needs current selection authority before any probe.
     shared.current(epoch)?;
-    if journal.planning.values().any(|r| {
-        planning::in_scope(&r.source, &t.source)
-            && r.operation["kind"] == "planning-enroll"
-            && r.pending()
-    }) {
-        return Err(Error::Unknown);
-    }
     let prepared = {
         let slot = shared
             .enrollment

@@ -662,7 +662,6 @@ fn a_lost_new_creation_is_checked_after_reopen_and_never_adopts_the_previous_mis
     f.cmd("lost", true);
     app.press("role:button[Plan a mission]").unwrap();
     wait(&mut app, "role:button[Check creation]");
-    assert!(!app.screen().enabled("role:button[Plan a mission]").unwrap());
     let before = f.cmd("held", false);
     let second = before["mission"].as_str().unwrap().to_owned();
     assert_ne!(first, second);
@@ -674,7 +673,6 @@ fn a_lost_new_creation_is_checked_after_reopen_and_never_adopts_the_previous_mis
     wait(&mut app, "role:button[New]");
     app.press("role:button[New]").unwrap();
     wait(&mut app, "role:button[Check creation]");
-    assert!(!app.screen().enabled("role:button[Plan a mission]").unwrap());
     assert_eq!(f.cmd("stats", false)["posts"], before["posts"]);
     app.press("role:button[Check creation]").unwrap();
     wait(&mut app, "id:interview");

@@ -145,23 +145,7 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	assert.match(fixMeta.pending[0].content, /Add the assignee name to PlanRow/);
 	assert.equal(f.stats().sessions, 2);
 
-	// A proposal that is not a small fix cannot start one.
-	answer = JSON.stringify({ ...JSON.parse(answer), next: "none", detail: "Works as designed." });
-	t.mock.method(f.sessions, "get", (sid: string) => {
-		const s = real(sid);
-		if (sid === fix.targetId && s) return { ...s, working: false, outcome: "done", outcomeAt: 9 } as SessionSummary;
-		return sid === triage.targetId && s
-			? ({ ...s, working: false, outcome: "done", outcomeAt: 8 } as SessionSummary)
-			: s;
-	});
-	const none = (await page()).items.find((i) => i.id === id)!.work[0]!.proposal!;
-	assert("value" in none);
-	const notFix = await post(
-		step({ action: "fix", ...build, triageSessionId: triage.targetId, proposalDigest: none.digest }),
-	);
-	assert.equal(notFix.state, "rejected");
-
-	// A proposed new mission can also be done as one chat, tied to no mission.
+	// Any proposal, here a new mission, can also be done as one chat, tied to no mission.
 	answer = JSON.stringify({
 		...JSON.parse(answer),
 		next: "new-mission",
@@ -181,7 +165,7 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	const chatAck = await post(chat);
 	assert.equal(chatAck.state, "accepted", JSON.stringify(chatAck));
 	const chatMeta = JSON.parse(await readFile(join(f.home, "sessions", chat.targetId, "meta.json"), "utf8"));
-	assert.match(chatMeta.pending[0].content, /as one chat instead of planning a mission/);
+	assert.match(chatMeta.pending[0].content, /as one chat, whatever the proposal suggested/);
 	assert.equal(f.stats().sessions, 3);
 
 	// Linking adds context to the mission; it starts nothing.

@@ -291,20 +291,11 @@ test("an old mission offers a re-plan: New opens with a draft from it and nothin
 		expect(draft.includes(text)).toBe(true);
 	}
 	expect(draft.includes("Old intro")).toBe(false);
-	// Its own draft in New only opens New again.
-	await app.keyboard.press("escape");
-	await app.press("id:mission-docs");
-	await app.press("id:mission-replan-start");
-	await app.waitFor("id:goal");
-	expect(app.value("id:goal")).toBe(draft);
-	// Other words in New are replaced only when the user says so.
+	// Pressing it again replaces whatever New holds.
 	await app.type("id:goal", "Something else");
 	await app.keyboard.press("escape");
 	await app.press("id:mission-docs");
 	await app.press("id:mission-replan-start");
-	await app.waitFor("id:mission-replan-held");
-	expect(app.shows("id:goal")).toBe(false);
-	await app.press("id:mission-replan-replace");
 	await app.waitFor("id:goal");
 	expect(app.value("id:goal")).toBe(draft);
 });

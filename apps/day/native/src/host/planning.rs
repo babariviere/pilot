@@ -25,6 +25,10 @@ pub(super) struct PlanningRecord {
     pub setup_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_pin: Option<super::delivery::Pin>,
+    /// The user dismissed this unconfirmed record on New. Nothing was sent;
+    /// it is no longer pending.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dismissed: bool,
 }
 impl PlanningRecord {
     pub fn id(&self) -> &str {
@@ -35,6 +39,7 @@ impl PlanningRecord {
     }
     pub fn pending(&self) -> bool {
         !self.not_sent
+            && !self.dismissed
             && self
                 .receipt
                 .as_ref()
@@ -120,7 +125,7 @@ impl PlanningRecord {
             "proposalId":request["proposalId"],
             "enrollmentId":if enrollment {json!(self.mission())} else {Value::Null}, "setupDigest":self.setup_digest,
             "kind":self.operation["kind"],
-            "state": if self.not_sent {"not-sent"} else {self.receipt.as_ref().and_then(|r| r["state"].as_str()).unwrap_or("unknown")},
+            "state": if self.not_sent {"not-sent"} else if self.dismissed {"dismissed"} else {self.receipt.as_ref().and_then(|r| r["state"].as_str()).unwrap_or("unknown")},
             "receipt":self.receipt})
     }
 }
@@ -214,6 +219,7 @@ fn record_pinned(
         not_sent: false,
         setup_digest: None,
         verification_pin,
+        dismissed: false,
         operation: json!({"schemaVersion":1,"operationId":id,"producerId":uuid::Uuid::new_v4().to_string(),"sequence":1,
             "origin":home(source,"local"),"destination":home(source,"daemon"),"kind":request["purpose"],
             "targetId":mission,"payloadHash":hash(&payload),"payload":payload,"bindingId":digest,"bindingGeneration":1}),
@@ -341,6 +347,7 @@ pub(super) fn enrollment_record(
         not_sent: false,
         setup_digest: Some(setup.into()),
         verification_pin: None,
+        dismissed: false,
         operation: json!({"schemaVersion":1,"operationId":uuid::Uuid::new_v4().to_string(),
             "producerId":uuid::Uuid::new_v4().to_string(),"sequence":1,"origin":home(source,"local"),
             "destination":home(source,"daemon"),"kind":"planning-enroll","targetId":enrollment,

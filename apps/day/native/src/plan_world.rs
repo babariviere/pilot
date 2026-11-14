@@ -49,6 +49,7 @@ pub fn setup() -> Setup {
         model: s("Default model"),
         access: s("Build: edits files in its own workspace"),
         digest: s("setup-1"),
+        unconfirmed: false,
     }
 }
 

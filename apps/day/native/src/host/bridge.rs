@@ -489,6 +489,7 @@ async fn run(
             enrollment = Some(id.clone());
             Some(Work::CheckPlanning(id))
         }
+        Command::DismissNew => Some(Work::DismissNew),
         Command::Attention => {
             shared.attention_wanted.store(true, Ordering::SeqCst);
             Some(Work::AttentionRead)

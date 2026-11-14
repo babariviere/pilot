@@ -373,7 +373,10 @@ fn lost_ack_restart_missing_and_wrong_result_only_lookup_the_exact_enrollment() 
         status(reply(host.enroll_planning(new.clone()))),
         OutcomeStatus::Unknown
     );
-    assert_eq!(reply(host.prepare_planning()), Err(Error::Unknown));
+    // The lost creation can be checked; it does not block a new setup.
+    let prepared = reply(host.prepare_planning());
+    assert!(prepared.is_ok(), "{prepared:?}");
+    assert!(host.planning_setup().unwrap().unconfirmed);
     let op = host.planning_enrollments()[0]["operationId"]
         .as_str()
         .unwrap()
@@ -462,7 +465,8 @@ fn interrupted_before_daemon_entry_stays_unknown_after_restart_without_historica
         status(reply(host.enroll_planning(new))),
         OutcomeStatus::Unknown
     );
-    assert_eq!(reply(host.prepare_planning()), Err(Error::Unknown));
+    assert!(reply(host.prepare_planning()).is_ok());
+    assert!(host.planning_setup().unwrap().unconfirmed);
     let stats = f.cmd("stats", false);
     assert_eq!(
         stats["posts"], 1,
@@ -514,13 +518,19 @@ fn FeedProbe(props: FeedProbeProps) -> impl IntoElement {
                 .status,
             OutcomeStatus::Unknown
         );
-        assert!(!feed.with(|f| f.snapshot()).can_create);
-        assert_eq!(
-            pilot_day_native::PlanFeed::prepare_new(feed.clone())
+        // A lost creation does not block the next setup; it says it can be checked.
+        // A refresh can make one setup read stale; read again, as New does.
+        let mut prepared = OutcomeStatus::Stale;
+        for _ in 0..5 {
+            prepared = pilot_day_native::PlanFeed::prepare_new(feed.clone())
                 .await
-                .status,
-            OutcomeStatus::Unknown
-        );
+                .status;
+            if prepared != OutcomeStatus::Stale {
+                break;
+            }
+        }
+        assert_eq!(prepared, OutcomeStatus::Accepted);
+        assert!(feed.with(|f| f.snapshot()).setup.unconfirmed);
         let checked = pilot_day_native::PlanFeed::check_new(feed.clone()).await;
         assert_eq!(checked.status, OutcomeStatus::Accepted);
         let mission = checked.mission_id.unwrap();

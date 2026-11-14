@@ -368,3 +368,16 @@ export async function checkCreation(plans: Plans) {
 		newBusy.set(false);
 	}
 }
+
+/** Stops showing unconfirmed creations. Nothing is sent. */
+export async function dismissCreation(plans: Plans) {
+	if (newBusy() || !plans.feed.dismissNew) return;
+	newBusy.set(true);
+	newMessage.set("");
+	try {
+		const outcome = await plans.feed.dismissNew();
+		if (outcome.status !== "accepted") newMessage.set(outcome.message);
+	} finally {
+		newBusy.set(false);
+	}
+}

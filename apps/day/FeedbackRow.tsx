@@ -128,10 +128,7 @@ function Proposal(props: {
 		}
 	};
 	const plan = () => {
-		if (goalDraft().trim() !== "") {
-			setStepMessage(props.item.id, "New already holds other words. They stay; nothing was copied.");
-			return;
-		}
+		// The user asked for this goal: it replaces whatever New holds.
 		glide();
 		goalDraft.set(missionDraft(props.item, p()));
 		closeFeedback();
@@ -151,25 +148,6 @@ function Proposal(props: {
 				{(d) => <Text class="text-xs text-faint">{`Same as: “${clip(d().text)}”`}</Text>}
 			</Each>
 			<View class="flex-row flex-wrap items-center gap-2">
-				<If when={p().next === "fix" && !fixed()}>
-					<Action
-						outline
-						label="Start fix"
-						testID={`feedback-fix-${props.item.id}`}
-						disabled={props.busy || !project() || running(steps().fix)}
-						accessibilityLabel="Start one Build chat that makes this fix, under the project's usual limits."
-						onPress={() =>
-							props.send({
-								action: "fix",
-								feedbackId: props.item.id,
-								projectId: props.triage.projectId,
-								contextDigest: project()?.contextDigest ?? "",
-								triageSessionId: props.triage.sessionId,
-								proposalDigest: props.digest,
-							})
-						}
-					/>
-				</If>
 				<If when={p().next === "existing-mission" && suggested()}>
 					<Action
 						outline
@@ -191,13 +169,13 @@ function Proposal(props: {
 						onPress={plan}
 					/>
 				</If>
-				<If when={p().next === "new-mission" && !fixed()}>
+				<If when={!fixed()}>
 					<Action
 						outline
-						label="Start as one chat"
-						testID={`feedback-chat-${props.item.id}`}
+						label="Start fix"
+						testID={`feedback-fix-${props.item.id}`}
 						disabled={props.busy || !project() || running(steps().fix)}
-						accessibilityLabel="Start one Build chat for this, tied to no mission, under the project's usual limits."
+						accessibilityLabel="Start one Build chat that makes this change, tied to no mission, under the project's usual limits."
 						onPress={() =>
 							props.send({
 								action: "fix",
@@ -210,11 +188,11 @@ function Proposal(props: {
 						}
 					/>
 				</If>
-				<If when={(p().next === "fix" || p().next === "new-mission") && !project()}>
+				<If when={!project()}>
 					<Text class="text-xs text-faint">Its project is not in your project list.</Text>
 				</If>
 			</View>
-			<If when={(p().next === "existing-mission" || p().next === "new-mission") && linkable().length > 0}>
+			<If when={linkable().length > 0}>
 				<View class="flex-row items-center gap-2.5">
 					<Text class="text-xs text-faint">{suggested() ? "Or link another" : "Link a mission"}</Text>
 					<Picker

@@ -74,6 +74,9 @@ pub struct Setup {
     pub access: String,
     /// Changes whenever any of the above changes. New intents name it.
     pub digest: String,
+    /// An earlier creation from this window is not confirmed. It can be
+    /// checked; it does not block a new one.
+    pub unconfirmed: bool,
 }
 
 /// Where a mission's planning is.

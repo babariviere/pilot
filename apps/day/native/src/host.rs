@@ -244,6 +244,8 @@ enum Work {
         request: serde_json::Value,
     },
     CheckPlanning(String),
+    /// Marks unconfirmed New creations as dismissed. Sends nothing.
+    DismissNew,
     PreparePlanning,
     EnrollPlanning(crate::plan::NewIntent),
     PlanningChat {
@@ -1424,6 +1426,7 @@ async fn handle(
         &work,
         Work::Check(_)
             | Work::CheckPlanning(_)
+            | Work::DismissNew
             | Work::EnrollPlanning(_)
             | Work::PreparePlanning
             | Work::AttentionCheck(_)
@@ -1560,6 +1563,24 @@ async fn handle(
                 planning_status(&record),
                 "Exact saved operation lookup only.",
             ));
+        }
+        Work::DismissNew => {
+            let dismissed: Vec<_> = journal
+                .planning
+                .values()
+                .filter(|r| {
+                    planning::in_scope(&r.source, &t.source)
+                        && r.operation["kind"] == "planning-enroll"
+                        && r.pending()
+                })
+                .cloned()
+                .collect();
+            for mut record in dismissed {
+                record.dismissed = true;
+                journal.save_planning(record.clone())?;
+                publish_planning(shared, &record);
+            }
+            return Ok(shared.outcome(OutcomeStatus::Accepted, "Dismissed. Nothing was sent."));
         }
         Work::Refresh => refresh(t, journal, shared, epoch, None).await?,
         Work::Lifecycle {

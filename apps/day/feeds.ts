@@ -50,6 +50,7 @@ export type PlanningFeed = Pick<
 	canReadInventory?: () => boolean;
 	prepareNew?: () => Promise<PlanOutcome>;
 	checkNew?: () => Promise<PlanOutcome>;
+	dismissNew?: () => Promise<PlanOutcome>;
 	canCheckNew?: () => boolean;
 	startWork?: (
 		missionId: string,
