@@ -28,6 +28,8 @@ import { captureView, restoreView, saveForms } from "./updateView";
 /** Whether this window has its feeds yet, and which. */
 export type Connection =
 	| { state: "opening" }
+	/** A read failed for a passing reason; Pilot reads again on its own soon. */
+	| { state: "waiting" }
 	| { state: "none"; reason: string; canRead: boolean }
 	| { state: "open"; day: Day; plans: Plans; rituals: Rituals; update: Update | null };
 
@@ -89,8 +91,9 @@ let planFeed: ConnectedPlans | null = null;
 let pendingFlush: number | null = null;
 /** The next automatic read after a passing failure, and its delay. */
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
-let retryDelay = 1000;
-const RETRY_MAX = 30_000;
+let retries = 0;
+/** 1 + 2 + 4 + 8 + 16 s: about 30 s, more than a service needs to start. */
+const RETRIES = 5;
 let scopeReading = false;
 let scopeAgain = false;
 
@@ -136,7 +139,7 @@ async function closeUnopened(window: string, generation: number) {
 function flushPending() {
 	const open = connection();
 	if (!window || pendingFlush === null || !current()) return;
-	if (open.state === "none") {
+	if (open.state === "none" || open.state === "waiting") {
 		// No feeds or forms were opened, so there is nothing new to save. The
 		// answer carries the window's last saved view back unchanged (or the
 		// default view when none was saved), so no draft is lost. When the saved
@@ -300,23 +303,26 @@ async function connect() {
 
 /**
  * A window that could not open for a passing reason (its service is down or
- * still starting) reads again on its own after 1 s, then 2, 4… up to 30 s,
- * like the root's own reconnect. It stops once the window opens. Changes from
- * the root are not used for this: the window's own startup reads cause them,
- * and a service that becomes ready may send none.
+ * still starting) waits and reads again on its own after 1 s, then 2, 4, 8 and
+ * 16 s. Meanwhile it looks like opening: the warning shows only when Pilot will
+ * not try again by itself. Changes from the root are not used for this: the
+ * window's own startup reads cause them, and a service that becomes ready may
+ * send none.
  */
 function retryLater() {
 	const now = connection();
-	if (now.state !== "none" || !now.canRead) {
-		retryDelay = 1000;
+	if (now.state !== "none" || !now.canRead || retries >= RETRIES) {
+		if (now.state === "open") retries = 0;
 		return;
 	}
-	if (retryTimer !== undefined) return;
+	const delay = 1000 * 2 ** retries;
+	retries += 1;
+	connection.set({ state: "waiting" });
+	if (retryTimer !== undefined) clearTimeout(retryTimer);
 	retryTimer = setTimeout(() => {
 		retryTimer = undefined;
 		void read();
-	}, retryDelay);
-	retryDelay = Math.min(retryDelay * 2, RETRY_MAX);
+	}, delay);
 }
 
 function read(): Promise<void> {
@@ -333,20 +339,20 @@ function read(): Promise<void> {
 		})
 		.finally(() => {
 			opening = null;
+			retryLater();
 			// A close asked for while opening is answered once the outcome is known.
 			flushPending();
-			retryLater();
 		});
 	return opening;
 }
 
-/** Read Again: reads at once and resets the automatic delay. */
+/** Read Again: reads at once, with a fresh set of automatic tries. */
 export function readAgain(): Promise<void> {
 	const now = connection();
-	if (now.state !== "none" || !now.canRead) return opening ?? Promise.resolve();
+	if (now.state !== "waiting" && (now.state !== "none" || !now.canRead)) return opening ?? Promise.resolve();
 	if (retryTimer !== undefined) clearTimeout(retryTimer);
 	retryTimer = undefined;
-	retryDelay = 1000;
+	retries = 0;
 	return read();
 }
 

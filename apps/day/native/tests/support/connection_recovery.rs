@@ -86,14 +86,13 @@ fn failed_first_read_reads_again_after_a_delay_or_explicitly_without_repeating_s
     let root = FakeRoot::new();
     root.refuse("day.today.read", "offline");
     let mut app = open_on(&entry, root.channel.clone());
-    wait(&mut app, "id:connection-read");
-    assert!(app.shows("Pilot could not reach its service. Nothing is shown rather than a guess."));
-    // A passing failure reads again on its own after a short delay. Still
-    // refused, the window says so again.
+    // A passing failure reads again on its own after a short delay. Until
+    // Pilot stops trying, the window looks like opening, with no warning.
     until(&mut app, "a delayed read", || {
         root.count("day.today.read") == 2
     });
-    wait(&mut app, "id:connection-read");
+    assert!(app.shows("Opening Pilot…"));
+    assert!(!has(&app, "id:connection-read"));
     assert_eq!(
         root.count("day.attention.read"),
         1,
@@ -108,10 +107,10 @@ fn failed_first_read_reads_again_after_a_delay_or_explicitly_without_repeating_s
     );
     root.reply("day.plan.inventory", inventory(vec![]));
     let held = hold_next(&root);
-    app.press("id:connection-read").unwrap();
+    // Read Again (here its probe) reads at once while Pilot waits.
+    retry(&root);
     until(&mut app, "retry entered", || held.lock().unwrap().is_some());
     wait(&mut app, "Opening Pilot…");
-    assert!(!has(&app, "id:connection-read"));
     retry(&root);
     retry(&root);
     root.changed();
@@ -168,17 +167,15 @@ fn a_saved_view_refused_while_the_service_starts_is_read_again_without_a_loop() 
     root.reply("day.plan.inventory", inventory(vec![]));
     root.refuse("day.window.read", "unavailable");
     let mut app = open_on(&entry, root.channel.clone());
-    wait(
-        &mut app,
-        "Pilot could not read its service. Nothing is shown rather than a guess.",
-    );
-    assert!(
-        has(&app, "id:connection-read"),
-        "a passing refusal can be read again"
-    );
+    until(&mut app, "saved view refused", || {
+        root.count("day.window.read") == 1
+    });
+    // Pilot will try again by itself, so the window still looks like opening.
+    wait(&mut app, "Opening Pilot…");
+    assert!(!has(&app, "id:connection-read"));
     // The window's own startup reads make the root send changes; they never
     // start another read. Only the delayed retry does.
-    app.wait(Duration::from_millis(500)).unwrap();
+    app.wait(Duration::from_millis(300)).unwrap();
     assert_eq!(root.count("day.window.read"), 1, "no read loop");
     // The service finished starting: the delayed read opens the window, and
     // the saved window is read before anything opens.
@@ -189,6 +186,29 @@ fn a_saved_view_refused_while_the_service_starts_is_read_again_without_a_loop() 
         1,
         "startup is not repeated"
     );
+    no_effects(&root);
+    drop(app);
+    std::fs::remove_dir_all(entry.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn the_warning_shows_only_once_pilot_stops_trying_by_itself() {
+    let entry = recovery_entry();
+    let root = FakeRoot::new();
+    root.refuse("day.today.read", "offline");
+    let mut app = open_on(&entry, root.channel.clone());
+    // Five delayed reads (1 + 2 + 4 + 8 + 16 s) look like opening; then the
+    // warning and Read again show, and nothing reads by itself any more.
+    until(&mut app, "first delayed read", || {
+        root.count("day.today.read") == 2
+    });
+    assert!(app.shows("Opening Pilot…"));
+    assert!(!app.shows("Pilot could not reach its service. Nothing is shown rather than a guess."));
+    wait(&mut app, "id:connection-read");
+    assert!(app.shows("Pilot could not reach its service. Nothing is shown rather than a guess."));
+    assert_eq!(root.count("day.today.read"), 6);
+    app.wait(Duration::from_millis(1500)).unwrap();
+    assert_eq!(root.count("day.today.read"), 6, "no more automatic reads");
     no_effects(&root);
     drop(app);
     std::fs::remove_dir_all(entry.parent().unwrap()).unwrap();
@@ -236,7 +256,10 @@ fn a_window_whose_first_read_failed_closes_with_its_saved_view_and_reads_again_l
     let entry = entry();
     let mut app = open_on(&entry, root.channel.clone());
     let failed = "Pilot could not reach its service. Nothing is shown rather than a guess.";
-    wait(&mut app, failed);
+    until(&mut app, "first read refused", || {
+        root.count("day.today.read") == 1
+    });
+    wait(&mut app, "Opening Pilot…");
     // A close while nothing is shown is answered at once with the saved view
     // unchanged, so the goal is kept. It used to wait forever.
     root.flush(1);
@@ -280,7 +303,6 @@ fn close_during_opening_is_answered_with_the_saved_view_once_the_read_fails() {
         .take()
         .unwrap()
         .resolve(json!({"version":1,"error":"offline"}));
-    wait(&mut app, "id:connection-read");
     // Nothing was shown, so nothing new is saved: the newest close is
     // answered with the saved view (here none, so the default view).
     until(&mut app, "pending close answered", || {
@@ -290,7 +312,7 @@ fn close_during_opening_is_answered_with_the_saved_view_once_the_read_fails() {
     assert_eq!(ack["generation"], 5, "only the newest generation");
     assert_eq!(ack["view"]["place"], "today");
     root.reply("day.plan.inventory", inventory(vec![]));
-    app.press("id:connection-read").unwrap();
+    // The delayed read opens the window; the answered close stays answered.
     wait(&mut app, "role:button[New]");
     app.wait(Duration::from_millis(100)).unwrap();
     assert_eq!(

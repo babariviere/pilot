@@ -19,6 +19,7 @@ function Connected() {
 	};
 	const note = () => {
 		const now = connection();
+		// While Pilot will still try again by itself, it is opening, not failing.
 		return now.state === "none" ? now.reason : "Opening Pilot…";
 	};
 	const canRead = () => {
