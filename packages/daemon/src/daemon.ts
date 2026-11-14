@@ -342,7 +342,7 @@ function recoverCompletions(): Promise<void> {
 	return write;
 }
 async function resumeRuntime(): Promise<void> {
-	if (stopping || legacyUpdateFrozen) return;
+	if (stopping || server.runtimeFrozen()) return;
 	await sessions.resumeMaintenance();
 	if (!backgroundInitialized) {
 		backgroundStarted = true;
@@ -449,10 +449,10 @@ power?.onNetworkPath((path) => connectivity.setPath(path));
 // Recover global sleep overrides before any interrupted agent can reopen.
 await power?.start();
 await schedules.load();
-await sessions.load(legacyUpdateFrozen || liveUpdate.frozen);
+await sessions.load(server.runtimeFrozen());
 for (const project of projects.list()) sessions.refreshTrackedSources(project.id);
 power?.refresh();
-if (!liveUpdate.frozen) await resumeRuntime();
+if (!server.runtimeFrozen()) await resumeRuntime();
 if (runtimeOwner) {
 	runtimeOwner.ready(hello);
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);

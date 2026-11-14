@@ -85,6 +85,7 @@ test("isolated daemon stop/start, exact hello, rollback and cold update fence", 
 		return { status: 200, value: JSON.parse(envelope.body).receipt };
 	}
 	const initial = await launch(build, "seed");
+	assert.equal(initial.ready.frozen, false);
 	assert.equal(await inspectRuntime(home, port, build, join(home, "fixture-runtime")), "ready");
 	const inode = (await stat(join(home, OWNER_FILE))).ino;
 	await assert.rejects(launch(), /runtime_profile_owned/, "second daemon cannot acquire the same profile");
@@ -146,7 +147,21 @@ test("isolated daemon stop/start, exact hello, rollback and cold update fence", 
 	await close(wrong.child); // only our retained ChildProcess, never an unrelated PID
 	const rollback = await launch();
 	assert.equal(rollback.ready.starts, 0, "retained global hold precedes cold recovery");
+	assert.equal(rollback.ready.frozen, true, "ready does not release retained global maintenance");
 	assert.equal(await inspectRuntime(home, port, build), "ready");
+	const read = await fetch(`http://127.0.0.1:${port}/api/sessions`);
+	assert.equal(read.status, 200, "held daemon still serves read-only session inventory");
+	assert.ok((await read.json()).length >= initial.ready.chats.length);
+	assert.equal(
+		(await fetch(`http://127.0.0.1:${port}/api/sessions`, { method: "POST", body: "{}" })).status,
+		503,
+		"ready must not admit new work under the retained hold",
+	);
+	assert.equal(
+		(await fetch(`http://127.0.0.1:${port}/__pilot_runtime_update/v1`, { method: "POST", body: "{}" })).status,
+		409,
+		"public callers cannot release maintenance",
+	);
 	assert.deepEqual((await native("inspect", { globalUpdate: prepare })).value, prepared.value);
 	const releaseOp = operation(
 		"global-update-release",
@@ -175,6 +190,7 @@ test("isolated daemon stop/start, exact hello, rollback and cold update fence", 
 	const statusReply = once(rollback.child, "message");
 	rollback.child.send("status");
 	const [status] = await statusReply;
+	assert.equal(status.frozen, false, "only the authenticated, verified release opens admissions");
 	assert.ok(status.opened.includes(initial.ready.chats[0].id), "healthy update-owned chat resumes");
 	assert.ok(!status.opened.includes(initial.ready.chats[1].id), "broken uncertain work is never replayed");
 	assert.ok(!status.opened.includes(initial.ready.chats[3].id), "canceled job is never replayed");

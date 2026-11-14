@@ -69,7 +69,8 @@ const server = createDaemonServer(
 	owner,
 );
 await server.runtimeReady;
-await sessions.load(true);
+// Use the same combined maintenance state as ordinary daemon startup.
+await sessions.load(server.runtimeFrozen());
 const chats = [];
 if (seed === "seed") {
 	await sessions.resumeMaintenance();
@@ -79,7 +80,7 @@ if (seed === "seed") {
 	await sessions.stop(chats[2]!.id);
 }
 owner.ready(hello);
-process.send?.({ ready: true, hello, chats, starts, boot: owner.identity().boot });
+process.send?.({ ready: true, hello, chats, starts, frozen: server.runtimeFrozen(), boot: owner.identity().boot });
 let closing = false;
 async function close() {
 	if (closing) return;
@@ -96,7 +97,7 @@ process.on("message", (value) => {
 	if (value === "status")
 		void (async () => {
 			await Promise.all((sessions as unknown as { starting: Map<string, Promise<unknown>> }).starting.values());
-			process.send?.({ starts, opened, sessions: sessions.list() });
+			process.send?.({ starts, opened, frozen: server.runtimeFrozen(), sessions: sessions.list() });
 		})();
 });
 process.on("SIGTERM", () => void close());

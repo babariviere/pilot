@@ -369,6 +369,7 @@ test("retained maintenance freezes full server resources before recovery", async
 	const f = await fixture(t, { ...proposal, phase: "draining", initialBoot: "previous" });
 	await f.server.runtimeReady;
 	assert.equal(f.service.frozen, true);
+	assert.equal(f.server.runtimeFrozen(), true);
 	// Ordinary mutations are refused by the same full resource assembly used by update readiness.
 	assert.equal((await f.request("-not-an-update", { id: proposal.id })).status, 503);
 	assert.equal((await f.request()).status, 200);

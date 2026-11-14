@@ -403,6 +403,7 @@ export function createDaemonServer(
 ): Server & {
 	runtimeResources: RuntimeResources;
 	runtimeReady: Promise<void>;
+	runtimeFrozen(): boolean;
 	recoverOperations(): void;
 	closePlanning(): Promise<void>;
 } {
@@ -567,6 +568,8 @@ export function createDaemonServer(
 				)
 			: undefined;
 	const runtimeReady = Promise.all([liveUpdate?.service.load(), globalUpdate?.load()]).then(() => undefined);
+	// Startup restore is allowed under maintenance, but work and recovery are not.
+	const runtimeFrozen = () => legacyAdmissionFrozen || !!liveUpdate?.service.frozen || !!globalUpdate?.frozen;
 	let lifecycleInterrupted = false;
 	const reservations = new UpdateReservation(
 		new RuntimeResources(
@@ -1089,13 +1092,7 @@ export function createDaemonServer(
 	// Only registered idempotent handlers resume. An interrupted handler always retains the same target.
 	let operationRecovery: Promise<void> | undefined;
 	const recoverOperations = () => {
-		if (
-			journal &&
-			!operationRecovery &&
-			!legacyAdmissionFrozen &&
-			!liveUpdate?.service.frozen &&
-			!globalUpdate?.frozen
-		)
+		if (journal && !operationRecovery && !runtimeFrozen())
 			operationRecovery = journal
 				.recover(admitOperation, (op) => !isRetiredDevboxOperation(op.kind))
 				.catch((error) => console.warn("pilotd: operation recovery", error))
@@ -4432,6 +4429,7 @@ export function createDaemonServer(
 	return Object.assign(server, {
 		runtimeResources,
 		runtimeReady,
+		runtimeFrozen,
 		recoverOperations,
 		closePlanning: async () => {
 			await Promise.all([planningWorkers?.close(), nativeAttention?.close()]);
