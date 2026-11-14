@@ -602,11 +602,15 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
 function Replan(props: { day: Day; page: MissionPage }) {
 	const note = signal("");
 	const busy = signal(false);
-	const start = () => {
-		if (goalDraft().trim() !== "") {
-			note.set("New already holds other words. They stay; nothing was copied.");
+	// New holds other words: the user chooses to replace them or to look first.
+	const held = signal(false);
+	const start = (replace = false) => {
+		const words = goalDraft().trim();
+		if (!replace && words !== "" && words !== props.page.replanDraft.trim()) {
+			held.set(true);
 			return;
 		}
+		held.set(false);
 		glide();
 		goalDraft.set(props.page.replanDraft);
 		replacesDraft.set({ missionId: props.page.row.id, title: props.page.row.title });
@@ -643,8 +647,31 @@ function Replan(props: { day: Day; page: MissionPage }) {
 									label="Re-plan as a new mission"
 									testID="mission-replan-start"
 									accessibilityLabel="Open New with a draft goal from this mission. Nothing is sent."
-									onPress={start}
+									onPress={() => start()}
 								/>
+							</View>
+						</If>
+						<If when={props.page.canReplan && held()}>
+							<View testID="mission-replan-held" class="gap-2">
+								<Text class="text-sm text-needs-ink">New already holds a draft.</Text>
+								<View class="flex-row flex-wrap gap-2">
+									<Action
+										outline
+										label="Replace with this draft"
+										testID="mission-replan-replace"
+										accessibilityLabel="Replace the words in New with a draft from this mission. Nothing is sent."
+										onPress={() => start(true)}
+									/>
+									<Action
+										label="Open New"
+										testID="mission-replan-open"
+										accessibilityLabel="Open New to read its draft. Nothing changes."
+										onPress={() => {
+											held.set(false);
+											openNew();
+										}}
+									/>
+								</View>
 							</View>
 						</If>
 					</View>
