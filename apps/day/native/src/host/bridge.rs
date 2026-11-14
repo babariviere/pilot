@@ -71,6 +71,7 @@ fn attention_read(host: &NativeHost) -> Result<Value, Error> {
 }
 
 pub(super) async fn handle(
+    root: &Transport,
     t: &Transport,
     journal: &mut Journal,
     shared: &std::sync::Arc<Shared>,
@@ -79,7 +80,7 @@ pub(super) async fn handle(
     epoch: u64,
     call: Call,
 ) {
-    let result = run(t, journal, shared, updates, day, epoch, &call).await;
+    let result = run(root, t, journal, shared, updates, day, epoch, &call).await;
     // Ritual progress is local, as on the native feed: its refusals stay
     // with the ritual and never mark the service read or controls failed.
     if !call.command.is_ritual()
@@ -123,7 +124,12 @@ async fn ritual(
     let view = encode(call.host.ritual_snapshot())?;
     Ok(json!({"snapshot":view,"outcome":outcome.map(encode).transpose()?}))
 }
+/// `root` is the window's own selection: saved window, updates, ritual and the
+/// project scope. `t` is the project the window acts on (the root, or a
+/// global window's focused project) for everything else.
+#[allow(clippy::too_many_arguments)]
 async fn run(
+    root: &Transport,
     t: &Transport,
     journal: &mut Journal,
     shared: &std::sync::Arc<Shared>,
@@ -136,7 +142,7 @@ async fn run(
         .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
     shared.open()?;
     if let Command::TodayScope(request) = &call.command {
-        let snapshot = super::today_scope::read(t, journal, shared, request, &call.gate).await?;
+        let snapshot = super::today_scope::read(root, journal, shared, request, &call.gate).await?;
         return Ok(json!({"snapshot":snapshot,"outcome":null}));
     }
     if matches!(call.command, Command::WindowRead) {
@@ -144,11 +150,16 @@ async fn run(
         // authority to replay anything. Recheck the selected home/project first.
         let saved = call.host.saved_window();
         if let Some(saved) = &saved {
-            if saved.source != t.source {
+            if saved.source != root.source {
                 return Err(Error::Identity);
             }
             saved.validate()?;
-            t.gate(false).await?;
+            // A global window has no project to check, only the profile.
+            if root.source.project.is_none() {
+                root.profile_gate().await?;
+            } else {
+                root.gate(false).await?;
+            }
         }
         shared.open()?;
         call.command
@@ -198,7 +209,7 @@ async fn run(
         return super::threads::handle(t, journal, shared, &call.command, &call.gate).await;
     }
     if call.command.is_ritual() {
-        return ritual(t, journal, shared, day, epoch, call).await;
+        return ritual(root, journal, shared, day, epoch, call).await;
     }
     if let Command::DeliveryArtifact(request) = &call.command {
         let snapshot = super::delivery_artifact::read(t, request).await?;
@@ -265,7 +276,7 @@ async fn run(
         _ => None,
     };
     if let Some(command) = update {
-        let outcome = super::updates::handle(t, journal, shared, updates, command).await?;
+        let outcome = super::updates::handle(root, journal, shared, updates, command).await?;
         if let Command::UpdateConfirm(r) = &call.command {
             let wake = {
                 let mut gate = call.gate.lock().expect("bridge gate poisoned");
@@ -476,7 +487,7 @@ async fn run(
                 let record = super::window::SavedWindow {
                     kind: "window-capture".into(),
                     version: 1,
-                    source: t.source.clone(),
+                    source: root.source.clone(),
                     window: call.window.clone(),
                     generation: *generation,
                     save_sequence: *sequence,

@@ -13,7 +13,7 @@ update.service.set({
 	service: "1.125.0",
 	agents: [],
 	forceAvailable: false,
-	blocked: "The signed official update and rollback distributions are not selected. Nothing was changed.",
+	blocked: "Automatic updates are not set up for this install. Install new versions with the Pilot installer.",
 });
 
 mount(() => (

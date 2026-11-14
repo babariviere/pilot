@@ -236,6 +236,37 @@ fn real_reads_exact_detail_and_selective_pause_resume_preserve_other_holds() {
     reply(host.close()).unwrap();
 }
 
+/// Regression: a global window (the normal launch) showed every mission as
+/// read only. Opening one now acts in its project, and its saved control
+/// records come back after a cold reopen.
+#[test]
+fn global_window_opens_and_controls_a_mission_in_its_own_project() {
+    let mut f = Fixture::new();
+    let mut global = f.source();
+    global.project = None;
+    let host = NativeHost::open(global.clone(), f.ledger()).unwrap();
+    reply(host.read_mission(f.mission())).unwrap();
+    let page = host.mission(&f.mission()).expect("mission opens");
+    assert!(page.tasks_known);
+    let today = ready(&host);
+    let pause = reply(host.pause(f.mission(), row(&today).control.revision)).unwrap();
+    assert_eq!(pause.status, OutcomeStatus::Accepted);
+    let paused = ready(&host);
+    assert_eq!(
+        row(&paused).control.state,
+        pilot_day_native::model::ControlState::Paused
+    );
+    reply(host.close()).unwrap();
+    let reopened = NativeHost::open(global, f.ledger()).unwrap();
+    reply(reopened.read_mission(f.mission())).unwrap();
+    assert_eq!(
+        row(&ready(&reopened)).control.state,
+        pilot_day_native::model::ControlState::Paused
+    );
+    assert_eq!(f.cmd("stats", true)["posts"], 1, "reopening sends nothing");
+    reply(reopened.close()).unwrap();
+}
+
 #[test]
 fn lost_ack_cold_open_and_missing_mismatched_lookup_never_replay() {
     let mut f = Fixture::new();
@@ -324,6 +355,37 @@ fn authority_changed_during_preflight_or_after_durable_save_refuses_admission() 
         }
         reply(host.close()).unwrap();
     }
+}
+
+/// Regression for flicker: busy agents send many session events. Each one is
+/// read again, but the shown read never turns stale while that happens.
+#[test]
+fn session_events_read_again_without_marking_the_shown_read_stale() {
+    let mut f = Fixture::new();
+    let host = f.open();
+    ready(&host);
+    let before = f.cmd("stats", true)["dayReads"].as_u64().unwrap();
+    let changes = host.changes();
+    for _ in 0..5 {
+        f.cmd("sessionEvent", true);
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        assert_eq!(
+            host.snapshot().freshness.state,
+            FreshnessState::Live,
+            "a session event repainted Today as stale"
+        );
+        if f.cmd("stats", true)["dayReads"].as_u64().unwrap() > before {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "no read after events");
+        let _ = runtime().block_on(async {
+            tokio::time::timeout(Duration::from_millis(50), changes.recv()).await
+        });
+    }
+    assert_eq!(f.cmd("stats", true)["posts"], 0);
+    reply(host.close()).unwrap();
 }
 
 #[test]

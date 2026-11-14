@@ -358,12 +358,7 @@ fn official_status_rechecks_live_identity_protocol_and_version_without_update_au
         );
         assert!(snapshot["offer"].is_null());
         assert_eq!(snapshot["forceAvailable"], false);
-        assert!(
-            snapshot["blocked"]
-                .as_str()
-                .unwrap()
-                .contains("not selected")
-        );
+        assert!(snapshot["blocked"].as_str().unwrap().contains("not set up"));
         assert_eq!(
             snapshot["reason"].as_str().unwrap().is_empty(),
             expected == "registered"
@@ -401,12 +396,7 @@ fn official_status_keeps_app_observation_when_service_is_offline_or_untrusted() 
     assert_eq!(snapshot["service"], "");
     assert!(snapshot["offer"].is_null());
     assert_eq!(snapshot["forceAvailable"], false);
-    assert!(
-        snapshot["blocked"]
-            .as_str()
-            .unwrap()
-            .contains("not selected")
-    );
+    assert!(snapshot["blocked"].as_str().unwrap().contains("not set up"));
     assert!(f.bridge.pending_update().is_none());
     assert_eq!(std::fs::metadata(f.path.join("journal")).unwrap().len(), 0);
 }
@@ -420,12 +410,7 @@ fn official_root_refuses_normal_and_force_before_capture_or_loss_and_ignores_leg
     let snapshot = &read["value"]["snapshot"];
     assert!(snapshot["offer"].is_null());
     assert_eq!(snapshot["forceAvailable"], false);
-    assert!(
-        snapshot["blocked"]
-            .as_str()
-            .unwrap()
-            .contains("not selected")
-    );
+    assert!(snapshot["blocked"].as_str().unwrap().contains("not set up"));
     for mode in ["normal", "force"] {
         let result = f.run(&format!("const r=await call('day.update.read'); return await call('day.update.prepare',{{kind:'app',mode:'{mode}',revision:r.value.snapshot.revision}});"));
         assert_eq!(result["error"], "unavailable", "{mode}");

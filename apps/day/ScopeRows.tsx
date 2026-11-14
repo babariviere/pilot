@@ -1,9 +1,9 @@
 // Today's project scope on screen: the one control at the top of Today, the
 // line that says what Today shows and what needs the user elsewhere, and
-// other projects' rows, read only. The window's own project keeps its own
-// actionable sections; another project's rows only say what is there.
-// Choosing a scope only reads: nothing moves, starts or is sent, and no
-// chat changes project. What Pilot could not read stays unknown.
+// other projects' rows. The project the window acts on keeps its own
+// actionable sections; another project's rows say what is there, and its
+// missions and plans open. Choosing a scope or opening a row only reads:
+// nothing starts or is sent. What Pilot could not read stays unknown.
 import { effect, lifecycle, Text, untracked, View } from "nsh";
 import type { Decision, HumanAction, MissionRow, Planning } from "pilot-day/native";
 import { decisionMark } from "./DecisionCard";
@@ -11,9 +11,10 @@ import type { Day } from "./day";
 import { waitsForCheck } from "./deliveryView";
 import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
+import { openPlan } from "./planView";
 import { type ScopeCount, type ScopeProject, todayProject } from "./todayScope";
-import { InlineAction, Mark, Picker, SectionTitle } from "./ui";
-import { drafts, picks, replies, reports } from "./view";
+import { InlineAction, Mark, Picker, RowLink, SectionTitle } from "./ui";
+import { drafts, openMission, picks, placeRow, replies, reports } from "./view";
 import { rowLine, stateMark, stateWord } from "./words";
 
 const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
@@ -24,7 +25,7 @@ export type TodayScope = {
 	on: () => boolean;
 	/** "all", or one project's ID. */
 	scope: () => string;
-	/** This window's own project, when Pilot named it. */
+	/** The project this window acts on, when Pilot named it. */
 	own: () => string | null;
 	/** A project's name, or "a project". */
 	name: (id: string) => string;
@@ -47,7 +48,8 @@ export function todayScope(day: Day, plans?: Plans): TodayScope {
 	if (day.scope && plans && untracked(() => plans.chats.view().availability) === "reading") {
 		void plans.chats.source.read();
 	}
-	const own = () => chats()?.current ?? null;
+	// The native root names the project the window acts on in its scope read; else the project list does.
+	const own = () => day.scope?.view().snapshot?.own ?? chats()?.current ?? null;
 	// A profile-only window has no own-project rows. Its catalog still scopes Today.
 	const on = () => !!day.scope;
 	const scope = () => (on() ? todayProject() : "all");
@@ -181,9 +183,7 @@ export function ScopeNote(props: { day: Day; ctx: TodayScope }) {
 		if (props.ctx.showsOwn()) return `Showing ${name}.`;
 		if (!v || v.state === "reading") return `Reading ${name}…`;
 		if (!snapshot()) return `Pilot cannot show ${name} here. ${v.reason}`;
-		return props.ctx.own()
-			? `Showing ${name}, read only here. Act on it from its own window.`
-			: `Showing ${name}. Project actions are not connected in this dashboard yet.`;
+		return `Showing ${name}.`;
 	};
 	const elsewhere = () => {
 		if (all()) return "";
@@ -235,9 +235,7 @@ export function ScopeNote(props: { day: Day; ctx: TodayScope }) {
 /** A project's name above its rows, so every row says where it belongs. */
 export function ProjectLabel(props: { name: string; own?: boolean; stale?: boolean }) {
 	const words = () =>
-		props.own
-			? `${props.name} · this window`
-			: `${props.name} · read only here${props.stale ? " · earlier read" : ""}`;
+		props.own ? `${props.name} · this window` : `${props.name}${props.stale ? " · earlier read" : ""}`;
 	return <Text class="pt-2 text-xs text-faint">{words()}</Text>;
 }
 
@@ -328,7 +326,7 @@ export function otherMissionsCount(ctx: TodayScope): number {
 	return ctx.others().reduce((n, p) => n + missionsOf(p).length, 0);
 }
 
-/** Other projects' missions: state and one line, read only here. */
+/** Other projects' missions: state and one line. Pressing one opens the mission. */
 export function OtherMissions(props: { ctx: TodayScope }) {
 	return (
 		<Each of={props.ctx.others()} key={(p) => p.id}>
@@ -340,16 +338,28 @@ export function OtherMissions(props: { ctx: TodayScope }) {
 						<Text class="py-1.5 text-sm text-muted-foreground">No active missions.</Text>
 					</If>
 					<Each of={missionsOf(p())} key={(m) => m.id}>
-						{(m) => (
-							<View class="gap-1 border-t border-border py-3">
-								<View class="flex-row items-center gap-2">
-									<Text class="flex-1 text-base text-foreground">{m().title}</Text>
-									<Mark kind={stateMark(m())} />
-									<Text class="text-xs text-muted-foreground">{stateWord(m())}</Text>
+						{(m) => {
+							const id = m().id;
+							// The same place as the window's own row: back on Today, the row takes the focus again.
+							const place = placeRow(`mission-${id}`, () => openMission(id));
+							return (
+								<View class="gap-1 border-t border-border py-3">
+									<RowLink
+										testID={`scope-mission-${id}`}
+										title={m().title}
+										accessibilityLabel={`${m().title} in ${p().name}, ${stateWord(m())}. Open the mission.`}
+										anchor={place.anchor}
+										onPress={place.press}
+									>
+										<View class="flex-row items-center gap-1.5">
+											<Mark kind={stateMark(m())} />
+											<Text class="text-xs text-muted-foreground">{stateWord(m())}</Text>
+										</View>
+									</RowLink>
+									<Text class="text-sm text-muted-foreground">{rowLine(m())}</Text>
 								</View>
-								<Text class="text-sm text-muted-foreground">{rowLine(m())}</Text>
-							</View>
-						)}
+							);
+						}}
 					</Each>
 				</View>
 			)}
@@ -361,7 +371,7 @@ function plansOf(p: ScopeProject): Planning["plans"] {
 	return p.planning?.plans ?? [];
 }
 
-/** Other projects' missions in planning, read only here. Unread planning is not shown as none. */
+/** Other projects' missions in planning. Pressing one opens its planning. Unread planning is not shown as none. */
 export function OtherPlanning(props: { ctx: TodayScope }) {
 	const shown = () => props.ctx.others().filter((p) => plansOf(p).length > 0 || p.errors.planning);
 	return (
@@ -376,15 +386,30 @@ export function OtherPlanning(props: { ctx: TodayScope }) {
 						</View>
 					</If>
 					<Each of={plansOf(p())} key={(row) => row.missionId}>
-						{(row) => (
-							<View class="flex-row items-center gap-2 py-1.5">
-								<Text class="flex-1 text-sm text-foreground">{row().title}</Text>
-								<Mark kind={stageMark(row().stage)} />
-								<Text class={row().needsYou ? "text-xs text-needs-ink" : "text-xs text-muted-foreground"}>
-									{stageWord(row().stage)}
-								</Text>
-							</View>
-						)}
+						{(row) => {
+							const id = row().missionId;
+							const place = placeRow(`plan-${id}`, () => openPlan(id));
+							return (
+								<View class="py-1.5">
+									<RowLink
+										testID={`scope-plan-${id}`}
+										title={row().title}
+										accessibilityLabel={`${row().title} in ${p().name}, ${stageWord(row().stage)}. Open its planning.`}
+										anchor={place.anchor}
+										onPress={place.press}
+									>
+										<View class="flex-row items-center gap-1.5">
+											<Mark kind={stageMark(row().stage)} />
+											<Text
+												class={row().needsYou ? "text-xs text-needs-ink" : "text-xs text-muted-foreground"}
+											>
+												{stageWord(row().stage)}
+											</Text>
+										</View>
+									</RowLink>
+								</View>
+							);
+						}}
 					</Each>
 				</View>
 			)}
@@ -392,7 +417,7 @@ export function OtherPlanning(props: { ctx: TodayScope }) {
 	);
 }
 
-/** Other projects' results since the user looked, read only here. */
+/** Other projects' results since the user looked. */
 export function OtherDone(props: { ctx: TodayScope }) {
 	const shown = () => props.ctx.others().filter((p) => (p.today?.done.length ?? 0) > 0);
 	return (
@@ -426,7 +451,7 @@ export function otherNewShown(ctx: TodayScope): boolean {
 		.some((p) => requestsOf(p).length > 0 || (p.today?.intake.trouble.length ?? 0) > 0 || !!p.errors.intake);
 }
 
-/** Other projects' new requests, read only here: nothing starts, defers or discards from them. */
+/** Other projects' new requests: nothing starts, defers or discards from them here. */
 export function OtherNew(props: { ctx: TodayScope }) {
 	const shown = () =>
 		props.ctx
@@ -505,9 +530,7 @@ export function OtherToCheck(props: { ctx: TodayScope }) {
 								</Text>
 							</If>
 							<If when={rows(p()).length > 0}>
-								<Text class="text-xs text-faint">
-									Read only here. Open this project's window to check its results.
-								</Text>
+								<Text class="text-xs text-faint">Choose this project above to check its results here.</Text>
 							</If>
 						</View>
 					)}

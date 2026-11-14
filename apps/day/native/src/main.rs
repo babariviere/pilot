@@ -1,5 +1,7 @@
 //! The Day executable, not the stock NSH packaged runner.
 fn main() -> std::process::ExitCode {
+    #[cfg(unix)]
+    pilot_day_native::day_log::enable();
     #[cfg(target_os = "macos")]
     if std::env::args_os()
         .nth(1)
@@ -32,9 +34,15 @@ fn main() -> std::process::ExitCode {
     #[cfg(target_os = "macos")]
     match pilot_day_native::bootstrap::run(std::env::args_os().skip(1).collect()) {
         Ok(()) => return std::process::ExitCode::SUCCESS,
-        Err(error) => eprintln!(
-            "Pilot could not open its verified package and explicit native selection: {error}"
-        ),
+        Err(error) => {
+            pilot_day_native::day_log::event(
+                "exit.failed",
+                serde_json::json!({"error": format!("{error:?}")}),
+            );
+            eprintln!(
+                "Pilot could not open its verified package and native selection: {error}. Details: ~/Library/Logs/Pilot/day.log"
+            );
+        }
     }
     #[cfg(not(target_os = "macos"))]
     eprintln!("Pilot's connected native executable requires macOS.");

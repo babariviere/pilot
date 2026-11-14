@@ -285,8 +285,9 @@ a saved draft keeps its explicit project choice.
 
 Legacy project-bound launches may still supply the complete `--project-id` and
 `--project-path` pair, with optional `--planning-model` for their existing mission
-enrollment path. Profile-only dashboards currently show cross-project sections
-read only; project-specific mission enrollment still needs that legacy binding.
+enrollment path. Profile-only dashboards act on one project at a time (chosen in
+Today's filter or by opening one of its missions); project-specific mission
+enrollment still needs that legacy binding.
 Standalone chat creation uses New's explicit project and current access instead.
 No model or project is inferred just to open the dashboard.
 New, final interview submission and

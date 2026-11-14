@@ -19,6 +19,9 @@ pub(super) struct Transport {
     pub source: Source,
     pub controls: AtomicBool,
     pub planning_model: Option<String>,
+    /// A global window's current project. Missions of other projects still
+    /// resolve through their own project, as they do without a focus.
+    pub focused: bool,
 }
 
 impl Transport {
@@ -37,7 +40,22 @@ impl Transport {
             source,
             controls: AtomicBool::new(false),
             planning_model: None,
+            focused: false,
         })
+    }
+
+    /// A global window acting on one project: same client and identity, the
+    /// project's own checks on every read and write.
+    pub(super) fn focus(&self, project: super::Project) -> Self {
+        let mut source = self.source.clone();
+        source.project = Some(project);
+        Self {
+            client: self.client.clone(),
+            source,
+            controls: AtomicBool::new(false),
+            planning_model: self.planning_model.clone(),
+            focused: true,
+        }
     }
 
     /// Resolve only planning through the mission's current project, not Today's filter or New's choice.
@@ -45,7 +63,7 @@ impl Transport {
         &self,
         mission: &str,
     ) -> Result<Option<Self>, Error> {
-        if self.source.project.is_some() {
+        if self.source.project.is_some() && !self.focused {
             return Ok(None);
         }
         if !valid_id(mission) {
@@ -70,6 +88,7 @@ impl Transport {
             source,
             controls: AtomicBool::new(false),
             planning_model: None,
+            focused: false,
             client: reqwest::Client::builder()
                 .no_proxy()
                 .retry(reqwest::retry::never())
@@ -230,8 +249,10 @@ impl Transport {
         if v["dashboard"]["projectId"] != self.source.project()?.project_id {
             return Err(Error::Identity);
         }
-        let overview: DayOverview = serde_json::from_value(v).map_err(|_| Error::Invalid)?;
-        c::check_overview(&overview).map_err(|_| Error::Invalid)?;
+        let overview: DayOverview = serde_json::from_value(v)
+            .map_err(|e| shape_error("overview", &project.project_id, &e))?;
+        c::check_overview(&overview)
+            .map_err(|e| shape_error("overview", &project.project_id, &e))?;
         let mut missions = std::collections::HashSet::new();
         let mut controls = std::collections::HashSet::new();
         if overview
@@ -267,7 +288,7 @@ impl Transport {
         {
             return Err(Error::Identity);
         }
-        serde_json::from_value(v).map_err(|_| Error::Invalid)
+        serde_json::from_value(v).map_err(|e| shape_error("mission", id, &e))
     }
 
     pub async fn planning(&self, id: &str) -> Result<Value, Error> {
@@ -428,6 +449,26 @@ pub(super) fn exact(
         return Err(Error::Unknown);
     }
     Ok(r)
+}
+
+/// Logs why a daemon read did not match this app's contract, for later
+/// diagnosis, then refuses it. Quoted values are dropped: they may be content.
+pub(super) fn shape_error(read: &str, id: &str, error: &dyn std::fmt::Display) -> Error {
+    let mut reason = String::new();
+    let mut quoted = false;
+    for ch in error.to_string().chars() {
+        if ch == '"' {
+            quoted = !quoted;
+            reason.push_str(if quoted { "\"…" } else { "\"" });
+        } else if !quoted {
+            reason.push(ch);
+        }
+    }
+    crate::day_log::event(
+        "read.shape_error",
+        serde_json::json!({"read":read,"id":id,"reason":reason}),
+    );
+    Error::Invalid
 }
 
 pub(super) async fn body(r: reqwest::Response) -> Result<Value, Error> {

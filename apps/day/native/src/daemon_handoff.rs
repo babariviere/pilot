@@ -145,12 +145,24 @@ fn write_new(path: &std::path::Path, value: &Value) -> Result<(), String> {
 /// Runs without creating AppKit or NSH. Machine-readable output has no secrets.
 /// All effects require a fresh explicit apply; inspect never re-enters them.
 pub fn run(args: Vec<OsString>) -> Value {
-    match Request::parse(args).and_then(execute) {
+    let result = Request::parse(args).and_then(|request| {
+        crate::day_log::event(
+            "handoff.requested",
+            json!({"action": request.action, "operation": request.operation, "build": request.build}),
+        );
+        execute(request)
+    });
+    let value = match result {
         Ok(value) => value,
         Err(error) => {
             json!({"state":"unknown","error":error,"recovery":"Inspect the original operation. Do not repeat apply after an entered or lost reply."})
         }
-    }
+    };
+    crate::day_log::event(
+        "handoff.finished",
+        json!({"state": value["state"], "error": value.get("error")}),
+    );
+    value
 }
 fn execute(request: Request) -> Result<Value, String> {
     let trust = helper::compiled_trust().map_err(|error| {
@@ -269,6 +281,7 @@ fn execute(request: Request) -> Result<Value, String> {
         "oldApp":request.old_app,"oldAppIdentity":old_identity});
     // Exclusive creation is the one-shot fence, including across cold restart.
     write_new(&path, &record)?;
+    handoff_stage("entered");
     let receipt = coordination::global_update(
         connection.location(),
         &operation,
@@ -285,9 +298,11 @@ fn execute(request: Request) -> Result<Value, String> {
         return Err("preparation receipt changed".into());
     }
     let uncertainty = bundled_service::dogfood_uncertainty(&fresh).map_err(failure)?;
+    handoff_stage("prepared");
     let stopped =
         bundled_service::stop(&connection, &target, &operation, &cancel)
             .map_err(|error| format!("Existing daemon shutdown was not confirmed: {error}. Keep admission held and inspect this operation"))?;
+    handoff_stage("stopped");
     let completed =
         if record["preflight"]["previousRuntime"] == target.replacement()["runtimeRoot"] {
             stopped.start()
@@ -295,6 +310,7 @@ fn execute(request: Request) -> Result<Value, String> {
             stopped.start_or_rollback()
         }
         .map_err(failure)?;
+    handoff_stage("started");
     record["completion"] = completed.evidence().clone();
     record["uncertainty"] = json!(uncertainty);
     let payload =
@@ -316,9 +332,14 @@ fn execute(request: Request) -> Result<Value, String> {
         return Err("release acknowledgement unknown".into());
     }
     record["state"] = "complete".into();
+    handoff_stage("released");
     record["releaseReceipt"] = receipt;
     write_new(&path.with_extension("complete.json"), &record)?;
     Ok(record)
+}
+
+fn handoff_stage(stage: &str) {
+    crate::day_log::event("handoff.stage", json!({"stage": stage}));
 }
 
 // Reuse the updater's native bundle-user census, not a process-name/pgrep check.

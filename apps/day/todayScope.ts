@@ -2,7 +2,8 @@
 // passive cross-project read behind it (`day.today.scope`). The choice is
 // the window's own, saved with its other screen state. Changing it reads
 // only: it moves no draft, starts or sends nothing and never retargets a
-// chat. Rows of other projects are read only here (`canAct` is false).
+// chat. The native root names the project the window acts on (`own`);
+// other projects' rows carry no actions (`canAct` is false).
 // What Pilot could not read stays unknown, never zero or empty.
 import { type Signal, signal } from "nsh";
 import type { Planning, Today } from "pilot-day/native";
@@ -48,6 +49,8 @@ export type ScopeProject = {
 export type ScopeSnapshot = {
 	scope: string;
 	generation: number;
+	/** The project this window acts on now, as the native root says, or null. */
+	own: string | null;
 	/** Whether the project list itself is complete. */
 	catalogComplete: boolean;
 	/** Whether every selected project's sections were read. */
@@ -162,6 +165,7 @@ export function scopeOf(x: unknown): ScopeSnapshot | null {
 	return {
 		scope: s.scope,
 		generation: s.generation,
+		own: typeof s.own === "string" && s.own !== "" ? s.own : null,
 		catalogComplete: s.catalogComplete,
 		complete: s.complete,
 		projects,
@@ -219,6 +223,10 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 	const view = signal<ScopeView>({ state: "reading", reason: "", snapshot: null });
 	const catalog = signal<{ id: string; name: string }[]>([]);
 	let newest = 0;
+	// What the shown snapshot and catalog hold, without the generation: an
+	// unchanged answer does not set the view again, so nothing redraws.
+	let shown = "";
+	let listed = "";
 	const read = async (scope: string) => {
 		const mine = ++generation;
 		newest = mine;
@@ -231,6 +239,12 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 			const earlier = view().snapshot;
 			// An earlier read of the same scope stays, said to be earlier. Another scope's never shows.
 			const keep = earlier && earlier.scope === scope ? earlier : null;
+			// A read that changed or waited meanwhile keeps the earlier rows quietly: the next read follows.
+			if (keep && (r.refusal === "stale" || r.refusal === "busy")) {
+				if (view().state !== "live" || view().reason !== "")
+					view.set({ state: "live", reason: "", snapshot: keep });
+				return;
+			}
 			view.set({
 				state: keep ? "live" : "unavailable",
 				reason: keep ? `${scopeReason(r.refusal)} What shows is Pilot's last read.` : scopeReason(r.refusal),
@@ -243,8 +257,20 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 			view.set({ state: "unavailable", reason: scopeReason("invalid"), snapshot: null });
 			return;
 		}
-		view.set({ state: "live", reason: "", snapshot });
-		if (snapshot.catalogComplete) catalog.set(snapshot.projects.map((p) => ({ id: p.id, name: p.name })));
+		const key = JSON.stringify({ ...snapshot, generation: 0 });
+		const v = view();
+		if (key !== shown || v.state !== "live" || v.reason !== "") {
+			shown = key;
+			view.set({ state: "live", reason: "", snapshot });
+		}
+		if (snapshot.catalogComplete) {
+			const projects = snapshot.projects.map((p) => ({ id: p.id, name: p.name }));
+			const names = JSON.stringify(projects);
+			if (names !== listed) {
+				listed = names;
+				catalog.set(projects);
+			}
+		}
 	};
 	return { view, catalog, read };
 }

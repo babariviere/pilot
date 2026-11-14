@@ -852,7 +852,8 @@ fn global_dashboard_opens_without_project_setup_and_refreshes_from_events() {
         "Across all your projects. Each section names its project.",
     );
     assert!(app.shows("All projects"));
-    assert!(app.shows("One · read only here"));
+    assert!(app.shows("One"));
+    assert!(!app.shows("One · read only here"));
     app.wait(Duration::from_millis(300)).unwrap();
     let before = root.count("day.today.scope");
     root.replies
@@ -861,7 +862,7 @@ fn global_dashboard_opens_without_project_setup_and_refreshes_from_events() {
         .get_mut("day.today.scope")
         .unwrap()["value"]["snapshot"]["projects"][0]["name"] = json!("Renamed");
     root.changed();
-    wait(&mut app, "Renamed · read only here");
+    wait(&mut app, "Renamed");
     assert!(root.count("day.today.scope") > before);
     for name in [
         "day.plan.create",

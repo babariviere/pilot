@@ -27,6 +27,8 @@ pub mod contract;
 pub mod desk;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
 pub mod daemon_handoff;
+#[cfg(unix)]
+pub mod day_log;
 pub mod feed;
 pub mod fixture;
 mod handoff;

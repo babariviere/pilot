@@ -13,10 +13,12 @@ use crate::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, Mutex, atomic::Ordering};
+
+#[cfg(test)]
+fn selected_transport(t: &Transport, project: &Value) -> Result<Transport, Error> {
+    t.for_project(project)
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -57,23 +59,6 @@ impl Request {
     fn includes(&self, id: &str) -> bool {
         self.scope == "all" || self.scope == id
     }
-}
-
-fn selected_transport(t: &Transport, project: &Value) -> Result<Transport, Error> {
-    let mut source = t.source.clone();
-    source.project = Some(super::Project {
-        project_id: project["projectId"].as_str().ok_or(Error::Invalid)?.into(),
-        project_path: project["projectPath"]
-            .as_str()
-            .ok_or(Error::Invalid)?
-            .into(),
-    });
-    Ok(Transport {
-        client: t.client.clone(),
-        source,
-        controls: AtomicBool::new(false),
-        planning_model: None,
-    })
 }
 
 fn same_project(a: &Source, b: &Source) -> bool {
@@ -337,19 +322,54 @@ async fn read_inner(
     request: &Request,
     gate: &Arc<Mutex<Gate>>,
 ) -> Result<Value, Error> {
-    let epoch = shared.epoch.load(Ordering::SeqCst);
+    // Passive, so not fenced by the event epoch: under a busy stream every
+    // read would be refused and the rows would flicker. The newest generation
+    // still wins, and a later invalidation reads again.
     let check = || {
-        shared.current(epoch)?;
+        shared.open()?;
         request.current(&gate.lock().expect("bridge gate poisoned"))
     };
-    read_projects(
+    let mut value = read_projects(
         t,
         journal,
         request,
         shared.connected.load(Ordering::SeqCst),
         check,
     )
-    .await
+    .await?;
+    // A global window acts on the one project the user chose here. The focus
+    // stays when All projects is chosen again; it never sends anything.
+    if t.source.project.is_none() && request.scope != "all" {
+        let catalog = new_chat::inventory(t).await?;
+        let project = catalog["projects"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|p| p["projectId"] == request.scope))
+            .ok_or(Error::Stale)?;
+        let path = project["projectPath"].as_str().ok_or(Error::Invalid)?;
+        *shared.focus.lock().expect("native focus poisoned") = Some(super::Project {
+            project_id: request.scope.clone(),
+            project_path: path.into(),
+        });
+    }
+    let own = match &t.source.project {
+        Some(p) => Some(p.project_id.clone()),
+        None => shared
+            .focus
+            .lock()
+            .expect("native focus poisoned")
+            .as_ref()
+            .map(|p| p.project_id.clone()),
+    };
+    value["own"] = json!(own);
+    for row in value["projects"].as_array().into_iter().flatten() {
+        if let Some(errors) = row["errors"].as_object().filter(|e| !e.is_empty()) {
+            crate::day_log::event(
+                "scope.project_errors",
+                json!({"project":row["id"],"name":row["name"],"errors":errors}),
+            );
+        }
+    }
+    Ok(value)
 }
 
 async fn read_projects(
@@ -371,7 +391,7 @@ async fn read_projects(
     for project in projects {
         check()?;
         let selected = request.includes(project["projectId"].as_str().ok_or(Error::Invalid)?);
-        let pt = selected_transport(t, project)?;
+        let pt = t.for_project(project)?;
         // Each canonical service performs its existing project/owner/access checks.
         let overview = async {
             pt.gate(false).await?;

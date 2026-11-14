@@ -11,8 +11,10 @@ host in a separately verified distribution. Its
 include explicit native selection and a compatible existing daemon. Build inputs
 are not a connected daily-driver candidate.
 The native launcher selects the profile/service, not a project or model. Today
-defaults to All projects and keeps its header filter per window. Cross-project
-sections are currently read only. New starts with no project; choose one to read
+defaults to All projects and keeps its header filter per window. The window acts
+on one project at a time: the one chosen in that filter, or the project of the
+mission last opened. Other projects' rows open their missions and plans.
+New starts with no project; choose one to read
 its configured model and trusted planning setup. Plan a mission and Start as one
 chat remain separate explicit actions. Saved drafts keep their chosen project.
 Command+K opens a palette over any screen. It goes to Day's places and to the
@@ -21,6 +23,9 @@ Use the [connected candidate recipe](../../docs/technical/day-connected-candidat
 to prepare the real native app without installing or updating it.
 For personal connected use, see [installation preparation](../../docs/technical/day-install.md).
 It reuses the same profile, hands off the daemon and offers explicit legacy retirement.
+Opening `Pilot.app` from Finder reuses the last launcher selection
+(`~/Library/Application Support/Pilot Day/launch.json`) or discovers the profile like GPUI,
+with the journal in that folder. Logs: `~/Library/Logs/Pilot/day.log` (`.1`-`.3`) and `pilotd.log`.
 New Day distributions are named `Pilot.app`, display Pilot, and can install at
 `~/Applications/Pilot.app`. Legacy app paths and all profile/service identities stay unchanged.
 

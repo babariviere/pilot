@@ -6,8 +6,12 @@ use sha2::{Digest, Sha256};
 
 /// A global root keeps all planning uncertainty in its authenticated home.
 pub(super) fn in_scope(source: &Source, root: &Source) -> bool {
+    // A global window sees every project's records; a focused one also keeps
+    // the records it saved while it had no project.
     source == root
-        || (root.project.is_none() && source.profile == root.profile && source.home == root.home)
+        || ((root.project.is_none() || source.project.is_none())
+            && source.profile == root.profile
+            && source.home == root.home)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

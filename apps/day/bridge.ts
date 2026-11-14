@@ -203,15 +203,10 @@ export class ConnectedToday implements DayFeed {
 	/** Reads Today again after an invalidation. Bursts collapse into one more read. */
 	refresh(): Promise<void> {
 		this.#readVersion += 1;
-		// A notice withdraws freshness immediately, even while the serialized
-		// root is still reading. Kept cards/drafts are display, not authority.
-		if (this.#today.freshness?.state === "live" || this.#today.attention?.state === "live") {
-			const age = (read: Today["freshness"]) =>
-				read.state === "live"
-					? { ...read, state: "stale" as const, reason: "Read changed. Refresh before acting." }
-					: read;
-			this.#take({ ...this.#today, freshness: age(this.#today.freshness), attention: age(this.#today.attention) });
-		}
+		// The shown read stays until the next one lands. Marking it stale on
+		// every notice repainted Today on each daemon event (flicker). Rust
+		// says when a read is really stale or failed, and every action is
+		// checked again natively before it is sent.
 		if (this.#reading) {
 			this.#again = true;
 			return this.#reading;
@@ -736,12 +731,10 @@ export class ConnectedPlans implements PlanningFeed {
 	 * collapse into one more read.
 	 */
 	refresh(): Promise<void> {
-		// The notice already invalidated the shown read. Do not leave answer
-		// controls live while cached snapshot calls wait behind a native read.
+		// The open page is read again below; other pages are marked older
+		// there. Not marking the open page first keeps it from flickering.
 		this.#refreshVersion += 1;
 		this.#inventoryVersion += 1;
-		for (const missionId of this.#pages.keys()) this.#older.add(missionId);
-		this.#publish();
 		if (this.#refreshing) {
 			this.#again = true;
 			return this.#refreshing;

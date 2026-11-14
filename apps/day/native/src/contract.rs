@@ -118,7 +118,9 @@ pub struct TrackedItem {
     pub url: Option<String>,
     /// A Linear state name, or a local Slack status.
     pub status: Option<String>,
-    /// Epoch ms.
+    /// Epoch ms. Older Slack rows were saved with a fractional part
+    /// (`ts * 1000`); it is dropped, so they still read.
+    #[serde(default, deserialize_with = "epoch_ms")]
     pub updated_at: Option<u64>,
     pub external_id: Option<String>,
     /// Source-specific fields, such as a Slack channel name or a Linear
@@ -133,6 +135,17 @@ pub struct TrackedItem {
     pub session_ids: Vec<String>,
     #[serde(default)]
     pub mission_ids: Vec<String>,
+}
+
+/// Epoch milliseconds, accepting the fractional values older Slack rows hold.
+fn epoch_ms<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    let Some(value) = Option::<f64>::deserialize(d)? else {
+        return Ok(None);
+    };
+    if !value.is_finite() || value < 0.0 || value > 9_007_199_254_740_991.0 {
+        return Err(serde::de::Error::custom("invalid epoch milliseconds"));
+    }
+    Ok(Some(value.trunc() as u64))
 }
 
 impl TrackedItem {
@@ -653,6 +666,25 @@ mod tests {
         assert_eq!(overview.reports[0].provenance, Provenance::AgentReport);
         assert_eq!(overview.controls[0].state, ControlState::Running);
         assert_eq!(overview.controls[0].revision, 3);
+    }
+
+    #[test]
+    fn legacy_fractional_slack_times_still_read() {
+        // Regression: one real project's overview failed as Invalid on these rows.
+        let legacy_slack = OVERVIEW.replace(
+            "\"tracked\": []",
+            r#""tracked": [{ "source": "slack", "label": "Slack", "status": "ok", "total": 1,
+                "items": [{ "id": "t1", "title": "Ask", "updatedAt": 1794579011204.229 }] }]"#,
+        );
+        let overview = read_overview(&legacy_slack).unwrap();
+        assert_eq!(
+            overview.dashboard.tracked[0].items[0].updated_at,
+            Some(1794579011204)
+        );
+        for bad in ["-1", "1e300", "\"soon\""] {
+            let row = legacy_slack.replace("1794579011204.229", bad);
+            assert!(read_overview(&row).is_err(), "{bad}");
+        }
     }
 
     #[test]

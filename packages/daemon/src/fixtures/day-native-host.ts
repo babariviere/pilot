@@ -316,6 +316,7 @@ for await (const line of createInterface({ input: process.stdin })) {
 		for (const ws of wss.clients) ws.close();
 	}
 	if (cmd.action === "invalidate") invalidate();
+	if (cmd.action === "sessionEvent") for (const ws of wss.clients) ws.send(JSON.stringify({ type: "session" }));
 	if (cmd.action === "pauseGate") pauseGate = () => {};
 	if (cmd.action === "waitPause" && pauses.length === 0)
 		await new Promise<void>((resolve) => {

@@ -117,8 +117,9 @@ app's native driver, not a GPUI updater or another service manager. The existing
 daemon is fenced/paused, known work canceled, handed off and selectively released.
 
 After success, open `Pilot/Launch Day.command` when separately ready to launch.
-Always use that launcher on reopen: it supplies the exact profile/service identity
-and same Day journal. Do not double-click the bare app without native selection.
+It supplies the exact profile/service identity and the installer's Day journal.
+After one launcher start, opening `Pilot.app` from Finder reuses that selection
+(see [Normal launch](#normal-launch)).
 
 Historical selection files may still contain project/model fields. The installer
 keeps those bytes in its exact selection binding for recovery but does not use
@@ -136,6 +137,44 @@ install invokes only native inspection, even after completion, never another
 apply. Rollback completion is not successor success. Unknown or missing evidence
 never authorizes removal. Keep the installation, original app/runtime and state
 records for recovery; do not reset the marker or invent a fresh UUID to retry.
+
+## Normal launch
+
+A Finder launch passes no arguments (or only `-psn_*`). Pilot then selects:
+
+1. `~/Library/Application Support/Pilot Day/launch.json`, if it is a private
+   (0600, owned, not a symlink, at most 4 KiB) file and its `daemonId` and
+   `lineageId` still match the profile's `daemon-id` and `storage-lineage`.
+   Each explicit global launch (such as `Launch Day.command`) rewrites it
+   atomically with `{version, profile, port, daemonId, lineageId, journal}`.
+   It keeps the journal the installer chose. It never holds a token.
+2. Otherwise the same profile as GPUI: `PILOT_HOME`, else
+   `$XDG_DATA_HOME/pilot`, else `~/.local/share/pilot`; port `PILOT_PORT`, else
+   4319; ids from the profile files. The journal is
+   `~/Library/Application Support/Pilot Day/window-journal` (directory 0700).
+
+Signature, identity and credential checks are the same for every launch kind.
+Explicit arguments keep their existing behavior.
+
+## Logs
+
+Pilot Day writes JSON lines to `~/Library/Logs/Pilot/day.log` and rotates at
+1 MiB to `day.log.1` to `day.log.3`. Only the app executable writes it; tests
+do not. Files are private (0600). Events:
+
+- `startup`, `launch.selected`, `launch.refused`, `launch.saved`, `exit.failed`:
+  version, build, launch kind, profile, port, journal, selection source, failed stage.
+- `host.open`, `connection.open` (daemon version, protocol), `connection.lost`:
+  the daemon connection. Pilot reconnects with a 1 to 30 second backoff.
+- `focus.changed`: the project a global window acts on.
+- `refresh.failed`, `read.failed`: why a read after a daemon event failed.
+- `read.shape_error`, `scope.project_errors`: a daemon reply this app could not
+  read, by read, ID and serde reason (quoted values dropped). Legacy data
+  problems show up here.
+- daemon handoff stages.
+
+Lines hold no message contents or tokens, and secret-looking values are masked.
+The daemon's own log is `~/Library/Logs/Pilot/pilotd.log`.
 
 ## Recovery from a pre-global-update daemon
 

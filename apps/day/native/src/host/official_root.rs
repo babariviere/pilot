@@ -53,7 +53,7 @@ impl OfficialRoot {
                 "The official update or rollback inputs could not be verified. Nothing was changed. Supply matching signed distributions before trying again."
             }
             (None, None, None) => {
-                "The signed official update and rollback distributions are not selected. Nothing was changed."
+                "Automatic updates are not set up for this install. Install new versions with the Pilot installer."
             }
             (Some(_), None, None) => {
                 "The signed official update and rollback inputs are not checked yet. Check verifies them. Nothing was changed."
@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn missing_and_failed_inputs_are_not_process_or_signature_evidence() {
         let root = OfficialRoot::default();
-        assert!(root.blocked().contains("not selected"));
+        assert!(root.blocked().contains("not set up"));
         let failed = OfficialRoot {
             inputs: None,
             target: None,
@@ -136,7 +136,7 @@ mod tests {
             OfficialRoot::default()
                 .checked(trust())
                 .blocked()
-                .contains("not selected")
+                .contains("not set up")
         );
         #[cfg(all(target_os = "macos", feature = "macos-host"))]
         {

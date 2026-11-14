@@ -22,12 +22,12 @@ function sent(app: { texts(): string[] }): string {
 test("Today starts on All projects: other projects' rows name their project, and an unread one stays unknown", async () => {
 	const app = await ready();
 	await app.waitFor("pilot · this window");
-	expect(app.shows("website · read only here")).toBe(true);
+	expect(app.shows("text:website")).toBe(true);
 	expect(app.shows("id:scope-needs-demo-website")).toBe(true);
 	expect(app.shows("Across your projects. Pilot could not read billing.")).toBe(true);
 	expect(app.shows("text:billing: Pilot could not reach billing's coordinator.")).toBe(true);
 	expect(app.shows("Landing page copy")).toBe(true);
-	expect(app.shows("Read only here. Open this project's window to check its results.")).toBe(true);
+	expect(app.shows("Choose this project above to check its results here.")).toBe(true);
 	expect(sent(app)).toContain("Sent: 0");
 });
 
@@ -40,7 +40,7 @@ test("one project shows only its rows, and counts what needs you elsewhere witho
 	expect(app.shows("Pilot could not count what needs you in other projects.")).toBe(true);
 	await app.press("Billing readable");
 	await choose(app, "website");
-	await app.waitFor("Showing website, read only here. Act on it from its own window.");
+	await app.waitFor("Showing website.");
 	expect(app.shows("pilot · this window")).toBe(false);
 	await app.press("id:scope-all");
 	await app.waitFor("pilot · this window");
@@ -65,7 +65,7 @@ test("an older read answering late never replaces the newer scope", async () => 
 	await app.press("Release newer read");
 	await app.press("Release older read");
 	await app.waitFor("Showing pilot.");
-	expect(app.shows("Showing website, read only here. Act on it from its own window.")).toBe(false);
+	expect(app.shows("Showing website.")).toBe(false);
 });
 
 test("the window keeps its scope across save and reopen, and sends nothing", async () => {
@@ -84,10 +84,56 @@ test("a profile-only window filters every project's rows without selecting work"
 	expect(app.shows("pilot · this window")).toBe(false);
 	expect(app.shows("id:scope-needs-demo-website")).toBe(true);
 	await choose(app, "website");
-	await app.waitFor("Showing website. Project actions are not connected in this dashboard yet.");
+	await app.waitFor("Showing website.");
 	expect(app.shows("id:scope-needs-demo-pilot")).toBe(false);
 	expect(app.shows("Pilot could not count what needs you in other projects.")).toBe(true);
 	await app.press("Save and reopen");
-	await app.waitFor("Showing website. Project actions are not connected in this dashboard yet.");
+	await app.waitFor("Showing website.");
 	expect(sent(app)).toContain("Sent: 0");
+});
+
+test("the project the root names as the window's own shows as its own sections", async () => {
+	const app = await ready();
+	await app.waitFor("pilot · this window");
+	await app.press("Focus website");
+	await app.waitFor("website · this window");
+	expect(app.shows("id:scope-needs-demo-website")).toBe(false);
+	expect(app.shows("id:scope-needs-demo-pilot")).toBe(true);
+	expect(app.shows("pilot · this window")).toBe(false);
+	expect(sent(app)).toContain("Sent: 0");
+});
+
+test("pressing another project's mission opens it, and sends nothing", async () => {
+	const app = await ready();
+	await app.waitFor("id:scope-missions-demo-website");
+	expect(app.shows("Latest report")).toBe(false);
+	await app.press("label:Faster search in website, Moving. Open the mission.");
+	await app.waitFor("Latest report");
+	expect(app.shows("id:scope-missions-demo-website")).toBe(false);
+	expect(sent(app)).toContain("Sent: 0");
+});
+
+test("an unchanged scope read does not change the view", async () => {
+	const app = await ready();
+	await app.waitFor("pilot · this window");
+	const before = app.texts().find((t) => t.startsWith("Scope views:"));
+	const reads = sent(app);
+	await app.press("Read scope again");
+	await app.waitFor(`text:${reads.replace(/Reads: (\d+)/, (_, n) => `Reads: ${Number(n) + 1}`)}`);
+	expect(app.texts().find((t) => t.startsWith("Scope views:"))).toBe(before);
+	// A changed read does change it.
+	await app.press("Focus website");
+	await app.waitFor("website · this window");
+	expect(app.texts().find((t) => t.startsWith("Scope views:"))).not.toBe(before);
+});
+
+test("a read refused because things changed keeps the earlier rows without a message", async () => {
+	const app = await ready();
+	await app.waitFor("id:scope-needs-demo-website");
+	await app.press("Changed meanwhile");
+	await app.press("Read scope again");
+	expect(app.shows("id:scope-needs-demo-website")).toBe(true);
+	expect(app.shows("Landing page copy")).toBe(true);
+	expect(app.shows("id:scope-read")).toBe(false);
+	expect(app.texts().some((t) => t.includes("Pilot's last read"))).toBe(false);
 });

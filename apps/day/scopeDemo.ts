@@ -16,6 +16,10 @@ export type ScopeScript = {
 	hold: boolean;
 	/** Whether billing can be read. */
 	billingReadable: boolean;
+	/** The project the window acts on, as the native root names it. Undefined sends no `own`. */
+	own?: string | null;
+	/** Refuse every read with this, as a busy or changing root does. */
+	refusal?: Refusal;
 };
 
 /** The demo projects. The first is the window's own (see chatDemo.ts). */
@@ -55,6 +59,7 @@ export class ScriptedScope implements ScopeSource {
 		this.reads.set(this.reads() + 1);
 		if (this.script.hold) await new Promise<void>((resolve) => this.#held.push(resolve));
 		if (this.script.unavailable) return { ok: false as const, refusal: "unavailable" as Refusal };
+		if (this.script.refusal) return { ok: false as const, refusal: this.script.refusal };
 		if (scope !== "all" && !SCOPE_PROJECTS.some((p) => p.id === scope))
 			return { ok: false as const, refusal: "invalid" as Refusal };
 		const needs = (t: Today) => t.decisions.length + t.actions.length;
@@ -114,6 +119,7 @@ export class ScriptedScope implements ScopeSource {
 				version: 1,
 				scope,
 				generation,
+				own: this.script.own,
 				catalogComplete: true,
 				complete: rows.every((r) => !r.selected || r.currentness === "live"),
 				projects: rows,

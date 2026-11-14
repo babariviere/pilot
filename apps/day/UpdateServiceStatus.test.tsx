@@ -7,7 +7,7 @@ test("running service remains visible without official update packages", async (
 	expect(app.shows("Pilot cannot tell whether its service is registered")).toBe(false);
 	expect(app.shows("Pilot is up to date.")).toBe(false);
 	expect(
-		app.shows("The signed official update and rollback distributions are not selected. Nothing was changed."),
+		app.shows("Automatic updates are not set up for this install. Install new versions with the Pilot installer."),
 	).toBe(true);
 	expect(app.shows("id:update-prepare")).toBe(false);
 	expect(app.shows("id:update-force-prepare")).toBe(false);

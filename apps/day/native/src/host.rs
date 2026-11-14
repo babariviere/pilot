@@ -138,6 +138,9 @@ struct Shared {
     detail: Mutex<Option<String>>,
     planning: Mutex<std::collections::BTreeMap<String, (u64, serde_json::Value)>>,
     planning_mission: Mutex<Option<String>>,
+    /// A global window's current project: chosen in Today's header or by
+    /// opening one of its missions. Never set for a project-bound window.
+    focus: Mutex<Option<Project>>,
     planning_inventory: Mutex<Option<(u64, serde_json::Value, Option<Error>)>>,
     planning_inventory_wanted: AtomicBool,
     planning_operations: Mutex<std::collections::BTreeMap<String, serde_json::Value>>,
@@ -427,6 +430,7 @@ impl NativeHost {
             detail: Mutex::new(None),
             planning: Mutex::new(std::collections::BTreeMap::new()),
             planning_mission: Mutex::new(None),
+            focus: Mutex::new(None),
             planning_inventory: Mutex::new(None),
             planning_inventory_wanted: AtomicBool::new(false),
             planning_operations: Mutex::new(std::collections::BTreeMap::new()),
@@ -846,7 +850,125 @@ async fn qualify_planning(
     Ok(())
 }
 
+/// The mission a request opens, if any. Only reading a mission moves focus.
+fn opened_mission(work: &Work) -> Option<String> {
+    match work {
+        Work::Detail(id) => Some(id.clone()),
+        Work::Bridge(call) => match &call.command {
+            crate::bridge::Command::Mission(id) => Some(id.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Moves a global window to its newly focused project. The previous project's
+/// projections are dropped (its saved records stay in the journal) and this
+/// project's saved records are shown again. Nothing is sent. Returns whether
+/// the focus changed.
+fn sync_focus(
+    root: &Transport,
+    focused: &mut Option<Transport>,
+    journal: &Journal,
+    shared: &Shared,
+) -> Result<bool, Error> {
+    let want = shared.focus.lock().expect("native focus poisoned").clone();
+    let Some(project) = want else {
+        return Ok(false);
+    };
+    if root.source.project.is_some()
+        || focused
+            .as_ref()
+            .is_some_and(|t| t.source.project.as_ref() == Some(&project))
+    {
+        return Ok(false);
+    }
+    crate::day_log::event(
+        "focus.changed",
+        serde_json::json!({"project":project.project_id}),
+    );
+    let t = root.focus(project);
+    shared.epoch.fetch_add(1, Ordering::SeqCst);
+    *shared.attention.lock().expect("attention read poisoned") = None;
+    shared
+        .attention_operations
+        .lock()
+        .expect("attention operations poisoned")
+        .clear();
+    shared
+        .attention_drafts
+        .lock()
+        .expect("attention drafts poisoned")
+        .clear();
+    *shared.changes.lock().expect("native Changes poisoned") = changes::State::default();
+    *shared
+        .planning_inventory
+        .lock()
+        .expect("planning inventory poisoned") = None;
+    *shared.detail.lock().expect("native detail poisoned") = None;
+    *shared.desk.lock().expect("native Desk poisoned") = Desk::native();
+    restore_project(journal, shared, &t.source)?;
+    *focused = Some(t);
+    Ok(true)
+}
+
+/// Shows one project's saved records: attention, drafts, Changes, the cached
+/// read and control history. Restores uncertainty, never executes it.
+fn restore_project(journal: &Journal, shared: &Shared, source: &Source) -> Result<(), Error> {
+    for record in journal.attention.values().filter(|r| r.source == *source) {
+        attention::publish(shared, record);
+    }
+    for draft in journal
+        .attention_drafts
+        .values()
+        .filter(|r| r.source == *source)
+    {
+        shared
+            .attention_drafts
+            .lock()
+            .expect("attention drafts poisoned")
+            .insert(
+                serde_json::to_string(&draft.key).map_err(|_| Error::Storage)?,
+                draft.value.clone(),
+            );
+    }
+    changes::restore(journal, source, shared);
+    if let Some(cache) = journal.cached(source) {
+        shared.change(|desk| {
+            desk.native_read(cache.overview, cache.details);
+            desk.lose_read(
+                FreshnessState::Cached,
+                "Saved read. Not checked with the daemon yet.",
+            );
+        });
+    }
+    // Even a crash before POST is lookup-only.
+    let mut history: Vec<_> = journal
+        .records
+        .values()
+        .filter(|r| r.source == *source && !r.not_sent)
+        .collect();
+    history.sort_by_key(|r| r.command.expected_revision);
+    for r in history {
+        shared.change(|desk| {
+            if let Some(receipt) = &r.receipt {
+                desk.native_receipt(receipt.clone());
+            } else {
+                desk.native_pending(&r.mission, &r.command, Delivery::Unknown);
+            }
+        });
+    }
+    shared.change(|_| ());
+    Ok(())
+}
+
 fn fail(shared: &Shared, error: Error) {
+    if error != Error::Stale {
+        crate::day_log::event(
+            "read.failed",
+            serde_json::json!({"error":error.to_string()}),
+        );
+    }
     // Failed authoritative reads age all projections, not just missions.
     // A notice race has already advanced this fence.
     if error != Error::Stale {
@@ -884,13 +1006,19 @@ fn fail(shared: &Shared, error: Error) {
 }
 
 async fn run(
-    t: Transport,
+    root: Transport,
     mut journal: Journal,
     shared: Arc<Shared>,
     requests: Receiver<Request>,
     day: Option<ritual::DaySource>,
     selection: Option<updates::Selection>,
 ) -> Result<(), Error> {
+    let t = &root;
+    crate::day_log::event(
+        "host.open",
+        serde_json::json!({"profile":t.source.profile,"port":t.source.port,
+            "project":t.source.project.as_ref().map(|p| &p.project_id),"version":env!("CARGO_PKG_VERSION")}),
+    );
     let mut updates = updates::State::new(selection);
     *shared
         .saved_window
@@ -916,24 +1044,7 @@ async fn run(
         .startup_ready
         .store(updates.startup_ready(), Ordering::SeqCst);
     *shared.updates.lock().expect("native updates poisoned") = updates.snapshot();
-    for record in journal.attention.values().filter(|r| r.source == t.source) {
-        attention::publish(&shared, record);
-    }
-    for draft in journal
-        .attention_drafts
-        .values()
-        .filter(|r| r.source == t.source)
-    {
-        shared
-            .attention_drafts
-            .lock()
-            .expect("attention drafts poisoned")
-            .insert(
-                serde_json::to_string(&draft.key).map_err(|_| Error::Storage)?,
-                draft.value.clone(),
-            );
-    }
-    changes::restore(&journal, &t.source, &shared);
+    restore_project(&journal, &shared, &t.source)?;
     for record in journal
         .planning
         .values()
@@ -941,34 +1052,12 @@ async fn run(
     {
         publish_planning(&shared, record);
     }
-    if let Some(cache) = journal.cached(&t.source) {
-        shared.change(|desk| {
-            desk.native_read(cache.overview, cache.details);
-            desk.lose_read(
-                FreshnessState::Cached,
-                "Saved read. Not checked with the daemon yet.",
-            );
-        });
-    }
-    // Restore uncertainty, never execute it. Even a crash before POST is lookup-only.
-    let mut history: Vec<_> = journal
-        .records
-        .values()
-        .filter(|r| r.source == t.source && !r.not_sent)
-        .collect();
-    history.sort_by_key(|r| r.command.expected_revision);
-    for r in history {
-        shared.change(|desk| {
-            if let Some(receipt) = &r.receipt {
-                desk.native_receipt(receipt.clone());
-            } else {
-                desk.native_pending(&r.mission, &r.command, Delivery::Unknown);
-            }
-        });
-    }
     let (invalidated, events) = async_channel::bounded(1);
     let ws = tokio::spawn(watch(t.source.clone(), shared.clone(), invalidated));
     let mut events_open = true;
+    // A global window's focused project. Its transport carries that project's
+    // checks; the root keeps the window, update, ritual and scope reads.
+    let mut focused: Option<Transport> = None;
     // Local clock refresh only. No daemon GET, visit, mark or automatic ritual.
     // An overdue tick runs after wake; missed ticks never build up a queue.
     let mut clock = tokio::time::interval(Duration::from_secs(30));
@@ -978,6 +1067,15 @@ async fn run(
             biased;
             request = requests.recv() => {
                 let Ok(request) = request else { break; };
+                // Opening a mission in a global window acts in its project.
+                if root.source.project.is_none()
+                    && let Some(mission) = opened_mission(&request.work)
+                    && let Ok(Some(pt)) = root.mission_planning_transport(&mission).await
+                {
+                    *shared.focus.lock().expect("native focus poisoned") = pt.source.project.clone();
+                }
+                sync_focus(&root, &mut focused, &journal, &shared)?;
+                let t = focused.as_ref().unwrap_or(&root);
                 let preparing = matches!(&request.work, Work::PreparePlanning);
                 let inventory = matches!(&request.work, Work::PlanningInventory);
                 let local_ritual = matches!(&request.work, Work::Ritual(_) | Work::RitualResults);
@@ -988,10 +1086,10 @@ async fn run(
                 let result = match request.work {
                     Work::Bridge(call) => {
                         // JSON failures are isolated from unrelated Today/control reads.
-                        bridge::handle(&t, &mut journal, &shared, &mut updates, day.as_ref(), request.epoch, call).await;
+                        bridge::handle(&root, t, &mut journal, &shared, &mut updates, day.as_ref(), request.epoch, call).await;
                         Ok(shared.outcome(OutcomeStatus::Accepted, ""))
                     }
-                    Work::Ritual(work) => ritual::handle(&t.source, day.as_ref(), &mut journal, &shared, work),
+                    Work::Ritual(work) => ritual::handle(&root.source, day.as_ref(), &mut journal, &shared, work),
                     Work::UpdateCommit { id, proof, window, gate } => {
                         let valid = {
                             let g = gate.lock().expect("bridge gate poisoned");
@@ -999,12 +1097,13 @@ async fn run(
                             !g.closed && g.sealed && g.forms_saved && g.native_captured
                                 && g.generation == generation && g.save_sequence == sequence
                         };
-                        if valid { updates::handle(&t, &mut journal, &shared, &mut updates, updates::Command::Commit(id, proof, window, gate)).await }
+                        if valid { updates::handle(&root, &mut journal, &shared, &mut updates, updates::Command::Commit(id, proof, window, gate)).await }
                         else { Err(Error::Stale) }
                     }
-                    Work::UpdateStartup => updates::handle(&t, &mut journal, &shared, &mut updates, updates::Command::Startup).await,
-                    Work::RitualResults => ritual::read_results(&t, day.as_ref(), &mut journal, &shared, request.epoch).await,
-                    work => handle(&t, &mut journal, &shared, request.epoch, work).await,
+                    Work::UpdateStartup => updates::handle(&root, &mut journal, &shared, &mut updates, updates::Command::Startup).await,
+                    Work::RitualResults => ritual::read_results(&root, day.as_ref(), &mut journal, &shared, request.epoch).await,
+                    Work::AcceptUpdateLoss(record) => handle(&root, &mut journal, &shared, request.epoch, Work::AcceptUpdateLoss(record)).await,
+                    work => handle(t, &mut journal, &shared, request.epoch, work).await,
                 };
                 if local_ritual || (preparing && matches!(result, Err(Error::Unavailable))) {
                     // Unsupported New configuration must not disable existing Today reads.
@@ -1024,6 +1123,13 @@ async fn run(
                 };
                 if changed { shared.change(|_| ()); }
                 let _ = request.reply.try_send(result);
+                // A scope read may have chosen another project: show it now.
+                if sync_focus(&root, &mut focused, &journal, &shared)?
+                    && let Some(t) = &focused
+                {
+                    let epoch = shared.epoch.load(Ordering::SeqCst);
+                    if let Err(e) = refresh(t, &journal, &shared, epoch, None).await { fail(&shared, e); }
+                }
                 // The update projection is a passive snapshot. This does not
                 // trigger another service read on a change notification.
             }
@@ -1031,11 +1137,15 @@ async fn run(
                 if event.is_err() { events_open = false; continue; }
                 if shared.closed.load(Ordering::SeqCst) { break; }
                 let epoch = shared.epoch.load(Ordering::SeqCst);
-                if shared.connected.load(Ordering::SeqCst) && let Err(e) = refresh(&t, &journal, &shared, epoch, None).await { fail(&shared, e); }
+                let t = focused.as_ref().unwrap_or(&root);
+                if shared.connected.load(Ordering::SeqCst) && let Err(e) = refresh(t, &journal, &shared, epoch, None).await {
+                    crate::day_log::event("refresh.failed", serde_json::json!({"trigger":"daemon-event","error":e.to_string()}));
+                    fail(&shared, e);
+                }
             }
             _ = clock.tick(), if day.is_some() => {
                 if shared.closed.load(Ordering::SeqCst) { break; }
-                ritual::refresh_clock(&t.source, day.as_ref().expect("clock is bound"), &mut journal, &shared);
+                ritual::refresh_clock(&root.source, day.as_ref().expect("clock is bound"), &mut journal, &shared);
             }
         }
     }
@@ -1535,64 +1645,96 @@ async fn qualify(
 }
 
 async fn watch(source: Source, shared: Arc<Shared>, invalidated: Sender<()>) {
+    // Reconnects with backoff while the window is open, so a daemon restart
+    // (an update, a crash, launchd) does not leave the window offline. Only
+    // the first loss is shown; retries do not repaint the window.
+    let mut delay = Duration::from_secs(1);
+    let mut shown_offline = false;
+    loop {
+        let result = watch_once(&source, &shared, &invalidated).await;
+        let was = shared.connected.swap(false, Ordering::SeqCst);
+        if shared.closed.load(Ordering::SeqCst) {
+            return;
+        }
+        if was || !shown_offline {
+            crate::day_log::event(
+                "connection.lost",
+                serde_json::json!({"wasConnected":was,"error":result.err().map(|e| e.to_string())}),
+            );
+            shared.invalidate(FreshnessState::Offline);
+            if let Err(e) = result {
+                fail(&shared, e);
+            }
+            let _ = invalidated.try_send(());
+            shown_offline = true;
+        }
+        if was {
+            delay = Duration::from_secs(1);
+        }
+        tokio::time::sleep(delay).await;
+        delay = (delay * 2).min(Duration::from_secs(30));
+        if shared.closed.load(Ordering::SeqCst) {
+            return;
+        }
+    }
+}
+
+async fn watch_once(
+    source: &Source,
+    shared: &Arc<Shared>,
+    invalidated: &Sender<()>,
+) -> Result<(), Error> {
     // No mutation frames, session subscriptions, focus or worker admission.
-    let result = async {
-        let t = Transport::new(source)?;
-        t.profile_gate().await?;
-        let stream = tokio::time::timeout(
-            Duration::from_secs(5),
-            tokio::net::TcpStream::connect(("127.0.0.1", t.source.port)),
-        )
-        .await
-        .map_err(|_| Error::Offline)?
-        .map_err(|_| Error::Offline)?;
-        let url = format!("ws://127.0.0.1:{}/api/ws", t.source.port);
-        let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
-            .max_message_size(Some(transport::MAX_BODY))
-            .max_frame_size(Some(transport::MAX_BODY));
-        let (mut ws, _) = tokio::time::timeout(
-            Duration::from_secs(5),
-            tokio_tungstenite::client_async_with_config(url, stream, Some(config)),
-        )
-        .await
-        .map_err(|_| Error::Offline)?
-        .map_err(|_| Error::Offline)?;
-        t.profile_gate().await?;
-        shared.connected.store(true, Ordering::SeqCst);
-        shared.invalidate(FreshnessState::Stale);
-        let _ = invalidated.try_send(());
-        while let Some(frame) = ws.next().await {
-            let frame = frame.map_err(|_| Error::Offline)?;
-            if let tokio_tungstenite::tungstenite::Message::Text(body) = frame {
-                let v: serde_json::Value =
-                    serde_json::from_str(&body).map_err(|_| Error::Invalid)?;
-                if matches!(
-                    v["type"].as_str(),
-                    Some(
-                        "mission-catalog.changed"
-                            | "missions"
-                            | "mission"
-                            | "projects"
-                            | "session"
-                            | "sessions"
-                            | "dashboard"
-                    )
-                ) {
-                    shared.invalidate(FreshnessState::Stale);
+    let t = Transport::new(source.clone())?;
+    t.profile_gate().await?;
+    let stream = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::net::TcpStream::connect(("127.0.0.1", t.source.port)),
+    )
+    .await
+    .map_err(|_| Error::Offline)?
+    .map_err(|_| Error::Offline)?;
+    let url = format!("ws://127.0.0.1:{}/api/ws", t.source.port);
+    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(transport::MAX_BODY))
+        .max_frame_size(Some(transport::MAX_BODY));
+    let (mut ws, _) = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio_tungstenite::client_async_with_config(url, stream, Some(config)),
+    )
+    .await
+    .map_err(|_| Error::Offline)?
+    .map_err(|_| Error::Offline)?;
+    let hello = t.profile_hello().await?;
+    crate::day_log::event(
+        "connection.open",
+        serde_json::json!({"port":t.source.port,"daemonVersion":hello["daemonVersion"],
+            "protocol":hello["protocolVersion"]}),
+    );
+    shared.connected.store(true, Ordering::SeqCst);
+    shared.invalidate(FreshnessState::Stale);
+    let _ = invalidated.try_send(());
+    while let Some(frame) = ws.next().await {
+        let frame = frame.map_err(|_| Error::Offline)?;
+        if let tokio_tungstenite::tungstenite::Message::Text(body) = frame {
+            let v: serde_json::Value = serde_json::from_str(&body).map_err(|_| Error::Invalid)?;
+            match v["type"].as_str() {
+                // Structural changes fence actions bound to the shown read.
+                Some("mission-catalog.changed" | "missions" | "mission" | "projects") => {
+                    shared.epoch.fetch_add(1, Ordering::SeqCst);
                     let _ = invalidated.try_send(());
                 }
-            } else if frame.is_close() {
-                break;
+                // Frequent while agents work. Read again without marking the
+                // shown read stale first: that repainted the window each time.
+                // The channel holds one wakeup, so bursts cost one read.
+                Some("session" | "sessions" | "dashboard") => {
+                    let _ = invalidated.try_send(());
+                }
+                _ => {}
             }
+        } else if frame.is_close() {
+            break;
         }
-        Ok::<_, Error>(())
     }
-    .await;
-    shared.connected.store(false, Ordering::SeqCst);
-    shared.invalidate(FreshnessState::Offline);
-    if let Err(e) = result {
-        fail(&shared, e);
-    }
-    let _ = invalidated.try_send(());
-    // No polling/reconnect loop. Native owner explicitly refreshes/reopens selection.
+    Ok(())
 }
