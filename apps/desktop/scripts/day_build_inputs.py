@@ -224,7 +224,7 @@ def compiled_capabilities(names):
     # are denials, not additional authority. Unknown keys still fail equality.
     return dict(host=names, network=dict(hosts=[], http=[]),
                 process=dict(execute=[], exit=False, env=[]), fs=dict(read=[], write=[]),
-                statusBar=False, clipboard=False, picker=False, openUrl=False)
+                statusBar=False, clipboard=True, picker=True, openUrl=False)
 
 
 def resource_closure(built, output, names):
@@ -278,7 +278,7 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     config = production or dict(schema=1, mode="unconfigured")
     names = host_methods(day)
     original_config = bundle.read_json(day / "nsh.json")
-    connected = dict(original_config, id=bundle.APP_ID, capabilities=dict(host=names))
+    connected = dict(original_config, id=bundle.APP_ID, capabilities=dict(host=names, clipboard=True, picker=True))
     bundle.write_json(day / "nsh.json", connected)
     manifests = [("pilot-desktop", day / "native/Cargo.toml", "macos-host")]
     locked = {day / "native/Cargo.lock": bundle.digest(day / "native/Cargo.lock")}

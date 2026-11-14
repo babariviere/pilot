@@ -243,7 +243,8 @@ async fn run(
     }
     if matches!(
         call.command,
-        Command::FeedbackRead(_)
+        Command::FeedbackImage(_)
+            | Command::FeedbackRead(_)
             | Command::FeedbackSend(_)
             | Command::FeedbackCheck(_)
             | Command::FeedbackStep(_)
@@ -400,7 +401,8 @@ async fn run(
         | Command::PreferencesHistory(_) => {
             unreachable!("handled preferences command")
         }
-        Command::FeedbackRead(_)
+        Command::FeedbackImage(_)
+        | Command::FeedbackRead(_)
         | Command::FeedbackSend(_)
         | Command::FeedbackCheck(_)
         | Command::FeedbackStep(_) => unreachable!("handled feedback command"),

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import type { DurableOperation, SessionSummary, UserFeedbackPage } from "@pilot/protocol";
+import { createAskTools } from "../../kernel/src/ask-tools.ts";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
 import { payloadHash } from "./operation-journal.ts";
 
@@ -41,14 +43,36 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 			bindingGeneration: 1,
 		} as DurableOperation;
 	};
-	const feedback = async (text: string) => {
-		const op = operation("user-feedback", randomUUID(), { purpose: "user-feedback", text, origin: null });
+	const feedback = async (text: string, attachments?: import("@pilot/protocol").StagedAttachmentRef[]) => {
+		const op = operation("user-feedback", randomUUID(), {
+			purpose: "user-feedback",
+			text,
+			origin: null,
+			...(attachments ? { attachments } : {}),
+		});
 		const r = await post(op);
 		assert.equal(r.state, "accepted", JSON.stringify(r));
 		return op.targetId;
 	};
 	const older = await feedback("Plan page hides who works");
-	const id = await feedback("The plan page does not say who is working on a task");
+	const png = Buffer.from(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==",
+		"base64",
+	);
+	const image = { uploadId: randomUUID(), sha256: createHash("sha256").update(png).digest("hex"), bytes: png.length };
+	const uploaded = await fetch(`${f.root}/api/attachments/${image.uploadId}`, {
+		method: "PUT",
+		headers: {
+			...headers,
+			"x-pilot-attachment": Buffer.from(
+				JSON.stringify({ ...image, origin: { ...f.host, hostId: "local" } }),
+			).toString("base64"),
+		},
+		body: png,
+	});
+	assert.equal(uploaded.status, 201);
+	await uploaded.arrayBuffer();
+	const id = await feedback("The plan page does not say who is working on a task", [image]);
 	const choice = async (mode: "ask" | "build") => {
 		const { mode: _mode, ...c } = await get(`/api/projects/${f.project.id}/chat-profile?mode=${mode}`);
 		return c as Record<string, string>;
@@ -82,6 +106,17 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	});
 	const meta = JSON.parse(await readFile(join(f.home, "sessions", triage.targetId, "meta.json"), "utf8"));
 	assert.equal(meta.mode, "ask");
+	const imagePath = join(f.home, "attachments", `${image.uploadId}.png`);
+	assert.deepEqual(meta.ask.feedbackImages, [imagePath]);
+	assert.deepEqual(await readFile(imagePath), png);
+	const reader = (await createAskTools(meta.ask)).find((tool) => tool.name === "read")!;
+	const viewed = await reader.execute("feedback-image", { path: imagePath }, undefined, undefined, {
+		cwd: meta.cwd,
+	} as ExtensionToolContext);
+	assert(
+		viewed.content.some((block) => block.type === "image"),
+		"the triage's actual read tool renders its screenshot",
+	);
 	assert.equal(meta.projectId, f.project.id);
 	assert.match(meta.title, /^Triage: The plan page/);
 	const message = meta.pending[0].content as string;

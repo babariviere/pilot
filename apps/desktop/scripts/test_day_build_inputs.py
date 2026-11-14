@@ -280,7 +280,9 @@ class RecipeTests(unittest.TestCase):
         original = bundle.read_json(built / "capabilities.json")
         self.assertEqual(original["fs"], {"read":[], "write":[]})
         self.assertEqual(original["network"], {"hosts":[], "http":[]})
-        for changes in ({"clipboard":True}, {"extra":False}, {"process":{"execute":["sh"], "env":[], "exit":False}},
+        self.assertTrue(original["clipboard"])
+        self.assertTrue(original["picker"])
+        for changes in ({"clipboard":False}, {"picker":False}, {"openUrl":True}, {"extra":False}, {"process":{"execute":["sh"], "env":[], "exit":False}},
                         {"fs":{"read":["/"], "write":[]}}):
             bundle.write_json(built / "capabilities.json", original | changes)
             with self.assertRaisesRegex(ValueError, "capabilities"):

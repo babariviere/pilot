@@ -17,12 +17,23 @@ export const feedbackOpen = signal(false);
 export const feedbackLater = signal<string[]>([]);
 
 /** Unsent feedback, exactly as typed, and the origin the user kept. */
-export type FeedbackDraft = { text: string; origin: UserFeedbackOriginRef | null };
+export type FeedbackDraft = {
+	text: string;
+	origin: UserFeedbackOriginRef | null;
+	attachments?: import("./feedbackFeed").UserFeedback["attachments"];
+};
 
 const EMPTY: FeedbackDraft = { text: "", origin: null };
 
 /** The window's unsent feedback. Kept across pages, close and update. */
 export const feedbackDraft = signal<FeedbackDraft>(EMPTY);
+
+/** Unfinished image imports block close rather than silently losing their bytes. */
+export const feedbackImageBusy = signal(false);
+export const feedbackPendingImage = signal<{ data: string; uploadId: string | null } | null>(null);
+export function feedbackImagePending(): boolean {
+	return feedbackPendingImage() !== null;
+}
 
 /**
  * Another origin the page was opened from, while the draft has words about
@@ -90,8 +101,8 @@ export function openFeedback(from: UserFeedbackOriginRef | null) {
 	glide();
 	feedbackMessage.set("");
 	const d = feedbackDraft();
-	if (d.text.trim() === "") {
-		feedbackDraft.set({ text: d.text, origin: from });
+	if (d.text.trim() === "" && !d.attachments?.length) {
+		feedbackDraft.set({ ...d, origin: from });
 		feedbackOffer.set(null);
 	} else {
 		feedbackOffer.set(originKey(d.origin) === originKey(from) ? null : { origin: from });
@@ -108,7 +119,7 @@ export function closeFeedback() {
 /** The draft as a saved window keeps it: "<origin>\n<text>", or "" without words. */
 export function savedFeedback(): string {
 	const d = feedbackDraft();
-	return d.text === "" ? "" : `${originKey(d.origin)}\n${d.text}`;
+	return d.text === "" && !d.attachments?.length ? "" : `${originKey(d.origin)}\n${d.text}`;
 }
 
 /** Shows a kept draft again, as unsent words with their own origin. Restoring sends nothing. */
@@ -143,6 +154,8 @@ export function restoreAnswers(saved: string[]) {
 
 /** Starts from nothing, as a new window does. */
 export function forgetFeedback() {
+	feedbackPendingImage.set(null);
+	feedbackImageBusy.set(false);
 	feedbackOpen.set(false);
 	feedbackDraft.set(EMPTY);
 	feedbackOffer.set(null);

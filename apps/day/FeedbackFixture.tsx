@@ -97,6 +97,7 @@ class ScriptedFeedback implements FeedbackSource {
 		const item = {
 			id: `f${this.#sequence}`,
 			text: intent.text,
+			...(intent.attachments ? { attachments: intent.attachments } : {}),
 			origin: this.#origin(intent),
 			recordedAt: Date.UTC(2026, 10, 13, 12),
 			operationId,

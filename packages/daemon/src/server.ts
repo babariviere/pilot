@@ -825,10 +825,10 @@ export function createDaemonServer(
 		journal && missions ? new UserVerifications({ journal, store: missions.store, projects, sessions }) : undefined;
 	const feedbackWork =
 		missions && nativeChat
-			? new UserFeedbackWorkService({ store: missions.store, chats: nativeChat, sessions })
+			? new UserFeedbackWorkService({ store: missions.store, chats: nativeChat, sessions, attachments })
 			: undefined;
 	const userFeedback = missions
-		? new UserFeedbackService({ store: missions.store, projects, sessions, work: feedbackWork })
+		? new UserFeedbackService({ store: missions.store, projects, sessions, work: feedbackWork, attachments })
 		: undefined;
 	const deliveredArtifacts =
 		userVerifications && missions

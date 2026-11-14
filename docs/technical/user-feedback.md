@@ -11,7 +11,7 @@ mission is needed for triage.
 - One append-only `user_feedback` table in the mission database (`MissionStore`), with
   its transaction and disk durability. No second store and no external service.
 - Native generic operation kind `user-feedback`, `targetId` = the new feedback ID the
-  native host names. The payload is exactly `{purpose, text, origin}`: the text (at most
+  native host names. The payload is `{purpose, text, origin, attachments?}`: the text (at most
   8 KiB UTF-8, not blank) and `null` or one exact `{kind:"mission", missionId}` /
   `{kind:"chat", sessionId}`. The service reads the origin's project and title when it
   saves; a missing mission or chat refuses the feedback. Native capability authentication
@@ -20,6 +20,35 @@ mission is needed for triage.
 - `GET /api/feedback?before=<sequence>&limit=20` (native authenticated) lists saved
   feedback newest first with an exact cursor. Each item has `work`: its saved steps,
   oldest first, with what Pilot reads about them now (below).
+
+### Images
+
+Day selects PNG files with the native picker or reads a clipboard image only after
+Paste image. It accepts up to four PNGs of 8 MiB each. The default development
+configuration stays deny-all. Connected bundles declare and receive picker and
+clipboard capabilities, but no filesystem, network or process access. Artifact
+preview engines keep their separate deny-all policy.
+
+`day.feedback.image` first reserves a random upload ID, then sends the PNG with
+that ID to the existing native-authenticated attachment upload route. Retrying an
+upload reuses that ID and its exact bytes, including after a lost upload reply.
+Only this image method has a larger bridge request limit; other requests stay
+limited to 64 KiB. Uploaded references, not image bytes, go in the window draft
+and the feedback operation. An unfinished upload blocks close/update capture until
+the user retries or removes it.
+
+The daemon adopts the image references under the feedback operation before saving
+the feedback. The existing attachment store checks content hash, size, PNG header,
+dimensions, origin and ownership, fsyncs the data and metadata, and never expires
+referenced images. Feedback rows and receipts keep the immutable references.
+Lost feedback ACKs remain lookup-only. Only a receipt matching the images as well
+as the text can clear a draft.
+
+Triage and fix admission look up only the images owned by that saved feedback.
+Their opening message names those paths. An Ask chat's saved context grants its
+read tool only those exact image paths, not their directory or arbitrary paths
+from feedback text. Other Ask chats receive no such grant. The normal source-only
+and no-symlink reader still applies. No image bytes enter duplicate summaries.
 
 ## Steps
 

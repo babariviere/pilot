@@ -382,6 +382,9 @@ export function FeedbackRow(props: { day: Day; mirror: FeedbackMirror; item: Fee
 		<View testID={`feedback-item-${props.item.id}`} class="gap-2.5 border-t border-border py-3">
 			<View selectable class="gap-1">
 				<Text class="text-sm leading-relaxed text-foreground">{props.item.text}</Text>
+				<If when={props.item.attachments?.length}>
+					<Text class="text-xs text-faint">{`${props.item.attachments?.length} ${props.item.attachments?.length === 1 ? "image" : "images"} attached · available to the agent`}</Text>
+				</If>
 				<Text class="text-xs text-faint">{props.when}</Text>
 			</View>
 			<If when={steps().resolved}>

@@ -28,6 +28,7 @@ pub const METHODS: &[&str] = &[
     "day.preferences.save",
     "day.preferences.check",
     "day.preferences.history",
+    "day.feedback.image",
     "day.feedback.read",
     "day.feedback.send",
     "day.feedback.check",
@@ -108,7 +109,7 @@ pub fn restrict(mut bundle: nsh_engine::Bundle) -> Result<nsh_engine::Bundle, Er
         .copied()
         .filter(|name| access.allows_host(name))
         .collect();
-    let grant = json!({"host":names}).to_string();
+    let grant = json!({"host":names, "picker": access.allows_picker(), "clipboard": access.allows_clipboard()}).to_string();
     bundle.policy.granted =
         Some(nsh_engine::parse_capabilities(&grant).map_err(|_| Error::Invalid)?);
     bundle.policy.harden = true;
@@ -209,6 +210,7 @@ pub(crate) enum Command {
     PreferencesSave(crate::host::preferences::Intent),
     PreferencesCheck(String),
     PreferencesHistory(crate::host::preferences::History),
+    FeedbackImage(crate::host::feedback::ImageUpload),
     FeedbackRead(crate::host::feedback::Read),
     FeedbackSend(crate::host::feedback::Intent),
     FeedbackCheck(String),
@@ -433,6 +435,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: crate::host::preferences::History = exact(args)?;
             r.validate()?;
             C::PreferencesHistory(r)
+        }
+        "day.feedback.image" => {
+            let r: crate::host::feedback::ImageUpload = exact(args)?;
+            r.validate()?;
+            C::FeedbackImage(r)
         }
         "day.feedback.read" => {
             let r: crate::host::feedback::Read = exact(args)?;
@@ -886,7 +893,12 @@ impl Bridge {
                 } // Posts can never cause unacknowledged effects.
                 let parsed = (|| {
                     let data = call.take_data();
-                    if serde_json::to_vec(&data).map_err(|_| Error::Invalid)?.len() > MAX_REQUEST {
+                    let limit = if name == "day.feedback.image" {
+                        crate::host::feedback::IMAGE_REQUEST
+                    } else {
+                        MAX_REQUEST
+                    };
+                    if serde_json::to_vec(&data).map_err(|_| Error::Invalid)?.len() > limit {
                         return Err(Error::Invalid);
                     }
                     let e: Envelope = exact(data)?;

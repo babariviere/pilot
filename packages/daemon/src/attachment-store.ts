@@ -207,6 +207,25 @@ export class AttachmentStore {
 			return records.map((record) => join(this.root, `${record.uploadId}.png`));
 		}).finally(end);
 	}
+	/** Exact feedback-owned image paths, never a caller-supplied filesystem path. */
+	async feedbackPaths(feedback: import("@pilot/protocol").UserFeedback): Promise<string[]> {
+		return this.serial(async () => {
+			await this.init();
+			return (feedback.attachments ?? []).map((ref) => {
+				const r = this.records.get(ref.uploadId);
+				if (
+					!r?.ready ||
+					r.sha256 !== ref.sha256 ||
+					r.bytes !== ref.bytes ||
+					r.owner?.operationId !== feedback.operationId ||
+					r.owner.targetId !== feedback.id
+				)
+					throw new OperationRejected("Feedback image is unavailable");
+				return join(this.root, `${r.uploadId}.png`);
+			});
+		});
+	}
+
 	async discard(uploadId: string): Promise<void> {
 		const end = this.admission.begin({ kind: "transfer-metadata", id: uploadId });
 		await this.serial(async () => {

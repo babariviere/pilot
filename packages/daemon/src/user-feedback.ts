@@ -1,4 +1,5 @@
 import type { DurableOperation, UserFeedback, UserFeedbackOrigin, UserFeedbackPage } from "@pilot/protocol";
+import type { AttachmentStore } from "./attachment-store.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import type { MissionStore } from "./missions.ts";
 import { type OperationJournal, OperationRejected, sameHost } from "./operation-journal.ts";
@@ -23,6 +24,7 @@ function object(value: unknown, keys: string[]): Record<string, unknown> {
 
 interface Dependencies {
 	store: MissionStore;
+	attachments?: Pick<AttachmentStore, "adopt">;
 	projects: Pick<ProjectStore, "require">;
 	sessions: Pick<SessionManager, "get">;
 	/** The user's steps on each item. Without it a page lists none. */
@@ -69,7 +71,7 @@ export class UserFeedbackService {
 		} catch {
 			throw new OperationRejected("Invalid feedback payload JSON");
 		}
-		const p = object(value, ["purpose", "text", "origin"]);
+		const p = object(value, ["purpose", "text", "origin", "attachments"]);
 		if (op.kind !== "user-feedback" || p.purpose !== op.kind || !sameHost(op.origin, journal.destination))
 			throw new OperationRejected("Invalid feedback intent scope");
 		const id = identifier(op.targetId, "feedback ID");
@@ -79,8 +81,34 @@ export class UserFeedbackService {
 		await this.deps.store.durable();
 		try {
 			const origin = this.origin(p.origin ?? null);
+			let images: import("@pilot/protocol").StagedAttachmentRef[] | undefined;
+			if (p.attachments !== undefined) {
+				if (
+					!this.deps.attachments ||
+					!Array.isArray(p.attachments) ||
+					p.attachments.length > 4 ||
+					p.attachments.some(
+						(r) =>
+							!r ||
+							typeof r !== "object" ||
+							Array.isArray(r) ||
+							Object.keys(r).sort().join() !== "bytes,sha256,uploadId" ||
+							typeof r.uploadId !== "string" ||
+							!/^[a-f0-9-]{36}$/i.test(r.uploadId) ||
+							typeof r.sha256 !== "string" ||
+							!/^[a-f0-9]{64}$/.test(r.sha256) ||
+							!Number.isSafeInteger(r.bytes) ||
+							r.bytes < 33 ||
+							r.bytes > 8 * 1024 * 1024,
+					)
+				)
+					throw new OperationRejected("Attach up to four images");
+				images = p.attachments;
+				await this.deps.attachments.adopt(op, images);
+			}
 			const saved = this.deps.store.feedback.add({
 				id,
+				...(images ? { attachments: images } : {}),
 				text,
 				origin,
 				recordedAt: Date.now(),

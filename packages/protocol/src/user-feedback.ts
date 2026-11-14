@@ -1,3 +1,5 @@
+import type { StagedAttachmentRef } from "./transfers.ts";
+
 /** The place the user sent feedback from. Identities only; the service derives the rest. */
 export type UserFeedbackOriginRef = { kind: "mission"; missionId: string } | { kind: "chat"; sessionId: string };
 
@@ -9,6 +11,8 @@ export type UserFeedbackOrigin = UserFeedbackOriginRef & { projectId: string; ti
  * Insights and findings. Saving it starts no work, approves nothing and grants no permission.
  */
 export interface UserFeedback {
+	/** Immutable images saved with this feedback. Omitted on older records. */
+	attachments?: StagedAttachmentRef[];
 	id: string;
 	text: string;
 	/** Null: about Pilot in general, not one mission or chat. */
@@ -93,6 +97,7 @@ export interface UserFeedbackPage {
  * Never resend after losing the ACK: look up the exact receipt, including after a restart.
  */
 export interface UserFeedbackIntent {
+	attachments?: StagedAttachmentRef[];
 	purpose: "user-feedback";
 	text: string;
 	origin: UserFeedbackOriginRef | null;

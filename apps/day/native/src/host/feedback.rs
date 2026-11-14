@@ -1,5 +1,5 @@
 //! The user's own feedback about Pilot on the existing serialized host and
-//! fsynced ledger. TSX sends only the words and, when the user kept it, the
+//! fsynced ledger. TSX sends the words, uploaded image references and, when the user kept it, the
 //! exact mission or chat the feedback came from; the host names the record
 //! and the service reads that origin's project and title. A Send is one
 //! journaled operation sent once. A lost answer stays Unknown: Check looks up
@@ -14,8 +14,10 @@
 //! that chat once. It clarifies the feedback; it starts and approves nothing.
 use super::{Error, Journal, Shared, Transport, planning, valid_id};
 use crate::bridge::{Command, Gate};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 
 /// The operation kind and payload purpose.
@@ -74,15 +76,123 @@ pub(crate) struct Intent {
     text: String,
     #[serde(default)]
     origin: Value,
+    #[serde(default)]
+    attachments: Option<Value>,
 }
 impl Intent {
     pub(crate) fn validate(&self) -> Result<(), Error> {
-        if valid_text(&self.text) && valid_origin(&self.origin) {
+        if valid_text(&self.text)
+            && valid_origin(&self.origin)
+            && self.attachments.as_ref().is_none_or(valid_images)
+        {
             Ok(())
         } else {
             Err(Error::Invalid)
         }
     }
+}
+
+/// The image limit also keeps the bridge and VM copies small.
+pub(crate) const MAX_IMAGE: usize = 8 * 1024 * 1024;
+pub(crate) const IMAGE_REQUEST: usize = MAX_IMAGE * 4 / 3 + 4096;
+
+pub(crate) fn valid_images(v: &Value) -> bool {
+    v.as_array().is_some_and(|images| {
+        images.len() <= 4
+            && images.iter().all(|r| {
+                r.as_object().is_some_and(|o| o.len() == 3)
+                    && r["uploadId"]
+                        .as_str()
+                        .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok())
+                    && r["sha256"].as_str().is_some_and(valid_digest)
+                    && r["bytes"]
+                        .as_u64()
+                        .is_some_and(|n| n >= 33 && n <= MAX_IMAGE as u64)
+            })
+            && images
+                .iter()
+                .enumerate()
+                .all(|(i, a)| images[..i].iter().all(|b| a["uploadId"] != b["uploadId"]))
+    })
+}
+
+/// Reserve an upload identity, or upload the exact PNG with that identity.
+/// Upload retries reuse it. This is not a feedback Send or an operation ID.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct ImageUpload {
+    upload_id: Option<String>,
+    data: Option<String>,
+}
+impl ImageUpload {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
+        match (&self.upload_id, &self.data) {
+            (None, None) => Ok(()),
+            (Some(id), None) if uuid::Uuid::parse_str(id).is_ok() => Ok(()),
+            (Some(id), Some(data))
+                if uuid::Uuid::parse_str(id).is_ok()
+                    && data.len() <= IMAGE_REQUEST
+                    && data.starts_with("data:image/png;base64,") =>
+            {
+                Ok(())
+            }
+            _ => Err(Error::Invalid),
+        }
+    }
+}
+
+async fn upload(t: &Transport, image: &ImageUpload) -> Result<Value, Error> {
+    image.validate()?;
+    if let (Some(id), None) = (&image.upload_id, &image.data) {
+        let r = t
+            .client
+            .delete(t.url(&format!("/api/attachments/{id}")))
+            .header("x-pilot-github-capability", t.local()?)
+            .send()
+            .await
+            .map_err(|_| Error::Offline)?;
+        return if r.status().is_success() {
+            Ok(json!({"removed":true}))
+        } else {
+            Err(Error::Unavailable)
+        };
+    }
+    let (Some(id), Some(data)) = (&image.upload_id, &image.data) else {
+        return Ok(json!({"uploadId":uuid::Uuid::new_v4().to_string()}));
+    };
+    let bytes = STANDARD
+        .decode(data.trim_start_matches("data:image/png;base64,"))
+        .map_err(|_| Error::Invalid)?;
+    if bytes.len() < 33 || bytes.len() > MAX_IMAGE || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(Error::Invalid);
+    }
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let reference = json!({"uploadId":id,"sha256":digest,"bytes":bytes.len()});
+    let mut metadata = reference.clone();
+    metadata["origin"] = json!({"hostId":"local","daemonId":t.source.home.daemon_id,"lineageId":t.source.home.lineage_id});
+    let r = t
+        .client
+        .put(t.url(&format!("/api/attachments/{id}")))
+        .header("x-pilot-github-capability", t.local()?)
+        .header("x-pilot-attachment", STANDARD.encode(metadata.to_string()))
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|_| Error::Offline)?;
+    if !r.status().is_success() {
+        return Err(Error::Unavailable);
+    }
+    if r.content_length().is_some_and(|n| n > 4096) {
+        return Err(Error::Invalid);
+    }
+    let body = r.bytes().await.map_err(|_| Error::Offline)?;
+    if body.len() > 4096
+        || serde_json::from_slice::<Value>(&body).map_err(|_| Error::Invalid)? != reference
+    {
+        return Err(Error::Invalid);
+    }
+    t.profile_gate().await?;
+    Ok(json!({"image":reference}))
 }
 
 /// One page of saved feedback: the newest, or older than `before`. Read only.
@@ -178,7 +288,9 @@ fn payload(op: &Value) -> Result<Value, Error> {
 /// A saved feedback operation holds only the words and an exact origin.
 pub(super) fn validate_record(op: &Value) -> Result<(), Error> {
     let p = payload(op)?;
-    if p.as_object().is_none_or(|o| o.len() != 3)
+    if p.as_object()
+        .is_none_or(|o| o.len() != 3 + usize::from(o.contains_key("attachments")))
+        || p.get("attachments").is_some_and(|v| !valid_images(v))
         || p["purpose"] != KIND
         || op["kind"] != KIND
         || op["bindingGeneration"] != 1
@@ -303,6 +415,7 @@ pub(super) fn exact_result(op: &Value, r: &Value) -> Result<(), Error> {
     if result["id"] != op["targetId"]
         || result["operationId"] != op["operationId"]
         || result["text"] != p["text"]
+        || result["attachments"] != p["attachments"]
         || !result["recordedAt"].is_u64()
     {
         return Err(Error::Unknown);
@@ -414,6 +527,12 @@ pub(super) async fn handle(
     let mut outcome = Value::Null;
     let mut before = None;
     match command {
+        Command::FeedbackImage(image) => {
+            check()?;
+            t.profile_gate().await?;
+            check()?;
+            return upload(t, image).await;
+        }
         Command::FeedbackRead(request) => {
             request.validate()?;
             before = request.before;
@@ -431,7 +550,10 @@ pub(super) async fn handle(
             // A service that cannot list feedback cannot be sent any.
             read(t, None).await?;
             check()?;
-            let request = json!({"purpose":KIND,"text":intent.text,"origin":intent.origin});
+            let mut request = json!({"purpose":KIND,"text":intent.text,"origin":intent.origin});
+            if let Some(images) = &intent.attachments {
+                request["attachments"] = images.clone();
+            }
             let digest = planning::hash(&request.to_string());
             let id = uuid::Uuid::new_v4().to_string();
             outcome = send_once(t, journal, &check, id, digest, request).await?;
@@ -506,7 +628,7 @@ pub(super) async fn handle(
                 .cloned()
                 .ok_or(Error::Unknown)?;
             // Only the saved envelope's receipt. Nothing is sent again.
-            t.gate(false).await?;
+            t.profile_gate().await?;
             check()?;
             if record.pending()
                 && let Ok(receipt) = t.planning_operation(&record.operation, true).await
@@ -597,6 +719,43 @@ fn outcome_of(record: &planning::PlanningRecord, saved: bool) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feedback_images_are_exact_references_not_paths_and_the_receipt_must_match() {
+        let image = json!({"uploadId":"00000000-0000-4000-8000-000000000001","sha256":"a".repeat(64),"bytes":70});
+        assert!(valid_images(&json!([image])));
+        assert!(!valid_images(&json!([image, image])));
+        assert!(!valid_images(&json!([{"path":"/etc/passwd"}])));
+        let p = json!({"purpose":KIND,"text":"popup","origin":null,"attachments":[image]});
+        let op = json!({"operationId":"op","targetId":"feedback","kind":KIND,"bindingGeneration":1,"payload":p.to_string()});
+        assert_eq!(validate_record(&op), Ok(()));
+        let r = json!({"result":{"id":"feedback","operationId":"op","text":"popup","recordedAt":1,"attachments":[image]}});
+        assert_eq!(exact_result(&op, &r), Ok(()));
+        let mut changed = r.clone();
+        changed["result"]["attachments"] = json!([]);
+        assert_eq!(exact_result(&op, &changed), Err(Error::Unknown));
+        let mut changed = image.clone();
+        changed["bytes"] = json!(MAX_IMAGE + 1);
+        assert!(!valid_images(&json!([changed])));
+        for v in [
+            json!({}),
+            json!({"uploadId":image["uploadId"]}),
+            json!({"uploadId":image["uploadId"],"data":"data:image/png;base64,AAAA"}),
+        ] {
+            assert!(
+                serde_json::from_value::<ImageUpload>(v)
+                    .unwrap()
+                    .validate()
+                    .is_ok()
+            );
+        }
+        assert!(
+            serde_json::from_value::<ImageUpload>(json!({"uploadId":"../escape"}))
+                .unwrap()
+                .validate()
+                .is_err()
+        );
+    }
 
     fn intent(v: Value) -> Result<Intent, Error> {
         let i: Intent = serde_json::from_value(v).map_err(|_| Error::Invalid)?;

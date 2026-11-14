@@ -51,6 +51,7 @@ fn view() -> SavedView {
         ],
         feedback_open: true,
         feedback: "mission/export\n  Exact feedback 日本語\nsecond line ".into(),
+        feedback_images: String::new(),
         feedback_project: "pilot".into(),
         feedback_later: vec!["f1/op1/done".into(), "f2/op2/42".into()],
         feedback_answers: vec!["triage-1/42\n1,2\n  Exact answer 👩🏽‍💻\nsecond line ".into()],
@@ -71,6 +72,18 @@ fn deferred_feedback_round_trips_and_old_windows_default_to_none() {
         let mut invalid = view();
         invalid.feedback_later = vec![key.into()];
         assert!(!invalid.feedback_valid(), "{key}");
+    }
+}
+
+#[test]
+fn saved_feedback_keeps_only_small_image_references_not_bytes_or_paths() {
+    let mut saved = view();
+    saved.feedback_images = serde_json::json!([{"uploadId":"00000000-0000-4000-8000-000000000001","sha256":"a".repeat(64),"bytes":70}]).to_string();
+    assert!(saved.feedback_valid());
+    assert!(saved.text_bytes() >= saved.feedback_images.len());
+    for value in ["not json", "[null]", "[{\"path\":\"/etc/passwd\"}]"] {
+        saved.feedback_images = value.into();
+        assert!(!saved.feedback_valid(), "{value}");
     }
 }
 

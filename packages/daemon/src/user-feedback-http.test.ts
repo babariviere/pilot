@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { test } from "node:test";
 import type { UserFeedback, UserFeedbackPage } from "@pilot/protocol";
+import { AttachmentStore } from "./attachment-store.ts";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 
 test("user feedback saves once with exact receipts, derived origins and a native-only newest-first history", async (t) => {
@@ -90,7 +93,44 @@ test("user feedback saves once with exact receipts, derived origins and a native
 	assert.equal(tooMany.status, 400);
 	await tooMany.arrayBuffer();
 
+	const png = Buffer.from(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==",
+		"base64",
+	);
+	const uploadId = randomUUID();
+	const image = { uploadId, sha256: createHash("sha256").update(png).digest("hex"), bytes: png.length };
+	const upload = (bytes: Buffer) =>
+		fetch(`${f.root}/api/attachments/${uploadId}`, {
+			method: "PUT",
+			headers: {
+				"x-pilot-github-capability": f.capability,
+				"x-pilot-attachment": Buffer.from(JSON.stringify({ ...image, origin: mission.origin })).toString("base64"),
+			},
+			body: Uint8Array.from(bytes),
+		});
+	// A truncated upload is not ready; retrying the same upload ID uses the same bytes.
+	const failed = await upload(png.subarray(0, 34));
+	assert.notEqual(failed.status, 201);
+	await failed.arrayBuffer();
+	const notReady = await (await f.post(send({ text: "not ready", attachments: [image] }))).json();
+	assert.equal(notReady.state, "rejected");
+	assert.equal((await upload(png)).status, 201);
+	assert.equal((await upload(png)).status, 201);
+	const attached = send({ text: "The screenshot shows the popup", origin: null, attachments: [image] });
+	const attachedReceipt = await (await f.post(attached)).json();
+	assert.equal(attachedReceipt.state, "accepted", JSON.stringify(attachedReceipt));
+	assert.deepEqual(attachedReceipt.result.attachments, [image]);
+	const reused = await (await f.post(send({ text: "another owner", attachments: [image] }))).json();
+	assert.equal(reused.state, "rejected");
+	for (const images of [[null], [{ ...image, path: "/etc/passwd" }], [image, image], Array(5).fill(image)]) {
+		assert.equal((await (await f.post(send({ text: "bad images", attachments: images }))).json()).state, "rejected");
+	}
 	await f.restart();
+	assert.deepEqual(await (await f.post(attached, true)).json(), attachedReceipt);
+	assert.deepEqual((await page()).items[0]?.attachments, [image]);
+	const paths = await new AttachmentStore(f.home).feedbackPaths(attachedReceipt.result);
+	assert.deepEqual(paths, [join(f.home, "attachments", `${uploadId}.png`)]);
+	assert.deepEqual(await readFile(paths[0]!), png);
 	assert.deepEqual(await (await f.post(mission, true)).json(), receipt);
-	assert.equal((await page()).items.length, 3);
+	assert.equal((await page()).items.length, 4);
 });

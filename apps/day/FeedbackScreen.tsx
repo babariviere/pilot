@@ -10,6 +10,7 @@
 import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
 import { Input } from "nsh/base";
 import type { Day } from "./day";
+import { FeedbackImages } from "./FeedbackImages";
 import { FeedbackRow } from "./FeedbackRow";
 import {
 	type FeedbackItem,
@@ -23,6 +24,8 @@ import {
 	closeFeedback,
 	dayOf,
 	feedbackDraft,
+	feedbackImageBusy,
+	feedbackImagePending,
 	feedbackMessage,
 	feedbackOffer,
 	feedbackProject,
@@ -119,6 +122,8 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 	const blocker = () => {
 		if (d().text.trim() === "") return "";
 		if (v().unsettled.length > 0) return "Check your earlier feedback first. Your text stays.";
+		if (feedbackImageBusy() || feedbackImagePending())
+			return "Finish attaching your image, or remove it before sending.";
 		if (tooLong()) return `Too long. Keep it under ${MAX_FEEDBACK_BYTES} bytes.`;
 		return "";
 	};
@@ -136,7 +141,11 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 		const draft = feedbackDraft();
 		if (!canSend()) return;
 		feedbackMessage.set("");
-		const r = await props.mirror.source.send({ text: draft.text, origin: draft.origin });
+		const r = await props.mirror.source.send({
+			text: draft.text,
+			origin: draft.origin,
+			...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
+		});
 		// Only an accepted receipt clears the words, and only the words that were sent.
 		if (r.status === "accepted" && feedbackDraft() === draft) {
 			glide();
@@ -160,7 +169,13 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 	const check = async (operationId: string) => {
 		feedbackMessage.set("");
 		const r = await props.mirror.source.check(operationId);
-		if (r.status === "accepted" && r.saved && feedbackDraft().text === r.saved.text) {
+		if (
+			r.status === "accepted" &&
+			r.saved &&
+			feedbackDraft().text === r.saved.text &&
+			originKey(feedbackDraft().origin) === originKey(r.saved.origin) &&
+			JSON.stringify(feedbackDraft().attachments ?? []) === JSON.stringify(r.saved.attachments ?? [])
+		) {
 			glide();
 			feedbackDraft.set({ text: "", origin: feedbackDraft().origin });
 		}
@@ -230,6 +245,7 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 				onSelectionChange={field.select}
 				class="min-h-28 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
 			/>
+			<FeedbackImages disabled={v().sending || v().unsettled.length > 0} />
 			<AgentProject mirror={props.mirror} />
 			<If when={blocker()}>
 				<Text testID="feedback-blocked" class="text-xs text-needs-ink">

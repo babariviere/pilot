@@ -7820,6 +7820,18 @@ ${run.excerpt}`,
 		const ask = meta.ask;
 		if (!ask || typeof ask.source !== "string" || !ask.source || ask.source !== meta.cwd || meta.workspace)
 			throw new Error("Invalid Ask source context");
+		if (
+			ask.feedbackImages !== undefined &&
+			(!Array.isArray(ask.feedbackImages) ||
+				ask.feedbackImages.length > 4 ||
+				ask.feedbackImages.some(
+					(path) =>
+						typeof path !== "string" ||
+						path !== join(this.home, "attachments", path.split("/").at(-1) ?? "") ||
+						!/^[a-f0-9-]{36}\.png$/i.test(path.split("/").at(-1) ?? ""),
+				))
+		)
+			throw new Error("Invalid feedback image context");
 		if (ask.branch === undefined) {
 			if (ask.gitDir !== undefined || ask.commit !== undefined || meta.preparing)
 				throw new Error("Invalid Ask checkout context");
@@ -7879,6 +7891,7 @@ ${run.excerpt}`,
 		operationId: string,
 		guard?: () => void,
 		mission?: { taskIds: string[]; admission: MissionSpawnAdmission },
+		feedbackImages?: string[],
 	): Promise<SessionSummary> {
 		guard?.();
 		this.insightsBacklog?.replacements.assertNotRetired(targetId);
@@ -7924,6 +7937,7 @@ ${run.excerpt}`,
 					guard,
 					undefined,
 					mission ? guard : undefined,
+					feedbackImages,
 				);
 			return this.repairProject.withBinding(request.diagnosticRepair.binding, async () => {
 				this.assertDiagnosticRepairAdmission(request);
@@ -9265,6 +9279,7 @@ ${run.excerpt}`,
 		planningGuard?: () => void,
 		publishedStart?: { permission?: ExecutionPermission },
 		dispatchGuard?: () => void,
+		feedbackImages?: string[],
 	): Promise<SessionSummary> {
 		if (admission) this.insightsBacklog?.replacements.assertNotRetired(admission.targetId);
 		if (deferInsightsInput && ((!insightsGrant && !ownerExecution) || request.role !== "insights"))
@@ -9456,7 +9471,7 @@ ${run.excerpt}`,
 		let preparing: SessionMeta["preparing"];
 		let ask: AskContext | undefined;
 		if (mode === "ask") {
-			ask = { source: cwd };
+			ask = { source: cwd, ...(feedbackImages?.length ? { feedbackImages } : {}) };
 			if (request.baseBranch !== undefined) {
 				ask = { ...ask, branch: request.baseBranch, gitDir: join(this.dir(id), "ask.git") };
 				preparing = { source: cwd, baseBranch: request.baseBranch };

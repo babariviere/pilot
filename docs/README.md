@@ -38,6 +38,9 @@ Today's New section also shows finished triages and triage questions. Open a row
 proposal or answer the question. Later keeps it out of New across reopening this window;
 Bring back restores it. A new question or finished triage returns to New. Reading or deferring
 feedback starts no work and approves nothing.
+Use Add image… or Paste image to attach screenshots (up to four PNGs, 8 MiB each).
+Pilot keeps the images with your feedback so its triage agent can read them after a restart.
+An upload failure keeps the image for Retry upload. Sending feedback still happens only with Send.
 
 | Feature                                         | Guide                                         |
 | ----------------------------------------------- | --------------------------------------------- |

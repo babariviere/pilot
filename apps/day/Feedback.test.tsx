@@ -4,6 +4,55 @@ import { expect, open, test } from "nsh/test";
 
 const desktop = { platform: "macos", width: 1100, height: 1600 } as const;
 
+test("pasted screenshots retry the same upload, survive reopening, and clear only with the exact Send receipt", async () => {
+	const png =
+		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==";
+	const reference = { uploadId: "00000000-0000-4000-8000-000000000001", sha256: "a".repeat(64), bytes: 70 };
+	const uploads: unknown[] = [];
+	let reservations = 0;
+	const app = await open("./FeedbackFixture.tsx", {
+		...desktop,
+		host: { params: { day: { version: 1, window: "fixture" } } },
+		modules: {
+			nsh: {
+				"Clipboard.readImage": { url: png, size: { width: 1, height: 1 } },
+				"host.call": async (_name: string, envelope: { args: { uploadId?: string } }) => {
+					if (!envelope.args.uploadId) {
+						reservations++;
+						return { version: 1, value: { uploadId: reference.uploadId } };
+					}
+					uploads.push(envelope.args);
+					return uploads.length === 1
+						? { version: 1, error: "offline" }
+						: { version: 1, value: { image: reference } };
+				},
+			},
+		},
+	});
+	await app.press("id:feedback-open");
+	await app.type("id:feedback-text", "This popup blocks my work");
+	await app.press("id:feedback-image-paste");
+	await app.waitFor("id:feedback-image-retry");
+	expect(app.enabled("id:feedback-send")).toBe(false);
+	await app.press("id:feedback-image-retry");
+	await app.waitFor("Image 1 attached");
+	expect(reservations).toBe(1);
+	expect(uploads).toEqual([
+		{ uploadId: reference.uploadId, data: png },
+		{ uploadId: reference.uploadId, data: png },
+	]);
+	await app.press("Save and reopen");
+	await app.waitFor("Image 1 attached");
+	await app.press("Next unknown");
+	await app.press("id:feedback-send");
+	await app.waitFor("id:feedback-unknown");
+	expect(app.shows("Image 1 attached")).toBe(true);
+	await app.press("id:feedback-check");
+	await app.waitFor("Your feedback was saved.");
+	expect(app.shows("Image 1 attached")).toBe(false);
+	expect(app.shows("1 image attached · available to the agent")).toBe(true);
+});
+
 async function feedback() {
 	const app = await open("./FeedbackFixture.tsx", desktop);
 	await app.press("id:feedback-open");

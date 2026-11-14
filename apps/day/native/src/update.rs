@@ -357,6 +357,9 @@ pub struct SavedView {
     /// Restoring it sends nothing, and it keeps its own origin.
     #[prop(default)]
     pub feedback: String,
+    /// Uploaded immutable image references for the unsent feedback, as JSON.
+    #[prop(default)]
+    pub feedback_images: String,
     /// The project the user chose for feedback triage, by project ID, or
     /// empty for none. The user's own choice: nothing picks one for them,
     /// and showing it again starts nothing.
@@ -403,6 +406,7 @@ impl SavedView {
             + self.today_project.len()
             + self.thread.len()
             + self.feedback.len()
+            + self.feedback_images.len()
             + self.feedback_project.len()
             + lists
     }
@@ -504,6 +508,13 @@ impl SavedView {
                             && (picks.is_empty() || picks.split(',').all(number))
                 )
             });
+        if !self.feedback_images.is_empty()
+            && serde_json::from_str::<serde_json::Value>(&self.feedback_images)
+                .ok()
+                .is_none_or(|v| !crate::host::feedback::valid_images(&v))
+        {
+            return false;
+        }
         let later = self.feedback_later.iter().all(|key| {
             let parts: Vec<_> = key.split('/').collect();
             matches!(parts.as_slice(), [feedback, triage, event] if id(feedback) && id(triage) && (*event == "done" || number(event)))

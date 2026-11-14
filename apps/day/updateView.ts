@@ -27,6 +27,9 @@ import {
 	savedReminders,
 } from "./deliveryView";
 import {
+	feedbackDraft,
+	feedbackImageBusy,
+	feedbackImagePending,
 	feedbackLater,
 	feedbackOpen,
 	feedbackProject,
@@ -168,6 +171,8 @@ const HELP: readonly Help[] = ["simpler", "more", "visual", "ask", "details"];
  * not kept here: they belong to the ritual's own progress.
  */
 export function captureView(today?: Today): SavedView {
+	if (feedbackImageBusy() || feedbackImagePending())
+		throw new Error("Finish attaching your feedback image, or remove it before closing.");
 	const at = place();
 	const key = shownKey();
 	const ritual = ritualWords(ritualRoute());
@@ -219,6 +224,7 @@ export function captureView(today?: Today): SavedView {
 		// The feedback page and unsent feedback with its own origin. Restoring sends nothing.
 		feedbackOpen: feedbackOpen(),
 		feedback: savedFeedback(),
+		feedbackImages: JSON.stringify(feedbackDraft().attachments ?? []),
 		// The project the user chose for triage, and unsent answers to a
 		// triage's question by chat and question. Restoring starts and sends nothing.
 		feedbackProject: feedbackProject() ?? "",
@@ -237,6 +243,11 @@ export type FormSave = { saved: true } | { saved: false; message: string };
  * anything pauses.
  */
 export async function saveForms(day: Day, plans?: Plans): Promise<FormSave> {
+	if (feedbackImageBusy() || feedbackImagePending())
+		return {
+			saved: false,
+			message: "Finish attaching your feedback image, or remove it before closing.",
+		};
 	const today = day.today();
 	const typed = new Set([...Object.keys(picks()), ...Object.keys(drafts()), ...Object.keys(replies())]);
 	let refused = "";
@@ -418,6 +429,8 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	// Unsent feedback always comes back as unsent words with their own origin.
 	// The page shows again only in a window that has it.
 	restoreFeedback(view.feedback ?? "");
+	const images = view.feedbackImages;
+	if (images) feedbackDraft.update((d) => ({ ...d, attachments: JSON.parse(images) }));
 	feedbackOpen.set(view.feedbackOpen === true);
 	feedbackProject.set(view.feedbackProject || null);
 	restoreAnswers(view.feedbackAnswers ?? []);

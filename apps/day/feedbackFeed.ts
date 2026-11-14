@@ -82,7 +82,11 @@ export type FeedbackView = {
 };
 
 /** The words and, when the user kept one, the exact mission or chat they are about. */
-export type SendIntent = { text: string; origin: UserFeedbackOriginRef | null };
+export type SendIntent = {
+	text: string;
+	origin: UserFeedbackOriginRef | null;
+	attachments?: UserFeedback["attachments"];
+};
 
 /** What a Send or a Check did, for the user. */
 export type SendResult = {
@@ -201,7 +205,32 @@ export function feedbackOf(x: unknown): UserFeedback | null {
 	if (typeof f.operationId !== "string" || typeof f.recordedAt !== "number") return null;
 	const origin = originOf(f.origin);
 	if (origin === undefined) return null;
-	return { id: f.id, text: f.text, origin, recordedAt: f.recordedAt, operationId: f.operationId };
+	const attachments = f.attachments as UserFeedback["attachments"];
+	if (
+		attachments !== undefined &&
+		(!Array.isArray(attachments) ||
+			attachments.length > 4 ||
+			attachments.some(
+				(r) =>
+					!r ||
+					typeof r.uploadId !== "string" ||
+					!/^[a-f0-9-]{36}$/i.test(r.uploadId) ||
+					typeof r.sha256 !== "string" ||
+					!/^[a-f0-9]{64}$/.test(r.sha256) ||
+					!Number.isSafeInteger(r.bytes) ||
+					r.bytes < 33 ||
+					r.bytes > 8 * 1024 * 1024,
+			))
+	)
+		return null;
+	return {
+		id: f.id,
+		text: f.text,
+		origin,
+		recordedAt: f.recordedAt,
+		operationId: f.operationId,
+		...(attachments ? { attachments } : {}),
+	};
 }
 
 const STATES = ["starting", "working", "question", "done", "failed", "stopped", "archived", "missing"];

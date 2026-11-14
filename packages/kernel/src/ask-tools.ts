@@ -1,7 +1,7 @@
 /** Host-owned Ask tools. No model-supplied command, executable, revision or Git pathspec is accepted. */
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { createReadToolDefinition, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { ARTIFACT_SKILL_FILES } from "./artifact-skill.ts";
@@ -100,6 +100,8 @@ export async function createAskTools(
 					// Exact host-owned documents only. Never grant access to their directories,
 					// siblings, aliases, or model-supplied skill paths (including pinned-tree Ask).
 					bytes = await readFile(args.path, { signal });
+				} else if (ask.feedbackImages?.includes(args.path)) {
+					bytes = await readLocal(dirname(args.path), args.path, signal);
 				} else if (
 					isAbsolute(args.path) &&
 					contained(ASK_ATTACHMENTS, absolute) &&

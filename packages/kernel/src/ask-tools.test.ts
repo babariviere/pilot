@@ -154,3 +154,18 @@ test("Ask rejects incomplete or model-controlled snapshot revisions", async () =
 	await assert.rejects(createAskTools({ source: "/tmp", commit: "HEAD:../../secret" }), /both gitDir and commit/);
 	await assert.rejects(createAskTools({ source: "/tmp", gitDir: "/tmp/git", commit: "HEAD" }), /full commit ID/);
 });
+
+test("feedback image reads use only the exact native-admitted paths, never their siblings or symlinks", async (t) => {
+	const f = await fixture(t);
+	const image = join(f.root, "feedback.png");
+	const sibling = join(f.root, "other.png");
+	await writeFile(image, Buffer.from(png, "base64"));
+	await writeFile(sibling, Buffer.from(png, "base64"));
+	const call = await calls({ source: f.source, feedbackImages: [image] });
+	assert.ok((await call("read", { path: image })).content.some((b) => b.type === "image"));
+	await assert.rejects(call("read", { path: sibling }), /inside the source/);
+	await assert.rejects((await calls({ source: f.source }))("read", { path: image }), /inside the source/);
+	await rm(image);
+	await symlink(sibling, image);
+	await assert.rejects(call("read", { path: image }));
+});

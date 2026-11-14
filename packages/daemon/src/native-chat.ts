@@ -135,7 +135,15 @@ export class NativeChat {
 		return check;
 	}
 	/** Creates one qualified chat. Once admission enters, failures remain Unknown: never re-enter it. */
-	spawn(p: Selection, draftId: string, operationId: string, message: string, check: () => void, title?: string) {
+	spawn(
+		p: Selection,
+		draftId: string,
+		operationId: string,
+		message: string,
+		check: () => void,
+		title?: string,
+		images?: string[],
+	) {
 		return this.deps.sessions.spawnDurable(
 			{
 				projectId: p.projectId,
@@ -154,6 +162,8 @@ export class NativeChat {
 					throw new Error("Chat project changed during admission");
 				}
 			},
+			undefined,
+			images,
 		);
 	}
 	async createPinned(p: Selection, draftId: string, operationId: string, message: string) {

@@ -111,6 +111,8 @@ export interface MissionContext {
 
 /** Ask reads either the original checkout or a pinned tree in a daemon-owned bare object store. */
 export interface AskContext {
+	/** Exact daemon-owned feedback images, supplied only by native feedback admission. */
+	feedbackImages?: string[];
 	/** Host-owned coordinator source reader: deny repository metadata and hardlinked file aliases. */
 	sourceOnly?: true;
 	source: string;
