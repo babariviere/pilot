@@ -4,9 +4,23 @@ import { expect, open, test } from "nsh/test";
 
 const desktop = { platform: "macos", width: 1100, height: 1600 } as const;
 
+test("native paste keeps image bytes on a disconnected host and leaves text paste intact", async () => {
+	const app = await open("./FeedbackFixture.tsx", {
+		...desktop,
+		host: { params: { day: { version: 1, window: "fixture" } } },
+	});
+	await app.press("id:feedback-open");
+	await app.paste("id:feedback-text", { files: ["../macos/Resources/LegacyApp/HomeSky.png"] });
+	await app.waitFor("id:feedback-image-retry");
+	expect(app.shows("Image not attached")).toBe(true);
+	expect(app.enabled("id:feedback-send")).toBe(false);
+	await app.press("Remove image");
+	await app.paste("id:feedback-text", { text: "Still editable 日本語" });
+	expect(app.value("id:feedback-text")).toBe("Still editable 日本語");
+});
+
 test("pasted screenshots retry the same upload, survive reopening, and clear only with the exact Send receipt", async () => {
-	const png =
-		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==";
+	const file = "../macos/Resources/LegacyApp/HomeSky.png";
 	const reference = { uploadId: "00000000-0000-4000-8000-000000000001", sha256: "a".repeat(64), bytes: 70 };
 	const uploads: unknown[] = [];
 	let reservations = 0;
@@ -15,7 +29,6 @@ test("pasted screenshots retry the same upload, survive reopening, and clear onl
 		host: { params: { day: { version: 1, window: "fixture" } } },
 		modules: {
 			nsh: {
-				"Clipboard.readImage": { url: png, size: { width: 1, height: 1 } },
 				"host.call": async (_name: string, envelope: { args: { uploadId?: string } }) => {
 					if (!envelope.args.uploadId) {
 						reservations++;
@@ -31,18 +44,23 @@ test("pasted screenshots retry the same upload, survive reopening, and clear onl
 	});
 	await app.press("id:feedback-open");
 	await app.type("id:feedback-text", "This popup blocks my work");
-	await app.press("id:feedback-image-paste");
+	await app.paste("id:feedback-text", { files: [file] });
 	await app.waitFor("id:feedback-image-retry");
 	expect(app.enabled("id:feedback-send")).toBe(false);
 	await app.press("id:feedback-image-retry");
 	await app.waitFor("Image 1 attached");
+	expect(app.shows(`id:feedback-image-preview-${reference.uploadId}`)).toBe(true);
 	expect(reservations).toBe(1);
+	const png = (uploads[0] as { data: string }).data;
+	expect(png.startsWith("data:image/png;base64,iVBORw0KGgo")).toBe(true);
+	expect(png.length > 1_000_000).toBe(true);
 	expect(uploads).toEqual([
 		{ uploadId: reference.uploadId, data: png },
 		{ uploadId: reference.uploadId, data: png },
 	]);
 	await app.press("Save and reopen");
 	await app.waitFor("Image 1 attached");
+	expect(app.shows(`id:feedback-image-preview-${reference.uploadId}`)).toBe(true);
 	await app.press("Next unknown");
 	await app.press("id:feedback-send");
 	await app.waitFor("id:feedback-unknown");
@@ -51,6 +69,52 @@ test("pasted screenshots retry the same upload, survive reopening, and clear onl
 	await app.waitFor("Your feedback was saved.");
 	expect(app.shows("Image 1 attached")).toBe(false);
 	expect(app.shows("1 image attached · available to the agent")).toBe(true);
+});
+
+test("text paste stays native and the image picker is an accessible icon", async () => {
+	const app = await feedback();
+	await app.paste("id:feedback-text", { text: "Copied feedback 日本語" });
+	expect(app.value("id:feedback-text")).toBe("Copied feedback 日本語");
+	expect(app.shows("label:Add image…")).toBe(true);
+	expect(app.texts().includes("Add image…")).toBe(false);
+	expect(app.shows("Paste image")).toBe(false);
+	expect(app.shows("Image 1 attached")).toBe(false);
+});
+
+test("uploaded previews can be removed without changing the feedback words", async () => {
+	const calls: unknown[] = [];
+	const uploadId = "00000000-0000-4000-8000-000000000002";
+	const app = await open("./FeedbackFixture.tsx", {
+		...desktop,
+		host: { params: { day: { version: 1, window: "fixture" } } },
+		modules: {
+			nsh: {
+				"host.call": (_name: string, envelope: { args: { uploadId?: string; data?: string } }) => {
+					const args = envelope.args;
+					calls.push(args);
+					return {
+						version: 1,
+						value: !args.uploadId
+							? { uploadId }
+							: args.data
+								? { image: { uploadId, sha256: "a".repeat(64), bytes: 70 } }
+								: { removed: true },
+					};
+				},
+			},
+		},
+	});
+	await app.press("id:feedback-open");
+	await app.paste("id:feedback-text", {
+		text: "Keep these words",
+		files: ["../macos/Resources/LegacyApp/HomeSky.png"],
+	});
+	await app.waitFor(`id:feedback-image-preview-${uploadId}`);
+	await app.press("label:Remove image 1");
+	await app.waitUntil(() => !app.shows(`id:feedback-image-preview-${uploadId}`));
+	expect(app.value("id:feedback-text")).toBe("Keep these words");
+	expect(calls.length).toBe(3);
+	expect(calls[2]).toEqual({ uploadId });
 });
 
 async function feedback() {

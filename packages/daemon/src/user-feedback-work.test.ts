@@ -55,10 +55,9 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 		return op.targetId;
 	};
 	const older = await feedback("Plan page hides who works");
-	const png = Buffer.from(
-		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==",
-		"base64",
-	);
+	// A recognizable image, not a one-pixel placeholder. Check the actual
+	// read tool's image payload, not just the path handed to triage.
+	const png = await readFile(new URL("../../../apps/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
 	const image = { uploadId: randomUUID(), sha256: createHash("sha256").update(png).digest("hex"), bytes: png.length };
 	const uploaded = await fetch(`${f.root}/api/attachments/${image.uploadId}`, {
 		method: "PUT",
@@ -117,6 +116,9 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 		viewed.content.some((block) => block.type === "image"),
 		"the triage's actual read tool renders its screenshot",
 	);
+	const rendered = viewed.content.find((block) => block.type === "image");
+	assert.equal(rendered?.mimeType, "image/png");
+	assert.deepEqual(Buffer.from(rendered!.data, "base64"), png);
 	assert.equal(meta.projectId, f.project.id);
 	assert.match(meta.title, /^Triage: The plan page/);
 	const message = meta.pending[0].content as string;

@@ -38,7 +38,9 @@ Today's New section also shows finished triages and triage questions. Open a row
 proposal or answer the question. Later keeps it out of New across reopening this window;
 Bring back restores it. A new question or finished triage returns to New. Reading or deferring
 feedback starts no work and approves nothing.
-Use Add image… or Paste image to attach screenshots (up to four PNGs, 8 MiB each).
+Paste a screenshot into the feedback field with Cmd+V/Ctrl+V, or use the + icon
+(Add image…). Uploaded thumbnails stay above the field until you remove or send them
+(up to four PNGs, 8 MiB each). Text paste works as usual.
 Pilot keeps the images with your feedback so its triage agent can read them after a restart.
 An upload failure keeps the image for Retry upload. Sending feedback still happens only with Send.
 Open the triage chat or Open the fix chat shows that chat read only: your messages, Pilot's replies,

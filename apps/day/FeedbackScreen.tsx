@@ -10,7 +10,7 @@
 import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
 import { Input } from "nsh/base";
 import type { Day } from "./day";
-import { FeedbackImages } from "./FeedbackImages";
+import { clearFeedbackImagePreviews, FeedbackImages } from "./FeedbackImages";
 import { FeedbackRow } from "./FeedbackRow";
 import {
 	type FeedbackItem,
@@ -150,6 +150,7 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 		if (r.status === "accepted" && feedbackDraft() === draft) {
 			glide();
 			feedbackDraft.set({ text: "", origin: draft.origin });
+			clearFeedbackImagePreviews();
 		}
 		// An Unknown Send shows as its own note, with Check.
 		feedbackMessage.set(r.status === "unknown" && v().unsettled.length > 0 ? "" : r.message);
@@ -178,6 +179,7 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 		) {
 			glide();
 			feedbackDraft.set({ text: "", origin: feedbackDraft().origin });
+			clearFeedbackImagePreviews();
 		}
 		feedbackMessage.set(r.status === "accepted" ? "Your feedback was saved." : r.message);
 		void props.mirror.source.read();
@@ -231,21 +233,25 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 					</Note>
 				)}
 			</Each>
-			<Input
-				testID="feedback-text"
-				ref={field.ref}
-				multiline
-				autoFocus
-				readonly={v().sending}
-				value={d().text}
-				accessibilityLabel="Your feedback about Pilot"
-				placeholder="What happened, and what would make it better?"
-				onChange={({ value }) => edit(value)}
-				onFocus={field.focus}
-				onSelectionChange={field.select}
-				class="min-h-28 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
-			/>
-			<FeedbackImages disabled={v().sending || v().unsettled.length > 0} />
+			<FeedbackImages disabled={v().sending || v().unsettled.length > 0}>
+				{(onPaste) => (
+					<Input
+						testID="feedback-text"
+						ref={field.ref}
+						multiline
+						autoFocus
+						readonly={v().sending}
+						value={d().text}
+						accessibilityLabel="Your feedback about Pilot"
+						placeholder="What happened, and what would make it better?"
+						onChange={({ value }) => edit(value)}
+						onPaste={onPaste}
+						onFocus={field.focus}
+						onSelectionChange={field.select}
+						class="min-h-28 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
+					/>
+				)}
+			</FeedbackImages>
 			<AgentProject mirror={props.mirror} />
 			<If when={blocker()}>
 				<Text testID="feedback-blocked" class="text-xs text-needs-ink">

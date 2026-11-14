@@ -1,6 +1,6 @@
 // Image imports are explicit user actions. The host owns upload identities,
 // credentials and storage. A failed upload retries the same bytes and ID.
-import { Clipboard, Image, Picker, Text, View } from "nsh";
+import { Image, type JSX, type PasteEvent, Picker, signal, Text, View } from "nsh";
 import type { StagedAttachmentRef } from "../../packages/protocol/src/transfers.ts";
 import { call, windowId } from "./bridge";
 import { feedbackDraft, feedbackImageBusy, feedbackMessage, feedbackPendingImage as pending } from "./feedbackView";
@@ -8,13 +8,26 @@ import { Action } from "./ui";
 
 const MAX_IMAGE = 8 * 1024 * 1024;
 
-export function FeedbackImages(props: { disabled: boolean }) {
+// Keep previews while the user leaves and returns to this draft. Upload
+// references alone contain no displayable URL. Never send these bytes as metadata.
+const previews = signal<Record<string, string>>({});
+
+/** Release the sent draft's local previews after its exact receipt is accepted. */
+export function clearFeedbackImagePreviews() {
+	previews.set({});
+}
+
+export function FeedbackImages(props: {
+	disabled: boolean;
+	children: (onPaste: (event: PasteEvent) => void) => JSX.Element;
+}) {
 	const discard = (id: string | null) => {
 		const window = windowId();
 		if (window && id) void call(window, "day.feedback.image", { uploadId: id });
 	};
 	const remove = (id: string) => {
 		feedbackDraft.update((d) => ({ ...d, attachments: d.attachments?.filter((a) => a.uploadId !== id) }));
+		previews.update((all) => Object.fromEntries(Object.entries(all).filter(([key]) => key !== id)));
 		discard(id);
 	};
 	const upload = async () => {
@@ -34,6 +47,12 @@ export function FeedbackImages(props: { disabled: boolean }) {
 			const r = await call(window, "day.feedback.image", image);
 			if (!r.ok || !r.value.image) throw new Error();
 			const reference = r.value.image as StagedAttachmentRef;
+			// Only keep the current draft's images (at most four).
+			const kept = new Set(feedbackDraft().attachments?.map((a) => a.uploadId));
+			previews.update((all) => ({
+				...Object.fromEntries(Object.entries(all).filter(([id]) => kept.has(id))),
+				[reference.uploadId]: image.data,
+			}));
 			feedbackDraft.update((d) => ({ ...d, attachments: [...(d.attachments ?? []), reference] }));
 			pending.set(null);
 			feedbackMessage.set("");
@@ -51,6 +70,16 @@ export function FeedbackImages(props: { disabled: boolean }) {
 		pending.set({ data, uploadId: null });
 		await upload();
 	};
+	const attachFile = async (file: File) => {
+		if (file.size > MAX_IMAGE || file.type !== "image/png") {
+			feedbackMessage.set("Choose a PNG image under 8 MiB.");
+			return;
+		}
+		const bytes = new Uint8Array(await file.arrayBuffer());
+		let binary = "";
+		for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+		await attach(`data:image/png;base64,${btoa(binary)}`);
+	};
 	const choose = async () => {
 		if (blocked()) return;
 		feedbackImageBusy.set(true);
@@ -58,27 +87,22 @@ export function FeedbackImages(props: { disabled: boolean }) {
 			const files = await Picker.pickFiles({ filters: [{ name: "PNG images", extensions: ["png"] }] });
 			const file = files[0]?.file;
 			if (!file) return;
-			if (file.size > MAX_IMAGE) {
-				feedbackMessage.set("Choose a PNG image under 8 MiB.");
-				return;
-			}
-			const bytes = new Uint8Array(await file.arrayBuffer());
-			let binary = "";
-			for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-			await attach(`data:image/png;base64,${btoa(binary)}`);
+			await attachFile(file);
 		} catch {
 			feedbackMessage.set("Pilot could not open that image. Choose a PNG image under 8 MiB.");
 		} finally {
 			feedbackImageBusy.set(false);
 		}
 	};
-	const paste = async () => {
+	const paste = async (event: PasteEvent) => {
+		const file = event.files.find((file) => file.type.startsWith("image/"));
+		// Native text insertion remains enabled. Do not intercept the shortcut
+		// or re-read the clipboard after the user may have changed it.
+		if (!file) return;
 		if (blocked()) return;
 		feedbackImageBusy.set(true);
 		try {
-			const image = await Clipboard.readImage();
-			if (image) await attach(image.url);
-			else feedbackMessage.set("No image on the clipboard. Copy a screenshot first.");
+			await attachFile(file);
 		} catch {
 			feedbackMessage.set("Pilot could not paste that image. Choose a PNG image instead.");
 		} finally {
@@ -88,20 +112,29 @@ export function FeedbackImages(props: { disabled: boolean }) {
 	const blocked = () =>
 		props.disabled || feedbackImageBusy() || pending() !== null || (feedbackDraft().attachments?.length ?? 0) >= 4;
 	return (
-		<View class="gap-2">
+		<View class="gap-4">
 			<View class="flex-row items-center gap-3">
-				<Action label="Add image…" testID="feedback-image-add" disabled={blocked()} onPress={() => void choose()} />
 				<Action
-					label="Paste image"
-					testID="feedback-image-paste"
+					label="Add image…"
+					icon="plus"
+					iconOnly
+					testID="feedback-image-add"
 					disabled={blocked()}
-					onPress={() => void paste()}
+					onPress={() => void choose()}
 				/>
 				<Text class="text-xs text-faint">PNG · up to four · 8 MiB each</Text>
 			</View>
 			<Each of={feedbackDraft().attachments ?? []} key={(r) => r.uploadId}>
 				{(r, index) => (
 					<View class="flex-row items-center gap-3">
+						<If when={previews()[r().uploadId]}>
+							<Image
+								testID={`feedback-image-preview-${r().uploadId}`}
+								src={previews()[r().uploadId]}
+								accessibilityLabel={`Attached image ${index() + 1}`}
+								class="h-24 w-36"
+							/>
+						</If>
 						<Text class="flex-1 text-xs text-muted-foreground">{`Image ${index() + 1} attached`}</Text>
 						<Action
 							label="Remove"
@@ -137,6 +170,7 @@ export function FeedbackImages(props: { disabled: boolean }) {
 					</View>
 				</View>
 			</If>
+			{props.children((event) => void paste(event))}
 		</View>
 	);
 }
