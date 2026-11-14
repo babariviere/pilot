@@ -71,6 +71,9 @@ test("upstream sources and dependencies stay byte-exact, attributed and separate
 	assert.match(source, /4ae2317ddb22b046e26455e4f9c9b3aaaf62212d/);
 	for (const boundary of [
 		"whole frontier",
+		"Generate substantive answer options only",
+		"The interface provides a built-in free-text field for every question",
+		"do not add a “Custom text” or equivalent option",
 		"recommendations alone are not",
 		"exact complete submitted snapshot",
 		"cannot grant",
