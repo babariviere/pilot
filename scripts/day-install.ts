@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 /** Side-by-side connected installation. Never changes a profile or starts a process/service. */
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { constants, cp, lstat, mkdtemp, open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { request } from "node:http";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { canonicalJSON, payloadHash } from "../packages/daemon/src/operation-journal.ts";
+import { inspectRuntime, type RuntimeBuild } from "../packages/daemon/src/runtime-owner.ts";
 
 export interface Selection {
 	app: string;
@@ -144,32 +146,28 @@ async function identity(s: Selection) {
 	);
 	return c.token as string;
 }
-async function get(s: Selection, path: string) {
-	const token = await identity(s);
-	const value = await new Promise<unknown>((accept, reject) => {
-		const req = request(
-			{ host: "127.0.0.1", port: s.port, path, method: "GET", headers: { "x-pilot-github-capability": token } },
-			(res) => {
-				let body = "";
-				res.setEncoding("utf8");
-				res.on("error", reject);
-				res.on("data", (chunk) => {
-					body += chunk;
-					if (body.length > 1024 * 1024) req.destroy(new Error("Preflight reply exceeds 1 MiB."));
-				});
-				res.on("end", () => {
-					try {
-						requireThat(
-							res.statusCode === 200,
-							`Connected preflight refused (${res.statusCode}). No daemon change attempted.`,
-						);
-						accept(JSON.parse(body));
-					} catch (error) {
-						reject(error);
-					}
-				});
-			},
-		);
+async function requestJSON(port: number, path: string, method: string, headers: Record<string, string>, body?: string) {
+	return new Promise<unknown>((accept, reject) => {
+		const req = request({ host: "127.0.0.1", port, path, method, headers, agent: false }, (res) => {
+			let body = "";
+			res.setEncoding("utf8");
+			res.on("error", reject);
+			res.on("data", (chunk) => {
+				body += chunk;
+				if (body.length > 1024 * 1024) req.destroy(new Error("Preflight reply exceeds 1 MiB."));
+			});
+			res.on("end", () => {
+				try {
+					requireThat(
+						res.statusCode === 200,
+						`Connected preflight refused (${res.statusCode}). No daemon change attempted.`,
+					);
+					accept(JSON.parse(body));
+				} catch (error) {
+					reject(error);
+				}
+			});
+		});
 		// Wall-clock timeout, including a slow response. No redirects, proxies or retries.
 		const timer = setTimeout(
 			() => req.destroy(new Error("Existing daemon is unavailable. No restart attempted.")),
@@ -177,8 +175,12 @@ async function get(s: Selection, path: string) {
 		);
 		req.on("close", () => clearTimeout(timer));
 		req.on("error", reject);
-		req.end();
+		req.end(body);
 	});
+}
+async function get(s: Selection, path: string) {
+	const token = await identity(s);
+	const value = await requestJSON(s.port, path, "GET", { "x-pilot-github-capability": token });
 	requireThat((await identity(s)) === token, "Native credentials changed during preflight.");
 	return value as {
 		daemonId?: string;
@@ -189,6 +191,116 @@ async function get(s: Selection, path: string) {
 		id?: string;
 		path?: string;
 	};
+}
+
+/** Only this sealed source omitted its capability despite implementing the native envelope. */
+async function qualifyBuild197(s: Selection, verify: typeof verifyApp) {
+	const ownerPath = join(s.targetProfile, ".daemon-owner.json");
+	if (!(await exists(ownerPath))) return false;
+	const owner = JSON.parse(await privateFile(ownerPath, 16_384));
+	if (owner.build?.source !== "3bf2f7ce63205155b3cc33b5311bac675ba1dfee") return false;
+	requireThat(
+		owner.schema === 1 &&
+			/^[a-f0-9]{64}$/.test(owner.boot) &&
+			/^[a-f0-9]{64}$/.test(owner.secret) &&
+			owner.home === payloadHash(s.targetProfile) &&
+			owner.port === s.port &&
+			typeof owner.runtimeRoot === "string" &&
+			owner.runtimeRoot.endsWith("/Contents/Resources/runtime"),
+		"Build 197 runtime owner is invalid.",
+	);
+	const runtime: string = owner.runtimeRoot;
+	const activeApp = dirname(dirname(dirname(runtime)));
+	await canonical(activeApp);
+	await canonical(runtime);
+	const retained = join(dirname(activeApp), "selection.json");
+	if (!(await exists(retained))) return false;
+	const old: Selection = JSON.parse(await privateFile(retained, 16_384));
+	if (old.source !== "3bf2f7ce63205155b3cc33b5311bac675ba1dfee") return false;
+	requireThat(
+		installedApp(old) === activeApp &&
+			old.targetProfile === s.targetProfile &&
+			old.sourceProfile === s.sourceProfile &&
+			old.daemonId === s.daemonId &&
+			old.lineageId === s.lineageId &&
+			old.port === s.port &&
+			/^[a-f0-9]{64}$/.test(old.binarySha256),
+		"Build 197 retained selection differs from the selected old app/profile.",
+	);
+	await verify(old, activeApp);
+	const build: RuntimeBuild = await json(join(runtime, "runtime-build.json"));
+	requireThat(build.source === old.source, "Build 197 runtime source differs from the sealed app.");
+	requireThat(
+		(await inspectRuntime(s.targetProfile, s.port, build, runtime)) === "ready",
+		"Build 197 runtime is not ready.",
+	);
+	requireThat(
+		owner.schema === 1 &&
+			/^[a-f0-9]{64}$/.test(owner.boot) &&
+			/^[a-f0-9]{64}$/.test(owner.secret) &&
+			owner.home === payloadHash(s.targetProfile) &&
+			owner.port === s.port &&
+			owner.runtimeRoot === runtime &&
+			isDeepStrictEqual(owner.build, build),
+		"Build 197 runtime owner changed.",
+	);
+	const host = { hostId: "daemon", daemonId: s.daemonId, lineageId: s.lineageId };
+	const payload = canonicalJSON({
+		captureHash: await digest(s.savedState),
+		app: { source: s.source, build: s.build },
+	});
+	const operation = {
+		schemaVersion: 1,
+		operationId: s.operationId,
+		producerId: s.operationId,
+		sequence: 1,
+		origin: host,
+		destination: host,
+		targetId: "global-update",
+		kind: "global-update-prepare",
+		payload,
+		payloadHash: payloadHash(payload),
+	};
+	const nonce = randomBytes(32).toString("hex");
+	const raw = JSON.stringify({ boot: owner.boot, nonce, action: "inspect", receipt: { globalUpdate: operation } });
+	const mac = (body: string) =>
+		createHmac("sha256", Buffer.from(owner.secret, "hex")).update(`update/v1\n${body}`).digest("hex");
+	const envelope = (await requestJSON(
+		s.port,
+		"/__pilot_runtime_update/v1",
+		"POST",
+		{ "x-pilot-update-proof": mac(raw) },
+		raw,
+	)) as { body?: string; mac?: string };
+	requireThat(
+		typeof envelope?.body === "string" &&
+			typeof envelope.mac === "string" &&
+			/^[a-f0-9]{64}$/.test(envelope.mac) &&
+			timingSafeEqual(Buffer.from(mac(envelope.body), "hex"), Buffer.from(envelope.mac, "hex")),
+		"Build 197 lookup proof is invalid.",
+	);
+	const proof = JSON.parse(envelope.body);
+	requireThat(
+		proof.schema === 1 &&
+			proof.boot === owner.boot &&
+			proof.nonce === nonce &&
+			proof.home === owner.home &&
+			proof.port === s.port &&
+			proof.runtimeRoot === runtime &&
+			isDeepStrictEqual(proof.build, build) &&
+			proof.receipt === null,
+		"Build 197 lookup identity changed or operation already exists; inspect the original operation.",
+	);
+	requireThat(
+		isDeepStrictEqual(JSON.parse(await privateFile(ownerPath, 16_384)), owner),
+		"Build 197 runtime owner changed.",
+	);
+	requireThat(
+		(await inspectRuntime(s.targetProfile, s.port, build, runtime)) === "ready",
+		"Build 197 runtime changed after lookup.",
+	);
+	await identity(s);
+	return true;
 }
 
 export async function preflight(s: Selection, verify = verifyApp) {
@@ -261,7 +373,8 @@ export async function preflight(s: Selection, verify = verifyApp) {
 		"Existing daemon lacks the base native protocol. Its supported migration path must be verified first.",
 	);
 	requireThat(
-		hello.capabilities?.globalUpdate === 1,
+		hello.capabilities?.globalUpdate === 1 ||
+			(hello.capabilities?.globalUpdate === undefined && (await qualifyBuild197(s, verify))),
 		"Existing daemon lacks native global-update support. Use the explicit legacy stop/start recovery; no handoff entered.",
 	);
 	return s;

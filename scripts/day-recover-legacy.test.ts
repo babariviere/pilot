@@ -3,8 +3,33 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { ownRuntime, type RuntimeBuild } from "../packages/daemon/src/runtime-owner.ts";
 import { UpdateReservation } from "../packages/daemon/src/update-reservation.ts";
-import { recoverOnce } from "./day-recover-legacy.ts";
+import { recoverOnce, verifyLegacyLeaseReleased } from "./day-recover-legacy.ts";
+
+test("legacy shutdown proves lease release without enrolling the existing profile", async () => {
+	const root = await mkdtemp(join(tmpdir(), "day-legacy-lease-"));
+	const build: RuntimeBuild = {
+		schema: 1,
+		source: "a".repeat(40),
+		version: "1.125.0",
+		protocol: 1,
+		platform: process.platform,
+		arch: process.arch,
+		node: process.versions.node,
+	};
+	const owner = await ownRuntime(root, 0, false, build, root);
+	try {
+		await assert.rejects(verifyLegacyLeaseReleased(root));
+		await owner.close();
+		await verifyLegacyLeaseReleased(root);
+		// A free legacy lease must not silently become an enrolled bundled profile.
+		await assert.rejects(ownRuntime(root, 0, true, build, root), /runtime_profile_unproven/);
+	} finally {
+		await owner.close();
+		await rm(root, { recursive: true, force: true });
+	}
+});
 
 test("legacy global envelope is refused before checkpoint or admission effects", async () => {
 	// This production class is byte-identical to the diagnosed bf005fd7 version.

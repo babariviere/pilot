@@ -26,8 +26,8 @@ saved drafts, selection and pending operations in `window-journal` beside its
 installed app. Never replay GPUI pending sends or clear uncertain Day operations.
 
 Native credentials stay in the existing profile, outside TSX. Read-only
-preflight checks the private capability and makes two authenticated loopback GET
-requests (hello). The selection, launcher and output contain no token.
+preflight checks the private capability and authenticated loopback hello.
+The selection, launcher and output contain no token.
 
 ## Bundle and driver prerequisites
 
@@ -147,6 +147,25 @@ reads a missing top-level operation ID and rejects before admission/checkpoint
 effects. The installer now checks the separate `globalUpdate: 1` capability.
 Native service preflight alone does not establish this wire compatibility.
 
+One sealed source has a narrower exception: build 197 at full source
+`3bf2f7ce63205155b3cc33b5311bac675ba1dfee` implements the native envelope but
+omits the hello capability. Qualification requires its original `selection.json`
+beside the active daemon's sealed app, matching the exact app/profile/service
+identity. The private runtime owner record supplies a canonical runtime path with
+the fixed `Contents/Resources/runtime` suffix. This binds the retained selection's
+installed app path, not its original download path. `trustFrom` remains the
+separate original GPUI app for target trust and native unused-app checks; it need
+not contain the running daemon. The installer re-verifies the active selection's pinned executable and signed
+full bundle, then uses `inspectRuntime` to attest its exact bundled runtime source,
+live lease and authenticated boot. It sends only an HMAC-authenticated `inspect`
+with the exact global-update operation envelope. A signed, nonce-bound null
+receipt is required, followed by unchanged owner and live-runtime checks. No
+preparation, journal creation, admission fence or service change occurs in this
+qualification. An existing receipt requires original-operation inspection.
+Missing/changed evidence, other sources (including `bf005fd7`) and explicit
+unsupported capability versions still fail closed. Native handoff checks remain
+required after qualification.
+
 For this diagnosed legacy source only, the prepared user-run recovery is:
 
 ```sh
@@ -173,7 +192,10 @@ independently proven. No Force, unrelated PID kill or lock unlink is used.
 
 Only after service unload, old PID exit, release of the unchanged permanent
 profile lease and a free listener does it replace that same service definition's
-two runtime paths and PATH entry. It keeps every other field, including profile,
+two runtime paths and PATH entry. The stopped-lease check uses an exclusive SQLite
+transaction to verify the same private inode and schema. It accepts the existing
+legacy `managed=0` lease without enrolling it or requiring `managed=1`.
+It keeps every other service field, including profile,
 port, policy and logs. It bootstraps once, then requires a new boot, exact
 source/runtime/build, service PID, lease ownership and authenticated native
 hello. This is separate successor evidence, not original handoff success or an

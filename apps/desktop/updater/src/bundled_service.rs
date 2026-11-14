@@ -410,9 +410,7 @@ fn fresh_handoff(
 
 fn verify_original(host: &LaunchAgent<'_>) -> Result<(), Failure> {
     let root = definition_root(&host.original)?;
-    let build = verified(coordination::code_build(&root))?;
-    verified(installer::validate_target(&root, host.trust))?;
-    verified(installer::MacPlatform.verify(&root, host.trust, &build, None))?;
+    verify_original_bundle(&root, host.trust)?;
     if super::super::native::runtime_stamp(&root)? != host.owner["build"]
         || verified(helper::process_executable(host.pid()?))?
             != io(root

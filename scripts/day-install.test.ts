@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { canonicalJSON, OperationJournal, payloadHash } from "../packages/daemon/src/operation-journal.ts";
+import { ownRuntime, type RuntimeBuild } from "../packages/daemon/src/runtime-owner.ts";
 import {
 	digest,
 	handoffArgs,
@@ -92,8 +95,11 @@ async function fixture() {
 		legacyUpdates() {
 			globalUpdate = false;
 		},
-		async close() {
+		async stopHTTP() {
 			await new Promise<void>((done, reject) => server.close((e) => (e ? reject(e) : done())));
+		},
+		async close() {
+			if (server.listening) await new Promise<void>((done, reject) => server.close((e) => (e ? reject(e) : done())));
 			await rm(root, { recursive: true, force: true });
 		},
 	};
@@ -123,6 +129,212 @@ test("flat Pilot.app installation preserves legacy files and refuses replacement
 		);
 	} finally {
 		await f.close();
+	}
+});
+
+async function build197Fixture() {
+	const f = await fixture();
+	await f.stopHTTP();
+	await chmod(f.profile, 0o700);
+	const activeApp = join(f.root, "active/Pilot Next.app");
+	const runtime = join(activeApp, "Contents/Resources/runtime");
+	await mkdir(runtime, { recursive: true });
+	await mkdir(join(activeApp, "Contents/MacOS"), { recursive: true });
+	await writeFile(join(activeApp, "Contents/MacOS/pilot-desktop"), "synthetic, never executable");
+	const trustFrom = join(f.root, "original/Pilot Next.app");
+	await mkdir(trustFrom, { recursive: true });
+	f.selection.trustFrom = trustFrom;
+	const old = {
+		...f.selection,
+		app: join(f.root, "original-download/Pilot Next.app"),
+		installDirectory: join(f.root, "active"),
+		source: "3bf2f7ce63205155b3cc33b5311bac675ba1dfee",
+		build: "1.125.197",
+	};
+	const retained = join(f.root, "active/selection.json");
+	await writeFile(retained, JSON.stringify(old), { mode: 0o600 });
+	const build: RuntimeBuild = {
+		schema: 1,
+		source: old.source,
+		version: "1.125.0",
+		protocol: 1,
+		platform: process.platform,
+		arch: process.arch,
+		node: process.versions.node,
+	};
+	await writeFile(join(runtime, "runtime-build.json"), JSON.stringify(build));
+	const owner = await ownRuntime(f.profile, f.selection.port, false, build, runtime);
+	const hello = {
+		daemonId: old.daemonId,
+		lineageId: old.lineageId,
+		daemonVersion: build.version,
+		protocolVersion: 1,
+		minimumClientProtocolVersion: 1,
+		platform: process.platform,
+		arch: process.arch,
+		capabilities: {
+			independentExecution: true,
+			coordinatorIsolation: false,
+			powerManagement: false,
+			systemSleepEvents: false,
+			swiftUIArtifacts: false,
+		},
+	};
+	owner.ready(hello);
+	owner.install((req, res) => {
+		assert.equal(req.url, "/api/hello");
+		assert.equal(req.headers["x-pilot-github-capability"], "a".repeat(64));
+		res.end(JSON.stringify(hello));
+	});
+	const journal = new OperationJournal(join(f.profile, "global-update-operations"), {
+		hostId: "daemon",
+		daemonId: old.daemonId,
+		lineageId: old.lineageId,
+	});
+	const lookups: unknown[] = [];
+	owner.updates(async (action, value) => {
+		assert.equal(action, "inspect", "qualification must never prepare or release");
+		assert.ok(value && typeof value === "object" && "globalUpdate" in value);
+		assert.deepEqual(Object.keys(value), ["globalUpdate"]);
+		const operation = value.globalUpdate as Parameters<OperationJournal["lookup"]>[0];
+		const host = { hostId: "daemon", daemonId: old.daemonId, lineageId: old.lineageId };
+		const payload = canonicalJSON({
+			captureHash: await digest(f.selection.savedState),
+			app: { source: f.selection.source, build: f.selection.build },
+		});
+		assert.deepEqual(operation, {
+			schemaVersion: 1,
+			operationId: f.selection.operationId,
+			producerId: f.selection.operationId,
+			sequence: 1,
+			origin: host,
+			destination: host,
+			targetId: "global-update",
+			kind: "global-update-prepare",
+			payload,
+			payloadHash: payloadHash(payload),
+		});
+		lookups.push(value);
+		return (await journal.lookup(operation)) ?? null;
+	});
+	return {
+		...f,
+		old,
+		activeApp,
+		retained,
+		runtime,
+		build,
+		owner,
+		lookups,
+		async close() {
+			await owner.close();
+			await f.close();
+		},
+	};
+}
+
+test("sealed build 197 missing capability qualifies via authenticated lookup, without journal writes", async () => {
+	const f = await build197Fixture();
+	const verified: string[] = [];
+	try {
+		assert.notEqual(f.old.app, f.selection.trustFrom);
+		assert.equal(installedApp(f.old), f.activeApp);
+		assert.notEqual(f.activeApp, f.selection.trustFrom);
+		assert.equal(
+			handoffArgs(f.selection, "apply")[handoffArgs(f.selection, "apply").indexOf("--old-app") + 1],
+			f.selection.trustFrom,
+		);
+		const before = await readdir(f.profile);
+		const verify = async (s: Selection, app = s.app) => {
+			verified.push(s.source);
+			if (s.source === f.old.source) assert.equal(app, f.activeApp);
+			await f.verify(s, app);
+		};
+		await preflight(f.selection, verify);
+		assert.deepEqual(verified, [f.selection.source, f.old.source]);
+		assert.equal(f.lookups.length, 1);
+		assert.deepEqual(await readdir(f.profile), before);
+		assert.deepEqual(await readdir(join(f.root, "installs")), []);
+		for (const [name, bytes] of Object.entries(f.files))
+			assert.equal(await readFile(join(f.profile, name), "utf8"), bytes);
+		const calls: string[] = [];
+		await migrate(f.selection, verify, (_s, action) => {
+			calls.push(action);
+			return action === "preflight"
+				? { state: "ready", changed: false }
+				: { state: "complete", completion: { role: "successor" }, releaseReceipt: { state: "accepted" } };
+		});
+		assert.deepEqual(calls, ["preflight", "apply"]);
+		assert.equal(f.lookups.length, 3);
+	} finally {
+		await f.close();
+	}
+});
+
+test("build 197 compatibility refuses wrong source, seal, runtime and profile pins before lookup", async () => {
+	for (const fault of ["legacy", "seal", "profile", "installed-app", "runtime", "idle"] as const) {
+		const f = await build197Fixture();
+		try {
+			if (fault === "legacy")
+				await writeFile(f.retained, JSON.stringify({ ...f.old, source: "bf005fd7".padEnd(40, "0") }));
+			if (fault === "seal") await writeFile(f.retained, JSON.stringify({ ...f.old, binarySha256: "0".repeat(64) }));
+			if (fault === "profile") await writeFile(f.retained, JSON.stringify({ ...f.old, daemonId: "another" }));
+			if (fault === "installed-app")
+				await writeFile(f.retained, JSON.stringify({ ...f.old, installDirectory: f.root }));
+			if (fault === "runtime")
+				await writeFile(
+					join(f.runtime, "runtime-build.json"),
+					JSON.stringify({ ...f.build, source: "0".repeat(40) }),
+				);
+			if (fault === "idle") await f.owner.close();
+			await assert.rejects(preflight(f.selection, f.verify));
+			assert.equal(f.lookups.length, 0);
+			assert.deepEqual(await readdir(join(f.root, "installs")), []);
+		} finally {
+			await f.close();
+		}
+	}
+});
+
+test("build 197 lookup fails closed on receipts, changed owners and unauthenticated responses", async () => {
+	for (const fault of ["receipt", "owner", "mac", "nonce", "root", "status"] as const) {
+		const f = await build197Fixture();
+		try {
+			const owner = JSON.parse(await readFile(join(f.profile, ".daemon-owner.json"), "utf8"));
+			f.owner.server.prependListener("request", (req, res) => {
+				if (req.url !== "/__pilot_runtime_update/v1") return;
+				if (fault === "status") {
+					const writeHead = res.writeHead.bind(res);
+					res.writeHead = ((_status: number, headers: Record<string, string>) =>
+						writeHead(409, headers)) as typeof res.writeHead;
+				}
+				const end = res.end.bind(res);
+				res.end = ((raw: string) => {
+					const envelope = JSON.parse(raw);
+					const proof = JSON.parse(envelope.body);
+					if (fault === "receipt") proof.receipt = { state: "accepted" };
+					if (fault === "nonce") proof.nonce = "0".repeat(64);
+					if (fault === "root") proof.runtimeRoot = f.root;
+					envelope.body = JSON.stringify(proof);
+					envelope.mac = createHmac("sha256", Buffer.from(owner.secret, "hex"))
+						.update(`update/v1\n${envelope.body}`)
+						.digest("hex");
+					if (fault === "mac") envelope.mac = "0".repeat(64);
+					return end(JSON.stringify(envelope));
+				}) as typeof res.end;
+			});
+			if (fault === "owner")
+				f.owner.updates(async () => {
+					const path = join(f.profile, ".daemon-owner.json");
+					const owner = JSON.parse(await readFile(path, "utf8"));
+					await writeFile(path, JSON.stringify({ ...owner, boot: "0".repeat(64) }));
+					return null;
+				});
+			await assert.rejects(preflight(f.selection, f.verify));
+			assert.deepEqual(await readdir(join(f.root, "installs")), []);
+		} finally {
+			await f.close();
+		}
 	}
 });
 

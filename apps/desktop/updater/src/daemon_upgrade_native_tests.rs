@@ -51,7 +51,14 @@ if(!existsSync(process.env.PILOT_HOME+'/lost-ready')) owner.ready({daemonId:'fix
 process.on('SIGTERM',async()=>{await owner.close();process.exit(0)});
 "#;
 
-fn bundle(root: &Path, name: &str, id: &str, build: &str, node: &Path, _new: bool) -> PathBuf {
+pub(super) fn bundle(
+    root: &Path,
+    name: &str,
+    id: &str,
+    build: &str,
+    node: &Path,
+    _new: bool,
+) -> PathBuf {
     let app = root.join(name);
     let runtime = app.join(crate::layout::RUNTIME);
     fs::create_dir_all(runtime.join("node/bin")).unwrap();

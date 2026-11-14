@@ -56,6 +56,194 @@ fn fixture() -> (Temp, PathBuf, Runtime) {
 }
 
 #[test]
+#[ignore = "explicit signed legacy rename fixture; private Node child, no launchd service"]
+fn native_legacy_app_rename_verifies_only_the_existing_service() {
+    let node = PathBuf::from(
+        std::env::var_os("PILOT_DAEMON_UPGRADE_FIXTURE_NODE").expect("explicit Node 24+ fixture"),
+    );
+    let temp = Temp::new();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let app = super::super::native_tests::bundle(
+        temp.path(),
+        "Pilot Next.app",
+        "com.example.synthetic.next",
+        "197",
+        &node,
+        false,
+    );
+    let mut trust = trust();
+    trust.application_id = "com.example.synthetic.next".into();
+    trust.code_requirement = "identifier \"com.example.synthetic.next\"".into();
+    trust.current_build = "201".into();
+    trust.bundle_name = "Pilot.app".into();
+    let current = super::super::native_tests::bundle(
+        temp.path(),
+        "Pilot.app",
+        &trust.application_id,
+        "201",
+        &node,
+        true,
+    );
+    let profile = temp.path().join("profile");
+    fs::create_dir(&profile).unwrap();
+    fs::set_permissions(&profile, fs::Permissions::from_mode(0o700)).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let location = Location {
+        home: profile,
+        port: listener.local_addr().unwrap().port(),
+        policy: Default::default(),
+    };
+    drop(listener);
+    struct Child(std::process::Child);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let runtime = app.join(crate::layout::RUNTIME);
+    let _child = Child(
+        std::process::Command::new(runtime.join("node/bin/node"))
+            .arg(runtime.join("packages/daemon/src/main.ts"))
+            .env("PILOT_HOME", &location.home)
+            .env("PILOT_PORT", location.port.to_string())
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let owner = super::super::super::native::wait_registered(&location, &app).unwrap();
+    let cancel = AtomicBool::new(false);
+    let mut host = launch_agent(
+        location,
+        &current,
+        &trust,
+        "fixture-daemon",
+        "fixture-lineage",
+        &cancel,
+    )
+    .unwrap();
+    host.owner = owner.clone();
+    host.original = json!({"ProgramArguments":[runtime.join("node/bin/node"), runtime.join("packages/daemon/src/main.ts")]});
+    assert_eq!(
+        host.verify_target(),
+        Ok(()),
+        "new Pilot.app remains verified"
+    );
+    for managed in [false, true] {
+        host.original["PilotNextManaged"] = json!(managed);
+        assert_eq!(
+            host.verify_running_payload(),
+            Ok(()),
+            "legacy managed={managed}"
+        );
+        assert_eq!(
+            verify_original(&host),
+            Ok(()),
+            "legacy original managed={managed}"
+        );
+    }
+    assert!(
+        installer::validate_target(&app, &trust).is_err(),
+        "new targets still require Pilot.app"
+    );
+    assert!(Runtime::verify(&app, &app, &trust, &"a".repeat(40), "197").is_err());
+    host.current = app.clone();
+    assert!(
+        host.verify_target().is_err(),
+        "historical name never authorizes a new target"
+    );
+    let mut wrong_identity = trust.clone();
+    wrong_identity.application_id = "com.example.other".into();
+    assert!(verify_original_bundle(&app, &wrong_identity).is_err());
+    let mut wrong_requirement = trust.clone();
+    wrong_requirement.code_requirement = "identifier \"com.example.other\"".into();
+    assert!(verify_original_bundle(&app, &wrong_requirement).is_err());
+    fs::set_permissions(&app, fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(
+        verify_original_bundle(&app, &trust).is_err(),
+        "unsafe original permissions"
+    );
+    fs::set_permissions(&app, fs::Permissions::from_mode(0o755)).unwrap();
+    let renamed = temp.path().join("Other.app");
+    fs::rename(&app, &renamed).unwrap();
+    assert!(
+        verify_original_bundle(&renamed, &trust).is_err(),
+        "no arbitrary old names"
+    );
+    symlink(&renamed, &app).unwrap();
+    assert!(
+        verify_original_bundle(&app, &trust).is_err(),
+        "no original symlink"
+    );
+    fs::remove_file(&app).unwrap();
+    fs::rename(&renamed, &app).unwrap();
+    for field in ["build", "runtimeRoot", "pid"] {
+        host.owner[field] = Value::Null;
+        assert!(
+            host.verify_running_payload().is_err(),
+            "substituted {field}"
+        );
+        if field != "runtimeRoot" {
+            assert!(
+                verify_original(&host).is_err(),
+                "substituted original {field}"
+            );
+        }
+        host.owner = owner.clone();
+    }
+    let stamp_path = runtime.join("runtime-build.json");
+    let stamp = fs::read(&stamp_path).unwrap();
+    let mut changed: Value = serde_json::from_slice(&stamp).unwrap();
+    changed["source"] = json!("b".repeat(40));
+    fs::write(&stamp_path, serde_json::to_vec(&changed).unwrap()).unwrap();
+    command(
+        "/usr/bin/codesign",
+        &[
+            "--force".as_ref(),
+            "--sign".as_ref(),
+            "-".as_ref(),
+            app.as_os_str(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        verify_original_bundle(&app, &trust),
+        Ok(()),
+        "changed source is genuinely signed"
+    );
+    assert!(
+        host.verify_running_payload().is_err(),
+        "signed source must still match the live boot"
+    );
+    assert!(
+        verify_original(&host).is_err(),
+        "original source must match the live boot"
+    );
+    fs::write(&stamp_path, stamp).unwrap();
+    command(
+        "/usr/bin/codesign",
+        &[
+            "--force".as_ref(),
+            "--sign".as_ref(),
+            "-".as_ref(),
+            app.as_os_str(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(host.verify_running_payload(), Ok(()));
+    assert_eq!(verify_original(&host), Ok(()));
+    fs::write(runtime.join("packages/daemon/src/main.ts"), b"tampered").unwrap();
+    assert!(
+        host.verify_running_payload().is_err(),
+        "legacy name does not bypass signature"
+    );
+    assert!(
+        verify_original(&host).is_err(),
+        "original signature stays required"
+    );
+}
+
+#[test]
 fn preflight_captures_the_private_definition_inode_before_revalidation() {
     let (temp, app, runtime) = fixture();
     let cancel = AtomicBool::new(false);

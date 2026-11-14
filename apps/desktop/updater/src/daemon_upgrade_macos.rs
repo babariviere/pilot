@@ -339,12 +339,20 @@ impl LaunchAgent<'_> {
         self.check_cancel()?;
         let root = definition_root(&self.original)?;
         let managed = self.original["PilotNextManaged"] == true;
-        if !managed && root.file_name().is_none_or(|name| name != "Pilot.app") {
+        let legacy = legacy_app(&root, self.trust);
+        if legacy {
+            verify_original_bundle(&root, self.trust)?;
+            if super::native::runtime_stamp(&root)? != self.owner["build"] {
+                return Err(Failure::Unverified);
+            }
+        }
+        if !managed && !legacy && root.file_name().is_none_or(|name| name != "Pilot.app") {
             return Err(Failure::Unsupported);
         }
         if managed
             && root != self.current
             && !prior_capsule(&root, self.trust, &self.home)
+            && !legacy
             && root.file_name().is_none_or(|name| name != "Pilot.app")
         {
             return Err(Failure::Unsupported);
@@ -359,7 +367,7 @@ impl LaunchAgent<'_> {
         // Bind that boot to launchd's exact PID and the same PID's profile lease.
         // Never infer executable ownership from argv or any merely held lease.
         verify_process_owner(self.pid()?, &self.location.home)?;
-        if !managed
+        if (!managed || legacy)
             && verified(helper::process_executable(self.pid()?))?
                 != io(root
                     .join(crate::layout::RUNTIME)
@@ -735,6 +743,25 @@ fn prior_capsule(root: &Path, trust: &Trust, home: &Path) -> bool {
                 .iter()
                 .any(|name| store == home.join("Library/Application Support").join(name))
         })
+}
+fn legacy_app(root: &Path, trust: &Trust) -> bool {
+    trust.bundle_name == "Pilot.app"
+        && root
+            .file_name()
+            .is_some_and(|name| name == "Pilot Next.app")
+}
+
+// Only an existing service may use the historical name. All other trust fields
+// and the full native/path verification remain unchanged; targets stay strict.
+fn verify_original_bundle(root: &Path, trust: &Trust) -> Result<(), Failure> {
+    use crate::installer::Platform;
+    let mut original_trust = trust.clone();
+    if legacy_app(root, trust) {
+        original_trust.bundle_name = "Pilot Next.app".into();
+    }
+    let build = verified(coordination::code_build(root))?;
+    verified(installer::validate_target(root, &original_trust))?;
+    verified(installer::MacPlatform.verify(root, &original_trust, &build, None))
 }
 fn runtime_path(runtime: &Path, previous: &str) -> String {
     // Replace prior injected bundle paths, not one PATH entry per app update.

@@ -6,6 +6,7 @@ import { constants } from "node:fs";
 import { lstat, open, readFile, realpath, rename } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -18,6 +19,33 @@ const label = "com.babariviere.pilot.daemon";
 const run = (command: string, args: string[]) =>
 	execFileSync(command, args, { encoding: "utf8", timeout: 130_000, stdio: ["ignore", "pipe", "pipe"] });
 const json = async (path: string) => JSON.parse(await readFile(path, "utf8"));
+
+/** A historical launchd service may own managed=0. Prove release, not enrollment. */
+export async function verifyLegacyLeaseReleased(home: string) {
+	const path = join(home, ".daemon-owner.sqlite");
+	const before = await lstat(path);
+	assert.ok(
+		before.isFile() &&
+			before.nlink === 1 &&
+			before.uid === process.getuid?.() &&
+			!(before.mode & 0o077) &&
+			before.size <= 1024 * 1024,
+		"Unsafe profile lease",
+	);
+	const db = new DatabaseSync(path, { timeout: 0 });
+	try {
+		db.exec("BEGIN EXCLUSIVE");
+		assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 1);
+		const rows = db.prepare("SELECT singleton, managed FROM runtime_owner").all();
+		assert.equal(rows.length, 1);
+		assert.equal(rows[0]?.singleton, 1);
+		assert.ok(rows[0]?.managed === 0 || rows[0]?.managed === 1);
+		const after = await lstat(path);
+		assert.ok(after.isFile() && after.dev === before.dev && after.ino === before.ino, "Profile lease changed");
+	} finally {
+		db.close();
+	}
+}
 
 async function privateBytes(path: string) {
 	const f = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -224,11 +252,7 @@ async function recovery(s: Selection, inspectOnly: boolean) {
 				assert.equal((e as { status?: number }).status, 113, "Service absence unconfirmed");
 			}
 			await unchanged();
-			assert.equal(
-				await inspectRuntime(s.targetProfile, s.port, old.previousBuild, old.previousRuntime),
-				"idle",
-				"Profile lease not released",
-			);
+			await verifyLegacyLeaseReleased(s.targetProfile);
 			const listener = createServer();
 			await new Promise<void>((accept, reject) => {
 				listener.once("error", reject);
