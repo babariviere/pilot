@@ -27,12 +27,12 @@
 		"@earendil-works/pi-coding-agent": "1.5.2",
 		"@earendil-works/pi-durable": "1.5.2",
 		"@earendil-works/pi-mcp": "1.5.2",
-		"@gotgenes/pi-anthropic-auth": "3.4.4",
+		"@gotgenes/pi-anthropic-auth": "3.5.0",
 		"@pilot/artifacts": "workspace:*",
 		"@pilot/protocol": "workspace:*",
 		"@pilot/telemetry": "workspace:*",
 		"jiti": "2.7.0",
-		"pi-posthorse": "0.10.10",
-		"typebox": "1.4.6"
+		"pi-posthorse": "0.10.29",
+		"typebox": "1.4.7"
 	}
 }
