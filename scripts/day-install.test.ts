@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import {
 	digest,
 	handoffArgs,
 	stageApp as install,
+	installedApp,
 	launcher,
 	install as migrate,
 	preflight,
@@ -97,6 +98,33 @@ async function fixture() {
 		},
 	};
 }
+
+test("flat Pilot.app installation preserves legacy files and refuses replacement", async () => {
+	const f = await fixture();
+	try {
+		const app = f.selection.app.replace("Pilot Next.app", "Pilot.app");
+		await rename(f.selection.app, app);
+		const s = { ...f.selection, app, trustFrom: app, appDestination: join(f.root, "installs/Pilot.app") };
+		const legacy = join(f.root, "installs/Pilot/Pilot Next.app");
+		await mkdir(legacy, { recursive: true });
+		await writeFile(join(legacy, "keep"), "legacy");
+		await install(s, f.verify);
+		assert.equal(installedApp(s), s.appDestination);
+		assert.equal(await readFile(join(legacy, "keep"), "utf8"), "legacy");
+		assert.match(launcher(s), /installs\/Pilot\.app\/Contents\/MacOS\/pilot-desktop/);
+		assert.match(await install(s, f.verify), /Already installed/);
+		await assert.rejects(
+			install({ ...s, installDirectory: join(f.root, "installs/other") }, f.verify),
+			/App destination exists/,
+		);
+		await assert.rejects(
+			preflight({ ...s, appDestination: join(f.root, "Pilot.app") }, f.verify),
+			/Flat installation/,
+		);
+	} finally {
+		await f.close();
+	}
+});
 
 test("native interface pins the exact original operation and profile without credentials", async () => {
 	const f = await fixture();

@@ -21,6 +21,8 @@ Use the [connected candidate recipe](../../docs/technical/day-connected-candidat
 to prepare the real native app without installing or updating it.
 For personal connected use, see [installation preparation](../../docs/technical/day-install.md).
 It reuses the same profile, hands off the daemon and offers explicit legacy retirement.
+New Day distributions are named `Pilot.app`, display Pilot, and can install at
+`~/Applications/Pilot.app`. Legacy app paths and all profile/service identities stay unchanged.
 
 ## Run
 

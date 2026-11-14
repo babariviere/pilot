@@ -34,8 +34,8 @@ def configuration(value):
 
 def trust_from(app):
     app = Path(app)
-    if not app.is_absolute() or app.is_symlink() or app.name != "Pilot Next.app":
-        raise ValueError("Select the existing verified Pilot Next.app explicitly")
+    if not app.is_absolute() or app.is_symlink() or app.name not in ("Pilot.app", "Pilot Next.app"):
+        raise ValueError("Select the existing verified Pilot app explicitly")
     app = app.resolve(strict=True)
     value = bundle.read_json(app / "Contents/Resources/updater-inputs.json")
     config = configuration(value["configuration"])
@@ -107,8 +107,8 @@ def prepare(source, app, output):
 def assemble(inputs, output):
     """Local development assembly and code sealing. Never called by prepare."""
     output = temporary_output(output)
-    if output.name != "Pilot Next.app":
-        raise ValueError("The production bootstrap requires the preserved bundle name")
+    if output.name != "Pilot.app":
+        raise ValueError("The Day bootstrap requires Pilot.app")
     inputs, value, config, version = checked_inputs(inputs)
     contents = output / "Contents"
     try:
@@ -152,7 +152,7 @@ def verify(app):
     contents = app / "Contents"
     value = bundle.read_json(contents / "Resources/connected-candidate.json")
     config = configuration(value["updater_configuration"])
-    if (app.name != "Pilot Next.app" or value.get("kind") != "connected-native-candidate"
+    if (app.name != "Pilot.app" or value.get("kind") != "connected-native-candidate"
             or value.get("installable_update") is not False or value.get("bundled_daemon") is not False
             or (contents / "Resources/runtime").exists() or (contents / "Helpers").exists()):
         raise ValueError("Not a connected-only candidate")
@@ -197,7 +197,7 @@ def main():
         print("Prepared inputs only. Assemble the temporary development app with:")
         print("No install, replacement or live update is included.")
         print(shlex.join([sys.executable, str(Path(__file__).resolve()), "assemble", "--inputs", str(output),
-                          "--output", str(output.parent / "Pilot Next.app")]))
+                          "--output", str(output.parent / "Pilot.app")]))
     elif args.action == "assemble":
         print(assemble(args.inputs, args.output))
     else:

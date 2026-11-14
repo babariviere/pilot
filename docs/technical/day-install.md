@@ -52,13 +52,21 @@ source containing this installer's `retire` entry when optional cleanup is wante
 
 ## Explicit selection and commands
 
+New Day bundles are named `Pilot.app` and display **Pilot**. To install at
+`~/Applications/Pilot.app` without replacing the existing `~/Applications/Pilot`
+directory, set `appDestination` to that absolute app path. Set `installDirectory`
+to a fresh sibling directory for selection, handoff records and the launcher.
+Both paths must have the same owned, non-group/world-writable parent. Existing
+apps are never overwritten. Historical `Pilot Next.app` selections and entered
+operations keep their original paths and remain lookup-only.
+
 Create a private selection file outside the profile. Use absolute canonical
 paths and actual connection values. The source is the full immutable commit;
 the digest is the sealed executable's `shasum -a 256` result.
 
 ```json
 {
-  "app": "/absolute/input/Pilot Next.app",
+  "app": "/absolute/input/Pilot.app",
   "trustFrom": "/absolute/installed/Pilot Next.app",
   "source": "FULL_40_CHARACTER_COMMIT",
   "build": "NUMERIC_DOTTED_BUILD",
@@ -68,7 +76,8 @@ the digest is the sealed executable's `shasum -a 256` result.
   "savedState": "/Users/you/Library/Application Support/Pilot Next/state-v1.json",
   "sourceProfile": "/absolute/existing/pilot-profile",
   "targetProfile": "/absolute/existing/pilot-profile",
-  "installDirectory": "/Users/you/Applications/Pilot",
+  "installDirectory": "/Users/you/Applications/Pilot-install",
+  "appDestination": "/Users/you/Applications/Pilot.app",
   "port": 24680,
   "daemonId": "EXACT_DAEMON_ID",
   "lineageId": "EXACT_STORAGE_LINEAGE"

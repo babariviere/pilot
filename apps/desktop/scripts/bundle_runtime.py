@@ -338,8 +338,10 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
         if (inputs.get("kind") != "development-rust-inputs" or inputs.get("profile") != "dev"
                 or inputs.get("installable_update") is not False):
             raise ValueError("Unsigned Day assembly requires development inputs, not a release")
-    if output.exists() or output.is_symlink() or output.name != "Pilot Next.app":
-        raise ValueError("Use a fresh output named Pilot Next.app")
+    bundle_name = "Pilot.app" if gui_resources is not None else "Pilot Next.app"
+    display_name = "Pilot" if gui_resources is not None else "Pilot Next"
+    if output.exists() or output.is_symlink() or output.name != bundle_name:
+        raise ValueError("Use a fresh output named " + bundle_name)
     build = validate_runtime(runtime, expected_source)
     bundle_build = bundle_build or build["version"]
     if not re.fullmatch(r"(?:0|[1-9][0-9]{0,8})(?:\.(?:0|[1-9][0-9]{0,8})){0,3}", bundle_build):
@@ -418,11 +420,11 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
         shutil.copyfile(native / "PilotSystemEvents", helper / "MacOS/PilotSystemEvents")
         (helper / "MacOS/PilotSystemEvents").chmod(0o755)
         with (helper / "Info.plist").open("wb") as stream:
-            plistlib.dump(dict(CFBundleIdentifier=APP_ID + ".system-events", CFBundleName="Pilot Next System Events",
+            plistlib.dump(dict(CFBundleIdentifier=APP_ID + ".system-events", CFBundleName=display_name + " System Events",
                                CFBundleExecutable="PilotSystemEvents", CFBundlePackageType="APPL", CFBundleVersion="1",
                                LSUIElement=True, LSMinimumSystemVersion="15.0"), stream)
         with (contents / "Info.plist").open("wb") as stream:
-            plistlib.dump(dict(CFBundleIdentifier=APP_ID, CFBundleName="Pilot Next", CFBundleDisplayName="Pilot Next",
+            plistlib.dump(dict(CFBundleIdentifier=APP_ID, CFBundleName=display_name, CFBundleDisplayName=display_name,
                                CFBundleExecutable="pilot-desktop", CFBundlePackageType="APPL", CFBundleVersion=bundle_build,
                                CFBundleShortVersionString=build["version"], CFBundleIconFile="AppIcon", LSMinimumSystemVersion="15.0", NSHighResolutionCapable=True,
                                CFBundleURLTypes=[dict(CFBundleURLName=APP_ID + ".chat", CFBundleURLSchemes=["pilot"], CFBundleTypeRole="Viewer")]), stream)

@@ -13,6 +13,7 @@ default = []
 native = []
 native-macos = ["native"]
 native-linux = ["native"]
+day-app = []
 fixture = []
 # Numeric phase durations only, for isolated lifecycle qualification builds.
 lifecycle-timings = []

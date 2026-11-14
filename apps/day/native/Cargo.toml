@@ -44,7 +44,7 @@ artifact-host = []
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = "=0.3.1"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSCalendar", "NSDate", "NSString", "NSTimeZone"] }
-pilot-desktop-updater = { path = "../../desktop/updater", features = ["native-macos"] }
+pilot-desktop-updater = { path = "../../desktop/updater", features = ["native-macos", "day-app"] }
 nsh-platform-macos = "=0.5.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]

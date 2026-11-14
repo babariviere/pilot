@@ -583,6 +583,7 @@ class BundleRuntimeTests(unittest.TestCase):
             self.assemble()
 
     def gui_resources(self):
+        self.output = self.root / "Pilot.app"
         # Day alone adds a native source host. It is never executed by these synthetic fixtures.
         binary = self.executables / day.ARTIFACT_HOST
         binary.write_bytes(b"\xcf\xfa\xed\xfe" + b"synthetic only")
@@ -615,6 +616,11 @@ class BundleRuntimeTests(unittest.TestCase):
                             gui_resources=resources)
         self.assertTrue((self.output / "Contents/MacOS/pilot-desktop").is_file())
         self.assertFalse((self.output / "Contents/MacOS/PilotDay").exists())
+        with (self.output / "Contents/Info.plist").open("rb") as stream:
+            info = plistlib.load(stream)
+        self.assertEqual(self.output.name, "Pilot.app")
+        self.assertEqual(info["CFBundleName"], "Pilot")
+        self.assertEqual(info["CFBundleDisplayName"], "Pilot")
         self.assertEqual(bundle.inventory(self.output / "Contents/Resources/nsh"), value["files"])
         bundle.verify(self.output)
         (self.output / "Contents/Resources/nsh/bundle.nshc").write_text("changed")

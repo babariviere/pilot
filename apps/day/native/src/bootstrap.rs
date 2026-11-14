@@ -104,7 +104,7 @@ fn resource_directory(executable: &Path) -> Result<PathBuf, Error> {
     if executable.file_name().and_then(|s| s.to_str()) != Some("pilot-desktop")
         || macos.file_name().and_then(|s| s.to_str()) != Some("MacOS")
         || contents.file_name().and_then(|s| s.to_str()) != Some("Contents")
-        || app.file_name().and_then(|s| s.to_str()) != Some("Pilot Next.app")
+        || app.file_name().and_then(|s| s.to_str()) != Some("Pilot.app")
     {
         return Err(Error::Identity);
     }
@@ -363,15 +363,14 @@ mod tests {
     #[test]
     fn packaged_resource_identity_has_no_development_fallback() {
         assert_eq!(
-            resource_directory(Path::new(
-                "/tmp/Pilot Next.app/Contents/MacOS/pilot-desktop"
-            )),
-            Ok(PathBuf::from("/tmp/Pilot Next.app/Contents/Resources/nsh"))
+            resource_directory(Path::new("/tmp/Pilot.app/Contents/MacOS/pilot-desktop")),
+            Ok(PathBuf::from("/tmp/Pilot.app/Contents/Resources/nsh"))
         );
         for exe in [
             "/tmp/pilot-desktop",
             "/tmp/Pilot Day.app/Contents/MacOS/PilotDay",
             "/tmp/Pilot Next.app/Contents/MacOS/PilotDay",
+            "/tmp/Pilot Next.app/Contents/MacOS/pilot-desktop",
         ] {
             assert_eq!(resource_directory(Path::new(exe)), Err(Error::Identity));
         }

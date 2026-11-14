@@ -346,15 +346,16 @@ fn old_app_unused(
         ffi::{CStr, CString},
         os::{fd::AsRawFd, unix::ffi::OsStrExt},
     };
-    if old.file_name().is_none_or(|n| n != "Pilot Next.app")
+    if old
+        .file_name()
+        .is_none_or(|n| n != "Pilot Next.app" && n != "Pilot.app")
         || old.canonicalize().map_err(failure)? != old
         || current.starts_with(old)
         || profile.starts_with(old)
         || old.starts_with(profile)
     {
         return Err(
-            "Old app must be an explicit separate canonical Pilot Next.app, outside profile data"
-                .into(),
+            "Old app must be an explicit separate canonical Pilot app, outside profile data".into(),
         );
     }
     let lease = OpenOptions::new()
@@ -374,8 +375,16 @@ fn old_app_unused(
     let build = unsafe { CStr::from_ptr(bytes.as_ptr()) }
         .to_str()
         .map_err(failure)?;
+    // The selected historical app keeps its original name and identity.
+    let mut old_trust = trust.clone();
+    old_trust.bundle_name = old
+        .file_name()
+        .unwrap()
+        .to_str()
+        .ok_or("invalid app name")?
+        .into();
     NativePlatform
-        .verify(old, trust, build, None)
+        .verify(old, &old_trust, build, None)
         .map_err(failure)?;
     let identity = pilot_desktop_updater::runtime::identity(old).map_err(failure)?;
     // SAFETY: owned directory descriptor, live C string and bounded read-only inspection.

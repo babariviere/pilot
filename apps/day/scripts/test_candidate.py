@@ -89,7 +89,7 @@ class CandidateTests(unittest.TestCase):
         self.assertNotIn("approval", text.lower())
         self.assertEqual(shlex.split(text.splitlines()[-1]),
                          [candidate.sys.executable, str(Path(candidate.__file__).resolve()), "assemble",
-                          "--inputs", str(output), "--output", str(output.parent / "Pilot Next.app")])
+                          "--inputs", str(output), "--output", str(output.parent / "Pilot.app")])
 
     def test_cli_help_describes_local_assembly_without_granting_install_or_launch(self):
         stdout = io.StringIO()
@@ -187,7 +187,7 @@ class CandidateTests(unittest.TestCase):
             candidate.checked_inputs(self.inputs)
 
     def test_explicit_assembly_is_connected_only_and_keeps_exact_identity(self):
-        app = self.root / "Pilot Next.app"
+        app = self.root / "Pilot.app"
         with self.mocked(), patch.object(day, "compiled_receipt", return_value=self.compiled):
             candidate.assemble(self.inputs, app)
             value = candidate.verify(app)
@@ -204,7 +204,7 @@ class CandidateTests(unittest.TestCase):
         self.assertFalse(any(call[0] in ("open", "/usr/bin/open", "launchctl") for call in self.calls))
 
     def test_changed_compiled_identity_and_resource_copy_fail_closed(self):
-        app = self.root / "Pilot Next.app"
+        app = self.root / "Pilot.app"
         with self.mocked(), patch.object(day, "compiled_receipt", return_value=self.compiled):
             candidate.assemble(self.inputs, app)
             self.compiled = self.compiled | {"source":"c" * 40}
@@ -215,7 +215,7 @@ class CandidateTests(unittest.TestCase):
                 candidate.verify(app)
 
     def test_failed_signature_does_not_leave_an_apparently_ready_app(self):
-        app = self.root / "Pilot Next.app"
+        app = self.root / "Pilot.app"
         with self.mocked(), patch.object(day, "compiled_receipt", return_value=self.compiled), \
                 patch.object(candidate, "verify", side_effect=ValueError("signature refused")):
             with self.assertRaisesRegex(ValueError, "signature refused"):

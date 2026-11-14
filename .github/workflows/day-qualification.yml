@@ -112,9 +112,9 @@ jobs:
           python3 apps/desktop/scripts/day_build_inputs.py --source "$SOURCE" --output "$RUNNER_TEMP/day-inputs"
           python3 apps/desktop/scripts/day_qualification.py --source "$SOURCE" --inputs "$RUNNER_TEMP/day-inputs" --runtime "$RUNNER_TEMP/day-runtime" --native "$RUNNER_TEMP/day-helpers" --output "$RUNNER_TEMP/day-qualification.json"
           mkdir "$RUNNER_TEMP/day-bundle"
-          python3 apps/desktop/scripts/bundle_runtime.py bundle --unsigned-day --source "$SOURCE" --runtime "$RUNNER_TEMP/day-runtime" --executables "$RUNNER_TEMP/day-inputs" --native "$RUNNER_TEMP/day-helpers" --gui-resources "$RUNNER_TEMP/day-inputs/nsh" --output "$RUNNER_TEMP/day-bundle/Pilot Next.app"
-          python3 apps/desktop/scripts/bundle_runtime.py verify --unsigned-day "$RUNNER_TEMP/day-bundle/Pilot Next.app"
-          ditto -c -k --keepParent "$RUNNER_TEMP/day-bundle/Pilot Next.app" "$RUNNER_TEMP/Pilot-Day-unsigned.zip"
+          python3 apps/desktop/scripts/bundle_runtime.py bundle --unsigned-day --source "$SOURCE" --runtime "$RUNNER_TEMP/day-runtime" --executables "$RUNNER_TEMP/day-inputs" --native "$RUNNER_TEMP/day-helpers" --gui-resources "$RUNNER_TEMP/day-inputs/nsh" --output "$RUNNER_TEMP/day-bundle/Pilot.app"
+          python3 apps/desktop/scripts/bundle_runtime.py verify --unsigned-day "$RUNNER_TEMP/day-bundle/Pilot.app"
+          ditto -c -k --keepParent "$RUNNER_TEMP/day-bundle/Pilot.app" "$RUNNER_TEMP/Pilot-Day-unsigned.zip"
           echo 'Unsigned Day bundle inventory checked. No signature, launch, release, native acceptance or cutover.' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload unsigned Day bundle evidence
         uses: actions/upload-artifact@v4

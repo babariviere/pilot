@@ -17,6 +17,8 @@ export interface Selection {
 	sourceProfile: string;
 	targetProfile: string;
 	installDirectory: string;
+	/** Optional flat app location. Installation records stay in installDirectory. */
+	appDestination?: string;
 	port: number;
 	daemonId: string;
 	lineageId: string;
@@ -69,7 +71,8 @@ export async function verifyApp(s: Selection, app = s.app) {
 		"Connected installation requires macOS arm64.",
 	);
 	await canonical(app);
-	requireThat(basename(app) === "Pilot Next.app", "Keep the supported Pilot Next.app bundle name.");
+	requireThat(["Pilot.app", "Pilot Next.app"].includes(basename(app)), "Keep the selected Pilot bundle name.");
+	requireThat(basename(app) === basename(s.app), "Copied bundle name differs from the selected app.");
 	// Daemon replacement needs the full distribution, never the runtime-free candidate.
 	requireThat(
 		await exists(join(app, "Contents/Resources/runtime/runtime-build.json")),
@@ -190,7 +193,7 @@ async function get(s: Selection, path: string) {
 
 export async function preflight(s: Selection, verify = verifyApp) {
 	const fields =
-		"app trustFrom source binarySha256 sourceProfile targetProfile installDirectory port daemonId lineageId projectId projectPath planningModel build operationId savedState updaterPublicKey".split(
+		"app trustFrom source binarySha256 sourceProfile targetProfile installDirectory appDestination port daemonId lineageId projectId projectPath planningModel build operationId savedState updaterPublicKey".split(
 			" ",
 		);
 	requireThat(
@@ -223,6 +226,17 @@ export async function preflight(s: Selection, verify = verifyApp) {
 		"Use an absolute installation directory.",
 	);
 	const parent = dirname(s.installDirectory);
+	if (s.appDestination !== undefined) {
+		requireThat(
+			isAbsolute(s.appDestination) &&
+				resolve(s.appDestination) === s.appDestination &&
+				dirname(s.appDestination) === parent &&
+				basename(s.appDestination) === "Pilot.app" &&
+				basename(s.app) === "Pilot.app" &&
+				s.appDestination !== s.installDirectory,
+			"Flat installation must select Pilot.app beside its separate installation records.",
+		);
+	}
 	await canonical(parent);
 	const st = await lstat(parent);
 	requireThat(
@@ -230,8 +244,10 @@ export async function preflight(s: Selection, verify = verifyApp) {
 		"Installation parent must be yours and not group/world writable.",
 	);
 	for (const protectedPath of [s.app, s.trustFrom, s.sourceProfile]) {
-		const rel = relative(protectedPath, s.installDirectory);
-		requireThat(rel.startsWith("../"), "Install outside the app and data profile.");
+		for (const destination of [s.installDirectory, installedApp(s)]) {
+			const rel = relative(protectedPath, destination);
+			requireThat(rel.startsWith("../"), "Install outside the app and data profile.");
+		}
 	}
 	await verify(s);
 	const hello = await get(s, "/api/hello");
@@ -252,9 +268,10 @@ export async function preflight(s: Selection, verify = verifyApp) {
 }
 
 const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
+export const installedApp = (s: Selection) => s.appDestination ?? join(s.installDirectory, basename(s.app));
 export function launcher(s: Selection) {
 	const args = [
-		join(s.installDirectory, "Pilot Next.app/Contents/MacOS/pilot-desktop"),
+		join(installedApp(s), "Contents/MacOS/pilot-desktop"),
 		"--profile",
 		s.targetProfile,
 		"--port",
@@ -278,7 +295,7 @@ export async function stageApp(s: Selection, verify = verifyApp) {
 			(await readFile(join(s.installDirectory, "selection.json"), "utf8")) === binding,
 			"Existing installation has another selection. Use a fresh directory; nothing was replaced.",
 		);
-		await verify(s, join(s.installDirectory, "Pilot Next.app"));
+		await verify(s, installedApp(s));
 		requireThat(
 			(await readFile(join(s.installDirectory, "Launch Day.command"), "utf8")) === launcher(s),
 			"Installed launcher changed. Nothing was replaced.",
@@ -287,13 +304,17 @@ export async function stageApp(s: Selection, verify = verifyApp) {
 	}
 	const stage = await mkdtemp(join(dirname(s.installDirectory), ".day-install-"));
 	try {
-		const app = join(stage, "Pilot Next.app");
+		const app = join(stage, basename(s.app));
 		await cp(s.app, app, { recursive: true, verbatimSymlinks: true, errorOnExist: true, force: false });
 		await verify(s, app);
 		await writeFile(join(stage, "selection.json"), binding, { mode: 0o600, flag: "wx" });
 		await writeFile(join(stage, "Launch Day.command"), launcher(s), { mode: 0o700, flag: "wx" });
 		await identity(s);
 		requireThat(!(await exists(s.installDirectory)), "Installation destination appeared. Nothing was replaced.");
+		if (s.appDestination) {
+			requireThat(!(await exists(s.appDestination)), "App destination exists. Nothing was replaced.");
+			await rename(app, s.appDestination);
+		}
 		// Only a fresh side-by-side directory is published. No app/profile replacement.
 		await rename(stage, s.installDirectory);
 		return "Installed, not launched. Open Launch Day.command when ready.";
@@ -374,7 +395,7 @@ async function durableNew(path: string, value: unknown) {
 }
 
 export async function install(s: Selection, verify = verifyApp, native = nativeAction) {
-	const app = join(s.installDirectory, "Pilot Next.app");
+	const app = installedApp(s);
 	const entered = join(s.installDirectory, "handoff-entered.json");
 	if (await exists(entered)) {
 		requireThat(isDeepStrictEqual(await json(entered), s), "Retained operation selection differs. Nothing replayed.");
@@ -414,12 +435,12 @@ async function main() {
 		);
 		if (mode === "install") result = await install(s);
 		else {
-			const app = join(s.installDirectory, "Pilot Next.app");
+			const app = installedApp(s);
 			await verifyApp(s, app);
 			result = nativeAction(s, "retire", app);
 		}
 	} else if (mode === "inspect") {
-		const app = join(s.installDirectory, "Pilot Next.app");
+		const app = installedApp(s);
 		await verifyApp(s, app);
 		result = nativeAction(s, "inspect", app);
 	} else {

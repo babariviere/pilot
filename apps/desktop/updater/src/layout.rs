@@ -1,8 +1,10 @@
 //! Platform-owned distribution paths, never inferred from a remote manifest.
 #[cfg(target_os = "linux")]
 pub const BUNDLE: &str = "Pilot Next";
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(feature = "day-app")))]
 pub const BUNDLE: &str = "Pilot Next.app";
+#[cfg(all(not(target_os = "linux"), feature = "day-app"))]
+pub const BUNDLE: &str = "Pilot.app";
 #[cfg(target_os = "linux")]
 pub const GUI: &str = "libexec/pilot-desktop";
 #[cfg(not(target_os = "linux"))]
@@ -73,7 +75,7 @@ mod tests {
         let temp = Temp::new();
         let current = std::env::current_exe().unwrap();
         for (bundle, binary, mode) in [
-            ("Pilot Next.app", "pilot-desktop", "accepted"),
+            (BUNDLE, "pilot-desktop", "accepted"),
             ("Pilot Day.app", "PilotDay", "refused"),
             ("Pilot Next.app", "PilotDay", "refused"),
             ("Pilot Day.app", "pilot-desktop", "refused"),

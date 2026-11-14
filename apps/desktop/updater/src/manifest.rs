@@ -88,7 +88,8 @@ impl Trust {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b))
             || self.channel != "desktop-stable"
-            || !matches!(self.bundle_name.as_str(), "Pilot Next.app" | "Pilot Next")
+            || !(matches!(self.bundle_name.as_str(), "Pilot Next.app" | "Pilot Next")
+                || cfg!(feature = "day-app") && self.bundle_name == "Pilot.app")
             || self.public_key == [0; 32]
             || self.code_requirement.is_empty()
             || self.code_requirement.len() > 2048

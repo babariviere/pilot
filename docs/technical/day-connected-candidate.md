@@ -41,7 +41,7 @@ replacement, registration, live updates/restarts or provider/domain writes.
 ```sh
 python3 apps/day/scripts/candidate.py assemble \
   --inputs "$candidate_dir/inputs" \
-  --output "$candidate_dir/Pilot Next.app"
+  --output "$candidate_dir/Pilot.app"
 ```
 
 This creates a fresh temporary bundle with the existing app identity and an
@@ -52,7 +52,7 @@ schemes, replaces an app, stops a chat, updates a daemon or writes a live profil
 No existing output can be overwritten. Verify again with:
 
 ```sh
-python3 apps/day/scripts/candidate.py verify "$candidate_dir/Pilot Next.app"
+python3 apps/day/scripts/candidate.py verify "$candidate_dir/Pilot.app"
 ```
 
 If genuine platform or trust verification refuses the candidate, report the
@@ -76,7 +76,7 @@ does not add missing capabilities to an older daemon.
 ## Authorized launch and read-only integration
 
 The preserved executable path is
-`Pilot Next.app/Contents/MacOS/pilot-desktop`. Use the explicit native launch
+`Pilot.app/Contents/MacOS/pilot-desktop`. Use the explicit native launch
 selection in [Connected launch](day-package-inputs.md#connected-launch), keeping
 its private journal across reopen. Launch needs no project or model. In New,
 the user explicitly chooses a project. The native host reuses its existing chat

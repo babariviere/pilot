@@ -179,10 +179,10 @@ mkdir "$work/app"
 python3 apps/desktop/scripts/bundle_runtime.py bundle --production \
   --source "$SOURCE" --bundle-build "$BUILD" \
   --runtime "$work/runtime" --native "$work/native" --executables "$work/inputs" \
-  --gui-resources "$work/inputs/nsh" --output "$work/app/Pilot Next.app"
-python3 apps/desktop/scripts/bundle_runtime.py verify "$work/app/Pilot Next.app"
+  --gui-resources "$work/inputs/nsh" --output "$work/app/Pilot.app"
+python3 apps/desktop/scripts/bundle_runtime.py verify "$work/app/Pilot.app"
 codesign --verify --deep --strict \
-  '-R=identifier "com.babariviere.pilot-next"' "$work/app/Pilot Next.app"
+  '-R=identifier "com.babariviere.pilot-next"' "$work/app/Pilot.app"
 ```
 
 Assembly checks matching production/release receipts, app/helper trust/build,
@@ -225,7 +225,7 @@ manifest and its required signed Pilot source/build extension:
 ```sh
 # VERSION must equal the sealed runtime/Info.plist short version.
 ditto -c -k --norsrc --noextattr --noqtn --keepParent \
-  "$work/app/Pilot Next.app" "$work/Pilot-$VERSION-macos-aarch64.zip"
+  "$work/app/Pilot.app" "$work/Pilot-$VERSION-macos-aarch64.zip"
 "$NSH_DAY_CLI" update-manifest --entry "$RELEASE_ENTRY" --key "$NSH_SECRET" \
   --base-url "$BASE_URL" --out "$work/official" "$work/Pilot-$VERSION-macos-aarch64.zip"
 jq --arg source "$SOURCE" --arg build "$BUILD" \
@@ -266,10 +266,12 @@ Unsigned build inputs and `nsh run Connected.tsx` are not connected launch
 substitutes. The [connected candidate recipe](day-connected-candidate.md) makes
 that minimal bundle without requiring a second bundled daemon. It is not an
 update/release distribution. Preserve the shipping app and use a separate
-candidate directory, still with the required `Pilot Next.app` bundle name.
+candidate directory, with the required `Pilot.app` bundle name. This Day-only
+name is selected before assembly and sealing; GPUI and historical inputs keep
+their original names. Bundle, service, profile and credential IDs are unchanged.
 
 ```sh
-"$candidate/Pilot Next.app/Contents/MacOS/pilot-desktop" \
+"$candidate/Pilot.app/Contents/MacOS/pilot-desktop" \
   --profile "$profile" --port "$port" \
   --daemon-id "$daemon_id" --lineage-id "$lineage_id" \
   --journal "$candidate/window-journal"

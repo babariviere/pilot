@@ -302,7 +302,7 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
         shutil.copyfile(archive, downloads / "quickjs-ng-0.17.0.tar.gz")
         execute([os.sys.executable, visual.parent / "scripts/prepare-visual-worker.py"], cwd=checkout, env=env)
         manifests += [(ARTIFACT_HOST, day / "native/Cargo.toml", "artifact-host"),
-                      ("pilot-desktop-update-helper", checkout / "apps/desktop/updater/Cargo.toml", "native-macos"),
+                      ("pilot-desktop-update-helper", checkout / "apps/desktop/updater/Cargo.toml", "native-macos,day-app"),
                       ("pilot-visual-worker", visual / "Cargo.toml", "")]
         updater_lock = checkout / "apps/desktop/updater/Cargo.lock"
         locked[updater_lock] = bundle.digest(updater_lock)
