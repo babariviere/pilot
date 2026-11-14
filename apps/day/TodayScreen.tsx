@@ -89,11 +89,17 @@ export function MissionStatus(props: { row: MissionRow }) {
 	);
 }
 
-function MissionLine(props: { day: Day; row: MissionRow }) {
+function MissionLine(props: { day: Day; row: MissionRow; plans?: Plans }) {
 	const decision = () => props.day.today().decisions.find((d) => d.id === props.row.decisionId);
 	const place = placeRow(`mission-${props.row.id}`, () => openMission(props.row.id));
+	// Old missions are the active ones a complete planning read does not list.
+	// Unknown planning shows no label rather than a guess.
+	const old = () => {
+		const p = props.plans?.planning();
+		return p?.availability === "live" && !p.plans.some((plan) => plan.missionId === props.row.id);
+	};
 	const meta = () => {
-		const parts = [props.row.report ? provenance(props.row.report) : "", props.row.stage];
+		const parts = [props.row.report ? provenance(props.row.report) : "", props.row.stage, old() ? "Old plan" : ""];
 		return parts.filter(Boolean).join(" · ");
 	};
 	return (
@@ -128,12 +134,12 @@ function MissionLine(props: { day: Day; row: MissionRow }) {
 	);
 }
 
-function MissionGroup(props: { day: Day; label: string; rows: MissionRow[]; first: boolean }) {
+function MissionGroup(props: { day: Day; label: string; rows: MissionRow[]; first: boolean; plans?: Plans }) {
 	return (
 		<View classList={{ "pt-3": !props.first }}>
 			<Text class="pb-1.5 text-xs text-faint">{`${props.label}  ${props.rows.length}`}</Text>
 			<Each of={props.rows} key={(m) => m.id}>
-				{(m) => <MissionLine day={props.day} row={m()} />}
+				{(m) => <MissionLine day={props.day} row={m()} plans={props.plans} />}
 			</Each>
 		</View>
 	);
@@ -313,7 +319,7 @@ function bindTriage(day: Day, shown: () => boolean) {
 	keymap.bind(guarded);
 }
 
-function Missions(props: { day: Day; ctx: TodayScope }) {
+function Missions(props: { day: Day; ctx: TodayScope; plans?: Plans }) {
 	const today = () => props.day.today();
 	const count = () => today().moving.length + today().notMoving.length + today().unreported.length;
 	return (
@@ -326,7 +332,7 @@ function Missions(props: { day: Day; ctx: TodayScope }) {
 				<Text class="text-sm text-muted-foreground">No active missions.</Text>
 			</If>
 			<If when={today().moving.length > 0}>
-				<MissionGroup day={props.day} label="Moving" rows={today().moving} first />
+				<MissionGroup day={props.day} label="Moving" rows={today().moving} first plans={props.plans} />
 			</If>
 			<If when={today().notMoving.length > 0}>
 				<MissionGroup
@@ -334,6 +340,7 @@ function Missions(props: { day: Day; ctx: TodayScope }) {
 					label="Not moving"
 					rows={today().notMoving}
 					first={today().moving.length === 0}
+					plans={props.plans}
 				/>
 			</If>
 			<If when={today().unreported.length > 0}>
@@ -342,6 +349,7 @@ function Missions(props: { day: Day; ctx: TodayScope }) {
 					label="No current report"
 					rows={today().unreported}
 					first={today().moving.length + today().notMoving.length === 0}
+					plans={props.plans}
 				/>
 			</If>
 			<OtherMissions ctx={props.ctx} />
@@ -666,7 +674,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 								<If when={plans}>
 									<Planning plans={plans as Plans} ctx={ctx} />
 								</If>
-								<Missions day={props.day} ctx={ctx} />
+								<Missions day={props.day} ctx={ctx} plans={plans} />
 								<DoneSince day={props.day} ctx={ctx} />
 								<ComingUp day={props.day} />
 

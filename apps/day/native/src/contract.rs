@@ -430,6 +430,35 @@ pub struct MissionDetail {
     /// Links (PRs, issues, threads, pages) on the mission or its tasks.
     #[serde(default)]
     pub resources: Vec<Resource>,
+    /// The current brief. Read only to draft a re-plan of an old mission.
+    #[serde(default)]
+    pub brief: Option<Brief>,
+    /// Every decision, replaced and withdrawn ones too.
+    #[serde(default)]
+    pub decisions: Vec<MissionDecision>,
+}
+
+/// `MissionBrief`: the brief's markdown.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Brief {
+    #[serde(default)]
+    pub markdown: String,
+}
+
+/// `MissionDecision`: one numbered decision. A replacement or withdrawal
+/// means it is no longer in force.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionDecision {
+    #[serde(default)]
+    pub number: u32,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub replacement: Option<serde_json::Value>,
+    #[serde(default)]
+    pub withdrawn: Option<serde_json::Value>,
 }
 
 /// `MissionArtifactLink`: an artifact an agent linked. Linking is not
@@ -464,6 +493,11 @@ pub struct Resource {
     pub external_id: Option<String>,
     /// The last GitHub state Pilot saw, for pull requests.
     pub pull_request: Option<PullRequest>,
+    /// "managed" when this mission manages the Linear ticket.
+    #[serde(default)]
+    pub linear_role: Option<String>,
+    #[serde(default)]
+    pub linear_key: Option<String>,
 }
 
 /// The parts of `SessionPullRequest` an output shows.
@@ -524,6 +558,10 @@ pub struct MissionHead {
     pub goal: String,
     pub coordinator_session_id: Option<String>,
     pub current_phase: Option<Phase>,
+    /// 1 for missions created through planning interviews. Absent for old
+    /// missions, which cannot be revisited.
+    #[serde(default)]
+    pub planning_version: Option<u32>,
 }
 
 /// `MissionCurrentPhase`.

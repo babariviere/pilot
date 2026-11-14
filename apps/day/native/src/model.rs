@@ -722,6 +722,10 @@ pub struct MissionPage {
     pub freshness: Freshness,
     /// Host-owned problems needing human attention for this mission.
     pub problems: Vec<Problem>,
+    /// For an old mission (started before planning interviews), the goal New
+    /// is filled with to re-plan it. Empty for planned missions or when the
+    /// detail could not be read.
+    pub replan_draft: String,
 }
 
 /// Passive projection of canonical dashboard attention. Never a retry intent.

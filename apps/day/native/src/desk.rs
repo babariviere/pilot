@@ -1571,8 +1571,8 @@ mod tests {
         assert_eq!(page.chats.len(), 1);
         assert_eq!(page.chats[0].since, "34 min ago");
         assert_eq!(page.row.stage, "Verify");
-        let docs = desk.mission("docs").unwrap();
-        assert!(!docs.tasks_known && docs.tasks.is_empty());
+        let notify = desk.mission("notify").unwrap();
+        assert!(!notify.tasks_known && notify.tasks.is_empty());
         assert!(desk.mission("nope").is_none());
     }
 

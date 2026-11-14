@@ -19,7 +19,7 @@ import { mapSummary, stageMark, stageWord } from "./PlanScreen";
 import { Problems } from "./Problems";
 import { askRevisit } from "./planCommands";
 import type { Plans } from "./planning";
-import { openPlan } from "./planView";
+import { goalDraft, openNew, openPlan } from "./planView";
 import { MissionThreadsSection } from "./ThreadScreen";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
 import { naming } from "./threadView";
@@ -329,6 +329,46 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
  * says what it can read, including a mission that has no saved interview.
  * A Wayfinder mission also shows its map in one line, from the same read.
  */
+/**
+ * An old mission (started before planning interviews) cannot be revisited.
+ * Re-planning opens New with a draft goal from this mission. It sends,
+ * changes and archives nothing; the user edits the draft and plans there.
+ */
+function Replan(props: { page: MissionPage }) {
+	const note = signal("");
+	const start = () => {
+		if (goalDraft().trim() !== "") {
+			note.set("New already holds other words. They stay; nothing was copied.");
+			return;
+		}
+		glide();
+		goalDraft.set(props.page.replanDraft);
+		openNew();
+	};
+	return (
+		<View testID="mission-replan" class="gap-2">
+			<SectionTitle title="Plan" />
+			<Text class="text-sm text-muted-foreground">
+				This mission started before planning interviews, so it cannot be revisited. Re-plan it as a new mission:
+				New opens with a draft from this mission. Choose its project there. This mission does not change.
+			</Text>
+			<View class="flex-row">
+				<Action
+					label="Re-plan as a new mission"
+					testID="mission-replan-start"
+					accessibilityLabel="Open New with a draft goal from this mission. Nothing is sent."
+					onPress={start}
+				/>
+			</View>
+			<If when={note()}>
+				<Text role="alert" class="text-sm text-needs-ink">
+					{note()}
+				</Text>
+			</If>
+		</View>
+	);
+}
+
 function PlanLink(props: { plans: Plans; missionId: string }) {
 	const row = (): PlanRow | null => props.plans.planning().plans.find((p) => p.missionId === props.missionId) ?? null;
 	const page = () => {
@@ -419,6 +459,11 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 							<If when={row().stage}>
 								<Text class="text-xs text-faint">{`· ${row().stage}`}</Text>
 							</If>
+							<If when={props.page.replanDraft}>
+								<Text testID="mission-old-plan" class="text-xs text-faint">
+									· Old plan
+								</Text>
+							</If>
 						</View>
 					</View>
 					<View class="pt-1">
@@ -451,12 +496,20 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 				</View>
 			</View>
 
-			<If when={props.plans}>
-				<PlanLink plans={props.plans as Plans} missionId={row().id} />
-			</If>
-
-			<If when={props.day.threads}>
-				<MissionThreadsSection day={props.day} missionId={row().id} />
+			<If
+				when={props.page.replanDraft}
+				else={
+					<View class="gap-10">
+						<If when={props.plans}>
+							<PlanLink plans={props.plans as Plans} missionId={row().id} />
+						</If>
+						<If when={props.day.threads}>
+							<MissionThreadsSection day={props.day} missionId={row().id} />
+						</If>
+					</View>
+				}
+			>
+				<Replan page={props.page} />
 			</If>
 
 			<View class="gap-1">

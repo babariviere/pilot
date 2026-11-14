@@ -626,6 +626,16 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
             since: ago(inputs.now, w.started_at),
         })
         .collect();
+    let problems = with_tasks(
+        problems(inputs.overview)
+            .into_iter()
+            .filter(|p| p.mission_id.as_deref() == Some(mission_id))
+            .collect(),
+        detail,
+    );
+    let replan_draft = detail
+        .filter(|d| d.mission.planning_version.is_none())
+        .map_or_else(String::new, |d| replan_draft(d, &problems));
     Some(MissionPage {
         row,
         goal: detail.map_or_else(String::new, |d| d.mission.goal.clone()),
@@ -633,14 +643,120 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
         tasks,
         chats,
         freshness,
-        problems: with_tasks(
-            problems(inputs.overview)
-                .into_iter()
-                .filter(|p| p.mission_id.as_deref() == Some(mission_id))
-                .collect(),
-            detail,
-        ),
+        problems,
+        replan_draft,
     })
+}
+
+/// New's goal limit, in characters (plan_desk::MAX_TEXT).
+const REPLAN_MAX: usize = crate::plan_desk::MAX_TEXT;
+
+/// The goal New gets to re-plan an old mission: its goal, then as much of
+/// the brief, decisions in force, open tasks, unfinished work and Linear
+/// ticket as fits. The user edits it before planning; nothing is sent here.
+pub fn replan_draft(detail: &c::MissionDetail, problems: &[Problem]) -> String {
+    fn section(out: &mut String, title: &str, lines: impl Iterator<Item = String>, cap: usize) {
+        let mut body = String::new();
+        for line in lines {
+            if body.chars().count() + line.chars().count() + 1 > cap {
+                body.push_str("- …\n");
+                break;
+            }
+            body.push_str(&line);
+            body.push('\n');
+        }
+        if !body.is_empty() {
+            out.push_str(&format!("\n{title}\n{body}"));
+        }
+    }
+    let cut = |text: &str, n: usize| -> String {
+        let one = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if one.chars().count() <= n {
+            one
+        } else {
+            format!("{}…", one.chars().take(n - 1).collect::<String>())
+        }
+    };
+    let mission = &detail.mission;
+    let mut out = format!(
+        "Re-plan the old mission “{}” as a new mission. Keep what still matters and drop the rest.\n\nGoal: {}\n",
+        mission.title,
+        cut(&mission.goal, 600)
+    );
+    let brief = detail
+        .brief
+        .as_ref()
+        .map(|b| b.markdown.as_str())
+        .unwrap_or("");
+    section(
+        &mut out,
+        "Brief (start):",
+        brief
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with("# "))
+            .map(|l| cut(l, 300)),
+        1000,
+    );
+    section(
+        &mut out,
+        "Decisions still in force:",
+        detail
+            .decisions
+            .iter()
+            .filter(|d| d.replacement.is_none() && d.withdrawn.is_none())
+            .map(|d| format!("- D{}: {}", d.number, cut(&d.text, 160))),
+        1100,
+    );
+    let mut open: Vec<_> = detail
+        .tasks
+        .iter()
+        .filter(|t| !matches!(t.status, c::TaskStatus::Done | c::TaskStatus::Dropped))
+        .collect();
+    open.sort_by(|a, b| a.order.total_cmp(&b.order).then(a.number.cmp(&b.number)));
+    section(
+        &mut out,
+        "Open tasks:",
+        open.iter().map(|t| {
+            let status = serde_json::to_value(t.status)
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.replace('_', " ")))
+                .unwrap_or_default();
+            format!("- #{} {} ({status})", t.number, cut(&t.title, 100))
+        }),
+        800,
+    );
+    section(
+        &mut out,
+        "Saved work without a pull request:",
+        problems
+            .iter()
+            .filter(|p| p.task_id.is_some() && p.next_step.contains("no pull request"))
+            .map(|p| format!("- {}", cut(&p.title, 100))),
+        400,
+    );
+    section(
+        &mut out,
+        "Linear ticket:",
+        detail
+            .resources
+            .iter()
+            .filter(|r| r.linear_role.as_deref() == Some("managed"))
+            .map(|r| {
+                format!(
+                    "- {}",
+                    r.linear_key
+                        .clone()
+                        .or_else(|| r.title.clone())
+                        .unwrap_or_else(|| r.url.clone())
+                )
+            }),
+        200,
+    );
+    if out.chars().count() > REPLAN_MAX {
+        out = out.chars().take(REPLAN_MAX - 1).collect::<String>() + "…";
+    }
+    out
 }
 
 /// The freshness view for a read observed at `observed_at`, if any.
@@ -719,6 +835,57 @@ mod tests {
         assert!(!t2[0].merged);
         assert_eq!((t2[1].label.as_str(), t2[1].link.as_str()), ("Runbook", ""));
         assert!(outputs(&detail, "t3", now).is_empty());
+    }
+
+    #[test]
+    fn old_missions_get_a_replan_draft_within_new_limit() {
+        use serde_json::json;
+        let tasks: Vec<_> = (1..=300)
+            .map(|n| {
+                json!({"id":format!("t{n}"),"number":n,"order":n,
+                    "title":format!("Task {n} with a title long enough to fill the draft quickly"),
+                    "status": if n % 3 == 0 { "done" } else { "blocked" }})
+            })
+            .collect();
+        let detail: c::MissionDetail = serde_json::from_value(json!({
+            "mission": {"id":"m","title":"Old","goal":"Ship it","coordinatorSessionId":"c"},
+            "tasks": tasks,
+            "brief": {"markdown":"# Old\n\n## Goal\nShip it soon.\n"},
+            "decisions": [{"number":1,"text":"Keep this"},
+                {"number":2,"text":"Replaced","replacement":{"id":"x"}},
+                {"number":3,"text":"Withdrawn","withdrawn":{"at":1}}],
+            "resources": [{"id":"r","url":"https://linear.app/x","kind":"linear.issue",
+                "linearRole":"managed","linearKey":"stoik/HS-1314"}]
+        }))
+        .unwrap();
+        assert_eq!(detail.mission.planning_version, None, "old mission");
+        let unpublished = Problem {
+            title: "Drafts".into(),
+            task_id: Some("t1".into()),
+            next_step: "Its task finished with changes but no pull request. See the work.".into(),
+            ..Problem::default()
+        };
+        let draft = replan_draft(&detail, &[unpublished]);
+        assert!(draft.chars().count() <= crate::plan_desk::MAX_TEXT);
+        for kept in [
+            "“Old”",
+            "Goal: Ship it",
+            "Ship it soon.",
+            "D1: Keep this",
+            "#1 Task 1",
+            "(blocked)",
+            "- Drafts",
+            "stoik/HS-1314",
+            "- …",
+        ] {
+            assert!(draft.contains(kept), "{kept} missing from {draft}");
+        }
+        for gone in ["D2:", "D3:", "#3 Task", "# Old"] {
+            assert!(!draft.contains(gone), "{gone} in {draft}");
+        }
+        let planned: c::MissionHead =
+            serde_json::from_value(json!({"id":"m","title":"t","planningVersion":1})).unwrap();
+        assert_eq!(planned.planning_version, Some(1));
     }
 
     /// Regression: a task chat with no pull request could not open its work.

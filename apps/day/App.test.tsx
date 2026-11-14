@@ -263,10 +263,38 @@ test("a mission opens with its report, tasks and working chats, and Escape goes 
 	expect(app.shows("Three short things need you.")).toBe(false);
 	await app.keyboard.press("escape");
 	await app.waitFor("Three short things need you.");
-	await app.press("id:mission-docs");
+	await app.press("id:mission-notify");
 	await app.waitFor("The task list is not available here yet.");
 	await app.press("role:button[Back to Today]");
 	await app.waitFor("Three short things need you.");
+});
+
+test("an old mission offers a re-plan: New opens with a draft from it and nothing is sent", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:mission-docs");
+	await app.waitFor("id:mission-replan");
+	expect(app.shows("· Old plan")).toBe(true);
+	expect(app.shows("Interview and plan")).toBe(false);
+	await app.press("id:mission-replan-start");
+	await app.waitFor("id:goal");
+	const draft = app.value("id:goal");
+	for (const text of ["Re-plan the old mission “Docs refresh”", "D1: Plain words only.", "#1 Rewrite setup (blocked)"]) {
+		expect(draft.includes(text)).toBe(true);
+	}
+	expect(draft.includes("Old intro")).toBe(false);
+	// A second press never overwrites what New holds.
+	await app.keyboard.press("escape");
+	await app.press("id:mission-docs");
+	await app.press("id:mission-replan-start");
+	await app.waitFor("New already holds other words. They stay; nothing was copied.");
+});
+
+test("a planned mission shows its plan, not a re-plan", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:mission-search");
+	await app.waitFor("id:mission-plan");
+	expect(app.shows("· Old plan")).toBe(false);
+	expect(app.shows("Re-plan as a new mission")).toBe(false);
 });
 
 test("a mission's overview leads to its interview and plan, which says when there is none", async () => {

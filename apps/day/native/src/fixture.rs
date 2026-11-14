@@ -8,10 +8,11 @@
 use crate::{
     actions::{self, Actions, Content},
     contract::{
-        ArtifactLink, Control, ControlState, Currentness, Dashboard, DashboardMission, DayOverview,
-        Home, MissionDetail, MissionHead, Movement, Phase, Provenance, PullRequest,
-        PullRequestState, Report, ReportView, ReportWrite, Resource, Section, SlackTriage,
-        SourceStatus, Task, TaskStatus, TrackedItem, TrackedSource, WorkingItem,
+        ArtifactLink, Brief, Control, ControlState, Currentness, Dashboard, DashboardMission,
+        DayOverview, Home, MissionDecision, MissionDetail, MissionHead, Movement, Phase,
+        Provenance, PullRequest, PullRequestState, Report, ReportView, ReportWrite, Resource,
+        Section, SlackTriage, SourceStatus, Task, TaskStatus, TrackedItem, TrackedSource,
+        WorkingItem,
     },
     model::{
         Bar, DayPart, Decision, DecisionKind, DecisionOption, Delivery, DoneBasis, DoneEntry,
@@ -426,11 +427,39 @@ fn detail(
                 done: phase.1,
                 total: phase.2,
             }),
+            // Mock missions are planned; one test world marks an old one.
+            planning_version: Some(1),
         },
         tasks,
         artifacts: Vec::new(),
         resources: Vec::new(),
+        brief: None,
+        decisions: Vec::new(),
     }
+}
+
+/// An old mission (no planning interview): its page offers a re-plan.
+fn docs_detail() -> MissionDetail {
+    let mut detail = detail(
+        "docs",
+        "Docs refresh",
+        "Refresh the user docs for the new app.",
+        ("Write", 0, 5),
+        vec![
+            task("docs-1", 1, "Rewrite setup", TaskStatus::Blocked, None),
+            task("docs-2", 2, "Old intro", TaskStatus::Done, None),
+        ],
+    );
+    detail.mission.planning_version = None;
+    detail.brief = Some(Brief {
+        markdown: s("# Docs refresh\n\nKeep each page short."),
+    });
+    detail.decisions = vec![MissionDecision {
+        number: 1,
+        text: s("Plain words only."),
+        ..MissionDecision::default()
+    }];
+    detail
 }
 
 fn search_detail() -> MissionDetail {
@@ -511,6 +540,8 @@ fn native_detail() -> MissionDetail {
                 checked_at: NOW - 5 * MINUTE,
                 readiness: None,
             }),
+            linear_role: None,
+            linear_key: None,
         },
         Resource {
             id: s("res-pr-history"),
@@ -527,6 +558,8 @@ fn native_detail() -> MissionDetail {
                 checked_at: NOW - 5 * MINUTE,
                 readiness: None,
             }),
+            linear_role: None,
+            linear_key: None,
         },
     ];
     detail.artifacts = vec![ArtifactLink {
@@ -852,7 +885,7 @@ fn decisions() -> World {
     World {
         today,
         overview: Some(overview),
-        details: vec![search_detail(), native_detail()],
+        details: vec![search_detail(), native_detail(), docs_detail()],
         freshness: (FreshnessState::Live, ""),
         control_acks: Vec::new(),
         acks: vec![
