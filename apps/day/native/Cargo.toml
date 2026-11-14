@@ -58,7 +58,7 @@ nsh-engine = "=0.5.0"
 nsh-core = "=0.5.0"
 nsh-base = "=0.5.0"
 nsh-bundler = { version = "=0.5.0", default-features = false }
-oxc = { version = "=0.153.0", features = ["ast_visit"] }
+oxc = { version = "=0.158.0", features = ["ast_visit"] }
 nsh-updater = "=0.5.0"
 # The daemon's v1 Day contracts, read in Rust only. Same versions NSH locks.
 serde = { version = "1", features = ["derive"] }
@@ -70,8 +70,8 @@ futures-util = { version = "0.3", features = ["sink"] }
 async-channel = "2"
 libc = "0.2"
 uuid = { version = "1", features = ["v4"] }
-sha2 = "0.10"
-base64 = "0.22"
+sha2 = "0.11"
+base64 = "0.23"
 
 [dev-dependencies]
 ed25519-dalek = "2.2"
