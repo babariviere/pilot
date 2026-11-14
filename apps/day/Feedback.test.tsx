@@ -149,6 +149,30 @@ test("with a chosen project a saved Send starts one triage; Start fix is a separ
 	expect(steps(app)).toBe("Steps: [triage,fix]");
 });
 
+test("resolving hides the saved fix proposal and its action; reopening restores them without starting work", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "The plan page hides who is working");
+	await app.waitFor("id:feedback-triage-f1");
+	await app.press("Triage fix");
+	await app.waitFor("id:feedback-proposal-f1");
+	expect(app.shows("id:feedback-fix-f1")).toBe(true);
+	await app.press("id:feedback-resolve-f1");
+	await app.waitFor("id:feedback-resolved-f1");
+	expect(app.shows("id:feedback-proposal-f1")).toBe(false);
+	expect(app.shows("Show the assignee on each plan row and check it in Plan.test.tsx.")).toBe(false);
+	expect(app.shows("id:feedback-fix-f1")).toBe(false);
+	expect(steps(app)).toBe("Steps: [triage,resolve]");
+	await app.press("id:feedback-reopen-f1");
+	await app.waitFor("id:feedback-proposal-f1");
+	expect(app.shows("id:feedback-resolved-f1")).toBe(false);
+	expect(app.shows("Show the assignee on each plan row and check it in Plan.test.tsx.")).toBe(true);
+	expect(app.enabled("id:feedback-fix-f1")).toBe(true);
+	expect(app.shows("id:feedback-fixing-f1")).toBe(false);
+	expect(steps(app)).toBe("Steps: [triage,resolve,reopen]");
+	expect(counts(app)).toBe("Sends: 1 · Checks: 0");
+});
+
 test("without a project nothing triages; a lost step stays Unknown and Check reads it once", async () => {
 	const app = await feedback();
 	await sendWords(app, "Search is slow");
@@ -183,11 +207,20 @@ test("a new-mission proposal opens New with its goal; linking a mission and reso
 	await app.press("id:feedback-resolve-f1");
 	await app.waitFor("id:feedback-resolved-f1");
 	expect(steps(app)).toBe("Steps: [triage,link,resolve]");
+	expect(app.shows("id:feedback-proposal-f1")).toBe(false);
+	expect(app.shows("id:feedback-plan-f1")).toBe(false);
+	expect(app.shows("id:feedback-chat-f1")).toBe(false);
+	expect(app.shows("id:feedback-link-f1")).toBe(false);
+	await app.press("id:feedback-reopen-f1");
+	await app.waitFor("id:feedback-proposal-f1");
+	expect(app.shows("id:feedback-chat-f1")).toBe(true);
+	expect(app.shows("id:feedback-link-f1")).toBe(true);
+	expect(steps(app)).toBe("Steps: [triage,link,resolve,reopen]");
 	await app.press("id:feedback-plan-f1");
 	// New gets the goal as an editable draft; nothing is created or sent.
 	await app.waitFor("New goal: [Make plans show their people]");
 	expect(app.shows("id:feedback")).toBe(false);
-	expect(steps(app)).toBe("Steps: [triage,link,resolve]");
+	expect(steps(app)).toBe("Steps: [triage,link,resolve,reopen]");
 });
 
 test("a triage question is answered here: its exact words, a kept draft and one explicit Send answer that starts nothing else", async () => {

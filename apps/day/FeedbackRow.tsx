@@ -442,7 +442,10 @@ export function FeedbackRow(props: { day: Day; mirror: FeedbackMirror; item: Fee
 					/>
 				)}
 			</Each>
-			<Each of={proposal() && triage() ? [{ triage: triage()!, ...proposal()! }] : []} key={(x) => x.digest}>
+			<Each
+				of={!steps().resolved && proposal() && triage() ? [{ triage: triage()!, ...proposal()! }] : []}
+				key={(x) => x.digest}
+			>
 				{(x) => (
 					<Proposal
 						day={props.day}
