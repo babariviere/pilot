@@ -87,6 +87,8 @@ let ritualFeed: ConnectedRituals | null = null;
 let todayFeed: ConnectedToday | null = null;
 let planFeed: ConnectedPlans | null = null;
 let pendingFlush: number | null = null;
+/** A root change that arrived while the window was opening. */
+let changedWhileOpening = false;
 let scopeReading = false;
 let scopeAgain = false;
 
@@ -150,8 +152,11 @@ if (window) {
 		if (!forWindow(payload, window)) return;
 		// The root read its service again (for example, it started or came
 		// back), so a first read that could not reach it is tried once more.
+		// The root sends one change until Today is read again, so one that
+		// arrives while opening is kept for when the outcome is known.
 		const now = connection();
-		if (now.state === "none" && now.canRead) void readAgain();
+		if (now.state === "opening") changedWhileOpening = true;
+		else if (now.state === "none" && now.canRead) void readAgain();
 		else refresh();
 	});
 	host.on("day.flush", (payload) => {
@@ -300,6 +305,9 @@ function read(): Promise<void> {
 			opening = null;
 			// A close asked for while opening is answered once the outcome is known.
 			flushPending();
+			const changed = changedWhileOpening;
+			changedWhileOpening = false;
+			if (changed) void readAgain();
 		});
 	return opening;
 }

@@ -163,6 +163,35 @@ fn failed_first_read_reads_again_on_a_change_or_explicitly_without_repeating_sta
 }
 
 #[test]
+fn a_change_while_the_first_read_fails_reads_again_once_it_has_failed() {
+    let entry = recovery_entry();
+    let root = FakeRoot::new();
+    root.reply("day.plan.inventory", inventory(vec![]));
+    let held = hold_next(&root);
+    let mut app = open_on(&entry, root.channel.clone());
+    until(&mut app, "first read", || held.lock().unwrap().is_some());
+    // The root's one change arrives while the window is still opening; it
+    // sends no other until Today is read again.
+    root.changed();
+    app.wait(Duration::from_millis(100)).unwrap();
+    held.lock()
+        .unwrap()
+        .take()
+        .unwrap()
+        .resolve(json!({"version":1,"error":"offline"}));
+    wait(&mut app, "role:button[New]");
+    assert!(!app.shows("Pilot could not reach its service. Nothing is shown rather than a guess."));
+    assert_eq!(
+        root.count("day.attention.read"),
+        1,
+        "startup is not repeated"
+    );
+    no_effects(&root);
+    drop(app);
+    std::fs::remove_dir_all(entry.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn a_window_whose_first_read_failed_closes_without_a_view_and_reads_again_on_a_change() {
     let root = FakeRoot::new();
     root.refuse("day.today.read", "offline");
