@@ -155,6 +155,13 @@ override for tests and candidates.
 
 Signature, identity and credential checks are the same for every launch kind.
 
+When nothing answers on the port at launch, Pilot starts its service once, in
+the background, through the same checked path as GPUI's Daemon > Start: only the
+managed launch agent for that profile and port, after verifying its definition
+and signed runtime. A running or unmanaged service is left alone. Not after an
+update (the updater owns the service then). The result is logged as
+`service.start`.
+
 ## Logs
 
 Pilot Day writes JSON lines to `~/Library/Logs/Pilot/day.log` and rotates at

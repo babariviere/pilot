@@ -1,6 +1,9 @@
 //! Production bootstrap. No development resource override, mock root, credential
 //! in JS or live registration. Missing signed identity refuses load.
 //!
+//! Opening Pilot starts its service when the service is stopped (see
+//! [`start_service`]).
+//!
 //! A normal launch (Finder, no arguments) discovers the profile like GPUI's
 //! local client. Every launch without `--journal` uses the same journal,
 //! `~/Library/Application Support/Pilot Day/window-journal`. It never reads
@@ -18,8 +21,11 @@ use crate::{
 };
 use nsh_platform_macos::{AssetBase, objc2::MainThreadMarker};
 use pilot_desktop_updater::{
+    coordination::Location,
+    daemon_upgrade::control::{self, Command, State},
     helper::compiled_trust,
     installer::{NativePlatform, Platform},
+    manifest::Trust,
 };
 use serde_json::json;
 use std::{
@@ -27,6 +33,8 @@ use std::{
     ffi::OsString,
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
+    sync::atomic::AtomicBool,
+    time::Duration,
 };
 
 /// Explicit native launch selection, never inferred from development state.
@@ -255,6 +263,12 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
             "project": source.project.is_some(),
         }),
     );
+    // Not after an update: the updater owns the service then.
+    let service = origin.is_some().then(|| Location {
+        home: source.profile.clone(),
+        port: source.port,
+        policy: Default::default(),
+    });
     let host = NativeHost::open_with_options(
         source,
         journal,
@@ -266,6 +280,9 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
         },
     )
     .map_err(|error| refused("host", error))?;
+    if let Some(location) = service {
+        start_service(location, trust.clone());
+    }
     let bridge = Bridge::new(DayRoot::new(host));
     let mut configuration = crate::macos_host::options(&bridge);
     configuration.app_id = trust.application_id.clone();
@@ -275,6 +292,43 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
     ApplicationOwner::configured(main, bundle, bridge, configuration)
         .map_err(|error| refused("app", error))?
         .run(main)
+}
+
+/// Starts the service when nothing answers on its port, off the main thread.
+/// It uses the same checked path as GPUI's Daemon > Start: only the managed
+/// launch agent for this profile and port, with its definition, owner and
+/// signed runtime verified first. A running, busy or unmanaged service is left
+/// alone. One try per launch; the connection's own reconnect picks it up.
+fn start_service(location: Location, trust: Trust) {
+    let spawned = std::thread::Builder::new()
+        .name("day-service-start".into())
+        .spawn(move || {
+            let address = (std::net::Ipv4Addr::LOCALHOST, location.port).into();
+            if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(500)).is_ok() {
+                return;
+            }
+            let result =
+                control::inspect(location, &trust).and_then(|target| match target.state() {
+                    State::Running => Ok("running"),
+                    State::Stopped => {
+                        control::execute(&target, Command::Start, &trust, &AtomicBool::new(false))
+                            .map(|_| "started")
+                    }
+                });
+            crate::day_log::event(
+                "service.start",
+                match result {
+                    Ok(state) => json!({"result": state}),
+                    Err(error) => json!({"result": "failed", "error": format!("{error:?}")}),
+                },
+            );
+        });
+    if spawned.is_err() {
+        crate::day_log::event(
+            "service.start",
+            json!({"result": "failed", "error": "thread"}),
+        );
+    }
 }
 
 fn refused(stage: &str, error: Error) -> Error {
