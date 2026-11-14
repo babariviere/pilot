@@ -13,9 +13,16 @@ day.today.update((t) => ({
 			title: "History work stopped",
 			cause: "Native checks failed. The coordinator needs your help.",
 			nextStep: "Inspect the failed check before choosing how to continue. Nothing is retried here.",
-			workState: "Saved work is not verified. Unfinished effects may be uncertain.",
 			missionId: "native",
-			chatLink: "pilot://chat/fixture-worker",
+			projectId: "fixture-project",
+		},
+		{
+			id: "session:fixture-chat",
+			title: "Tidy the release notes",
+			nextStep:
+				"Its chat finished with changes but no pull request. See the work, then mark it done or send it back.",
+			projectId: "fixture-project",
+			sessionId: "fixture-chat",
 		},
 	],
 }));

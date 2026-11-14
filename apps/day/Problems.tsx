@@ -2,6 +2,7 @@
 // Today. Reports cannot create or clear these. No retry/permission intents.
 import { Text, View } from "nsh";
 import type { Problem } from "pilot-day/native";
+import { openDelivery } from "./deliveryView";
 import { Action, SectionTitle } from "./ui";
 import { openMission } from "./view";
 
@@ -22,11 +23,31 @@ export function Problems(props: { rows: Problem[]; known: boolean; inMission?: b
 					{(p) => (
 						<View testID={`problem-${p().id}`} selectable class="gap-2 border-t border-border py-3">
 							<Text class="text-sm font-medium text-foreground">{p().title}</Text>
-							<Text class="text-sm text-muted-foreground">{p().cause}</Text>
-							<Text class="text-xs text-faint">{p().workState}</Text>
+							<If when={p().cause}>
+								<Text class="text-sm text-muted-foreground">{p().cause as string}</Text>
+							</If>
 							<Text class="text-sm text-muted-foreground">{`Next: ${p().nextStep}`}</Text>
-							<If when={p().chatLink}>
-								<Text class="text-xs text-faint">{`Diagnostic chat: ${p().chatLink}`}</Text>
+							<If when={p().taskId || (p().sessionId && !p().missionId)}>
+								<View class="flex-row">
+									<Action
+										label="See the work"
+										accessibilityLabel={`See the work of ${p().title}`}
+										onPress={() =>
+											openDelivery(
+												p().taskId
+													? {
+															kind: "task",
+															projectId: p().projectId,
+															missionId: p().missionId as string,
+															taskId: p().taskId as string,
+														}
+													: { kind: "chat", projectId: p().projectId, sessionId: p().sessionId as string },
+												p().title,
+												true,
+											)
+										}
+									/>
+								</View>
 							</If>
 							<If when={!props.inMission && p().missionId}>
 								<View class="flex-row">

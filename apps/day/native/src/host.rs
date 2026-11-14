@@ -1139,7 +1139,7 @@ async fn run(
                 let epoch = shared.epoch.load(Ordering::SeqCst);
                 let t = focused.as_ref().unwrap_or(&root);
                 if shared.connected.load(Ordering::SeqCst) && let Err(e) = refresh(t, &journal, &shared, epoch, None).await {
-                    crate::day_log::event("refresh.failed", serde_json::json!({"trigger":"daemon-event","error":e.to_string()}));
+                    if e != Error::Stale { crate::day_log::event("refresh.failed", serde_json::json!({"trigger":"daemon-event","error":e.to_string()})); }
                     fail(&shared, e);
                 }
             }

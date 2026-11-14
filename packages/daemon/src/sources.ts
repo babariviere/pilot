@@ -211,6 +211,8 @@ export class SourceRegistry {
 	}
 	/** Optional read-only consumer. Runs only after a validated Linear poll is committed. */
 	linearObserved?: (projectId: string, items: TrackedInput[], activeIds: string[]) => Promise<void>;
+	/** Read-only: the mission whose managed link resolved to each Linear issue UUID. Set once missions load. */
+	managedLinearMissions?: (projectId: string, issueIds: string[]) => Map<string, string>;
 	triage?: TriageGroomer;
 	/** Reads and classifies a Slack message the user pasted. Without it, adding by link is unavailable. */
 	slackAdder?: SlackAdder;
@@ -837,8 +839,23 @@ export class SourceRegistry {
 					status: source.status,
 					...(source.error ? { error: source.error } : {}),
 					total,
-					items: this.withParents(items, () => projectId),
-					...(done ? { done: { ...done, items: this.withParents(done.items, () => projectId) } } : {}),
+					items: this.withManagers(
+						source.kind,
+						projectId,
+						this.withParents(items, () => projectId),
+					),
+					...(done
+						? {
+								done: {
+									...done,
+									items: this.withManagers(
+										source.kind,
+										projectId,
+										this.withParents(done.items, () => projectId),
+									),
+								},
+							}
+						: {}),
 					...(commonCases ? { commonCases } : {}),
 					...(source.linear ? { linear: source.linear } : {}),
 				};
@@ -865,6 +882,7 @@ export class SourceRegistry {
 			const current = this.synced(project, page.kind);
 			return {
 				...page,
+				items: this.withManagers(page.kind, projectId, page.items),
 				source: page.kind,
 				label: page.kind === "slack" ? "Slack" : "Linear",
 				status: !health.configured ? "not_configured" : !current ? "idle" : health.status,
@@ -956,6 +974,25 @@ export class SourceRegistry {
 				: {}),
 			...(tracks("slack") ? { slack: result.slack } : {}),
 		};
+	}
+	/** Link Linear items to the mission that manages the same issue, so they never look new. Read-only. */
+	private withManagers<T extends { externalId?: string; missionId?: string; missionIds?: string[] }>(
+		kind: TrackedKind,
+		projectId: string,
+		items: T[],
+	): T[] {
+		const ids = kind === "linear" ? items.flatMap((item) => (item.externalId ? [item.externalId] : [])) : [];
+		const managers = ids.length ? this.managedLinearMissions?.(projectId, ids) : undefined;
+		if (!managers?.size) return items;
+		return items.map((item) => {
+			const missionId = item.externalId ? managers.get(item.externalId) : undefined;
+			if (!missionId || item.missionIds?.includes(missionId)) return item;
+			return {
+				...item,
+				missionId: item.missionId ?? missionId,
+				missionIds: [...(item.missionIds ?? []), missionId],
+			};
+		});
 	}
 	/** Attach cached parent headers to Linear sub-issues. Headers live in each project's Linear checkpoint, so
 	 * this reads no disk and makes no source calls. */

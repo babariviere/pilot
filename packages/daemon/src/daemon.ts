@@ -192,6 +192,7 @@ trackedItems.onChange((projectId) => {
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
 const missionLinear = new MissionLinearSource(missionStore, sourceMcp);
 const linearSync = new MissionLinearSyncService(missionStore, projects, sourceMcp, tracking.jobDiagnostics);
+tracking.managedLinearMissions = (projectId, issueIds) => missionStore.managedLinearMissions(projectId, issueIds);
 const completionWrites = new Set<Promise<void>>();
 const stopSlackCompletions = missionStore.onCompleted((projectId, missionId, at) => {
 	if (!backgroundStarted || stopping || startupWork.frozen) return;

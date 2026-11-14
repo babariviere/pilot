@@ -3,17 +3,20 @@ import { stateMark } from "./words";
 
 const desktop = { platform: "macos", width: 1100, height: 1800 } as const;
 
-test("Today shows the cause, uncertain work, recommendation and diagnostic origin", async () => {
+test("Today shows the cause, the next step and a way to the work", async () => {
 	const app = await open("./VisibilityFixture.tsx", desktop);
 	await app.waitFor("Some work needs a look.");
 	expect(app.shows("Unresolved work is shown above. Nothing is retried here.")).toBe(true);
 	expect(app.shows("What needs you is not current. Read again before acting.")).toBe(false);
 	expect(app.shows("Native checks failed. The coordinator needs your help.")).toBe(true);
-	expect(app.shows("Saved work is not verified. Unfinished effects may be uncertain.")).toBe(true);
-	expect(app.shows("Diagnostic chat: pilot://chat/fixture-worker")).toBe(true);
+	expect(app.texts().some((t) => t.startsWith("Diagnostic chat") || t.includes("no further cause"))).toBe(false);
 	expect(app.shows("Next: Inspect the failed check before choosing how to continue. Nothing is retried here.")).toBe(
 		true,
 	);
+	// Only the standalone chat offers its result page; the task row opens its mission.
+	expect(app.shows("role:button[See the work of Tidy the release notes]")).toBe(true);
+	expect(app.shows("role:button[See the work of History work stopped]")).toBe(false);
+	expect(app.shows("role:button[Open the mission for Tidy the release notes]")).toBe(false);
 	await app.press("Stale read");
 	await app.waitFor("Earlier read. These problems may have changed.");
 	expect(app.shows("History work stopped")).toBe(true);

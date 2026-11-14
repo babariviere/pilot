@@ -3416,6 +3416,22 @@ export class MissionStore {
 		).map((row) => ({ resourceId: str(row.id!), issueId: str(row.external_id!), projectId: str(row.project_id!) }));
 	}
 
+	/** Read-only: the mission of a project whose managed link resolved to each Linear issue UUID. At most one each. */
+	managedLinearMissions(projectId: string, issueIds: string[]): Map<string, string> {
+		const missions = new Map<string, string>();
+		if (!issueIds.length) return missions;
+		for (const row of this.all(
+			`SELECT r.mission_id, json_extract(r.linear_sync,'$.status.issueId') AS issue_id
+			FROM resources r JOIN missions m ON m.id=r.mission_id
+			WHERE r.linear_role='managed' AND m.project_id=? AND m.status<>'archived'
+			AND json_extract(r.linear_sync,'$.status.issueId') IN (SELECT value FROM json_each(?))`,
+			projectId,
+			JSON.stringify(issueIds),
+		))
+			missions.set(str(row.issue_id!), str(row.mission_id!));
+		return missions;
+	}
+
 	/** Only an assignee transition can override a manual status. All state and its notice commit together. */
 	observeLinearAssignee(
 		projectId: string,

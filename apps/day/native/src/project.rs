@@ -365,29 +365,67 @@ pub fn problems(overview: &c::DayOverview) -> Vec<Problem> {
     overview.dashboard.needs_you.as_ref().map_or_else(Vec::new, |section| {
         section.items.iter().filter(|item| item.kind != "unread" && item.counts_in_badge != Some(false)).map(|item| {
             let reason = &item.attention_reason;
+            let cause = reason.detail.as_ref().filter(|s| !s.trim().is_empty()).or(item.reason.as_ref().filter(|s| !s.trim().is_empty())).cloned();
+            let standalone = item.session_id.is_some() && item.mission_id.is_none();
             let next_step = match reason.kind.as_str() {
                 "mcp" => "Sign in to the service named above, then check the originating work.",
                 "limit" => "Check the usage limit before choosing whether to continue.",
+                "mission" if cause.as_deref().is_some_and(|c| c.starts_with("Blocked:")) => "A task is blocked. See its work in the mission.",
                 "mission" => "Open the mission and resolve its blocked work or question.",
                 "asks" => "Read the originating question and answer it explicitly.",
                 "pr_stuck" => "Inspect the pull request and its checks before choosing a next step.",
                 "automation" => "Inspect the permission request. Continuing needs explicit permission.",
                 "tool_stall" | "long_job" => "Inspect the running work before stopping or continuing it.",
-                "no_pr" => "Inspect the saved changes and intended publication. No pull request is linked.",
+                "no_pr" if standalone => "Its chat finished with changes but no pull request. See the work, then mark it done or send it back.",
+                "no_pr" => "Its task finished with changes but no pull request. Open the mission to see the work.",
                 _ => "Inspect the originating work before choosing how to continue. Nothing is retried here.",
             };
             Problem {
                 id: item.id.clone(),
                 title: item.title.clone(),
-                cause: reason.detail.as_ref().filter(|s| !s.trim().is_empty()).or(item.reason.as_ref().filter(|s| !s.trim().is_empty()))
-                    .cloned().unwrap_or_else(|| "The source gives no further cause.".to_owned()),
+                cause,
                 next_step: next_step.to_owned(),
-                work_state: "Saved-work and unfinished-effect state are not verified by this attention record. Do not assume a retry is safe.".to_owned(),
                 mission_id: item.mission_id.clone(),
-                chat_link: item.session_id.as_ref().map_or_else(String::new, |id| format!("pilot://chat/{id}")),
+                project_id: overview.project_id.clone(),
+                session_id: item.session_id.clone(),
+                task_id: None,
             }
         }).collect()
     })
+}
+
+/// On a mission page, names each row's task so its work can open: the task
+/// with the row's title (or the blocked task its cause names), else the only
+/// task of its chat. Ambiguous rows stay without a task.
+fn with_tasks(mut rows: Vec<Problem>, detail: Option<&c::MissionDetail>) -> Vec<Problem> {
+    let Some(detail) = detail else { return rows };
+    for row in &mut rows {
+        let blocked = row
+            .cause
+            .as_deref()
+            .and_then(|c| c.strip_prefix("Blocked: "));
+        let by_title: Vec<_> = detail
+            .tasks
+            .iter()
+            .filter(|t| t.title == row.title || Some(t.title.as_str()) == blocked)
+            .collect();
+        let by_chat: Vec<_> = detail
+            .tasks
+            .iter()
+            .filter(|t| t.session_id.is_some() && t.session_id == row.session_id)
+            .collect();
+        let task = match (by_title.as_slice(), by_chat.as_slice()) {
+            ([t], _) | ([], [t]) => Some(t),
+            _ => None,
+        };
+        row.task_id = task.map(|t| t.id.clone());
+        if row.task_id.is_some() && row.next_step.starts_with("Its task finished") {
+            row.next_step =
+                "Its task finished with changes but no pull request. See the work, then mark it done or send it back."
+                    .into();
+        }
+    }
+    rows
 }
 
 fn task_status(status: c::TaskStatus) -> Option<TaskStatus> {
@@ -595,10 +633,13 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
         tasks,
         chats,
         freshness,
-        problems: problems(inputs.overview)
-            .into_iter()
-            .filter(|p| p.mission_id.as_deref() == Some(mission_id))
-            .collect(),
+        problems: with_tasks(
+            problems(inputs.overview)
+                .into_iter()
+                .filter(|p| p.mission_id.as_deref() == Some(mission_id))
+                .collect(),
+            detail,
+        ),
     })
 }
 
@@ -680,6 +721,66 @@ mod tests {
         assert!(outputs(&detail, "t3", now).is_empty());
     }
 
+    /// Regression: a task chat with no pull request could not open its work.
+    #[test]
+    fn mission_page_rows_name_their_task_by_title_then_only_chat() {
+        let task = |id: &str, title: &str, chat: Option<&str>| c::Task {
+            id: id.into(),
+            number: 1,
+            title: title.into(),
+            status: c::TaskStatus::Blocked,
+            session_id: chat.map(str::to_owned),
+            order: 0.0,
+        };
+        let detail: c::MissionDetail = serde_json::from_value(serde_json::json!({
+            "mission": {"id":"m","projectId":"p","title":"M","goal":"","status":"active"},
+            "tasks": []
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let detail = c::MissionDetail {
+            tasks: vec![
+                task("t46", "Connect", Some("shared")),
+                task("t59", "Follow-up", Some("shared")),
+                task("t53", "Drafts", Some("own")),
+                task("t87", "Sub-issues", None),
+            ],
+            ..detail
+        };
+        let row = |title: &str, chat: Option<&str>| {
+            Problem {
+            title: title.into(),
+            next_step: "Its task finished with changes but no pull request. Open the mission to see the work.".into(),
+            session_id: chat.map(str::to_owned),
+            ..Problem::default()
+        }
+        };
+        let rows = with_tasks(
+            vec![
+                row("Connect", Some("shared")),
+                row("Other", Some("own")),
+                row("Sub-issues", Some("gone")),
+                row("Unknown", Some("shared")),
+                Problem {
+                    cause: Some("Blocked: Drafts".into()),
+                    ..row("Pilot Day Redesign", None)
+                },
+            ],
+            Some(&detail),
+        );
+        let ids: Vec<_> = rows.iter().map(|r| r.task_id.as_deref()).collect();
+        assert_eq!(
+            ids,
+            [Some("t46"), Some("t53"), Some("t87"), None, Some("t53")]
+        );
+        assert!(rows[0].next_step.contains("See the work"));
+        assert!(rows[3].next_step.contains("Open the mission"));
+        assert!(
+            with_tasks(vec![row("Connect", None)], None)[0]
+                .task_id
+                .is_none()
+        );
+    }
+
     #[test]
     fn host_problems_survive_offline_and_reopen_without_inventing_recovery() {
         use crate::{desk::Desk, fixture, model::Scenario};
@@ -710,12 +811,13 @@ mod tests {
         let mut desk = Desk::from_world(world);
         assert!(desk.today().problems_known);
         assert_eq!(desk.today().problems.len(), 3);
-        assert_eq!(desk.today().problems[0].cause, "Cause failed-worker");
         assert_eq!(
-            desk.today().problems[0].chat_link,
-            "pilot://chat/chat-failed-worker"
+            desk.today().problems[0].cause.as_deref(),
+            Some("Cause failed-worker")
         );
-        assert!(desk.today().problems[0].work_state.contains("not verified"));
+        // Today has no task details, so a task chat's row names no task.
+        assert!(desk.today().problems[0].session_id.is_some());
+        assert_eq!(desk.today().problems[0].task_id, None);
         assert!(
             desk.today().problems[2]
                 .next_step
@@ -735,6 +837,55 @@ mod tests {
         desk.apply_overview(next).unwrap();
         assert!(desk.today().problems.is_empty());
         assert!(desk.today().problems_known);
+    }
+
+    #[test]
+    fn problems_offer_only_readable_chat_results_and_no_filler() {
+        let mut overview = crate::fixture::world(crate::model::Scenario::Decisions)
+            .overview
+            .unwrap();
+        let row =
+            |id: &str, kind: &str, mission: Option<&str>, detail: Option<&str>| c::NeedsYouItem {
+                id: id.to_owned(),
+                kind: kind.to_owned(),
+                title: id.to_owned(),
+                session_id: (kind == "no_pr").then(|| format!("chat-{id}")),
+                mission_id: mission.map(str::to_owned),
+                reason: None,
+                counts_in_badge: None,
+                attention_reason: c::AttentionReason {
+                    kind: kind.into(),
+                    detail: detail.map(str::to_owned),
+                },
+            };
+        overview.dashboard.needs_you = Some(c::Section {
+            total: 4,
+            items: vec![
+                row("standalone", "no_pr", None, None),
+                row("task-chat", "no_pr", Some("m1"), None),
+                row("blocked", "mission", Some("m1"), Some("Blocked: Ship it")),
+                row(
+                    "question",
+                    "mission",
+                    Some("m1"),
+                    Some("A question is waiting"),
+                ),
+            ],
+        });
+        let p = problems(&overview);
+        assert_eq!(p[0].cause, None);
+        assert_eq!(p[0].project_id, overview.project_id);
+        assert_eq!(p[0].session_id.as_deref(), Some("chat-standalone"));
+        assert!(p[0].next_step.contains("See the work"));
+        assert_eq!(p[1].session_id.as_deref(), Some("chat-task-chat"));
+        assert_eq!(p[1].task_id, None);
+        assert!(p[1].next_step.contains("Open the mission to see the work"));
+        assert_eq!(p[2].session_id, None);
+        assert_eq!(
+            p[2].next_step,
+            "A task is blocked. See its work in the mission."
+        );
+        assert!(p[3].next_step.starts_with("Open the mission and resolve"));
     }
 
     #[test]

@@ -730,13 +730,18 @@ pub struct MissionPage {
 pub struct Problem {
     pub id: String,
     pub title: String,
-    pub cause: String,
+    /// The cause the source gives, if any.
+    pub cause: Option<String>,
     pub next_step: String,
-    /// What the source can prove about saved or unfinished work.
-    pub work_state: String,
     pub mission_id: Option<String>,
-    /// Diagnostic origin, as text. Reading it acknowledges nothing.
-    pub chat_link: String,
+    /// The project of the read this row came from.
+    pub project_id: String,
+    /// The chat behind the row. Its result page opens only for a standalone
+    /// chat; the service refuses that read for a mission's chat.
+    pub session_id: Option<String>,
+    /// The mission task behind the row, named on its mission page. Its
+    /// result page opens through the task.
+    pub task_id: Option<String>,
 }
 
 /// One result since the user last looked.

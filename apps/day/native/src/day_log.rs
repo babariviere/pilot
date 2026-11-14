@@ -180,7 +180,8 @@ fn now() -> String {
 
 /// Masks secret-looking values and keeps at most 300 characters.
 /// Masks long hex or base64 runs, values after token, secret, password or
-/// authorization keys, and bearer tokens. UUIDs stay readable.
+/// authorization keys, and bearer tokens. UUIDs stay readable. '/' separates
+/// runs, so each path segment is judged alone.
 pub fn redact(text: &str) -> String {
     let text = redact_keys(text);
     let bytes = text.as_bytes();
@@ -204,11 +205,11 @@ pub fn redact(text: &str) -> String {
 }
 
 fn is_token_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'_' | b'-')
+    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'=' | b'_' | b'-')
 }
 
 fn secret_run(run: &str) -> bool {
-    let core = run.trim_matches(|c| c == '/' || c == '=' || c == '-');
+    let core = run.trim_matches(|c| c == '=' || c == '-');
     if core.len() < 32 || is_uuid(core) {
         return false;
     }
@@ -382,6 +383,7 @@ mod tests {
         for kept in [
             "/Users/someone/Library/Application Support/Pilot Day/window-journal",
             "/Users/someone/.local/share/pilot",
+            "/Users/x/Downloads/Pilot-20261114.205-3af8362b/Pilot.app",
             "8f14e45f-ceea-467f-a0a8-2c2b1f3b0c11",
             "token missing",
         ] {

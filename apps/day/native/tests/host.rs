@@ -143,13 +143,16 @@ fn canonical_failure_is_visible_without_chat_reads_and_survives_host_reopen() {
     assert!(matches!(reply(host.refresh()), Ok(_) | Err(Error::Stale)));
     let today = wait(&host, |t| !t.problems.is_empty());
     assert!(today.problems_known);
-    assert_eq!(today.problems[0].cause, "Synthetic native checks failed");
+    assert_eq!(
+        today.problems[0].cause.as_deref(),
+        Some("Synthetic native checks failed")
+    );
     assert_eq!(
         today.problems[0].mission_id.as_deref(),
         Some(f.mission().as_str())
     );
-    assert!(today.problems[0].chat_link.starts_with("pilot://chat/"));
-    assert!(today.problems[0].work_state.contains("not verified"));
+    assert!(today.problems[0].session_id.is_some());
+    assert_eq!(today.problems[0].task_id, None, "Today has no task details");
     assert_eq!(f.cmd("stats", false)["posts"], 0);
     reply(host.close()).unwrap();
     let reopened = f.open();

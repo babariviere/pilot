@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { Conflict } from "./errors.ts";
+import { MissionStore } from "./missions.ts";
 import { ProjectStore } from "./projects.ts";
 import { SourceSignInRequired } from "./source-tool-rules.ts";
 import { SourceRegistry } from "./sources.ts";
@@ -221,4 +222,36 @@ test("global concurrency is bounded and shutdown cancels adapters that ignore th
 	await f.registry.stop();
 	await Promise.all([a, b]);
 	assert.throws(() => f.registry.poll(`${other.id}:linear`), /stopped/);
+});
+
+test("Linear items managed by a mission report that mission on the dashboard and intake", async (t) => {
+	const f = await fixture(t);
+	const missions = new MissionStore(":memory:");
+	t.after(() => missions.close());
+	const issueId = "3f811447-b574-4d82-b36c-5190a4e15bba";
+	const mission = missions.create({ projectId: f.project.id, title: "Seasonal template", tasks: [{ title: "A" }] });
+	const manager = missions.addResource(mission.id, {
+		url: "https://linear.app/acme/issue/HS-1314",
+		linearRole: "managed",
+	});
+	const record = missions.linearSyncRecord(manager.id)!;
+	record.status = { ...record.status, issueId };
+	assert.ok(missions.saveLinearSync(manager.id, record.version, record));
+	f.registry.managedLinearMissions = (projectId, ids) => missions.managedLinearMissions(projectId, ids);
+	await f.projects.update(f.project.id, { tracking: { slackChannels: [], linearTeam: "ENG" } });
+	f.registry.register("linear", async () => ({
+		items: [
+			{ ...item, externalId: issueId, status: "In Progress" },
+			{ ...item, externalId: "other", url: "https://example.com/2" },
+		],
+		cursor: "next",
+	}));
+	await f.registry.poll(`${f.project.id}:linear`);
+	const links = (items: Array<{ externalId?: string; missionId?: string; missionIds?: string[] }>) =>
+		Object.fromEntries(items.map((row) => [row.externalId, [row.missionId, row.missionIds]]));
+	const expected = { [issueId]: [mission.id, [mission.id]], other: [undefined, undefined] };
+	assert.deepEqual(links(f.registry.dashboard(f.project.id)[0]!.items), expected);
+	const intake = (await f.registry.intakeSources(f.project.id)).find((source) => source.kind === "linear")!;
+	assert.deepEqual(links(intake.items), expected);
+	assert.equal(missions.managedLinearMissions("another-project", [issueId]).size, 0, "other projects stay unlinked");
 });
