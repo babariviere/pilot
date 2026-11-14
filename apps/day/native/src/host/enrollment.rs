@@ -140,10 +140,14 @@ impl Prepared {
         {
             return Err(Error::Invalid);
         }
-        // Keep the user's goal byte-for-byte. Only the display title is shortened.
+        // Keep the user's goal byte-for-byte. The display title is its first
+        // line, shortened.
         let title: String = intent
             .goal
-            .trim()
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or_default()
             .chars()
             .scan(0, |bytes, c| {
                 *bytes += c.len_utf8();
@@ -469,5 +473,13 @@ mod tests {
             prepared.record(&source, &intent(Some("../old"))).err(),
             Some(Error::Invalid)
         );
+        // The title is the goal's first line; the goal is kept whole.
+        let lines = NewIntent {
+            goal: "\n  Docs refresh  \n\nRe-plan the old mission.".into(),
+            ..intent(None)
+        };
+        let titled = payload(&prepared.record(&source, &lines).unwrap());
+        assert_eq!(titled["title"], "Docs refresh");
+        assert_eq!(titled["goal"], lines.goal.as_str());
     }
 }

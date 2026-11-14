@@ -694,8 +694,10 @@ pub fn replan_draft(detail: &c::MissionDetail, problems: &[Problem]) -> String {
         }
     };
     let mission = &detail.mission;
+    // The first line is the new mission's title, so a re-plan keeps its name.
     let mut out = format!(
-        "Re-plan the old mission “{}” as a new mission. Keep what still matters and drop the rest.\n\nGoal: {}\n",
+        "{}\n\nRe-plan the old mission “{}” as a new mission. Keep what still matters and drop the rest.\n\nGoal: {}\n",
+        cut(&mission.title, 80),
         mission.title,
         cut(&mission.goal, 600)
     );
@@ -883,6 +885,11 @@ mod tests {
         };
         let draft = replan_draft(&detail, &[unpublished]);
         assert!(draft.chars().count() <= crate::plan_desk::MAX_TEXT);
+        assert_eq!(
+            draft.lines().next(),
+            Some("Old"),
+            "the title line comes first"
+        );
         for kept in [
             "“Old”",
             "Goal: Ship it",
