@@ -192,34 +192,46 @@ fn a_change_while_the_first_read_fails_reads_again_once_it_has_failed() {
 }
 
 #[test]
-fn a_window_whose_first_read_failed_closes_without_a_view_and_reads_again_on_a_change() {
+fn a_window_whose_first_read_failed_closes_with_its_saved_view_and_reads_again_on_a_change() {
     let root = FakeRoot::new();
     root.refuse("day.today.read", "offline");
+    // The window's saved view holds an unsent goal from an earlier session.
+    let saved = pilot_day_native::update::SavedView {
+        place: pilot_day_native::update::PlaceKind::New,
+        goal: "Kept 👩🏽‍💻 goal".into(),
+        ..Default::default()
+    };
+    root.reply("day.window.read", serde_json::to_value(&saved).unwrap());
     let entry = entry();
     let mut app = open_on(&entry, root.channel.clone());
     let failed = "Pilot could not reach its service. Nothing is shown rather than a guess.";
     wait(&mut app, failed);
-    // A close while nothing is shown is answered at once, with no view: the
-    // root keeps the window's last saved one. It used to wait forever.
+    // A close while nothing is shown is answered at once with the saved view
+    // unchanged, so the goal is kept. It used to wait forever.
     root.flush(1);
     until(&mut app, "close answered", || {
         root.count("day.flush.ack") == 1
     });
-    assert_eq!(root.args("day.flush.ack"), [json!({"generation": 1})]);
+    let ack = &root.args("day.flush.ack")[0];
+    assert_eq!(ack["generation"], 1);
+    // The saved view comes back unchanged (numbers may differ only as 0 / 0.0).
+    assert_eq!(ack["view"]["place"], "new");
+    assert_eq!(ack["view"]["goal"], saved.goal.as_str());
     // The service came back: the root's next change reads again by itself.
     root.reply(
         "day.today.read",
         serde_json::to_value(Desk::new(Scenario::Quiet).today()).unwrap(),
     );
     root.changed();
-    wait(&mut app, "Monday 9 November, 09:12");
+    // It opens where the saved view was: New, with the kept goal.
+    wait(&mut app, "What do you want done?");
     assert!(!app.shows(failed));
     drop(app);
     std::fs::remove_dir_all(entry.parent().unwrap()).unwrap();
 }
 
 #[test]
-fn close_during_opening_is_answered_without_a_view_once_the_read_fails() {
+fn close_during_opening_is_answered_with_the_saved_view_once_the_read_fails() {
     let entry = recovery_entry();
     let root = FakeRoot::new();
     let held = hold_next(&root);
@@ -239,16 +251,14 @@ fn close_during_opening_is_answered_without_a_view_once_the_read_fails() {
         .unwrap()
         .resolve(json!({"version":1,"error":"offline"}));
     wait(&mut app, "id:connection-read");
-    // Nothing was shown, so nothing is saved: the newest close is answered
-    // with no view, and the root keeps the last saved one.
+    // Nothing was shown, so nothing new is saved: the newest close is
+    // answered with the saved view (here none, so the default view).
     until(&mut app, "pending close answered", || {
         root.count("day.flush.ack") == 1
     });
-    assert_eq!(
-        root.args("day.flush.ack"),
-        [json!({"generation": 5})],
-        "only the newest generation, and never an empty view"
-    );
+    let ack = &root.args("day.flush.ack")[0];
+    assert_eq!(ack["generation"], 5, "only the newest generation");
+    assert_eq!(ack["view"]["place"], "today");
     root.reply("day.plan.inventory", inventory(vec![]));
     app.press("id:connection-read").unwrap();
     wait(&mut app, "role:button[New]");
@@ -264,7 +274,7 @@ fn close_during_opening_is_answered_without_a_view_once_the_read_fails() {
 }
 
 #[test]
-fn a_channel_rejection_settles_without_restarting_and_answers_close_without_a_view() {
+fn a_channel_rejection_settles_without_restarting_and_answers_close_with_the_saved_view() {
     let entry = recovery_entry();
     let root = FakeRoot::new();
     let held = hold_next(&root);
@@ -287,7 +297,10 @@ fn a_channel_rejection_settles_without_restarting_and_answers_close_without_a_vi
     app.wait(Duration::from_millis(100)).unwrap();
     assert!(!has(&app, "id:connection-read"));
     assert_eq!(root.count("day.today.read"), 1);
-    assert_eq!(root.args("day.flush.ack"), [json!({"generation": 6})]);
+    until(&mut app, "close answered", || {
+        root.count("day.flush.ack") == 1
+    });
+    assert_eq!(root.args("day.flush.ack")[0]["generation"], 6);
     no_effects(&root);
     drop(app);
     std::fs::remove_dir_all(entry.parent().unwrap()).unwrap();

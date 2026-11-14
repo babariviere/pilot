@@ -124,15 +124,24 @@ function refresh() {
 	void refreshScope().catch((error: unknown) => console.error("Pilot could not read its project scope:", error));
 }
 
+/** Answers a close for a window that never opened, with its saved view unchanged. */
+async function closeUnopened(window: string, generation: number) {
+	const saved = await call<SavedView | null>(window, "day.window.read", {});
+	if (!saved.ok || generation !== latestFlush || windowId() !== window) return;
+	await call(window, "day.flush.ack", { generation, view: saved.snapshot ?? captureView() });
+}
+
 function flushPending() {
 	const open = connection();
 	if (!window || pendingFlush === null || !current()) return;
 	if (open.state === "none") {
-		// No feeds or forms were opened, so there is nothing to save. The answer
-		// carries no view: the root keeps the window's last saved one.
+		// No feeds or forms were opened, so there is nothing new to save. The
+		// answer carries the window's last saved view back unchanged (or the
+		// default view when none was saved), so no draft is lost. When the saved
+		// view cannot be read, nothing is answered and the close is not proved.
 		const generation = pendingFlush;
 		pendingFlush = null;
-		call(window, "day.flush.ack", { generation }).catch((error: unknown) => {
+		closeUnopened(window, generation).catch((error: unknown) => {
 			console.error("Day could not answer a close while it shows no data:", error);
 		});
 		return;
