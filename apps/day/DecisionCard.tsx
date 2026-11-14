@@ -91,7 +91,7 @@ function AnswerLine(props: { day: Day; decision: Decision; answer: Answer }) {
 			</If>
 			<If when={a().state === "unknown"}>
 				<View class="flex-row flex-wrap items-baseline gap-x-1.5">
-					<Text class="text-sm text-needs-ink">
+					<Text class="min-w-0 shrink text-sm text-needs-ink">
 						No answer came back. Pilot will not ask again until it checks.
 					</Text>
 					<InlineAction

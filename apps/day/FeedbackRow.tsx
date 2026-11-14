@@ -296,9 +296,9 @@ function Clarify(props: {
 										}}
 									/>
 								</View>
-								<View class="flex-1 gap-0.5">
+								<View class="min-w-0 flex-1 gap-0.5">
 									<View class="flex-row flex-wrap items-baseline gap-2">
-										<Text class="text-sm text-foreground">{o().label}</Text>
+										<Text class="min-w-0 shrink text-sm text-foreground">{o().label}</Text>
 										<If when={o().suggested}>
 											<Text class="text-xs text-muted-foreground">Suggested</Text>
 										</If>

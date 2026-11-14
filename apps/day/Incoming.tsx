@@ -597,7 +597,9 @@ function LiveIncoming(props: { day: Day; mirror: IntakeMirror }) {
 				</Each>
 				<If when={undoRow()}>
 					<View testID="incoming-undo" class="flex-row flex-wrap items-baseline gap-x-1.5 pb-1">
-						<Text class="text-sm text-muted-foreground">{`Discarded ${quoted(undoRow()?.request.title ?? "")}.`}</Text>
+						<Text class="min-w-0 shrink text-sm text-muted-foreground">
+							{`Discarded ${quoted(undoRow()?.request.title ?? "")}.`}
+						</Text>
 						<InlineAction
 							label="Undo"
 							testID="undo-last"

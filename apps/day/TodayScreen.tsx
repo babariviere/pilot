@@ -114,7 +114,8 @@ function MissionLine(props: { day: Day; row: MissionRow; plans?: Plans }) {
 				<MissionStatus row={props.row} />
 			</RowLink>
 			<View class="flex-row flex-wrap items-baseline gap-x-1.5">
-				<Text class="text-sm text-muted-foreground">{rowLine(props.row)}</Text>
+				{/* min-w-0 shrink lets the summary wrap inside the row instead of running past it. */}
+				<Text class="min-w-0 shrink text-sm text-muted-foreground">{rowLine(props.row)}</Text>
 				<If when={decision()}>
 					<InlineAction
 						label={actionFor(decision())}

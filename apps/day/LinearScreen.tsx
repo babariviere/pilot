@@ -101,7 +101,7 @@ function PlaceAction(props: { place: Place; itemId: string }) {
 	const p = () => props.place;
 	return (
 		<View class="flex-row flex-wrap items-baseline gap-x-1.5">
-			<Text class="text-sm text-foreground">{placeSentence(p())}</Text>
+			<Text class="min-w-0 shrink text-sm text-foreground">{placeSentence(p())}</Text>
 			<If when={p().kind === "mission" && (p() as Extract<Place, { kind: "mission" }>).title}>
 				<InlineAction
 					label="Open the mission"
