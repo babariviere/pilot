@@ -36,6 +36,7 @@ struct Fixture {
     host: NativeHost,
     stop: Arc<AtomicBool>,
     server: Option<JoinHandle<()>>,
+    hello: Arc<std::sync::Mutex<Value>>,
 }
 impl Fixture {
     fn new(fresh: bool) -> Self {
@@ -69,6 +70,11 @@ impl Fixture {
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
         let project = path.display().to_string();
+        let hello = Arc::new(std::sync::Mutex::new(
+            json!({"daemonId":"synthetic-daemon","lineageId":"synthetic-lineage","daemonVersion":"203.0", "protocolVersion":1,
+            "minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"dayOverview":1}}),
+        ));
+        let response_hello = hello.clone();
         let server = std::thread::spawn(move || {
             while !stopped.load(Ordering::SeqCst) {
                 let (mut stream, _) = match listener.accept() {
@@ -79,6 +85,7 @@ impl Fixture {
                     }
                     Err(e) => panic!("fixture listener: {e}"),
                 };
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(3)))
                     .unwrap();
@@ -100,8 +107,7 @@ impl Fixture {
                     }
                 }
                 let value = if hello {
-                    json!({"daemonId":"synthetic-daemon","lineageId":"synthetic-lineage","protocolVersion":1,
-                    "minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"dayOverview":1}})
+                    response_hello.lock().unwrap().clone()
                 } else if project_read {
                     json!({"id":"synthetic-project","path":project})
                 } else {
@@ -173,6 +179,7 @@ impl Fixture {
             bridge,
             stop,
             server: Some(server),
+            hello,
         }
     }
     fn open(path: &std::path::Path, source: &Source, selection: &Selection) -> NativeHost {
@@ -244,6 +251,165 @@ impl Drop for Fixture {
     }
 }
 const VIEW: &str = r#"{place:'new',id:'',update:true,goal:'  unsent 👩🏽‍💻\nexact  ',focused:'decision',questions:['round/question']}"#;
+
+#[cfg(target_os = "macos")]
+fn signed_fixture_app(f: &mut Fixture) {
+    let app = f.path.join("Fixture.app");
+    std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+    std::fs::copy("/usr/bin/true", app.join("Contents/MacOS/fixture")).unwrap();
+    std::fs::write(
+        app.join("Contents/Info.plist"),
+        r#"<?xml version="1.0"?><plist version="1.0"><dict>
+        <key>CFBundleIdentifier</key><string>com.example.synthetic.day</string>
+        <key>CFBundleExecutable</key><string>fixture</string>
+        <key>CFBundleVersion</key><string>1.0</string>
+        <key>CFBundlePackageType</key><string>APPL</string></dict></plist>"#,
+    )
+    .unwrap();
+    let signed = std::process::Command::new("/usr/bin/codesign")
+        .args(["--force", "--sign", "-", "--timestamp=none"])
+        .arg(&app)
+        .output()
+        .unwrap();
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    f.selection.installed = app;
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn official_update_readiness_does_not_hide_running_service_or_signed_app() {
+    let mut f = Fixture::new(false);
+    signed_fixture_app(&mut f);
+    for root in [
+        OfficialRoot::default(),
+        OfficialRoot::selected(f.path.join("missing-inputs"), f.path.join("journal")),
+    ] {
+        f.selection.official = Some(root);
+        f.reopen();
+        for method in ["read", "check", "read"] {
+            let reply = f.run(&format!("return await call('day.update.{method}');"));
+            let snapshot = &reply["value"]["snapshot"];
+            assert_eq!(snapshot["state"], "registered", "{method}: {snapshot}");
+            assert_eq!(snapshot["app"], "1.0");
+            assert_eq!(snapshot["service"], "203.0");
+            assert_eq!(snapshot["reason"], "");
+            assert!(snapshot["offer"].is_null());
+            assert_eq!(snapshot["forceAvailable"], false);
+            assert!(!snapshot["blocked"].as_str().unwrap().is_empty());
+        }
+        for kind in ["app", "service"] {
+            for mode in ["normal", "force"] {
+                let reply = f.run(&format!("const r=await call('day.update.read');return await call('day.update.prepare',{{kind:'{kind}',mode:'{mode}',revision:r.value.snapshot.revision}});"));
+                assert_eq!(reply["error"], "unavailable");
+            }
+        }
+    }
+    std::fs::write(
+        f.selection.installed.join("Contents/MacOS/fixture"),
+        "tampered",
+    )
+    .unwrap();
+    let reply = f.run("return await call('day.update.read');");
+    let snapshot = &reply["value"]["snapshot"];
+    assert_eq!(snapshot["state"], "registered");
+    assert_eq!(snapshot["app"], "", "Read rechecks the actual code seal");
+    assert_eq!(snapshot["service"], "203.0");
+    assert!(f.bridge.pending_update().is_none());
+    assert_eq!(std::fs::metadata(f.path.join("journal")).unwrap().len(), 0);
+    assert!(!f.source.profile.join(".daemon-upgrade.json").exists());
+}
+
+#[test]
+fn official_status_rechecks_live_identity_protocol_and_version_without_update_authority() {
+    let mut f = Fixture::new(false);
+    f.selection.official = Some(Default::default());
+    f.selection.capsule = None;
+    f.selection.binding = None;
+    f.selection.app = None;
+    f.reopen();
+    let original = f.hello.lock().unwrap().clone();
+    for (field, value, expected) in [
+        ("daemonVersion", json!("204.0"), "registered"),
+        ("daemonId", json!("wrong-daemon"), "unknown"),
+        ("lineageId", json!("wrong-lineage"), "unknown"),
+        ("minimumClientProtocolVersion", json!(2), "incompatible"),
+    ] {
+        let mut hello = original.clone();
+        hello[field] = value;
+        *f.hello.lock().unwrap() = hello;
+        let reply = f.run("return await call('day.update.check');");
+        let snapshot = &reply["value"]["snapshot"];
+        assert_eq!(snapshot["state"], expected, "{field}: {snapshot}");
+        assert_eq!(
+            snapshot["service"],
+            if expected == "registered" {
+                "204.0"
+            } else {
+                ""
+            }
+        );
+        assert_eq!(
+            snapshot["app"], "",
+            "an unpublished path is not a code seal"
+        );
+        assert!(snapshot["offer"].is_null());
+        assert_eq!(snapshot["forceAvailable"], false);
+        assert!(
+            snapshot["blocked"]
+                .as_str()
+                .unwrap()
+                .contains("not selected")
+        );
+        assert_eq!(
+            snapshot["reason"].as_str().unwrap().is_empty(),
+            expected == "registered"
+        );
+    }
+    *f.hello.lock().unwrap() = original;
+    let reply = f.run("return await call('day.update.read');");
+    assert_eq!(reply["value"]["snapshot"]["state"], "registered");
+    assert_eq!(reply["value"]["snapshot"]["service"], "203.0");
+    assert!(f.bridge.pending_update().is_none());
+    assert_eq!(std::fs::metadata(f.path.join("journal")).unwrap().len(), 0);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn official_status_keeps_app_observation_when_service_is_offline_or_untrusted() {
+    let mut f = Fixture::new(false);
+    signed_fixture_app(&mut f);
+    f.selection.official = Some(Default::default());
+    f.reopen();
+    let reply = f.run("return await call('day.update.read');");
+    assert_eq!(reply["value"]["snapshot"]["app"], "1.0");
+    std::fs::write(f.source.profile.join("daemon-id"), "wrong-daemon").unwrap();
+    let reply = f.run("return await call('day.update.check');");
+    assert_eq!(reply["value"]["snapshot"]["state"], "unknown");
+    assert_eq!(reply["value"]["snapshot"]["app"], "1.0");
+    assert_eq!(reply["value"]["snapshot"]["service"], "");
+    std::fs::write(f.source.profile.join("daemon-id"), "synthetic-daemon").unwrap();
+    f.stop.store(true, Ordering::SeqCst);
+    f.server.take().unwrap().join().unwrap();
+    let reply = f.run("return await call('day.update.read');");
+    let snapshot = &reply["value"]["snapshot"];
+    assert_eq!(snapshot["state"], "offline");
+    assert_eq!(snapshot["app"], "1.0");
+    assert_eq!(snapshot["service"], "");
+    assert!(snapshot["offer"].is_null());
+    assert_eq!(snapshot["forceAvailable"], false);
+    assert!(
+        snapshot["blocked"]
+            .as_str()
+            .unwrap()
+            .contains("not selected")
+    );
+    assert!(f.bridge.pending_update().is_none());
+    assert_eq!(std::fs::metadata(f.path.join("journal")).unwrap().len(), 0);
+}
 
 #[test]
 fn official_root_refuses_normal_and_force_before_capture_or_loss_and_ignores_legacy_target() {

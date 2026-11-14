@@ -502,7 +502,7 @@ export function UpdateScreen(props: { update: Update; day: Day; plans?: Plans })
 					/>
 				</If>
 				<If when={!service().offer && !run() && service().state === "registered"}>
-					<Text class="text-sm text-muted-foreground">Pilot is up to date.</Text>
+					<Text class="text-sm text-muted-foreground">{service().blocked || "Pilot is up to date."}</Text>
 				</If>
 				<If when={service().agents.length > 0}>
 					<Agents agents={service().agents} />

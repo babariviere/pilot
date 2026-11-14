@@ -215,8 +215,19 @@ impl Selection {
         // legacy helper/orchestration; official_update owns the new boundary.
         Err(Failure::Unsupported)
     }
-    fn inspect(&self) -> Inspection {
+    fn app_verified(&self) -> bool {
         use pilot_desktop_updater::installer::{NativePlatform, Platform};
+        self.trust.validate().is_ok()
+            && NativePlatform
+                .verify(
+                    &self.installed,
+                    &self.trust,
+                    &self.trust.current_build,
+                    None,
+                )
+                .is_ok()
+    }
+    fn inspect(&self) -> Inspection {
         if self.trust.validate().is_err() {
             return Inspection {
                 daemon: Err(Failure::Unverified),
@@ -228,15 +239,7 @@ impl Selection {
         // cannot offer a new NSH app update. New installs use official_update
         // only after the global preparation and native joined-close boundary.
         let app_ready = false;
-        let app_verified = app_ready
-            || NativePlatform
-                .verify(
-                    &self.installed,
-                    &self.trust,
-                    &self.trust.current_build,
-                    None,
-                )
-                .is_ok();
+        let app_verified = self.app_verified();
         let daemon = if let Some(capsule) = &self.capsule {
             DaemonLifecycle::new(self.connection.clone()).needed(
                 capsule,
@@ -836,6 +839,44 @@ pub(super) async fn handle(
                     return Ok(outcome(OutcomeStatus::Accepted, state.view.revision, ""));
                 }
                 if let Some(mut root) = selection.official.clone() {
+                    // Observe the selected live connection independently of
+                    // distribution readiness. Never consult a legacy capsule
+                    // or service controller to answer this read-only question.
+                    let app_selection = selection.clone();
+                    let app_verified =
+                        tokio::task::spawn_blocking(move || app_selection.app_verified())
+                            .await
+                            .map_err(|_| Error::Unknown)?;
+                    state.view.app = if app_verified {
+                        selection.trust.current_build.clone()
+                    } else {
+                        String::new()
+                    };
+                    match t.profile_hello().await {
+                        Ok(hello) => {
+                            state.view.state = ServiceState::Registered;
+                            state.view.reason.clear();
+                            state.view.service = hello["daemonVersion"]
+                                .as_str()
+                                .filter(|v| v.len() <= 128)
+                                .unwrap_or_default()
+                                .into();
+                        }
+                        Err(error) => {
+                            state.view.service.clear();
+                            state.view.state = match error {
+                                Error::Offline => ServiceState::Offline,
+                                Error::Unavailable => ServiceState::Incompatible,
+                                _ => ServiceState::Unknown,
+                            };
+                            state.view.reason = if error == Error::Offline {
+                                "Pilot's service is registered but is not answering."
+                            } else {
+                                failure_message(Failure::Unverified)
+                            }
+                            .into();
+                        }
+                    }
                     // Only an explicit Check runs the signed input preflight, on
                     // a blocking thread, never AppKit. Read reports saved status.
                     if checking {
@@ -850,7 +891,6 @@ pub(super) async fn handle(
                     state.view.offer = None;
                     state.view.force_available = Some(false);
                     state.view.blocked = root.blocked().into();
-                    state.view.reason = state.view.blocked.clone();
                     state.changed();
                     return Ok(outcome(OutcomeStatus::Accepted, state.view.revision, ""));
                 }

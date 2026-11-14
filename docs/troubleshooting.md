@@ -51,6 +51,8 @@ does not confirm that every MCP server connected; check **Settings → Connectio
 
 Use **Settings → Updates** for the available app and daemon controls. On macOS,
 packaged managed connections also offer **Pilot Next → Daemon** actions.
+In Day, service status and update-package readiness are separate. Missing signed
+update distributions do not mean that the connected service is unavailable.
 **Install and restart** saves current chat drafts, question replies, attachments
 and app preferences, waits for pending saves, then continues automatically.
 It does not send drafts or require a delivery Check. Saved pending messages

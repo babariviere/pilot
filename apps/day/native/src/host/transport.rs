@@ -166,8 +166,14 @@ impl Transport {
 
     /// Profile identity and protocol only; no selected project or feature requirement.
     pub(super) async fn profile_gate(&self) -> Result<(), Error> {
+        self.profile_hello().await.map(|_| ())
+    }
+
+    /// Same authenticated identity/protocol gate, with its observed version.
+    pub(super) async fn profile_hello(&self) -> Result<Value, Error> {
         let v = self.get("/api/hello").await?;
-        self.check_hello(&v)
+        self.check_hello(&v)?;
+        Ok(v)
     }
 
     fn check_hello(&self, v: &Value) -> Result<(), Error> {
