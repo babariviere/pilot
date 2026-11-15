@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -35,6 +35,28 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
 	t.after(() => rm(directory, { recursive: true, force: true }));
 	return { directory, journal: new OperationJournal(directory, destination) };
 }
+test("an unknown outcome is noted once; recovery at the next start does not log the same outcome again", async (t) => {
+	const f = await fixture(t);
+	const op = operation();
+	const file = join(f.directory, `${payloadHash(op.operationId)}.json`);
+	const lost = async () => {
+		throw new Error("Unknown admission; no replay");
+	};
+	assert.equal((await f.journal.execute(op, lost)).state, "pending");
+	const saved = JSON.parse(await readFile(file, "utf8"));
+	assert.equal(saved.unknown, "Error: Unknown admission; no replay");
+	assert.equal("unknown" in (await f.journal.lookup(op))!, false, "the note is never part of the receipt");
+	const written = (await stat(file)).ino;
+	const restarted = new OperationJournal(f.directory, destination);
+	await restarted.recover(lost);
+	assert.equal((await stat(file)).ino, written, "the same unknown outcome is not written or logged again");
+	await restarted.recover(async () => {
+		throw new Error("Another reason");
+	});
+	assert.equal(JSON.parse(await readFile(file, "utf8")).unknown, "Error: Another reason");
+	assert.equal((await restarted.lookup(op))!.state, "pending");
+});
+
 test("reservation survives crash before admission, repeated acknowledgment loss returns one stable receipt", async (t) => {
 	const { directory, journal } = await fixture(t);
 	const op = operation();

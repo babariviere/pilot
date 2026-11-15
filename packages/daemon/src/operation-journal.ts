@@ -31,6 +31,9 @@ export class OperationRejected extends Error {
 interface StoredOperation {
 	operation: DurableOperation;
 	receipt: OperationReceipt;
+	/** The last unknown outcome written to the log. Recovery rechecks the operation at every start;
+	 * the same outcome is not logged again. Private: never part of the receipt. */
+	unknown?: string;
 }
 
 /** Async fsync + atomic publication, including directory durability. No SQLite on the daemon loop. */
@@ -458,7 +461,19 @@ export class OperationJournal {
 				result = await handler(structuredClone(op), { firstEntry });
 			} catch (e) {
 				if (!(e instanceof OperationRejected)) {
-					trace(`pilotd: operation ${op.kind} ${op.operationId} (target ${op.targetId}) outcome unknown: ${e}`);
+					const unknown = String(e).slice(0, 512);
+					await this.serial(async () => {
+						const previous = this.checked(op);
+						if (previous?.receipt.state !== "pending" || previous.unknown === unknown) return;
+						trace(
+							`pilotd: operation ${op.kind} ${op.operationId} (target ${op.targetId}) outcome unknown: ${unknown}`,
+						);
+						const updated = { ...previous, unknown };
+						await this.persist(join(this.directory, `${payloadHash(op.operationId)}.json`), updated);
+						this.records.set(op.operationId, updated);
+					}).catch(() => {
+						/* The note only quiets the log; the operation stays pending either way. */
+					});
 					return (await this.lookup(op))!;
 				}
 				reason = e.message.slice(0, 512);
