@@ -27,6 +27,8 @@ The states are distinct:
 - `checkpointed`: final inventory, census, close ACK and worker exit were saved.
 - `resume-admitted`: recovery admission was saved before opening a replacement kernel.
 - `resume-acknowledged`: that kernel's ready ACK and its receipt were saved. This is not proof of model progress.
+  The checkpoint stays on the chat, but it no longer holds work: planning input, coordinator dispatch and task
+  continuation go on as they do for a chat with no checkpoint.
 - `stopped`: a later user Stop wins. It retains its original ownership generation.
 - `unknown`: inspection is required. Do not resend a checkpoint, resume or fresh continuation input.
 

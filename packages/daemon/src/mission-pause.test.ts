@@ -166,6 +166,21 @@ test("mission Pause proves ACK, census and joined exit; unrelated work stays run
 	);
 });
 
+test("after Resume the coordinator can dispatch and its tasks can continue again", async (t) => {
+	const f = await fixture(t),
+		command = f.command();
+	(f.sessions as unknown as { metas: Map<string, { taskIds?: string[] }> }).metas.get(f.a.id)!.taskIds = ["task"];
+	f.sessions.missionDispatchFence(f.a.id);
+	await f.service.controls.execute(f.mission.id, command);
+	assert.throws(() => f.sessions.missionDispatchFence(f.a.id), /held or unavailable/);
+	assert.throws(() => f.sessions.assertMissionTaskHolds(f.mission.id, ["task"]), /paused/);
+	const resumed = await f.service.controls.execute(f.mission.id, f.command("resume", command.operationId));
+	assert.equal(resumed.control.state, "running");
+	assert.equal((await f.meta()).lifecycleCheckpoint.phase, "resume-acknowledged");
+	f.sessions.missionDispatchFence(f.a.id);
+	f.sessions.assertMissionTaskHolds(f.mission.id, ["task"]);
+});
+
 for (const options of [{ lostAck: true }, { remainingJobs: 1 }, { failExit: true }])
 	test(`mission Pause stays uncertain: ${JSON.stringify(options)}`, async (t) => {
 		const f = await fixture(t, options),

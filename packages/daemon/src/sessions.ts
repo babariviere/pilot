@@ -8041,7 +8041,7 @@ ${run.excerpt}`,
 				meta.outcome === "stopped" ||
 				meta.inputsPaused ||
 				meta.archivedAt !== undefined ||
-				meta.lifecycleCheckpoint
+				lifecycleHeld(meta)
 			)
 				throw new Conflict(
 					"Task has a stopped, paused or archived chat; user holds are not continuation authority",
@@ -8065,7 +8065,7 @@ ${run.excerpt}`,
 			meta.updatePaused ||
 			meta.sleepPaused ||
 			this.internetOnline === false ||
-			meta.lifecycleCheckpoint ||
+			lifecycleHeld(meta) ||
 			this.subscriptionPaused(id) ||
 			meta.outcome === "stopped"
 		)
