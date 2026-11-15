@@ -14,8 +14,9 @@ use crate::{
     host::{Error, NativeHost},
     model::IntentOutcome,
     plan::{
-        AnswerIntent, ConfirmRevisionIntent, InterviewRef, NewIntent, OutcomeStatus, PlanChat,
-        PlanOutcome, PlanPage, PlanScenario, Planning, RevisionRef, RevisitIntent, SubmitIntent,
+        AnswerIntent, ConfirmRevisionIntent, ContinueIntent, InterviewRef, NewIntent,
+        OutcomeStatus, PlanChat, PlanOutcome, PlanPage, PlanScenario, Planning, QuestionAskIntent,
+        RepairApplyIntent, RevisionRef, RevisitIntent, SubmitIntent, UnstickIntent,
     },
     plan_desk::PlanDesk,
     plan_host::{self, Local},
@@ -656,6 +657,109 @@ impl PlanFeed {
             return outcome(OutcomeStatus::Unknown, "", None);
         }
         Self::settle(&this, |desk| desk.settle_revisit(&intent))
+    }
+
+    /// Asks the idle planning agent to continue planning. It answers,
+    /// approves and starts nothing; mock flows have no planning agent to wake.
+    pub async fn continue_planning(this: Instance<Self>, intent: ContinueIntent) -> PlanOutcome {
+        if let Some(side) = this.with(|f| f.native.clone()) {
+            return Self::host_write(
+                &this,
+                side,
+                |read| plan_host::continue_request(read, &intent),
+                |_, _| (),
+                if intent.feedback.trim().is_empty() {
+                    "Pilot continues planning. It asks you when it needs you."
+                } else {
+                    "Sent. Pilot redoes these questions with your feedback."
+                },
+            )
+            .await;
+        }
+        outcome(
+            OutcomeStatus::Rejected,
+            "Continue planning is not available here. Nothing was sent.",
+            Some(intent.mission_id),
+        )
+    }
+
+    /// Applies Unstick's fix that removes saved answers to an earlier wording, so
+    /// new answers save. It answers no question; Continue planning is its own action.
+    pub async fn drop_earlier_answers(this: Instance<Self>, intent: UnstickIntent) -> PlanOutcome {
+        if let Some(side) = this.with(|f| f.native.clone()) {
+            return Self::host_write(
+                &this,
+                side,
+                |read| plan_host::drop_earlier_request(read, &intent.mission_id),
+                |_, _| (),
+                "Removed. Answer those questions again.",
+            )
+            .await;
+        }
+        outcome(
+            OutcomeStatus::Rejected,
+            "Unstick is not available here. Nothing was sent.",
+            Some(intent.mission_id),
+        )
+    }
+
+    /// Starts Unstick's repair agent: a read-only chat that reads the planner's chat
+    /// and proposes one fix. It changes nothing in the mission.
+    pub async fn repair_start(this: Instance<Self>, intent: UnstickIntent) -> PlanOutcome {
+        if let Some(side) = this.with(|f| f.native.clone()) {
+            return Self::host_write(
+                &this,
+                side,
+                |read| plan_host::repair_start_request(read, &intent.mission_id),
+                |_, _| (),
+                "An agent is looking. Its fix shows here.",
+            )
+            .await;
+        }
+        outcome(
+            OutcomeStatus::Rejected,
+            "The repair agent is not available here. Nothing was sent.",
+            Some(intent.mission_id),
+        )
+    }
+
+    /// Applies the repair agent's fix, only while it still matches the mission.
+    pub async fn repair_apply(this: Instance<Self>, intent: RepairApplyIntent) -> PlanOutcome {
+        if let Some(side) = this.with(|f| f.native.clone()) {
+            return Self::host_write(
+                &this,
+                side,
+                |read| plan_host::repair_apply_request(read, &intent),
+                |_, _| (),
+                "Applied.",
+            )
+            .await;
+        }
+        outcome(
+            OutcomeStatus::Rejected,
+            "The repair agent is not available here. Nothing was sent.",
+            Some(intent.mission_id),
+        )
+    }
+
+    /// Asks about one interview question. A read-only chat answers it on the
+    /// planning page; the round keeps waiting for the user's answers.
+    pub async fn ask_question(this: Instance<Self>, intent: QuestionAskIntent) -> PlanOutcome {
+        if let Some(side) = this.with(|f| f.native.clone()) {
+            return Self::host_write(
+                &this,
+                side,
+                |read| plan_host::ask_request(read, &intent),
+                |_, _| (),
+                "Asked. The answer shows here.",
+            )
+            .await;
+        }
+        outcome(
+            OutcomeStatus::Rejected,
+            "Questions about questions are not available here. Nothing was sent.",
+            Some(intent.mission_id),
+        )
     }
 
     /// Confirms one revision exactly as shown: its id and digest. It applies

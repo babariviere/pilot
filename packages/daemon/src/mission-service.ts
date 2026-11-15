@@ -58,6 +58,7 @@ import { splitTicket } from "./mission-ticket-work.ts";
 import { type MissionActivityQuery, type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
 import { canonicalJSON } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
+import { replacedMissionView } from "./replaced-mission.ts";
 import {
 	captureRetainedArtifact,
 	type RetainedArtifactHost,
@@ -1959,6 +1960,14 @@ export class MissionService {
 					},
 				});
 				return { map: (await reader.view(missionId)).map };
+			}
+			case "replaced": {
+				// Read-only: the old mission this one re-plans, so members can research what it delivered.
+				this.assertSameProject(sessionId, missionId);
+				const number = args.id === undefined ? undefined : Number(String(args.id).replace(/^#/, ""));
+				if (number !== undefined && (!Number.isSafeInteger(number) || number < 1))
+					throw new Error("id must be a task number of the old mission");
+				return replacedMissionView(this.store, missionId, number);
 			}
 			case "report": {
 				const authorize = () => {

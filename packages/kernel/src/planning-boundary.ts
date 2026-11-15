@@ -94,7 +94,10 @@ export async function admitPlanningInput(
 		const live = await tx.doc(LiveDoc, conversation.id);
 		const inbox = await tx.doc(InboxDoc, conversation.id);
 		if (
-			(["plan-revisit", "thread-send"].includes(input.operation.kind) && held.planning) ||
+			// A comment on a waiting round names that exact hold and releases it; other user turns wait.
+			(["plan-revisit", "plan-continue", "thread-send"].includes(input.operation.kind) &&
+				held.planning &&
+				!(input.operation.kind === "plan-continue" && input.hold)) ||
 			held.stopped ||
 			held.paused ||
 			held.questionPending ||

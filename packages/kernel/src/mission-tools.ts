@@ -10,6 +10,7 @@ export const MISSION_TOOL = "mission";
 const MEMBER_ACTIONS = [
 	"get",
 	"map",
+	"replaced",
 	"brief",
 	"update",
 	"tasks",
@@ -73,6 +74,7 @@ Write limits (Unicode code points, including whitespace): decision text ${MISSIO
 Workers report facts with report/log, never change canonical task status, complete or claim/release work. Coordinator/user owns status; worker delivery is not task completion or user acceptance. When get reports planningVersion 1, only the coordinator/user edits task definitions, criteria, assignments, brief or decisions. Propose changes with comment.
 - get: without id, compact goal/status/brief revision, tasks grouped by phase with progress, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, completion record if delivered, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
 - map: read the canonical Wayfinder overview for this chat's current mission, with source currentness and interview history. No arguments. Same map as the native planning page; no edits, grants or execution authority. Unavailable planning context refuses, never means an empty map.
+- replaced: read-only view of the old mission this mission re-plans: brief, decisions and task list; id (old task number) for one task with its latest report.
 - links, artifacts: references, filtered by taskId and filter open (default), done or all.
 - decisions: active decisions not already in your prompt. Use filter all for exact historical bodies, labeled nonbinding when replaced/withdrawn. Changes arrive as short notices; current decisions supersede old prompt text.
 - comments: read open questions and feedback; check for an existing discussion before posting.

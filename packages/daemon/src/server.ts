@@ -468,6 +468,8 @@ export function createDaemonServer(
 					mission: missions.store.get(request.missionId!),
 					brief: missions.store.brief(request.missionId!),
 					tasks: rows,
+					// Why planning moves, waits or is stuck, read-only. Null without a planning agent.
+					planning: planningWorkers?.diagnosticPlanning(request.missionId!) ?? null,
 					linearSync: { ...linearSync, coverage: "Persisted mission sync only, no network fetch" },
 				},
 				Math.max(rows.length, linearSync.tickets.length),
@@ -799,6 +801,7 @@ export function createDaemonServer(
 					projects,
 					sessions,
 					confirmations: workflowConfirmations,
+					...(missions.knowledge ? { knowledge: missions.knowledge } : {}),
 				})
 			: undefined;
 	const nativePlanning =
@@ -812,6 +815,8 @@ export function createDaemonServer(
 					workers: planningWorkers,
 				})
 			: undefined;
+	// Ready research questions start read-only research chats (D28), within existing limits.
+	planningWorkers?.startResearch();
 	const missionThreads =
 		journal && missions
 			? new MissionThreads({ store: missions.store, journal, projects, sessions, workers: planningWorkers })

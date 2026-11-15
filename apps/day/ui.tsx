@@ -19,6 +19,8 @@ import archive from "./icons/archive.svg";
 import back from "./icons/back.svg";
 import changes from "./icons/changes.svg";
 import document from "./icons/document.svg";
+import fullscreen from "./icons/fullscreen.svg";
+import fullscreenExit from "./icons/fullscreen-exit.svg";
 import moon from "./icons/moon.svg";
 import notes from "./icons/notes.svg";
 import pause from "./icons/pause.svg";
@@ -38,6 +40,8 @@ const ICONS = {
 	back,
 	changes,
 	document,
+	fullscreen,
+	fullscreenExit,
 	moon,
 	notes,
 	pause,

@@ -1,0 +1,3 @@
+/** How planning agents word what they ask the user. Sent with interview and planning prompts. */
+export const QUESTION_STYLE =
+	"Write each question for the user, who has not read the code or the research: everyday words, one short question of one or two sentences, and options that say what the user gets or sees. Prefer the terms of the project's GLOSSARY.md and the user's own words (goal, answers, comments), so you and the user mean the same thing; explain any other technical term plainly. Leave out IDs, labels such as FB-01, revision numbers and permission disclaimers. Put background in the question's context: what it is about, what happens today and what each option changes, in a few short sentences.";

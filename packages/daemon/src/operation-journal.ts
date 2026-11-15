@@ -60,9 +60,9 @@ export async function durableJSON(file: string, value: unknown): Promise<void> {
  * An exception leaves a recoverable pending receipt, not a possibly false rejection.
  */
 export class OperationJournal {
-	private readonly settledListeners = new Set<(operation: DurableOperation) => void>();
+	private readonly settledListeners = new Set<(operation: DurableOperation, receipt: OperationReceipt) => void>();
 	/** Invalidations follow durable final receipt publication, never merely handler entry. */
-	onSettled(listener: (operation: DurableOperation) => void): () => void {
+	onSettled(listener: (operation: DurableOperation, receipt: OperationReceipt) => void): () => void {
 		this.settledListeners.add(listener);
 		return () => this.settledListeners.delete(listener);
 	}
@@ -456,7 +456,12 @@ export class OperationJournal {
 			try {
 				result = await handler(structuredClone(op), { firstEntry });
 			} catch (e) {
-				if (!(e instanceof OperationRejected)) return (await this.lookup(op))!;
+				if (!(e instanceof OperationRejected)) {
+					console.warn(
+						`pilotd: operation ${op.kind} ${op.operationId} (target ${op.targetId}) outcome unknown: ${e}`,
+					);
+					return (await this.lookup(op))!;
+				}
 				reason = e.message.slice(0, 512);
 				result = e.result;
 			}
@@ -473,9 +478,13 @@ export class OperationJournal {
 				if (Buffer.byteLength(JSON.stringify(updated)) > MAX_PAYLOAD * 2) throw new Error("Receipt too large");
 				await this.persist(join(this.directory, `${payloadHash(op.operationId)}.json`), updated);
 				this.records.set(op.operationId, updated);
+				// One line per settled operation, so a stuck mission can be traced from the log.
+				console.log(
+					`pilotd: operation ${op.kind} ${updated.receipt.state} ${op.operationId} (target ${op.targetId})${reason === undefined ? "" : `: ${reason}`}`,
+				);
 				for (const listener of this.settledListeners) {
 					try {
-						listener(structuredClone(op));
+						listener(structuredClone(op), structuredClone(updated.receipt));
 					} catch {
 						/* Observers cannot undo a durable receipt. */
 					}

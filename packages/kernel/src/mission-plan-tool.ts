@@ -7,6 +7,8 @@ export interface NativePlanningPort {
 	/** Bound to the current admitted mission/project/coordinator, never model-supplied IDs. */
 	read(revision: number | undefined, signal?: AbortSignal): Promise<unknown>;
 	knowledge(id: string, revision: number, signal?: AbortSignal): Promise<unknown>;
+	/** Read-only view of the old mission this mission re-plans: its brief, decisions and tasks, or one task in full. */
+	replaced?(task: number | undefined, signal?: AbortSignal): Promise<unknown>;
 	/** Host resolves the retained full envelope in this mission. Status only, no handler re-entry. */
 	receipt(operationId: string, signal?: AbortSignal): Promise<unknown>;
 	/** Host owns durable envelope identity, retains it by callId, and never replays Unknown effects.
@@ -193,6 +195,13 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 							prompt: Type.String(),
 							options: Type.Array(option),
 							recommendedOptionId: Type.Union([key, Type.Null()]),
+							context: Type.Optional(
+								Type.String({
+									maxLength: 1500,
+									description:
+										"Background in plain words, shown on request: what the question is about, what happens today, what each option changes.",
+								}),
+							),
 						},
 						{ additionalProperties: false },
 					),
@@ -208,7 +217,7 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 		name: "mission_plan",
 		label: "Mission planning",
 		description:
-			"Read native planning or save a revision-bound map, questions, spec or slices. After publication, read returns current agreement/tasks/active decisions and settled answers; only explicitly requested Revisit questions or an inert revision delta are allowed. Use read revisionSource for action revision; only separate exact human confirmation applies it. Prototype findings need exact digests and a pinned artifact; they never accept a preference. Human answers use native UI. Publication starts nothing. Unknown writes require exact receipt lookup, never a new attempt.",
+			"Read native planning or save a revision-bound map, questions, spec or slices. After publication, read returns current agreement/tasks/active decisions and settled answers; only explicitly requested Revisit questions or an inert revision delta are allowed. Use read revisionSource for action revision; only separate exact human confirmation applies it. Prototype findings need exact digests and a pinned artifact; they never accept a preference. Human answers use native UI. Publication starts nothing. Unknown writes require exact receipt lookup, never a new attempt. Action replaced reads the old mission this one re-plans (brief, decisions, task list; pass task for one task with its latest report).",
 		parameters: Type.Union([
 			Type.Object(
 				{
@@ -256,6 +265,13 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 								prompt: Type.String(),
 								options: Type.Array(option),
 								recommendedOptionId: Type.Union([key, Type.Null()]),
+								context: Type.Optional(
+									Type.String({
+										maxLength: 1500,
+										description:
+											"Background in plain words, shown on request: what the question is about, what happens today, what each option changes.",
+									}),
+								),
 							}),
 						),
 					}),
@@ -269,6 +285,10 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 			),
 			Type.Object(
 				{ action: Type.Literal("knowledge"), id: key, revision: Type.Integer({ minimum: 1 }) },
+				{ additionalProperties: false },
+			),
+			Type.Object(
+				{ action: Type.Literal("replaced"), task: Type.Optional(Type.Integer({ minimum: 1 })) },
 				{ additionalProperties: false },
 			),
 			Type.Object({ action: Type.Literal("write"), request }, { additionalProperties: false }),
@@ -288,7 +308,10 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 			} else if (args.action === "read") result = await port.read(args.revision, signal);
 			else if (args.action === "check") result = await port.receipt(args.operationId, signal);
 			else if (args.action === "knowledge") result = await port.knowledge(args.id, args.revision, signal);
-			else {
+			else if (args.action === "replaced") {
+				if (!port.replaced) throw new Error("Replaced mission read unavailable");
+				result = await port.replaced(args.task, signal);
+			} else {
 				const r = args.request as PlanWrite;
 				if (
 					!r ||

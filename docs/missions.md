@@ -105,14 +105,43 @@ See [decision routing](technical/mission-decision-routing.md) for the exact rule
 
 Day's saved Wayfinder planning records distinguish **Needs research**, **Needs grilling** and
 **Needs prototype**. A prototype is a small disposable experiment for a named uncertainty during
-agreement, not a required step or build task. Its linked artifact, findings and open questions stay
+agreement, not a required step or build task. When a research question is ready, Pilot starts a
+read-only research chat for it (at most two at a time). Pilot saves the chat's findings word for word as
+Knowledge linked to the mission, and the planner cites them. Research chats read `main`, change no files
+and create no tasks. Its linked artifact, findings and open questions stay
 with the mission. Findings are evidence, not your acceptance or permission to build. Interactive
 prototype execution remains unavailable; see [native planning](technical/day-mission-planning.md).
+When Pilot's planning agent has stopped while the plan is still open, **Continue planning** under its
+status asks it to pick up where it stopped. It answers, approves and starts nothing.
+**Unstick**, under the same status, says whether planning moves, waits for you or is stuck, lists what
+Pilot checked, and offers at most one fix. Reading it changes nothing; the fix applies only on **Apply**.
+When there is no fix, report it with Feedback. `~/Library/Logs/Pilot/pilotd.log` records each operation,
+When planning is stuck, **Have an agent look** starts a read-only chat that reads the planning agent's chat,
+Pilot's checks and the logs. It proposes one fix (continue, a note to the planning agent that you can edit, or
+removing answers to an earlier wording) with the cause and what it read. Only **Apply** acts, and only while
+the mission is as the agent saw it. A bug in Pilot itself shows as a cause to report.
+planning step change and research or question chat; `day.log` records closing and errors the window caught.
+Under each question, **More context** shows the background Pilot wrote, and **Ask a question** asks a
+separate read-only chat, which answers under the question from the mission's records. **Say it simpler**
+and **Reword this** leave notes; add one on the whole round if you like, then **Send notes to Pilot**:
+Pilot redoes the round with all of them at once. Your saved answers stay. Notes and questions answer
+nothing for you, and they never start work.
 
 These records form the mission's **map**, one shared overview for you and the planning agent:
 what is open now, what waits, what is settled (never asked again), the Fog of war and the agreed
 tasks. When a cited decision or Knowledge entry changes, the map says so until the agent updates it.
 Viewing the map answers, approves and starts nothing.
+
+Pilot Day draws the map as an expedition chart: settled questions are inked islands, open ones sit on
+blank ground with a mark for their kind, fog of war is drawn as fog, and Pilot's route runs between
+its planning rounds. The compass points at what needs you. Select a place for its field notes and
+original sources. On the planning page the chart shows whole and stays still, so scrolling moves the
+page. Trails show what waits for what. A question that waits for more than three others says how many
+instead; select it to see its trails. A finished research chat's question says its findings wait for
+Pilot until the planning agent records them. **Open chart** (⇧⌘M) shows it full window, where you drag,
+scroll and zoom to look around; Esc closes the notes, then the full view. Changes that arrive while the
+chart is open play once: an answer inks its ground, fog lifts, and a new planning round draws its leg.
+Reduce Motion shows them without movement. Everything on the chart is also listed below it.
 
 Coordinators can record an already-authorized decision replacement with
 `mission({action: "supersede", decisionId: "D7", replacementDecisionId: "D9"})`.

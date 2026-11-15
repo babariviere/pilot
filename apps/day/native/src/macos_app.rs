@@ -78,12 +78,17 @@ fn begin(id: &str) {
         }
         state.fallback_focus = state.window.firstResponder();
         let update = state.owner.take_app_update();
+        crate::day_log::event(
+            "close.requested",
+            serde_json::json!({"update": update.is_some()}),
+        );
         match state.owner.begin_close(main) {
             Ok(generation) => {
                 let content = state.window.contentView().expect("owned content view");
                 state.shield.setFrame(content.bounds());
                 content.addSubview(&state.shield);
                 if !state.window.makeFirstResponder(Some(&state.shield)) {
+                    crate::day_log::event("close.refused", serde_json::json!({"error": "focus"}));
                     state.shield.removeFromSuperview();
                     let _ = state.owner.cancel_close(generation);
                     state.error = Some(Error::Unavailable);
@@ -95,6 +100,10 @@ fn begin(id: &str) {
                 generation
             }
             Err(error) => {
+                crate::day_log::event(
+                    "close.refused",
+                    serde_json::json!({"error": error.to_string()}),
+                );
                 state.error = Some(error);
                 return;
             }
@@ -146,6 +155,10 @@ fn cancel(id: &str, generation: u32, error: Option<Error>) {
     if state.phase != Phase::Saving(generation) {
         return;
     }
+    crate::day_log::event(
+        "close.cancelled",
+        serde_json::json!({"error": error.as_ref().map(ToString::to_string)}),
+    );
     if let Some(timer) = state.deadline.take() {
         timer.invalidate();
     }
@@ -205,6 +218,10 @@ fn advance(state: &Rc<RefCell<State>>) {
         Ok(sealed) => sealed,
         Err(Error::Busy) => return,
         Err(error) => {
+            crate::day_log::event(
+                "close.seal_failed",
+                serde_json::json!({"error": error.to_string()}),
+            );
             if let Some(timer) = s.deadline.take() {
                 timer.invalidate();
             }
@@ -335,6 +352,7 @@ define_class!(
     impl Deadline {
         #[unsafe(method(saveDeadline:))]
         fn deadline(&self, _timer: &NSTimer) {
+            crate::day_log::event("close.timeout", serde_json::json!({"generation": self.ivars().generation}));
             cancel(&self.ivars().id, self.ivars().generation, Some(Error::Unavailable));
         }
     }
@@ -442,15 +460,12 @@ impl ApplicationOwner {
             window.setReleasedWhenClosed(false);
         }
         window.setTitle(&NSString::from_str("Pilot"));
-        let content = NSView::initWithFrame(NSView::alloc(main), window.frame());
+        // The AppView itself is the content view: NSH passes a scroll that no
+        // scroll view under the pointer takes up to an embedding view, so a
+        // wrapper would swallow the wheel a view listening to `onWheel` needs
+        // (the full Expedition chart). The close shield goes in it, on top.
         let surface = owner.view();
-        surface.setFrame(content.bounds());
-        surface.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable
-                | NSAutoresizingMaskOptions::ViewHeightSizable,
-        );
-        content.addSubview(&surface);
-        window.setContentView(Some(&content));
+        window.setContentView(Some(&surface));
         if let Err(error) = owner.load(bundle) {
             // No VM form exists on a rejected bundle. Join the unopened root
             // off-thread, without entering the application event loop.
@@ -464,7 +479,7 @@ impl ApplicationOwner {
         let delegate: Retained<Delegate> = unsafe { msg_send![super(delegate), init] };
         let shield = CaptureShield::alloc(main).set_ivars(DelegateData { id: id.clone() });
         let shield: Retained<CaptureShield> =
-            unsafe { msg_send![super(shield), initWithFrame: content.bounds()] };
+            unsafe { msg_send![super(shield), initWithFrame: surface.bounds()] };
         shield.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable
                 | NSAutoresizingMaskOptions::ViewHeightSizable,

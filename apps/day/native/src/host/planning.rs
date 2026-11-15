@@ -61,6 +61,9 @@ impl PlanningRecord {
                         | "planning-enroll"
                         | "plan-start"
                         | "plan-revisit"
+                        | "plan-continue"
+                        | "plan-question-ask"
+                        | "plan-repair-start"
                         | "revision-preview"
                         | "revision-confirm"
                         | "intake-triage"
@@ -172,6 +175,9 @@ fn record_pinned(
                     | "interview-submit"
                     | "plan-start"
                     | "plan-revisit"
+                    | "plan-continue"
+                    | "plan-question-ask"
+                    | "plan-repair-start"
                     | "revision-preview"
                     | "revision-confirm"
                     | "intake-triage"
@@ -192,6 +198,9 @@ fn record_pinned(
             Some(
                 "plan-start"
                     | "plan-revisit"
+                    | "plan-continue"
+                    | "plan-question-ask"
+                    | "plan-repair-start"
                     | "revision-preview"
                     | "revision-confirm"
                     | "intake-triage"
@@ -262,7 +271,7 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
     {
         return Err(Error::Unknown);
     }
-    if op["kind"] == "plan-revisit"
+    if matches!(op["kind"].as_str(), Some("plan-revisit" | "plan-continue"))
         && r["state"] == "accepted"
         && r["result"]["admissionId"] != op["operationId"]
     {

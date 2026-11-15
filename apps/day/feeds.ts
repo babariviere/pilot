@@ -58,5 +58,19 @@ export type PlanningFeed = Pick<
 	) => Promise<PlanOutcome>;
 	checkWork?: (missionId: string) => Promise<PlanOutcome>;
 } & Partial<
-		Pick<PlanFeed, "revisit" | "confirmRevision" | "checkRevision" | "chat" | "readChat" | "closeChat" | "leave">
+		Pick<
+			PlanFeed,
+			| "revisit"
+			| "continuePlanning"
+			| "askQuestion"
+			| "dropEarlierAnswers"
+			| "repairStart"
+			| "repairApply"
+			| "confirmRevision"
+			| "checkRevision"
+			| "chat"
+			| "readChat"
+			| "closeChat"
+			| "leave"
+		>
 	>;

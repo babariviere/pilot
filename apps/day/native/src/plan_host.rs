@@ -14,11 +14,11 @@ use std::collections::BTreeSet;
 use serde_json::{Value, json};
 
 use crate::plan::{
-    AnswerIntent, Choice, Delivery, Exploration, ExploreKind, ExploreState, FogArea, Interview,
-    MapInfo, MapTask, OutcomeStatus, PlanIdentity, PlanPage, PlanRoute, PlanRow, PlanStage,
-    PlanWork, Proposal, PrototypeSupport, Question, QuestionSection, QuestionState, RoundAnswer,
-    RoundKind, RoundLine, RoundState, Slice, SliceOwner, Spec, Step, StepState, Story,
-    SubmitIntent, SubmitState,
+    AnswerIntent, AskState, Choice, ContinueIntent, Delivery, Exploration, ExploreKind,
+    ExploreState, FogArea, Interview, MapInfo, MapTask, OutcomeStatus, PlanIdentity, PlanPage,
+    PlanRoute, PlanRow, PlanStage, PlanWork, Proposal, PrototypeSupport, Question,
+    QuestionAskIntent, QuestionSection, QuestionState, RoundAnswer, RoundKind, RoundLine,
+    RoundState, Slice, SliceOwner, Spec, Step, StepState, Story, SubmitIntent, SubmitState,
 };
 use crate::plan_desk::ANSWER_ROOM;
 
@@ -182,6 +182,22 @@ fn question(read: &Value, q: &Value, local: &Local) -> Question {
     Question {
         section: section(&q["section"]),
         prompt: s(&q["prompt"]),
+        context: s(&q["context"]),
+        asks: arr(&read["questionAsks"])
+            .iter()
+            .filter(|a| a["questionId"] == q["id"])
+            .map(|a| crate::plan::QuestionAsk {
+                id: s(&a["id"]),
+                text: s(&a["text"]),
+                state: match a["state"].as_str() {
+                    Some("answered") => AskState::Answered,
+                    Some("failed") => AskState::Failed,
+                    _ => AskState::Asking,
+                },
+                answer: s(&a["answer"]),
+                reason: s(&a["reason"]),
+            })
+            .collect(),
         digest,
         chosen: if state == QuestionState::Answered {
             offered.map(|c| c.id.clone())
@@ -225,6 +241,21 @@ fn round_kind(read: &Value) -> (RoundKind, String, String) {
     (RoundKind::Mission, String::new(), String::new())
 }
 
+/// The round's number as the user saw it: 1 plus the rounds submitted before
+/// question set `set`. Question sets also count internal empty rounds (an
+/// enrollment's bootstrap), so their revision is not a round number.
+fn round_number(view: &Value, set: u64) -> u32 {
+    let earlier = arr(&view["interviewHistory"])
+        .iter()
+        .filter(|entry| {
+            entry["interview"]["submission"]["fence"]["questionSetRevision"]
+                .as_u64()
+                .is_some_and(|r| r < set)
+        })
+        .count();
+    u32::try_from(earlier).map_or(u32::MAX, |n| n.saturating_add(1))
+}
+
 fn interview(read: &Value, ops: &[Value], local: &Local) -> Option<Interview> {
     let iv = &read["view"]["interview"];
     let id = interview_id(read)?;
@@ -258,7 +289,7 @@ fn interview(read: &Value, ops: &[Value], local: &Local) -> Option<Interview> {
         id,
         kind,
         topic,
-        round: set,
+        round: round_number(&read["view"], u64::from(set)),
         revision: iv["revision"].as_u64().unwrap_or(0) as u32,
         question_set: set,
         current: true,
@@ -364,6 +395,7 @@ fn exploration(map: &Value, item: &Value) -> Exploration {
         } else {
             String::new()
         },
+        findings_waiting: state == ExploreState::Running && item["findingsWaiting"] == true,
         result: settled(by),
         sources: sources(&item["sources"]),
         source_refs: source_refs(&item["sources"], by),
@@ -667,10 +699,16 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
                 .collect();
             RoundLine {
                 id: s(&sub["operationId"]),
-                title: if sub["kind"] == "revisit" {
-                    format!("Revisit, round {}", sub["fence"]["questionSetRevision"])
-                } else {
-                    format!("Round {}", sub["fence"]["questionSetRevision"])
+                title: {
+                    let n = round_number(
+                        view,
+                        sub["fence"]["questionSetRevision"].as_u64().unwrap_or(0),
+                    );
+                    if sub["kind"] == "revisit" {
+                        format!("Revisit, round {n}")
+                    } else {
+                        format!("Round {n}")
+                    }
                 },
                 line: format!("{} answers, submitted", arr(&sub["answers"]).len()),
                 state: RoundState::Submitted,
@@ -731,7 +769,233 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
         // (bridge.ts), with its own reasons for an older page.
         note: String::new(),
         activity,
+        can_continue: fresh
+            && read["continuePlanning"]["available"] == true
+            && read["continuePlanning"]["feedbackOnly"] != true
+            && unsettled_operation(ops).is_none(),
+        can_comment: fresh
+            && read["continuePlanning"]["available"] == true
+            && unsettled_operation(ops).is_none(),
+        unstick: read["unstick"].is_object().then(|| crate::plan::Unstick {
+            state: match read["unstick"]["state"].as_str() {
+                Some("moving") => crate::plan::UnstickState::Moving,
+                Some("stuck") => crate::plan::UnstickState::Stuck,
+                _ => crate::plan::UnstickState::Waiting,
+            },
+            line: s(&read["unstick"]["line"]),
+            fix: match read["unstick"]["fix"].as_str() {
+                Some("continue") => crate::plan::UnstickFix::Continue,
+                Some("drop-earlier-answers") => crate::plan::UnstickFix::DropEarlierAnswers,
+                _ => crate::plan::UnstickFix::None,
+            },
+            checks: arr(&read["unstick"]["checks"]).iter().map(s).collect(),
+            repair: read["repair"].is_object().then(|| repair(&read["repair"])),
+        }),
     }
+}
+
+/// Continue planning names the planning state the user saw: if it changed, the daemon refuses.
+pub fn continue_request(read: &Value, intent: &ContinueIntent) -> Result<(String, Value), Refusal> {
+    let mission = intent.mission_id.as_str();
+    if read["fresh"] != true || read["missionId"] != mission {
+        return Err((
+            OutcomeStatus::Rejected,
+            "Read this mission again. Nothing was sent.",
+        ));
+    }
+    if read["continuePlanning"]["available"] != true {
+        return Err((
+            OutcomeStatus::Rejected,
+            "Pilot's planning agent is working, held or done planning. Nothing was sent.",
+        ));
+    }
+    if intent.feedback.trim().is_empty() && read["continuePlanning"]["feedbackOnly"] == true {
+        return Err((
+            OutcomeStatus::Rejected,
+            "These questions wait for your answers. Answer them, or send a comment on them. Nothing was sent.",
+        ));
+    }
+    if intent.feedback.len() > 8000 {
+        return Err((
+            OutcomeStatus::Rejected,
+            "Notes are limited to 8000 bytes. Nothing was sent.",
+        ));
+    }
+    Ok((
+        s(&read["continuePlanning"]["contextDigest"]),
+        if intent.feedback.trim().is_empty() {
+            json!({"purpose":"plan-continue"})
+        } else {
+            json!({"purpose":"plan-continue","feedback":intent.feedback})
+        },
+    ))
+}
+
+/// Unstick's fix for answers to an earlier wording: the current saved answers,
+/// without those, so new answers save again.
+pub fn drop_earlier_request(read: &Value, mission: &str) -> Result<(String, Value), Refusal> {
+    if read["unstick"]["fix"] != "drop-earlier-answers" {
+        return Err((
+            OutcomeStatus::Rejected,
+            "This fix no longer applies. Read the mission again. Nothing was sent.",
+        ));
+    }
+    drop_earlier(read, mission)
+}
+
+/// The current saved answers without those to an earlier wording.
+fn drop_earlier(read: &Value, mission: &str) -> Result<(String, Value), Refusal> {
+    if read["fresh"] != true || read["missionId"] != mission {
+        return Err((
+            OutcomeStatus::Rejected,
+            "This fix no longer applies. Read the mission again. Nothing was sent.",
+        ));
+    }
+    let iv = &read["view"]["interview"];
+    let answers: Vec<Value> = arr(&iv["answers"])
+        .iter()
+        .filter(|a| {
+            a["questionDigest"]
+                == read["questionDigests"][a["questionId"].as_str().unwrap_or_default()]
+        })
+        .cloned()
+        .collect();
+    Ok((
+        s(&read["contextDigest"]),
+        json!({
+            "purpose": "interview-save",
+            "expected": {"fence": iv["fence"], "revision": iv["revision"]},
+            "answers": answers,
+        }),
+    ))
+}
+
+/// The repair agent, from the planning read.
+fn repair(v: &Value) -> crate::plan::Repair {
+    use crate::plan::{RepairFix, RepairProposal, RepairState};
+    let p = &v["proposal"];
+    crate::plan::Repair {
+        available: v["available"] == true,
+        state: match v["state"].as_str() {
+            Some("starting" | "looking") => RepairState::Looking,
+            Some("proposed") => RepairState::Proposed,
+            Some("failed") => RepairState::Failed,
+            _ => RepairState::None,
+        },
+        chat_id: s(&v["chatId"]),
+        proposal: p.is_object().then(|| RepairProposal {
+            fix: match p["fix"].as_str() {
+                Some("continue") => RepairFix::Continue,
+                Some("planner-note") => RepairFix::PlannerNote,
+                Some("drop-earlier-answers") => RepairFix::DropEarlierAnswers,
+                Some("code-repair") => RepairFix::CodeRepair,
+                _ => RepairFix::None,
+            },
+            cause: s(&p["cause"]),
+            note: s(&p["note"]),
+            certainty: s(&p["certainty"]),
+            evidence: arr(&p["evidence"]).iter().map(s).collect(),
+        }),
+        reason: s(&v["reason"]),
+        current: v["current"] == true,
+    }
+}
+
+/// Starts Unstick's repair agent: one read-only Diagnostics chat on the planner.
+pub fn repair_start_request(read: &Value, mission: &str) -> Result<(String, Value), Refusal> {
+    if read["fresh"] != true || read["missionId"] != mission || read["repair"]["available"] != true
+    {
+        return Err((
+            OutcomeStatus::Rejected,
+            "Planning changed, or an agent already looks. Read the mission again. Nothing was sent.",
+        ));
+    }
+    Ok((
+        s(&read["repair"]["contextDigest"]),
+        json!({"purpose": "plan-repair-start"}),
+    ))
+}
+
+/// Applies the repair agent's fix through the usual operation, only while it still
+/// matches the mission. A planner note is sent as the user left it.
+pub fn repair_apply_request(
+    read: &Value,
+    intent: &crate::plan::RepairApplyIntent,
+) -> Result<(String, Value), Refusal> {
+    let mission = intent.mission_id.as_str();
+    let repair = &read["repair"];
+    if read["fresh"] != true
+        || read["missionId"] != mission
+        || repair["state"] != "proposed"
+        || repair["current"] != true
+    {
+        return Err((
+            OutcomeStatus::Rejected,
+            "The mission changed since the agent looked. Ask again. Nothing was sent.",
+        ));
+    }
+    match repair["proposal"]["fix"].as_str() {
+        Some("continue") => continue_request(
+            read,
+            &ContinueIntent {
+                mission_id: mission.into(),
+                feedback: String::new(),
+            },
+        ),
+        Some("planner-note") => {
+            let note = match intent.note.trim() {
+                "" => s(&repair["proposal"]["note"]),
+                edited => edited.to_owned(),
+            };
+            if note.trim().is_empty() || note.chars().count() > 2000 {
+                return Err((
+                    OutcomeStatus::Rejected,
+                    "A note needs 1 to 2000 characters. Nothing was sent.",
+                ));
+            }
+            if read["continuePlanning"]["available"] != true
+                || read["continuePlanning"]["feedbackOnly"] == true
+            {
+                return Err((
+                    OutcomeStatus::Rejected,
+                    "Pilot's planning agent is working or waits for your answers. Nothing was sent.",
+                ));
+            }
+            Ok((
+                s(&read["continuePlanning"]["contextDigest"]),
+                json!({"purpose": "plan-continue", "note": note}),
+            ))
+        }
+        Some("drop-earlier-answers") => drop_earlier(read, mission),
+        _ => Err((
+            OutcomeStatus::Rejected,
+            "This fix has nothing Pilot can apply here. Nothing was sent.",
+        )),
+    }
+}
+
+/// A question about one question of the interview shown. It names that question's
+/// meaning: if the question changed, the daemon refuses it.
+pub fn ask_request(read: &Value, intent: &QuestionAskIntent) -> Result<(String, Value), Refusal> {
+    let digest = s(&read["questionDigests"][&intent.question_id]);
+    if read["fresh"] != true || read["missionId"] != intent.mission_id.as_str() || digest.is_empty()
+    {
+        return Err((
+            OutcomeStatus::Rejected,
+            "This question changed. Read it again. Nothing was sent.",
+        ));
+    }
+    let text = intent.text.trim();
+    if text.is_empty() || text.len() > 2000 {
+        return Err((
+            OutcomeStatus::Rejected,
+            "Write a question of up to 2000 bytes. Nothing was sent.",
+        ));
+    }
+    Ok((
+        digest,
+        json!({"purpose":"plan-question-ask","questionId":intent.question_id,"text":text}),
+    ))
 }
 
 /// Only a press on the exact displayed published plan may prepare Start.
@@ -936,7 +1200,12 @@ pub fn save_request(read: &Value, intent: &AnswerIntent) -> Result<(String, Valu
     let mut answers: Vec<Value> = arr(&iv["answers"])
         .iter()
         .filter(|a| {
-            a["questionId"] != json!(intent.question_id) && current.contains(&&a["questionId"])
+            // An answer to an earlier wording of a changed question cannot be saved again: the
+            // daemon would refuse the whole list. Saving drops it; that question needs a new answer.
+            a["questionId"] != json!(intent.question_id)
+                && current.contains(&&a["questionId"])
+                && a["questionDigest"]
+                    == read["questionDigests"][a["questionId"].as_str().unwrap_or_default()]
         })
         .cloned()
         .collect();

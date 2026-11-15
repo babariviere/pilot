@@ -103,6 +103,7 @@ import {
 import { type PerformanceSink, type PreparationMark, RequestTiming } from "./performance.ts";
 import type { AskContext } from "./policy.ts";
 import { Posthorse } from "./posthorse.ts";
+import { QUESTION_STYLE } from "./question-style.ts";
 import { REPAIR_PROPOSAL_TOOL } from "./repair-proposal-tool.ts";
 import { SHELL_STATUS_DETAIL, shellDeadline } from "./shell-deadline.ts";
 import type { SubagentBridge } from "./subagents.ts";
@@ -613,6 +614,7 @@ export class NativeAdapter {
 							...(options.memoryPrompt ? [options.memoryPrompt] : []),
 							...(missionInterview ? [INTERVIEW_SKILL_ADAPTATION] : []),
 							...(options.missionPlanning ? [PLANNING_SKILL_ADAPTATION] : []),
+							...(missionInterview || options.missionPlanning ? [QUESTION_STYLE] : []),
 						],
 						cwd,
 						agentDir,

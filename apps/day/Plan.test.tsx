@@ -258,6 +258,12 @@ test("when Pilot cannot continue, the submitted answers are kept and every later
 	await app.waitFor("Pilot continues planning: Not here");
 	expect(app.shows("Not connected here yet. Your submitted answers are kept.")).toBe(true);
 	expect(app.shows("Submitted, waiting to continue")).toBe(true);
+	// Submitted answers are history: no dead Submit and no "not ready" note.
+	expect(app.shows("Submitted. These answers are fixed.")).toBe(true);
+	expect(app.shows(SUBMIT)).toBe(false);
+	expect(app.shows("Pilot is not ready to take answers yet. You can read the questions; answering opens soon.")).toBe(
+		false,
+	);
 	await app.wait(1200);
 	expect(app.shows("id:proposal")).toBe(false);
 });
@@ -274,6 +280,22 @@ test("a 40-question interview shows one at a time, and all of them on See all", 
 	expect(app.shows("Question 1: which way should setting group 1 go?")).toBe(true);
 	expect(app.shows("Question 40: which way should setting group 40 go?")).toBe(true);
 	expect(app.enabled(SUBMIT)).toBe(false);
+});
+
+test("a question's background shows only when asked for, and changes no answer", async () => {
+	const app = await open("./Wayfinder.tsx", desktop);
+	await app.press("id:plan-linux");
+	await app.press("id:see-all");
+	await app.waitFor("id:question-first");
+	expect(app.shows("id:context-first")).toBe(false);
+	// A question without background offers none.
+	expect(app.shows("id:help-working >> More context")).toBe(false);
+	await app.press("id:help-first >> More context");
+	await app.waitFor("id:context-first");
+	expect(app.texts().some((t) => t.startsWith("Most Linux users run GNOME or KDE."))).toBe(true);
+	await app.press("id:help-first >> More context");
+	expect(app.shows("id:context-first")).toBe(false);
+	expect(app.shows("0 of 3 answered")).toBe(true);
 });
 
 test("a Wayfinder map shows what is open, waiting, settled and in fog, each with its record", async () => {
@@ -297,10 +319,12 @@ test("a Wayfinder map shows what is open, waiting, settled and in fog, each with
 	]) {
 		expect(app.shows(text)).toBe(true);
 	}
-	// Settled questions stay closed until asked for, and each opens to what settled it.
-	expect(app.shows("Wayland or X11")).toBe(false);
+	// The chart names every place; the outline keeps settled questions closed
+	// until asked for, and each opens to what settled it.
+	expect(app.shows("id:place-wayland")).toBe(true);
+	expect(app.shows("id:map-settled")).toBe(false);
 	await app.press("id:settled-toggle");
-	await app.waitFor("Wayland or X11");
+	await app.waitFor("id:map-settled >> Wayland or X11");
 	expect(app.shows("Settled by Decision 4. It changed since.")).toBe(true);
 	expect(app.shows("Decision 4 changed after Pilot cited it.")).toBe(true);
 	await app.press("id:explore-scope");
@@ -313,9 +337,9 @@ test("a Wayfinder map shows what is open, waiting, settled and in fog, each with
 	await app.waitFor("Finding: supported. It matches this map.");
 	expect(app.shows("• Is a status line enough for you, or do you also want a notification?")).toBe(true);
 	expect(app.shows("A status line instead of a tray")).toBe(true);
-	expect(app.shows("Accessibility on Linux")).toBe(false);
+	expect(app.shows("id:fog-a11y")).toBe(false);
 	await app.press("id:fog-toggle");
-	await app.waitFor("Accessibility on Linux");
+	await app.waitFor("id:fog-a11y >> Accessibility on Linux");
 	expect(app.shows("Ready when: Once the desktops are chosen.")).toBe(true);
 	expect(app.shows("Became: Keyring access")).toBe(true);
 	await app.press("id:see-all");

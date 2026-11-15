@@ -2,11 +2,10 @@
 // map of what is still unknown, the proposed plan in full, and each step
 // from answers to work. Submitting, approving, publishing and starting work
 // are separate steps. Only the exact-plan confirmation starts one task.
-import { cleanup, computed, type JSX, keymap, Scroll, signal, Text, View } from "nsh";
+import { cleanup, computed, type JSX, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
 import { Collapsible } from "nsh/base";
 import type {
 	Exploration,
-	ExploreKind,
 	FogArea,
 	MapInfo,
 	PlanPage,
@@ -17,15 +16,18 @@ import type {
 	StepState,
 } from "pilot-day/native";
 import type { Day } from "./day";
+import { errorText, logEvent } from "./dayLog";
+import { ChartKey, chartState, ExpeditionChart, ExpeditionLog, FullChart, OPEN_CHART } from "./ExpeditionChart";
 import { InterviewDoc } from "./InterviewDoc";
 import { keepScroll } from "./kept";
-import { MapSources } from "./MapSources";
+import { Agreement, exploreLine, exploreMark, FogRecord, ItemRecord, itemWord } from "./MapRecords";
 import { planBack } from "./nav";
 import { ActivityLine } from "./PlanActivity";
 import { flush, unsavedCount } from "./planCommands";
 import type { Plans } from "./planning";
 import { fogOpen, mapOpen, put, roundOpen, settledOpen } from "./planView";
 import { RevisitSection } from "./RevisitDoc";
+import { Unstick } from "./Unstick";
 import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
 
 /** The words beside a plan's mark. */
@@ -157,62 +159,6 @@ function ProposalView(props: { proposal: Proposal }) {
 	);
 }
 
-function exploreLine(e: Exploration): string {
-	switch (e.state) {
-		case "waiting":
-			return e.after.length > 0 ? `Waits for: ${e.after.join(", ")}` : "Waiting";
-		case "ready":
-			return "Ready: what it needs is resolved.";
-		case "running":
-			return e.by ? `Running · ${e.by}` : "Running";
-		case "asking":
-			return "Its questions for you are open above.";
-		case "resolved":
-			return e.result || "Resolved";
-	}
-}
-
-function exploreMark(e: Exploration): MarkKind {
-	switch (e.state) {
-		case "asking":
-			return "needs";
-		case "running":
-			return "moving";
-		case "resolved":
-			return "done";
-		case "ready":
-			return "moving";
-		default:
-			return "unreported";
-	}
-}
-
-/** What kind of uncertainty a question is, in the words the map uses. */
-function kindWord(kind: ExploreKind): string {
-	switch (kind) {
-		case "grilling":
-			return "Needs your answers";
-		case "research":
-			return "Needs research";
-		case "prototype":
-			return "Needs a prototype";
-	}
-}
-
-/** A short list under a quiet label, inside a map record. */
-function Detail(props: { title: string; lines: string[] }) {
-	return (
-		<If when={props.lines.length > 0}>
-			<View class="gap-0.5">
-				<Text class="text-xs text-faint">{props.title}</Text>
-				<Each of={props.lines} key={(l) => l}>
-					{(l) => <Text class="text-sm leading-relaxed text-foreground">{`• ${l()}`}</Text>}
-				</Each>
-			</View>
-		</If>
-	);
-}
-
 /**
  * One question on the map: a calm row that opens to its full saved record.
  * Opening it reads nothing and changes nothing.
@@ -221,43 +167,11 @@ function MapItem(props: { plans: Plans; page: PlanPage; item: Exploration }) {
 	const e = () => props.item;
 	const key = () => `${props.page.missionId}/${e().id}`;
 	const open = () => mapOpen()[key()] === true;
-	// A question settled in an interview shows that round's answers, as submitted.
-	const round = () => (e().round ? (props.page.rounds.find((r) => r.id === e().round) ?? null) : null);
-	const origin = () =>
-		[e().sources.length > 0 ? `From ${e().sources.join(", ")}` : "", e().fromFog ? `Was fog: ${e().fromFog}` : ""]
-			.filter(Boolean)
-			.join(" · ");
 	return (
 		<Collapsible
 			open={open()}
 			class="border-t border-border py-3"
-			content={
-				<View testID={`record-${e().id}`} class="gap-3 pl-4 pt-3">
-					<Text class="text-sm leading-relaxed text-foreground">{e().question}</Text>
-					<If when={e().evidence}>
-						<Text class="text-sm text-foreground">{e().evidence}</Text>
-					</If>
-					<Detail title="What the prototype showed" lines={e().observations} />
-					<Detail title="What it left open" lines={e().unresolved} />
-					<If when={round()}>
-						<View testID={`settled-round-${e().id}`} class="gap-2">
-							<Text class="text-xs text-faint">{`${round()?.title ?? ""} · your answers, as submitted`}</Text>
-							<Each of={round()?.answers ?? []} key={(a) => a.prompt}>
-								{(a) => (
-									<View class="gap-0.5">
-										<Text class="text-xs text-muted-foreground">{a().prompt}</Text>
-										<Text class="text-sm text-foreground">{a().answer || "No answer"}</Text>
-									</View>
-								)}
-							</Each>
-						</View>
-					</If>
-					<MapSources plans={props.plans} page={props.page} area="item" recordId={e().id} refs={e().sourceRefs} />
-					<If when={origin()}>
-						<Text class="text-xs text-faint">{origin()}</Text>
-					</If>
-				</View>
-			}
+			content={<ItemRecord plans={props.plans} page={props.page} item={e()} class="pl-4 pt-3" />}
 		>
 			<View
 				testID={`explore-${e().id}`}
@@ -269,7 +183,7 @@ function MapItem(props: { plans: Plans; page: PlanPage; item: Exploration }) {
 				<View class="flex-row items-center gap-2">
 					<Mark kind={exploreMark(e())} />
 					<Text class="flex-1 text-sm font-medium text-foreground">{e().title}</Text>
-					<Text class="text-xs text-faint">{kindWord(e().kind)}</Text>
+					<Text class="text-xs text-faint">{itemWord(e())}</Text>
 				</View>
 				<Text class="pl-4 text-xs text-foreground">{exploreLine(e())}</Text>
 				<Each of={e().changed} key={(c) => c}>
@@ -313,23 +227,10 @@ function MapGroup(props: { testID: string; title: string; items: Exploration[]; 
 }
 
 function FogRow(props: { plans: Plans; page: PlanPage; fog: FogArea }) {
-	const f = () => props.fog;
 	return (
-		<View testID={`fog-${f().id}`} class="gap-1 border-t border-border py-3">
-			<Text class="text-sm font-medium text-foreground">{f().area}</Text>
-			<Text class="text-sm text-muted-foreground">{f().why}</Text>
-			<Text class="text-xs text-foreground">
-				{f().active ? `Ready when: ${f().readyWhen}` : `Became: ${f().became.join(", ")}`}
-			</Text>
-			<MapSources plans={props.plans} page={props.page} area="fog" recordId={f().id} refs={f().sourceRefs} />
-			<Text class="text-xs text-faint">
-				{[
-					f().after.length > 0 ? `After: ${f().after.join(", ")}` : "",
-					f().sources.length > 0 ? `From ${f().sources.join(", ")}` : "",
-				]
-					.filter(Boolean)
-					.join(" · ")}
-			</Text>
+		<View testID={`fog-${props.fog.id}`} class="gap-1 border-t border-border py-3">
+			<Text class="text-sm font-medium text-foreground">{props.fog.area}</Text>
+			<FogRecord plans={props.plans} page={props.page} fog={props.fog} />
 		</View>
 	);
 }
@@ -350,40 +251,65 @@ function Disclosure(props: { testID: string; label: string; open: boolean; onTog
 	);
 }
 
-/** The agreement and the tasks it became. Opening a task shows the mission overview; it starts nothing. */
-function Agreement(props: { info: MapInfo; onOpenTasks?: () => void }) {
-	return (
-		<If when={props.info.agreement || props.info.tasks.length > 0}>
-			<View testID="map-agreement" class="gap-1">
-				<Text class="text-xs text-faint">Agreement</Text>
-				<Text class="text-sm text-foreground">{props.info.agreement}</Text>
-				<Each of={props.info.tasks} key={(t) => t.id}>
-					{(t) => (
-						<View class="flex-row items-baseline gap-3 py-1">
-							<Text class="w-7 text-xs text-faint">{t().number > 0 ? `#${t().number}` : ""}</Text>
-							<Text class="flex-1 text-sm text-foreground">{t().title}</Text>
-							<Text class="text-xs text-muted-foreground">{t().status}</Text>
-						</View>
-					)}
-				</Each>
-				<If when={props.info.tasks.length > 0 && props.onOpenTasks}>
-					<View class="flex-row">
-						<Action label="Open the tasks" onPress={() => props.onOpenTasks?.()} />
-					</View>
-				</If>
-			</View>
-		</If>
-	);
-}
-
 /**
  * The Wayfinder map: the same saved records the coordinator reads. What is
  * open now, what waits, what is settled, the fog of war and the agreement.
  * Reading it answers, approves and starts nothing.
  */
-function MapView(props: { plans: Plans; page: PlanPage; onOpenTasks?: () => void }) {
+/** The last stop on the route: the plan, once nothing is left to decide. */
+function PlanStep(props: { page: PlanPage }) {
+	const step = () => {
+		switch (props.page.stage) {
+			case "review":
+				return {
+					mark: "needs" as MarkKind,
+					title: "Read the plan",
+					who: "You",
+					line: "Pilot proposed a plan. Read it in full before you answer.",
+				};
+			case "approved":
+			case "published":
+				return {
+					mark: "done" as MarkKind,
+					title: stageWord(props.page.stage),
+					who: "",
+					line: "Approving publishes build tasks; it starts nothing.",
+				};
+			default:
+				return {
+					mark: "unreported" as MarkKind,
+					title: "Pilot proposes a plan",
+					who: "Later",
+					line: "When nothing is left to decide. Approving it publishes build tasks; it starts nothing.",
+				};
+		}
+	};
+	return (
+		<View testID="map-plan-step" class="gap-1 border-t border-border pt-3">
+			<View class="flex-row items-center gap-2">
+				<Mark kind={step().mark} />
+				<Text class="flex-1 text-sm font-medium text-foreground">{step().title}</Text>
+				<Text class="text-xs text-faint">{step().who}</Text>
+			</View>
+			<Text class="pl-4 text-xs text-muted-foreground">{step().line}</Text>
+		</View>
+	);
+}
+
+function MapView(props: {
+	plans: Plans;
+	page: PlanPage;
+	onOpenTasks?: () => void;
+	/** Opens the chart full window. It gets the button that opened it. */
+	onOpenChart?: (button: ViewRef | undefined) => void;
+}) {
+	const chart = chartState();
 	const items = () => props.page.explorations;
-	const now = () => openNow(props.page);
+	// What needs you first, then work under way, then what is ready.
+	const now = () => {
+		const rank = { asking: 0, running: 1, ready: 2, waiting: 3, resolved: 4 } as const;
+		return [...openNow(props.page)].sort((a, b) => rank[a.state] - rank[b.state]);
+	};
 	const waiting = () => items().filter((e) => e.state === "waiting");
 	const settled = () => items().filter((e) => e.state === "resolved");
 	const active = () => props.page.fog.filter((f) => f.active);
@@ -411,11 +337,28 @@ function MapView(props: { plans: Plans; page: PlanPage; onOpenTasks?: () => void
 					</Text>
 				</If>
 			</View>
-			<MapGroup plans={props.plans} testID="map-now" title="Open now" items={now()} page={props.page} />
-			<MapGroup plans={props.plans} testID="map-waiting" title="Waiting" items={waiting()} page={props.page} />
-			<If when={!props.page.prototypes.available && items().some((e) => e.kind === "prototype")}>
-				<Text class="text-xs text-faint">{props.page.prototypes.line}</Text>
-			</If>
+			<ExpeditionChart
+				plans={props.plans}
+				page={props.page}
+				state={chart}
+				mode="inline"
+				onOpenFull={props.onOpenChart}
+				onOpenTasks={props.onOpenTasks}
+			/>
+			<Text class="text-xs leading-relaxed text-faint">
+				{`Select a place for its field notes. Open the chart (${keymap.label(OPEN_CHART)}) to look around and zoom. Esc closes the notes. Reading the chart answers, approves and starts nothing.`}
+			</Text>
+			<View testID="map-next" class="gap-3">
+				<SectionTitle title="Next on the route">
+					<Text class="text-xs text-faint">In order</Text>
+				</SectionTitle>
+				<MapGroup plans={props.plans} testID="map-now" title="Open now" items={now()} page={props.page} />
+				<MapGroup plans={props.plans} testID="map-waiting" title="Waiting" items={waiting()} page={props.page} />
+				<If when={!props.page.prototypes.available && items().some((e) => e.kind === "prototype")}>
+					<Text class="text-xs text-faint">{props.page.prototypes.line}</Text>
+				</If>
+				<PlanStep page={props.page} />
+			</View>
 			<If when={settled().length > 0}>
 				<Collapsible
 					open={done()}
@@ -470,6 +413,8 @@ function MapView(props: { plans: Plans; page: PlanPage; onOpenTasks?: () => void
 			<If when={props.page.map}>
 				<Agreement info={props.page.map as MapInfo} onOpenTasks={props.onOpenTasks} />
 			</If>
+			<ExpeditionLog page={props.page} state={chart} />
+			<ChartKey />
 		</View>
 	);
 }
@@ -638,16 +583,66 @@ function Rounds(props: { page: PlanPage }) {
 	);
 }
 
+/**
+ * Wakes an idle planning agent. One quiet action under its status: it answers, approves
+ * and starts nothing, and names the planning state shown, so a changed mission refuses it.
+ */
+function ContinuePlanning(props: { plans: Plans; page: PlanPage }) {
+	const busy = signal(false);
+	const message = signal("");
+	const press = async () => {
+		const feed = props.plans.feed;
+		if (busy() || !feed.continuePlanning) return;
+		busy.set(true);
+		message.set("");
+		try {
+			// Called on the feed: the connected feed's methods use their own private state.
+			message.set((await feed.continuePlanning({ missionId: props.page.missionId, feedback: "" })).message);
+		} catch (error) {
+			logEvent("ui.error", errorText(error));
+			message.set("Pilot could not send this. Nothing was sent.");
+		} finally {
+			busy.set(false);
+		}
+	};
+	return (
+		<View class="gap-1">
+			<If when={(props.page.canContinue && props.plans.feed.continuePlanning !== undefined) || busy()}>
+				<View class="-ml-3 mt-1 flex-row">
+					<Action
+						testID="continue-planning"
+						label={busy() ? "Asking Pilot to continue…" : "Continue planning"}
+						accessibilityLabel="Continue planning: Pilot's planning agent picks up where it stopped. It answers, approves and starts nothing."
+						disabled={busy()}
+						onPress={() => void press()}
+					/>
+				</View>
+			</If>
+			<If when={message()}>
+				<Text testID="continue-message" class="text-xs text-faint">
+					{message()}
+				</Text>
+			</If>
+		</View>
+	);
+}
+
 function Body(props: {
 	plans: Plans;
 	page: PlanPage;
 	title: string;
 	onOpenTasks?: () => void;
+	/** Opens the map's chart full window. */
+	onOpenChart?: (button: ViewRef | undefined) => void;
 	/** A command beside the title, such as Read again. */
 	action?: JSX.Element;
 }) {
 	const p = () => props.page;
-	const asking = () => (p().interview && p().interview?.kind !== "review" ? p().interview : null);
+	const asking = () =>
+		p().interview && p().interview?.kind !== "review" && p().interview?.submit !== "submitted" ? p().interview : null;
+	// A submitted round is history while Pilot plans from it, so the map comes first.
+	const submitted = () =>
+		p().interview && p().interview?.kind !== "review" && p().interview?.submit === "submitted" ? p().interview : null;
 	const review = () => (p().interview?.kind === "review" ? p().interview : null);
 	return (
 		<View class="gap-10">
@@ -701,6 +696,8 @@ function Body(props: {
 						/>
 					</View>
 				</If>
+				<ContinuePlanning plans={props.plans} page={p()} />
+				<Unstick plans={props.plans} page={p()} />
 			</View>
 			<If when={asking()}>
 				<Each of={asking() ? [asking() as NonNullable<PlanPage["interview"]>] : []} key={(iv) => iv.id}>
@@ -708,7 +705,12 @@ function Body(props: {
 				</Each>
 			</If>
 			<If when={p().available && p().route === "wayfinder"}>
-				<MapView plans={props.plans} page={p()} onOpenTasks={props.onOpenTasks} />
+				<MapView plans={props.plans} page={p()} onOpenTasks={props.onOpenTasks} onOpenChart={props.onOpenChart} />
+			</If>
+			<If when={submitted()}>
+				<Each of={submitted() ? [submitted() as NonNullable<PlanPage["interview"]>] : []} key={(iv) => iv.id}>
+					{(iv) => <InterviewDoc plans={props.plans} page={p()} interview={iv()} />}
+				</Each>
 			</If>
 			<If when={p().proposal}>
 				<Each of={p().proposal ? [p().proposal as Proposal] : []} key={(x) => x.digest}>
@@ -769,6 +771,22 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 	void read();
 	keymap.bind("escape", () => back().go());
 	const scroll = keepScroll(`plan/${id}`);
+	// The map's chart, full window, over this page. The page stays mounted underneath,
+	// so closing the chart comes back to the same scroll position and drafts.
+	const chartOpen = signal(false);
+	let chartButton: ViewRef | undefined;
+	const openChart = (button: ViewRef | undefined) => {
+		chartButton = button;
+		chartOpen.set(true);
+	};
+	const closeChart = () => {
+		chartOpen.set(false);
+		chartButton?.focus();
+	};
+	const fullChart = () => {
+		const p = page();
+		return chartOpen() && p?.available && p.route === "wayfinder" ? p : null;
+	};
 	const readAgain = () => (
 		<If when={reading() === "failed" || (page() && (!page()?.fresh || page()?.stage === "planning"))}>
 			<Action
@@ -781,46 +799,62 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 		</If>
 	);
 	return (
-		<Scroll
-			class="flex-1 bg-background"
-			contentOffset={scroll.contentOffset}
-			scrollEventThrottle={100}
-			onScroll={scroll.onScroll}
-		>
-			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
-				<If when={message() && page()}>
-					<Text role="alert" class="text-sm text-needs-ink">
-						{message()}
-					</Text>
-				</If>
-				<If
-					when={page()}
-					else={
-						<View class="flex-row items-start gap-4">
-							<Text class="flex-1 text-base text-muted-foreground">
-								{reading() === "reading"
-									? "Reading this mission's planning…"
-									: message() || "This mission is not in planning any more."}
-							</Text>
-							{readAgain()}
-						</View>
-					}
-				>
-					<Each of={page() ? [page() as PlanPage] : []} key={(p) => p.missionId}>
-						{(p) => (
-							<Body
-								plans={props.plans}
-								page={p()}
-								title={
-									props.title || props.plans.planning().plans.find((row) => row.missionId === id)?.title || ""
-								}
-								onOpenTasks={inToday() ? toOverview : undefined}
-								action={readAgain()}
-							/>
-						)}
-					</Each>
-				</If>
-			</View>
-		</Scroll>
+		<View class="flex-1">
+			<Scroll
+				class="flex-1 bg-background"
+				accessibilityElementsHidden={fullChart() !== null}
+				contentOffset={scroll.contentOffset}
+				scrollEventThrottle={100}
+				onScroll={scroll.onScroll}
+			>
+				<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
+					<If when={message() && page()}>
+						<Text role="alert" class="text-sm text-needs-ink">
+							{message()}
+						</Text>
+					</If>
+					<If
+						when={page()}
+						else={
+							<View class="flex-row items-start gap-4">
+								<Text class="flex-1 text-base text-muted-foreground">
+									{reading() === "reading"
+										? "Reading this mission's planning…"
+										: message() || "This mission is not in planning any more."}
+								</Text>
+								{readAgain()}
+							</View>
+						}
+					>
+						<Each of={page() ? [page() as PlanPage] : []} key={(p) => p.missionId}>
+							{(p) => (
+								<Body
+									plans={props.plans}
+									page={p()}
+									title={
+										props.title ||
+										props.plans.planning().plans.find((row) => row.missionId === id)?.title ||
+										""
+									}
+									onOpenTasks={inToday() ? toOverview : undefined}
+									onOpenChart={openChart}
+									action={readAgain()}
+								/>
+							)}
+						</Each>
+					</If>
+				</View>
+			</Scroll>
+			<If when={fullChart()}>
+				{(p) => (
+					<FullChart
+						plans={props.plans}
+						page={p()}
+						onClose={closeChart}
+						onOpenTasks={inToday() ? toOverview : undefined}
+					/>
+				)}
+			</If>
+		</View>
 	);
 }

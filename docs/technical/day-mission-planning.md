@@ -5,10 +5,32 @@ ingress through the [Day host](day-native-host.md#saved-interviews-and-planning)
 worker-profile IPC and planning-only continuation are implemented for explicitly enrolled new flows.
 Desktop New/bootstrap and explicit one-task admission now use the existing native host and durable
 operation ledger. Connected screen qualification runs with an isolated daemon and faux workers;
-the installed Preview remains demo-only. Automatic research dispatch, attention-driven continuation,
-budget increases and live activation remain unavailable. Existing missions and running work are not
+the installed Preview remains demo-only. Attention-driven continuation, budget increases and live
+activation remain unavailable. Existing missions and running work are not
 enrolled, restarted or changed.
 Transport fixtures are not native screen acceptance.
+
+## Research chats and Continue planning
+
+The daemon starts read-only research chats (explorer role, Ask mode) for ready research questions of an
+unpublished plan: at most two at a time, only while the planner is idle and no review round is open, and
+only when the mission's existing worker cap, Pause, Stop and dispatch holds allow. Each chat claims its
+question with `plan-claim` and reads the project's read-only `main` copy (`main-views`), never the user's
+checkout or a worktree. When it ends, the daemon saves its final answer word for word as an investigation
+Knowledge entry, authored by that chat and linked to the mission, and keeps it in the planning worker record.
+When no research chat of the mission still runs, or 3 findings wait, the idle planner gets them once, as one
+`plan-research-result` planning input with each entry's ID and synopsis, never the full reports (unless
+saving failed). The planner cites them on the map and resolves the questions, so it never retypes findings;
+research chats never resolve questions or create tasks. If the planner
+unclaims a question because its findings were not enough, one more research chat starts for it, never a
+third. A question too broad for one chat is split on the map into narrower research questions instead.
+Each chat's final answer is limited to 48,000 characters. Research chats read the old mission a re-plan
+replaces with `mission` action `replaced`.
+A failed start waits a minute before the next try. Code: `PlanningWorkers.startResearch`.
+
+`plan-continue` is an explicit native user operation that gives an idle, unheld, unpublished planner one
+planning-only turn. It is refused while the planner works, waits for answers or after publication
+(Revisit covers published plans).
 
 ## Audit and reuse
 
@@ -53,8 +75,11 @@ appends an explicit native adapter.
 Paths resolve relative to the runtime module after packaging/relocation.
 
 The dedicated profile denies generic mission writes, shell/file tools, jobs, subagents, updates
-and all MCP tool calls, including nested codemode calls. Its only mutation surface is the bound
-native planning port. Upstream Notes, tracker instructions, local-file fallbacks, research branch
+and all MCP tool calls, including nested codemode calls. Its mutation surfaces are the bound
+native planning port and the project `knowledge` tool, so the planner can do ready research itself
+and save findings with provenance. `mission_plan` action `replaced` reads the old mission this one
+re-plans (brief, decisions, task list, or one task with its latest report). It writes nothing.
+Upstream Notes, tracker instructions, local-file fallbacks, research branch
 instructions and ready-for-agent labels cannot expand this surface. The host still checks scope,
 permissions, lifecycle and journal identity independently. Trusted extensions are not a sandbox
 for arbitrary hostile extension code.
@@ -75,6 +100,9 @@ versioned private worker IPC. The native human ingress cannot impersonate this c
   implementation tasks. Prototypes can reduce uncertainty during agreement, before any spec/tickets.
 - Existing active decisions are reused by exact record digest, without asking the user again or
   creating another decision. Resolved questions cannot be rewritten or silently removed.
+- A human question resolves with kind `interview` from its `plan-ask` round. A plain `questions` round
+  has no topic, so the coordinator may link its exact latest submission to the human question it answers.
+  Submissions of topic or review rounds never use that fallback.
 - `plan-claim` uses exact CAS and current mission membership. The frontier is unresolved, unclaimed
   questions whose precise dependencies resolved. It grants no execution permission.
 - Fog saves area, why it matters, readiness/dependency cues and source locators. It is distinct from
@@ -204,6 +232,11 @@ Its outer tool result terminates the turn; there is no promise waiting for human
 Recovered held work never reconstructs a lost tool stack or consumes a historical input.
 
 Every question in the current list needs an explicit option selection or nonblank custom answer.
+The map itself has no question count limit: settled questions stay for good. A `plan-map` save lists only open
+questions, and the daemon keeps settled ones; the planner's read shows them under `settled`, one short entry
+each. The saved map is limited to 192 KiB (`PLAN_STATE_LIMIT`, sized from the Pilot Day mission) because every
+save stores a full copy. Refusals name the limit and the numbers, and Unstick shows the last refused save.
+
 Skipped questions and displayed recommendations do not count. Limits are **40 questions, 12 KiB for
 the question list, 8 options per question, 12 KiB for answers and 4,000 UTF-8 bytes of custom text per
 answer**. Oversized lists refuse rather than silently drop questions. Presentation can show one

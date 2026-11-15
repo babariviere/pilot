@@ -37,6 +37,8 @@ select a local official distribution without changing a global installation. Pre
 workspace dependencies before running checks. Cargo may download locked crates.
 Day CI sets `NSH_DAY_CARGO_MODE=direct` to run the selected real Cargo directly.
 The default for local development remains the MBX adapter.
+With it, `apps/day/target` is a link into mbx's managed targets, so `mbx gc` and mbx's size limits clean it
+like other Rust builds. The first build in a checkout moves an existing `apps/day/target` there.
 
 From the repository root:
 

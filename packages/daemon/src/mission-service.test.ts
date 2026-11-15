@@ -1268,6 +1268,28 @@ for (const race of ["pin-aba", "actor-project", "custodian-project", "coordinato
 	});
 }
 
+test("members read the old mission their mission re-plans, and nothing else", async (t) => {
+	const f = await fixture(t);
+	const old = f.store.create({ projectId: f.project.id, title: "Old mission", goal: "Ship" });
+	const done = f.store.addTask(old.id, { title: "Shipped importer", body: "Importer details" });
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Re-plan",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	await assert.rejects(f.service.call(lead.id, "replaced", {}), /does not re-plan/);
+	f.store.linkSuccessor(old.id, mission.id, f.project.id, "replan-op");
+	const view = (await f.service.call(lead.id, "replaced", {})) as { title: string; tasks: unknown[] };
+	assert.equal(view.title, "Old mission");
+	assert.deepEqual(view.tasks, [{ number: done.number, title: "Shipped importer", status: "todo" }]);
+	const one = (await f.service.call(lead.id, "replaced", { id: `#${done.number}` })) as { task: { body: string } };
+	assert.equal(one.task.body, "Importer details");
+	await assert.rejects(f.service.call(lead.id, "replaced", { id: "x" }), /task number/);
+});
+
 test("coordinator admits explorer research before a brief, preserving reports, proposals and Ask profile", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();
@@ -1321,7 +1343,7 @@ test("coordinator admits explorer research before a brief, preserving reports, p
 	assert.equal(f.service.context(explorer.id)?.role, "explorer");
 });
 
-test("project preferences IPC scopes planning coordinators without opening generic Knowledge writes", async (t) => {
+test("project preferences IPC scopes planning coordinators; Knowledge is open to them except documentation batches", async (t) => {
 	const f = await fixture(t);
 	f.sessions.setKnowledge(new KnowledgeService(f.store, f.projects, f.sessions));
 	const lead = await f.spawn();
@@ -1370,7 +1392,9 @@ test("project preferences IPC scopes planning coordinators without opening gener
 		);
 	};
 	assert.equal((await call("context")).error, undefined);
-	assert.match((await call("create", {})).error ?? "", /only its bound native port/);
+	// Planners record research as Knowledge; documentation batches stay with ordinary coordinators.
+	assert.doesNotMatch((await call("create", {})).error ?? "", /only its bound native port/);
+	assert.match((await call("batch", {})).error ?? "", /only its bound native port/);
 	const input = {
 		operationId: "pref-op",
 		expectedRevision: 0,

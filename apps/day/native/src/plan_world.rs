@@ -794,6 +794,9 @@ fn linux(current: bool) -> Plan {
                 ("gnome", "GNOME only", false),
                 ("any", "Any Wayland desktop", false),
             ],
+        )
+        .context(
+            "Most Linux users run GNOME or KDE. Each desktop shows tray icons, notifications and the keyring a little differently, so every desktop on the list is more work to build and test. A shorter list ships sooner; other desktops can come later.",
         ),
         Ask::new(
             "working",

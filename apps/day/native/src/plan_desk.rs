@@ -44,6 +44,7 @@ pub(crate) struct Ask {
     pub section: QuestionSection,
     pub prompt: String,
     pub choices: Vec<Choice>,
+    pub context: String,
     pub new: bool,
     pub saved: Option<Saved>,
     pub saving: Delivery,
@@ -68,6 +69,7 @@ impl Ask {
                     recommended: *recommended,
                 })
                 .collect(),
+            context: String::new(),
             new: false,
             saved: None,
             saving: Delivery::Idle,
@@ -84,6 +86,13 @@ impl Ask {
             text.push_str(&c.meaning);
         }
         digest(&text)
+    }
+
+    /// Saves an answer for the question as it is now.
+    /// Adds background, shown when the user asks for more.
+    pub(crate) fn context(mut self, text: &str) -> Self {
+        self.context = text.into();
+        self
     }
 
     /// Saves an answer for the question as it is now.
@@ -144,6 +153,8 @@ impl Ask {
             id: self.id.clone(),
             section: self.section,
             prompt: self.prompt.clone(),
+            context: self.context.clone(),
+            asks: Vec::new(),
             digest: self.digest(),
             choices: self.choices.clone(),
             chosen: match state {
@@ -517,6 +528,9 @@ impl Plan {
             work: None,
             revisit: self.revisit.as_ref().map(RevisitDesk::view),
             note: self.note.clone(),
+            can_continue: false,
+            can_comment: false,
+            unstick: None,
             // The mock coordinator always reads the same guide while it plans,
             // started two minutes before the page is read.
             activity: (stage == PlanStage::Planning).then(|| {

@@ -221,6 +221,10 @@ pub struct Question {
     pub section: QuestionSection,
     /// The question, exactly as Pilot asked it.
     pub prompt: String,
+    /// Background in plain words, shown when the user asks for more. Empty when Pilot gave none.
+    pub context: String,
+    /// The user's questions about this question, oldest first, with their answers.
+    pub asks: Vec<QuestionAsk>,
     /// Changes when the question's meaning or suggestions change. Saves name it.
     pub digest: String,
     /// Suggested answers. Pilot may mark one as recommended.
@@ -417,6 +421,8 @@ pub struct Exploration {
     pub after: Vec<String>,
     /// Who works on it, while running.
     pub by: String,
+    /// Running research whose chat finished: its findings wait for Pilot's planner to record them.
+    pub findings_waiting: bool,
     /// What resolved it, with its source, once resolved.
     pub result: String,
     /// Where it came from, such as a decision or Knowledge entry.
@@ -714,6 +720,14 @@ pub struct PlanPage {
     pub note: String,
     /// What Pilot's planning agent does now. Absent when Pilot cannot tell.
     pub activity: Option<PlanActivity>,
+    /// Whether the user can ask the idle planning agent to continue: it is
+    /// idle or paused, not held, and the plan is not published. False in mock flows.
+    pub can_continue: bool,
+    /// Whether the user can send one comment on the current interview: also while its
+    /// round waits for answers, which the comment then releases. False in mock flows.
+    pub can_comment: bool,
+    /// Why planning moves, waits or is stuck, with at most one fix. Absent in mock flows.
+    pub unstick: Option<Unstick>,
 }
 
 /// Native Start read model. No host, credentials, operation IDs or new grants.
@@ -981,6 +995,192 @@ pub struct Revisit {
 pub struct RevisitIntent {
     /// The mission.
     pub mission_id: String,
+}
+
+/// Ask the idle planning agent to continue planning this mission. It
+/// answers, approves and starts nothing.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct ContinueIntent {
+    /// The mission.
+    pub mission_id: String,
+    /// Feedback on the current interview, word for word: Pilot redoes the round
+    /// with it. Empty to only continue.
+    pub feedback: String,
+}
+
+/// Why a mission's planning moves, waits or is stuck, read from saved state.
+/// Reading it changes nothing; its fix applies only when the user asks.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Unstick {
+    /// Moving, waiting (normal) or stuck.
+    pub state: UnstickState,
+    /// Why, in one sentence.
+    pub line: String,
+    /// The one fix the user can apply, if any.
+    pub fix: UnstickFix,
+    /// What was checked, one short line each.
+    pub checks: Vec<String>,
+    /// Unstick's repair agent: a read-only chat that looks and proposes one fix.
+    pub repair: Option<Repair>,
+}
+
+/// Whether planning moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UnstickState {
+    /// An agent or chat works.
+    Moving,
+    /// It waits for the user or for something normal.
+    #[default]
+    Waiting,
+    /// Nothing moves without help.
+    Stuck,
+}
+
+/// The fix Unstick offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UnstickFix {
+    /// No fix: report it with Feedback.
+    #[default]
+    None,
+    /// Continue planning.
+    Continue,
+    /// Remove saved answers to an earlier wording, so new answers save.
+    DropEarlierAnswers,
+}
+
+/// Unstick's repair agent for one mission.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Repair {
+    /// Whether **Have an agent look** may start one now.
+    pub available: bool,
+    /// Where the agent is.
+    pub state: RepairState,
+    /// The repair chat, to open it. Empty before it starts.
+    pub chat_id: String,
+    /// Its proposed fix, once it has one.
+    pub proposal: Option<RepairProposal>,
+    /// Why it failed, in plain words.
+    pub reason: String,
+    /// Whether the proposal still matches the mission. Apply refuses when not.
+    pub current: bool,
+}
+
+/// Where the repair agent is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RepairState {
+    /// Not asked yet.
+    #[default]
+    None,
+    /// Starting or reading.
+    Looking,
+    /// It proposed a fix.
+    Proposed,
+    /// It could not look or gave no usable fix.
+    Failed,
+}
+
+/// The repair agent's proposal. Only the user's Apply acts on it.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairProposal {
+    /// The one fix.
+    pub fix: RepairFix,
+    /// Why planning is stuck, in plain words.
+    pub cause: String,
+    /// With a planner note: the note Continue planning sends.
+    pub note: String,
+    /// low, medium or high.
+    pub certainty: String,
+    /// Short labels of what the agent read.
+    pub evidence: Vec<String>,
+}
+
+/// The fixes a repair agent may propose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RepairFix {
+    /// Nothing to apply: the cause only.
+    #[default]
+    None,
+    /// Continue planning.
+    Continue,
+    /// Continue planning with a note.
+    PlannerNote,
+    /// Remove saved answers to an earlier wording.
+    DropEarlierAnswers,
+    /// A Pilot bug: a code fix in a separate chat.
+    CodeRepair,
+}
+
+/// Apply the repair agent's fix, with the note as the user left it.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct RepairApplyIntent {
+    /// The mission.
+    pub mission_id: String,
+    /// The note to send, for a planner note. Empty keeps the agent's note.
+    pub note: String,
+}
+
+/// Apply Unstick's fix for one mission.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct UnstickIntent {
+    /// The mission.
+    pub mission_id: String,
+}
+
+/// One question the user asked about an interview question. A read-only chat
+/// answers it; the answer explains and never answers for the user.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionAsk {
+    /// Stable: the operation that asked.
+    pub id: String,
+    /// The user's words.
+    pub text: String,
+    /// Where it is.
+    pub state: AskState,
+    /// The answer, word for word, once answered. Empty otherwise.
+    pub answer: String,
+    /// Why there is no answer, once failed. Empty otherwise.
+    pub reason: String,
+}
+
+/// Where a question about a question is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AskState {
+    /// A chat works on the answer.
+    #[default]
+    Asking,
+    /// Answered.
+    Answered,
+    /// No answer came. Asking again is safe.
+    Failed,
+}
+
+/// Ask about one question of the current interview. A read-only chat answers;
+/// it answers no question, and the round keeps waiting for the user.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct QuestionAskIntent {
+    /// The mission.
+    pub mission_id: String,
+    /// The interview question asked about.
+    pub question_id: String,
+    /// The user's question, word for word.
+    pub text: String,
 }
 
 /// Confirm one revision exactly as shown. It changes the agreement and

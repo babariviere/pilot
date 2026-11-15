@@ -41,6 +41,9 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
   their own colours. Artifacts are light documents and keep a light page in both. Native visuals are the exception:
   they sit on the chat itself, without a card, and follow the appearance through Theme tokens (`accent`, the
   `successInk`/`warningInk` text colours and the `chart1`...`chart6` palette).
+  Day's Wayfinder expedition chart draws on its own paper through the `map-*` roles in `apps/day/theme.json`
+  (paper, ink, faint, land, hatch, contour, fog, route). Use them only on that chart; `needs-soft` fills the disc of
+  a mark that needs you.
 - **Typography carries the page.** Weight and size separate headline, section and row. Use secondary and
   tertiary text colors for meta information, and keep line lengths comfortable.
 - **Delight without noise.** Motion and effects are subtle and purposeful (a soft transition, a gentle highlight).

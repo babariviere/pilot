@@ -62,6 +62,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Confirmed mission revisions and current-only context](mission-revisions.md)
 - [Focused mission discussion API and history](mission-threads.md)
 - [Authorized work continuation and current-policy source](mission-continuation.md)
+- [Mission Unstick: repair agent (plan)](mission-unstick-repair.md)
 - [Mission Pause/Resume and versioned agent reports](mission-controls-reports.md)
 - [Mission results and failure visibility audit](day-results-visibility.md)
 - [Proposed mission interview and approval contract](mission-interview-approval.md)

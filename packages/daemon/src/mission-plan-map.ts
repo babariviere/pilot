@@ -28,6 +28,8 @@ export interface PlanMapInput {
 	/** Prototype evidence currentness, as the planning service judges it. */
 	evidence(question: PlanQuestion): "missing" | "current" | "stale";
 	task(taskId: string): MissionTask | undefined;
+	/** Whether the research chat holding this question finished and its findings wait for the planner. */
+	findingsWaiting?(question: PlanQuestion): boolean;
 }
 
 function decisionSource(input: PlanMapInput, id: string, cited: string): PlanMapSource {
@@ -55,6 +57,18 @@ function source(input: PlanMapInput, s: PlanSource): PlanMapSource {
 	return s.kind === "decision" ? decisionSource(input, s.id, s.digest) : knowledgeSource(input, s);
 }
 
+/**
+ * The round number the user saw: 1 plus the rounds submitted before it. Question-set revisions also
+ * count empty internal rounds (an enrollment bootstrap), so they are not round numbers.
+ */
+function roundNumber(input: PlanMapInput, questionSetRevision: number): number {
+	return (
+		1 +
+		input.history.filter((h) => (h.interview.submission?.fence.questionSetRevision ?? Infinity) < questionSetRevision)
+			.length
+	);
+}
+
 function settledBy(input: PlanMapInput, q: PlanQuestion): PlanMapSource | null {
 	const r = q.resolution;
 	if (!r) return null;
@@ -74,7 +88,7 @@ function settledBy(input: PlanMapInput, q: PlanQuestion): PlanMapSource | null {
 		? {
 				kind: "interview",
 				id: r.id,
-				label: `Interview round ${submission.fence.questionSetRevision}`,
+				label: `Interview round ${roundNumber(input, submission.fence.questionSetRevision)}`,
 				state: submission.digest === r.digest ? "current" : "changed",
 			}
 		: { kind: "interview", id: r.id, label: "An interview round", state: "missing" };
@@ -101,6 +115,7 @@ function item(input: PlanMapInput, plan: MissionPlan, q: PlanQuestion): PlanMapI
 		dependsOn: [...q.dependsOn],
 		waitingOn: q.dependsOn.filter((key) => !settled(key)),
 		claimedBy: q.claimedBy,
+		...(state === "claimed" && input.findingsWaiting?.(q) ? { findingsWaiting: true } : {}),
 		fromFog: plan.fog.find((f) => f.promotedTo.includes(q.id))?.id ?? null,
 		sources: q.sources.map((s) => source(input, s)),
 		settledBy: settledBy(input, q),

@@ -99,6 +99,7 @@ pub(super) fn cached(
             | Command::PlanningInventorySnapshot
             | Command::PlanChatSnapshot(_)
             | Command::PlanLeave { .. }
+            | Command::Log { .. }
             | Command::ChatSnapshot(_)
             | Command::ChatClose(_)
     ) {
@@ -115,6 +116,11 @@ pub(super) fn cached(
             // Local only: the chat is no longer read or kept.
             Command::ChatClose(id) => {
                 host.close_session_chat(id);
+                Value::Null
+            }
+            Command::Log { event, message } => {
+                // Local only: one line in Day's log, from the window's code.
+                crate::day_log::event(event, json!({"message": message}));
                 Value::Null
             }
             // Local only: closes the chat, or stops reading the page on notices.
@@ -433,7 +439,10 @@ async fn run(
             unreachable!("handled mission thread command")
         }
         Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot => None,
-        Command::PlanChat { .. } | Command::PlanChatSnapshot(_) | Command::PlanLeave { .. } => {
+        Command::PlanChat { .. }
+        | Command::PlanChatSnapshot(_)
+        | Command::PlanLeave { .. }
+        | Command::Log { .. } => {
             unreachable!("handled planning chat command")
         }
         Command::ChatRead { .. } | Command::ChatSnapshot(_) | Command::ChatClose(_) => {
@@ -481,6 +490,21 @@ async fn run(
         })?),
         Command::StartWork { mission, shown } => Some(planning_request(host, mission, |read| {
             plan_host::start_request(read, shown)
+        })?),
+        Command::Continue(intent) => Some(planning_request(host, &intent.mission_id, |read| {
+            plan_host::continue_request(read, intent)
+        })?),
+        Command::AskQuestion(intent) => Some(planning_request(host, &intent.mission_id, |read| {
+            plan_host::ask_request(read, intent)
+        })?),
+        Command::DropEarlierAnswers(mission) => Some(planning_request(host, mission, |read| {
+            plan_host::drop_earlier_request(read, mission)
+        })?),
+        Command::RepairStart(mission) => Some(planning_request(host, mission, |read| {
+            plan_host::repair_start_request(read, mission)
+        })?),
+        Command::RepairApply(intent) => Some(planning_request(host, &intent.mission_id, |read| {
+            plan_host::repair_apply_request(read, intent)
         })?),
         Command::CheckWork(mission) => {
             let id = host
@@ -640,6 +664,11 @@ async fn run(
         Command::Save { mission: id, .. }
         | Command::Submit { mission: id, .. }
         | Command::StartWork { mission: id, .. }
+        | Command::Continue(crate::plan::ContinueIntent { mission_id: id, .. })
+        | Command::AskQuestion(crate::plan::QuestionAskIntent { mission_id: id, .. })
+        | Command::DropEarlierAnswers(id)
+        | Command::RepairStart(id)
+        | Command::RepairApply(crate::plan::RepairApplyIntent { mission_id: id, .. })
         | Command::CheckWork(id) => {
             // Losing a newer read cannot erase an entered write's exact outcome.
             value = planning(host, id).unwrap_or(Value::Null);

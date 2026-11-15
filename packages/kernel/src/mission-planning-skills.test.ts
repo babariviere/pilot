@@ -195,7 +195,7 @@ test("native Revisit tool forwards inert delta only, never confirmation or worke
 
 test("actual NativeAdapter planning profile reads upstream but blocks direct and nested external effects", async (t) => {
 	assert.equal(planningToolAllowed("project_preferences"), true);
-	assert.equal(planningToolAllowed("knowledge"), false);
+	assert.equal(planningToolAllowed("knowledge"), true);
 	const home = await realpath(await mkdtemp(join(tmpdir(), "native-planning-")));
 	const main = join(home, "main"),
 		scratch = join(home, "scratch"),

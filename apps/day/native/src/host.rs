@@ -973,6 +973,29 @@ async fn qualify_planning(
     request: &serde_json::Value,
 ) -> Result<(), Error> {
     let read = read_planning(t, shared, epoch, mission).await?;
+    if request["purpose"] == "plan-question-ask" {
+        let question = request["questionId"].as_str().unwrap_or_default();
+        if read["questionDigests"][question] != digest {
+            return Err(Error::Stale);
+        }
+        return Ok(());
+    }
+    if request["purpose"] == "plan-repair-start" {
+        if read["repair"]["available"] != true || read["repair"]["contextDigest"] != digest {
+            return Err(Error::Stale);
+        }
+        return Ok(());
+    }
+    if request["purpose"] == "plan-continue" {
+        if read["continuePlanning"]["available"] != true
+            || read["continuePlanning"]["contextDigest"] != digest
+            || (read["continuePlanning"]["feedbackOnly"] == true
+                && request.get("feedback").is_none())
+        {
+            return Err(Error::Stale);
+        }
+        return Ok(());
+    }
     if request["purpose"] == "plan-revisit" {
         if read["revisit"]["available"] != true
             || read["revisit"]["contextDigest"] != digest
@@ -1561,6 +1584,16 @@ async fn handle(
                     }
                     return Ok(shared.outcome(status, if request["purpose"] == "plan-start" {
                         "Start recorded. Admission is separate from progress; read the agent report."
+                    } else if request["purpose"] == "plan-question-ask" {
+                        "Asked. The answer shows here."
+                    } else if request["purpose"] == "plan-repair-start" {
+                        "An agent is looking. Its fix shows here."
+                    } else if request["purpose"] == "plan-continue" && request.get("note").is_some() {
+                        "Sent. Pilot continues planning with this note."
+                    } else if request["purpose"] == "plan-continue" && request.get("feedback").is_some() {
+                        "Sent. Pilot redoes these questions with your feedback."
+                    } else if request["purpose"] == "plan-continue" {
+                        "Pilot continues planning. It asks you when it needs you."
                     } else { "Saved planning action. This does not start work." }));
                 }
                 Err(_) => {

@@ -75,6 +75,11 @@ pub const METHODS: &[&str] = &[
     "day.plan.save",
     "day.plan.submit",
     "day.plan.startWork",
+    "day.plan.continue",
+    "day.plan.askQuestion",
+    "day.plan.dropEarlierAnswers",
+    "day.plan.repairStart",
+    "day.plan.repairApply",
     "day.plan.checkWork",
     "day.plan.check",
     "day.plan.checkNew",
@@ -82,6 +87,7 @@ pub const METHODS: &[&str] = &[
     "day.plan.chat",
     "day.plan.chatSnapshot",
     "day.plan.leave",
+    "day.log.event",
     "day.attention.read",
     "day.attention.reply",
     "day.attention.action",
@@ -265,6 +271,11 @@ pub(crate) enum Command {
         mission: String,
         chat_only: bool,
     },
+    /// One event from the window's code for Day's log (`ui.error`, `forms.unsaved`). Local only.
+    Log {
+        event: String,
+        message: String,
+    },
     PlanSource(crate::host::plan_sources::Request),
     PlanningInventory,
     PlanningInventorySnapshot,
@@ -283,6 +294,16 @@ pub(crate) enum Command {
         shown: Value,
     },
     CheckWork(String),
+    /// Ask the idle planning agent to continue (plan-continue).
+    Continue(crate::plan::ContinueIntent),
+    /// Ask about one interview question (plan-question-ask).
+    AskQuestion(crate::plan::QuestionAskIntent),
+    /// Unstick's fix: remove saved answers to an earlier wording (interview-save).
+    DropEarlierAnswers(String),
+    /// Start Unstick's repair agent (plan-repair-start).
+    RepairStart(String),
+    /// Apply the repair agent's fix (plan-continue or interview-save).
+    RepairApply(crate::plan::RepairApplyIntent),
     PlanCheck {
         mission: String,
         interview: String,
@@ -704,6 +725,22 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 older: r.older,
             }
         }
+        "day.log.event" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Log {
+                event: String,
+                message: String,
+            }
+            let r: Log = exact(args)?;
+            if !matches!(r.event.as_str(), "ui.error" | "forms.unsaved") || r.message.len() > 2000 {
+                return Err(Error::Invalid);
+            }
+            C::Log {
+                event: r.event,
+                message: r.message,
+            }
+        }
         "day.plan.leave" => {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -734,6 +771,35 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 "day.plan.checkWork" => C::CheckWork(r.mission_id),
                 _ => C::Plan(r.mission_id),
             }
+        }
+        "day.plan.continue" => {
+            let r: crate::plan::ContinueIntent = decode(&args)?;
+            mission(&r.mission_id)?;
+            C::Continue(r)
+        }
+        "day.plan.dropEarlierAnswers" => {
+            let r: crate::plan::UnstickIntent = decode(&args)?;
+            mission(&r.mission_id)?;
+            C::DropEarlierAnswers(r.mission_id)
+        }
+        "day.plan.repairStart" => {
+            let r: crate::plan::UnstickIntent = decode(&args)?;
+            mission(&r.mission_id)?;
+            C::RepairStart(r.mission_id)
+        }
+        "day.plan.repairApply" => {
+            let r: crate::plan::RepairApplyIntent = decode(&args)?;
+            mission(&r.mission_id)?;
+            if r.note.len() > 8000 {
+                return Err(Error::Invalid);
+            }
+            C::RepairApply(r)
+        }
+        "day.plan.askQuestion" => {
+            let r: crate::plan::QuestionAskIntent = decode(&args)?;
+            mission(&r.mission_id)?;
+            id(&r.question_id)?;
+            C::AskQuestion(r)
         }
         "day.mission.pause" => {
             let r: crate::model::PauseIntent = decode(&args)?;
@@ -896,6 +962,7 @@ impl Command {
                     | Self::PlanChat { .. }
                     | Self::PlanChatSnapshot(_)
                     | Self::PlanLeave { .. }
+                    | Self::Log { .. }
                     | Self::PlanningInventory
                     | Self::PlanningInventorySnapshot
                     | Self::Attention

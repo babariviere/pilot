@@ -23,12 +23,23 @@ import type { WorkflowConfirmations } from "./workflow-confirmations.ts";
 export const isNativePlanningOperation = (kind: string) =>
 	isInterviewOperation(kind) ||
 	isPlanOperation(kind) ||
-	["plan-start", "plan-revisit", "revision-preview", "revision-confirm"].includes(kind);
+	[
+		"plan-start",
+		"plan-revisit",
+		"plan-continue",
+		"plan-question-ask",
+		"plan-repair-start",
+		"revision-preview",
+		"revision-confirm",
+	].includes(kind);
 const humanKinds = [
 	"interview-save",
 	"interview-submit",
 	"plan-start",
 	"plan-revisit",
+	"plan-continue",
+	"plan-question-ask",
+	"plan-repair-start",
 	"revision-preview",
 	"revision-confirm",
 ];
@@ -285,6 +296,13 @@ export class NativeMissionPlanning {
 				available: false,
 				reason: "Trusted Revisit owner unavailable",
 			},
+			questionAsks: this.deps.workers?.askView(missionId) ?? [],
+			unstick: this.deps.workers?.unstickView(missionId) ?? null,
+			repair: this.deps.workers?.repairView(missionId) ?? null,
+			continuePlanning: this.deps.workers?.continueView(missionId) ?? {
+				available: false,
+				reason: "Trusted planning owner unavailable",
+			},
 			revision,
 			activity,
 			view: view.interview.questions.length ? view : null,
@@ -322,7 +340,18 @@ export class NativeMissionPlanning {
 		const expected = (
 			request as { expected?: { fence?: { ownerSessionId?: string; enrollmentId?: string; missionId?: string } } }
 		)?.expected?.fence;
-		if (["plan-start", "plan-revisit", "revision-preview", "revision-confirm"].includes(op.kind)) return;
+		if (
+			[
+				"plan-start",
+				"plan-revisit",
+				"plan-continue",
+				"plan-question-ask",
+				"plan-repair-start",
+				"revision-preview",
+				"revision-confirm",
+			].includes(op.kind)
+		)
+			return;
 		if (
 			expected?.missionId !== op.targetId ||
 			expected.ownerSessionId !== pin.interview.fence.ownerSessionId ||
@@ -335,7 +364,15 @@ export class NativeMissionPlanning {
 		this.envelope(op);
 		let receipt = await this.deps.journal.lookup(op);
 		if (
-			["plan-start", "plan-revisit", "revision-preview", "revision-confirm"].includes(op.kind) &&
+			[
+				"plan-start",
+				"plan-revisit",
+				"plan-continue",
+				"plan-question-ask",
+				"plan-repair-start",
+				"revision-preview",
+				"revision-confirm",
+			].includes(op.kind) &&
 			receipt?.state === "pending"
 		) {
 			// Inspect saved kernel/canonical effects under the original identity. Never re-enter them.
@@ -356,6 +393,39 @@ export class NativeMissionPlanning {
 				}
 			}
 			return this.deps.workers.revisit(op, firstEntry);
+		}
+		if (op.kind === "plan-continue") {
+			if (!this.deps.workers) throw new OperationRejected("Continue planning authority unavailable");
+			if (firstEntry) {
+				try {
+					this.envelope(op);
+				} catch (cause) {
+					throw new OperationRejected(String(cause));
+				}
+			}
+			return this.deps.workers.resume(op, firstEntry);
+		}
+		if (op.kind === "plan-question-ask") {
+			if (!this.deps.workers) throw new OperationRejected("Question answers unavailable");
+			if (firstEntry) {
+				try {
+					this.envelope(op);
+				} catch (cause) {
+					throw new OperationRejected(String(cause));
+				}
+			}
+			return this.deps.workers.ask(op, firstEntry);
+		}
+		if (op.kind === "plan-repair-start") {
+			if (!this.deps.workers) throw new OperationRejected("Repair agent unavailable");
+			if (firstEntry) {
+				try {
+					this.envelope(op);
+				} catch (cause) {
+					throw new OperationRejected(String(cause));
+				}
+			}
+			return this.deps.workers.repairStart(op, firstEntry);
 		}
 		if (["revision-preview", "revision-confirm"].includes(op.kind)) return this.revisionIntent(op, firstEntry);
 		if (op.kind === "plan-start") {

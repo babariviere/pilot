@@ -940,6 +940,73 @@ export class ConnectedPlans implements PlanningFeed {
 		return this.#outcome(r.outcome, missionId);
 	}
 
+	/** Asks the idle planning agent to continue. It names the planning state shown; a changed mission refuses it. */
+	async continuePlanning(intent: { missionId: string; feedback: string }): Promise<PlanOutcome> {
+		const missionId = intent.missionId;
+		const r = await call<PlanPage | null>(this.#window, "day.plan.continue", {
+			missionId,
+			feedback: intent.feedback,
+		});
+		if (!r.ok) {
+			void this.refresh();
+			return this.#refused(r.refusal, missionId);
+		}
+		this.#take(missionId, r.snapshot);
+		return this.#outcome(r.outcome, missionId);
+	}
+
+	/** Starts Unstick's repair agent: a read-only chat that reads the planner's chat and proposes one fix. */
+	async repairStart(intent: { missionId: string }): Promise<PlanOutcome> {
+		const missionId = intent.missionId;
+		const r = await call<PlanPage | null>(this.#window, "day.plan.repairStart", { missionId });
+		if (!r.ok) {
+			void this.refresh();
+			return this.#refused(r.refusal, missionId);
+		}
+		this.#take(missionId, r.snapshot);
+		return this.#outcome(r.outcome, missionId);
+	}
+
+	/** Applies the repair agent's fix, with the note as the user left it. */
+	async repairApply(intent: { missionId: string; note: string }): Promise<PlanOutcome> {
+		const { missionId, note } = intent;
+		const r = await call<PlanPage | null>(this.#window, "day.plan.repairApply", { missionId, note });
+		if (!r.ok) {
+			void this.refresh();
+			return this.#refused(r.refusal, missionId);
+		}
+		this.#take(missionId, r.snapshot);
+		return this.#outcome(r.outcome, missionId);
+	}
+
+	/** Unstick's fix: removes saved answers to an earlier wording, so new answers save. */
+	async dropEarlierAnswers(intent: { missionId: string }): Promise<PlanOutcome> {
+		const missionId = intent.missionId;
+		const r = await call<PlanPage | null>(this.#window, "day.plan.dropEarlierAnswers", { missionId });
+		if (!r.ok) {
+			void this.refresh();
+			return this.#refused(r.refusal, missionId);
+		}
+		this.#take(missionId, r.snapshot);
+		return this.#outcome(r.outcome, missionId);
+	}
+
+	/** Asks about one interview question. A read-only chat answers; the answer shows under the question. */
+	async askQuestion(intent: { missionId: string; questionId: string; text: string }): Promise<PlanOutcome> {
+		const missionId = intent.missionId;
+		const r = await call<PlanPage | null>(this.#window, "day.plan.askQuestion", {
+			missionId,
+			questionId: intent.questionId,
+			text: intent.text,
+		});
+		if (!r.ok) {
+			void this.refresh();
+			return this.#refused(r.refusal, missionId);
+		}
+		this.#take(missionId, r.snapshot);
+		return this.#outcome(r.outcome, missionId);
+	}
+
 	async startWork(
 		missionId: string,
 		intent: Pick<NonNullable<PlanPage["work"]>, "revision" | "digest" | "taskId" | "context">,

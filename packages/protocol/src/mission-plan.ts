@@ -157,6 +157,8 @@ export interface PlanMapItem {
 	/** Unsettled prerequisites, by question ID. */
 	waitingOn: string[];
 	claimedBy: string | null;
+	/** Claimed by Pilot's research chat, which has finished: its findings wait for the planner to record them. */
+	findingsWaiting?: boolean;
 	/** The fog area this question came from, by fog ID. */
 	fromFog: string | null;
 	sources: PlanMapSource[];

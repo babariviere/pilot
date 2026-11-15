@@ -9,6 +9,8 @@ export interface InterviewQuestion {
 	prompt: string;
 	options: InterviewOption[];
 	recommendedOptionId: string | null;
+	/** Background in plain words, shown when the user asks for more: what the question is about, what happens today, what each option changes. */
+	context?: string;
 }
 export interface InterviewAnswer {
 	questionId: string;

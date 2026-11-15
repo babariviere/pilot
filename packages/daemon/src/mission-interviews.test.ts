@@ -28,7 +28,10 @@ test("empty bootstrap cannot submit, and question count/size limits reject inste
 	const forty = Array.from({ length: 40 }, (_, index) => ({ ...question(`q${index}`), prompt: "New question" }));
 	validateQuestions(forty);
 	assert.throws(() => validateQuestions([...forty, question("extra")]), /1–40 questions/);
-	assert.throws(() => validateQuestions(forty.map((q) => ({ ...q, prompt: "x".repeat(1000) }))), /12 KiB/);
+	assert.throws(
+		() => validateQuestions(forty.map((q) => ({ ...q, prompt: "x".repeat(1100), context: "y".repeat(1000) }))),
+		/40 KiB/,
+	);
 	assert.equal(forty.length, 40);
 });
 function operation(kind: string, targetId: string, value: unknown): DurableOperation {

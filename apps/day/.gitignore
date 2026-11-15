@@ -1,5 +1,6 @@
 .nsh/
-target/
+# A link into mbx's managed targets (scripts/cargo), or a plain directory before the first build.
+/target
 native/target/
 output/
 .tools/

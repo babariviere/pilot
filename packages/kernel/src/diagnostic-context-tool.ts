@@ -12,7 +12,7 @@ export function createDiagnosticContextTool(call: DiagnosticContextCall): ToolDe
 		name: DIAGNOSTIC_CONTEXT_TOOL,
 		label: "Pilot context",
 		description:
-			"Read app-wide chats/history/search, usage/budgets, feature counts, refresh health, missions/issues and Pilot logs. performance reads this daemon's existing bounded CPU/memory, event-loop and operation snapshot (optional host only, no linked-host forwarding). Trusted-host and sanitized. No wake, writes, credentials or uploads.",
+			"Read app-wide chats/history/search, usage/budgets, feature counts, refresh health, missions/issues and Pilot logs. mission includes planning: why it moves, waits or is stuck, refused saves, map and round counts, recent operations and chats. performance reads this daemon's existing bounded CPU/memory, event-loop and operation snapshot (optional host only, no linked-host forwarding). Trusted-host and sanitized. No wake, writes, credentials or uploads.",
 		promptSnippet: "Read app-wide evidence through trusted diagnostics capability",
 		parameters: Type.Object({
 			action: Type.Union(

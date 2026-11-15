@@ -83,9 +83,18 @@ export const prototypeContextDigest = (plan: MissionPlan): string =>
 		questions: plan.questions.map(({ prototypeResult: _p, ...q }) => q),
 	});
 
-function list<T>(value: T[], max = 40): T[] {
-	if (!Array.isArray(value) || value.length > max) throw new Conflict("Invalid planning list");
+function list<T>(value: T[], max = 40, what = "a list"): T[] {
+	if (!Array.isArray(value)) throw new Conflict(`Invalid planning list: ${what} is not a list`);
+	if (value.length > max)
+		throw new Conflict(`Invalid planning list: ${what} has ${value.length} items, at most ${max}`);
 	return value;
+}
+/**
+ * The map's questions. No count limit: settled questions stay on the map for good, so a count limit
+ * ends every long mission. The saved state's byte limit (mission-plan-store.ts) bounds the map instead.
+ */
+function questionList<T>(value: T[]): T[] {
+	return list(value, Number.MAX_SAFE_INTEGER, "questions");
 }
 function strings(value: string[], max = 40) {
 	for (const s of list(value, max)) text(s, 2000);
@@ -101,7 +110,7 @@ function graph(nodes: { id: string; dependsOn: string[] }[]): void {
 		if (!n || visiting.has(key)) throw new Conflict("Missing dependency or planning cycle");
 		visiting.add(key);
 		if (new Set(n.dependsOn).size !== n.dependsOn.length) throw new Conflict("Duplicate dependency");
-		for (const dependency of list(n.dependsOn)) {
+		for (const dependency of list(n.dependsOn, 40, `dependsOn of ${n.id}`)) {
 			id(dependency);
 			visit(dependency);
 		}
@@ -230,6 +239,10 @@ export class MissionPlanReader {
 				frontier,
 				evidence,
 				task: (taskId) => tasks.find((t) => t.id === taskId),
+				findingsWaiting: (q) => {
+					const research = store.planningWorkers.get(missionId)?.research?.[q.id];
+					return research?.state === "reporting" && research.sessionId === q.claimedBy;
+				},
 			}),
 		};
 		this.deps.authorize("plan-read", missionId, pin.owner);
@@ -272,7 +285,7 @@ export class MissionPlanReader {
 	}
 	protected sources(missionId: string, sources: PlanSource[]): void {
 		const { store } = this.deps;
-		for (const s of list(sources)) {
+		for (const s of list(sources, 40, "sources")) {
 			id(s.id);
 			if (s.kind === "decision") {
 				exact(s, ["kind", "id", "digest"]);
@@ -316,10 +329,16 @@ export class MissionPlans extends MissionPlanReader {
 		this.journal = deps.journal;
 		this.validateRound = deps.validateRound;
 	}
-	private validate(plan: MissionPlan): void {
+	/**
+	 * `kept`: settled questions' sources already saved before this write (canonical JSON). They were checked
+	 * when written and cannot be edited, so a cited record that changed since shows on the map and never
+	 * blocks unrelated writes. Open questions, fog and the plan's own sources stay current.
+	 */
+	private validate(plan: MissionPlan, kept: ReadonlySet<string> = new Set()): void {
+		const fresh = (sources: PlanSource[]) => list(sources).filter((s) => !kept.has(canonicalJSON(s)));
 		text(plan.destination, 2000);
 		this.sources(plan.missionId, plan.sources);
-		for (const q of list(plan.questions)) {
+		for (const q of questionList(plan.questions)) {
 			exact(q, [
 				"id",
 				"title",
@@ -355,11 +374,11 @@ export class MissionPlans extends MissionPlanReader {
 					throw new Conflict("Prototype needs an experiment type and small time/cost bounds");
 			} else if (Object.hasOwn(q, "prototype") || Object.hasOwn(q, "prototypeResult"))
 				throw new Conflict("Prototype fields require a prototype question");
-			this.sources(plan.missionId, q.sources);
+			this.sources(plan.missionId, q.resolution ? fresh(q.sources) : q.sources);
 		}
 		graph(plan.questions);
 		const fogIds = new Set<string>();
-		for (const f of list(plan.fog)) {
+		for (const f of list(plan.fog, 40, "fog")) {
 			exact(f, ["id", "area", "why", "readyWhen", "dependsOn", "sources", "promotedTo"]);
 			id(f.id);
 			text(f.area, 2000);
@@ -368,7 +387,7 @@ export class MissionPlans extends MissionPlanReader {
 			if (fogIds.has(f.id)) throw new Conflict("Duplicate fog identity");
 			fogIds.add(f.id);
 			this.sources(plan.missionId, f.sources);
-			for (const key of [...list(f.dependsOn), ...list(f.promotedTo)])
+			for (const key of [...list(f.dependsOn, 40, "fog dependsOn"), ...list(f.promotedTo, 40, "fog promotedTo")])
 				if (!plan.questions.some((q) => q.id === key)) throw new Conflict("Fog link missing");
 		}
 		if (plan.spec) {
@@ -450,6 +469,11 @@ export class MissionPlans extends MissionPlanReader {
 			await this.journal.checkpoint(op, this.marker(op));
 			const result = this.deps.store.plans.write(op, request.expectedRevision, (state) => {
 				check();
+				const kept = new Set(
+					questionList(state?.questions ?? [])
+						.filter((q) => q.resolution)
+						.flatMap((q) => list(q.sources).map((s) => canonicalJSON(s))),
+				);
 				const plan: MissionPlan = state ?? {
 					version: 1,
 					missionId: op.targetId,
@@ -467,7 +491,7 @@ export class MissionPlans extends MissionPlanReader {
 					publication: null,
 				};
 				if (request.purpose === "plan-map") {
-					const questions = list(request.questions).map((q) => {
+					const sent = questionList(request.questions).map((q) => {
 						exact(q, [
 							"id",
 							"title",
@@ -482,8 +506,24 @@ export class MissionPlans extends MissionPlanReader {
 						const previous = plan.questions.find((p) => p.id === q.id);
 						if (previous?.resolution) {
 							const { resolution: _r, claimedBy: _c, prototypeResult: _p, ...rest } = previous;
-							if (canonicalJSON(q) !== canonicalJSON(rest))
-								throw new Conflict("Settled question cannot be rewritten");
+							// A settled question keeps what it asked and why. Only its Knowledge citations may move to a
+							// newer revision of the same entries, so a restored or corrected entry can be cited again.
+							const cited = (x: { sources: PlanSource[] }) =>
+								canonicalJSON({
+									...x,
+									sources: list(x.sources).map((s) =>
+										s.kind === "knowledge" ? { kind: s.kind, id: s.id } : s,
+									),
+								});
+							if (cited(q) !== cited(rest))
+								throw new Conflict(
+									"Settled question cannot be rewritten; only its Knowledge citations may move to a newer revision",
+								);
+							for (const s of list(q.sources) as PlanSource[]) {
+								const was = list(rest.sources).find((p: PlanSource) => p.kind === "knowledge" && p.id === s.id);
+								if (s.kind === "knowledge" && was?.kind === "knowledge" && s.revision < was.revision)
+									throw new Conflict("A settled question cites the same or a newer Knowledge revision");
+							}
 						}
 						if (previous?.prototypeResult && q.kind !== "prototype")
 							throw new Conflict("Keep prototype evidence and its question identity");
@@ -494,12 +534,14 @@ export class MissionPlans extends MissionPlanReader {
 							...(previous?.prototypeResult ? { prototypeResult: previous.prototypeResult } : {}),
 						};
 					});
-					if (
-						plan.questions.some(
-							(q) => (q.resolution || q.prototypeResult) && !questions.some((n) => n.id === q.id),
-						)
-					)
-						throw new Conflict("Keep settled decisions");
+					// Settled questions (and prototype evidence) stay without being sent again: the planner
+					// saves only what it changes, so the save stays small however long the mission runs.
+					const questions = [
+						...plan.questions.filter(
+							(q) => (q.resolution || q.prototypeResult) && !sent.some((n) => n.id === q.id),
+						),
+						...sent,
+					];
 					const fog = list(request.fog).map((f) => {
 						exact(f, ["id", "area", "why", "readyWhen", "dependsOn", "sources"]);
 						if (plan.fog.some((p) => p.id === f.id && p.promotedTo.length))
@@ -512,7 +554,7 @@ export class MissionPlans extends MissionPlanReader {
 					plan.fog = [...plan.fog.filter((f) => f.promotedTo.length), ...fog];
 				} else if (request.purpose === "plan-promote") {
 					const fog = plan.fog.find((f) => f.id === request.fogId);
-					if (!fog || fog.promotedTo.length || !list(request.questions).length)
+					if (!fog || fog.promotedTo.length || !questionList(request.questions).length)
 						throw new Conflict("Active fog required");
 					for (const q of request.questions) {
 						exact(q, [
@@ -571,7 +613,7 @@ export class MissionPlans extends MissionPlanReader {
 						questionSetRevision: updated.fence.questionSetRevision,
 					};
 				} else if (request.purpose === "plan-review") {
-					this.validate(plan);
+					this.validate(plan, kept);
 					if (!plan.spec || plan.questions.some((q) => !q.resolution))
 						throw new Conflict("Resolve precise questions before spec review");
 					const proposalDigest = planDigest(plan),
@@ -612,11 +654,12 @@ export class MissionPlans extends MissionPlanReader {
 					)
 				)
 					plan.round = null;
-				this.validate(plan);
+				this.validate(plan, kept);
 				return plan;
 			});
 			// Do not turn durability failure after commit into rejection or safe replay.
 			await this.deps.store.durable();
+			this.deps.store.plans.refused(op.targetId, null);
 			return { missionId: result.missionId, revision: result.revision };
 		} catch (error) {
 			if (this.deps.store.plans.lookup(op))
@@ -626,8 +669,10 @@ export class MissionPlans extends MissionPlanReader {
 				error instanceof NotFound ||
 				error instanceof SyntaxError ||
 				error instanceof TypeError
-			)
+			) {
+				this.deps.store.plans.refused(op.targetId, { kind: op.kind, reason: error.message.slice(0, 512) });
 				throw new OperationRejected(error.message);
+			}
 			throw error;
 		}
 	}
@@ -701,15 +746,17 @@ export class MissionPlans extends MissionPlanReader {
 		} else if (resolution.kind === "interview" && (q.kind === "human" || q.kind === "prototype")) {
 			const i = this.context(plan.missionId).interview,
 				s = i.submission;
-			if (
-				!s ||
-				!plan.round ||
-				plan.round.topicId !== q.id ||
-				plan.round.digest !== questionContextDigest(plan) ||
-				plan.round.questionSetRevision !== s.fence.questionSetRevision ||
-				s.operationId !== resolution.id ||
-				s.digest !== resolution.digest
-			)
+			// A plan-ask round is bound to its topic. A plain questions round has no topic, so the coordinator
+			// links its exact latest submission to the human question it answers. Topic and review rounds never
+			// fall back to this, so a changed map cannot inherit their answers.
+			const asked = plan.round
+				? plan.round.topicId === q.id &&
+					plan.round.digest === questionContextDigest(plan) &&
+					plan.round.questionSetRevision === s?.fence.questionSetRevision
+				: q.kind === "human" &&
+					!!s &&
+					!this.deps.store.plans.boundRound(plan.missionId, s.fence.questionSetRevision);
+			if (!s || !asked || s.operationId !== resolution.id || s.digest !== resolution.digest)
 				throw new Conflict("Exact complete human submission required");
 			this.deps.store.interviews.binding(plan.missionId, this.deps.store.brief(plan.missionId)!);
 		} else throw new Conflict("Research cannot answer a human decision");

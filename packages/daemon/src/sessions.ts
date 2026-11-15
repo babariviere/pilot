@@ -246,6 +246,8 @@ export interface MissionSpawnAdmission {
 	continuationOperationId?: string;
 	/** Set only by mission tool dispatch from the caller's IPC identity, never request arguments. */
 	actorSessionId?: string;
+	/** Daemon-only: read the project's read-only main view, never the user's checkout or a new workspace. */
+	mainView?: true;
 }
 
 /** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */
@@ -1277,6 +1279,10 @@ function sameTrackedSource(a?: SessionTrackedSource, b?: SessionTrackedSource): 
 			a.url === b.url)
 	);
 }
+
+/** Planners read and record project Knowledge for their research. Documentation batches stay with coordinators. */
+export const planningHostCallAllowed = (type: string, action: string | undefined): boolean =>
+	type === "knowledge.call" && action !== "batch";
 
 export class SessionManager {
 	private planningBridge?: {
@@ -6041,6 +6047,18 @@ ${run.excerpt}`,
 		await task;
 	}
 
+	/** The project's read-only main view at the current fetched main head, for daemon-started readers. */
+	private async currentMainView(projectId: string): Promise<string> {
+		if (!this.mainHeads.has(projectId)) await this.refreshProjectMain(projectId);
+		const head = this.mainHeads.get(projectId);
+		const repository = this.mainRepositories.get(projectId);
+		if (!head || !repository) throw new Conflict("The project's main view is unavailable");
+		const upstream = (
+			await run("git", ["remote", "get-url", "origin"], this.projects.require(projectId).path)
+		).trim();
+		return await this.mainViews.update(projectId, repository, head, upstream);
+	}
+
 	private async refreshMainViews(event: MainMoved): Promise<void> {
 		const members = [...this.metas.values()].filter(
 			(meta) =>
@@ -9146,6 +9164,12 @@ ${run.excerpt}`,
 		};
 	}
 
+	/** A host-qualified Diagnostics target for one chat on this daemon, for Unstick's repair agent. */
+	diagnosticTargetFor(sessionId: string): DiagnosticTargetReference | undefined {
+		if (!this.diagnosticHost) return undefined;
+		return { host: this.diagnosticHost, sessionId, chatUrl: `pilot://chat/${sessionId}` };
+	}
+
 	private diagnosticReference(meta: SessionMeta): DiagnosticTargetReference | undefined {
 		if (meta.diagnosticTarget) return meta.diagnosticTarget;
 		if (!meta.diagnosticTargetId || !this.diagnosticHost) return undefined;
@@ -9427,6 +9451,11 @@ ${run.excerpt}`,
 		if (!directory) throw new Error("projectId or cwd is required");
 		if (this.closing) throw new Error("pilotd is shutting down");
 		let cwd = await requireDirectory(directory);
+		if (missionAdmission?.mainView) {
+			if (mode !== "ask" || !project || request.baseBranch !== undefined || request.cwd !== undefined)
+				throw new Conflict("A main view reader requires an Ask project chat");
+			cwd = await this.currentMainView(project.id);
+		}
 		const model = request.model?.trim() || project?.model;
 		const now = Date.now();
 		const id = admission?.targetId ?? randomUUID();
@@ -9476,7 +9505,9 @@ ${run.excerpt}`,
 		let preparing: SessionMeta["preparing"];
 		let ask: AskContext | undefined;
 		if (mode === "ask") {
-			ask = { source: cwd, ...(feedbackImages?.length ? { feedbackImages } : {}) };
+			ask = missionAdmission?.mainView
+				? { source: cwd, sourceOnly: true }
+				: { source: cwd, ...(feedbackImages?.length ? { feedbackImages } : {}) };
 			if (request.baseBranch !== undefined) {
 				ask = { ...ask, branch: request.baseBranch, gitDir: join(this.dir(id), "ask.git") };
 				preparing = { source: cwd, baseBranch: request.baseBranch };
@@ -12811,12 +12842,7 @@ ${run.excerpt}`,
 		}
 		if (
 			meta.planning &&
-			!(
-				packet.type === "knowledge.call" &&
-				["context", "preferences.get", "preferences.history", "preferences.lookup", "preferences.write"].includes(
-					packet.action,
-				)
-			)
+			!planningHostCallAllowed(packet.type, "action" in packet ? String(packet.action) : undefined)
 		) {
 			const denied = {
 				"mission.call": "mission.result",

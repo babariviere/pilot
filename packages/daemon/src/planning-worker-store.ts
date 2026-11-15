@@ -25,6 +25,66 @@ export interface PlanningWorkerState {
 	revisit?: { operation: DurableOperation; admitted: boolean };
 	/** User topic input, never a Start or permission to release a hold. */
 	discussion?: { operation: DurableOperation; admitted: boolean };
+	/** The waiting round a user's interview comment released, kept so recovery looks up the same input. */
+	feedback?: { operationId: string; hold: PlanningRound };
+	/**
+	 * Read-only research chats started for ready research questions, by question ID. A question is
+	 * started once; its findings go to the planner as one exact planning input.
+	 */
+	research?: Record<string, PlanningResearch>;
+	/**
+	 * The user's questions about interview questions, by the operation that asked. A read-only chat
+	 * answers each one; the waiting round and the planner are left alone.
+	 */
+	asks?: Record<string, QuestionAsk>;
+	/** Unstick's repair agent: one read-only Diagnostics chat that reads the planner's chat and proposes one fix. */
+	repair?: PlanningRepair;
+}
+export interface PlanningRepair {
+	operationId: string;
+	/** starting: chat not yet created. looking: chat works. proposed or failed: done. */
+	state: "starting" | "looking" | "proposed" | "failed";
+	sessionId: string | null;
+	/** The planning state the agent looked at. Its fix applies only while this still matches. */
+	basis: string;
+	startedAt: number;
+	proposal?: MissionFix;
+	reason?: string;
+}
+/** One proposed fix. Only the user's Apply acts on it, through the usual operations. */
+export interface MissionFix {
+	fix: "continue" | "planner-note" | "drop-earlier-answers" | "code-repair" | "none";
+	cause: string;
+	/** Only with planner-note: the note Continue planning sends. */
+	note?: string;
+	certainty: "low" | "medium" | "high";
+	/** Short labels of what the agent read. */
+	evidence: string[];
+}
+export interface QuestionAsk {
+	questionId: string;
+	text: string;
+	/** starting: chat not yet created. running: chat works. answered or failed: done. */
+	state: "starting" | "running" | "answered" | "failed";
+	sessionId: string | null;
+	answer?: string;
+	reason?: string;
+	askedAt: number;
+}
+export interface PlanningResearch {
+	questionDigest: string;
+	/** starting: chat not yet created. running: chat works. reporting: findings saved, input not confirmed. */
+	state: "starting" | "running" | "reporting" | "reported" | "failed";
+	sessionId: string | null;
+	/** Planning input carrying the findings, once saved. */
+	operation?: DurableOperation;
+	/** The research chat's final answer, limited, saved before admission so recovery sends the same text. */
+	report?: string;
+	reason?: string;
+	/** Research chats started for this question so far (1 when absent). */
+	attempts?: number;
+	/** The Knowledge entry Pilot saved the findings in, word for word, linked to the mission. */
+	knowledge?: { id: string; revision: number; synopsis: string };
 }
 interface Port {
 	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
@@ -36,6 +96,10 @@ export class PlanningWorkerStore {
 	private readonly port: Port;
 	constructor(port: Port) {
 		this.port = port;
+	}
+	missionIds(): string[] {
+		const row = this.port.one("SELECT json_group_array(mission_id) ids FROM planning_workers");
+		return row ? JSON.parse(String(row.ids)) : [];
 	}
 	get(missionId: string): PlanningWorkerState | undefined {
 		const row = this.port.one("SELECT record FROM planning_workers WHERE mission_id=?", missionId);
@@ -58,15 +122,18 @@ export class PlanningWorkerStore {
 		});
 	}
 	change(missionId: string, revision: number, work: (state: PlanningWorkerState) => void): PlanningWorkerState {
+		let before: PlanningWorkerState["phase"] | undefined;
 		const result = this.port.transaction(() => {
 			const state = this.get(missionId);
 			if (!state || state.revision !== revision) throw new Conflict("Planning worker changed");
+			before = state.phase;
 			work(state);
 			state.revision++;
 			this.port.run("UPDATE planning_workers SET record=? WHERE mission_id=?", canonicalJSON(state), missionId);
 			return state;
 		});
 		this.port.changed(missionId);
+		if (before !== result.phase) console.log(`pilotd: planning ${missionId} phase ${before} -> ${result.phase}`);
 		return result;
 	}
 	call(missionId: string, callId: string): DurableOperation | undefined {

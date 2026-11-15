@@ -116,6 +116,25 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 	assert.equal(manager.get(sibling)!.cwd, meta.cwd, "all source readers of the project share one view");
 	assert.notEqual(manager["require"](sibling).coordinatorView!.scratch, meta.coordinatorView!.scratch);
 	assert.equal(manager["mainProjects"]().length, 1);
+	// Daemon-started research readers use the same read-only main view: no workspace, never the user's checkout.
+	const reader = await manager.spawn(
+		{ projectId: project.id, mode: "ask", title: "Research", message: "Read main" },
+		false,
+		undefined,
+		{ mainView: true },
+	);
+	const readerMeta = manager["require"](reader.id);
+	assert.equal(readerMeta.cwd, meta.cwd);
+	assert.deepEqual(readerMeta.ask, { source: meta.cwd, sourceOnly: true });
+	assert.equal(readerMeta.workspace, undefined);
+	assert.equal(existsSync(join(home, "sessions", reader.id, "workspace")), false);
+	await manager["starting"].get(reader.id);
+	assert.equal(specs.filter((s) => s.pilot?.ask?.sourceOnly && s.pilot.ask.source === meta.cwd).length, 1);
+	specs = specs.filter((s) => !s.pilot?.ask?.sourceOnly);
+	await assert.rejects(
+		manager.spawn({ projectId: project.id, title: "Build", message: "x" }, false, undefined, { mainView: true }),
+		/requires an Ask project chat/,
+	);
 	assert.equal(manager.get(id)!.branch, undefined);
 	assert.equal(manager.get(id)!.pullRequests, undefined);
 	assert.deepEqual(manager.ownedPullRequests(id), []);
@@ -199,6 +218,7 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 	await manager.refreshCoordinatorWorkspace(sibling);
 	await manager.archive(id);
 	await manager.archive(sibling);
+	await manager.archive(reader.id);
 	assert.deepEqual(manager["mainProjects"](), [], "no active chats means no project watcher entry");
 });
 

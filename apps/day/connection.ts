@@ -10,6 +10,7 @@ import { ConnectedPlans, ConnectedRituals, ConnectedToday, call, type Refusal, w
 import { ConnectedChats, mirrorChats } from "./chatFeed";
 import { connectedUpdates } from "./connectedUpdates";
 import { type Day, mirrorDay } from "./day";
+import { errorText, logEvent, setLogSink } from "./dayLog";
 import { ConnectedDelivery, deliveryKey, mirrorDelivery, type VerificationSubject } from "./deliveryFeed";
 import { deliveryTitles } from "./deliveryView";
 import { ConnectedFeedback, mirrorFeedback } from "./feedbackFeed";
@@ -73,10 +74,15 @@ let latestFlush = -1;
  */
 async function flushForms(window: string, generation: number, today: ConnectedToday, plans: Plans, day: Day) {
 	const forms = await saveForms(day, plans);
-	if (!forms.saved) return;
+	if (!forms.saved) {
+		logEvent("forms.unsaved", forms.message);
+		return;
+	}
 	const drafts = await today.saveDrafts();
 	await flushAll(plans);
 	const waiting = Object.keys(answerDrafts()).length + Object.keys(answerPicks()).length;
+	if (!drafts) logEvent("forms.unsaved", "Today's drafts could not be saved.");
+	if (waiting > 0) logEvent("forms.unsaved", `${waiting} interview answers could not be saved.`);
 	if (!drafts || waiting > 0 || generation !== latestFlush || windowId() !== window) return;
 	await call(window, "day.flush.ack", { generation, view: captureView(day.today()) });
 }
@@ -84,6 +90,7 @@ async function flushForms(window: string, generation: number, today: ConnectedTo
 // Pinned once. Read again never chooses another root, reopens feeds, or repeats
 // startup calls. The native bridge checks this same identity on every call too.
 const window = windowId();
+if (window) setLogSink((event, message) => void call(window, "day.log.event", { event, message }));
 let opening: Promise<void> | null = null;
 let began = false;
 let ritualFeed: ConnectedRituals | null = null;
@@ -165,6 +172,7 @@ function flushPending() {
 	pendingFlush = null;
 	flushForms(window, generation, todayFeed, open.plans, open.day).catch((error: unknown) => {
 		console.error("Day could not save its forms before a close or an update:", error);
+		logEvent("forms.unsaved", errorText(error));
 	});
 }
 

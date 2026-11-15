@@ -27,6 +27,7 @@ export interface PlanningRound extends InterviewVersion {
 export type PlanningWorkerRequest =
 	| { action: "read"; revision?: number }
 	| { action: "knowledge"; id: string; revision: number }
+	| { action: "replaced"; task?: number }
 	| { action: "receipt"; operationId: string }
 	| { action: "write"; toolCallId: string; request: PlanWrite }
 	| {

@@ -687,6 +687,109 @@ test("research uses linked Knowledge and cannot resolve human decisions", async 
 	assert.equal((await f.write(ask())).receipt.state, "rejected");
 });
 
+test("a settled question's changed citation never blocks other map edits, and it can cite the newer revision", async (t) => {
+	const f = await fixture(t);
+	const write = (id: string | undefined, revision: number) =>
+		f.store.knowledge.write("project", id, {
+			operationId: randomUUID(),
+			requestHash: "hash",
+			expectedRevision: revision,
+			kind: "investigation",
+			title: "Facts",
+			synopsis: "Primary sources",
+			body: revision ? "Observed evidence, restored in full" : "Observed evidence",
+			sources: [],
+			author: { type: "user" },
+			...(revision ? { reason: "Restore" } : {}),
+		});
+	const k = write(undefined, 0);
+	f.store.knowledge.setLink(f.missionId, k.entry.id, 0, { linked: true, pinnedRevision: 1 }, { type: "user" });
+	const old = { kind: "knowledge" as const, id: k.entry.id, revision: 1, linkRevision: 1 };
+	const fact = { ...question("fact"), kind: "research" as const, sources: [old] };
+	await f.map([fact, question("choice", ["fact"])]);
+	const resolution = { kind: "knowledge", id: k.entry.id, digest: digest(old) };
+	assert.equal((await f.write({ purpose: "plan-resolve", questionId: "fact", resolution })).receipt.state, "accepted");
+	// The entry gets a restored revision 2 and the link moves to it: the settled citation is now old.
+	write(k.entry.id, 1);
+	f.store.knowledge.setLink(f.missionId, k.entry.id, 1, { linked: true, pinnedRevision: 2 }, { type: "user" });
+	const other = { ...question("later"), title: "Later" };
+	await f.map([fact, question("choice", ["fact"]), other]);
+	assert.ok(
+		f.plan.questions.some((q) => q.id === "later"),
+		"an unrelated edit is not blocked",
+	);
+	// The settled question may cite the newer revision, and nothing else may change.
+	const now = { ...old, revision: 2, linkRevision: 2 };
+	await f.map([{ ...fact, sources: [now] }, question("choice", ["fact"]), other]);
+	assert.deepEqual(f.plan.questions.find((q) => q.id === "fact")?.sources, [now]);
+	assert.ok(f.plan.questions.find((q) => q.id === "fact")?.resolution, "it stays settled");
+	const rewrite = await f.write({
+		purpose: "plan-map",
+		expectedRevision: f.plan.revision,
+		destination: f.plan.destination,
+		sources: f.plan.sources,
+		questions: [{ ...fact, title: "Other", sources: [now] }, question("choice", ["fact"]), other],
+		fog: [],
+	});
+	assert.equal(rewrite.receipt.state, "rejected");
+});
+
+test("settled questions stay without being sent again, and the map has no question count limit", async (t) => {
+	const f = await fixture(t);
+	const k = f.store.knowledge.write("project", undefined, {
+		operationId: randomUUID(),
+		requestHash: "hash",
+		expectedRevision: 0,
+		kind: "investigation",
+		title: "Facts",
+		synopsis: "Primary sources",
+		body: "Observed evidence",
+		sources: [],
+		author: { type: "user" },
+	});
+	f.store.knowledge.setLink(f.missionId, k.entry.id, 0, { linked: true, pinnedRevision: 1 }, { type: "user" });
+	const source = { kind: "knowledge" as const, id: k.entry.id, revision: 1, linkRevision: 1 };
+	await f.map([{ ...question("fact"), kind: "research", sources: [source] }]);
+	const resolution = { kind: "knowledge", id: k.entry.id, digest: digest(source) };
+	assert.equal((await f.write({ purpose: "plan-resolve", questionId: "fact", resolution })).receipt.state, "accepted");
+	// 45 open questions, without the settled one: it stays, settled, and dependencies on it still work.
+	const open = Array.from({ length: 45 }, (_, i) => question(`open-${i}`, i ? [] : ["fact"]));
+	await f.map(open);
+	assert.equal(f.plan.questions.length, 46);
+	assert.ok(f.plan.questions.find((q) => q.id === "fact")?.resolution, "the settled question stays settled");
+	// The planner reads it as one short entry; its full text stays in the saved map.
+	const store = f.store.plans;
+	assert.equal(store.get(f.missionId)?.questions.length, 46);
+	// The size limit names its numbers. One save is at most 64 KiB, so only settled questions grow past it.
+	const big = operation(f.missionId, { purpose: "plan-map" });
+	assert.throws(
+		() =>
+			store.write(big, f.plan.revision, (state) => ({
+				...state!,
+				questions: Array.from({ length: 120 }, (_, i) => ({
+					...question(`big-${i}`),
+					question: "x".repeat(1900),
+					resolution: resolution as never,
+					claimedBy: null,
+				})),
+			})),
+		/Planning state exceeds 192 KiB: this save is \d+ KiB, and settled questions use \d+ KiB that stay/,
+	);
+	// A refused save is remembered for Unstick until one is accepted.
+	const refused = await f.write({
+		purpose: "plan-map",
+		expectedRevision: f.plan.revision,
+		destination: "",
+		sources: [],
+		questions: [],
+		fog: [],
+	});
+	assert.equal(refused.receipt.state, "rejected");
+	assert.equal(store.refusal(f.missionId)?.kind, "plan-map");
+	await f.map(open);
+	assert.equal(store.refusal(f.missionId), undefined);
+});
+
 test("spec and slice publication requires exact review and produces traced native tasks only", async (t) => {
 	const f = await fixture(t);
 	assert.equal((await f.proposal()).receipt.state, "accepted");
@@ -1074,4 +1177,22 @@ test("shared map links agreement tasks without inventing completion", async (t) 
 			["resume", "Resume a plan", "todo", "number"],
 		],
 	);
+});
+
+test("a plain interview round links its exact submission to an open human question only", async (t) => {
+	const f = await fixture(t);
+	await f.map([question("a"), { ...question("facts"), kind: "research", options: [], recommendedOptionId: null }]);
+	assert.equal((await f.answer(true, "yes", "Keep native storage")).state, "accepted");
+	assert.equal(f.plan.round, null);
+	const s = f.store.interviews.latest(f.missionId)!.submission!;
+	const resolve = (questionId: string, digest = s.digest) =>
+		f.write({ purpose: "plan-resolve", questionId, resolution: { kind: "interview", id: s.operationId, digest } });
+	assert.equal((await resolve("a", "guessed")).receipt.state, "rejected");
+	assert.equal((await resolve("facts")).receipt.state, "rejected");
+	assert.equal((await resolve("a")).receipt.state, "accepted");
+	assert.deepEqual(f.plan.questions.find((q) => q.id === "a")!.resolution, {
+		kind: "interview",
+		id: s.operationId,
+		digest: s.digest,
+	});
 });

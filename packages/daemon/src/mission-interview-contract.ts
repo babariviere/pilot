@@ -26,12 +26,14 @@ export function validateQuestions(value: unknown): asserts value is InterviewQue
 		!Array.isArray(value) ||
 		!value.length ||
 		value.length > 40 ||
-		Buffer.byteLength(JSON.stringify(value)) > 12 * 1024
+		Buffer.byteLength(JSON.stringify(value)) > 40 * 1024
 	)
-		throw new Conflict("Interview needs 1–40 questions within 12 KiB");
+		throw new Conflict("Interview needs 1–40 questions within 40 KiB");
 	const seen = new Set<string>();
 	for (const q of value) {
-		interviewExact(q, ["id", "section", "prompt", "options", "recommendedOptionId"]);
+		const context = q && typeof q === "object" && Object.hasOwn(q, "context");
+		interviewExact(q, ["id", "section", "prompt", "options", "recommendedOptionId", ...(context ? ["context"] : [])]);
+		if (context) interviewText(q.context, 1500);
 		interviewId(q.id);
 		interviewText(q.prompt, 2000);
 		if (

@@ -35,6 +35,7 @@ import {
 	submitting,
 	writing,
 } from "./planView";
+import { QuestionHelp, RoundNotes } from "./QuestionHelp";
 import { Action, KeyCap, KeyHint, Mark, type MarkKind } from "./ui";
 
 /** The page after the last question: every answer, and Submit. No question id can hold a NUL. */
@@ -197,6 +198,9 @@ function QuestionView(props: {
 			>
 				{q().prompt}
 			</Text>
+			<If when={!locked()}>
+				<QuestionHelp plans={props.plans} page={props.page} interview={iv()} question={q()} helpKey={key} />
+			</If>
 			<If when={q().state === "changed"}>
 				<View class="gap-0.5 rounded-lg bg-muted px-3 py-2">
 					<Text class="text-sm text-needs-ink">This question changed after you answered. Answer it again.</Text>
@@ -414,19 +418,21 @@ function Answers(props: { plans: Plans; page: PlanPage; interview: Interview }) 
 						(iv().unconfirmed && iv().submit === "open")
 					}
 					else={
-						<Action
-							primary
-							testID="submit"
-							label={
-								busy() || iv().submit === "submitting"
-									? "Submitting…"
-									: review()
-										? "Send review"
-										: "Submit answers"
-							}
-							disabled={!ready()}
-							onPress={() => void submit(props.plans, props.page)}
-						/>
+						<If when={iv().submit !== "submitted"}>
+							<Action
+								primary
+								testID="submit"
+								label={
+									busy() || iv().submit === "submitting"
+										? "Submitting…"
+										: review()
+											? "Send review"
+											: "Submit answers"
+								}
+								disabled={!ready()}
+								onPress={() => void submit(props.plans, props.page)}
+							/>
+						</If>
 					}
 				>
 					<Action
@@ -571,7 +577,7 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 					<View class="h-full bg-progress" style={{ flexGrow: iv().answered, flexBasis: 0 }} />
 					<View class="h-full" style={{ flexGrow: total() - iv().answered, flexBasis: 0 }} />
 				</View>
-				<If when={!iv().accepting}>
+				<If when={!iv().accepting && iv().submit === "open"}>
 					<Text class="text-xs text-needs-ink">
 						Pilot is not ready to take answers yet. You can read the questions; answering opens soon.
 					</Text>
@@ -656,6 +662,9 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 						</View>
 					</If>
 				</View>
+			</If>
+			<If when={!review() && props.plans.feed.continuePlanning !== undefined}>
+				<RoundNotes plans={props.plans} page={props.page} interview={iv()} />
 			</If>
 		</View>
 	);

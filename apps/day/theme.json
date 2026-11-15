@@ -38,7 +38,16 @@
 			"added": "#e8f4ec",
 			"added-strong": "#c4e4cf",
 			"removed": "#fbeceb",
-			"removed-strong": "#f2c7c4"
+			"removed-strong": "#f2c7c4",
+			"needs-soft": "#fbf3e0",
+			"map-paper": "#e9ede0",
+			"map-ink": "#2d3943",
+			"map-faint": "#71807b",
+			"map-land": "#d0d9b8",
+			"map-hatch": "#2d394333",
+			"map-contour": "#9fb4ad",
+			"map-fog": "#f7f8f2",
+			"map-route": "#ad432a"
 		},
 		"dark": {
 			"background": "#23262c",
@@ -74,7 +83,16 @@
 			"added": "#253a2f",
 			"added-strong": "#2f5a41",
 			"removed": "#3f2a2b",
-			"removed-strong": "#6a3a3a"
+			"removed-strong": "#6a3a3a",
+			"needs-soft": "#3a3324",
+			"map-paper": "#1c2325",
+			"map-ink": "#cbd4ca",
+			"map-faint": "#87958f",
+			"map-land": "#2d3a31",
+			"map-hatch": "#cbd4ca24",
+			"map-contour": "#3a4d4b",
+			"map-fog": "#333b3e",
+			"map-route": "#e3825f"
 		}
 	}
 }

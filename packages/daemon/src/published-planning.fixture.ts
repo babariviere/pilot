@@ -6,9 +6,13 @@ import { interviewDigest } from "./mission-interview-contract.ts";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 import { NativeMissionPlanning } from "./native-mission-planning.ts";
 import { PlanningWorkers } from "./planning-workers.ts";
+import { KnowledgeService } from "./project-knowledge.ts";
 
-export async function publishedPlanningFixture(t: TestContext, options = { native: false }) {
-	const f = await nativePlanningFixture(options);
+export async function publishedPlanningFixture(
+	t: TestContext,
+	options: { native?: boolean; published?: boolean; knowledge?: boolean } = {},
+) {
+	const f = await nativePlanningFixture({ native: options.native ?? false });
 	t.after(() => f.close());
 	await f.closePlanning();
 	await f.plan({
@@ -19,30 +23,32 @@ export async function publishedPlanningFixture(t: TestContext, options = { nativ
 		questions: [],
 		fog: [],
 	} as { purpose: string });
-	await f.plan({
-		purpose: "plan-propose",
-		expectedRevision: 1,
-		spec: {
-			problem: "Import",
-			solution: "Read exact bytes",
-			stories: [{ id: "one", text: "Read" }],
-			implementation: ["Keep parser"],
-			testing: ["Corrupt archive"],
-			exclusions: ["No deployment"],
-		},
-		slices: [
-			{
-				id: "one",
-				title: "Importer",
-				outcome: "Read archive",
-				acceptance: ["Exact bytes"],
-				storyIds: ["one"],
-				dependsOn: [],
-				owners: ["sol-backend"],
+	const published = options.published ?? true;
+	if (published)
+		await f.plan({
+			purpose: "plan-propose",
+			expectedRevision: 1,
+			spec: {
+				problem: "Import",
+				solution: "Read exact bytes",
+				stories: [{ id: "one", text: "Read" }],
+				implementation: ["Keep parser"],
+				testing: ["Corrupt archive"],
+				exclusions: ["No deployment"],
 			},
-		],
-	} as { purpose: string });
-	await f.plan({ purpose: "plan-review", expectedRevision: 2 } as { purpose: string });
+			slices: [
+				{
+					id: "one",
+					title: "Importer",
+					outcome: "Read archive",
+					acceptance: ["Exact bytes"],
+					storyIds: ["one"],
+					dependsOn: [],
+					owners: ["sol-backend"],
+				},
+			],
+		} as { purpose: string });
+	if (published) await f.plan({ purpose: "plan-review", expectedRevision: 2 } as { purpose: string });
 	const iv = f.store.interviews.latest(f.missionId)!;
 	const { MissionInterviews } = await import("./mission-interviews.ts");
 	const interviews = new MissionInterviews({
@@ -61,14 +67,17 @@ export async function publishedPlanningFixture(t: TestContext, options = { nativ
 			text: "",
 		})),
 	} as { purpose: string });
-	assert.equal((await f.journal.execute(save, (o, e) => interviews.admit(o, e.firstEntry))).state, "accepted");
+	if (published)
+		assert.equal((await f.journal.execute(save, (o, e) => interviews.admit(o, e.firstEntry))).state, "accepted");
 	const latest = f.store.interviews.latest(f.missionId)!;
 	const submit = f.operation(f.missionId, {
 		purpose: "interview-submit",
 		expected: { fence: latest.fence, revision: latest.revision },
 	} as { purpose: string });
-	assert.equal((await f.journal.execute(submit, (o, e) => interviews.admit(o, e.firstEntry))).state, "accepted");
-	await f.plan({ purpose: "plan-publish", expectedRevision: 3 });
+	if (published) {
+		assert.equal((await f.journal.execute(submit, (o, e) => interviews.admit(o, e.firstEntry))).state, "accepted");
+		await f.plan({ purpose: "plan-publish", expectedRevision: 3 });
+	}
 	const binding = {
 		version: 1 as const,
 		profile: PLANNING_PROFILE,
@@ -113,6 +122,7 @@ export async function publishedPlanningFixture(t: TestContext, options = { nativ
 		projects: f.projects,
 		sessions: f.sessions,
 		confirmations: f.confirmations(),
+		...(options.knowledge ? { knowledge: new KnowledgeService(f.store, f.projects, f.sessions) } : {}),
 	});
 	t.after(() => workers.close());
 	const native = new NativeMissionPlanning({

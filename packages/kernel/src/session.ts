@@ -699,6 +699,8 @@ export class KernelSession {
 									planningCall({ action: "read", ...(revision === undefined ? {} : { revision }) }, signal),
 								knowledge: (id, revision, signal) =>
 									planningCall({ action: "knowledge", id, revision }, signal),
+								replaced: (task, signal) =>
+									planningCall({ action: "replaced", ...(task === undefined ? {} : { task }) }, signal),
 								receipt: (operationId, signal) => planningCall({ action: "receipt", operationId }, signal),
 								write: (toolCallId, request, signal) =>
 									planningCall({ action: "write", toolCallId, request }, signal),
