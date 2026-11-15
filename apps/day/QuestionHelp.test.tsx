@@ -1,8 +1,36 @@
 // Help on interview questions: background, a question to a chat, and notes sent together. Mock data.
 import { expect, open, test } from "nsh/test";
+import { questionNotes, restoreQuestionHelp, roundNotes, savedQuestionHelp } from "./QuestionHelp";
 
 // Tall enough that every question and the round's notes show at once.
 const desktop = { platform: "macos", width: 1100, height: 3200 } as const;
+
+test("unsent question help survives a closed window, word for word, and sends nothing", () => {
+	restoreQuestionHelp([
+		"note\ni1\nq1\n1\nToo technical.\nUse my words.",
+		"round\ni1\n\n0\nAll of these are too long.",
+		"ask\ni1/q1\n\n0\nWhat is NSH?",
+	]);
+	expect(questionNotes().i1?.q1).toEqual({ simpler: true, text: "Too technical.\nUse my words." });
+	expect(roundNotes().i1).toBe("All of these are too long.");
+	expect(savedQuestionHelp()).toEqual([
+		"note\ni1\nq1\n1\nToo technical.\nUse my words.",
+		"round\ni1\n\n0\nAll of these are too long.",
+		"ask\ni1/q1\n\n0\nWhat is NSH?",
+	]);
+	restoreQuestionHelp([]);
+	expect(savedQuestionHelp()).toEqual([]);
+});
+
+test("keys toggle help on the question shown: M more context, S say it simpler", async () => {
+	const app = await open("./QuestionHelpFixture.tsx", desktop);
+	await app.keyboard.press("s");
+	await app.waitFor("id:simpler-first");
+	await app.keyboard.press("m");
+	await app.waitFor("id:context-first");
+	await app.keyboard.press("s");
+	expect(app.shows("id:simpler-first")).toBe(false);
+});
 
 test("notes on questions wait, then go to Pilot together, word for word, and answer nothing", async () => {
 	const app = await open("./QuestionHelpFixture.tsx", desktop);

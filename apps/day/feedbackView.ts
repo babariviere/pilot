@@ -97,6 +97,16 @@ export function originFrom(key: string): UserFeedbackOriginRef | null | undefine
  * Opens the feedback page from `from`: a mission or chat, or null for Pilot
  * in general. Opening only reads; it never sends or moves typed words.
  */
+/**
+ * Opens Feedback with words someone else wrote for the user to check, such as the repair agent's
+ * findings. They fill only an empty draft: the user's own words are never replaced. Nothing is sent.
+ */
+export function openFeedbackWith(from: UserFeedbackOriginRef | null, text: string) {
+	const d = feedbackDraft();
+	if (d.text.trim() === "" && !d.attachments?.length) feedbackDraft.set({ ...d, text });
+	openFeedback(from);
+}
+
 export function openFeedback(from: UserFeedbackOriginRef | null) {
 	glide();
 	feedbackMessage.set("");

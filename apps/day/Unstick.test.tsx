@@ -37,4 +37,18 @@ test("Have an agent look starts one read-only agent; its fix shows with what it 
 	await app.waitFor("Sent. Pilot continues planning with this note.");
 	expect(app.shows("Note: Merge a and b, keep c.")).toBe(true);
 	expect(app.shows("Ask an agent again")).toBe(true);
+	// Not now puts the agent's fix aside, and Unstick's own fix shows again.
+	await app.press("id:repair-proposal >> Not now");
+	await app.waitFor("id:unstick-apply");
+	expect(app.shows("id:repair-proposal")).toBe(false);
+});
+
+test("a bug in Pilot itself goes to Feedback with the agent's findings, and nothing is sent", async () => {
+	const app = await open("./UnstickFixture.tsx", desktop);
+	await app.press("id:unstick");
+	await app.press("id:agent-bug");
+	await app.waitFor("id:repair-report");
+	expect(app.shows("id:repair-apply")).toBe(false);
+	await app.press("id:repair-report");
+	await app.waitFor("Feedback: Cause: Pilot refuses every save over 40 questions.");
 });

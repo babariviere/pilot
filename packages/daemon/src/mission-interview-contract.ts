@@ -17,18 +17,25 @@ export function interviewText(value: unknown, max: number, empty = false): asser
 	if (typeof value !== "string" || Buffer.byteLength(value) > max || (!empty && !value.trim()))
 		throw new Conflict("Invalid interview text");
 }
+/** Largest answer list in one save. See validateAnswers. */
+export const ANSWERS_LIMIT = 48 * 1024;
+/** Largest agreement (the mission brief). See agreementMarkdown. */
+export const AGREEMENT_LIMIT = 28 * 1024;
 export function interviewId(value: unknown): asserts value is string {
 	if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value))
 		throw new Conflict("Invalid interview identity");
 }
 export function validateQuestions(value: unknown): asserts value is InterviewQuestion[] {
-	if (
-		!Array.isArray(value) ||
-		!value.length ||
-		value.length > 40 ||
-		Buffer.byteLength(JSON.stringify(value)) > 40 * 1024
-	)
-		throw new Conflict("Interview needs 1–40 questions within 40 KiB");
+	// A round is answered by a person in one sitting: 40 questions and 40 KiB keep it readable.
+	if (!Array.isArray(value) || !value.length || value.length > 40)
+		throw new Conflict(
+			`Interview needs 1–40 questions; this round has ${Array.isArray(value) ? value.length : 0}. Split it into rounds.`,
+		);
+	const bytes = Buffer.byteLength(JSON.stringify(value));
+	if (bytes > 40 * 1024)
+		throw new Conflict(
+			`Interview questions are ${Math.ceil(bytes / 1024)} KiB, more than 40 KiB. Shorten context or options, or split the round.`,
+		);
 	const seen = new Set<string>();
 	for (const q of value) {
 		const context = q && typeof q === "object" && Object.hasOwn(q, "context");
@@ -61,8 +68,14 @@ export function validateQuestions(value: unknown): asserts value is InterviewQue
 	}
 }
 export function validateAnswers(value: unknown, questions: InterviewQuestion[]): asserts value is InterviewAnswer[] {
-	if (!Array.isArray(value) || value.length > 40 || Buffer.byteLength(JSON.stringify(value)) > 12 * 1024)
-		throw new Conflict("Answers exceed 12 KiB");
+	if (!Array.isArray(value) || value.length > 40) throw new Conflict("Answers need at most one per question");
+	// One save carries every answer and must fit an operation (64 KiB), so 48 KiB leaves room for the rest.
+	// Each answer repeats its picked option, so a full round with long answers needs this much.
+	const bytes = Buffer.byteLength(JSON.stringify(value));
+	if (bytes > ANSWERS_LIMIT)
+		throw new Conflict(
+			`Answers are ${Math.ceil(bytes / 1024)} KiB, more than ${ANSWERS_LIMIT / 1024} KiB. Shorten the longest answers.`,
+		);
 	const seen = new Set<string>();
 	for (const a of value) {
 		interviewExact(a, ["questionId", "questionDigest", "selectedOption", "text"]);
@@ -96,6 +109,12 @@ export function agreementMarkdown(state: MissionInterview): string {
 			return `\n## ${q.section}: ${JSON.stringify(q.prompt)}\n\n${JSON.stringify({ selectedOption: a.selectedOption, text: a.text })}`;
 		}),
 	].join("\n");
-	interviewText(markdown, 28 * 1024);
+	// The agreement becomes the mission brief, which every worker reads: its size is model cost on every turn.
+	const bytes = Buffer.byteLength(markdown);
+	if (bytes > AGREEMENT_LIMIT)
+		throw new Conflict(
+			`The agreement would be ${Math.ceil(bytes / 1024)} KiB, more than ${AGREEMENT_LIMIT / 1024} KiB. Shorten the longest answers.`,
+		);
+	interviewText(markdown, AGREEMENT_LIMIT);
 	return markdown;
 }

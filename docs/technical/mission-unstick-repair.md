@@ -16,7 +16,7 @@ the planner's last messages and the map counts would have named the cause in a m
 ## Already built
 
 - Unstick card with rules, one fix and **Apply** (`apps/day/Unstick.tsx`, `unstickView`).
-- The last refused planning save per mission (`MissionPlanStore.refused`, memory only).
+- The last refused planning save per mission (`MissionPlanStore.refused`, table `mission_plan_refusals`).
 - Log lines: every settled operation, planning step changes, planner input, research and question chats
   (`pilotd.log`); close steps, unsaved forms and caught window errors (`day.log`).
 - The **Diagnostics** chat role (`docs/technical/agent-diagnostics.md`): Ask mode, read-only, with
@@ -133,4 +133,6 @@ with the user.
 4. Day card: start, looking, proposal, Apply. **Built:** `Unstick.tsx` (`RepairAgent`), `plan_host::repair_start_request`
    and `repair_apply_request`, bridge commands `day.plan.repairStart` and `day.plan.repairApply`.
 5. Docs: `docs/missions.md` user guide paragraph.
-6. Later: Day review sheet for `code-repair`.
+6. `code-repair` in Day. **Built differently:** no new review sheet. **Report with Feedback** opens Feedback with
+   the cause, the evidence labels and the repair chat link in an empty draft (`openFeedbackWith`). The user
+   checks and sends it, then starts a triage or fix in Pilot's project with Feedback's existing steps.

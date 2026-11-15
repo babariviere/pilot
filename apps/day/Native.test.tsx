@@ -29,12 +29,15 @@ test("Unstick with the repair agent's proposed note, captured", async () => {
 
 test("a large expedition chart, still, with a selected place and full window: captures only, no input", async () => {
 	const size = { platform: "macos", width: 1100, height: 1400 } as const;
-	for (const [entry, file] of [
-		["./ExpeditionLargeFixture.tsx", "chart-large-light"],
-		["./ExpeditionLargeSelectedFixture.tsx", "chart-large-selected-light"],
-		["./ExpeditionLargeFullFixture.tsx", "chart-large-full-light"],
+	for (const [entry, file, colorScheme] of [
+		["./ExpeditionLargeFixture.tsx", "chart-large-light", "light"],
+		["./ExpeditionLargeSelectedFixture.tsx", "chart-large-selected-light", "light"],
+		["./ExpeditionLargeFullFixture.tsx", "chart-large-full-light", "light"],
+		["./ExpeditionLargeFixture.tsx", "chart-large-dark", "dark"],
+		["./ExpeditionLargeFullFixture.tsx", "chart-large-full-dark", "dark"],
 	] as const) {
-		const app = await open(entry, size);
+		// Dark captures fit the screen: a taller headless window leaves its lower part unpainted.
+		const app = await open(entry, { ...size, colorScheme, ...(colorScheme === "dark" ? { height: 900 } : {}) });
 		await app.waitFor("id:place-features");
 		await app.wait(600);
 		await app.screenshot(`output/${file}.png`);

@@ -40,6 +40,12 @@ const kinds = [
 	"plan-publish",
 ];
 export const isPlanOperation = (kind: string): boolean => kinds.includes(kind);
+/**
+ * Linked Knowledge summaries the planner reads each turn (the page says when there are more). It protects
+ * model tokens: a summary is about 300 bytes (measured: title and synopsis average 210 characters), so 100
+ * cost about 30 KB per read. The Pilot Day mission links 24 entries and grows with each research answer.
+ */
+export const LINKED_KNOWLEDGE = 100;
 /** Routing is a host choice, never an upstream instruction to start a worker. */
 export const planningRoute = (unclear: boolean, multipleSessions: boolean): "wayfinder" | "grill-with-docs" =>
 	unclear && multipleSessions ? "wayfinder" : "grill-with-docs";
@@ -83,7 +89,11 @@ export const prototypeContextDigest = (plan: MissionPlan): string =>
 		questions: plan.questions.map(({ prototypeResult: _p, ...q }) => q),
 	});
 
-function list<T>(value: T[], max = 40, what = "a list"): T[] {
+/**
+ * A list in a planning save. Counts are not limited by default: the saved map's byte limit
+ * (PLAN_STATE_LIMIT) bounds every list, and a count limit only ends long missions early.
+ */
+function list<T>(value: T[], max = Number.MAX_SAFE_INTEGER, what = "a list"): T[] {
 	if (!Array.isArray(value)) throw new Conflict(`Invalid planning list: ${what} is not a list`);
 	if (value.length > max)
 		throw new Conflict(`Invalid planning list: ${what} has ${value.length} items, at most ${max}`);
@@ -96,7 +106,7 @@ function list<T>(value: T[], max = 40, what = "a list"): T[] {
 function questionList<T>(value: T[]): T[] {
 	return list(value, Number.MAX_SAFE_INTEGER, "questions");
 }
-function strings(value: string[], max = 40) {
+function strings(value: string[], max = Number.MAX_SAFE_INTEGER) {
 	for (const s of list(value, max)) text(s, 2000);
 }
 function graph(nodes: { id: string; dependsOn: string[] }[]): void {
@@ -110,7 +120,7 @@ function graph(nodes: { id: string; dependsOn: string[] }[]): void {
 		if (!n || visiting.has(key)) throw new Conflict("Missing dependency or planning cycle");
 		visiting.add(key);
 		if (new Set(n.dependsOn).size !== n.dependsOn.length) throw new Conflict("Duplicate dependency");
-		for (const dependency of list(n.dependsOn, 40, `dependsOn of ${n.id}`)) {
+		for (const dependency of list(n.dependsOn, undefined, `dependsOn of ${n.id}`)) {
 			id(dependency);
 			visit(dependency);
 		}
@@ -189,7 +199,7 @@ export class MissionPlanReader {
 	async view(missionId: string) {
 		const pin = this.context(missionId),
 			{ store } = this.deps;
-		const knowledge = store.knowledge.list(pin.mission.projectId, { missionId }, undefined, 40);
+		const knowledge = store.knowledge.list(pin.mission.projectId, { missionId }, undefined, LINKED_KNOWLEDGE);
 		const interviewHistory = store.interviews.history(missionId);
 		const frontier = pin.plan ? planFrontier(pin.plan) : [];
 		const destination = pin.plan?.destination ?? pin.mission.goal;
@@ -250,7 +260,7 @@ export class MissionPlanReader {
 		this.deps.authorize("plan-read", missionId, pin.owner);
 		if (
 			canonicalJSON(this.context(missionId)) !== canonicalJSON(pin) ||
-			canonicalJSON(store.knowledge.list(pin.mission.projectId, { missionId }, undefined, 40)) !==
+			canonicalJSON(store.knowledge.list(pin.mission.projectId, { missionId }, undefined, LINKED_KNOWLEDGE)) !==
 				canonicalJSON(knowledge)
 		)
 			throw new Conflict("Planning context changed");
@@ -285,7 +295,7 @@ export class MissionPlanReader {
 	}
 	protected sources(missionId: string, sources: PlanSource[]): void {
 		const { store } = this.deps;
-		for (const s of list(sources, 40, "sources")) {
+		for (const s of list(sources, undefined, "sources")) {
 			id(s.id);
 			if (s.kind === "decision") {
 				exact(s, ["kind", "id", "digest"]);
@@ -378,7 +388,7 @@ export class MissionPlans extends MissionPlanReader {
 		}
 		graph(plan.questions);
 		const fogIds = new Set<string>();
-		for (const f of list(plan.fog, 40, "fog")) {
+		for (const f of list(plan.fog, undefined, "fog")) {
 			exact(f, ["id", "area", "why", "readyWhen", "dependsOn", "sources", "promotedTo"]);
 			id(f.id);
 			text(f.area, 2000);
@@ -387,7 +397,10 @@ export class MissionPlans extends MissionPlanReader {
 			if (fogIds.has(f.id)) throw new Conflict("Duplicate fog identity");
 			fogIds.add(f.id);
 			this.sources(plan.missionId, f.sources);
-			for (const key of [...list(f.dependsOn, 40, "fog dependsOn"), ...list(f.promotedTo, 40, "fog promotedTo")])
+			for (const key of [
+				...list(f.dependsOn, undefined, "fog dependsOn"),
+				...list(f.promotedTo, undefined, "fog promotedTo"),
+			])
 				if (!plan.questions.some((q) => q.id === key)) throw new Conflict("Fog link missing");
 		}
 		if (plan.spec) {

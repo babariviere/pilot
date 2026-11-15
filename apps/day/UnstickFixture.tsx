@@ -2,6 +2,7 @@
 // with Unstick's repair agent. Mock data.
 import { mount, signal, Text, View } from "nsh";
 import type { PlanPage } from "pilot-day/native";
+import { feedbackDraft, feedbackOpen } from "./feedbackView";
 import { openPlanning } from "./mockFeeds";
 import { Unstick } from "./Unstick";
 import { Action } from "./ui";
@@ -61,6 +62,28 @@ mount(() => (
 		<Unstick plans={plans} page={page()} />
 		<Text testID="applied">{`Applied: ${applied()}`}</Text>
 		<Text testID="sent-note">{`Note: ${sentNote()}`}</Text>
+		<Text testID="feedback-draft">
+			{feedbackOpen() ? `Feedback: ${feedbackDraft().text.split("\n")[2] ?? ""}` : ""}
+		</Text>
+		<Action
+			testID="agent-bug"
+			label="Agent found a bug"
+			onPress={() =>
+				repair({
+					available: true,
+					state: "proposed",
+					current: true,
+					chatId: "repair-2",
+					proposal: {
+						fix: "codeRepair",
+						cause: "Pilot refuses every save over 40 questions.",
+						note: "",
+						certainty: "medium",
+						evidence: ["mission-plans.ts list limit"],
+					},
+				})
+			}
+		/>
 		<Action
 			testID="agent-done"
 			label="Agent done"

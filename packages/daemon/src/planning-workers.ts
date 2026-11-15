@@ -1,4 +1,5 @@
 /** Trusted planning worker lifecycle. No existing chat adoption or generic send fallback. */
+
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import {
@@ -14,7 +15,13 @@ import { Conflict } from "./errors.ts";
 import { interviewDigest, interviewExact, interviewId, interviewText } from "./mission-interview-contract.ts";
 import { MissionInterviews } from "./mission-interviews.ts";
 import { PLAN_STATE_LIMIT } from "./mission-plan-store.ts";
-import { isPlanOperation, MissionPlans, planQuestionDigest, planResearchFrontier } from "./mission-plans.ts";
+import {
+	isPlanOperation,
+	LINKED_KNOWLEDGE,
+	MissionPlans,
+	planQuestionDigest,
+	planResearchFrontier,
+} from "./mission-plans.ts";
 import { taskMessage } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
@@ -29,6 +36,7 @@ import type { KnowledgeService } from "./project-knowledge.ts";
 import type { ProjectStore } from "./projects.ts";
 import { replacedMissionView } from "./replaced-mission.ts";
 import type { SessionManager } from "./sessions.ts";
+import { trace } from "./trace.ts";
 import type { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
 export interface PlanningEnrollment {
@@ -806,7 +814,7 @@ export class PlanningWorkers {
 		this.deps.store.planningWorkers.change(op.targetId, state.revision, (s) => {
 			s.repair = { operationId: op.operationId, state: "starting", sessionId: null, basis, startedAt: Date.now() };
 		});
-		console.log(`pilotd: planning ${op.targetId} repair agent requested (${op.operationId})`);
+		trace(`pilotd: planning ${op.targetId} repair agent requested (${op.operationId})`);
 		await this.deps.store.durable();
 		this.scheduleResearch(op.targetId);
 		return { repairId: op.operationId };
@@ -818,7 +826,7 @@ export class PlanningWorkers {
 		if (!state || !repair) return;
 		const set = (change: Partial<PlanningRepair>) => {
 			if (change.state)
-				console.log(
+				trace(
 					`pilotd: planning ${missionId} repair agent -> ${change.state}${change.reason ? `: ${change.reason}` : change.proposal ? `: ${change.proposal.fix}, ${change.proposal.certainty}` : ""}`,
 				);
 			const now = this.deps.store.planningWorkers.get(missionId)!;
@@ -876,7 +884,7 @@ export class PlanningWorkers {
 		if (!state?.asks) return;
 		const set = (id: string, change: Partial<QuestionAsk>) => {
 			if (change.state)
-				console.log(
+				trace(
 					`pilotd: planning ${missionId} question ask ${id} -> ${change.state}${change.reason ? `: ${change.reason}` : ""}`,
 				);
 			const now = this.deps.store.planningWorkers.get(missionId)!;
@@ -1043,9 +1051,7 @@ export class PlanningWorkers {
 		this.admissions.set(state.binding.missionId, admission);
 		try {
 			const receipt = await admission;
-			console.log(
-				`pilotd: planning ${state.binding.missionId} planner input ${op.kind} admitted (${op.operationId})`,
-			);
+			trace(`pilotd: planning ${state.binding.missionId} planner input ${op.kind} admitted (${op.operationId})`);
 			return receipt;
 		} catch (error) {
 			console.warn(`pilotd: planning ${state.binding.missionId} planner input ${op.kind} refused: ${error}`);
@@ -1487,7 +1493,7 @@ export class PlanningWorkers {
 		change: Partial<PlanningResearch>,
 	): PlanningWorkerState {
 		if (change.state)
-			console.log(
+			trace(
 				`pilotd: planning ${state.binding.missionId} research ${questionId} -> ${change.state}${change.reason ? `: ${change.reason}` : ""}`,
 			);
 		return this.deps.store.planningWorkers.change(state.binding.missionId, state.revision, (s) => {
@@ -1670,7 +1676,12 @@ export class PlanningWorkers {
 			revisionSource: store.revisions.source(binding.missionId),
 			interview: store.interviews.latest(binding.missionId),
 			settledAnswers: store.interviews.history(binding.missionId).map((h) => h.interview.submission),
-			knowledge: store.knowledge.list(binding.projectId, { missionId: binding.missionId }, undefined, 40),
+			knowledge: store.knowledge.list(
+				binding.projectId,
+				{ missionId: binding.missionId },
+				undefined,
+				LINKED_KNOWLEDGE,
+			),
 		});
 		const pin = snapshot();
 		await store.durable();

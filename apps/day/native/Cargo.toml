@@ -72,6 +72,8 @@ libc = "0.2"
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
 base64 = "0.22"
+# NSH reports uncaught JS errors through the `log` facade; day_log forwards them to day.log.
+log = "0.4"
 
 [dev-dependencies]
 ed25519-dalek = "2.2"

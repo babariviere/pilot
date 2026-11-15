@@ -115,17 +115,21 @@ When Pilot's planning agent has stopped while the plan is still open, **Continue
 status asks it to pick up where it stopped. It answers, approves and starts nothing.
 **Unstick**, under the same status, says whether planning moves, waits for you or is stuck, lists what
 Pilot checked, and offers at most one fix. Reading it changes nothing; the fix applies only on **Apply**.
-When there is no fix, report it with Feedback. `~/Library/Logs/Pilot/pilotd.log` records each operation,
+When there is no fix, report it with Feedback.
 When planning is stuck, **Have an agent look** starts a read-only chat that reads the planning agent's chat,
 Pilot's checks and the logs. It proposes one fix (continue, a note to the planning agent that you can edit, or
 removing answers to an earlier wording) with the cause and what it read. Only **Apply** acts, and only while
-the mission is as the agent saw it. A bug in Pilot itself shows as a cause to report.
-planning step change and research or question chat; `day.log` records closing and errors the window caught.
+the mission is as the agent saw it. For a bug in Pilot itself, **Report with Feedback** fills Feedback with the
+agent's findings for you to check and send; from Feedback you can start a fix in Pilot's own project.
+`~/Library/Logs/Pilot/pilotd.log` records each operation, planning step change and research or question
+chat; `day.log` records closing, unsaved forms and window errors, including uncaught ones.
 Under each question, **More context** shows the background Pilot wrote, and **Ask a question** asks a
 separate read-only chat, which answers under the question from the mission's records. **Say it simpler**
 and **Reword this** leave notes; add one on the whole round if you like, then **Send notes to Pilot**:
 Pilot redoes the round with all of them at once. Your saved answers stay. Notes and questions answer
-nothing for you, and they never start work.
+nothing for you, and they never start work. Unsent notes and questions come back after Pilot restarts.
+With one question shown, keys toggle its help: **M** more context, **S** say it simpler, **A** ask a
+question, **R** reword this.
 
 These records form the mission's **map**, one shared overview for you and the planning agent:
 what is open now, what waits, what is settled (never asked again), the Fog of war and the agreed

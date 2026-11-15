@@ -3,6 +3,7 @@ import type { PlanningRound, PlanningWorkerBinding } from "@pilot/kernel";
 import type { DurableOperation, MissionInterview } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
+import { trace } from "./trace.ts";
 
 export const PLANNING_WORKER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS planning_workers (mission_id TEXT PRIMARY KEY, enrollment_id TEXT NOT NULL UNIQUE, record TEXT NOT NULL);
@@ -133,7 +134,7 @@ export class PlanningWorkerStore {
 			return state;
 		});
 		this.port.changed(missionId);
-		if (before !== result.phase) console.log(`pilotd: planning ${missionId} phase ${before} -> ${result.phase}`);
+		if (before !== result.phase) trace(`pilotd: planning ${missionId} phase ${before} -> ${result.phase}`);
 		return result;
 	}
 	call(missionId: string, callId: string): DurableOperation | undefined {

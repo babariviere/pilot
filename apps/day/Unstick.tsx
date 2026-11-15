@@ -8,6 +8,7 @@ import { Input } from "nsh/base";
 import type { PlanPage } from "pilot-day/native";
 import { openChat } from "./chatView";
 import { errorText, logEvent } from "./dayLog";
+import { openFeedbackWith } from "./feedbackView";
 import type { Plans } from "./planning";
 import { Action, Mark } from "./ui";
 
@@ -23,7 +24,7 @@ const REPAIR_WORDS: Record<Fix, string> = {
 	continue: "Continue planning: Pilot's planning agent picks up where it stopped.",
 	plannerNote: "Continue planning with this note to Pilot's planning agent. You can change it first.",
 	dropEarlierAnswers: "Remove the saved answers to the earlier wording. Answer those questions again after.",
-	codeRepair: "Pilot's code needs a fix. Open the agent's chat, or report it with Feedback.",
+	codeRepair: "Pilot's code needs a fix. Report it with Feedback: there you can start a fix in Pilot's project.",
 	none: "Nothing to apply from here.",
 };
 
@@ -35,8 +36,10 @@ export function Unstick(props: { plans: Plans; page: PlanPage }) {
 	// The repair state a message was written in: a newer state replaces it.
 	const messageFor = signal<string | undefined>(undefined);
 	const u = () => props.page.unstick;
-	// One fix at a time: the agent's proposal, once shown, replaces the rule's fix.
-	const agentProposes = () => u()?.repair?.state === "proposed";
+	// The repair chat whose proposal the user put aside with Not now.
+	const hidden = signal("");
+	// One fix at a time: the agent's proposal, while shown, replaces the rule's fix.
+	const agentProposes = () => u()?.repair?.state === "proposed" && hidden() !== u()?.repair?.chatId;
 	// Calls run on the feed: the connected feed's methods use their own private state.
 	const run = async (send: () => Promise<{ message: string } | undefined> | undefined) => {
 		if (busy()) return;
@@ -106,7 +109,14 @@ export function Unstick(props: { plans: Plans; page: PlanPage }) {
 							</Each>
 						</View>
 						<If when={u()?.repair?.available || (u()?.repair && u()?.repair?.state !== "none")}>
-							<RepairAgent plans={props.plans} page={props.page} busy={busy()} run={run} />
+							<RepairAgent
+								plans={props.plans}
+								page={props.page}
+								busy={busy()}
+								run={run}
+								shown={agentProposes()}
+								hide={() => hidden.set(u()?.repair?.chatId ?? "")}
+							/>
 						</If>
 						<If when={message() && messageFor() === u()?.repair?.state}>
 							<Text testID="unstick-message" class="text-xs text-faint">
@@ -126,18 +136,35 @@ function RepairAgent(props: {
 	page: PlanPage;
 	busy: boolean;
 	run: (send: () => Promise<{ message: string } | undefined> | undefined) => Promise<void>;
+	/** Whether the proposal shows (not put aside with Not now). */
+	shown: boolean;
+	hide: () => void;
 }) {
 	const r = () => props.page.unstick?.repair;
 	const p = () => r()?.proposal;
 	// The note as the user edited it; null until they do. An empty note keeps the agent's.
 	const note = signal<string | null>(null);
-	const hidden = signal("");
-	const shown = () => !!p() && hidden() !== r()?.chatId;
+	const shown = () => !!p() && props.shown;
 	const missionId = () => props.page.missionId;
 	const start = () => void props.run(() => props.plans.feed.repairStart?.({ missionId: missionId() }));
 	const apply = () =>
 		void props.run(() => props.plans.feed.repairApply?.({ missionId: missionId(), note: note() ?? "" }));
 	const canApply = () => !!p() && ["continue", "plannerNote", "dropEarlierAnswers"].includes(p()!.fix);
+	// A bug in Pilot itself goes to Feedback, where the user can start a fix in Pilot's own project.
+	const report = () =>
+		openFeedbackWith(
+			{ kind: "mission", missionId: missionId() },
+			[
+				"Planning for this mission got stuck, and Pilot's repair agent says Pilot's code needs a fix.",
+				"",
+				`Cause: ${p()?.cause ?? ""}`,
+				"",
+				"What the agent read:",
+				...(p()?.evidence ?? []).map((e) => `- ${e}`),
+				"",
+				`Repair chat: pilot://chat/${r()?.chatId ?? ""}`,
+			].join("\n"),
+		);
 	return (
 		<View testID="repair" class="gap-2 border-t border-border pt-3">
 			<If when={r()?.state === "looking"}>
@@ -188,7 +215,10 @@ function RepairAgent(props: {
 								onPress={apply}
 							/>
 						</If>
-						<Action label="Not now" disabled={props.busy} onPress={() => hidden.set(r()?.chatId ?? "")} />
+						<If when={p()?.fix === "codeRepair"}>
+							<Action testID="repair-report" label="Report with Feedback" onPress={report} />
+						</If>
+						<Action label="Not now" disabled={props.busy} onPress={props.hide} />
 						<Action label="Open its chat" onPress={() => openChat(r()?.chatId ?? "", "Plan")} />
 					</View>
 				</View>

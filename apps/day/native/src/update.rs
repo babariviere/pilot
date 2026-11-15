@@ -374,6 +374,12 @@ pub struct SavedView {
     /// Feedback attention keys deferred in this window. Restoring starts nothing.
     #[prop(default)]
     pub feedback_later: Vec<String>,
+    /// Unsent question help: notes for Pilot, a note on a whole round and
+    /// questions not yet asked, as "<note|round|ask>\n<interview or answer
+    /// key>\n<question or empty>\n<0|1 say it simpler>\n<text>". Restoring
+    /// one sends nothing, and it stays with its own interview and question.
+    #[prop(default)]
+    pub question_help: Vec<String>,
 }
 
 impl SavedView {
@@ -390,6 +396,7 @@ impl SavedView {
             .chain(&self.threads)
             .chain(&self.feedback_answers)
             .chain(&self.feedback_later)
+            .chain(&self.question_help)
             .map(String::len)
             .sum::<usize>();
         self.goal.len()
@@ -422,6 +429,7 @@ impl SavedView {
             + self.threads.len()
             + self.feedback_answers.len()
             + self.feedback_later.len()
+            + self.question_help.len()
     }
 
     /// Whether its offsets are plain, non-negative numbers.
@@ -468,6 +476,20 @@ impl SavedView {
                 line.split_once('\n')
                     .is_some_and(|(entry, _)| entry.is_empty() || id(entry))
             })
+    }
+
+    /// Whether each unsent question-help entry has its kind, its interview or
+    /// answer key, and a plain "say it simpler" flag.
+    pub fn question_help_valid(&self) -> bool {
+        let key = |s: &str| !s.is_empty() && s.len() <= 300;
+        self.question_help.iter().all(|line| {
+            let parts: Vec<_> = line.splitn(5, '\n').collect();
+            matches!(parts.as_slice(),
+                [kind, at, question, simpler, _] if matches!(*kind, "note" | "round" | "ask")
+                    && key(at)
+                    && question.len() <= 300
+                    && matches!(*simpler, "0" | "1"))
+        })
     }
 
     /// Whether `thread` is empty or "<mission>/<thread>", and each unsent
@@ -1018,6 +1040,7 @@ impl UpdateDesk {
                 || !view.linear_valid()
                 || !view.preferences_valid()
                 || !view.threads_valid()
+                || !view.question_help_valid()
                 || !view.feedback_valid())
         {
             self.bump();

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readdir, readFile, rename, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { DurableOperation, OperationHost, OperationReceipt } from "@pilot/protocol";
+import { trace } from "./trace.ts";
 
 const MAX_PAYLOAD = 64 * 1024;
 const MAX_RECORDS = 4096;
@@ -457,9 +458,7 @@ export class OperationJournal {
 				result = await handler(structuredClone(op), { firstEntry });
 			} catch (e) {
 				if (!(e instanceof OperationRejected)) {
-					console.warn(
-						`pilotd: operation ${op.kind} ${op.operationId} (target ${op.targetId}) outcome unknown: ${e}`,
-					);
+					trace(`pilotd: operation ${op.kind} ${op.operationId} (target ${op.targetId}) outcome unknown: ${e}`);
 					return (await this.lookup(op))!;
 				}
 				reason = e.message.slice(0, 512);
@@ -479,7 +478,7 @@ export class OperationJournal {
 				await this.persist(join(this.directory, `${payloadHash(op.operationId)}.json`), updated);
 				this.records.set(op.operationId, updated);
 				// One line per settled operation, so a stuck mission can be traced from the log.
-				console.log(
+				trace(
 					`pilotd: operation ${op.kind} ${updated.receipt.state} ${op.operationId} (target ${op.targetId})${reason === undefined ? "" : `: ${reason}`}`,
 				);
 				for (const listener of this.settledListeners) {

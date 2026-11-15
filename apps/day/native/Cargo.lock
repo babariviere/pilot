@@ -4033,6 +4033,7 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "futures-util",
  "libc",
+ "log",
  "nsh-base",
  "nsh-bundler",
  "nsh-core",

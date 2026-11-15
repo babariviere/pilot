@@ -75,6 +75,7 @@ import {
 	savedPreferences,
 	settingsOpen,
 } from "./preferencesView";
+import { restoreQuestionHelp, savedQuestionHelp } from "./QuestionHelp";
 import { type RitualRoute, ritualRoute, startStep } from "./ritualView";
 import { forgetThreads, restoreThreads, savedThread, savedThreadDrafts, threadRoute } from "./threadView";
 import { todayProject } from "./todayScope";
@@ -231,6 +232,8 @@ export function captureView(today?: Today): SavedView {
 		feedbackProject: feedbackProject() ?? "",
 		feedbackAnswers: savedAnswers(),
 		feedbackLater: feedbackLater(),
+		// Unsent question help: notes for Pilot and questions not yet asked. Restoring sends nothing.
+		questionHelp: savedQuestionHelp(),
 	};
 }
 
@@ -437,6 +440,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	feedbackProject.set(view.feedbackProject || null);
 	restoreAnswers(view.feedbackAnswers ?? []);
 	feedbackLater.set(view.feedbackLater ?? []);
+	restoreQuestionHelp(view.questionHelp ?? []);
 	// A thread comes back over its own mission only; its words always come back unsent.
 	const thread = view.thread ?? "";
 	restoreThreads(view.place === "mission" && thread.startsWith(`${view.id}/`) ? thread : "", view.threads ?? []);

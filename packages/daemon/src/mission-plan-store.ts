@@ -9,7 +9,13 @@ CREATE TABLE IF NOT EXISTS mission_plans (
  mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
  revision INTEGER NOT NULL, operation_id TEXT NOT NULL UNIQUE,
  operation TEXT NOT NULL, state TEXT NOT NULL,
- UNIQUE(mission_id, revision)
+UNIQUE(mission_id, revision)
+);
+-- The last planning save Pilot refused, per mission, until one is accepted. Unstick and the planner's
+-- Continue read it, so it is kept across restarts.
+CREATE TABLE IF NOT EXISTS mission_plan_refusals (
+ mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL, reason TEXT NOT NULL, at INTEGER NOT NULL
 );
 `;
 /**
@@ -27,17 +33,24 @@ interface Port {
 /** Append-only native mission planning state. Shares the existing SQLite transaction and replica. */
 export class MissionPlanStore {
 	private readonly port: Port;
-	/** The last planning save Pilot refused, per mission, until one is accepted. Memory only: Unstick reads it. */
-	private readonly refusals = new Map<string, { kind: string; reason: string; at: number }>();
 	constructor(port: Port) {
 		this.port = port;
 	}
+	/** Saves or clears the last refused planning save of a mission. */
 	refused(missionId: string, refusal: { kind: string; reason: string } | null): void {
-		if (refusal) this.refusals.set(missionId, { ...refusal, at: Date.now() });
-		else this.refusals.delete(missionId);
+		if (refusal)
+			this.port.run(
+				"INSERT INTO mission_plan_refusals(mission_id,kind,reason,at) VALUES(?,?,?,?) ON CONFLICT(mission_id) DO UPDATE SET kind=excluded.kind, reason=excluded.reason, at=excluded.at",
+				missionId,
+				refusal.kind,
+				refusal.reason,
+				Date.now(),
+			);
+		else this.port.run("DELETE FROM mission_plan_refusals WHERE mission_id=?", missionId);
 	}
 	refusal(missionId: string): { kind: string; reason: string; at: number } | undefined {
-		return this.refusals.get(missionId);
+		const row = this.port.one("SELECT kind,reason,at FROM mission_plan_refusals WHERE mission_id=?", missionId);
+		return row ? { kind: String(row.kind), reason: String(row.reason), at: Number(row.at) } : undefined;
 	}
 	/** Amendments require a separately reviewed task-update adapter, never duplicate creation. */
 	hasPublication(id: string): boolean {

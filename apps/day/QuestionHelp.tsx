@@ -24,6 +24,51 @@ const askBusy = signal<Record<string, boolean>>({});
 const askMessages = signal<Record<string, string>>({});
 
 const panel = (key: string, kind: string) => panels()[`${key}:${kind}`] === true;
+/** Keys for the help on the question shown, as on the chips' tooltips. */
+export const HELP_KEYS = { context: "m", simpler: "s", ask: "a", reword: "r" } as const;
+
+/** Toggles one kind of help on a question, as its chip does. A key press calls it for the question shown. */
+export function toggleQuestionHelp(
+	interview: Interview,
+	q: Question,
+	helpKey: string,
+	kind: keyof typeof HELP_KEYS,
+	canAsk: boolean,
+) {
+	if (kind === "simpler") setNote(interview.id, q.id, { simpler: !noteOf(interview.id, q.id).simpler });
+	else if (kind === "context" ? !!q.context : kind === "ask" ? canAsk : true) toggle(helpKey, kind);
+}
+/** Unsent question help as a saved window keeps it (see SavedView.questionHelp). */
+export function savedQuestionHelp(): string[] {
+	const lines: string[] = [];
+	for (const [interview, notes] of Object.entries(questionNotes()))
+		for (const [question, n] of Object.entries(notes))
+			if (n.simpler || n.text.trim()) lines.push(`note\n${interview}\n${question}\n${n.simpler ? 1 : 0}\n${n.text}`);
+	for (const [interview, text] of Object.entries(roundNotes()))
+		if (text.trim()) lines.push(`round\n${interview}\n\n0\n${text}`);
+	for (const [key, text] of Object.entries(askDrafts())) if (text.trim()) lines.push(`ask\n${key}\n\n0\n${text}`);
+	return lines;
+}
+
+/** Shows kept question help again, each with its own interview and question. Restoring sends nothing. */
+export function restoreQuestionHelp(saved: string[]) {
+	const notes: Record<string, Record<string, QuestionNote>> = {};
+	const rounds: Record<string, string> = {};
+	const asks: Record<string, string> = {};
+	for (const line of saved) {
+		const [kind, at, question, simpler, ...rest] = line.split("\n");
+		const text = rest.join("\n");
+		if (!at) continue;
+		if (kind === "note" && question)
+			notes[at] = { ...(notes[at] ?? {}), [question]: { simpler: simpler === "1", text } };
+		else if (kind === "round") rounds[at] = text;
+		else if (kind === "ask") asks[at] = text;
+	}
+	questionNotes.set(notes);
+	roundNotes.set(rounds);
+	askDrafts.set(asks);
+}
+
 const toggle = (key: string, kind: string) => put(panels, `${key}:${kind}`, !panel(key, kind));
 
 function noteOf(interview: string, question: string): QuestionNote {
@@ -100,22 +145,30 @@ export function QuestionHelp(props: {
 		<View testID={`help-${q().id}`} class="gap-3">
 			<View class="flex-row flex-wrap gap-1.5">
 				<If when={q().context}>
-					<HelpChip label="More context" pressed={panel(key, "context")} onChange={() => toggle(key, "context")} />
+					<HelpChip
+						label="More context"
+						shortcut={HELP_KEYS.context}
+						pressed={panel(key, "context")}
+						onChange={() => toggle(key, "context")}
+					/>
 				</If>
 				<HelpChip
 					label="Say it simpler"
+					shortcut={HELP_KEYS.simpler}
 					pressed={note().simpler}
 					onChange={(pressed) => setNote(props.interview.id, q().id, { simpler: pressed })}
 				/>
 				<If when={canAsk()}>
 					<HelpChip
 						label="Ask a question"
+						shortcut={HELP_KEYS.ask}
 						pressed={panel(key, "ask") || q().asks.length > 0}
 						onChange={() => toggle(key, "ask")}
 					/>
 				</If>
 				<HelpChip
 					label="Reword this"
+					shortcut={HELP_KEYS.reword}
 					pressed={panel(key, "reword") || note().text.trim() !== ""}
 					onChange={() => toggle(key, "reword")}
 				/>

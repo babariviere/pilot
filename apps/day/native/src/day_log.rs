@@ -39,6 +39,40 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 /// integration tests never write to the user's log.
 pub fn enable() {
     ENABLED.store(true, Ordering::SeqCst);
+    // NSH writes uncaught JS exceptions and unhandled rejections (target `js`) and its
+    // own warnings to the `log` facade. Without a logger they go nowhere in Day.
+    if log::set_logger(&FACADE).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
+}
+
+/// The `log` facade's warnings and errors, as `js.error` (window code) or
+/// `native.warning` lines. The message is cut and masked like every field.
+struct Facade;
+static FACADE: Facade = Facade;
+
+impl log::Log for Facade {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let name = match (record.target(), record.level()) {
+            ("js", log::Level::Error) => "js.error",
+            ("js", _) => "js.warning",
+            (_, log::Level::Error) => "native.error",
+            _ => "native.warning",
+        };
+        event(
+            name,
+            serde_json::json!({"target": record.target(), "message": record.args().to_string()}),
+        );
+    }
+
+    fn flush(&self) {}
 }
 
 /// Appends one event. Never panics and never reports failure to the caller.

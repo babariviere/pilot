@@ -35,7 +35,7 @@ import {
 	submitting,
 	writing,
 } from "./planView";
-import { QuestionHelp, RoundNotes } from "./QuestionHelp";
+import { HELP_KEYS, QuestionHelp, RoundNotes, toggleQuestionHelp } from "./QuestionHelp";
 import { Action, KeyCap, KeyHint, Mark, type MarkKind } from "./ui";
 
 /** The page after the last question: every answer, and Submit. No question id can hold a NUL. */
@@ -469,7 +469,8 @@ function Answers(props: { plans: Plans; page: PlanPage; interview: Interview }) 
  * Keys while one question shows: 1 to 9 pick a suggestion (again: clear it),
  * 0 opens the text field for own words or detail, Return or J
  * moves on and K moves back. Command-Return moves on from the text field
- * too. Letters and digits type into the field while it has the focus.
+ * too. M, S, A and R toggle the question's help: more context, say it simpler,
+ * ask a question, reword this. Letters and digits type into the field while it has the focus.
  * See all turns these keys off.
  */
 function bindKeys(plans: Plans, missionId: string, interview: () => Interview, fresh: () => boolean) {
@@ -503,6 +504,14 @@ function bindKeys(plans: Plans, missionId: string, interview: () => Interview, f
 			focusField.set(answerKey(interview(), q));
 		},
 	};
+	for (const [kind, key] of Object.entries(HELP_KEYS) as [keyof typeof HELP_KEYS, string][]) {
+		keys[key] = () => {
+			const q = current();
+			if (!q || fixed(interview())) return;
+			const canAsk = plans.feed.askQuestion !== undefined && fresh();
+			toggleQuestionHelp(interview(), q, answerKey(interview(), q), kind, canAsk);
+		};
+	}
 	for (let n = 1; n <= 9; n++) {
 		keys[String(n)] = () => {
 			const q = current();
