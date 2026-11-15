@@ -200,6 +200,10 @@ export class PlanningWorkers {
 	private readonly offSettled: () => void;
 	/** Repair chats are not mission members: their changes reach the mission through this map. */
 	private readonly repairChats = new Map<string, string>();
+	/** Missions whose submitted round is being sent to the planner now. */
+	private readonly continuing = new Set<string>();
+	/** Submitted rounds Pilot already tried to send by itself in this run. Unstick sends them on request. */
+	private readonly resumeTried = new Set<string>();
 	private readonly recentOperations = new Map<
 		string,
 		{ kind: string; state: string; reason: string | null; operationId: string; at: string }[]
@@ -366,9 +370,14 @@ export class PlanningWorkers {
 	}
 	private roundContext(state: PlanningWorkerState, authority: string): string {
 		const missionId = state.binding.missionId;
+		// Pilot's own bookkeeping (the map's revision and research claims) changes while a round waits;
+		// it changes no question the user answered, so it never invalidates the round.
+		const plan = this.deps.store.plans.get(missionId);
 		return hash({
 			authority,
-			plan: this.deps.store.plans.get(missionId) ?? null,
+			plan: plan
+				? { ...plan, revision: 0, questions: plan.questions.map(({ claimedBy: _claim, ...q }) => q) }
+				: null,
 			...(this.deps.store.interviews.latest(missionId)?.kind === "revisit"
 				? { briefRevision: this.deps.store.brief(missionId)?.revision }
 				: {}),
@@ -473,11 +482,13 @@ export class PlanningWorkers {
 	 */
 	private continuePin(missionId: string, feedback = false) {
 		const state = this.deps.store.planningWorkers.get(missionId);
+		// Submitted answers Pilot never passed on (a restart, or a round check that failed): Continue sends them.
+		const stalled = !feedback && !!state && this.stalledRound(state);
 		const waiting =
 			feedback && state?.phase === "held" && !!state.hold && (!state.continuation || state.continuation.entered);
 		if (
 			!state ||
-			(!waiting && (state.phase !== "active" || state.hold)) ||
+			(!waiting && !stalled && (state.phase !== "active" || state.hold)) ||
 			state.pendingHold ||
 			this.admissions.has(missionId) ||
 			this.turnAdmissions.has(missionId)
@@ -489,7 +500,29 @@ export class PlanningWorkers {
 		if (identity.inputGeneration !== 0 || owner?.working || (owner?.state !== "idle" && owner?.state !== "parked"))
 			throw new Conflict("Pilot is still planning or was stopped");
 		if (this.deps.store.plans.get(missionId)?.publication) throw new Conflict("A published plan uses Revisit");
-		return { authority, revision: state.revision, ...(waiting ? { round: state.hold!.operationId } : {}) };
+		return {
+			authority,
+			revision: state.revision,
+			...(waiting ? { round: state.hold!.operationId } : {}),
+			...(stalled ? { resumeRound: state.hold!.operationId } : {}),
+		};
+	}
+	/**
+	 * A round the user submitted whose answers never reached the planner: the continuation was saved
+	 * but never entered, and nothing is sending it now. Sending it is safe: its operation never ran.
+	 */
+	private stalledRound(state: PlanningWorkerState): boolean {
+		const c = state.continuation;
+		const submission = this.deps.store.interviews.latest(state.binding.missionId)?.submission;
+		return (
+			state.phase === "held" &&
+			!!state.hold &&
+			!!c &&
+			!c.entered &&
+			!!submission &&
+			JSON.parse(c.operation.payload).submissionOperationId === submission.operationId &&
+			!this.continuing.has(state.binding.missionId)
+		);
 	}
 	continueView(missionId: string) {
 		try {
@@ -541,6 +574,20 @@ export class PlanningWorkers {
 		await this.deps.journal.checkpoint(op, { stage: "continue-entered", payloadHash: op.payloadHash });
 		if (hash(this.continuePin(op.targetId, feedback)) !== hash(pin)) throw new Conflict("Planning changed");
 		let state = this.deps.store.planningWorkers.get(op.targetId)!;
+		if (pin.resumeRound) {
+			// The user asked again: the submitted round goes on against the map as it is now. The saved
+			// hold stays exactly as the planning agent holds it; only the map check is skipped.
+			trace(`pilotd: planning ${op.targetId} submitted round resumed by the user (${op.operationId})`);
+			try {
+				await this.continue(state, true);
+			} catch (e) {
+				// Not entered: nothing reached the planner, so this is a plain refusal.
+				if (!this.deps.store.planningWorkers.get(op.targetId)?.continuation?.entered)
+					throw new OperationRejected(String(e));
+				throw e;
+			}
+			return { resumedRound: pin.resumeRound };
+		}
 		this.deps.store.planningWorkers.retain(op.targetId, `$continue:${op.operationId}`, op);
 		if (pin.round) {
 			// The comment releases the waiting round: the planner redoes it, as a submission would continue it.
@@ -652,6 +699,14 @@ export class PlanningWorkers {
 				);
 		}
 		if (state.phase === "held" && open) return result("waiting", "Pilot waits for your answers to this round.");
+		if (this.stalledRound(state)) {
+			checks.push("Submitted answers sent to the planning agent: no");
+			return result(
+				"stuck",
+				"Your answers were submitted, but Pilot did not pass them to its planning agent.",
+				this.continueView(missionId).available ? "continue" : null,
+			);
+		}
 		if (state.phase === "held") return result("waiting", "Pilot waits for you.");
 		if (state.phase !== "active")
 			return result("stuck", "Pilot's planning stopped partway, and its agent is idle. Report it with Feedback.");
@@ -1259,6 +1314,7 @@ export class PlanningWorkers {
 		} catch {
 			return; // Paused, stopped, changed owner or project: start and report nothing.
 		}
+		this.resumeStalled(missionId);
 		await this.reconcileAsks(missionId);
 		await this.reconcileRepair(missionId);
 		state = this.deps.store.planningWorkers.get(missionId)!;
@@ -1747,6 +1803,24 @@ export class PlanningWorkers {
 		await this.deps.store.durable();
 		return held;
 	}
+	/**
+	 * A round the user submitted that never reached the planner (the daemon stopped first) is sent
+	 * once the planning agent is loaded, at most once per run. Its continuation never entered, so nothing is replayed.
+	 */
+	private resumeStalled(missionId: string): void {
+		const state = this.deps.store.planningWorkers.get(missionId);
+		if (!state || !this.stalledRound(state)) return;
+		const id = state.continuation!.operation.operationId;
+		if (this.resumeTried.has(id)) return;
+		this.resumeTried.add(id);
+		trace(`pilotd: planning ${missionId} submitted round was not sent; sending it now`);
+		const task = this.continue(state).catch((e) => {
+			// The planning agent may not be loaded yet at start: its next change tries again.
+			if (String(e).includes("planning owner required")) this.resumeTried.delete(id);
+		});
+		this.tasks.add(task);
+		void task.finally(() => this.tasks.delete(task));
+	}
 	/** Only a fresh explicit submit invokes this. Restarts/status/duplicate POSTs never schedule input. */
 	submitted(missionId: string, submissionOperationId: string): void {
 		const state = this.deps.store.planningWorkers.get(missionId);
@@ -1757,20 +1831,41 @@ export class PlanningWorkers {
 		)
 			return;
 		const task = this.continue(state).catch(() => {
-			/* Saved pending state remains Unknown; never replay. */
+			/* Saved pending state remains Unknown; never replay. continue() logs why. */
 		});
 		this.tasks.add(task);
 		void task.finally(() => this.tasks.delete(task));
 	}
-	private async continue(state: PlanningWorkerState): Promise<void> {
+	private async continue(state: PlanningWorkerState, confirmed = false): Promise<void> {
 		const op = state.continuation!.operation,
 			binding = state.binding;
+		this.continuing.add(binding.missionId);
+		try {
+			const sent = await this.continueSubmitted(state, op, binding, confirmed);
+			trace(
+				`pilotd: planning ${binding.missionId} submitted round ${sent === "accepted" ? "sent to the planner" : `not confirmed (${sent})`} (${op.operationId})`,
+			);
+		} catch (e) {
+			console.warn(`pilotd: planning ${binding.missionId} submitted round not sent: ${e}`);
+			throw e;
+		} finally {
+			this.continuing.delete(binding.missionId);
+		}
+	}
+	private async continueSubmitted(
+		state: PlanningWorkerState,
+		op: DurableOperation,
+		binding: PlanningWorkerState["binding"],
+		confirmed: boolean,
+	): Promise<string> {
 		const guard = () => {
 			const current = this.scope(binding);
 			if (
 				!state.hold ||
 				current.hold?.operationId !== state.hold.operationId ||
-				this.roundContext(state, this.authority(binding)) !== state.hold.contextDigest ||
+				// The user's explicit Continue confirms the round against the map as it is now.
+				(!confirmed && this.roundContext(state, this.authority(binding)) !== state.hold.contextDigest) ||
+				(confirmed && !this.authority(binding)) ||
 				canonicalJSON(current.continuation?.operation) !== canonicalJSON(op)
 			)
 				throw new Conflict("Submitted planning round or controls changed");
@@ -1779,7 +1874,7 @@ export class PlanningWorkers {
 		await this.deps.sessions.planningIdle(binding.ownerSessionId, guard, this.closing.signal);
 		guard();
 		const latest = this.scope(binding);
-		if (latest.continuation?.entered) return;
+		if (latest.continuation?.entered) return "already entered";
 		let release!: () => void;
 		const turnAdmission = new Promise<void>((resolve) => {
 			release = resolve;
@@ -1802,6 +1897,7 @@ export class PlanningWorkers {
 				});
 				await this.deps.store.durable();
 			}
+			return receipt.state;
 		} finally {
 			if (this.turnAdmissions.get(binding.missionId) === turnAdmission)
 				this.turnAdmissions.delete(binding.missionId);

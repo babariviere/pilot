@@ -209,6 +209,52 @@ test("lost native admission ACK settles only from its exact durable receipt, nev
 	assert.equal(await f.requestCount(), 2);
 });
 
+test("a submitted round that never reached the planner shows as stuck, and Continue planning sends it once", {
+	timeout: 60000,
+}, async (t) => {
+	const f = await heldFixture(t);
+	await answerAll(f);
+	// The map changed after the round was saved: the submitted round cannot go on by itself.
+	const held = f.store.planningWorkers.get(f.missionId)!;
+	f.store.plans.write(f.operation(f.missionId, { purpose: "plan-map" } as { purpose: string }, "x"), 0, () => ({
+		version: 1,
+		missionId: f.missionId,
+		revision: 0,
+		ownerSessionId: f.binding.ownerSessionId,
+		ownerFence: f.store.interviewOwnerFence(f.missionId, f.binding.ownerSessionId),
+		destination: "Changed while the round waited",
+		sources: [],
+		questions: [],
+		fog: [],
+		spec: null,
+		slices: [],
+		round: null,
+		review: null,
+		publication: null,
+	}));
+	assert.equal((await submit(f)).receipt.state, "accepted");
+	let view = await f.read(f.missionId);
+	for (let i = 0; i < 50 && view.unstick?.state !== "stuck"; i++) view = await f.read(f.missionId);
+	assert.equal(view.unstick.state, "stuck", JSON.stringify(view.unstick));
+	assert.match(view.unstick.line, /answers were submitted, but Pilot did not pass them/);
+	assert.equal(view.unstick.fix, "continue");
+	assert.equal(await f.requestCount(), 1);
+	const op = f.operation(
+		f.missionId,
+		{ purpose: "plan-continue" } as { purpose: string },
+		view.continuePlanning.contextDigest,
+	);
+	assert.equal((await f.post(op)).state, "accepted", f.logs());
+	await f.changed(
+		() =>
+			f.store.planningWorkers.get(f.missionId)?.phase === "active" &&
+			f.sessions.get(f.binding.ownerSessionId)?.state === "idle",
+	);
+	assert.equal(await f.requestCount(), 2, f.logs());
+	assert.equal((await f.post(op)).state, "accepted", "the same Continue is not sent twice");
+	assert.equal(await f.requestCount(), 2);
+});
+
 test("daemon restart preserves drafts and the round hold, with no historical auto-send", {
 	timeout: 60000,
 }, async (t) => {

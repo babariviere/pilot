@@ -232,6 +232,12 @@ Its outer tool result terminates the turn; there is no promise waiting for human
 Recovered held work never reconstructs a lost tool stack or consumes a historical input.
 
 Every question in the current list needs an explicit option selection or nonblank custom answer.
+A submitted round goes to the planner when its saved map check still matches. Pilot's own bookkeeping (the
+map's revision and research claims) does not count. A submitted round that never reached the planner (the
+daemon stopped first, or the check failed) is sent once per daemon run when the planning agent is loaded, and
+Unstick shows it as stuck; **Continue planning** then sends it against the current map. The saved hold stays
+exactly as the planning agent keeps it, so the agent's own hold check still applies.
+
 The map itself has no question count limit: settled questions stay for good. A `plan-map` save lists only open
 questions, and the daemon keeps settled ones; the planner's read shows them under `settled`, one short entry
 each. The saved map is limited to 192 KiB (`PLAN_STATE_LIMIT`, sized from the Pilot Day mission) because every
