@@ -233,10 +233,10 @@ Recovered held work never reconstructs a lost tool stack or consumes a historica
 
 Every question in the current list needs an explicit option selection or nonblank custom answer.
 A submitted round goes to the planner when the map and the mission's aim are as they were when the questions
-were asked. Chats joining the mission (research, asks, repair), the map's revision, research claims and
-controls do not count; pause, owner and project are checked when the round is sent. A submitted round that
-did not reach the planner is sent again when the reason clears (the planning agent loads, planning resumes,
-the daemon restarts). If the map changed, it waits: Unstick shows it as stuck, and **Continue planning** sends
+were asked. Chats joining the mission (research, asks, repair), the map's revision, research claims, and Pause
+and Resume do not count; pause, Stop, owner and project are checked when the round is sent. A submitted round
+that did not reach the planner is sent again when the reason clears (the planning agent loads, planning
+resumes, the daemon restarts). If the map changed, it waits: Unstick shows it as stuck, and **Continue planning** sends
 it against the current map. The saved hold stays exactly as the planning agent keeps it. A new question set
 drops saved answers to questions no longer asked; the submitted round keeps them.
 

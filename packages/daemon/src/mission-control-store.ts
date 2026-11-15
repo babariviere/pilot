@@ -44,7 +44,10 @@ export class MissionControlStore {
 		this.flushing.set(missionId, pending);
 		void pending.then(
 			() => {
-				if (this.flushing.get(missionId) === pending) this.flushing.delete(missionId);
+				if (this.flushing.get(missionId) !== pending) return;
+				this.flushing.delete(missionId);
+				// Work held until the controls were on disk (fenceCurrent) can go on now: tell listeners.
+				this.port.changed(missionId);
 			},
 			() => {
 				this.failed.add(missionId);

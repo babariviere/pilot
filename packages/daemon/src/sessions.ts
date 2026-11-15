@@ -1284,6 +1284,10 @@ function sameTrackedSource(a?: SessionTrackedSource, b?: SessionTrackedSource): 
 export const planningHostCallAllowed = (type: string, action: string | undefined): boolean =>
 	type === "knowledge.call" && action !== "batch";
 
+/** A finished resume leaves its checkpoint as "resume-acknowledged"; work may go on (see openWorker). */
+const lifecycleHeld = (meta: SessionMeta): boolean =>
+	!!meta.lifecycleCheckpoint && meta.lifecycleCheckpoint.phase !== "resume-acknowledged";
+
 export class SessionManager {
 	private planningBridge?: {
 		assert(binding: import("@pilot/kernel").PlanningWorkerBinding): void;
@@ -1338,7 +1342,7 @@ export class SessionManager {
 			meta.archivedAt ||
 			meta.failure ||
 			this.changingModels.has(id) ||
-			meta.lifecycleCheckpoint ||
+			lifecycleHeld(meta) ||
 			meta.delegationFenced
 		)
 			throw new Conflict("Planning worker is stopped, held or unavailable");
@@ -1470,7 +1474,7 @@ export class SessionManager {
 				meta.cancelled ||
 				meta.recoveryStopped ||
 				meta.failure ||
-				meta.lifecycleCheckpoint ||
+				lifecycleHeld(meta) ||
 				meta.pending?.length ||
 				this.changingModels.has(id) ||
 				canonicalJSON(meta.planning) !== canonicalJSON(input.binding)

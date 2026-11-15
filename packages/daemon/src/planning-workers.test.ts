@@ -209,7 +209,40 @@ test("lost native admission ACK settles only from its exact durable receipt, nev
 	assert.equal(await f.requestCount(), 2);
 });
 
-test("a submitted round that never reached the planner shows as stuck, and Continue planning sends it once", {
+test("a submitted round held while planning is paused is sent when planning resumes", {
+	timeout: 60000,
+}, async (t) => {
+	const f = await heldFixture(t);
+	await answerAll(f);
+	const control = (action: "pause" | "resume", pauseOperationId?: string) => {
+		const operationId = randomUUID();
+		return f.service.controls
+			.execute(f.missionId, {
+				version: 1,
+				action,
+				operationId,
+				...(pauseOperationId ? { pauseOperationId } : {}),
+				home: { daemonId: f.hello.daemonId, lineageId: f.hello.lineageId! },
+				projectId: f.project.id,
+				coordinatorSessionId: f.binding.ownerSessionId,
+				expectedRevision: f.store.controls.current(f.missionId).revision,
+			})
+			.then(() => operationId);
+	};
+	const paused = await control("pause");
+	assert.equal((await submit(f)).receipt.state, "accepted");
+	assert.equal(await f.requestCount(), 1, "nothing is sent while planning is paused");
+	assert.equal(f.store.planningWorkers.get(f.missionId)!.phase, "held");
+	await control("resume", paused);
+	await f.changed(
+		() =>
+			f.store.planningWorkers.get(f.missionId)?.phase === "active" &&
+			f.sessions.get(f.binding.ownerSessionId)?.state === "idle",
+	);
+	assert.equal(await f.requestCount(), 2, f.logs());
+});
+
+test("a submitted round is sent when a research chat joined the mission while the user answered", {
 	timeout: 60000,
 }, async (t) => {
 	const f = await heldFixture(t);

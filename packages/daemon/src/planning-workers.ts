@@ -352,7 +352,7 @@ export class PlanningWorkers {
 		return state;
 	}
 	/** `round`: the fingerprint a held round keeps, without chats joining the mission (research, asks,
-	 * repair). They join while a round waits and change nothing the user answered. */
+	 * repair), and pause and resume. They change nothing the user answered; pause is checked at send time. */
 	private authority(binding: PlanningWorkerBinding, round = false): string {
 		this.scope(binding);
 		this.deps.sessions.assertPlanningOpen(binding.ownerSessionId);
@@ -374,7 +374,8 @@ export class PlanningWorkers {
 			},
 			owner: store.interviewOwnerFence(binding.missionId, binding.ownerSessionId),
 			context,
-			controls: control,
+			// A held round keeps only Stop: pause is checked when it is sent, so Resume sends it.
+			controls: round ? { stopGeneration: control.stopGeneration } : control,
 		});
 	}
 	/**
