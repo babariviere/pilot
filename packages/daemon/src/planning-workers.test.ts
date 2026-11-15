@@ -214,6 +214,22 @@ test("a submitted round that never reached the planner shows as stuck, and Conti
 }, async (t) => {
 	const f = await heldFixture(t);
 	await answerAll(f);
+	// A research chat joins the mission while the round waits: nothing the user answered changed.
+	f.store.join("research-chat", f.missionId);
+	assert.equal((await submit(f)).receipt.state, "accepted");
+	await f.changed(
+		() =>
+			f.store.planningWorkers.get(f.missionId)?.phase === "active" &&
+			f.sessions.get(f.binding.ownerSessionId)?.state === "idle",
+	);
+	assert.equal(await f.requestCount(), 2, f.logs());
+});
+
+test("a submitted round that never reached the planner shows as stuck, and Continue planning sends it once", {
+	timeout: 60000,
+}, async (t) => {
+	const f = await heldFixture(t);
+	await answerAll(f);
 	// The map changed after the round was saved: the submitted round cannot go on by itself.
 	const held = f.store.planningWorkers.get(f.missionId)!;
 	f.store.plans.write(f.operation(f.missionId, { purpose: "plan-map" } as { purpose: string }, "x"), 0, () => ({
@@ -244,7 +260,9 @@ test("a submitted round that never reached the planner shows as stuck, and Conti
 		{ purpose: "plan-continue" } as { purpose: string },
 		view.continuePlanning.contextDigest,
 	);
-	assert.equal((await f.post(op)).state, "accepted", f.logs());
+	const continued = await f.post(op);
+	assert.equal(continued.state, "accepted", f.logs());
+	assert.equal(continued.result.admissionId, op.operationId, "Day settles a Continue by its admission ID");
 	await f.changed(
 		() =>
 			f.store.planningWorkers.get(f.missionId)?.phase === "active" &&

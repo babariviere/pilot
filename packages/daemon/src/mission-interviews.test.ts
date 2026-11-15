@@ -320,6 +320,17 @@ test("saved custom drafts survive new frontiers; changed option meanings require
 	assert.equal((await f.write(state, "interview-submit")).receipt.state, "accepted");
 });
 
+test("a new question set drops answers to questions no longer asked", async (t) => {
+	const f = await fixture(t);
+	let state = await f.submitted("Answer to the last round");
+	({ state } = await f.write(state, "interview-questions", { questions: [question("next")] }));
+	assert.deepEqual(state.answers, []);
+	const saved = await f.write(state, "interview-save", {
+		answers: [answer(state.questions[0]!, "New answer", false)],
+	});
+	assert.equal(saved.receipt.state, "accepted");
+});
+
 test("concurrent edits, stale submissions and duplicate submission cannot double-continue", async (t) => {
 	const f = await fixture(t);
 	const { state } = await f.create();

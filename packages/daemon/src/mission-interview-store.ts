@@ -191,6 +191,9 @@ export class MissionInterviewStore {
 				}
 				state.questions = structuredClone(request.questions);
 				// Keep old meanings and custom drafts. Changed questions need explicit reconfirmation.
+				// Answers to questions no longer asked are dropped: the submitted snapshot keeps them.
+				const asked = new Set(request.questions.map((q) => q.id));
+				state.answers = state.answers.filter((a) => asked.has(a.questionId));
 				state.fence.questionSetRevision++;
 				state.fence.answerRevision++;
 				state.submission = null;

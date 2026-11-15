@@ -190,6 +190,12 @@ export function researchSynopsis(report: string): string {
 		.trim();
 	return text.length > 600 ? `${text.slice(0, 599).trimEnd()}…` : text || "Research findings.";
 }
+/** The map, mission or its controls changed after the round was saved: only the user's Continue sends it. */
+class RoundChanged extends Conflict {
+	constructor() {
+		super("Submitted planning round changed; Continue planning sends it against the current map");
+	}
+}
 export class PlanningWorkers {
 	private readonly deps: Dependencies;
 	private readonly closing = new AbortController();
@@ -202,7 +208,7 @@ export class PlanningWorkers {
 	private readonly repairChats = new Map<string, string>();
 	/** Missions whose submitted round is being sent to the planner now. */
 	private readonly continuing = new Set<string>();
-	/** Submitted rounds Pilot already tried to send by itself in this run. Unstick sends them on request. */
+	/** Submitted rounds Pilot is sending by itself, or stopped trying because the map changed. */
 	private readonly resumeTried = new Set<string>();
 	private readonly recentOperations = new Map<
 		string,
@@ -345,13 +351,16 @@ export class PlanningWorkers {
 		projects.require(binding.projectId);
 		return state;
 	}
-	private authority(binding: PlanningWorkerBinding): string {
+	/** `round`: the fingerprint a held round keeps, without chats joining the mission (research, asks,
+	 * repair). They join while a round waits and change nothing the user answered. */
+	private authority(binding: PlanningWorkerBinding, round = false): string {
 		this.scope(binding);
 		this.deps.sessions.assertPlanningOpen(binding.ownerSessionId);
 		const { store, sessions } = this.deps,
 			mission = store.require(binding.missionId),
 			control = store.controls.fenceCurrent(binding.missionId);
-		const { briefRevision: _brief, ...context } = store.allocationContextFence(binding.missionId);
+		const { briefRevision: _brief, memberEventId, ...rest } = store.allocationContextFence(binding.missionId);
+		const context = round ? rest : { ...rest, memberEventId };
 		if (control.held) throw new Conflict("Mission planning is paused");
 		return hash({
 			binding,
@@ -368,10 +377,13 @@ export class PlanningWorkers {
 			controls: control,
 		});
 	}
+	/**
+	 * What the user answered against: the mission, its controls and the map. Pilot's bookkeeping (the map's
+	 * revision and research claims) and chats joining the mission are left out: they change while a round
+	 * waits without changing any question.
+	 */
 	private roundContext(state: PlanningWorkerState, authority: string): string {
 		const missionId = state.binding.missionId;
-		// Pilot's own bookkeeping (the map's revision and research claims) changes while a round waits;
-		// it changes no question the user answered, so it never invalidates the round.
 		const plan = this.deps.store.plans.get(missionId);
 		return hash({
 			authority,
@@ -586,7 +598,8 @@ export class PlanningWorkers {
 					throw new OperationRejected(String(e));
 				throw e;
 			}
-			return { resumedRound: pin.resumeRound };
+			// Same receipt shape as every Continue: Day settles a Continue by its admission ID.
+			return { admissionId: op.operationId, resumedRound: pin.resumeRound };
 		}
 		this.deps.store.planningWorkers.retain(op.targetId, `$continue:${op.operationId}`, op);
 		if (pin.round) {
@@ -1678,7 +1691,7 @@ export class PlanningWorkers {
 		state = this.deps.store.planningWorkers.change(binding.missionId, state.revision, (s) => {
 			if (opensRound) {
 				s.phase = "holding";
-				s.pendingHold = { operationId: op.operationId, authority };
+				s.pendingHold = { operationId: op.operationId, authority, round: this.authority(binding, true) };
 				s.continuation = null;
 			}
 		});
@@ -1793,7 +1806,7 @@ export class PlanningWorkers {
 			fence: interview.fence,
 			revision: interview.revision,
 			operationId: op.operationId,
-			contextDigest: this.roundContext(state, state.pendingHold.authority),
+			contextDigest: this.roundContext(state, state.pendingHold.round ?? state.pendingHold.authority),
 		};
 		const held = this.deps.store.planningWorkers.change(op.targetId, state.revision, (s) => {
 			s.phase = "held";
@@ -1804,8 +1817,9 @@ export class PlanningWorkers {
 		return held;
 	}
 	/**
-	 * A round the user submitted that never reached the planner (the daemon stopped first) is sent
-	 * once the planning agent is loaded, at most once per run. Its continuation never entered, so nothing is replayed.
+	 * A round the user submitted that never reached the planner is sent when the reason clears: the
+	 * planning agent loads, planning resumes, or the daemon restarts. A changed map never clears by
+	 * itself, so that round waits for the user's Continue. Its continuation never entered: nothing is replayed.
 	 */
 	private resumeStalled(missionId: string): void {
 		const state = this.deps.store.planningWorkers.get(missionId);
@@ -1815,8 +1829,8 @@ export class PlanningWorkers {
 		this.resumeTried.add(id);
 		trace(`pilotd: planning ${missionId} submitted round was not sent; sending it now`);
 		const task = this.continue(state).catch((e) => {
-			// The planning agent may not be loaded yet at start: its next change tries again.
-			if (String(e).includes("planning owner required")) this.resumeTried.delete(id);
+			// Only a changed map stops further tries; anything else is tried again on the next change.
+			if (!(e instanceof RoundChanged)) this.resumeTried.delete(id);
 		});
 		this.tasks.add(task);
 		void task.finally(() => this.tasks.delete(task));
@@ -1863,12 +1877,12 @@ export class PlanningWorkers {
 			if (
 				!state.hold ||
 				current.hold?.operationId !== state.hold.operationId ||
-				// The user's explicit Continue confirms the round against the map as it is now.
-				(!confirmed && this.roundContext(state, this.authority(binding)) !== state.hold.contextDigest) ||
-				(confirmed && !this.authority(binding)) ||
 				canonicalJSON(current.continuation?.operation) !== canonicalJSON(op)
 			)
 				throw new Conflict("Submitted planning round or controls changed");
+			// The user's explicit Continue confirms the round against the map as it is now.
+			const round = this.authority(binding, true);
+			if (!confirmed && this.roundContext(state, round) !== state.hold.contextDigest) throw new RoundChanged();
 		};
 		guard();
 		await this.deps.sessions.planningIdle(binding.ownerSessionId, guard, this.closing.signal);
