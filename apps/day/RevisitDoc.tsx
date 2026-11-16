@@ -289,11 +289,12 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 						onPress={() => void checkRevision(props.plans, id(), r().id)}
 					/>
 				</If>
-				<If when={!r().current && props.revisitCanAsk}>
+				{/* Kept in place while Revisit is briefly unavailable (a read refreshing, the planner working), so it does not flicker. */}
+				<If when={!r().current && !!props.plans.feed.revisit}>
 					<Action
 						testID="ask-again"
 						label="Ask for a new revision"
-						disabled={busy()}
+						disabled={busy() || !props.revisitCanAsk}
 						onPress={() => void askRevisit(props.plans, id())}
 					/>
 				</If>
