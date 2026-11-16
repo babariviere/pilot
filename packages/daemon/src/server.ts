@@ -803,6 +803,7 @@ export function createDaemonServer(
 					sessions,
 					confirmations: workflowConfirmations,
 					...(missions.knowledge ? { knowledge: missions.knowledge } : {}),
+					...(tracking ? { tracking } : {}),
 				})
 			: undefined;
 	const nativePlanning =

@@ -377,3 +377,16 @@ A merged pull request that owns a task (`ownership` link) also finishes it in th
 dependents start. Workers in these missions see the user as coordinator (`MissionContext.coordinator` is
 `user`): their prompt tells them to ask the user with `ask_user`, because no coordinator chat reads
 comments promptly. A task Pilot starts by rule says its dependencies were checked by the user.
+
+## Planning from a request in New
+
+New's Plan a mission… on a Linear or Slack request opens New with a goal that names the request and its
+link, and keeps the request beside the words (`requestDraft`). Plan sends it in the enrollment as
+`request: { itemId, revision }` (`PlanRequest` in Day's `NewIntent`). Before the enrollment is entered,
+the daemon refuses a request that is in another project, changed since the user saw it, or was already
+started or linked. After the planner takes its first input, `PlanningWorkers.linkRequest` claims the
+request with the enrollment's operation ID (the same claim Start work uses), links it to the mission and
+adds its URL as a `reference` link, so Pilot never manages the Linear issue. Nothing changes in Linear or
+Slack yet. When the first task worker starts (the user's Start or a start by rule),
+`markRequestStarted` marks the request started, best effort, unless it already has a start result or a chat.
+Neither step changes the planning record's revision: their progress is read from the request itself.

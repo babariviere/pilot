@@ -17,6 +17,7 @@ import {
 	newBusy,
 	newMessage,
 	replacesDraft,
+	requestDraft,
 	restoredDraft,
 } from "./planView";
 
@@ -117,6 +118,7 @@ export async function startNewChat(chats: ChatMirror) {
 			if (goalDraft() === goal) {
 				goalDraft.set("");
 				replacesDraft.set(null);
+				requestDraft.set(null);
 				dropChoice();
 				return;
 			}
@@ -152,6 +154,7 @@ export async function checkNewChat(chats: ChatMirror, operationId: string) {
 		if (words !== undefined && goalDraft() === words) {
 			goalDraft.set("");
 			replacesDraft.set(null);
+			requestDraft.set(null);
 			dropChoice();
 			return;
 		}

@@ -19,6 +19,7 @@ import {
 	planMessages,
 	put,
 	replacesDraft,
+	requestDraft,
 	revisionShown,
 	revisitBusy,
 	revisitMessages,
@@ -336,12 +337,15 @@ export async function planMission(plans: Plans) {
 	newMessage.set("");
 	const goal = goalDraft();
 	const replaces = replacesDraft()?.missionId ?? null;
+	const from = requestDraft();
+	const request = from ? { itemId: from.itemId, revision: from.revision } : null;
 	try {
-		const outcome = await plans.feed.plan({ goal, setup: plans.planning().setup.digest, replaces });
+		const outcome = await plans.feed.plan({ goal, setup: plans.planning().setup.digest, replaces, request });
 		if (outcome.status === "accepted" && outcome.missionId) {
 			if (goalDraft() === goal) {
 				goalDraft.set("");
 				replacesDraft.set(null);
+				requestDraft.set(null);
 				dropChoice();
 			}
 			openPlan(outcome.missionId);

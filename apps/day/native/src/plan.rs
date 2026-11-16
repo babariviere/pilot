@@ -1238,6 +1238,20 @@ pub struct NewIntent {
     /// The old mission this plan re-plans, when New was opened from its
     /// "Re-plan as a new mission". Only Plan sends it.
     pub replaces: Option<String>,
+    /// The request in New (a Linear issue or Slack message) this plan comes
+    /// from, when New was opened from its "Plan a mission". Only Plan sends it.
+    pub request: Option<PlanRequest>,
+}
+
+/// A request in New, as the screen showed it.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct PlanRequest {
+    /// The request's ID.
+    pub item_id: String,
+    /// The request's revision the screen showed.
+    pub revision: u32,
 }
 
 /// Save one answer as a draft. It never submits or starts anything.

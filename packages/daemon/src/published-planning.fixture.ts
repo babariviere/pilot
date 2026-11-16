@@ -10,7 +10,14 @@ import { KnowledgeService } from "./project-knowledge.ts";
 
 export async function publishedPlanningFixture(
 	t: TestContext,
-	options: { native?: boolean; published?: boolean; knowledge?: boolean; twoSlices?: boolean } = {},
+	options: {
+		native?: boolean;
+		published?: boolean;
+		knowledge?: boolean;
+		twoSlices?: boolean;
+		/** A fake request source for the project, given to the planning workers. */
+		tracking?: (projectId: string) => { tracking: unknown };
+	} = {},
 ) {
 	const f = await nativePlanningFixture({ native: options.native ?? false });
 	t.after(() => f.close());
@@ -128,6 +135,7 @@ export async function publishedPlanningFixture(
 	const lookup = t.mock.method(f.sessions, "lookupPlanning", async (input: PlanningInput) =>
 		receipts.has(input.operation.operationId) ? { admissionId: input.operation.operationId } : undefined,
 	);
+	const tracking = options.tracking?.(f.project.id);
 	const workers = new PlanningWorkers({
 		home: f.home,
 		store: f.store,
@@ -136,6 +144,9 @@ export async function publishedPlanningFixture(
 		sessions: f.sessions,
 		confirmations: f.confirmations(),
 		...(options.knowledge ? { knowledge: new KnowledgeService(f.store, f.projects, f.sessions) } : {}),
+		...(tracking
+			? { tracking: tracking.tracking as ConstructorParameters<typeof PlanningWorkers>[0]["tracking"] }
+			: {}),
 	});
 	t.after(() => workers.close());
 	const native = new NativeMissionPlanning({
@@ -157,5 +168,17 @@ export async function publishedPlanningFixture(
 	};
 	const execute = (op: ReturnType<typeof f.operation>) =>
 		f.journal.execute(op, (o, e) => native.admit(o, e.firstEntry));
-	return Object.assign(f, { native, workers, binding, inputs, admission, lookup, revisit, execute, submit, receipts });
+	return Object.assign(f, {
+		native,
+		workers,
+		binding,
+		inputs,
+		admission,
+		lookup,
+		revisit,
+		execute,
+		submit,
+		receipts,
+		tracking,
+	});
 }

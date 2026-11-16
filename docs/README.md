@@ -28,6 +28,9 @@ asks its coordinator shows on that page. Answer with Send back or a thread.
 After your first Start work, marking a task's result done finishes the task, and Pilot starts the next
 tasks that are ready, within the worker limit, Pause and Stop. A merged pull request of a task finishes it too.
 On a mission page, a done task folds its report until Show report, and each task links its own chat.
+A request in New (a Linear issue or a Slack message) can also become a mission: Plan a mission… opens New
+with its title and link. Your Plan takes it out of New and links it to the mission, without changing
+Linear or Slack. When the mission's first task starts, Pilot marks the request started there.
 A chat started from Slack, Linear or a schedule saves a report for its result page: its answer, how
 it knows, its limits, your next step and links. A chat with no report shows its last message instead.
 For published native plans, Revisit mission requests planning only. Review new questions and

@@ -62,6 +62,15 @@ test("opening a request and choosing where work goes sends nothing", async () =>
 	expect(app.shows(NORTHWIND)).toBe(true);
 });
 
+test("Plan a mission opens New with the request's words and link; it sends nothing", async () => {
+	const app = await ready();
+	await app.press("id:request-bil-231");
+	await app.press("id:plan-bil-231");
+	await app.waitFor("New: new · CSV export times out for large accounts · request bil-231@1");
+	expect(app.shows("Sends: 0 · Checks: 0")).toBe(true);
+	expect(app.shows("id:request-bil-231")).toBe(true);
+});
+
 test("Later and Bring back, Discard and Undo each send once and move the row", async () => {
 	const app = await ready();
 	await app.press("id:request-northwind");

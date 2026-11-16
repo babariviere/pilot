@@ -37,6 +37,7 @@ import {
 	openPlan,
 	projectsOpen,
 	replacesDraft,
+	requestDraft,
 } from "./planView";
 import { Action, Mark, PAGE_COLUMN, Picker, RadioRow, RowLink, SectionTitle } from "./ui";
 
@@ -46,6 +47,12 @@ const MODES: { mode: ChatMode; label: string }[] = [
 ];
 
 /** The project a new chat goes to: a list of the user's projects, and where the chosen one lives. */
+/** What Plan does with the request New's words come from. A chat started instead leaves it in New. */
+function fromRequest(r: { title: string; source: string } | null): string {
+	if (!r) return "";
+	return `From ${r.source}: “${r.title}”. Plan takes it out of New. Pilot marks it started in ${r.source} when the first task starts.`;
+}
+
 function ProjectRow(props: { plans: Plans }) {
 	const chats = props.plans.chats;
 	const view = () => chats.view();
@@ -266,7 +273,10 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 						value={goalDraft()}
 						onChange={({ value }) => {
 							goalDraft.set(value);
-							if (value.trim() === "") replacesDraft.set(null);
+							if (value.trim() === "") {
+								replacesDraft.set(null);
+								requestDraft.set(null);
+							}
 							confirmingStart.set(false);
 						}}
 						onFocus={goal.focus}
@@ -275,6 +285,11 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 						class="min-h-20 rounded-xl border border-input bg-background px-3.5 py-2.5 text-base text-foreground focus:border-primary"
 					/>
 					<ProjectRow plans={props.plans} />
+					<If when={requestDraft()}>
+						<Text testID="new-request" class="text-xs text-faint">
+							{fromRequest(requestDraft())}
+						</Text>
+					</If>
 					<If when={replacesDraft()}>
 						<Text testID="new-replaces" class="text-xs text-faint">
 							{`Re-plans “${replacesDraft()?.title ?? ""}”. That mission stays as it is.`}

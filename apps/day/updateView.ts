@@ -62,6 +62,7 @@ import {
 	planRoute,
 	projectsOpen,
 	replacesDraft,
+	requestDraft,
 	restoredDraft,
 	roundOpen,
 	seeAll,
@@ -318,6 +319,7 @@ export function startFresh() {
 	planRoute.set(null);
 	goalDraft.set("");
 	replacesDraft.set(null);
+	requestDraft.set(null);
 	confirmingStart.set(false);
 	newMessage.set("");
 	newBusy.set(false);
@@ -381,8 +383,9 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 		changesRoute.set(view.place === "changes" && changes ? { kind: "list" } : null);
 	}
 	goalDraft.set(view.goal);
-	// A restored window does not keep which old mission the words re-planned.
+	// A restored window does not keep which old mission or request the words planned.
 	replacesDraft.set(null);
+	requestDraft.set(null);
 	// The project and access the user chose come back as a choice to select
 	// again, never as a selection: New reads them again and sends nothing. A
 	// view saved without chatChosen may hold New's old default project, never

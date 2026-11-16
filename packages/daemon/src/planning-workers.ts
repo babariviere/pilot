@@ -39,6 +39,7 @@ import type { KnowledgeService } from "./project-knowledge.ts";
 import type { ProjectStore } from "./projects.ts";
 import { replacedMissionView } from "./replaced-mission.ts";
 import type { SessionManager } from "./sessions.ts";
+import type { SourceRegistry } from "./sources.ts";
 import { trace } from "./trace.ts";
 import type { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
@@ -53,6 +54,8 @@ export interface PlanningEnrollment {
 	configurationDigest: string;
 	/** An old mission this one re-plans. Linked in the enrollment transaction; the old mission is not changed. */
 	replaces?: string;
+	/** The request in New (a Linear issue or Slack message) this mission is planned from, as the user saw it. */
+	request?: { itemId: string; revision: number };
 }
 interface Dependencies {
 	home: string;
@@ -63,6 +66,8 @@ interface Dependencies {
 	confirmations: WorkflowConfirmations;
 	/** Saves finished research as Knowledge. Without it, the planner gets the full reports to record. */
 	knowledge?: KnowledgeService;
+	/** Requests in New, for missions planned from one. */
+	tracking?: Pick<SourceRegistry, "items" | "patch">;
 }
 const hash = (value: unknown) => payloadHash(canonicalJSON(value));
 /**
@@ -270,6 +275,9 @@ class RoundChanged extends Conflict {
 export class PlanningWorkers {
 	private readonly deps: Dependencies;
 	private readonly closing = new AbortController();
+	/** Missions whose request this process linked or tried to link, and those it marked started: once each. */
+	private readonly requestsSeen = new Set<string>();
+	private readonly requestsStarted = new Set<string>();
 	private readonly tasks = new Set<Promise<unknown>>();
 	private readonly admissions = new Map<string, Promise<unknown>>();
 	private readonly turnAdmissions = new Map<string, Promise<void>>();
@@ -1544,11 +1552,18 @@ export class PlanningWorkers {
 				"configurationDigest",
 			];
 			if (request && typeof request === "object" && Object.hasOwn(request, "replaces")) keys.push("replaces");
+			if (request && typeof request === "object" && Object.hasOwn(request, "request")) keys.push("request");
 			interviewExact(request, keys);
 			interviewId(op.targetId);
 			interviewId(request.projectId);
 			interviewId(request.ownerSessionId);
 			if (request.replaces !== undefined) interviewId(request.replaces);
+			if (request.request !== undefined) {
+				interviewExact(request.request, ["itemId", "revision"]);
+				interviewId(request.request.itemId);
+				if (!Number.isSafeInteger(request.request.revision) || request.request.revision < 1)
+					throw new Conflict("Invalid request revision");
+			}
 			interviewText(request.title, 200);
 			interviewText(request.goal, 12000);
 			interviewText(request.model, 256);
@@ -1577,6 +1592,8 @@ export class PlanningWorkers {
 			if (request.replaces !== undefined) this.deps.store.assertReplaceable(request.replaces, request.projectId);
 		};
 		try {
+			check();
+			if (request.request !== undefined) await this.requestOpen(request.projectId, request.request);
 			check();
 		} catch (e) {
 			throw new OperationRejected(e instanceof Error ? e.message : String(e));
@@ -1613,6 +1630,7 @@ export class PlanningWorkers {
 				creation: op,
 				goal: request.goal,
 				configurationDigest: request.configurationDigest,
+				...(request.request ? { request: { ...request.request } } : {}),
 				revision: 1,
 				phase: "setup",
 				hold: null,
@@ -1655,6 +1673,7 @@ export class PlanningWorkers {
 		});
 		if (this.authority(active.binding) !== authority)
 			throw new Error("Unknown changed planning enrollment; lookup only");
+		await this.linkRequest(active.binding.missionId);
 		return {
 			missionId: active.binding.missionId,
 			ownerSessionId: active.binding.ownerSessionId,
@@ -1733,6 +1752,7 @@ export class PlanningWorkers {
 		await this.reconcileAsks(missionId);
 		await this.reconcileRepair(missionId);
 		await this.deliverMessages(missionId);
+		await this.linkRequest(missionId);
 		state = this.deps.store.planningWorkers.get(missionId)!;
 		const plan = this.deps.store.plans.get(missionId);
 		if (!plan || plan.publication) return;
@@ -2776,8 +2796,83 @@ export class PlanningWorkers {
 		}
 		this.changeAutoStart(missionId, operationId, "admitted");
 		await store.durable();
+		await this.markRequestStarted(missionId, sessionId);
 		console.log(`pilotd: planning ${missionId} started #${task.number} ${task.title} by rule`);
 		return true;
+	}
+	/**
+	 * Links the Linear issue or Slack request a mission was planned from, once: the request leaves New, and the
+	 * mission keeps its link as a reference. Nothing changes in Linear or Slack until the first task starts.
+	 * Its progress is read from the request itself, so the planning record's revision never changes for it.
+	 */
+	private async linkRequest(missionId: string): Promise<void> {
+		const { store, tracking } = this.deps;
+		const state = store.planningWorkers.get(missionId);
+		const request = state?.request;
+		if (!state || !request || !tracking || this.requestsSeen.has(missionId)) return;
+		// Not during setup or an admission: the added link can change what an admission checks.
+		if (state.phase === "setup" || this.admissions.has(missionId) || this.turnAdmissions.has(missionId)) return;
+		this.requestsSeen.add(missionId);
+		const operationId = state.creation.operationId;
+		try {
+			let item = await tracking.items.require(request.itemId);
+			if (item.missionIds?.includes(missionId) || item.missionId === missionId) return;
+			if (item.startOperationId !== operationId)
+				item = await tracking.items.intakeWrite(
+					state.binding.projectId,
+					request.itemId,
+					request.revision,
+					undefined,
+					operationId,
+				);
+			await tracking.patch(item.id, { missionId }, operationId);
+			try {
+				store.addResource(missionId, { url: item.url, title: item.title });
+			} catch (error) {
+				console.warn(`pilotd: planning ${missionId} could not link ${item.url}: ${String(error)}`);
+			}
+		} catch (error) {
+			console.warn(`pilotd: planning ${missionId} could not take its request ${request.itemId}: ${String(error)}`);
+		}
+	}
+	/**
+	 * The first task worker marks the mission's request started in Linear or Slack, best effort. A request that
+	 * already has a start result or a chat was started before, and is left as it is.
+	 */
+	private async markRequestStarted(missionId: string, sessionId: string): Promise<void> {
+		const { store, tracking } = this.deps;
+		const request = store.planningWorkers.get(missionId)?.request;
+		if (!request || !tracking || this.requestsStarted.has(missionId)) return;
+		this.requestsStarted.add(missionId);
+		try {
+			const item = await tracking.items.require(request.itemId);
+			if (
+				!item.missionIds?.includes(missionId) ||
+				item.sessionIds?.length ||
+				item.metadata.linearStart ||
+				item.metadata.slackStart
+			)
+				return;
+			await tracking.patch(request.itemId, { start: true, sessionId });
+		} catch (error) {
+			console.warn(`pilotd: planning ${missionId} could not mark its request started: ${String(error)}`);
+		}
+	}
+	/** A request the user plans from must still be new in New, in this project, as they saw it. */
+	private async requestOpen(projectId: string, request: { itemId: string; revision: number }): Promise<void> {
+		if (!this.deps.tracking) throw new Conflict("Requests are unavailable here");
+		const item = await this.deps.tracking.items.require(request.itemId);
+		if (item.projectId !== projectId) throw new Conflict("That request belongs to another project");
+		if (
+			item.revision !== request.revision ||
+			item.triageState !== "new" ||
+			item.startOperationId ||
+			item.sessionId ||
+			item.missionId ||
+			item.sessionIds?.length ||
+			item.missionIds?.length
+		)
+			throw new Conflict("That request changed or already started. Look at it again in New.");
 	}
 	/** Only an authenticated, explicit native Start enters this method. No submission calls it. */
 	start(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
@@ -2864,6 +2959,7 @@ export class PlanningWorkers {
 			s.start!.admitted = true;
 		});
 		await store.durable();
+		await this.markRequestStarted(op.targetId, sessionId);
 		return result;
 	}
 	private async recoverStart(op: DurableOperation) {

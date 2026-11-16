@@ -28,6 +28,8 @@ export interface PlanningWorkerState {
 	continuation: { operation: DurableOperation; entered: boolean } | null;
 	/** Entered Start is lookup-only across restart, even when no kernel receipt can be found. */
 	start?: { operation: DurableOperation; sessionId: string; taskId: string; admitted: boolean };
+	/** The Linear issue or Slack request in New this mission was planned from, as the user saw it. */
+	request?: { itemId: string; revision: number };
 	/** Tasks Pilot started by rule after the user's Start, one per task. A crash while `starting` leaves a lookup only. */
 	autoStarts?: Array<{
 		operationId: string;

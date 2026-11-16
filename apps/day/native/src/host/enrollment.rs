@@ -20,6 +20,16 @@ pub(super) struct PlanningEnrollment {
     /// The old mission this plan re-plans. The daemon links both missions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     replaces: Option<String>,
+    /// The request in New this plan comes from. The daemon takes it out of
+    /// New and links it to the mission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request: Option<EnrollRequest>,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct EnrollRequest {
+    item_id: String,
+    revision: u32,
 }
 #[derive(Debug, Serialize, Deserialize)]
 enum Purpose {
@@ -51,6 +61,9 @@ pub(super) fn validate_record(
         || r.model.trim().is_empty()
         || r.model.len() > 256
         || r.replaces.as_deref().is_some_and(|id| !super::valid_id(id))
+        || r.request
+            .as_ref()
+            .is_some_and(|q| !super::valid_id(&q.item_id) || q.revision == 0)
     {
         return Err(Error::Storage);
     }
@@ -138,6 +151,10 @@ impl Prepared {
                 .replaces
                 .as_deref()
                 .is_some_and(|id| !super::valid_id(id))
+            || intent
+                .request
+                .as_ref()
+                .is_some_and(|q| !super::valid_id(&q.item_id) || q.revision == 0)
         {
             return Err(Error::Invalid);
         }
@@ -176,6 +193,10 @@ impl Prepared {
                     .ok_or(Error::Invalid)?
                     .into(),
                 replaces: intent.replaces.clone(),
+                request: intent.request.as_ref().map(|q| EnrollRequest {
+                    item_id: q.item_id.clone(),
+                    revision: q.revision,
+                }),
             })
             .map_err(|_| Error::Invalid)?,
         )
@@ -341,6 +362,10 @@ pub(super) async fn send(
                 .map_err(|_| Error::Storage)?;
         if request["goal"] != intent.goal
             || request["replaces"].as_str() != intent.replaces.as_deref()
+            || request["request"]["itemId"].as_str()
+                != intent.request.as_ref().map(|q| q.item_id.as_str())
+            || request["request"]["revision"].as_u64()
+                != intent.request.as_ref().map(|q| u64::from(q.revision))
             || record.not_sent
         {
             return Err(Error::Stale);
@@ -454,6 +479,7 @@ mod tests {
             goal: "Re-plan the docs".into(),
             setup: prepared.setup.digest.clone(),
             replaces: replaces.map(Into::into),
+            request: None,
         };
         let payload = |r: &planning::PlanningRecord| -> Value {
             serde_json::from_str(r.operation["payload"].as_str().unwrap()).unwrap()
@@ -469,6 +495,27 @@ mod tests {
             prepared.record(&source, &intent(Some("../old"))).err(),
             Some(Error::Invalid)
         );
+        // A plan from a request in New names it, as the screen showed it.
+        let from = |item_id: &str, revision: u32| NewIntent {
+            request: Some(crate::plan::PlanRequest {
+                item_id: item_id.into(),
+                revision,
+            }),
+            ..intent(None)
+        };
+        assert!(payload(&plain).get("request").is_none());
+        let planned = prepared.record(&source, &from("issue-1", 3)).unwrap();
+        assert_eq!(
+            payload(&planned)["request"],
+            json!({"itemId": "issue-1", "revision": 3})
+        );
+        assert!(validate_record(&source, &planned.operation, Some(&prepared.setup.digest)).is_ok());
+        for (item, revision) in [("../x", 3), ("issue-1", 0)] {
+            assert_eq!(
+                prepared.record(&source, &from(item, revision)).err(),
+                Some(Error::Invalid)
+            );
+        }
         // The title is the goal's first line; the goal is kept whole.
         let lines = NewIntent {
             goal: "\n  Docs refresh  \n\nRe-plan the old mission.".into(),

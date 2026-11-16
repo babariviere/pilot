@@ -23,12 +23,19 @@ import { canonicalJSON, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager, Worker } from "./sessions.ts";
+import type { SourceRegistry } from "./sources.ts";
 import { TerminalManager } from "./terminals.ts";
 
 const exec = promisify(execFile);
 export async function planningWorkerFixture(
 	t?: TestContext,
-	options: { followup?: boolean; publishedPlan?: boolean; journey?: boolean } = {},
+	options: {
+		followup?: boolean;
+		publishedPlan?: boolean;
+		journey?: boolean;
+		/** A fake request source for the project, passed to the daemon as its tracking. */
+		tracking?: (projectId: string) => { tracking: unknown };
+	} = {},
 ) {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "planning-worker-")));
 	const home = join(root, "home"),
@@ -148,6 +155,7 @@ export default pi => {
 	const projects = new ProjectStore(home);
 	await projects.load();
 	const project = await projects.create({ path: repo, workspace: "direct" });
+	const tracking = options.tracking?.(project.id);
 	const hello = await daemonHello(home, {
 		independentExecution: true,
 		powerManagement: false,
@@ -230,6 +238,7 @@ export default pi => {
 			terminals,
 			{ service, store },
 		];
+		if (tracking) args[9] = tracking.tracking as SourceRegistry;
 		args[12] = hello;
 		args[17] = native;
 		server = createDaemonServer(...args);
@@ -339,6 +348,7 @@ export default pi => {
 		kernels,
 		project,
 		enrollment,
+		tracking,
 		operation,
 		post,
 		read,

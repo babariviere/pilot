@@ -18,6 +18,7 @@ import {
 	type TriageIntent,
 } from "./intakeFeed";
 import { openDay } from "./mockFeeds";
+import { goalDraft, planRoute, requestDraft } from "./planView";
 import { Action } from "./ui";
 
 type Item = {
@@ -235,6 +236,7 @@ mount(() => (
 			<Incoming day={day} />
 			<Text testID="counts">{`Sends: ${counts().sends} · Checks: ${counts().checks}`}</Text>
 			<Text>{`Reads: ${counts().reads}`}</Text>
+			<Text testID="plan-draft">{`New: ${planRoute()?.kind ?? "closed"} · ${goalDraft().split("\n")[0]} · request ${requestDraft()?.itemId ?? "none"}@${requestDraft()?.revision ?? 0}`}</Text>
 			<View class="flex-row flex-wrap gap-1">
 				<Action label="Lose next answer" onPress={() => lose.set(true)} />
 				<Action label="Hold answers" onPress={() => hold.set(true)} />
