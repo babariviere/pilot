@@ -811,6 +811,9 @@ export class MissionStore {
 		changed: (id, report) => this.changed(id, [], !report, false, !report),
 		reportSaved: (report) => {
 			const task = this.task(report.missionId, report.write.taskId);
+			// No coordinator can complete this task, so the worker's delivery report is the result the user checks.
+			if (report.write.delivery && this.plannedWithoutCoordinator(report.missionId))
+				this.userVerifications.recordSource(`report:${report.write.reportId}`, task.id);
 			const note = `Task #${task.number}: worker report ${report.write.reportId}${report.write.delivery ? " (scoped delivery)" : ""}. Read current task scope, owner, dependencies and report before changing status; not user acceptance.`;
 			this.event(
 				report.missionId,
@@ -1937,7 +1940,8 @@ export class MissionStore {
 				actor.sessionId,
 				missionId,
 			);
-		if (extra.wake) {
+		// A planning chat never reads mission notices, so none are queued for it.
+		if (extra.wake && !this.plannedWithoutCoordinator(missionId)) {
 			const coordinator = this.one(
 				"SELECT coordinator_session_id FROM missions WHERE id = ?",
 				missionId,
@@ -3021,6 +3025,32 @@ export class MissionStore {
 	}
 
 	/** Durable guard: passive lifecycle never re-enables automatic coordinator notices. */
+	/**
+	 * A mission planned in Pilot Day whose coordinator is still its planning chat. That chat never takes notices or
+	 * completes tasks, so workers' delivery reports go to the user's To check instead.
+	 */
+	plannedWithoutCoordinator(missionId: string): boolean {
+		const coordinator = this.one(
+			"SELECT coordinator_session_id FROM missions WHERE id=?",
+			missionId,
+		)?.coordinator_session_id;
+		const owner = this.planningWorkers.get(missionId)?.binding.ownerSessionId;
+		return typeof coordinator === "string" && coordinator === owner;
+	}
+
+	/**
+	 * Open comments a worker addressed to the coordinator (no target chat), newest first. At most 10: the result page
+	 * shows them whole, and older ones stay in the mission's comments.
+	 */
+	openCoordinatorComments(missionId: string, sessionId: string): Array<{ id: string; text: string; at: number }> {
+		return this.all(
+			`SELECT id, text, created_at FROM comments WHERE mission_id=? AND author_session_id=?
+			AND target_session_id IS NULL AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 10`,
+			missionId,
+			sessionId,
+		).map((r) => ({ id: String(r.id), text: String(r.text), at: Number(r.created_at) }));
+	}
+
 	passiveLifecycle(id: string): boolean {
 		return this.one("SELECT passive_lifecycle FROM missions WHERE id=?", id)?.passive_lifecycle === 1;
 	}

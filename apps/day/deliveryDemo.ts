@@ -170,6 +170,19 @@ export function demoResults(): DeliveredWork[] {
 				at: 1,
 			},
 		}),
+		result({ kind: "task", projectId: PROJECT, missionId: "native", taskId: "native-5" }, "5", {
+			workerDelivery: {
+				reportId: "today-native-delivery",
+				reportedAt: 1,
+				summary: "Today opens against the real service and shows a clear error when the service is down.",
+				nextStep: "Review the native host fix before other tasks rely on it.",
+				evidence: ["Closed-port window: Pilot could not reach its service."],
+				commit: "5c0ffee1".padEnd(40, "0"),
+				checks: "Native checks passed against port 4319.",
+				issues: "",
+			},
+			coordinatorRequests: [{ id: "c1", text: "Please arrange the required independent review.", at: 1 }],
+		}),
 	];
 }
 
@@ -179,6 +192,7 @@ export const DEMO_TITLES: Record<string, string> = {
 	"task/mock-project/native/native-2": "#2 Chat view",
 	"chat/mock-project/explain-exports": "Explain CSV exports in the guide",
 	"chat/mock-project/phishing-check": "Is the phishing password entry a true positive?",
+	"task/mock-project/native/native-5": "#5 Open a real Today",
 };
 
 const hex = (c: string, n = 40) => c.repeat(n);

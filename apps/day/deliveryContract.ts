@@ -62,6 +62,19 @@ export interface DeliveredWork {
 	outcome?: { outcomeAt: number; reason?: string };
 	/** A finished standalone chat's last reply, word for word; `shortened` when Pilot cut it. Its words, not a report. */
 	finalReply?: { text: string; shortened: boolean };
+	/** A planned mission with no execution coordinator: the task worker's latest delivery report. Its account only. */
+	workerDelivery?: {
+		reportId: string;
+		reportedAt: number;
+		summary: string;
+		nextStep: string;
+		evidence: string[];
+		commit: string;
+		checks: string;
+		issues: string;
+	};
+	/** In the same missions: open comments the worker addressed to the coordinator, newest first. */
+	coordinatorRequests?: Array<{ id: string; text: string; at: number }>;
 	/** A job chat's own report from its latest run. Its words, not Pilot's check. */
 	chatReport?: {
 		answer: string;

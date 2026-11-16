@@ -58,6 +58,14 @@ typed read model. Important fields:
   `pendingOperationId` blocks further assessment while an entered outcome is
   uncertain. Do not display success from the domain row alone.
 * `title` (standalone chats) is the chat's own title, so a result keeps its name after a restart.
+* `workerDelivery` and `coordinatorRequests` (tasks of planned missions with no execution
+  coordinator). After Start work, the mission's coordinator is still its planning chat. That chat never
+  takes notices (`canSendNotice` refuses planning chats) or completes tasks. So
+  `MissionStore.plannedWithoutCoordinator` missions treat the current task worker's latest report with
+  `delivery` facts as the result: saving it records a `report:<id>` discovery source, and its report ID
+  is the delivery identity. Done is the user's check; it does not change task status. The worker's open
+  comments to the coordinator (no target chat, newest 10) show on the page, and the user answers with
+  Send back or a thread. Pilot also queues no mission notices for these missions.
 * `chatReport` (job chats) is the report the chat saved with its `chat_report` tool: answer,
   how it knows, limits, next step and links. Only standalone chats started from a Slack or Linear
   intake Start or a schedule are job chats (`job` in the chat's metadata, set at creation). They

@@ -257,6 +257,21 @@ test("a job chat's report shows its answer, proof, limits, next step and links i
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
 });
 
+test("a planned mission's worker delivery report shows as the result, with what it asks the coordinator", async () => {
+	const app = await ready();
+	await pressCheck(app, "id:check-task.mock-project.native.native-5");
+	await app.waitFor("id:delivery-worker-report");
+	expect(app.texts().includes("Reports it finished. Commit 5c0ffee.")).toBe(true);
+	expect(app.shows("Today opens against the real service and shows a clear error when the service is down.")).toBe(
+		true,
+	);
+	expect(app.shows("Native checks passed against port 4319.")).toBe(true);
+	expect(app.shows("Please arrange the required independent review.")).toBe(true);
+	expect(app.shows("Answer with Send back, or in a thread with the mission.")).toBe(true);
+	expect(app.shows("Commit 5c0ffee10000")).toBe(true);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
 test("rapid presses while an answer is on its way send once", async () => {
 	const app = await ready();
 	await app.press(DOCS_ROW);

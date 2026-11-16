@@ -76,6 +76,22 @@ export interface DeliveredWork {
 	 * not a saved report or Pilot's check. `shortened` when the reply was longer than Pilot keeps here.
 	 */
 	finalReply?: { text: string; shortened: boolean };
+	/**
+	 * In a planned mission with no execution coordinator: the task worker's latest delivery report. The worker's
+	 * account, not a coordinator's completion or Pilot's check.
+	 */
+	workerDelivery?: {
+		reportId: string;
+		reportedAt: number;
+		summary: string;
+		nextStep: string;
+		evidence: string[];
+		commit: string;
+		checks: string;
+		issues: string;
+	};
+	/** In the same missions: open comments the task's worker addressed to the coordinator. Newest first, at most 10. */
+	coordinatorRequests?: Array<{ id: string; text: string; at: number }>;
 	/** The report a job chat (started from Slack, Linear or a schedule) saved with `chat_report` in its latest run. */
 	chatReport?: ChatReport;
 	pullRequests: MissionResource[];

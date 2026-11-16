@@ -128,7 +128,8 @@ function Report(props: { work: DeliveredWork }) {
 		(w().nonCodeDelivery?.references ?? [])
 			.map((r) => (r.kind === "brief" ? `Brief, revision ${r.revision}` : `Artifact, revision ${r.revision}`))
 			.join(" · ");
-	const nothing = () => !w().completion && !w().nonCodeDelivery && !w().submission && !w().outcome;
+	const nothing = () =>
+		!w().completion && !w().nonCodeDelivery && !w().submission && !w().outcome && !w().workerDelivery;
 	return (
 		<View testID="delivery-report" selectable class="gap-3 rounded-xl bg-muted px-4 py-4">
 			<Text class="text-xs text-faint">The agent reports</Text>
@@ -147,6 +148,27 @@ function Report(props: { work: DeliveredWork }) {
 			<If when={w().submission}>
 				<Said label="It says" text={w().submission?.claim ?? ""} />
 				<Said label="Limits" text={w().submission?.limitations ?? ""} />
+			</If>
+			<If when={w().workerDelivery}>
+				<View testID="delivery-worker-report" class="gap-3">
+					<Text class="text-xs text-faint">
+						The worker's delivery report. No coordinator runs this mission, so you check it here.
+					</Text>
+					<Said label="It says" text={w().workerDelivery?.summary ?? ""} />
+					<Said label="Checks it ran" text={w().workerDelivery?.checks ?? ""} />
+					<Said label="Open issues" text={w().workerDelivery?.issues ?? ""} />
+					<Said label="Next step" text={w().workerDelivery?.nextStep ?? ""} />
+					<Said label="Evidence" text={(w().workerDelivery?.evidence ?? []).join("\n")} />
+				</View>
+			</If>
+			<If when={(w().coordinatorRequests?.length ?? 0) > 0}>
+				<View testID="delivery-coordinator-requests" class="gap-1">
+					<Text class="text-xs text-faint">It asks the coordinator. No coordinator runs this mission yet:</Text>
+					<Each of={w().coordinatorRequests ?? []} key={(r) => r.id}>
+						{(r) => <Text class="text-sm leading-relaxed text-foreground">{r().text}</Text>}
+					</Each>
+					<Text class="text-xs text-faint">Answer with Send back, or in a thread with the mission.</Text>
+				</View>
 			</If>
 			<If when={w().outcome && (!w().chatReport || w().outcome?.reason)}>
 				<Said label="It says" text={w().outcome?.reason || "The chat says it is done."} />
@@ -279,7 +301,8 @@ function Outputs(props: {
 }) {
 	const w = () => props.work;
 	const key = () => props.place.key;
-	const count = () => w().pullRequests.length + w().artifacts.length + (w().completion ? 1 : 0);
+	const commit = () => w().completion?.commit ?? w().workerDelivery?.commit;
+	const count = () => w().pullRequests.length + w().artifacts.length + (commit() ? 1 : 0);
 	const web = () => props.mirror.view().webLinks;
 	const opening = (r: OutputLink) => props.mirror.view().opening.includes(`${key()}#${r.id}`);
 	const say = (m: string) => setFor(outputMessages, key(), m);
@@ -339,9 +362,9 @@ function Outputs(props: {
 					/>
 				)}
 			</Each>
-			<If when={w().completion}>
+			<If when={commit()}>
 				<View class="flex-row items-baseline gap-3 border-t border-border py-2.5">
-					<Text class="flex-1 text-sm text-foreground">{`Commit ${w().completion?.commit.slice(0, 12) ?? ""}`}</Text>
+					<Text class="flex-1 text-sm text-foreground">{`Commit ${commit()?.slice(0, 12) ?? ""}`}</Text>
 					<Text class="text-xs text-muted-foreground">Source, as the agent recorded it</Text>
 				</View>
 			</If>

@@ -14,6 +14,7 @@ import type {
 	VerificationSubject,
 } from "@pilot/protocol";
 import { MissionControls } from "./mission-controls.ts";
+import { MissionReports } from "./mission-reports.ts";
 import { MissionStore } from "./missions.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
@@ -458,6 +459,58 @@ test("entered domain success without outer receipt remains Unknown, and malforme
 	assert.deepEqual(await f.service.lookup(op), pair);
 	await assert.rejects(f.service.lookup({ ...op, producerId: "changed" }), /immutable/);
 	await assert.rejects(f.service.lookup({ ...op, origin: host }), /native/);
+});
+
+test("a planned mission with no execution coordinator shows the worker's delivery report and its requests", async (t) => {
+	const f = await fixture(t);
+	t.mock.method(f.store, "plannedWithoutCoordinator", () => true);
+	await f.service.list(f.project.id); // First use sets the discovery cutoff.
+	assert.equal((await f.service.read(f.subject)).deliveryId, null);
+	f.store.addComment(
+		f.mission.id,
+		{ text: "Please arrange an independent review.", notification: "urgent" },
+		{ sessionId: "worker" },
+	);
+	assert.deepEqual(f.store.noticeDeadlines(Date.now()), [], "the planning chat never reads notices, so none wait");
+	const reports = new MissionReports(f.store);
+	const source = reports.source(f.mission.id, "worker", f.task.id);
+	await reports.write(f.mission.id, "worker", {
+		version: 1,
+		reportId: "report-1",
+		taskId: f.task.id,
+		source: source.source,
+		expectedPreviousId: source.expectedPreviousId,
+		movement: "moving",
+		summary: "Today opens against the real service.",
+		nextStep: "Review the native host fix.",
+		evidence: ["native checks"],
+		delivery: { commit: "b".repeat(40), checks: "Native checks passed", issues: "" },
+	});
+	const page = await f.service.read(f.subject);
+	assert.ok(page.deliveryId);
+	assert.equal(page.completion, undefined, "a worker report is not a coordinator's completion");
+	assert.deepEqual(page.workerDelivery, {
+		reportId: "report-1",
+		reportedAt: page.workerDelivery!.reportedAt,
+		summary: "Today opens against the real service.",
+		nextStep: "Review the native host fix.",
+		evidence: ["native checks"],
+		commit: "b".repeat(40),
+		checks: "Native checks passed",
+		issues: "",
+	});
+	assert.deepEqual(
+		page.coordinatorRequests?.map((r) => r.text),
+		["Please arrange an independent review."],
+	);
+	// To check discovers it, and the user's check works on it.
+	assert.deepEqual((await f.service.list(f.project.id)).items[0]?.subject, f.subject);
+	assert.equal((await f.run(operation(page))).state, "accepted");
+	assert.equal(
+		f.store.task(f.mission.id, f.task.id).status !== "done",
+		true,
+		"Done is the user's check, not task status",
+	);
 });
 
 test("task status and PR merge observations never turn into verification or production", async (t) => {

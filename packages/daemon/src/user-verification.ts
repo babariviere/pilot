@@ -119,7 +119,15 @@ export class UserVerifications {
 		let identity: unknown = null;
 		let outputs: Pick<
 			DeliveredWork,
-			"completion" | "nonCodeDelivery" | "pullRequests" | "artifacts" | "outcome" | "submissionId" | "submission"
+			| "completion"
+			| "nonCodeDelivery"
+			| "pullRequests"
+			| "artifacts"
+			| "outcome"
+			| "submissionId"
+			| "submission"
+			| "workerDelivery"
+			| "coordinatorRequests"
 		> = { pullRequests: [], artifacts: [] };
 		if (subject.kind === "task") {
 			const mission = this.deps.store.require(subject.missionId);
@@ -150,6 +158,32 @@ export class UserVerifications {
 					artifacts: outputs.artifacts.map((a) => [a.sessionId, a.artifactId, a.revision ?? null]),
 					pullRequests: outputs.pullRequests.map((r) => r.id),
 				};
+			// A planned mission whose coordinator is its planning chat has no one to complete tasks or read workers'
+			// requests. The current worker's latest delivery report is then the result, and its requests are shown.
+			if (this.deps.store.plannedWithoutCoordinator(subject.missionId)) {
+				const report = this.deps.store.controls.latestReport(subject.missionId, subject.taskId);
+				const delivery = report?.write.delivery;
+				if (!identity && report && delivery && report.sessionId === task.sessionId) {
+					outputs.workerDelivery = {
+						reportId: report.write.reportId,
+						reportedAt: report.reportedAt,
+						summary: report.write.summary,
+						nextStep: report.write.nextStep,
+						evidence: report.write.evidence,
+						...delivery,
+					};
+					identity = {
+						workerReport: report.write.reportId,
+						definition: { title: task.title, body: task.body, assignment: task.assignment ?? null },
+						artifacts: outputs.artifacts.map((a) => [a.sessionId, a.artifactId, a.revision ?? null]),
+						pullRequests: outputs.pullRequests.map((r) => r.id),
+					};
+				}
+				const requests = task.sessionId
+					? this.deps.store.openCoordinatorComments(subject.missionId, task.sessionId)
+					: [];
+				if (requests.length) outputs.coordinatorRequests = requests;
+			}
 		} else {
 			const chat = this.deps.sessions.get(subject.sessionId);
 			if (!chat || chat.projectId !== subject.projectId || this.deps.store.membership(chat.id))
