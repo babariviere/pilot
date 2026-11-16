@@ -24,6 +24,7 @@ import { askRevisit } from "./planCommands";
 import type { Plans } from "./planning";
 import { goalDraft, openNew, openPlan, replacesDraft } from "./planView";
 import { MissionThreadsSection } from "./ThreadScreen";
+import { ToCheck } from "./ToCheck";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
 import { naming } from "./threadView";
 import { Action, EvidenceList, Mark, PAGE_COLUMN, RowLink, SectionTitle, Track } from "./ui";
@@ -831,6 +832,8 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 				inMission
 				earlier={props.page.freshness.state !== "live"}
 			/>
+
+			<ToCheck day={props.day} missionId={row().id} />
 
 			<View class="gap-3">
 				<SectionTitle title="Latest report" />

@@ -149,6 +149,17 @@ test("To check lists delivered results; the page shows the report, outputs and f
 	expect(app.shows("id:delivery")).toBe(false);
 });
 
+test("Today's To check sits in Needs you with a small heading; a mission's lists only its own results", async () => {
+	const app = await ready();
+	expect(app.shows("text:/^To check · \\d+$/")).toBe(true);
+	expect(app.shows("Explain CSV exports in the guide")).toBe(true);
+	await app.press("Mission native");
+	await app.waitFor("#2 Chat view");
+	expect(app.shows("Explain CSV exports in the guide")).toBe(false);
+	expect(app.shows("text:/^Native desktop app/")).toBe(false);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
 test("Mark done asks first while the PR is open, then sends once; Reopen sends once", async () => {
 	const app = await ready();
 	await openCsv(app);

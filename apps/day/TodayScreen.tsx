@@ -36,7 +36,7 @@ import {
 	type TodayScope,
 	todayScope,
 } from "./ScopeRows";
-import { ToCheck } from "./ToCheck";
+import { ToCheck, toCheckCount } from "./ToCheck";
 import { Action, EvidenceChip, InlineAction, Mark, PAGE_COLUMN, RowLink, SectionTitle, Track } from "./ui";
 import { focused, focusFront, front, type Item, move, openMission, placeRow, queue, todayPlace } from "./view";
 import { freshnessLine, provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
@@ -166,6 +166,8 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 		return a.reason;
 	};
 	const readable = () => attention().state === "live";
+	// Results to check are part of what needs the user: they count here and list below the cards.
+	const checks = () => toCheckCount(props.day);
 	// A focus request with no card to take it lapses, so a later arrival
 	// never takes the focus on its own.
 	effect(() => {
@@ -173,7 +175,7 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 	});
 	return (
 		<View class="gap-4">
-			<SectionTitle title="Needs you" count={items().length + otherNeedsCount(props.ctx)} />
+			<SectionTitle title="Needs you" count={items().length + checks() + otherNeedsCount(props.ctx)} />
 			<If when={props.ctx.tagged()}>
 				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
 			</If>
@@ -201,7 +203,11 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 							</Text>
 						}
 					>
-						<Text class="text-base text-foreground">Nothing needs you. Pilot keeps going on its own.</Text>
+						<Text class="text-base text-foreground">
+							{checks() > 0
+								? "No question or action waits for you. Check the results below."
+								: "Nothing needs you. Pilot keeps going on its own."}
+						</Text>
 					</If>
 				}
 			>
@@ -257,7 +263,9 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 					</Each>
 				</View>
 			</If>
+			<ToCheck day={props.day} nested />
 			<OtherNeeds ctx={props.ctx} />
+			<OtherToCheck ctx={props.ctx} nested />
 		</View>
 	);
 }
@@ -576,8 +584,8 @@ function OtherProject(props: { ctx: TodayScope }) {
 				<View class="gap-4">
 					<SectionTitle title="Needs you" count={otherNeedsCount(props.ctx)} />
 					<OtherNeeds ctx={props.ctx} />
+					<OtherToCheck ctx={props.ctx} nested />
 				</View>
-				<OtherToCheck ctx={props.ctx} />
 				<OtherNotShown ctx={props.ctx} />
 				<If when={props.ctx.others().some((p) => (p.planning?.plans.length ?? 0) > 0 || p.errors.planning)}>
 					<View class="gap-1">
@@ -667,8 +675,6 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 									known={today().problemsKnown}
 									earlier={today().freshness.state !== "live"}
 								/>
-								<ToCheck day={props.day} />
-								<OtherToCheck ctx={ctx} />
 								<If when={ctx.tagged()}>
 									<OtherNotShown ctx={ctx} />
 								</If>

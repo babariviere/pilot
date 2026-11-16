@@ -18,6 +18,7 @@ Show planning chat opens its conversation, read only.
 Command+K opens a palette over any screen. Search to go to a place or to a mission
 that Today or Planning lists. It only navigates: answers, sends and starts stay on their pages.
 Today To check discovers new mission deliveries from a saved first-use cutoff.
+To check is part of Needs you on Today, and a mission's overview lists its own results to check.
 Older work stays in missions, without being accepted or deleted. Your saved
 checks stay available. Other projects' results are read-only in this window.
 A result's Agent work section (folded until Show, or opened from a task linked in a thread) lists

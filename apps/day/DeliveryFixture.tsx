@@ -5,7 +5,7 @@
 // Check reads it; Check never sends again; a save and reopen keeps unsent
 // notes and sends nothing. Inspect source reads one exact pin's saved
 // source once and shows it as plain text; nothing runs it.
-import { mount, Scroll, Text, View } from "nsh";
+import { mount, Scroll, signal, Text, View } from "nsh";
 import { DeliveryScreen } from "./DeliveryScreen";
 import { ScriptedDelivery } from "./deliveryDemo";
 import { mirrorDelivery } from "./deliveryFeed";
@@ -17,6 +17,8 @@ import { captureView, restoreView, startFresh } from "./updateView";
 
 const source = new ScriptedDelivery();
 const day = { ...openDay(), delivery: mirrorDelivery(source) };
+/** Shows one mission's To check, as its overview does, instead of Today's. */
+const missionOnly = signal(false);
 
 mount(() => (
 	<View class="flex-1 bg-background">
@@ -26,7 +28,9 @@ mount(() => (
 				else={
 					<Scroll class="flex-1">
 						<View class="w-full max-w-2xl self-center gap-6 px-6 py-6">
-							<ToCheck day={day} />
+							<If when={missionOnly()} else={<ToCheck day={day} nested />}>
+								<ToCheck day={day} missionId="native" />
+							</If>
 						</View>
 					</Scroll>
 				}
@@ -44,6 +48,7 @@ mount(() => (
 				<Text testID="reads">{`Source reads: [${source.reads().join(" ")}]`}</Text>
 				<Text testID="work-reads">{`Work reads: ${source.workReads().length}`}</Text>
 				<View class="flex-row flex-wrap gap-1">
+					<Action label="Mission native" onPress={() => missionOnly.set(!missionOnly())} />
 					<Action label="Refuse work" onPress={() => (source.refuseWork = "unavailable")} />
 					<Action label="Lose next answer" onPress={() => (source.script.loseNext = true)} />
 					<Action label="Lose next open" onPress={() => (source.script.loseOpen = true)} />

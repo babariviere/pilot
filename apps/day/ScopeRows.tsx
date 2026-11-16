@@ -508,7 +508,7 @@ export function OtherNew(props: { ctx: TodayScope }) {
 }
 
 /** Other projects' delivered results. Reading does not retarget this window or grant actions. */
-export function OtherToCheck(props: { ctx: TodayScope }) {
+export function OtherToCheck(props: { ctx: TodayScope; nested?: boolean }) {
 	const rows = (p: ScopeProject) =>
 		p.results?.items.filter(
 			(i) => i.unsettled || i.snapshot?.pendingOperationId || waitsForCheck(i.snapshot, undefined),
@@ -517,7 +517,11 @@ export function OtherToCheck(props: { ctx: TodayScope }) {
 	return (
 		<If when={shown().length > 0}>
 			<View class="gap-1" testID="scope-to-check">
-				<SectionTitle title="To check" />
+				<If when={props.nested} else={<SectionTitle title="To check" />}>
+					<Text role="header" class="pb-0.5 text-xs font-medium text-muted-foreground">
+						To check in other projects
+					</Text>
+				</If>
 				<Each of={shown()} key={(p) => p.id}>
 					{(p) => (
 						<View class="gap-0.5">
