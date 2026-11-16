@@ -1,9 +1,9 @@
 /** New-flow host contracts. These records never grant model, tool or delivery permissions. */
-export interface InterviewOption {
+export type InterviewOption = {
 	id: string;
 	meaning: string;
-}
-export interface InterviewQuestion {
+};
+export type InterviewQuestion = {
 	id: string;
 	section: "outcome" | "non-goals" | "constraints" | "acceptance" | "authority";
 	prompt: string;
@@ -11,15 +11,15 @@ export interface InterviewQuestion {
 	recommendedOptionId: string | null;
 	/** Background in plain words, shown when the user asks for more: what the question is about, what happens today, what each option changes. */
 	context?: string;
-}
-export interface InterviewAnswer {
+};
+export type InterviewAnswer = {
 	questionId: string;
 	/** Exact question meaning at explicit answer time, not the latest question's digest. */
 	questionDigest: string;
 	selectedOption: InterviewOption | null;
 	/** Custom answer or extra detail. Kept byte-for-byte, including incomplete drafts. */
 	text: string;
-}
+};
 export interface InterviewFence {
 	missionId: string;
 	ownerSessionId: string;

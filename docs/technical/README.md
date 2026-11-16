@@ -73,6 +73,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Native Today qualification and ownership boundaries](day-today-qualification.md)
 - [Proposed mission interview and approval contract](mission-interview-approval.md)
 - [Day interview and agreement backend (host-only)](day-mission-agreements.md)
+- [Shared interview tool, standalone rounds and nonblocking questions](shared-interviews.md)
 - [Native mission planning and Fog of war (host-only)](day-mission-planning.md)
 - [Native Today intake, triage and Start receipts](day-intake.md)
 - [Project-pinned standalone New chat](day-new-chat.md)

@@ -976,12 +976,23 @@ export interface ArtifactImageSize {
 }
 
 /**
- * Data of a `pilot.question` transcript entry, written by the agent's ask_user tool. The question is pending until a
+ * Data of a `pilot.question` transcript entry, written by ask_user or interview. The question is pending until a
  * later user message; that message is the reply.
  */
+/** Exact human submission of one saved standalone round. */
+export interface StandaloneInterviewReply {
+	roundId: string;
+	answers: import("./mission-interview.ts").InterviewAnswer[];
+}
 export interface AgentQuestion {
+	/** A complete saved interview round, not a blocking ask_user invocation. */
+	interview?: {
+		roundId: string;
+		questions: import("./mission-interview.ts").InterviewQuestion[];
+		questionDigests: Record<string, string>;
+	};
 	question: string;
-	/** ask_user is suspended in the live run; legacy questions and DB approvals still end their turn. */
+	/** Historical blocking invocations only. New questions and interviews always end their turn. */
 	blocking?: boolean;
 	context?: string;
 	/** At most nine answers, in the order shown and numbered from 1. May be empty for an open question. */

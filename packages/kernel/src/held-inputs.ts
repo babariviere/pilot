@@ -23,6 +23,7 @@ import {
 import type { DeliveryMode } from "@pilot/protocol";
 import { HeldInputsDoc, type HeldInput as Input, type SystemMessageStateEvent } from "./held-inputs-doc.ts";
 import { inputOrigin } from "./input-origin.ts";
+import { acceptInterviewReply, StandaloneInterviewDoc } from "./interview-state.ts";
 import { QUESTION_ENTRY } from "./question-entry.ts";
 
 /** A native reply's exact immutable question is no longer answerable. */
@@ -32,6 +33,18 @@ export class InputGenerationRefused extends Error {}
 import { previewText, type WithdrawnMessage } from "./queue.ts";
 
 export { HeldInputsDoc, type SystemMessageStateEvent } from "./held-inputs-doc.ts";
+
+/** The same hold rule applies to Harness calls and dynamically constructed native calls. */
+export function pendingQuestionToolBlock(
+	state: { questionPending?: boolean; interviewPending?: number } | undefined,
+	name: string,
+	args: Record<string, unknown>,
+): string | undefined {
+	if (!state?.questionPending) return undefined;
+	if (state.interviewPending && name === "interview" && ["read", "check"].includes(String(args.action)))
+		return undefined;
+	return "Answer the saved question or interview before running more tools";
+}
 
 /** A timed-out/cancelled script loses its stack, but its question still needs an explicit answer. */
 export function questionBoundary(extension: Extension, session: () => Harness | undefined): Extension {
@@ -46,11 +59,15 @@ export function questionBoundary(extension: Extension, session: () => Harness | 
 				},
 			}),
 			hook(ToolTask, {
+				beforeTool: async (call, api, context) => {
+					const held = await session()?.snapshot(HeldInputsDoc, api.conversationId, context);
+					const block = pendingQuestionToolBlock(held, call.name, call.arguments);
+					if (block) return { block };
+				},
 				afterTool: async (call, result, api, context) => {
 					if (call.parent) return;
 					const held = await session()?.snapshot(HeldInputsDoc, api.conversationId, context);
-					if (held?.blockingQuestion && held.questionPending)
-						return { ...result, control: { ...result.control, terminate: true } };
+					if (held?.questionPending) return { ...result, control: { ...result.control, terminate: true } };
 				},
 			}),
 			...(extension.hooks ?? []),
@@ -101,43 +118,6 @@ export async function finishQuestionReply(
 	}, context);
 }
 
-/** Observe the committed reply, not a transport ACK or an automatic notification. No polling. */
-export async function waitForQuestionAnswer(
-	session: Pick<Harness, "watchDoc">,
-	conversationId: ConversationId,
-	callId: string,
-	context: Context,
-	signal?: AbortSignal,
-): Promise<string> {
-	const watch = await session.watchDoc(HeldInputsDoc, conversationId, context);
-	if (!watch) throw new Error("Question is unavailable");
-	let abort = () => {};
-	try {
-		return await new Promise<string>((resolve, reject) => {
-			abort = () => reject(signal?.reason ?? new Error("Question cancelled"));
-			signal?.addEventListener("abort", abort, { once: true });
-			if (signal?.aborted) {
-				abort();
-				return;
-			}
-			const check = (state: typeof watch.value) => {
-				const question = state?.blockingQuestion;
-				// Stop clears the gate before signalling the tool. Only the signal cancels the
-				// await, so a script cannot catch a premature rejection and start another effect.
-				if (question?.callId === callId && question.answer !== undefined) resolve(question.answer);
-			};
-			check(watch.value);
-			watch.start(async (call) => {
-				if (call.kind === "value" && !call.retired) check(call.value);
-			});
-			void watch.closed.then(() => reject(new Error("Question watch closed")), reject);
-		});
-	} finally {
-		signal?.removeEventListener("abort", abort);
-		await watch.stop();
-	}
-}
-
 /** Publish and fence the next boundary together, before a tool can return or suspend. */
 export async function publishQuestionWithHeld(
 	session: Pick<Session, "commit">,
@@ -146,16 +126,32 @@ export async function publishQuestionWithHeld(
 	requestId: string,
 	data: EntryDraft["data"],
 	context: Context,
+	interviewExpected?: string | null,
 ): Promise<void> {
 	const published = await session.commit(async (tx) => {
 		if (await tx.submissionByRequest(conversationId, requestId)) return true;
 		const held = await tx.doc(HeldInputsDoc, conversationId);
-		if (held.questionPending && held.blockingQuestion) return false;
+		if (held.stopped) throw new Error("Chat is stopped");
+		if (held.questionPending && (held.blockingQuestion || held.interviewPending)) return false;
+		const round = interviewExpected !== undefined ? await tx.doc(StandaloneInterviewDoc, conversationId) : undefined;
+		if (round && interviewExpected !== (round.revision ? String(round.revision) : null))
+			throw new Error("Interview revision changed; read it again");
 		const blocking = typeof data === "object" && data !== null && !Array.isArray(data) && data.blocking === true;
-		await holdQuestionInbox(tx, conversationId, readSubmission, blocking);
+		await holdQuestionInbox(tx, conversationId, readSubmission, true);
 		if (blocking) held.blockingQuestion = { callId: requestId };
 		const entry = await tx.appendEntry(conversationId, { kind: QUESTION_ENTRY, data, model: [] });
 		await tx.createSubmission({ conversationId, requestId, type: "write", status: "done", entry: entry.id });
+		if (round) {
+			const interview = (data as unknown as import("@pilot/protocol").AgentQuestion).interview!;
+			round.revision++;
+			round.round = {
+				entryId: Number(entry.id),
+				roundId: interview.roundId,
+				questions: structuredClone(interview.questions),
+				submission: null,
+			};
+			held.interviewPending = Number(entry.id);
+		}
 		return true;
 	}, context);
 	if (!published) throw new Error("Answer the pending question before asking another");
@@ -170,7 +166,7 @@ export async function initializeQuestionHold(
 ): Promise<boolean> {
 	return session.commit(async (tx) => {
 		const held = await tx.doc(HeldInputsDoc, conversationId);
-		const interrupted = !!held.blockingQuestion && !!held.questionPending;
+		const interrupted = !!(held.blockingQuestion || held.interviewPending) && !!held.questionPending;
 		// Native tools are replay-unsafe. A replacement worker never resumes a script's JS stack.
 		// Keep its unanswered question as a legacy next-turn question instead.
 		// An accepted reply is restored at the recovered tool round's boundary.
@@ -294,6 +290,7 @@ export async function holdOnStop(
 		const records = await Promise.all(inputs.map((item) => readSubmission(item.id)));
 		held.stopped = true;
 		held.questionPending = false;
+		delete held.interviewPending;
 		if (held.blockingQuestion?.answer === undefined) delete held.blockingQuestion;
 		const withdrawn: { mode: DeliveryMode; content: string; requestId?: string }[] = [];
 		inputs.forEach((item, index) => {
@@ -352,6 +349,7 @@ export async function admitWithHeld(
 				entry?: Input["entry"];
 				answerQuestionId?: number;
 				questionReplyId?: number;
+				interviewReply?: import("@pilot/protocol").StandaloneInterviewReply;
 				dedupeOnly?: boolean;
 		  }
 		| undefined,
@@ -411,6 +409,7 @@ export async function admitWithHeld(
 				cursor = page.next;
 			} while (cursor !== undefined);
 		}
+
 		if (
 			!held.stopped &&
 			!held.paused &&
@@ -422,6 +421,27 @@ export async function admitWithHeld(
 			return undefined;
 		const existing = input ? await tx.submissionByRequest(conversationId, input.requestId) : undefined;
 		if (existing) return { id: existing.id, held: held.items.some((item) => item.id === existing.id) };
+		if (
+			held.questionPending &&
+			held.interviewPending &&
+			input &&
+			(!inputOrigin(input.requestId) || coordinatorAnswer)
+		) {
+			if (!nativeReply || questionId !== held.interviewPending || !input.interviewReply)
+				throw new QuestionReplyRefused("Submit the complete saved interview in Pilot before proceeding");
+			try {
+				input.content = await acceptInterviewReply(
+					tx,
+					conversationId,
+					held.interviewPending,
+					input.requestId,
+					input.interviewReply,
+				);
+			} catch (error) {
+				throw new QuestionReplyRefused(error instanceof Error ? error.message : "Invalid interview submission");
+			}
+			delete held.interviewPending;
+		} else if (input?.interviewReply) throw new QuestionReplyRefused("That interview round is no longer pending");
 		const live = await tx.doc(LiveDoc, conversationId);
 		const inbox = await tx.doc(InboxDoc, conversationId);
 		if (held.questionPending && !input) return { held: true };

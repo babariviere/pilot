@@ -708,7 +708,7 @@ async fn run(
             if serde_json::to_vec(&value)
                 .map_err(|_| Error::Invalid)?
                 .len()
-                > ah::DRAFT_LIMIT
+                > ah::draft_limit(&read, &r.item_id)
             {
                 return Err(Error::Invalid);
             }

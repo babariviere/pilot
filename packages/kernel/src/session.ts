@@ -72,9 +72,9 @@ import {
 	initializeQuestionHold,
 	pauseInputs,
 	publishQuestionWithHeld,
+	pendingQuestionToolBlock,
 	questionBoundary,
 	type SystemMessageStateEvent,
-	waitForQuestionAnswer,
 } from "./held-inputs.ts";
 import { createHistoryRecallTool } from "./history-recall.ts";
 import { submitIdleInput } from "./idle-input.ts";
@@ -109,6 +109,8 @@ import type { WorkspaceContext } from "./policy.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
 import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
+import { createInterviewTool } from "./interview-tool.ts";
+import { interviewQuestion, StandaloneInterviewDoc } from "./interview-state.ts";
 import { createQuestionTool, type PublishQuestion } from "./question-tool.ts";
 import {
 	editQueuedMessage,
@@ -524,26 +526,54 @@ export class KernelSession {
 				);
 			});
 		};
-		const awaited = new Map<string, string>();
-		const reportAwaited = () => hooks.onQuestionAwaited?.([...awaited.values()].at(-1));
-		const questionTool = createQuestionTool(async (callId, question, signal) => {
-			signal?.throwIfAborted();
-			await publishQuestion(callId, { ...question, blocking: true }, signal);
-			awaited.set(callId, question.question);
-			reportAwaited();
-			try {
-				return await waitForQuestionAnswer(
-					harness!,
-					artifactConversation!.id,
-					`question:${callId}`,
-					context,
-					signal,
-				);
-			} finally {
-				awaited.delete(callId);
-				reportAwaited();
-			}
-		});
+		const questionTool = createQuestionTool((callId, question, signal) => publishQuestion(callId, question, signal));
+		const readInterview = async () => {
+			if (mission.current) throw new Error("Standalone interviews cannot author mission planning");
+			if (!artifactConversation || !harness) throw new Error("Interview requires a bound conversation");
+			const state = await harness.snapshot(StandaloneInterviewDoc, artifactConversation.id, context);
+			return {
+				expected: state?.revision ? String(state.revision) : null,
+				questions: state?.round?.questions ?? [],
+				answers: state?.round?.submission?.answers ?? [],
+				submission: state?.round?.submission ?? null,
+			};
+		};
+		const interviewTool =
+			!spec.planning && !spec.role && !spec.mission
+				? createInterviewTool({
+						read: readInterview,
+						questions: async (callId, request, signal) => {
+							if (!artifactConversation || !harness) throw new Error("Interview requires a bound conversation");
+							if (mission.current) throw new Error("Standalone interviews cannot author mission planning");
+							if (request.kind) throw new Error("Standalone interviews have no mission Revisit kind");
+							await serializeQuestion(async () => {
+								signal?.throwIfAborted();
+								const question = interviewQuestion(callId, request.questions);
+								await publishQuestionWithHeld(
+									harness!,
+									artifactConversation!.id,
+									(id) => owned.storage.submission(id, context),
+									`interview:${callId}`,
+									{ ...question },
+									context,
+									request.expected,
+								);
+							});
+							return {
+								...(await readInterview()),
+								operationId: `interview:${callId}`,
+								waitingForSubmission: true,
+							};
+						},
+						receipt: async (operationId) => {
+							if (!artifactConversation) throw new Error("Interview requires a bound conversation");
+							return artifactConversation.commit(async (tx) => {
+								const receipt = await tx.submissionByRequest(artifactConversation!.id, operationId);
+								return receipt ? { operationId, status: receipt.status } : { operationId, status: "unknown" };
+							}, context);
+						},
+					})
+				: undefined;
 		const callTodo: TodoCall = async (args, actor) => {
 			validateTodoArgs(args, actor);
 			if (!artifactConversation || !harness) throw new Error("Todos require a bound chat");
@@ -746,7 +776,11 @@ export class KernelSession {
 					publish: (activity) => hooks.onToolActivity?.(activity),
 				},
 				hostExtensions: [
-					nativeToolPolicy(pilot.executionPermission),
+					nativeToolPolicy(pilot.executionPermission, async (name, args) => {
+						if (!harness || !artifactConversation) return undefined;
+						const held = await harness.snapshot(HeldInputsDoc, artifactConversation.id, context);
+						return pendingQuestionToolBlock(held, name, args);
+					}),
 					jobs.native,
 					...(provenance ? [provenance.native] : []),
 					...(refs ? [refs.native] : []),
@@ -786,6 +820,7 @@ export class KernelSession {
 						: []),
 					...missionTools,
 					questionTool,
+					...(interviewTool ? [interviewTool] : []),
 					...(!spec.pilot?.ask ? [createTodoTool(callTodo, () => spec.sessionId)] : []),
 					...(!spec.pilot?.ask && hooks.callSlackStatus ? [createSlackStatusTool(hooks.callSlackStatus)] : []),
 					...(spec.pilot?.job && hooks.callChatReport ? [createChatReportTool(hooks.callChatReport)] : []),
@@ -1559,6 +1594,7 @@ export class KernelSession {
 		answerQuestionId?: number,
 		questionReplyId?: number,
 		dedupeOnly = false,
+		interviewReply?: import("@pilot/protocol").StandaloneInterviewReply,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
 		// Reserve admission before serialization yields, so model changes and idle-only sends cannot race preparation.
 		if (this.#closing || this.#changingModel || this.#moving || (onlyIfIdle && this.#admissions))
@@ -1577,6 +1613,7 @@ export class KernelSession {
 				answerQuestionId,
 				questionReplyId,
 				dedupeOnly,
+				interviewReply,
 			),
 		);
 	}
@@ -1593,6 +1630,7 @@ export class KernelSession {
 		answerQuestionId?: number,
 		questionReplyId?: number,
 		dedupeOnly = false,
+		interviewReply?: import("@pilot/protocol").StandaloneInterviewReply,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
 		const traced = trace ? this.adapter.beginInteraction(requestId, trace) : false;
 		try {
@@ -1610,7 +1648,7 @@ export class KernelSession {
 						}
 					: { delivery: existing.status === "queued" ? "queued" : "delivered" };
 			}
-			const prepared = dedupeOnly ? content : await this.adapter.prepareInput(content);
+			const prepared = dedupeOnly || interviewReply ? content : await this.adapter.prepareInput(content);
 			const heldAdmission = await admitWithHeld(
 				this.harness,
 				this.conversation.id,
@@ -1620,6 +1658,7 @@ export class KernelSession {
 					mode,
 					...(answerQuestionId !== undefined ? { answerQuestionId } : {}),
 					...(questionReplyId !== undefined ? { questionReplyId } : {}),
+					...(interviewReply ? { interviewReply } : {}),
 					...(dedupeOnly ? { dedupeOnly: true } : {}),
 					...(event ? { entry: { kind: "pi.user", data: { event: { ...event } } } } : {}),
 				},

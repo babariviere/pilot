@@ -453,9 +453,25 @@ test("standalone Ask and Build choose interviews by material uncertainty, honori
 		assert.match(prompt, /different answers would materially change scope, behavior, acceptance or risk/);
 		assert.match(prompt, /Investigate discoverable facts instead of asking the user/);
 		assert.match(prompt, /When the user requests an interview, complete it before proceeding/);
-		assert.match(prompt, /Use ask_user for questions and wait for the human answer/);
+		assert.match(prompt, /Use interview actions read\/questions\/check/);
+		assert.match(prompt, /save the full question list and check answers/);
+		assert.match(prompt, /Saving questions returns immediately: end your turn when the round is saved/);
+		assert.match(prompt, /native submission resumes the chat/);
+		assert.match(prompt, /Never answer or select for the human/);
+		assert.match(prompt, /Use ask_user for isolated blockers, not interview rounds/);
+		assert.doesNotMatch(prompt, /Use ask_user for questions|or when blocked/);
 		assert.match(prompt, /Answers never expand this chat's permissions/);
 	}
+});
+
+test("standalone interview guidance does not replace coordinator or mission workflows", () => {
+	const coordinator = pilotPrompt({}, false, true);
+	assert.doesNotMatch(coordinator, /Use interview actions|For standalone chats/);
+	const thread = missionPrompt({ ...mission, thread: { topicId: "topic", title: "Design" } });
+	assert.match(thread, /one question at a time/);
+	assert.match(thread, /Only after they say yes, call mission handoff/);
+	assert.doesNotMatch(thread, /Use interview actions|native submission resumes/);
+	assert.match(missionPrompt(mission), /ask the user with `ask_user`/);
 });
 
 test("Build verification guidance prefers focused iteration, never Ask", () => {

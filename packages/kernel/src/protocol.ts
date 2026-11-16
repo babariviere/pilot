@@ -233,6 +233,8 @@ export type KernelCommand =
 			answerQuestionId?: number;
 			/** Native user reply, atomically fenced to the exact immutable question entry. */
 			questionReplyId?: number;
+			/** Exact native human submission, checked again on the kernel mutation line. */
+			interviewReply?: import("@pilot/protocol").StandaloneInterviewReply;
 			/** Native capture's Stop generation, retained in pilotd's outbox. */
 			inputGeneration?: number;
 			/** A newer Stop permits receipt dedupe only, never a new submission. */

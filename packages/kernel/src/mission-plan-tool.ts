@@ -2,6 +2,7 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import type { InterviewWrite, PlanWrite } from "@pilot/protocol";
 import { Type } from "typebox";
 import type { MissionRevisionDelta } from "../../protocol/src/mission-revision.ts";
+import { interviewQuestionSchema } from "./interview-tool.ts";
 
 export interface NativePlanningPort {
 	/** Bound to the current admitted mission/project/coordinator, never model-supplied IDs. */
@@ -233,7 +234,7 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 		name: "mission_plan",
 		label: "Mission planning",
 		description:
-			"Read native planning or save a revision-bound map, questions, spec or slices. After publication, read returns current agreement/tasks/active decisions and settled answers; only explicitly requested Revisit questions or an inert revision delta are allowed. Use read revisionSource for action revision; only separate exact human confirmation applies it. Prototype findings need exact digests and a pinned artifact; they never accept a preference. Human answers use native UI. Publication starts nothing. Unknown writes require exact receipt lookup, never a new attempt. Action replaced reads the old mission this one re-plans (brief, decisions, task list; pass task for one task with its latest report).",
+			"Read native planning or save a revision-bound map, questions, spec or slices. After publication, read returns current agreement/tasks/active decisions and settled answers; only explicitly requested Revisit questions or an inert revision delta are allowed. Use read revisionSource for action revision; only separate exact human confirmation applies it. Prototype findings need exact digests and a pinned artifact; they never accept a preference. Use interview action questions for initial and Revisit rounds; action questions here is compatibility only. Keep plan-ask/plan-review for map-linked rounds. Human answers use native UI. Publication starts nothing. Unknown writes require exact receipt lookup, never a new attempt. Action replaced reads the old mission this one re-plans (brief, decisions, task list; pass task for one task with its latest report).",
 		parameters: Type.Union([
 			Type.Object(
 				{
@@ -278,26 +279,7 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 							}),
 							revision: Type.Integer(),
 						}),
-						questions: Type.Array(
-							Type.Object({
-								id: key,
-								section: Type.Union(
-									["outcome", "non-goals", "constraints", "acceptance", "authority"].map((s) =>
-										Type.Literal(s),
-									),
-								),
-								prompt: Type.String(),
-								options: Type.Array(option),
-								recommendedOptionId: Type.Union([key, Type.Null()]),
-								context: Type.Optional(
-									Type.String({
-										maxLength: 1500,
-										description:
-											"Background in plain words, shown on request: what the question is about, what happens today, what each option changes.",
-									}),
-								),
-							}),
-						),
+						questions: Type.Array(interviewQuestionSchema),
 					}),
 				},
 				{ additionalProperties: false },

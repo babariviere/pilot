@@ -654,7 +654,9 @@ impl Native {
         };
         let before = self.current_draft(&key);
         let value = ah::draft_value(&ah::draft_from(&key, intent, before.as_ref()));
-        if serde_json::to_vec(&value).map_or(true, |v| v.len() > ah::DRAFT_LIMIT) {
+        if serde_json::to_vec(&value)
+            .map_or(true, |v| v.len() > ah::draft_limit(&read, &intent.item_id))
+        {
             return self.outcome(
                 OutcomeStatus::Rejected,
                 "This is too long to save. It stays on screen; copy it before you close Pilot.",

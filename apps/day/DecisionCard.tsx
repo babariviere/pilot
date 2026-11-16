@@ -25,6 +25,7 @@ import {
 	toggleHelp,
 } from "./commands";
 import type { Day } from "./day";
+import { InterviewCard } from "./InterviewCard";
 import { keepField } from "./kept";
 import { QuestionArtifacts } from "./QuestionArtifacts";
 import { Action, Bars, EvidenceChip, HelpChip, InlineAction, Mark, type MarkKind } from "./ui";
@@ -132,7 +133,7 @@ function pickedLine(decision: Decision): string {
 }
 
 /** The decision `props.decision`, `props.index` of `props.count` waiting. */
-export function DecisionCard(props: { day: Day; decision: Decision; index: number; count: number; later: boolean }) {
+function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: number; count: number; later: boolean }) {
 	const d = () => props.decision;
 	const id = props.decision.id;
 	const idle = () => d().delivery === "idle";
@@ -520,5 +521,18 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 				</View>
 			</If>
 		</View>
+	);
+}
+
+/** A new immutable round gets its own local draft state. */
+export function DecisionCard(props: { day: Day; decision: Decision; index: number; count: number; later: boolean }) {
+	return (
+		<Each of={[props.decision]} key={(d) => `${d.id}:${d.interviewRoundId ?? "ordinary"}`}>
+			{(d) => (
+				<If when={d().interviewRoundId} else={<OrdinaryDecisionCard {...props} decision={d()} />}>
+					<InterviewCard {...props} decision={d()} />
+				</If>
+			)}
+		</Each>
 	);
 }

@@ -4,6 +4,7 @@
 	"private": true,
 	"type": "module",
 	"exports": {
+		"./interview-round": "./src/interview-round.ts",
 		"./retained-calls": "./src/retained-call-runner.ts",
 		"./subscription-refresh": "./src/subscription-refresh.ts",
 		"./mission-write": "./src/mission-write.ts",

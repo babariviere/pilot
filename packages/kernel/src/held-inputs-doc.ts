@@ -17,6 +17,8 @@ export const HeldInputsDoc = defineDoc<{
 	planning?: boolean;
 	/** Automatic input cannot act as the reply to an interactive question. */
 	questionPending?: boolean;
+	/** A complete nonblocking interview round waits for exact native submission. */
+	interviewPending?: number;
 	/** Live ask identity and committed answer. An unanswered interrupted invocation becomes a legacy question. */
 	blockingQuestion?: { callId: string; answer?: string };
 	/** Replies remain visible immediately; their model contribution waits for the enclosing tool round. */

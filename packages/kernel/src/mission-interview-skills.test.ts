@@ -161,3 +161,9 @@ test("opted-in native coordinator loads and reads actual upstream entries", asyn
 		/trusted coordinator host/,
 	);
 });
+
+test("initial interview adaptation uses the shared immediate-return tool", () => {
+	assert.match(INTERVIEW_SKILL_ADAPTATION, /interview action questions for the initial full-list round/);
+	assert.match(INTERVIEW_SKILL_ADAPTATION, /tool returns immediately/);
+	assert.match(INTERVIEW_SKILL_ADAPTATION, /Keep mission_plan plan-ask\/plan-review/);
+});

@@ -1,103 +1,35 @@
 import type { InterviewAnswer, InterviewQuestion, MissionInterview } from "@pilot/protocol";
+import * as round from "@pilot/kernel/interview-round";
 import { Conflict } from "./errors.ts";
-import { canonicalJSON, payloadHash } from "./operation-journal.ts";
-
-export const interviewDigest = (value: unknown): string => payloadHash(canonicalJSON(value));
+import { canonicalJSON } from "./operation-journal.ts";
+export const interviewDigest = round.interviewDigest;
+export const ANSWERS_LIMIT = round.ANSWERS_LIMIT;
+export const AGREEMENT_LIMIT = 28 * 1024;
+function checked<T>(work: () => T): T {
+	try {
+		return work();
+	} catch (error) {
+		if (error instanceof round.InterviewInvalid) throw new Conflict(error.message);
+		throw error;
+	}
+}
 export function interviewExact(value: unknown, keys: string[]): asserts value is Record<string, unknown> {
-	if (
-		!value ||
-		typeof value !== "object" ||
-		Array.isArray(value) ||
-		Object.keys(value).length !== keys.length ||
-		keys.some((key) => !Object.hasOwn(value, key))
-	)
-		throw new Conflict("Expected exact interview fields");
+	checked(() => round.interviewExact(value, keys));
 }
 export function interviewText(value: unknown, max: number, empty = false): asserts value is string {
-	if (typeof value !== "string" || Buffer.byteLength(value) > max || (!empty && !value.trim()))
-		throw new Conflict("Invalid interview text");
+	checked(() => round.interviewText(value, max, empty));
 }
-/** Largest answer list in one save. See validateAnswers. */
-export const ANSWERS_LIMIT = 48 * 1024;
-/** Largest agreement (the mission brief). See agreementMarkdown. */
-export const AGREEMENT_LIMIT = 28 * 1024;
 export function interviewId(value: unknown): asserts value is string {
-	if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value))
-		throw new Conflict("Invalid interview identity");
+	checked(() => round.interviewId(value));
 }
 export function validateQuestions(value: unknown): asserts value is InterviewQuestion[] {
-	// A round is answered by a person in one sitting: 40 questions and 40 KiB keep it readable.
-	if (!Array.isArray(value) || !value.length || value.length > 40)
-		throw new Conflict(
-			`Interview needs 1–40 questions; this round has ${Array.isArray(value) ? value.length : 0}. Split it into rounds.`,
-		);
-	const bytes = Buffer.byteLength(JSON.stringify(value));
-	if (bytes > 40 * 1024)
-		throw new Conflict(
-			`Interview questions are ${Math.ceil(bytes / 1024)} KiB, more than 40 KiB. Shorten context or options, or split the round.`,
-		);
-	const seen = new Set<string>();
-	for (const q of value) {
-		const context = q && typeof q === "object" && Object.hasOwn(q, "context");
-		interviewExact(q, ["id", "section", "prompt", "options", "recommendedOptionId", ...(context ? ["context"] : [])]);
-		if (context) interviewText(q.context, 1500);
-		interviewId(q.id);
-		interviewText(q.prompt, 2000);
-		if (
-			seen.has(q.id) ||
-			typeof q.section !== "string" ||
-			!["outcome", "non-goals", "constraints", "acceptance", "authority"].includes(q.section) ||
-			!Array.isArray(q.options) ||
-			q.options.length > 8
-		)
-			throw new Conflict("Invalid interview question");
-		seen.add(q.id);
-		const options = new Set<string>();
-		for (const option of q.options) {
-			interviewExact(option, ["id", "meaning"]);
-			interviewId(option.id);
-			interviewText(option.meaning, 2000);
-			if (options.has(option.id)) throw new Conflict("Duplicate option");
-			options.add(option.id);
-		}
-		if (
-			q.recommendedOptionId !== null &&
-			(typeof q.recommendedOptionId !== "string" || !options.has(q.recommendedOptionId))
-		)
-			throw new Conflict("Recommendation must reference an option");
-	}
+	checked(() => round.validateQuestions(value));
 }
 export function validateAnswers(value: unknown, questions: InterviewQuestion[]): asserts value is InterviewAnswer[] {
-	if (!Array.isArray(value) || value.length > 40) throw new Conflict("Answers need at most one per question");
-	// One save carries every answer and must fit an operation (64 KiB), so 48 KiB leaves room for the rest.
-	// Each answer repeats its picked option, so a full round with long answers needs this much.
-	const bytes = Buffer.byteLength(JSON.stringify(value));
-	if (bytes > ANSWERS_LIMIT)
-		throw new Conflict(
-			`Answers are ${Math.ceil(bytes / 1024)} KiB, more than ${ANSWERS_LIMIT / 1024} KiB. Shorten the longest answers.`,
-		);
-	const seen = new Set<string>();
-	for (const a of value) {
-		interviewExact(a, ["questionId", "questionDigest", "selectedOption", "text"]);
-		const q = questions.find((q) => q.id === a.questionId);
-		if (!q || seen.has(q.id) || a.questionDigest !== interviewDigest(q))
-			throw new Conflict("Answer question meaning changed");
-		seen.add(q.id);
-		interviewText(a.text, 4000, true);
-		if (
-			a.selectedOption !== null &&
-			!q.options.some((option) => canonicalJSON(option) === canonicalJSON(a.selectedOption))
-		)
-			throw new Conflict("Selected option identity or meaning changed");
-	}
+	checked(() => round.validateAnswers(value, questions));
 }
-export function completeAnswers(state: MissionInterview): InterviewAnswer[] {
-	if (!state.questions.length) throw new Conflict("Planning interview is not ready");
-	const answers = state.questions.map((q) => state.answers.find((a) => a.questionId === q.id));
-	if (answers.some((a) => !a || (!a.selectedOption && !a.text.trim())))
-		throw new Conflict("Every question needs an explicit answer");
-	validateAnswers(answers, state.questions);
-	return answers as InterviewAnswer[];
+export function completeAnswers(state: Pick<MissionInterview, "questions" | "answers">): InterviewAnswer[] {
+	return checked(() => round.completeAnswers(state));
 }
 /** Deterministic mapping, no model paraphrase and no inferred acceptance of recommendations. */
 export function agreementMarkdown(state: MissionInterview): string {

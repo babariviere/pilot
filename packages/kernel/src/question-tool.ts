@@ -1,4 +1,4 @@
-/** The `ask_user` tool waits for the user's explicit reply, including inside codemode. */
+/** The `ask_user` tool saves one question; the human reply starts a new turn. */
 
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AgentQuestion } from "@pilot/protocol";
@@ -13,13 +13,12 @@ export const MAX_QUESTION_ARTIFACTS = 3;
 
 /** Commits the question to the transcript. `callId` makes the write idempotent. */
 export type PublishQuestion = (callId: string, question: AgentQuestion, signal?: AbortSignal) => Promise<void>;
-export type AskQuestion = (callId: string, question: AgentQuestion, signal?: AbortSignal) => Promise<string>;
 
-export function createQuestionTool(ask: AskQuestion): ToolDefinition {
+export function createQuestionTool(publish: PublishQuestion): ToolDefinition {
 	return defineTool({
 		name: QUESTION_TOOL,
 		label: "Ask the user",
-		description: `Ask the user one question when you need their decision. Offer up to ${MAX_QUESTION_OPTIONS} short answers and mark the one you recommend as suggested; set multiSelect only when several answers can apply together. The user can always reply in their own words, including a question back. This call waits until they answer or the call is cancelled, then returns their answer. Await it before continuing.`,
+		description: `Ask the user one question when you need their decision. Offer up to ${MAX_QUESTION_OPTIONS} short answers and mark the one you recommend as suggested; set multiSelect only when several answers can apply together. The user can always reply in their own words, including a question back. This call saves the question and returns immediately, without a human answer. End your turn after saving it. The human reply starts the next turn; never answer or select for them.`,
 		promptSnippet: "Ask the user a question with suggested answers",
 		parameters: Type.Object({
 			question: Type.String({ minLength: 1, maxLength: 300, description: "One short question." }),
@@ -49,15 +48,15 @@ export function createQuestionTool(ask: AskQuestion): ToolDefinition {
 		annotations: { readOnlyHint: true, openWorldHint: false },
 		async execute(callId, params, signal) {
 			const question = normalizeQuestion(params);
-			const answer = await ask(callId, question, signal);
+			await publish(callId, question, signal);
 			return {
 				content: [
 					{
 						type: "text",
-						text: answer,
+						text: "Question saved. Awaiting the human reply. End your turn; their reply starts the next turn.",
 					},
 				],
-				details: { question, answer },
+				details: { question, awaitingHuman: true },
 			};
 		},
 	});

@@ -44,7 +44,13 @@ impl Draft {
             || serde_json::to_vec(&self.value)
                 .map_err(|_| Error::Invalid)?
                 .len()
-                > 16384
+                > if self.key.kind == "question"
+                    && crate::attention_interview::is_draft(&self.value)
+                {
+                    crate::attention_interview::DRAFT_STORAGE_LIMIT
+                } else {
+                    crate::attention_host::DRAFT_LIMIT
+                }
         {
             return Err(Error::Invalid);
         }
@@ -82,7 +88,12 @@ impl Record {
             || r["version"] != 1
             || r["projectId"] != self.source.project()?.project_id
             || r["home"] != home(&self.source)
-            || serde_json::to_vec(r).map_err(|_| Error::Invalid)?.len() > 65536
+            || serde_json::to_vec(r).map_err(|_| Error::Invalid)?.len()
+                > if r["interview"].is_object() {
+                    256 * 1024
+                } else {
+                    65536
+                }
         {
             return Err(Error::Invalid);
         }
@@ -479,7 +490,12 @@ pub(super) async fn handle(
                     }
                 }
                 Some("answer") => {
-                    let payload = json!({"projectId":t.source.project()?.project_id,"scope":request["scope"],"message":request["message"]});
+                    let mut payload = json!({"projectId":t.source.project()?.project_id,"scope":request["scope"]});
+                    if let Some(interview) = request.get("interview") {
+                        payload["interview"] = interview.clone();
+                    } else {
+                        payload["message"] = request["message"].clone();
+                    }
                     let payload = serde_json::to_string(&payload).map_err(|_| Error::Invalid)?;
                     // bindingId uses canonical sorted JSON, not feature-dependent serde map order.
                     let scope = canonical(&request["scope"]);
@@ -635,6 +651,58 @@ fn canonical(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn round_journals_allow_escaped_drafts_and_kept_questions_without_widening_ordinary_limits() {
+        let source = Source {
+            profile: std::env::temp_dir(),
+            port: 1,
+            home: crate::contract::Home {
+                daemon_id: "daemon".into(),
+                lineage_id: "lineage".into(),
+            },
+            project: Some(crate::host::Project {
+                project_id: "project".into(),
+                project_path: "/project".into(),
+            }),
+        };
+        let answers: Vec<Value> = (0..12).map(|n| json!({"questionId":format!("q{n}"),"selectedOptionId":null,"text":"\n".repeat(1900)})).collect();
+        let text = json!({"roundId":"r","answers":answers}).to_string();
+        assert!(text.len() < 48 * 1024);
+        let value = json!({"text":text,"pick":null,"question":""});
+        assert!(serde_json::to_vec(&value).unwrap().len() > 48 * 1024);
+        let mut draft = Draft {
+            draft_version: 1,
+            source: source.clone(),
+            key: DraftKey {
+                kind: "question".into(),
+                id: "question-s-1".into(),
+                revision: 1,
+                digest: "a".repeat(64),
+            },
+            value,
+        };
+        assert!(draft.validate().is_ok());
+        draft.key.kind = "action".into();
+        assert_eq!(draft.validate(), Err(Error::Invalid));
+        draft.key.kind = "question".into();
+        draft.value["text"] = json!("x".repeat(17000));
+        assert_eq!(draft.validate(), Err(Error::Invalid));
+        let mut record = Record {
+            attention_version: 1,
+            source: source.clone(),
+            id: "op-id".into(),
+            receipt: None,
+            not_sent: false,
+            request: json!({"kind":"answer","version":1,"projectId":"project","home":home(&source),
+                "interview":{"roundId":"r","answers":answers},"interviewQuestions":"x".repeat(40000),
+                "operation":{"operationId":"op-id","kind":"attention-answer","payload":"x".repeat(48000)}}),
+        };
+        assert!(serde_json::to_vec(&record.request).unwrap().len() > 65536);
+        assert!(record.validate().is_ok());
+        record.request.as_object_mut().unwrap().remove("interview");
+        assert_eq!(record.validate(), Err(Error::Invalid));
+    }
+
     #[test]
     fn attention_draft_capacity_never_evicts_and_existing_draft_can_still_save() {
         let path =

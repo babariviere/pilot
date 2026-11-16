@@ -18,6 +18,7 @@ pub mod artifact_runtime;
 pub mod artifact_source;
 mod attention_feed;
 pub mod attention_host;
+mod attention_interview;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
 pub mod bootstrap;
 pub mod bridge;

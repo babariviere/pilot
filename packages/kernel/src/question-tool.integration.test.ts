@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -182,7 +180,7 @@ async function questionPublished(session: KernelSession, count = 1) {
 	assert.equal((await questions(session)).length, count);
 }
 
-test("a direct ask_user suspends until an explicit reply reaches its tool result", { timeout: 20_000 }, async (t) => {
+test("direct ask_user saves a result, ends the turn and starts a new turn on reply", { timeout: 20_000 }, async (t) => {
 	const { session, faux, completions, awaited } = await open(t, "direct-question");
 	let seen = "";
 	faux.setResponses([
@@ -191,53 +189,46 @@ test("a direct ask_user suspends until an explicit reply reaches its tool result
 			const call = view.messages.findIndex(
 				(message) => message.role === "assistant" && message.content.some((block) => block.type === "toolCall"),
 			);
-			assert.equal(
-				view.messages[call + 1]?.role,
-				"toolResult",
-				"the visible reply must not split provider tool-call/result pairing",
-			);
+			assert.equal(view.messages[call + 1]?.role, "toolResult", "reply preserves tool-call/result pairing");
 			seen = JSON.stringify(view.messages);
 			return fauxAssistantMessage("Answered.");
 		},
 		fauxAssistantMessage("Automatic processed."),
 	]);
 	await session.submit("ask", "Add retries", "followUp");
-	await questionPublished(session);
-	const deadline = Date.now() + 5000;
-	while (awaited.at(-1) !== "Where?" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
-	assert.deepEqual(awaited, ["Where?"], "the live run reports the question it awaits");
-	await session.submit("mission:send:auto", "Not an answer", "followUp");
-	assert.deepEqual(awaited, ["Where?"], "automatic input is not an answer");
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 	assert.equal(faux.state.callCount, 1);
-	assert.equal(completions.length, 0, "the caller has not finished");
-	assert.ok(
-		!(await session.conversation.context(BACKGROUND_CONTEXT)).entries.some((e) => e.kind === "pi.tool-result"),
+	assert.equal((await settled(completions, 1))?.outcome, "question");
+	assert.ok(!awaited.some((question) => question !== undefined), "no suspended tool call");
+	assert.deepEqual(await questions(session), [{ question: "Where?", options: [] }]);
+	const saved = (await session.conversation.context(BACKGROUND_CONTEXT)).messages.find(
+		(message) => message.role === "toolResult" && message.toolName === "ask_user",
 	);
+	assert.match(JSON.stringify(saved), /Question saved.*Awaiting the human reply/);
+	assert.doesNotMatch(JSON.stringify(saved), /Sync worker/);
+	await session.submit("mission:send:auto", "Not an answer", "followUp");
+	assert.equal(faux.state.callCount, 1, "automatic input cannot answer a saved question");
 	await session.submit("reply", "Sync worker", "steer");
 	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-	assert.deepEqual(awaited, ["Where?", undefined], "the reply clears it");
 	assert.match(seen, /Sync worker/);
-	const entries = (await session.conversation.context(BACKGROUND_CONTEXT)).entries;
-	assert.match(JSON.stringify(entries.filter((e) => e.kind === "pi.tool-result")), /Sync worker/);
-	assert.equal((await settled(completions, 1))?.outcome, "done");
+	assert.equal((await settled(completions, 2))?.outcome, "done");
 });
 
-test("coordinator answers resume the exact blocked tool and retain coordinator provenance", {
+test("coordinator answers start a new turn and retain provenance and reply deduplication", {
 	timeout: 20_000,
 }, async (t) => {
 	const { session, faux, effects } = await open(t, "coordinator-question");
 	faux.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall("codemode", {
-				code: 'const answer = await tools.ask_user({question:"Which checks?"}); await tools.question_effect({value:answer});',
-			}),
-			{ stopReason: "toolUse" },
-		),
+		fauxAssistantMessage(fauxToolCall("ask_user", { question: "Which checks?" }), { stopReason: "toolUse" }),
+		(view) => {
+			assert.match(JSON.stringify(view.messages), /Tests/);
+			return fauxAssistantMessage(fauxToolCall("question_effect", { value: "new turn" }), { stopReason: "toolUse" });
+		},
 		fauxAssistantMessage("Answered."),
 		fauxAssistantMessage("Notice handled."),
 	]);
 	await session.submit("ask", "Ask", "followUp");
-	await questionPublished(session);
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 	const entries = (await session.conversation.context(BACKGROUND_CONTEXT)).entries;
 	const questionId = Number(entries.find((entry) => entry.kind === QUESTION_ENTRY)!.id);
 	await session.submit("mission:send:from:lead:mission:notice", "Not an answer", "steer");
@@ -259,9 +250,9 @@ test("coordinator answers resume the exact blocked tool and retain coordinator p
 	const requestId = "mission:send:from:lead:mission:answer";
 	await session.submit(requestId, "Tests", "followUp", false, true, undefined, undefined, false, questionId);
 	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-	assert.deepEqual(effects, ["Tests"]);
+	assert.deepEqual(effects, ["new turn"]);
 	await session.submit(requestId, "Tests", "followUp", false, true, undefined, undefined, false, questionId);
-	assert.deepEqual(effects, ["Tests"], "accepted reply retries never replay effects");
+	assert.deepEqual(effects, ["new turn"], "accepted reply retries never replay effects");
 	const events: AgentEvent[] = [];
 	await session.watch("answer-provenance", (batch) => {
 		events.push(...batch);
@@ -272,40 +263,43 @@ test("coordinator answers resume the exact blocked tool and retain coordinator p
 			snapshot.entries.some(
 				(entry) =>
 					entry.kind === "pi.user" &&
-					(entry as unknown as { origin?: string; sourceSessionId?: string }).origin === "coordinator" &&
+					(entry as unknown as { origin?: string }).origin === "coordinator" &&
 					(entry as unknown as { sourceSessionId?: string }).sourceSessionId === "lead",
 			),
 	);
 	await session.unwatch("answer-provenance");
 });
 
-test("codemode code after await ask_user runs only after reply and receives the answer", {
+test("codemode cannot run subsequent effects or save a second question before reply", {
 	timeout: 20_000,
 }, async (t) => {
-	const { session, faux, effects } = await open(t, "codemode-question");
-	faux.setResponses([
+	const f = await open(t, "codemode-question");
+	f.faux.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall("codemode", {
-				code: 'await tools.question_effect({value:"before"}); const answer = await tools.ask_user({question:"Which checks?"}); await tools.question_effect({value: "after:" + answer}); text(answer);',
+				code: 'await tools.question_effect({value:"before"}); await tools.ask_user({question:"First?"}); try { await tools.question_effect({value:"after"}); } catch {} try { await tools.ask_user({question:"Second?"}); } catch {} await tools.question_effect({value:"escaped"});',
 			}),
 			{ stopReason: "toolUse" },
 		),
-		fauxAssistantMessage("Answered."),
+		fauxAssistantMessage("Reply handled in a new turn."),
 		fauxAssistantMessage("Notice handled."),
 	]);
-	await session.submit("ask", "Ask", "followUp");
-	await questionPublished(session);
-	await session.submit("native:jobs.result:auto", "Not an answer", "steer");
-	assert.deepEqual(effects, ["before"]);
-	assert.equal(faux.state.callCount, 1);
-	await session.submit("reply", "Tests", "steer");
-	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-	assert.deepEqual(effects, ["before", "after:Tests"]);
-	await session.submit("reply", "Tests", "steer");
-	assert.deepEqual(effects, ["before", "after:Tests"], "lost ACK must not repeat the script");
+	await f.session.submit("ask", "Ask", "followUp");
+	await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	assert.equal((await settled(f.completions, 1))?.outcome, "question");
+	assert.deepEqual(f.effects, ["before"]);
+	assert.deepEqual(await questions(f.session), [{ question: "First?", options: [] }]);
+	await f.session.submit("native:jobs.result:auto", "Not an answer", "steer");
+	assert.equal(f.faux.state.callCount, 1);
+	await f.session.submit("reply", "Tests", "steer");
+	await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	assert.deepEqual(f.effects, ["before"], "reply never resumes the old script");
+	const calls = f.faux.state.callCount;
+	await f.session.submit("reply", "Tests", "steer");
+	assert.equal(f.faux.state.callCount, calls, "lost ACK must not repeat a turn");
 });
 
-test("Stop cancels a suspended script without running its catch or subsequent effects", {
+test("Stop clears a saved question without running subsequent effects or held automatic input", {
 	timeout: 20_000,
 }, async (t) => {
 	const f = await open(t, "cancelled-question");
@@ -318,7 +312,7 @@ test("Stop cancels a suspended script without running its catch or subsequent ef
 		),
 	]);
 	await f.session.submit("ask", "Ask", "followUp");
-	await questionPublished(f.session);
+	await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 	await f.session.submit("mission:send:auto", "Keep held", "followUp");
 	const snapshots: AgentEvent[] = [];
 	const capture = (events: AgentEvent[]) => snapshots.push(...events);
@@ -326,34 +320,32 @@ test("Stop cancels a suspended script without running its catch or subsequent ef
 	assert.ok(snapshots.find((e) => e.type === "snapshot")?.history?.question);
 	await f.session.unwatch("paged-pending");
 	await f.session.abort();
-	snapshots.length = 0;
-	await f.session.watch("paged-stopped", capture, false, false, true);
-	assert.equal(snapshots.find((e) => e.type === "snapshot")?.history?.question, null);
-	await f.session.unwatch("paged-stopped");
-	assert.deepEqual(f.effects, ["before"]);
-	await f.reopen();
-	snapshots.length = 0;
-	await f.session.watch("paged-restored", capture, false, false, true);
-	assert.equal(snapshots.find((e) => e.type === "snapshot")?.history?.question, null);
-	await f.session.unwatch("paged-restored");
+	for (const label of ["stopped", "restored"]) {
+		if (label === "restored") await f.reopen();
+		snapshots.length = 0;
+		await f.session.watch(label, capture, false, false, true);
+		assert.equal(snapshots.find((e) => e.type === "snapshot")?.history?.question, null);
+		await f.session.unwatch(label);
+	}
 	assert.deepEqual(f.effects, ["before"]);
 	assert.equal(f.faux.state.callCount, 1);
 });
 
-test("Stop after an accepted reply retains its model context without replaying effects", {
+test("Stop during the reply turn keeps the accepted answer without replaying effects", {
 	timeout: 20_000,
 }, async (t) => {
 	const f = await open(t, "accepted-then-stopped");
 	f.faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("ask_user", { question: "Continue?" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage(
 			fauxToolCall("codemode", {
-				code: 'await tools.ask_user({question:"Continue?"}); await tools.question_wait({}); await tools.question_effect({value:"after"});',
+				code: 'await tools.question_wait({}); await tools.question_effect({value:"after"});',
 			}),
 			{ stopReason: "toolUse" },
 		),
 	]);
 	await f.session.submit("ask", "Ask", "followUp");
-	await questionPublished(f.session);
+	await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 	await f.session.submit("answer", "Retain my answer", "steer");
 	await f.waiting;
 	await f.session.abort();
@@ -366,40 +358,12 @@ test("Stop after an accepted reply retains its model context without replaying e
 	await f.reopen();
 	await f.session.submit("answer", "Retain my answer", "steer");
 	assert.deepEqual(f.effects, []);
-	assert.equal(f.faux.state.callCount, 1);
-});
-
-test("two awaited questions in one script retain both replies at the model boundary", {
-	timeout: 20_000,
-}, async (t) => {
-	const f = await open(t, "two-questions");
-	f.faux.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall("codemode", {
-				code: 'const a = await tools.ask_user({question:"First?"}); const b = await tools.ask_user({question:"Second?"}); await tools.question_effect({value:a + "/" + b});',
-			}),
-			{ stopReason: "toolUse" },
-		),
-		(view) => {
-			const users = view.messages.flatMap((message) => (message.role === "user" ? [message.content] : []));
-			assert.ok(users.includes("one"));
-			assert.ok(users.includes("two"));
-			return fauxAssistantMessage("Done.");
-		},
-	]);
-	await f.session.submit("ask", "Ask", "followUp");
-	await questionPublished(f.session);
-	await f.session.submit("first-answer", "one", "steer");
-	await questionPublished(f.session, 2);
-	await f.session.submit("first-answer", "one", "steer");
-	assert.deepEqual(f.effects, []);
-	await f.session.submit("second-answer", "two", "steer");
-	await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-	assert.deepEqual(f.effects, ["one/two"]);
 	assert.equal(f.faux.state.callCount, 2);
 });
 
-test("kernel replacement keeps the question but never replays the suspended script", { timeout: 20_000 }, async (t) => {
+test("kernel replacement keeps the saved question and never replays earlier or later effects", {
+	timeout: 20_000,
+}, async (t) => {
 	const f = await open(t, "recovered-question");
 	f.faux.setResponses([
 		fauxAssistantMessage(
@@ -409,139 +373,60 @@ test("kernel replacement keeps the question but never replays the suspended scri
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("Recovered answer handled."),
+		fauxAssistantMessage("Held notice handled."),
 	]);
 	await f.session.submit("ask", "Ask", "followUp");
-	await questionPublished(f.session);
+	await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	await f.session.submit("mission:send:auto", "Not an answer", "followUp");
 	await f.reopen();
 	await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 	assert.deepEqual(f.effects, ["before"]);
 	assert.equal(f.faux.state.callCount, 1);
 	assert.equal((await questions(f.session)).length, 1);
+	const snapshots: AgentEvent[] = [];
+	await f.session.watch(
+		"restored-pending",
+		(events) => {
+			snapshots.push(...events);
+		},
+		false,
+		false,
+		true,
+	);
+	assert.ok(snapshots.find((event) => event.type === "snapshot")?.history?.question);
+	await f.session.unwatch("restored-pending");
 	await f.session.submit("answer", "Continue", "steer");
 	await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 	assert.deepEqual(f.effects, ["before"]);
-	assert.equal(f.faux.state.callCount, 2);
+	const calls = f.faux.state.callCount;
 	await f.session.submit("answer", "Continue", "steer");
-	assert.equal(f.faux.state.callCount, 2);
+	assert.equal(f.faux.state.callCount, calls);
 });
 
-for (const answeredBeforeCrash of [false, true])
-	test(answeredBeforeCrash
-		? "hard crash after accepted reply keeps the answer without replaying the script"
-		: "hard crash preserves the pending question without replaying earlier or later script effects", {
-		timeout: 20_000,
-	}, async (t) => {
-		const root = await mkdtemp(join(tmpdir(), "pilot-question-crash-"));
-		t.after(() => rm(root, { recursive: true, force: true }));
-		const env = Object.fromEntries(
-			Object.entries(process.env).filter(([key]) => !key.startsWith("PILOT_") && key !== "NODE_OPTIONS"),
-		);
-		const child = spawn(
-			process.execPath,
-			["--max-old-space-size=1024", new URL("./testing/question-crash-worker.ts", import.meta.url).pathname, root],
-			{ env, stdio: ["ignore", "pipe", "pipe", "ipc"] },
-		);
-		t.after(() => {
-			if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-		});
-		let diagnostics = "";
-		child.stderr!.on("data", (data) => {
-			diagnostics += data;
-		});
-		const message = await Promise.race([
-			once(child, "message"),
-			once(child, "exit").then(() => {
-				throw new Error(diagnostics || "worker exited before question");
-			}),
-		]);
-		assert.equal(message[0], "waiting");
-		if (answeredBeforeCrash) {
-			const seen = new Set<string>();
-			const admitted = new Promise<void>((resolve) =>
-				child.on("message", (message) => {
-					if (typeof message === "string") seen.add(message);
-					if (seen.has("accepted") && seen.has("resumed")) resolve();
-				}),
-			);
-			child.send("answer");
-			await admitted;
-		}
-		const exited = once(child, "exit");
-		child.kill("SIGKILL");
-		await exited;
-		assert.equal(await readFile(join(root, "effects"), "utf8"), "before\n");
-		const f = await open(t, "crashed-question", { root });
-		f.faux.setResponses([
-			(view) => {
-				assert.match(JSON.stringify(view.messages), /Continue/);
-				return fauxAssistantMessage("Recovered answer handled.");
-			},
-		]);
-		await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-		assert.equal(f.faux.state.callCount, answeredBeforeCrash ? 1 : 0);
-		assert.equal((await questions(f.session)).length, 1);
-		await f.session.submit("answer", "Continue", "steer");
-		await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-		assert.deepEqual(f.effects, []);
-		assert.equal(await readFile(join(root, "effects"), "utf8"), "before\n");
-		assert.equal(f.faux.state.callCount, 1);
-	});
-
-test("script deadline cancels the await, leaves the question open, and cannot resume effects", {
-	timeout: 20_000,
-}, async (t) => {
-	const f = await open(t, "deadline-question");
-	// Allow cold codemode setup/publication; this checks cancellation semantics, not startup speed.
-	f.faux.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall("codemode", {
-				code: '// @options: {"timeout_ms": 2000}\nawait tools.question_effect({value:"before"}); await tools.ask_user({question:"Continue?"}); await tools.question_effect({value:"after"});',
-			}),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("Answer handled."),
-	]);
-	await f.session.submit("ask", "Ask", "followUp");
-	await questionPublished(f.session);
-	await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-	assert.equal(f.faux.state.callCount, 1);
-	assert.deepEqual(f.effects, ["before"]);
-	await f.session.submit("answer", "Continue", "steer");
-	await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-	assert.equal(f.faux.state.callCount, 2);
-	assert.deepEqual(f.effects, ["before"]);
-});
-
-test("safe tool drain waits for an explicit answer, then commits the script before pausing", {
+test("safe tool drain completes without a reply and preserves the saved question across reopen", {
 	timeout: 20_000,
 }, async (t) => {
 	const f = await open(t, "drained-question");
 	f.faux.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall("codemode", {
-				code: 'const answer = await tools.ask_user({question:"Continue?"}); await tools.question_effect({value: answer});',
+				code: 'await tools.ask_user({question:"Continue?"}); await tools.question_effect({value:"after"});',
 			}),
 			{ stopReason: "toolUse" },
 		),
-		fauxAssistantMessage("Finished."),
-		fauxAssistantMessage("Automatic handled."),
+		fauxAssistantMessage("Reply handled."),
 	]);
 	await f.session.submit("ask", "Ask", "followUp");
 	await questionPublished(f.session);
-	let drained = false;
-	const drain = f.session.pauseForUpdate().then(() => {
-		drained = true;
-	});
-	await f.session.submit("mission:send:auto", "Not an answer", "followUp");
-	assert.equal(drained, false);
+	await f.session.pauseForUpdate();
 	assert.deepEqual(f.effects, []);
-	await f.session.submit("answer", "Continue", "steer");
-	await drain;
-	assert.deepEqual(f.effects, ["Continue"]);
 	assert.equal(f.faux.state.callCount, 1);
 	await f.reopen();
+	assert.equal((await questions(f.session)).length, 1);
+	await f.session.submit("answer", "Continue", "steer");
 	await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-	assert.deepEqual(f.effects, ["Continue"]);
+	assert.deepEqual(f.effects, []);
+	assert.equal(f.faux.state.callCount, 2);
 });
 
 test("db through codemode queries pilotd, and a pending grant asks the user", { timeout: 20_000 }, async (t) => {
@@ -564,7 +449,6 @@ test("db through codemode queries pilotd, and a pending grant asks the user", { 
 			};
 		},
 	});
-	let seen = "";
 	faux.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall("codemode", {
@@ -572,10 +456,6 @@ test("db through codemode queries pilotd, and a pending grant asks the user", { 
 			}),
 			{ stopReason: "toolUse" },
 		),
-		(context) => {
-			seen = JSON.stringify(context.messages.at(-1));
-			return fauxAssistantMessage("Waiting for access.");
-		},
 	]);
 	await session.submit("ask", "Count users", "followUp");
 	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
@@ -583,7 +463,10 @@ test("db through codemode queries pilotd, and a pending grant asks the user", { 
 		["query", { env: "local", sql: "select 1 as n" }],
 		["access", { env: "prod" }],
 	]);
-	assert.match(seen, /n\\":1/);
+	const messages = (await session.conversation.context(BACKGROUND_CONTEXT)).messages;
+	const result = messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
+	assert.match(JSON.stringify(result), /n\\":1/);
+	assert.equal(faux.state.callCount, 1, "saving the access question ends the turn");
 	assert.deepEqual(await questions(session), [
 		{
 			question: "Allow read access to the prod database?",

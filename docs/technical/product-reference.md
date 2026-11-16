@@ -145,10 +145,11 @@ the daemon report; check, sign-in and setup actions are not included. See the
   suggested answers. Pick one with the number keys and Return, or reply in your own words. The chat shows as
   needing you until you answer. Automatic job, mission and agent inputs wait durably while the question is open,
   then run in arrival order after your reply. Stop keeps them held until you explicitly resume or send another message.
-  `await tools.ask_user(...)` suspends the calling script and returns your answer in that same script. Stop or a
-  script deadline cancels the wait. A worker replacement keeps the question, but never replays the interrupted
-  script; your answer then starts a fresh turn. Safe update drains wait for an answer or cancellation, rather
-  than interrupting a script's other effects. Database-access approvals keep their separate turn-ending flow.
+  `ask_user` saves one question and ends the turn without waiting inside a live tool call. Your explicit reply
+  starts the next turn. A worker replacement keeps the saved question without replaying an interrupted script.
+  Multi-question scope clarification uses the shared `interview` tool: a saved full round, native drafts,
+  review and one complete Submit. Ordinary messages and coordinator answers cannot submit an interview.
+  Database-access approvals keep their separate turn-ending flow.
   Mission coordinators are notified of member questions and can answer ordinary questions within the approved
   mission scope. They read the exact pending question with `mission status` and reply with `mission answer`.
   Replies are attributed to the coordinator, not you. Stale questions are rejected; database approvals remain yours.

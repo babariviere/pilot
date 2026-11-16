@@ -84,6 +84,7 @@ import { createExplorationTools } from "./exploration-tools.ts";
 import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
 import { INSIGHTS_BACKLOG_TOOL } from "./insights-backlog-tool.ts";
 import { INSIGHTS_HISTORY_TOOL } from "./insights-history-tool.ts";
+import { createInterviewTool, createMissionInterviewPort } from "./interview-tool.ts";
 import { OwnedJobGroups } from "./job-groups.ts";
 import { JobHistory } from "./job-history.ts";
 import { drainLifecycleJobs, runningJobs } from "./jobs.ts";
@@ -538,7 +539,10 @@ export class NativeAdapter {
 		let renderPrompt: (() => string) | undefined;
 		let registerHostTool: ((tool: ToolDefinition) => void) | undefined;
 		const hostTools = new Map((options.hostTools ?? []).map((tool) => [tool.name, tool]));
-		if (options.missionPlanning) hostTools.set("mission_plan", createMissionPlanTool(options.missionPlanning));
+		if (options.missionPlanning) {
+			hostTools.set("mission_plan", createMissionPlanTool(options.missionPlanning));
+			hostTools.set("interview", createInterviewTool(createMissionInterviewPort(options.missionPlanning)));
+		}
 		const usage = new UsageTracker(options.onUsageChanged);
 		const infrastructure = new InfrastructureChildren();
 		const mcp = createTrackedMcpExtension(infrastructure);

@@ -356,11 +356,11 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 	}
 	if (!coordinator)
 		lines.push(
-			"- For standalone chats, first check the prompt and available read-only context. If the request is clear, proceed without an interview. Use a short interview when different answers would materially change scope, behavior, acceptance or risk, or when blocked. Investigate discoverable facts instead of asking the user. When the user requests an interview, complete it before proceeding. Use ask_user for questions and wait for the human answer. Answers never expand this chat's permissions.",
+			"- For standalone chats, first check the prompt and available read-only context. If the request is clear, proceed without an interview. Use a short interview when different answers would materially change scope, behavior, acceptance or risk. Investigate discoverable facts instead of asking the user. When the user requests an interview, complete it before proceeding. Use interview actions read/questions/check to read the round, save the full question list and check answers. Saving questions returns immediately: end your turn when the round is saved; native submission resumes the chat. Never answer or select for the human. Answers never expand this chat's permissions. Use ask_user for isolated blockers, not interview rounds.",
 		);
 	if (!context.ask && !coordinator)
 		lines.push(
-			"- Take each request as far as it asks. After any requested interview, for implementation, finish with a working change: implement it, run the checks that cover it, fix failures it causes, and deliver it as described below when delivery applies, without pausing for review after a first pass. Ask only when a decision would materially change scope, user-visible behavior or risk, or when you are blocked, and then use ask_user.",
+			"- Take each request as far as it asks. After any requested interview, for implementation, finish with a working change: implement it, run the checks that cover it, fix failures it causes, and deliver it as described below when delivery applies, without pausing for review after a first pass. Use interview for material uncertainty and ask_user for isolated blockers, as above.",
 			"- Run focused tests while iterating, then the relevant full suites once before publishing, using the project's verification wrappers. Run long local checks as background jobs so they can finish without blocking other work.",
 			"- Pilot monitors tracked PRs and sends automatic follow-ups for actionable failures. After publishing or rebasing, finish without waiting for remote CI. Do not use jobs, polling loops, `gh pr checks --watch` or `gh run watch` to wait for CI; background jobs are for local verification, not CI monitoring.",
 		);

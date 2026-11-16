@@ -10153,6 +10153,7 @@ ${run.excerpt}`,
 			trace?: TraceCarrier;
 			event?: import("@pilot/protocol").ChatEventSummary;
 			questionReplyId?: number;
+			interviewReply?: import("@pilot/protocol").StandaloneInterviewReply;
 			inputGeneration?: number;
 			/** Synchronous owner/delivery fence immediately before durable input admission. */
 			admissionGuard?: () => void;
@@ -10175,6 +10176,7 @@ ${run.excerpt}`,
 				options.questionReplyId,
 				options.inputGeneration,
 				options.admissionGuard,
+				options.interviewReply,
 			);
 		} finally {
 			end();
@@ -10196,6 +10198,7 @@ ${run.excerpt}`,
 		questionReplyId?: number,
 		inputGeneration?: number,
 		admissionGuard?: () => void,
+		interviewReply?: import("@pilot/protocol").StandaloneInterviewReply,
 	): Promise<void> {
 		const meta = this.require(id);
 		if (meta.planning) throw new Conflict("Planning chats use saved interviews, not ordinary messages");
@@ -10323,6 +10326,7 @@ ${run.excerpt}`,
 					...(resumeHeld ? { resumeHeld: true } : {}),
 					...(answerQuestionId !== undefined ? { answerQuestionId } : {}),
 					...(questionReplyId !== undefined ? { questionReplyId } : {}),
+					...(interviewReply ? { interviewReply } : {}),
 					...(inputGeneration !== undefined ? { inputGeneration } : {}),
 					...(event ? { event } : {}),
 				});

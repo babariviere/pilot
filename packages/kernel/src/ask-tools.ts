@@ -22,6 +22,7 @@ export const ASK_TOOL_NAMES = [
 	"artifact",
 	"mission",
 	"ask_user",
+	"interview",
 	"web",
 	// Declared only in job chats; it saves a report, never a file.
 	"chat_report",

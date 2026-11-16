@@ -1,4 +1,5 @@
 /** Native capability ingress. Reuses attention receipts and ordinary input admission, never auto-resumes. */
+import { completeAnswers, interviewDigest, validateAnswers, validateQuestions } from "@pilot/kernel/interview-round";
 import { createHash } from "node:crypto";
 import type {
 	AgentQuestion,
@@ -103,8 +104,7 @@ export class NativeAttention {
 			session.archivedAt ||
 			session.continuedTo ||
 			session.role ||
-			session.control ||
-			session.mode === "ask"
+			session.control
 		)
 			fail("forbidden", "Current writable same-project origin required");
 		const member = this.deps.store.membership(sessionId);
@@ -148,6 +148,8 @@ export class NativeAttention {
 		});
 	}
 	private authorize(projectId: string, content: HumanActionContent) {
+		if (this.session(projectId, content.sessionId).session.mode === "ask")
+			fail("forbidden", "Ask chats cannot request human actions");
 		if (
 			content.projectId !== projectId ||
 			!equal(this.session(projectId, content.sessionId).session.missionId ?? null, content.missionId)
@@ -274,9 +276,24 @@ export class NativeAttention {
 			!Array.isArray(data.options) ||
 			data.options.length > 9 ||
 			data.databaseAccess !== undefined ||
-			Buffer.byteLength(JSON.stringify(data)) > 32768
+			Buffer.byteLength(JSON.stringify(data)) > (data.interview ? 64 * 1024 : 32768)
 		)
 			return undefined;
+		if (data.interview) {
+			if (s.missionId || !data.interview.roundId || data.blocking) return undefined;
+			try {
+				validateQuestions(data.interview.questions);
+				if (
+					!equal(
+						data.interview.questionDigests,
+						Object.fromEntries(data.interview.questions.map((q) => [q.id, interviewDigest(q)])),
+					)
+				)
+					return undefined;
+			} catch {
+				return undefined;
+			}
+		} else if (s.mode === "ask") return undefined;
 		// The question names artifacts by ID; the card needs their titles. IDs the chat no longer has are left out.
 		const named = Array.isArray(data.artifacts) ? data.artifacts.slice(0, 3) : [];
 		const saved = named.length ? await this.deps.sessions.artifacts(sessionId).catch(() => []) : [];
@@ -316,7 +333,6 @@ export class NativeAttention {
 					!s.role &&
 					!s.control &&
 					!s.continuedTo &&
-					s.mode !== "ask" &&
 					(s.outcome === "question" || s.attentionReason?.kind === "asks"),
 			);
 		if (candidates.length > 4096) fail("unavailable", "Attention read capacity reached (4096); nothing was evicted");
@@ -437,17 +453,24 @@ export class NativeAttention {
 		const payload = JSON.parse(op.payload) as {
 			projectId: string;
 			scope: AssistanceRequest["scope"];
-			message: string;
+			message?: string;
+			interview?: import("@pilot/protocol").StandaloneInterviewReply;
 		};
-		keys(payload, ["projectId", "scope", "message"]);
-		this.session(payload.projectId, op.targetId);
+		const interview = Object.hasOwn(payload, "interview");
+		keys(payload, ["projectId", "scope", interview ? "interview" : "message"]);
+		if (this.session(payload.projectId, op.targetId).session.mode === "ask" && !interview)
+			throw new OperationRejected("Ask chats require a saved interview submission");
 		if (
 			payload.scope?.subject?.kind !== "question" ||
 			payload.scope.subject.sessionId !== op.targetId ||
 			payload.scope.projectId !== payload.projectId ||
-			typeof payload.message !== "string" ||
-			!payload.message.trim() ||
-			payload.message.length > 8000
+			(!interview &&
+				(typeof payload.message !== "string" || !payload.message.trim() || payload.message.length > 8000)) ||
+			(interview &&
+				(!payload.interview ||
+					typeof payload.interview.roundId !== "string" ||
+					!Array.isArray(payload.interview.answers) ||
+					Buffer.byteLength(JSON.stringify(payload.interview)) > 49 * 1024))
 		)
 			throw new OperationRejected("Exact current ordinary question required");
 		return payload;
@@ -469,6 +492,17 @@ export class NativeAttention {
 		const q = await this.currentQuestion(p.projectId, p.scope.subject);
 		if (!q || !equal(q.scope, p.scope) || op.bindingId !== attentionDigest(p.scope))
 			throw new OperationRejected("Question revision or authority changed");
+		if (q.question.interview) {
+			if (!p.interview || p.interview.roundId !== q.question.interview.roundId)
+				throw new OperationRejected("Submit the complete saved interview round");
+			try {
+				keys(p.interview, ["roundId", "answers"]);
+				validateAnswers(p.interview.answers, q.question.interview.questions);
+				completeAnswers({ questions: q.question.interview.questions, answers: p.interview.answers });
+			} catch (error) {
+				throw new OperationRejected(error instanceof Error ? error.message : "Invalid interview answers");
+			}
+		} else if (p.interview) throw new OperationRejected("That question is not an interview round");
 		const session = this.session(p.projectId, op.targetId).session;
 		if (
 			session.sleepPaused ||
@@ -477,10 +511,17 @@ export class NativeAttention {
 			(session.missionId && this.deps.store.controls.fenceCurrent(session.missionId).held)
 		)
 			throw new OperationRejected("Question work is currently held");
-		await this.deps.sessions.sendDurable(op.targetId, p.message, "followUp", op.operationId, {
-			questionReplyId: q.scope.subject.kind === "question" ? q.scope.subject.entryId : undefined,
-			inputGeneration: q.session.inputGeneration,
-		});
+		await this.deps.sessions.sendDurable(
+			op.targetId,
+			p.message ?? "The user submitted the saved interview answers.",
+			"followUp",
+			op.operationId,
+			{
+				questionReplyId: q.scope.subject.kind === "question" ? q.scope.subject.entryId : undefined,
+				inputGeneration: q.session.inputGeneration,
+				...(p.interview ? { interviewReply: p.interview } : {}),
+			},
+		);
 		return { sessionId: op.targetId };
 	}
 }

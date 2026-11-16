@@ -553,6 +553,11 @@ pub fn project(
             boundary: format!(
                 "Only you can answer. Pilot sends your answer to “{chat}” once, exactly as you write it."
             ),
+            interview_round_id: data["interview"]["roundId"].as_str().map(str::to_owned),
+            interview_questions: pending.filter(|op| op["request"]["interview"].is_object())
+                .map(|op| crate::attention_interview::sent(&op["request"]))
+                .unwrap_or_else(|| crate::attention_interview::project(
+                    &data["interview"], &draft_for(question_key(q)).text)),
             options,
             answers: help_answers(ops, &id, local),
             delivery,
@@ -584,12 +589,20 @@ pub fn project(
         }
         decisions.push(Decision {
             revision: 1,
+            interview_round_id: op["request"]["interview"]["roundId"]
+                .as_str()
+                .map(str::to_owned),
+            interview_questions: crate::attention_interview::sent(&op["request"]),
             kind: DecisionKind::Unknown,
             title: "Your answer was not confirmed".into(),
             reason: "Not confirmed".into(),
             context: format!(
                 "You answered: “{}”. Pilot heard nothing back and will not send it again.",
-                s(&op["request"]["message"])
+                if op["request"]["interview"].is_object() {
+                    "Interview answers submitted".into()
+                } else {
+                    s(&op["request"]["message"])
+                }
             ),
             boundary: "Check again only reads the saved answer; it never sends it twice.".into(),
             delivery: if local.checking.contains(&id) {
@@ -716,6 +729,16 @@ pub fn project(
     }
 }
 
+/// The larger draft envelope is only for a standalone round. Ordinary
+/// question and action draft limits do not change.
+pub fn draft_limit(read: &Value, id: &str) -> usize {
+    if find_question(read, id).is_some_and(|q| q["question"]["interview"].is_object()) {
+        crate::attention_interview::DRAFT_STORAGE_LIMIT
+    } else {
+        DRAFT_LIMIT
+    }
+}
+
 /// The answer to question card "id": the picked option's label, then the
 /// user's own words, exactly as typed, the way the chat composers send it.
 /// A question that takes several lists every picked label as "- label"
@@ -727,6 +750,16 @@ pub fn answer_request(
     text: &str,
 ) -> Result<Value, Refusal> {
     let q = find_question(read, id).ok_or(GONE)?;
+    if !q["question"]["interview"].is_null() {
+        if !picks.is_empty() {
+            return Err(NOT_AN_OPTION);
+        }
+        let interview = crate::attention_interview::answer(&q["question"]["interview"], text)?;
+        return Ok(
+            json!({ "kind": "answer", "scope": q["scope"], "interview": interview,
+            "interviewQuestions": q["question"]["interview"]["questions"] }),
+        );
+    }
     let options = arr(&q["question"]["options"]);
     let mut picked: Vec<usize> = Vec::new();
     for option in picks.iter().filter(|o| !o.is_empty()) {
@@ -946,6 +979,54 @@ mod tests {
 
     fn missions() -> Vec<(String, String)> {
         vec![("m1".into(), "Release".into())]
+    }
+
+    #[test]
+    fn interview_round_drafts_and_unknown_submissions_remain_structured() {
+        let mut r = read();
+        let round = json!({"roundId":"r1","questions":[{"id":"q1","section":"outcome","prompt":"What should change?",
+            "options":[{"id":"a","meaning":"Keep drafts"}],"recommendedOptionId":"a"}],"questionDigests":{"q1":"digest"}});
+        r["questions"][0]["question"] =
+            json!({"question":"Questions before proceeding","options":[],"interview":round});
+        let id = "question-s1-12";
+        let blank = project(Some(&r), &[], &[], &[], &Local::default());
+        assert_eq!(blank.decisions[0].interview_round_id.as_deref(), Some("r1"));
+        assert!(blank.decisions[0].options.is_empty());
+        assert_eq!(
+            blank.decisions[0].interview_questions[0].selected_option_id,
+            None
+        );
+        assert!(answer_request(&r, id, &[], "ordinary reply").is_err());
+        let text = json!({"roundId":"r1","answers":[{"questionId":"q1","selectedOptionId":"a","text":"  detail\n日本  "}]}).to_string();
+        let saved = vec![(
+            question_key(&r["questions"][0]).unwrap(),
+            words(None, &text, ""),
+        )];
+        let restored = project(Some(&r), &[], &saved, &[], &Local::default());
+        assert_eq!(
+            restored.decisions[0].interview_questions[0].text,
+            "  detail\n日本  "
+        );
+        let request = answer_request(&r, id, &[], &text).unwrap();
+        assert!(request.get("message").is_none());
+        assert_eq!(request["scope"], r["questions"][0]["scope"]);
+        assert_eq!(
+            request["interview"]["answers"][0]["questionDigest"],
+            "digest"
+        );
+        let op = json!({"id":"op","request":request,"state":"unknown","receipt":null});
+        r["questions"] = json!([]);
+        let pending = project(Some(&r), &[op], &[], &[], &Local::default());
+        let card = &pending.decisions[0];
+        assert_eq!(card.delivery, Delivery::Unknown);
+        assert_eq!(card.interview_round_id.as_deref(), Some("r1"));
+        assert_eq!(card.interview_questions[0].prompt, "What should change?");
+        assert_eq!(
+            card.interview_questions[0].selected_option_id.as_deref(),
+            Some("a")
+        );
+        assert_eq!(card.interview_questions[0].text, "  detail\n日本  ");
+        assert!(!card.context.contains("questionDigest"));
     }
 
     #[test]

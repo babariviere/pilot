@@ -91,6 +91,9 @@ export function choose(day: Day, decision: Decision, option: string) {
 
 /** Whether `decision` has an answer the user can send now: a pick or, where allowed, their own words. */
 export function canSend(decision: Decision): boolean {
+	// Round submission belongs to its explicit review/Submit controls, not
+	// the ordinary question shortcuts.
+	if (decision.interviewRoundId) return false;
 	const anyPick = decision.multiple ? picked(decision).length > 0 : chosen(decision) !== "";
 	return anyPick || (decision.reply && replyText(decision).trim() !== "");
 }

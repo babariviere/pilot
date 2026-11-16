@@ -9,14 +9,24 @@ such as **Quick fix** and **Needs planning** help choose; they never start work 
 their own, and you can correct them.
 
 Chats started from a Linear ticket explicitly request a short interview before
-implementation. The agent reads the ticket and relevant code first, then asks
-1–3 targeted questions about scope, acceptance or tradeoffs. A clear ticket needs
-only one scope-confirmation question. The agent waits for your answers before
-implementation. Direct prompts leave the interview choice to the agent: clear
-requests proceed, while material uncertainty prompts questions.
+implementation. The agent reads the ticket and relevant code read-only first,
+then asks 1–3 material questions about scope, acceptance or tradeoffs. A clear
+ticket needs only one scope-confirmation question.
 
-This is agent guidance through the existing `ask_user` tool, not a new enforced
-start gate. Answers do not change the chat's permissions or mission approvals.
+The shared `interview` tool has `read`, `questions` and `check` actions. The agent
+saves the full question list with `questions`, which returns immediately, then
+ends its turn. You answer in the native app; submitting the round resumes the
+chat. The agent never answers or selects for you and waits for your answers
+before implementation.
+
+Direct Ask and Build prompts leave the interview choice to the agent: clear
+requests proceed, while material uncertainty or an explicit interview request
+uses `interview`. Isolated blockers still use `ask_user`, which saves one question
+and ends the turn without waiting inside the tool. This is agent guidance,
+not a new enforced start gate. Answers never grant permissions or change mission
+approvals. Mission workflows are unchanged.
+
+See [shared interviews](technical/shared-interviews.md) for durability and recovery.
 
 Starting work can move an eligible issue to the team's configured **In progress**
 state. A missing or invalid mapping leaves Linear unchanged and reports an error

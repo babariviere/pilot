@@ -87,7 +87,6 @@ async function fixture(t: TestContext, coordinator = false) {
 				},
 			})),
 	);
-	const awaited: (string | undefined)[] = [];
 	const open = () =>
 		KernelSession.open(
 			{
@@ -109,7 +108,7 @@ async function fixture(t: TestContext, coordinator = false) {
 						}
 					: {}),
 			},
-			{ onWorking: () => {}, onQuestionAwaited: (question) => awaited.push(question) },
+			{ onWorking: () => {} },
 		);
 	let session = await open();
 	t.after(async () => {
@@ -121,7 +120,6 @@ async function fixture(t: TestContext, coordinator = false) {
 		faux,
 		started,
 		finish,
-		awaited,
 		get session() {
 			return session;
 		},
@@ -224,8 +222,19 @@ async function waitingQuestion(f: Awaited<ReturnType<typeof fixture>>, count = 1
 		if (
 			entries.filter((e) => e.kind === QUESTION_ENTRY).length >= count &&
 			(await f.session.harness.snapshot(HeldInputsDoc, f.session.conversation.id, context))?.questionPending
-		)
+		) {
+			await f.session.conversation.waitForIdle(context);
+			assert.equal(
+				(await f.session.harness.snapshot(LiveDoc, f.session.conversation.id, context))?.run,
+				undefined,
+				"saving a question ends the run instead of suspending its tool call",
+			);
+			assert.equal(
+				(await f.session.harness.snapshot(HeldInputsDoc, f.session.conversation.id, context))?.questionPending,
+				true,
+			);
 			return;
+		}
 		await new Promise((resolve) => setTimeout(resolve, 5));
 	}
 	assert.fail("question did not become pending");
@@ -308,7 +317,7 @@ test("question publication fences already queued automatic input, including nati
 	assert.equal(held?.questionPending, true);
 });
 
-test("Stop cancels the question gate without losing deferred work or starting it on reconnect", {
+test("Stop clears the saved question without losing deferred work or starting it on reconnect", {
 	timeout: 20_000,
 }, async (t) => {
 	const f = await fixture(t);
@@ -318,13 +327,13 @@ test("Stop cancels the question gate without losing deferred work or starting it
 	]);
 	await f.session.submit("user:ask", "Ask", "followUp");
 	await waitingQuestion(f);
-	const deadline = Date.now() + 5000;
-	while (f.awaited.at(-1) !== "Proceed?" && Date.now() < deadline)
-		await new Promise((resolve) => setTimeout(resolve, 5));
-	assert.equal(f.awaited.at(-1), "Proceed?");
 	await f.session.submit("watch-notice:first", "Retain this", "followUp");
 	assert.deepEqual(await f.session.abort(), []);
-	assert.equal(f.awaited.at(-1), undefined, "Stop clears the awaited question");
+	assert.equal(
+		(await f.session.harness.snapshot(HeldInputsDoc, f.session.conversation.id, context))?.questionPending,
+		false,
+		"Stop clears the saved question",
+	);
 	await f.session.submit("control:send:late", "Retain late input", "steer");
 	await f.reopen();
 	const held = await f.session.harness.snapshot(HeldInputsDoc, f.session.conversation.id, context);

@@ -167,6 +167,71 @@ fn entry_id(entry: &Value) -> Option<u64> {
         .or_else(|| entry["id"].as_str()?.parse().ok())
 }
 
+/// Saved interview evidence has no model messages. Read only the immutable
+/// record, never tool output or a model's summary of the answers.
+fn interview_evidence(entry: &Value) -> Option<(&'static str, String, bool)> {
+    let submitted = entry["kind"] == "pilot.interview-submission";
+    let round = if submitted {
+        &entry["data"]
+    } else if entry["kind"] == "pilot.question" && entry["data"]["interview"].is_object() {
+        &entry["data"]["interview"]
+    } else {
+        return None;
+    };
+    let mut words = if submitted {
+        "Submitted interview answers\n\n"
+    } else {
+        "Questions before proceeding\n\n"
+    }
+    .to_owned();
+    // Stop adding fields once the existing per-message limit is reached.
+    let mut shortened = false;
+    let mut append = |text: &str| {
+        let left = TEXT_BYTES.saturating_sub(words.len());
+        let mut end = left.min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        words.push_str(&text[..end]);
+        shortened |= end < text.len();
+    };
+    let questions = round["questions"].as_array()?;
+    for q in questions {
+        append(q["prompt"].as_str().unwrap_or("Question text unavailable"));
+        append("\n");
+        if let Some(context) = q["context"].as_str().filter(|c| !c.is_empty()) {
+            append(context);
+            append("\n");
+        }
+        for option in q["options"].as_array().into_iter().flatten() {
+            append("• ");
+            append(option["meaning"].as_str().unwrap_or_default());
+            if q["recommendedOptionId"].is_string() && q["recommendedOptionId"] == option["id"] {
+                append(" (Recommended)");
+            }
+            append("\n");
+        }
+        if submitted {
+            let answer = round["answers"]
+                .as_array()
+                .and_then(|answers| answers.iter().find(|a| a["questionId"] == q["id"]));
+            append("Answer: ");
+            if let Some(answer) = answer {
+                if let Some(meaning) = answer["selectedOption"]["meaning"].as_str() {
+                    append(meaning);
+                    append("\n");
+                }
+                append(answer["text"].as_str().unwrap_or_default());
+            } else {
+                append("No saved answer.");
+            }
+            append("\n");
+        }
+        append("\n");
+    }
+    Some((if submitted { "you" } else { "pilot" }, words, shortened))
+}
+
 /// Compact rows for one history page, oldest first: the user's messages,
 /// Pilot's text and one line per tool call. Tool results only mark their
 /// step done or failed. Only the newest page can have a running step: an
@@ -187,6 +252,10 @@ pub(crate) fn rows(entries: &[Value], cwd: &str, newest: bool) -> Vec<Value> {
     sorted.sort_by_key(|(id, _)| *id);
     let mut rows = Vec::new();
     for (id, entry) in sorted {
+        if let Some((role, text, shortened)) = interview_evidence(entry) {
+            rows.push(json!({"key":id.to_string(),"entryId":id,"role":role,"text":text,"shortened":shortened}));
+            continue;
+        }
         let (role, from) = match entry["kind"].as_str() {
             Some("pi.user") => ("you", "user"),
             Some("pi.assistant") => ("pilot", "assistant"),
@@ -517,6 +586,32 @@ mod tests {
         let words = crate::plan_activity::chat(&json!({"rows":rows}));
         assert_eq!(words.rows[2].text, "Read src/a.rs");
         assert!(words.rows[2].failed);
+    }
+
+    #[test]
+    fn immutable_interviews_remain_readable_without_model_messages() {
+        let questions = json!([{"id":"q","section":"authority","prompt":"Who can approve?",
+            "context":"Approval is required.","options":[{"id":"me","meaning":"I approve"}],"recommendedOptionId":"me"}]);
+        let entries = vec![
+            json!({"id":1,"kind":"pilot.question","model":[],"data":{"interview":{"roundId":"r","questions":questions}}}),
+            json!({"id":2,"kind":"pilot.interview-submission","model":[],"data":{"roundId":"r","questions":questions,
+                "answers":[{"questionId":"q","questionDigest":"digest","selectedOption":{"id":"me","meaning":"I approve"},"text":"  after review\n日本  "}]}}),
+        ];
+        let rows = rows(&entries, "", true);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["role"], "pilot");
+        assert_eq!(rows[1]["role"], "you");
+        let shown = rows[1]["text"].as_str().unwrap();
+        assert!(shown.contains("Who can approve?\nApproval is required."));
+        assert!(shown.contains("• I approve (Recommended)"));
+        assert!(shown.contains("Answer: I approve\n  after review\n日本  "));
+        assert!(!shown.contains("questionDigest"));
+        assert_eq!(rows[1]["shortened"], false);
+        let mut long = entries[0].clone();
+        long["data"]["interview"]["questions"][0]["prompt"] = json!("日本".repeat(TEXT_BYTES));
+        let cut = super::rows(&[long], "", false);
+        assert_eq!(cut[0]["shortened"], true);
+        assert!(cut[0]["text"].as_str().unwrap().len() <= TEXT_BYTES);
     }
 
     #[test]

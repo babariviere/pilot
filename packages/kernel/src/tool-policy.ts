@@ -64,19 +64,30 @@ const INVESTIGATE_TOOLS = new Set([
 	"web",
 	"artifact",
 	"ask_user",
+	"interview",
 	"mission",
 	"history_recall",
 ]);
 /** Runs for actual nested tool calls too, including dynamically constructed codemode arguments. */
-export function nativeToolPolicy(permission?: ExecutionPermission): ExtensionFactory {
+export function nativeToolPolicy(
+	permission?: ExecutionPermission,
+	questionGate?: (name: string, args: Record<string, unknown>) => Promise<string | undefined>,
+): ExtensionFactory {
 	return (pi) => {
 		pi.on("tool_call", (event) => {
-			const posting = githubPosting([event.toolName, commandArguments(event.toolName, event.input)]);
-			const reason = posting
-				? `Pilot policy: agents do not ${posting} on GitHub. Report it in your final answer instead.`
-				: (executionPermissionBlock(permission, event.toolName, event.input) ??
-					messageFormatBlock(event.toolName, event.input, commandArguments(event.toolName, event.input)));
-			if (reason) return { block: true, reason };
+			const check = () => {
+				const posting = githubPosting([event.toolName, commandArguments(event.toolName, event.input)]);
+				const reason = posting
+					? `Pilot policy: agents do not ${posting} on GitHub. Report it in your final answer instead.`
+					: (executionPermissionBlock(permission, event.toolName, event.input) ??
+						messageFormatBlock(event.toolName, event.input, commandArguments(event.toolName, event.input)));
+				if (reason) return { block: true as const, reason };
+			};
+			return questionGate
+				? questionGate(event.toolName, event.input).then((reason) =>
+						reason ? { block: true as const, reason } : check(),
+					)
+				: check();
 		});
 	};
 }

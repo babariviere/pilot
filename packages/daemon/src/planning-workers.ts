@@ -768,7 +768,7 @@ export class PlanningWorkers {
 									? this.researchContent(state, op)
 									: op.kind === "interview-continue"
 										? `Continue planning from this exact submitted interview. Answers are not build permission. Use the trusted native planning skills and records only.\n${canonicalJSON(submitted)}`
-										: `Plan this requested outcome using the trusted upstream skills. Read mission_plan, then publish the complete first saved round with action questions. Do not ask inside ask_user or start implementation.\n${state.goal}`) +
+										: `Plan this requested outcome using the trusted upstream skills. Read mission_plan for context, then read interview and publish the complete first saved round with interview action questions. Do not ask inside ask_user or start implementation.\n${state.goal}`) +
 			messages
 		);
 	}

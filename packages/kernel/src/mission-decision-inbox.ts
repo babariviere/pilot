@@ -178,9 +178,13 @@ export class DecisionInbox {
 					detail: parts.map((part) => part.detail).join("\n\n"),
 					at: now,
 					decisionIds: [...new Set(parts.flatMap((part) => part.decisionIds))],
-					bodyDecisionIds: current?.decisionState
-						?.filter((d) => ids.has(d.id) && !d.replacement && !d.withdrawn)
-						.map((d) => d.id),
+					...(current?.decisionState
+						? {
+								bodyDecisionIds: current.decisionState
+									.filter((d) => ids.has(d.id) && !d.replacement && !d.withdrawn)
+									.map((d) => d.id),
+							}
+						: {}),
 				};
 				delete state.pending;
 				return copyFrozen(state.frozen);

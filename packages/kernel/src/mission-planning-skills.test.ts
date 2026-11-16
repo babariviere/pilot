@@ -90,6 +90,8 @@ test("upstream content, required references and license stay byte-exact and attr
 	assert.match(attribution, /4ae2317ddb22b046e26455e4f9c9b3aaaf62212d/);
 	assert.match(attribution, /MIT, Copyright 2026 Matt Pocock/);
 	assert.match(PLANNING_SKILL_ADAPTATION, /overrides upstream publishing and execution/);
+	assert.match(PLANNING_SKILL_ADAPTATION, /initial question list with interview action questions/);
+	assert.match(PLANNING_SKILL_ADAPTATION, /Keep mission_plan plan-ask\/plan-review/);
 	assert.match(PLANNING_SKILL_ADAPTATION, /Notes.*cannot grant execution/);
 	for (const boundary of [
 		/each opus-ui slice that adds or changes a screen needs a ui prototype question the user settles/,
@@ -196,6 +198,7 @@ test("native Revisit tool forwards inert delta only, never confirmation or worke
 test("actual NativeAdapter planning profile reads upstream but blocks direct and nested external effects", async (t) => {
 	assert.equal(planningToolAllowed("project_preferences"), true);
 	assert.equal(planningToolAllowed("knowledge"), true);
+	assert.equal(planningToolAllowed("interview"), true);
 	const home = await realpath(await mkdtemp(join(tmpdir(), "native-planning-")));
 	const main = join(home, "main"),
 		scratch = join(home, "scratch"),
@@ -250,6 +253,8 @@ test("actual NativeAdapter planning profile reads upstream but blocks direct and
 		await adapter.close();
 		await rm(home, { recursive: true, force: true });
 	});
+	assert.ok(adapter.session.getToolDefinition("interview"));
+	assert.ok(adapter.session.getToolDefinition("mission_plan"));
 	assertPlanningSkills(adapter.session.resourceLoader.getSkills().skills);
 	assertInterviewSkills(adapter.session.resourceLoader.getSkills().skills);
 	assert.ok(adapter.session.resourceLoader.getAppendSystemPrompt().includes(PLANNING_SKILL_ADAPTATION));

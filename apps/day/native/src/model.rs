@@ -384,6 +384,28 @@ pub struct Visual {
     pub source: String,
 }
 
+/// One choice in a standalone interview, from the immutable round.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionInterviewOption {
+    pub id: String,
+    pub meaning: String,
+}
+
+/// One question and its local draft. Recommendations never fill an answer.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionInterviewQuestion {
+    pub id: String,
+    pub section: String,
+    pub prompt: String,
+    pub context: String,
+    pub options: Vec<AttentionInterviewOption>,
+    pub recommended_option_id: Option<String>,
+    pub selected_option_id: Option<String>,
+    pub text: String,
+}
+
 /// Something only the user can decide.
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -417,6 +439,10 @@ pub struct Decision {
     pub tried: Vec<String>,
     /// The answers the user can give. Empty for an unconfirmed outcome.
     pub options: Vec<DecisionOption>,
+    /// Standalone interview identity. None for ordinary questions.
+    pub interview_round_id: Option<String>,
+    /// The full round, with drafts projected by native code.
+    pub interview_questions: Vec<AttentionInterviewQuestion>,
     /// What the evidence is.
     pub evidence: Vec<Evidence>,
     /// What was sent or pushed, when the user asks.

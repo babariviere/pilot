@@ -226,8 +226,9 @@ before worker startup. `KernelSpec.planning` loads the actual trusted skills and
 planning IPC. Generic mission writes, MCP writes, ordinary chat sends, model-continuation transfer,
 shell fallback and builder admission are not alternative paths.
 
-The profiled worker saves its complete first list with `mission_plan` action `questions`. Later
-`questions`, `plan-ask` and `plan-review` operations save whole new rounds. `planning_workers` saves
+The profiled worker saves its complete first list with the shared `interview` tool, action `questions`.
+The existing `mission_plan` question action remains compatible. Later `interview` questions,
+`plan-ask` and `plan-review` operations save whole new rounds. `planning_workers` saves
 a provisional hold **before** the round operation can enter effects. After the exact snapshot is
 durable, the tool returns that round and saves the matching hold in the worker's durable Harness.
 Its outer tool result terminates the turn; there is no promise waiting for human answers.

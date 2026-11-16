@@ -354,6 +354,7 @@ export function runKernelWorker(): void {
 						command.answerQuestionId,
 						command.questionReplyId,
 						command.dedupeOnly,
+						command.interviewReply,
 					);
 					await send({ type: "accepted", requestId: command.requestId, ...delivery });
 					admissionSpan?.end();
