@@ -74,6 +74,7 @@ impl PlanningRecord {
                         | "project-preferences-update"
                         | "model-controls"
                         | "connection-controls"
+                        | "slack-controls"
                         | "user-feedback"
                         | "feedback-work"
                         | "thread-create"
@@ -115,6 +116,9 @@ impl PlanningRecord {
         }
         if o["kind"] == super::connection_controls::KIND {
             super::connection_controls::validate_record(&self.source, o)?;
+        }
+        if o["kind"] == super::slack_controls::KIND {
+            super::slack_controls::validate_record(&self.source, o)?;
         }
         if o["kind"] == super::feedback::KIND {
             super::feedback::validate_record(o)?;
@@ -200,6 +204,7 @@ fn record_pinned(
                     | "project-preferences-update"
                     | "model-controls"
                     | "connection-controls"
+                    | "slack-controls"
                     | "user-feedback"
                     | "feedback-work"
                     | "thread-create"
@@ -226,6 +231,7 @@ fn record_pinned(
                     | "project-preferences-update"
                     | "model-controls"
                     | "connection-controls"
+                    | "slack-controls"
                     | "user-feedback"
                     | "feedback-work"
                     | "thread-create"
@@ -349,6 +355,9 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
     }
     if op["kind"] == super::connection_controls::KIND && r["state"] == "accepted" {
         super::connection_controls::exact_result(op, &r)?;
+    }
+    if op["kind"] == super::slack_controls::KIND && r["state"] == "accepted" {
+        super::slack_controls::exact_result(op, &r)?;
     }
     if op["kind"] == super::feedback::KIND && r["state"] == "accepted" {
         super::feedback::exact_result(op, &r)?;

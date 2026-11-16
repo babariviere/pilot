@@ -83,6 +83,7 @@ import {
 import { restoreProjectSetup, savedProjectSetup } from "./projectSetup";
 import { restoreQuestionHelp, savedQuestionHelp } from "./QuestionHelp";
 import { type RitualRoute, ritualRoute, startStep } from "./ritualView";
+import { restoreSlackDraft, savedSlackDraft } from "./slackDraft";
 import { forgetThreads, restoreThreads, savedThread, savedThreadDrafts, threadRoute } from "./threadView";
 import { todayProject } from "./todayScope";
 import type { Update } from "./updateFeed";
@@ -228,6 +229,7 @@ export function captureView(today?: Today): SavedView {
 		projectSetup: savedProjectSetup(),
 		modelSettings: savedModelDraft(),
 		connectionSettings: savedConnectionDraft(),
+		slackSettings: savedSlackDraft(),
 		knowledge: savedKnowledge(),
 		// The thread on screen and unsent thread words, by mission and thread.
 		// Restoring them sends nothing and never moves words to another thread.
@@ -448,6 +450,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	restoreProjectSetup(view.projectSetup ?? []);
 	restoreModelDraft(view.modelSettings ?? "");
 	restoreConnectionDraft(view.connectionSettings ?? "");
+	restoreSlackDraft(view.slackSettings ?? "");
 	restoreKnowledge(view.knowledge ?? "");
 	settingsOpen.set(settings && view.settings === true);
 	// Unsent feedback always comes back as unsent words with their own origin.

@@ -93,12 +93,14 @@ type Health = {
 	key: string;
 	status: "ok" | "sign_in_required" | "error";
 	error?: string;
-	localBudget?: boolean;
 	/** The provider asked Pilot to wait (rate limit). Manual syncs respect it; ordinary error backoff they skip. */
 	limited?: boolean;
 	failures: number;
 	nextPollAt: number;
 };
+
+/** A definite refusal before an explicit import entered local item persistence. */
+export class SlackImportRefused extends ServiceUnavailable {}
 
 /** Bounded manual and background polling. Only explicitly registered sources do work. */
 export class SourceRegistry {
@@ -460,19 +462,13 @@ export class SourceRegistry {
 			const nextDueAt = this.due.has(id)
 				? (explicitDueAt ?? now)
 				: (health?.nextPollAt ?? (currentCheckpoint?.lastPolledAt ?? 0) + SOURCE_REFRESH_CADENCE_MS);
-			const backoff = health?.localBudget
-				? live?.stages.some((stage) => stage.reason === "local_classification_budget")
-					? "local_classification_budget"
-					: live?.stages.some((stage) => stage.reason === "local_read_budget")
-						? "local_read_budget"
-						: "local_budget_unknown_stage"
-				: health?.limited
-					? "provider_rate_limit"
-					: health?.status === "sign_in_required"
-						? "sign_in"
-						: health?.status === "error" && health.failures > 0
-							? "failure_backoff"
-							: undefined;
+			const backoff = health?.limited
+				? "provider_rate_limit"
+				: health?.status === "sign_in_required"
+					? "sign_in"
+					: health?.status === "error" && health.failures > 0
+						? "failure_backoff"
+						: undefined;
 			const channels = kind === "slack" ? (project.tracking?.slackChannels ?? []).slice(0, 100) : [];
 			const progress = slackChannelProgress(currentCheckpoint?.cursor, channels, true);
 			const channelRows = channels.slice(channelOffset, channelOffset + 20).map((channel, index) => {
@@ -628,10 +624,11 @@ export class SourceRegistry {
 			],
 			quotaPolicy: {
 				slackLocalOperations: {
+					enabled: false,
 					limit: SLACK_HOURLY_BUDGET,
 					windowMs: SLACK_BUDGET_WINDOW_MS,
 					alignment: "fixed_utc_hour",
-					force: "counted_single_bounded_pass_provider_limits_preserved",
+					force: "same_bounded_pass_provider_limits_preserved",
 				},
 			},
 			coverageGaps: [],
@@ -653,21 +650,13 @@ export class SourceRegistry {
 			throw new ServiceUnavailable("Tracking is stopped or paused for maintenance");
 		const source = this.require(id);
 		if (!source.configured) throw new Conflict("Attach a Linear team or Slack channels in project settings first");
-		if (force && source.kind !== "slack") throw new Conflict("Only Slack supports forcing the local budget");
+		if (force && source.kind !== "slack") throw new Conflict("Only Slack supports forced refresh");
 		const key = this.currentKey(id)!;
-		// Background polling waits out error backoff on its own schedule. A manual sync retries right away,
-		// except while the provider is rate limiting or Slack's local hourly budget is spent.
+		// Manual sync retries failures, but never bypasses provider Retry-After.
 		const health = this.health.get(id);
-		if (
-			health &&
-			health.status !== "ok" &&
-			health.nextPollAt > Date.now() &&
-			(health.limited || (health.localBudget && !force))
-		)
+		if (health?.limited && health.nextPollAt > Date.now())
 			throw new Conflict(
-				health.localBudget
-					? (health.error ?? "Slack hourly budget reached.")
-					: `${source.kind === "slack" ? "Slack" : "Linear"} is limiting requests. Pilot will retry automatically.`,
+				`${source.kind === "slack" ? "Slack" : "Linear"} is limiting requests. Pilot will retry automatically.`,
 			);
 		const running = this.running.get(id);
 		if (running) {
@@ -761,32 +750,24 @@ export class SourceRegistry {
 						signal: controller.signal,
 						call: (tool, args) => this.readCall("slack", tool, args, controller.signal),
 					};
-					// Replies to waiting messages resume work, so they go before reaction checks in the shared budget.
+					// Replies to waiting messages resume work, so check them before reactions.
 					if (this.slackWaiting) observe({ stage: "waiting_replies", phase: "started" });
-					const waiting = this.slackWaiting ? await this.slackWaiting(context) : false;
-					// A budget spent by reaction checks only defers them. New messages keep being read.
+					if (this.slackWaiting) await this.slackWaiting(context);
 					observe({ stage: "reaction_reads", phase: "started" });
 					await refreshSlackReactions(this.items, context, this.slackReactionRecheckMs);
-					if (waiting) result.issue = "slack_budget";
 				}
-				const nextPollAt =
-					result.issue === "slack_budget"
-						? (Math.floor(Date.now() / SLACK_BUDGET_WINDOW_MS) + 1) * SLACK_BUDGET_WINDOW_MS
-						: Date.now() + SOURCE_REFRESH_CADENCE_MS;
+				const nextPollAt = Date.now() + SOURCE_REFRESH_CADENCE_MS;
 				this.health.set(id, {
 					key,
 					failures: 0,
 					nextPollAt,
 					status: result.issue ? "error" : "ok",
-					...(result.issue === "slack_budget" ? { localBudget: true } : {}),
 					...(result.issue
 						? {
 								error:
-									result.issue === "slack_budget"
-										? "Slack hourly budget reached. Resumes next hour."
-										: result.issue === "slack_channel"
-											? "A Slack channel could not be read. Check its access in project settings."
-											: "Some Slack threads could not be classified. Failed or interrupted attempts are cached and never retried.",
+									result.issue === "slack_channel"
+										? "A Slack channel could not be read. Check its access in project settings."
+										: "Some Slack threads could not be classified. Failed or interrupted attempts are cached and never retried.",
 							}
 						: {}),
 				});
@@ -826,39 +807,42 @@ export class SourceRegistry {
 	}
 	dashboard(projectId: string): DashboardTrackedSource[] {
 		return this.list(projectId)
-			.filter((source) => source.configured)
-			.map((source) => {
+			.filter((source) => source.configured || source.kind === "slack")
+			.flatMap((source) => {
 				const checkpoint = this.items.checkpoint(source.id);
 				const { items, total, done, commonCases } =
-					checkpoint && checkpoint.configKey !== this.currentKey(source.id)
+					source.kind !== "slack" && checkpoint && checkpoint.configKey !== this.currentKey(source.id)
 						? { items: [], total: 0, done: undefined }
 						: this.items.preview(projectId, source.kind);
-				return {
-					source: source.kind,
-					label: source.label,
-					status: source.status,
-					...(source.error ? { error: source.error } : {}),
-					total,
-					items: this.withManagers(
-						source.kind,
-						projectId,
-						this.withParents(items, () => projectId),
-					),
-					...(done
-						? {
-								done: {
-									...done,
-									items: this.withManagers(
-										source.kind,
-										projectId,
-										this.withParents(done.items, () => projectId),
-									),
-								},
-							}
-						: {}),
-					...(commonCases ? { commonCases } : {}),
-					...(source.linear ? { linear: source.linear } : {}),
-				};
+				if (!source.configured && !total && !done?.total) return [];
+				return [
+					{
+						source: source.kind,
+						label: source.label,
+						status: !source.configured ? ("idle" as const) : source.status,
+						...(source.error ? { error: source.error } : {}),
+						total,
+						items: this.withManagers(
+							source.kind,
+							projectId,
+							this.withParents(items, () => projectId),
+						),
+						...(done
+							? {
+									done: {
+										...done,
+										items: this.withManagers(
+											source.kind,
+											projectId,
+											this.withParents(done.items, () => projectId),
+										),
+									},
+								}
+							: {}),
+						...(commonCases ? { commonCases } : {}),
+						...(source.linear ? { linear: source.linear } : {}),
+					},
+				];
 			});
 	}
 	async commonCases(projectId: string): Promise<import("@pilot/protocol").SlackCommonCaseList> {
@@ -868,7 +852,7 @@ export class SourceRegistry {
 			return { cases: [], windowDays: 30, windowLimit: 200, truncated: false };
 		return this.items.commonCases(projectId);
 	}
-	/** Current configuration only; never expose rows left over from another team/channel setup. */
+	/** Linear needs its current team. Slack imports need no channel configuration. */
 	assertIntakeSource(projectId: string, kind: TrackedKind): void {
 		if (!this.synced(this.projects.require(projectId), kind)) throw new Conflict("Sync this request source first");
 	}
@@ -885,7 +869,7 @@ export class SourceRegistry {
 				items: this.withManagers(page.kind, projectId, page.items),
 				source: page.kind,
 				label: page.kind === "slack" ? "Slack" : "Linear",
-				status: !health.configured ? "not_configured" : !current ? "idle" : health.status,
+				status: !health.configured ? (page.total ? "idle" : "not_configured") : !current ? "idle" : health.status,
 				...(health.error ? { error: health.error } : {}),
 				...(!current ? { items: [], total: 0, complete: true } : {}),
 			};
@@ -896,7 +880,10 @@ export class SourceRegistry {
 		const kinds = (query.kind ? [query.kind] : (["linear", "slack"] as const)).filter((kind) => {
 			const id = `${query.projectId}:${kind}`,
 				checkpoint = this.items.checkpoint(id);
-			return this.require(id).configured && (!checkpoint || checkpoint.configKey === this.currentKey(id));
+			return (
+				kind === "slack" ||
+				(this.require(id).configured && (!checkpoint || checkpoint.configKey === this.currentKey(id)))
+			);
 		});
 		const { kind: _kind, ...rest } = query;
 		const list = await this.items.list({ ...rest, kinds });
@@ -972,7 +959,7 @@ export class SourceRegistry {
 			...(tracks("linear")
 				? { linear: { ...result.linear, items: this.withParents(result.linear.items, (item) => item.projectId) } }
 				: {}),
-			...(tracks("slack") ? { slack: result.slack } : {}),
+			...(tracks("slack") || result.slack.total > 0 ? { slack: result.slack } : {}),
 		};
 	}
 	/** Link Linear items to the mission that manages the same issue, so they never look new. Read-only. */
@@ -1016,8 +1003,9 @@ export class SourceRegistry {
 			return header ? { ...item, linearParent: header } : item;
 		});
 	}
-	/** Configured, with stored rows from its current settings (a team change must not show the old team's rows). */
+	/** Slack retention hides removed channels but keeps imports. Linear rows require the current team key. */
 	private synced(project: Project, kind: TrackedKind): boolean {
+		if (kind === "slack") return true;
 		if (!isConfigured(project, kind)) return false;
 		const checkpoint = this.items.checkpoint(`${project.id}:${kind}`);
 		return !checkpoint || checkpoint.configKey === configKey(project, kind);
@@ -1135,7 +1123,7 @@ export class SourceRegistry {
 			key = this.currentKey(id);
 		const checkpoint = this.items.checkpoint(id);
 		// A message added by hand can be read before the first sync; it is listed then too.
-		if (!key || (checkpoint ? checkpoint.configKey !== key : item.metadata.manual !== true))
+		if (!key || (item.metadata.manual !== true && (!checkpoint || checkpoint.configKey !== key)))
 			throw new Conflict("Sync this project's Slack source first");
 		const health = this.health.get(id);
 		if (health?.key === key && health.failures > 0 && health.nextPollAt > Date.now())
@@ -1148,7 +1136,7 @@ export class SourceRegistry {
 		const work = read(
 			{
 				project,
-				config: project.tracking!,
+				config: project.tracking ?? { slackChannels: [] },
 				signal: controller.signal,
 				call: (tool, args) => this.readCall("slack", tool, args, controller.signal),
 			},
@@ -1178,33 +1166,34 @@ export class SourceRegistry {
 		return promise;
 	}
 	/** Adds one Slack message from a pasted link to a project's triage, from any channel the user's Slack account can
-	 * read. The project must track Slack. Repeated requests for the same message share one read; a message already
-	 * in triage is returned as it is, with its local status and links. Failures are plain and leave the source's
-	 * health alone. */
+	 * read, even when the project does not track channels. Repeated requests for the same message share one read; a message already
+	 * in triage is returned as it is, with its local status and links. Provider rate limits also postpone later reads. */
 	addSlackMessage(projectId: string, url: string): Promise<TrackedItem> {
 		if (this.stopped || this.runtime.frozen)
-			throw new ServiceUnavailable("Tracking is stopped or paused for maintenance");
+			throw new SlackImportRefused("Tracking is stopped or paused for maintenance");
 		const link = parseSlackMessageLink(url);
-		if (!link) throw new Conflict("Paste a link to a Slack message");
+		if (!link) throw new SlackImportRefused("Paste a link to a Slack message");
 		const project = structuredClone(this.projects.require(projectId));
 		const id = `${projectId}:slack`,
 			key = this.currentKey(id);
-		if (!key) throw new Conflict("Add Slack channels to this project's settings first");
-		if (this.items.checkpoint(id) && this.items.checkpoint(id)?.configKey !== key)
-			throw new Conflict("Sync this project's Slack source first");
+		if (!key) throw new SlackImportRefused("Project is unavailable");
+		const health = this.health.get(id);
+		if (health?.limited && health.nextPollAt > Date.now())
+			throw new SlackImportRefused("Slack is limiting requests. Try importing after the delay.");
 		const adder = this.slackAdder;
-		if (!adder) throw new ServiceUnavailable("Adding Slack messages is unavailable");
+		if (!adder) throw new SlackImportRefused("Adding Slack messages is unavailable");
 		const runKey = `${projectId}/${link.channel}/${link.threadTs}`;
 		const existing = this.adds.get(runKey);
 		if (existing) return existing.promise;
-		if (this.busy() >= 2) throw new ServiceUnavailable("Tracking is busy, retry shortly");
+		if (this.busy() >= 2) throw new SlackImportRefused("Tracking is busy, retry shortly");
 		const controller = new AbortController();
+		let saving = false;
 		// Below the app's one-minute request timeout, so the app shows pilotd's plain reason.
 		const timer = setTimeout(() => controller.abort(new Error("Adding the message timed out")), 50_000);
 		const work = adder(
 			{
 				project,
-				config: project.tracking!,
+				config: project.tracking ?? { slackChannels: [] },
 				signal: controller.signal,
 				call: (tool, args) => this.readCall("slack", tool, args, controller.signal),
 			},
@@ -1212,6 +1201,7 @@ export class SourceRegistry {
 		).then(async (input) => {
 			controller.signal.throwIfAborted();
 			if (this.currentKey(id) !== key) throw new Conflict("Tracking configuration changed");
+			saving = true;
 			await this.items.commit(projectId, "slack", [input]);
 			// A message stored earlier from a channel no longer tracked is shown again.
 			await this.items.retainSlack(projectId, this.projects.require(projectId).tracking?.slackChannels ?? []);
@@ -1219,17 +1209,20 @@ export class SourceRegistry {
 		});
 		const promise = abortable(work, controller.signal)
 			.catch((error: unknown) => {
-				if (error instanceof Conflict) throw error;
+				if (saving) throw new Error("Couldn't confirm the saved message. Check status; do not retry it.");
+				if (error instanceof Conflict) throw new SlackImportRefused(error.message);
 				console.warn(`pilotd: adding a Slack message failed for project ${projectId}: ${logCause(error)}`);
 				if (error instanceof SourceSignInRequired)
-					throw new ServiceUnavailable("Sign in to Slack to add this message");
-				if (error instanceof SourceRateLimited)
-					throw new ServiceUnavailable("Slack is limiting requests. Try again in a minute.");
+					throw new SlackImportRefused("Sign in to Slack to add this message");
+				if (error instanceof SourceRateLimited) {
+					this.failed(id, key, error);
+					throw new SlackImportRefused("Slack is limiting requests. Try importing after the delay.");
+				}
 				if (error instanceof SourceToolError || error instanceof SlackFormatChanged)
-					throw new Conflict(
+					throw new SlackImportRefused(
 						"Couldn't read this message from Slack. Check the link and that you can see it in Slack.",
 					);
-				throw new ServiceUnavailable("Couldn't add this message. Try again in a moment.");
+				throw new SlackImportRefused("Couldn't read this message. Nothing was saved. Try again later.");
 			})
 			.finally(() => {
 				clearTimeout(timer);
@@ -1323,7 +1316,7 @@ export class SourceRegistry {
 			let owner: SlackReactionOwner | undefined;
 			try {
 				controller.signal.throwIfAborted();
-				if (!key || this.items.checkpoint(sourceId)?.configKey !== key)
+				if (!key || (current.metadata.manual !== true && this.items.checkpoint(sourceId)?.configKey !== key))
 					throw new Conflict("Sync Slack before starting");
 				const health = this.health.get(sourceId);
 				if (health && health.status !== "ok" && health.nextPollAt > Date.now())
@@ -1333,7 +1326,7 @@ export class SourceRegistry {
 					slackStart(
 						{
 							project,
-							config: project.tracking!,
+							config: project.tracking ?? { slackChannels: [] },
 							signal: controller.signal,
 							call: (tool, args) => {
 								controller.signal.throwIfAborted();
@@ -1416,15 +1409,18 @@ export class SourceRegistry {
 					try {
 						controller.signal.throwIfAborted();
 						current = await this.items.require(admitted.id);
-						if (this.currentKey(sourceId) !== key || this.items.checkpoint(sourceId)?.configKey !== key)
+						if (
+							this.currentKey(sourceId) !== key ||
+							(current.metadata.manual !== true && this.items.checkpoint(sourceId)?.configKey !== key)
+						)
 							throw new Conflict("Sync Slack first");
 						const health = this.health.get(sourceId);
-						if (health && !health.localBudget && health.status !== "ok" && health.nextPollAt > Date.now())
+						if (health && health.status !== "ok" && health.nextPollAt > Date.now())
 							throw new Conflict("Source is backing off");
 						const project = structuredClone(this.projects.require(projectId));
 						context = {
 							project,
-							config: project.tracking!,
+							config: project.tracking ?? { slackChannels: [] },
 							signal: controller.signal,
 							call: (tool, args) => {
 								controller.signal.throwIfAborted();
@@ -1716,7 +1712,6 @@ export class SourceRegistry {
 			...(checkpoint?.configKey === key && checkpoint.linear ? { linear: structuredClone(checkpoint.linear) } : {}),
 			...(health?.key === key ? { nextPollAt: health.nextPollAt } : {}),
 			...(health?.key === key && health.error ? { error: health.error } : {}),
-			...(health?.key === key && health.localBudget ? { budgetLimited: true } : {}),
 			...(status === "sign_in_required" ? { signInCommand: `pi mcp login ${kind}` } : {}),
 			...(kind === "slack" && configured
 				? {
@@ -1754,7 +1749,9 @@ export class SourceRegistry {
 	private currentKey(id: string): string | undefined {
 		try {
 			const source = this.require(id);
-			return source.configured ? configKey(this.projects.require(source.projectId), source.kind) : undefined;
+			return source.configured || source.kind === "slack"
+				? configKey(this.projects.require(source.projectId), source.kind)
+				: undefined;
 		} catch {
 			return undefined;
 		}

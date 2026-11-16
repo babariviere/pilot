@@ -42,6 +42,10 @@ pub const METHODS: &[&str] = &[
     "day.connections.probe",
     "day.power.read",
     "day.power.resume",
+    "day.slack.read",
+    "day.slack.write",
+    "day.slack.check",
+    "day.slack.setAside",
     "day.models.write",
     "day.models.check",
     "day.models.signIn",
@@ -266,6 +270,10 @@ pub(crate) enum Command {
     PowerRead,
     /// The user's Resume of work Pilot paused for sleep.
     PowerResume,
+    SlackRead,
+    SlackWrite(crate::host::slack_controls::Intent),
+    SlackCheck(String),
+    SlackSetAside(String),
     ModelsRecovery(String),
     ModelsWrite(crate::host::model_controls::Intent),
     ModelsCheck(String),
@@ -578,6 +586,31 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 return Err(Error::Invalid);
             }
             C::ModelsRead
+        }
+        "day.slack.read" => {
+            if args != json!({}) {
+                return Err(Error::Invalid);
+            }
+            C::SlackRead
+        }
+        "day.slack.write" => {
+            let r: crate::host::slack_controls::Intent = exact(args)?;
+            r.validate()?;
+            C::SlackWrite(r)
+        }
+        "day.slack.check" | "day.slack.setAside" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Lookup {
+                operation_id: String,
+            }
+            let r: Lookup = exact(args)?;
+            mission(&r.operation_id)?;
+            if name == "day.slack.check" {
+                C::SlackCheck(r.operation_id)
+            } else {
+                C::SlackSetAside(r.operation_id)
+            }
         }
         "day.connections.read" | "day.connections.probe" => {
             if args != json!({}) {
@@ -1152,6 +1185,7 @@ impl Command {
                     | Self::ModelsRead
                     | Self::ConnectionsRead
                     | Self::PowerRead
+                    | Self::SlackRead
                     | Self::ModelsRecovery(_)
                     | Self::PreferencesHistory(_)
                     | Self::FeedbackRead(_)

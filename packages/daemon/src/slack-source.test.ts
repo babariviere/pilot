@@ -19,7 +19,6 @@ import {
 import { SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-tool-rules.ts";
 import { type SourcePollContext, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
-import { SLACK_HOURLY_BUDGET } from "./tracked-items-disk.ts";
 
 const now = Date.UTC(2026, 9, 13, 12);
 const bug: SlackClassification = {
@@ -206,11 +205,11 @@ test("bounded pages rotate channels; pagination pins time range and resumes acro
 	assert.ok(third.cursor);
 	await assert.rejects(poll({ ...context, cursor: { version: 99 } }), /Invalid Slack checkpoint/);
 });
-test("hourly budget defers the page without losing cursor; next UTC hour resumes; malformed output is cached once", async (t) => {
+test("classification continues beyond the legacy hourly cap; malformed output stays cached", async (t) => {
 	const f = await fixture(t);
-	for (let i = 0; i < SLACK_HOURLY_BUDGET; i++) await f.store.reserveSlack("C9", `${i + 1}.000001`, now, "budget");
-	let clock = now,
-		calls = 0;
+	for (let i = 0; i < 150; i++)
+		assert.equal((await f.store.reserveSlack("C9", `${i + 1}.000001`, now, "budget")).state, "reserved");
+	let calls = 0;
 	const poll = createSlackPoller(
 		f.store,
 		{
@@ -219,22 +218,11 @@ test("hourly budget defers the page without losing cursor; next UTC hour resumes
 				return parseSlackClassification("malformed private text");
 			},
 		},
-		() => clock,
+		() => now,
 	);
 	const context = { ...f.context, call: async () => standalone() };
-	const limited = await poll(context);
-	assert.equal(limited.issue, "slack_budget");
-	assert.equal(calls, 0);
-	const cursor = limited.cursor as { channels: Record<string, [string, string | null, string | null]> };
-	const [pinned] = Object.values(cursor.channels);
-	assert.ok(pinned?.[1]);
-	assert.notEqual(pinned?.[0], pinned?.[1]);
-	clock += 3_600_000;
-	const resumed = await poll({ ...context, cursor: limited.cursor });
-	assert.equal(resumed.issue, "slack_classification");
-	assert.equal(calls, 1);
-	assert.equal(resumed.items.length, 0);
 	assert.equal((await poll(context)).issue, "slack_classification");
+	assert.equal((await poll({ ...context, force: true })).issue, "slack_classification");
 	assert.equal(calls, 1);
 });
 test("same-project concurrent polls share the classification; cancellation and crash claims never retry", async (t) => {
@@ -300,14 +288,14 @@ test("same-project concurrent polls share the classification; cancellation and c
 	assert.equal((await f.store.slackCached("C000000001", "1791892802.000001", f.project.id))?.state, "error");
 });
 
-test("force resumes a pinned budget page for one pass, without enabling future polls or bypassing Slack rate limits", async (t) => {
+test("ordinary and forced refreshes share cache and still respect Slack retry delays", async (t) => {
 	const f = await fixture(t);
 	t.mock.timers.enable({ apis: ["Date"], now });
 	const projects = new ProjectStore(f.home);
 	await projects.load();
 	const project = await projects.create({ path: f.home, tracking: { slackChannels: ["C000000001"] } });
 	await f.store.load([project.id]);
-	for (let i = 0; i < SLACK_HOURLY_BUDGET; i++) await f.store.reserveSlackRead(now);
+	for (let i = 0; i < 150; i++) await f.store.reserveSlackRead(now);
 	let classified = 0;
 	const registry = new SourceRegistry(projects, f.store, {
 		call: async (_kind, tool) => (tool === "reactions" ? { present: false } : standalone()),
@@ -326,10 +314,6 @@ test("force resumes a pinned budget page for one pass, without enabling future p
 	let mode = "poll";
 	registry.register("slack", async (context) => {
 		if (mode === "rate") throw new SourceRateLimited(120_000);
-		if (mode === "budget") {
-			assert.equal(context.force, false, "ordinary refresh does not inherit force");
-			return { items: [], issue: "slack_budget" };
-		}
 		return poller(context);
 	});
 	let waitingForced: boolean | undefined;
@@ -338,20 +322,17 @@ test("force resumes a pinned budget page for one pass, without enabling future p
 		return false;
 	};
 	const id = `${project.id}:slack`;
-	const limited = await registry.poll(id);
-	assert.equal(limited.budgetLimited, true);
-	assert.equal(classified, 0);
-	assert.throws(() => registry.poll(id), /hourly budget/);
+	const ordinary = await registry.poll(id);
+	assert.equal(ordinary.status, "ok");
+	assert.equal(ordinary.budgetLimited, undefined);
+	assert.equal(classified, 1);
 	const forced = await registry.poll(id, true);
 	assert.equal(forced.status, "ok");
 	assert.equal(forced.budgetLimited, undefined);
 	assert.equal(waitingForced, true);
 	assert.equal(classified, 1);
 	assert.equal((await f.store.list({ projectId: project.id })).items.length, 1);
-	assert.equal(await f.store.reserveSlackRead(now), false, "forced classifications do not reset shared usage");
-	mode = "budget";
-	assert.equal((await registry.poll(id)).budgetLimited, true);
-	assert.throws(() => registry.poll(id), /hourly budget/);
+	assert.equal(await f.store.reserveSlackRead(now), true);
 	mode = "rate";
 	const rateLimited = await registry.poll(id, true);
 	assert.equal(rateLimited.budgetLimited, undefined);
@@ -606,7 +587,7 @@ test("registry reports per-channel status and hides items of removed channels wi
 	assert.equal(registry.require(id).channels?.[1]?.status, "ok");
 });
 
-test("shared scheduler polls Slack only when configured, preserves partial checkpoints, and resumes a budget pause at the next UTC hour", async (t) => {
+test("shared scheduler polls Slack only when configured and preserves partial checkpoints on its bounded cadence", async (t) => {
 	const f = await fixture(t);
 	const projects = new ProjectStore(f.home);
 	await projects.load();
@@ -622,7 +603,11 @@ test("shared scheduler polls Slack only when configured, preserves partial check
 	let calls = 0;
 	registry.register("slack", async () => {
 		calls++;
-		return { items: [], cursor: { remaining: true }, ...(calls === 1 ? { issue: "slack_budget" as const } : {}) };
+		return {
+			items: [],
+			cursor: { remaining: true },
+			...(calls === 1 ? { issue: "slack_classification" as const } : {}),
+		};
 	});
 	registry.register("linear", async () => ({ items: [] }));
 	registry.startPolling("slack");
@@ -633,11 +618,10 @@ test("shared scheduler polls Slack only when configured, preserves partial check
 	const limited = await registry.poll(`${project.id}:slack`);
 	assert.equal(calls, 1, "manual and background polling share the same single flight");
 	assert.equal(limited.status, "error");
-	assert.match(limited.error!, /hourly budget/);
+	assert.match(limited.error!, /classified/);
 	assert.deepEqual(f.store.checkpoint(limited.id)?.cursor, { remaining: true });
-	const nextHour = Date.UTC(2026, 9, 13, 13);
+	const nextHour = Date.now() + 300_000;
 	assert.equal(limited.nextPollAt, nextHour);
-	assert.throws(() => registry.poll(limited.id), /hourly budget/);
 	assert.equal((await registry.poll(`${project.id}:linear`)).status, "ok", "Slack budget does not block Linear");
 	t.mock.timers.tick(nextHour - Date.now() - 1);
 	assert.equal(calls, 1);
@@ -919,5 +903,80 @@ test("a pasted Slack link adds its thread to triage from any channel, classified
 	warn.mock.restore();
 	assert.throws(() => registry.addSlackMessage(project.id, "https://example.com/x"), /Paste a link/);
 	await projects.update(project.id, { tracking: { slackChannels: [] } });
-	assert.throws(() => registry.addSlackMessage(project.id, link), /Add Slack channels/);
+	unreadable = false;
+	assert.equal((await registry.addSlackMessage(project.id, link)).id, first.id);
+	assert.equal((await registry.listItems({ projectId: project.id, kind: "slack" })).items.length, 1);
+	assert.equal((await registry.slackExcerpt(first.id)).itemId, first.id);
+	await f.store.patch(first.id, { slack: { status: "open" } });
+	registry.assertIntakeSource(project.id, "slack");
+	assert.equal((await registry.intakeSources(project.id)).find((page) => page.source === "slack")?.items.length, 1);
+});
+
+test("explicit imports need no tracking and share provider Retry-After with refresh", async (t) => {
+	const f = await fixture(t);
+	const projects = new ProjectStore(f.home);
+	await projects.load();
+	const project = await projects.create({ path: f.home });
+	await f.store.load([project.id]);
+	t.mock.timers.enable({ apis: ["Date"], now });
+	let calls = 0;
+	let limited = true;
+	const registry = new SourceRegistry(projects, f.store, {
+		call: async (_kind, tool, args) => {
+			calls++;
+			if (limited) throw new SourceRateLimited(120_000);
+			if (tool === "startSlack") return { userId: "U000000001" };
+			return tool === "thread"
+				? {
+						...thread(String(args.message_ts), "Import without tracking"),
+						pagination_info: "There are no more messages in this thread.\n",
+					}
+				: standalone("C000000009");
+		},
+	});
+	t.after(() => registry.stop());
+	registry.slackAdder = createSlackAdder(f.store, { classifySlack: async () => bug }, () => now);
+	const link = "https://acme.slack.com/archives/C000000009/p1791892800000001";
+	const warn = t.mock.method(console, "warn", () => {});
+	await assert.rejects(registry.addSlackMessage(project.id, link), /limiting requests/);
+	const before = calls;
+	assert.throws(() => registry.addSlackMessage(project.id, link), /limiting requests/);
+	assert.equal(calls, before);
+	limited = false;
+	t.mock.timers.tick(120_000);
+	const item = await registry.addSlackMessage(project.id, link);
+	const assertSavedIntake = async () => {
+		const dashboard = registry.dashboard(project.id).find((source) => source.source === "slack");
+		assert.equal(dashboard?.items[0]?.id, item.id);
+		assert.equal(dashboard?.status, "idle");
+		const intake = (await registry.intakeSources(project.id)).find((source) => source.source === "slack");
+		assert.equal(intake?.items[0]?.id, item.id);
+		assert.equal(intake?.status, "idle");
+		assert.equal(registry.require(`${project.id}:slack`).status, "not_configured");
+	};
+	await assertSavedIntake();
+	await f.store.commit(project.id, "slack", [], { configKey: "old-settings", lastPolledAt: now });
+	await assertSavedIntake();
+	assert.equal(item.metadata.manual, true);
+	assert.equal(registry.require(`${project.id}:slack`).configured, false);
+	registry.assertIntakeSource(project.id, "slack");
+	assert.equal(
+		(await registry.intakeSources(project.id)).find((page) => page.source === "slack")?.items[0]?.id,
+		item.id,
+	);
+	assert.equal((await registry.slackThread(item.id)).itemId, item.id);
+	await registry.startSlack(item);
+	assert.equal(((await f.store.require(item.id)).metadata.slackStart as { outcome: string }).outcome, "reacted");
+	assert.equal((await registry.inbox(project.id, 20)).slack?.items[0]?.id, item.id);
+	await projects.update(project.id, { tracking: { slackChannels: ["C000000001"] } });
+	registry.register("slack", async () => {
+		throw new SourceRateLimited(180_000);
+	});
+	await registry.poll(`${project.id}:slack`);
+	assert.throws(() => registry.addSlackMessage(project.id, link), /limiting requests/);
+	await projects.update(project.id, { tracking: { slackChannels: [] } });
+	await assertSavedIntake();
+	assert.throws(() => registry.addSlackMessage(project.id, link), /limiting requests/);
+	assert.equal((await registry.listItems({ projectId: project.id, kind: "slack" })).items[0]?.id, item.id);
+	warn.mock.restore();
 });

@@ -28,8 +28,8 @@ of current liveness. Full tracking configuration hashes fence replacement/remova
 Diagnostic reads only inspect observations, never execute, enqueue, retry or write an integration job.
 Local operational collection/clear controls apply independently of remote export. Nothing is uploaded.
 
-Quota evidence comes from current policy constants, not a new budget: Slack currently counts 100 local
-operations per fixed UTC hour. Force remains a single counted bounded pass and preserves provider limits.
+Quota evidence marks the legacy Slack local hourly cap disabled. Ordinary and forced refreshes use
+the same bounded pass and preserve provider AI allowances and Slack retry delays.
 Slack Done writes use existing durable admissions/shared slots and provider limits, not the source-read
 quota. Manual lookups and linked sync retain their own provider/scheduler guards. Triage rebuilds retain
 existing grooming spacing/day limits and failure cooldown, not Slack classification quota. Observation

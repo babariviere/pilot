@@ -140,8 +140,7 @@ export function createSlackPoller(
 		cursor.last = key;
 		let page: ReturnType<typeof parseSlackPage>;
 		const items: TrackedInput[] = [];
-		let issue: SourcePollResult["issue"],
-			deferred = false;
+		let issue: SourcePollResult["issue"];
 		try {
 			let me: SlackIdentity | undefined;
 			const groupIds: string[] = [];
@@ -234,16 +233,6 @@ export function createSlackPoller(
 						false,
 						context.force,
 					);
-					if (reservation.state === "budget") {
-						context.observe?.({
-							stage: "classification",
-							phase: "partial",
-							reason: "local_classification_budget",
-						});
-						issue = "slack_budget";
-						deferred = true;
-						break;
-					}
 					if (reservation.state === "reserved") {
 						const channel = page.channel;
 						const work = (async (): Promise<SlackCache> => {
@@ -321,17 +310,10 @@ export function createSlackPoller(
 		context.observe?.({
 			stage: "classification",
 			phase: "completed",
-			outcome:
-				issue === "slack_budget" ? "budget_limited" : issue === "slack_classification" ? "partial" : "success",
-			...(issue
-				? { reason: issue === "slack_budget" ? "local_classification_budget" : "classification_failed" }
-				: {}),
+			outcome: issue === "slack_classification" ? "partial" : "success",
+			...(issue ? { reason: "classification_failed" } : {}),
 		});
-		cursor.channels[key] = deferred
-			? [oldest, latest, next, pulled, null]
-			: page.next
-				? [oldest, latest, page.next, pulled, null]
-				: [latest, null, null, pulled, null];
+		cursor.channels[key] = page.next ? [oldest, latest, page.next, pulled, null] : [latest, null, null, pulled, null];
 		return { items, cursor: cursor as unknown as TrackingJson, ...(issue ? { issue } : {}) };
 	};
 }
@@ -370,7 +352,7 @@ export type SlackMessageLink = { channel: string; ts: string; threadTs: string }
 export type SlackAdder = (context: SourcePollContext, link: SlackMessageLink) => Promise<TrackedInput>;
 
 /** Adds one message the user pasted, from any channel their Slack account can read. Reads its thread and classifies
- * it like a polled thread: cached per project and sharing the hourly budget, but a cached failure is retried because
+ * it like a polled thread: cached per project, but a cached failure is retried because
  * the user asked. When classification is unavailable the message is still added, untyped, titled by its first line.
  * The row is marked manual, so it stays listed when its channel is not tracked. */
 export function createSlackAdder(

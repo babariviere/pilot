@@ -16,7 +16,7 @@ const REPLY_CHARS = 8_000;
  * deduplicated. Resolves false when the chat can't take it (deleted, archived or failed); throws when it may later.
  */
 export type ResumeChat = (sessionId: string, message: string, requestId: string) => Promise<boolean>;
-/** One bounded pass over a project's waiting messages. Resolves true when the hourly budget cut it short. */
+/** One bounded pass over a project's waiting messages. The boolean is kept for older callers. */
 export type SlackWaitingWatcher = (context: SourcePollContext) => Promise<boolean>;
 
 export function createSlackWaitingWatcher(
@@ -31,24 +31,13 @@ export function createSlackWaitingWatcher(
 			context.observe?.({
 				stage: "waiting_replies",
 				phase: "completed",
-				outcome: batch.budget ? "budget_limited" : "success",
-				...(batch.budget ? { reason: "local_read_budget" } : {}),
+				outcome: "success",
 				count: 0,
 			});
-			return batch.budget;
+			return false;
 		}
 		// The user's own replies (including what an agent posts as them) never end a wait.
 		if (!identity || now() - identity.at >= 3_600_000) {
-			if (!(await store.reserveSlackRead(now(), context.force))) {
-				context.observe?.({
-					stage: "waiting_replies",
-					phase: "completed",
-					outcome: "budget_limited",
-					reason: "local_read_budget",
-					count: 0,
-				});
-				return true;
-			}
 			identity = {
 				value: parseSlackIdentity(await context.call("profile", { response_format: "detailed" })),
 				at: now(),
@@ -108,11 +97,10 @@ export function createSlackWaitingWatcher(
 		context.observe?.({
 			stage: "waiting_replies",
 			phase: "completed",
-			outcome: batch.budget ? "budget_limited" : "success",
-			...(batch.budget ? { reason: "local_read_budget" } : {}),
+			outcome: "success",
 			count: batch.reads.length,
 		});
-		return batch.budget;
+		return false;
 	};
 }
 

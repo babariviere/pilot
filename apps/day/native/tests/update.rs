@@ -40,6 +40,7 @@ fn view() -> SavedView {
         today_project: "project".into(),
         model_settings: String::new(),
         connection_settings: String::new(),
+        slack_settings: String::new(),
         knowledge: String::new(),
         settings: true,
         project_setup: vec![
@@ -134,6 +135,19 @@ fn connection_setup_draft_round_trips_and_older_windows_still_open() {
     json.as_object_mut().unwrap().remove("connectionSettings");
     let old: SavedView = nsh_core::element::from_json(&json).unwrap();
     assert!(old.connection_settings.is_empty());
+}
+
+#[test]
+fn slack_draft_round_trips_and_legacy_windows_default_empty() {
+    let mut original = view();
+    original.slack_settings = r#"{"projectId":"support","binding":"earlier","channels":"C123","mentionOnly":[],"groups":"","url":""}"#.into();
+    let mut json = serde_json::to_value(&original).unwrap();
+    let restored: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert_eq!(restored.slack_settings, original.slack_settings);
+    assert!(restored.text_bytes() >= restored.slack_settings.len());
+    json.as_object_mut().unwrap().remove("slackSettings");
+    let old: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert!(old.slack_settings.is_empty());
 }
 
 #[test]

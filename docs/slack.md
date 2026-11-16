@@ -4,6 +4,30 @@ Connect the `slack` MCP server, then configure tracked channels in project setti
 Open the project's Slack triage to review reports; use **Refresh** to sync on demand.
 Tracking never sends Slack messages or replies.
 
+## Native Pilot intake
+
+In Day, open **Settings → Slack intake** for the displayed project. Enter chosen
+channel names or IDs, choose **All messages** or **Mentions only** for each,
+and save tracking. Optional group handles extend mention filtering. Clearing the
+channels stops tracking, not saved messages.
+
+New channels start seven days back. Catch-up reads one small history page per
+turn. Settings shows each channel's last page, remaining pages and failures,
+plus source delays. This is incomplete coverage, not a complete Slack history.
+Mention-only intake checks top-level messages. Automatic discovery of mentions
+found only in replies remains deferred; use a message link for those threads.
+
+Use **Import a message** in the same settings section for any channel your Slack
+account can read. It works with tracking off and does not add a channel. Saved
+imports remain on Today after tracking changes. Opening Settings or restoring a
+draft never imports. An uncertain import offers **Check status**, which only
+reads its receipt and never sends it again.
+If it stays Unknown, **Set aside Unknown** checks once more and unlocks Settings.
+It does not cancel or retry the action, which may already have saved a message.
+
+The remaining sections describe the existing desktop triage, not additional Day
+controls.
+
 ## Triage a report
 
 Select a report to read its thread. Search by summary, channel, message text, or a
@@ -39,7 +63,8 @@ Labels can hide or locally close reports. Use **Show hidden** or **Show dismisse
 Corrections help future classification. Common cases group related reports so you
 can review recurring problems together.
 
-Slack classification/check work shares a budget of 100 operations per UTC hour
-across projects. **Force sync** bypasses that budget for one refresh, not Slack's
-own rate limits. Mention-only channels detect top-level mentions, not mentions
+Slack refreshes use bounded pages, batches, concurrency and recheck intervals,
+without a local hourly operation cap. Provider AI allowances and Slack retry delays
+still apply, including on forced refreshes. Explicit imports work without tracked
+channels and stay available after channel tracking stops. Mention-only channels detect top-level mentions, not mentions
 appearing only in replies.

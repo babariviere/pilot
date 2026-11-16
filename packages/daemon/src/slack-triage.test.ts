@@ -195,6 +195,6 @@ test("legacy global boolean cache migrates without calls or budget charges; new 
 		disk.close();
 	}
 	const check = new DatabaseSync(path);
-	assert.equal(check.prepare("SELECT used FROM slack_budget").get()!.used, 2);
+	assert.equal(check.prepare("SELECT COUNT(*) AS n FROM slack_budget").get()!.n, 0);
 	check.close();
 });

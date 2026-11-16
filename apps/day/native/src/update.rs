@@ -349,6 +349,9 @@ pub struct SavedView {
     /// Unsent connection setup, never authentication responses. Restore sends nothing.
     #[prop(default)]
     pub connection_settings: String,
+    /// Unsent Slack tracking and message-link draft. Restore never imports.
+    #[prop(default)]
+    pub slack_settings: String,
     /// Unsaved Knowledge edit and library location. Restore never submits it.
     #[prop(default)]
     pub knowledge: String,
@@ -430,6 +433,7 @@ impl SavedView {
             + self.today_project.len()
             + self.model_settings.len()
             + self.connection_settings.len()
+            + self.slack_settings.len()
             + self.knowledge.len()
             + self.thread.len()
             + self.feedback.len()

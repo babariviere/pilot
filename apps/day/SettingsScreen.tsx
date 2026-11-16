@@ -41,6 +41,7 @@ import {
 	revisionQuote,
 	sourceLine,
 } from "./preferencesView";
+import { SlackSettings } from "./SlackSettings";
 import { Action, Mark, PAGE_COLUMN, SectionTitle } from "./ui";
 
 /** A quiet note with a mark, for what needs a look. */
@@ -563,6 +564,7 @@ export function SettingsScreen(props: { day: Day }) {
 				</Text>
 				<If when={props.day.models}>{(controls) => <ModelSettingsSection controls={controls()} />}</If>
 				<If when={props.day.connections}>{(controls) => <ConnectionSettings controls={controls()} />}</If>
+				<If when={props.day.slack}>{(controls) => <SlackSettings controls={controls()} />}</If>
 				<Preferences mirror={mirror} />
 				<KnowledgeSection projectId={mirror.view().projectId} />
 				<ProjectsSection />

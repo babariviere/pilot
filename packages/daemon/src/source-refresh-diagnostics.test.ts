@@ -299,7 +299,7 @@ test("shared-slot queue, deadline uncertainty and deleted configuration are read
 	assert.equal(f.calls(), 0);
 });
 
-test("waiting-reply and reaction-read limits stay separate from successful message discovery", async (t) => {
+test("waiting-reply failures stay separate from discovery; legacy read budgets are ignored", async (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: time });
 	const f = await fixture(t);
 	f.registry.register("slack", async () => ({ items: [] }));
@@ -316,7 +316,8 @@ test("waiting-reply and reaction-read limits stay separate from successful messa
 	assert.equal(row.live?.outcome, "partial");
 	assert.equal(row.live?.stages.find((s) => s.stage === "discovery")?.outcome, "success");
 	assert.equal(row.live?.stages.find((s) => s.stage === "waiting_replies")?.outcome, "partial");
-	assert.equal(row.live?.stages.find((s) => s.stage === "reaction_reads")?.reason, "local_read_budget");
+	assert.equal(row.live?.stages.find((s) => s.stage === "reaction_reads")?.outcome, "success");
+	assert.equal(row.live?.stages.find((s) => s.stage === "reaction_reads")?.reason, undefined);
 	assert.equal(row.backoff, undefined, "reaction limits do not pause message discovery");
 	assert.equal(row.scheduler.nextDueAt, time + 300_000);
 	assert.equal(f.calls(), calls);

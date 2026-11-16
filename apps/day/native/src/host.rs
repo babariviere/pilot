@@ -32,6 +32,7 @@ pub(crate) mod preferences;
 pub(crate) mod projects;
 pub mod ritual;
 mod session_chat;
+pub(crate) mod slack_controls;
 pub(crate) mod threads;
 pub(crate) mod today_scope;
 mod transport;

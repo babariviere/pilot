@@ -116,14 +116,14 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 	const forcedCalls: boolean[] = [];
 	tracking.register("slack", async (context) => {
 		forcedCalls.push(context.force === true);
-		return { items: [], issue: "slack_budget" };
+		return { items: [] };
 	});
 	const limited = (await (await api(slackPoll, {})).json()) as TrackingSource;
-	assert.equal(limited.budgetLimited, true);
-	assert.equal((await api(slackPoll, {})).status, 409);
+	assert.equal(limited.budgetLimited, undefined);
+	assert.equal((await api(slackPoll, {})).status, 200);
 	assert.equal((await api(slackPoll, { force: true })).status, 200);
-	assert.equal((await api(slackPoll, { force: false })).status, 409);
-	assert.deepEqual(forcedCalls, [false, true]);
+	assert.equal((await api(slackPoll, { force: false })).status, 200);
+	assert.deepEqual(forcedCalls, [false, false, true, false]);
 	const teams = await (await api("/tracking/linear/teams")).json();
 	assert.equal((await api("/tracking/linear/states")).status, 400);
 	assert.equal((await api(`/tracking/linear/states?team=${"a".repeat(201)}`)).status, 400);

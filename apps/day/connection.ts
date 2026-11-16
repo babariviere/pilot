@@ -26,6 +26,7 @@ import { ConnectedPreferences, mirrorPreferences } from "./preferencesFeed";
 import { settingsOpen } from "./preferencesView";
 import { mirrorRituals, type Rituals, rootRecap } from "./ritualFeed";
 import { ConnectedSessionChat, mirrorSessionChat } from "./sessionChat";
+import { connectedSlackControls } from "./slackControls";
 import { ConnectedThreads, mirrorThreads } from "./threadFeed";
 import { ConnectedScope, mirrorScope, todayProject } from "./todayScope";
 import type { Update } from "./updateFeed";
@@ -145,6 +146,7 @@ function refresh() {
 		open.state === "open" ? open.day.chat?.source.refresh() : undefined,
 		open.state === "open" && settingsOpen() ? open.day.connections?.read() : undefined,
 		open.state === "open" ? open.day.power?.read() : undefined,
+		open.state === "open" && settingsOpen() ? open.day.slack?.read() : undefined,
 	]).catch((error: unknown) => {
 		console.error("Pilot could not read this window again:", error);
 	});
@@ -303,6 +305,7 @@ async function connect() {
 	day.connections = connectedConnectionControls(window);
 	day.power = connectedPower(window);
 	void day.power.read();
+	day.slack = connectedSlackControls(window, () => void intakeFeed.read());
 	const plans = mirrorPlanning(planFeed, mirrorChats(new ConnectedChats(window)));
 	const rituals = mirrorRituals(ritualFeed, rootRecap);
 	const update = await connectedUpdates(window);

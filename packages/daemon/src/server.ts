@@ -136,8 +136,9 @@ import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
 import type { ScheduleService } from "./schedules.ts";
 import { CommandRejected, NotFound, type SessionManager } from "./sessions.ts";
 import { SetupError, type SetupService } from "./setup.ts";
+import { SLACK_CONTROLS, SlackControls } from "./slack-controls.ts";
 import { parseSlackMessageLink } from "./slack-format.ts";
-import type { SourceRegistry } from "./sources.ts";
+import { SlackImportRefused, type SourceRegistry } from "./sources.ts";
 import { parseTaskModel } from "./task-model.ts";
 import type { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { terminalSender } from "./terminal-output.ts";
@@ -968,9 +969,11 @@ export function createDaemonServer(
 				})
 			: undefined;
 	const connectionControls = new ConnectionControls(mcpSetup, mcp, _config.mcpSetupReadOnly);
+	const slackControls = tracking ? new SlackControls(projects, tracking) : undefined;
 	const modelControls = new ModelControls(models, projects, setup, sessions, _config.modelScopeReadOnly);
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
 		if (op.kind === CONNECTION_CONTROLS) throw new Error("Connection outcome unknown; lookup only");
+		if (op.kind === SLACK_CONTROLS) throw new Error("Slack outcome unknown; lookup only");
 		if (op.kind === MODEL_CONTROLS) throw new Error("Model settings outcome unknown; lookup only");
 		if (isThreadOperation(op.kind)) {
 			if (!missionThreads) throw new Error("Topic lookup unavailable");
@@ -1261,6 +1264,14 @@ export function createDaemonServer(
 			throw new SetupError(404, "Unknown GitHub import operation.");
 		}
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "slack-controls") {
+			res.setHeader("cache-control", "no-store");
+			if (!githubSetup || !slackControls) throw new ServiceUnavailable("Native Slack unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (parts.length === 2 && req.method === "GET")
+				return json(res, 200, slackControls.read(url.searchParams.get("projectId") ?? ""));
+			throw new HttpError(404, "Not found");
+		}
 		if (parts[1] === "connection-controls") {
 			res.setHeader("cache-control", "no-store");
 			if (!githubSetup) throw new ServiceUnavailable("Native connections unavailable");
@@ -1685,6 +1696,24 @@ export function createDaemonServer(
 						res,
 						200,
 						await journal.execute(operation, (op, entry) => planningWorkers.enroll(op, entry.firstEntry)),
+					);
+				} finally {
+					end();
+				}
+			}
+			if (operation?.kind === SLACK_CONTROLS) {
+				res.setHeader("cache-control", "no-store");
+				if (!githubSetup || !slackControls) throw new ServiceUnavailable("Native Slack unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				const saved = await journal.lookup(operation);
+				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					return json(
+						res,
+						200,
+						await journal.execute(operation, (op, entry) => slackControls.admit(op, journal, entry.firstEntry)),
 					);
 				} finally {
 					end();
@@ -2257,7 +2286,12 @@ export function createDaemonServer(
 						throw new HttpError(400, "projectId and url are required");
 					projects.require(body.projectId);
 					if (!parseSlackMessageLink(body.url)) throw new HttpError(400, "Paste a link to a Slack message");
-					return json(res, 200, await tracking.addSlackMessage(body.projectId, body.url));
+					try {
+						return json(res, 200, await tracking.addSlackMessage(body.projectId, body.url));
+					} catch (error) {
+						if (error instanceof SlackImportRefused) throw error;
+						throw new HttpError(500, "Couldn't confirm the saved message. It may already be saved.");
+					}
 				}
 				if (parts[2] === "slack" && parts[3] === "cases") {
 					const projectId = url.searchParams.get("projectId") ?? "";

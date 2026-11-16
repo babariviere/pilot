@@ -290,6 +290,15 @@ async fn run(
     }
     if matches!(
         call.command,
+        Command::SlackRead
+            | Command::SlackWrite(_)
+            | Command::SlackCheck(_)
+            | Command::SlackSetAside(_)
+    ) {
+        return super::slack_controls::handle(t, journal, shared, &call.command, &call.gate).await;
+    }
+    if matches!(
+        call.command,
         Command::ConnectionsRead
             | Command::ConnectionsWrite(_)
             | Command::ConnectionsCheck(_)
@@ -741,6 +750,12 @@ async fn run(
         | Command::ConnectionsCheck(_)
         | Command::ConnectionsProbe => unreachable!("handled connection command"),
         Command::PowerRead | Command::PowerResume => unreachable!("handled power command"),
+        Command::SlackRead
+        | Command::SlackWrite(_)
+        | Command::SlackCheck(_)
+        | Command::SlackSetAside(_) => {
+            unreachable!("handled Slack command")
+        }
         Command::UpdateRead
         | Command::UpdatePrepare(_)
         | Command::UpdateConfirm(_)

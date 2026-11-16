@@ -342,14 +342,14 @@ test("a check written on manual Done does not undo reopening, and starting work 
 	assert.equal(f.calls.filter((call) => call.tool === "doneSlack").length, 1);
 });
 
-test("a spent read budget defers only reaction checks, not discovery or Done writes", async (t) => {
+test("legacy hourly usage does not block reaction checks, discovery or Done writes", async (t) => {
 	const f = await fixture(t);
 	await f.eyes();
 	for (let i = 0; i < 100; i++) await f.items.reserveSlackReactions(f.project.id, Date.now(), 0);
 	const reads = f.calls.filter((call) => call.tool === "reactions").length;
 	await f.poll();
 	assert.equal(f.registry.require(`${f.project.id}:slack`).status, "ok");
-	assert.equal(f.calls.filter((call) => call.tool === "reactions").length, reads);
+	assert.equal(f.calls.filter((call) => call.tool === "reactions").length, reads + 1);
 	await f.items.patch(f.item.id, { slack: { status: "done" } });
 	await until(async () => outcome(await f.items.require(f.item.id)) === "reacted");
 });
@@ -403,7 +403,7 @@ test("write failure is quiet, once-only and durable; already_reacted succeeds an
 	}
 });
 
-test("reaction reads are capped, rotate fairly, wait between checks and share the durable hourly Slack budget", async () => {
+test("reaction reads keep batch, fairness and recheck limits without an hourly cap", async () => {
 	const items = new TrackedItemStore(":memory:");
 	try {
 		await items.commit(
@@ -422,11 +422,11 @@ test("reaction reads are capped, rotate fairly, wait between checks and share th
 		assert.equal((await items.reserveSlackReactions("p", t + 400)).reads.length, 0);
 		let used = 20;
 		for (let i = 0; i < 12; i++) used += (await items.reserveSlackReactions("p", t + 500 + i, 0)).reads.length;
-		assert.equal(used, 100);
-		assert.deepEqual(await items.reserveSlackReactions("p", t + 600, 0), { reads: [], budget: true });
-		assert.equal((await items.reserveSlack("CEXAMPLE", parent, t + 600, "p")).state, "budget");
+		assert.equal(used, 116);
+		assert.equal((await items.reserveSlackReactions("p", t + 600, 0)).reads.length, 8);
+		assert.equal((await items.reserveSlack("CEXAMPLE", parent, t + 600, "p")).state, "reserved");
 		assert.equal((await items.reserveSlackReactions("p", t + 600, 0, true)).reads.length, 8);
-		assert.deepEqual(await items.reserveSlackReactions("p", t + 601, 0), { reads: [], budget: true });
+		assert.equal((await items.reserveSlackReactions("p", t + 601, 0)).reads.length, 8);
 		assert.equal((await items.reserveSlackReactions("p", t + 3_600_000 + 1_000)).reads.length, 8);
 	} finally {
 		await items.close();

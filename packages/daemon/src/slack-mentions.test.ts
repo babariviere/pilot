@@ -13,7 +13,6 @@ import { createSlackPoller } from "./slack-source.ts";
 import { dedicatedSourceTool, SourceToolError, validSourceArguments } from "./source-tool-rules.ts";
 import { type SourcePollContext, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
-import { SLACK_HOURLY_BUDGET } from "./tracked-items-disk.ts";
 
 const now = Date.UTC(2026, 9, 13, 12);
 const channel = "C000000001";
@@ -330,24 +329,20 @@ test("an unresolved or refused group search retries after a day without stopping
 	assert.equal((await f.store.slackGroups(["oncall"])).oncall?.id, "S0ONCALL1");
 });
 
-test("discovery reads leave the hourly budget to classification, which pins progress and resumes next UTC hour", async (t) => {
+test("mention discovery and classification continue beyond the retired hourly cap", async (t) => {
 	const f = await fixture(t);
-	for (let i = 0; i < SLACK_HOURLY_BUDGET; i++) await f.store.reserveSlack(channel, `${i + 1}.000002`, now, "budget");
+	for (let i = 0; i < 150; i++) await f.store.reserveSlack(channel, `${i + 1}.000002`, now, "budget");
 	f.history(history([{ ts: parent, text: "<@U000000099> export crashes" }]));
-	const limited = await f.poll(f.context);
-	assert.equal(limited.issue, "slack_budget");
-	assert.equal(f.texts.length, 0);
+	const refreshed = await f.poll(f.context);
+	assert.equal(refreshed.issue, undefined);
+	assert.equal(refreshed.items.length, 1);
+	assert.equal(f.texts.length, 1);
 	assert.deepEqual(
 		f.calls.map((call) => call.tool),
 		["profile", "history"],
 	);
-	f.tick(3_600_000);
-	const resumed = await f.poll({ ...f.context, cursor: limited.cursor });
-	assert.equal(resumed.items.length, 1);
+	await f.poll({ ...f.context, force: true });
 	assert.equal(f.texts.length, 1);
-	const reads = f.calls.filter((call) => call.tool === "history");
-	assert.equal(reads[1]?.args.oldest, reads[0]?.args.oldest);
-	assert.equal(reads[1]?.args.latest, reads[0]?.args.latest);
 });
 
 test("option off preserves history behaviour and enabling it never hides/closes existing items or label effects", async (t) => {

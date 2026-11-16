@@ -15,6 +15,7 @@ import { glide } from "./motion";
 import type { PowerControls } from "./power";
 import type { PreferencesMirror } from "./preferencesFeed";
 import type { SessionChatMirror } from "./sessionChat";
+import type { SlackControls } from "./slackControls";
 import type { ThreadsMirror } from "./threadFeed";
 import type { ScopeMirror } from "./todayScope";
 
@@ -23,6 +24,7 @@ export type Day = {
 	/** Native AI settings; absent from mock worlds unless explicitly supplied. */
 	models?: ModelControls;
 	connections?: ConnectionControls;
+	slack?: SlackControls;
 	/** Sends intents. Never written to from TSX state. */
 	feed: DayFeed;
 	/** A mirror of Rust's read model. Only the feed's listener sets it. */

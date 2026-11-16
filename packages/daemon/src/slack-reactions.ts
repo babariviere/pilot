@@ -24,11 +24,10 @@ export async function refreshSlackReactions(
 	context.observe?.({
 		stage: "reaction_reads",
 		phase: "completed",
-		outcome: batch.budget ? "budget_limited" : "success",
-		...(batch.budget ? { reason: "local_read_budget" } : {}),
+		outcome: "success",
 		count: batch.reads.length,
 	});
-	return batch.budget;
+	return false;
 }
 
 /** Add the check through the dedicated Slack server. Persist its outcome before attempting removal. */
