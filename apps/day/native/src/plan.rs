@@ -810,6 +810,8 @@ pub enum ChangeKind {
     Changes,
     /// It is dropped. An open task only; its history stays.
     Drops,
+    /// It is a new task the revision adds.
+    Adds,
 }
 
 /// One text of the agreement, now and after the revision.
@@ -942,6 +944,8 @@ pub struct Revision {
     pub plan: TextChange,
     /// Every open task, in order.
     pub tasks: Vec<TaskChange>,
+    /// New tasks the revision adds, in order. Their number is 0 until they exist.
+    pub added: Vec<TaskChange>,
     /// Finished tasks. They and their history always stay.
     pub finished: u32,
     /// Active decisions it replaces or withdraws.

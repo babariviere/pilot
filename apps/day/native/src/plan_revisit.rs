@@ -72,8 +72,17 @@ pub(crate) struct DecisionEdit {
     pub reason: String,
 }
 
-/// What a revision changes. Like the daemon's delta, it cannot add tasks,
-/// touch finished ones or edit a decision in place.
+/// One task a revision adds, and the open tasks it waits for.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct NewTask {
+    pub key: String,
+    pub title: String,
+    pub body: String,
+    pub after: Vec<u32>,
+}
+
+/// What a revision changes. Like the daemon's delta, it cannot touch
+/// finished tasks or edit a decision in place.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct Delta {
     pub goal: Option<String>,
@@ -81,6 +90,7 @@ pub(crate) struct Delta {
     pub tasks: Vec<TaskEdit>,
     pub decisions: Vec<DecisionEdit>,
     pub corrections: Vec<Correction>,
+    pub added: Vec<NewTask>,
 }
 
 /// How the mock service answers a confirmation.
@@ -242,6 +252,24 @@ impl RevisitDesk {
             goal: Self::text(&now.goal, p.delta.goal.as_ref()),
             plan: Self::text(&now.plan, p.delta.plan.as_ref()),
             tasks,
+            added: p
+                .delta
+                .added
+                .iter()
+                .map(|n| TaskChange {
+                    id: n.key.clone(),
+                    number: 0,
+                    title: n.title.clone(),
+                    kind: ChangeKind::Adds,
+                    lines: std::iter::once(n.body.clone())
+                        .chain((!n.after.is_empty()).then(|| {
+                            let after: Vec<String> =
+                                n.after.iter().map(|x| format!("#{x}")).collect();
+                            format!("After: {}", after.join(", "))
+                        }))
+                        .collect(),
+                })
+                .collect(),
             finished: now.tasks.iter().filter(|t| t.finished).count() as u32,
             kept_decisions: active.saturating_sub(decisions.len()) as u32,
             decisions,
@@ -336,6 +364,17 @@ impl RevisitDesk {
                 }
                 t.dropped |= edit.drop;
             }
+        }
+        for n in &p.delta.added {
+            let number = now.tasks.iter().map(|t| t.number).max().unwrap_or(0) + 1;
+            now.tasks.push(Task {
+                id: format!("notify-{number}"),
+                number,
+                title: n.title.clone(),
+                body: n.body.clone(),
+                finished: false,
+                dropped: false,
+            });
         }
         for edit in &p.delta.decisions {
             let next = now.decisions.iter().map(|d| d.number).max().unwrap_or(0) + 1;
@@ -553,6 +592,12 @@ fn notify_revision(now: &Agreement, picks: &[(String, String)]) -> (String, Delt
         delta.corrections.push(Correction {
             kind: CorrectionKind::Permission,
             text: s("Let Pilot read whether macOS Focus is on."),
+        });
+        delta.added.push(NewTask {
+            key: s("focus-summary"),
+            title: s("Summarize what waited during Focus"),
+            body: s("When Focus ends, show one summary of the notifications it held."),
+            after: vec![5],
         });
     } else {
         plan.push_str("Quiet hours are 22:00 to 07:00. ");

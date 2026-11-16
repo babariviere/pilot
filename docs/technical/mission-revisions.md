@@ -73,6 +73,25 @@ Running, Pausing or Unknown is refused, not treated as a safe boundary. Changing
 invalidates a proposal's source. This is a conservative backend gate, not an automatic pause
 or checkpoint adapter.
 
+A revision that only adds tasks (`newTasks`, with no goal, agreement, task or decision change)
+needs no Pause: it changes nothing a working chat uses. Each new task has a `key`, a title, a
+body (its outcome and acceptance) and `dependsOn`: existing task IDs or numbers, or keys of new
+tasks listed earlier. A dropped task, or one the same revision drops, cannot be a dependency.
+
+### Planned missions
+
+In a mission with a published native plan, a confirmed revision becomes the published agreement
+(`MissionStore.republish`): the publication takes the current brief revision and latest
+submission, each open published task gets its `definition` (`publishedDefinition`: title, body,
+dependencies, assignment, decisions), and each new task joins `publication.tasks` with slice ID
+`revision:<proposal>:<key>`. Start and starts by rule compare a task with its `definition` when
+it has one, and with its slice otherwise. So new tasks start like the others, and a task changed
+outside a confirmed revision loses Start authority.
+
+The planning agent may save a proposal after a Revisit or after a mission thread message it took
+(`userAsked`), for example when the user asks for new work in a thread. The proposal is inert
+until the user confirms it on the planning page.
+
 ### Reachable post-Pause preview
 
 The coordinator can prepare and save an inert delta while already allowed to plan. The user

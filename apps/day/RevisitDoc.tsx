@@ -32,6 +32,8 @@ export function changeWord(kind: ChangeKind): string {
 			return "Changes";
 		case "drops":
 			return "Drops";
+		case "adds":
+			return "New";
 	}
 }
 
@@ -43,6 +45,8 @@ function changeMark(kind: ChangeKind): MarkKind {
 			return "needs";
 		case "drops":
 			return "unreported";
+		case "adds":
+			return "needs";
 	}
 }
 
@@ -106,13 +110,13 @@ function TextPart(props: { missionId: string; title: string; part: string; chang
 	);
 }
 
-/** One open task: whether it stays, changes or drops, and what changes. */
+/** One open task: whether it stays, changes or drops, and what changes. A new task shows what it is for and what it waits for. */
 function TaskRow(props: { task: TaskChange }) {
 	const t = () => props.task;
 	return (
 		<View testID={`revision-task-${t().id}`} class="gap-1 border-t border-border py-2.5">
 			<View class="flex-row items-baseline gap-3">
-				<Text class="w-7 text-xs text-faint">{`#${t().number}`}</Text>
+				<Text class="w-7 text-xs text-faint">{t().kind === "adds" ? "" : `#${t().number}`}</Text>
 				<Text class="flex-1 text-sm text-foreground">{t().title}</Text>
 				<View class="flex-row items-center gap-1.5">
 					<Mark kind={changeMark(t().kind)} />
@@ -172,6 +176,18 @@ function changeCount(r: Revision): string {
 	return parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }
 
+/** What confirming does, in plain words. New tasks start by rule like the others, so the line says so. */
+function confirmLine(r: Revision): string {
+	const count = changeCount(r);
+	const added = r.added.length;
+	const changes = count === "nothing" && added > 0 ? "" : `It changes ${count} as shown. `;
+	const adds = added > 0 ? `It adds ${added} new ${added === 1 ? "task" : "tasks"}. ` : "";
+	const history = "Finished tasks, earlier answers and replaced decisions stay as history.";
+	return added > 0
+		? `${changes}${adds}${history} Each new task starts like the others, once the tasks it waits for are done. It resumes and permits nothing.`
+		: `${changes}${history} It starts, resumes and permits nothing.`;
+}
+
 /** Why the confirmation cannot be sent now, or nothing. */
 function blocked(page: PlanPage, r: Revision): string {
 	if (!r.current) return "The mission changed after Pilot proposed this revision. It cannot be confirmed.";
@@ -218,9 +234,7 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 			<If when={pin() && !unknown()}>
 				<View testID="revision-confirm-ask" class="gap-2">
 					<Text class="text-sm font-medium text-foreground">Apply exactly this revision?</Text>
-					<Text class="text-xs leading-relaxed text-muted-foreground">
-						{`It changes ${changeCount(r())} as shown. Finished tasks, earlier answers and replaced decisions stay as history. It starts, resumes and permits nothing.`}
-					</Text>
+					<Text class="text-xs leading-relaxed text-muted-foreground">{confirmLine(r())}</Text>
 					<If when={!pinned()}>
 						<Text class="text-xs text-needs-ink">
 							The revision changed after you opened this. Read it again and confirm again.
@@ -318,6 +332,17 @@ function RevisionView(props: { plans: Plans; page: PlanPage; revisit: Revisit; r
 						: `${r().finished} finished tasks stay as they are, with their history.`}
 				</Text>
 			</View>
+			<If when={r().added.length > 0}>
+				<View testID="revision-added" class="gap-0">
+					<Text class="pb-1 text-sm font-medium text-foreground">{`New tasks · ${r().added.length}`}</Text>
+					<Each of={r().added} key={(t) => t.id}>
+						{(t) => <TaskRow task={t()} />}
+					</Each>
+					<Text class="pt-2 text-xs text-faint">
+						Confirming adds them to the plan. Each starts when the tasks it waits for are done, like the others.
+					</Text>
+				</View>
+			</If>
 			<View testID="revision-decisions" class="gap-0">
 				<Text class="pb-1 text-sm font-medium text-foreground">Decisions</Text>
 				<Each of={r().decisions} key={(d) => d.id}>

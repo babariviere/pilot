@@ -88,7 +88,11 @@ export interface MissionPlan {
 		submissionDigest: string;
 		briefRevision: number;
 		markdown: string;
-		tasks: { sliceId: string; taskId: string }[];
+		/**
+		 * Published tasks. definition: the task as a confirmed revision left it (publishedDefinition); without it,
+		 * the task must still match its slice. A task a revision added has slice ID "revision:<proposal>:<key>".
+		 */
+		tasks: { sliceId: string; taskId: string; definition?: string }[];
 	};
 }
 export type PlanWrite =

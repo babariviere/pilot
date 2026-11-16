@@ -64,6 +64,10 @@ agreement acceptance, new approval or permission grant. Held/paused/stopped plan
 neither the host nor kernel clears a hold for discussion. A fresh input generation after Stop
 cannot use this first-version admission path.
 
+When the user asks for new work or a change in a thread, the planner may save one inert revision
+proposal (new work as `newTasks`). It shows on the planning page for review and applies only on
+the user's confirmation. See [mission-revisions.md](mission-revisions.md#planned-missions).
+
 ## Messages that wait
 
 When the planning agent cannot take a message now (it works, a round waits for answers, planning

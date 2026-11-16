@@ -75,6 +75,9 @@ test("submitting completes the round only; the revision applies only when confir
 	expect(app.shows("text:Title: Add quiet hours → Follow macOS Focus for quiet hours")).toBe(true);
 	expect(app.shows("id:revision-task-notify-7 >> Drops")).toBe(true);
 	expect(app.shows("id:revision-task-notify-4 >> Stays")).toBe(true);
+	expect(app.shows("New tasks · 1")).toBe(true);
+	expect(app.shows("id:revision-task-focus-summary >> New")).toBe(true);
+	expect(app.shows("text:After: #5")).toBe(true);
 	expect(app.shows("3 finished tasks stay as they are, with their history.")).toBe(true);
 	expect(app.shows("id:revision-decision-d3 >> Replaced")).toBe(true);
 	expect(app.shows("text:Why: Your Revisit answer: follow macOS Focus.")).toBe(true);
@@ -84,7 +87,8 @@ test("submitting completes the round only; the revision applies only when confir
 	// The first press only asks; Cancel changes nothing.
 	await app.press("id:confirm-revision");
 	await app.waitFor("Apply exactly this revision?");
-	expect(app.shows("text:/It starts, resumes and permits nothing\\./")).toBe(true);
+	expect(app.shows("text:/It adds 1 new task\\./")).toBe(true);
+	expect(app.shows("text:/once the tasks it waits for are done\\. It resumes and permits nothing\\./")).toBe(true);
 	await app.press("role:button[Cancel]");
 	await app.waitFor("id:confirm-revision");
 	expect(app.shows("id:revision")).toBe(true);
@@ -97,7 +101,7 @@ test("submitting completes the round only; the revision applies only when confir
 	await app.waitFor("History, not guidance. Pilot works from the agreement now.");
 	expect(app.shows("text:/D3 “Quiet hours are 22:00 to 07:00\\.” replaced by D4/")).toBe(true);
 	await app.press("id:fold-now");
-	await app.waitFor("4 open tasks · 3 finished · 3 active decisions");
+	await app.waitFor("5 open tasks · 3 finished · 3 active decisions");
 });
 
 test("a changed mission, working chats and a lost answer never apply a revision twice", async () => {

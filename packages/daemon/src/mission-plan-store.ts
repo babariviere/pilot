@@ -1,7 +1,22 @@
 import type { SQLInputValue } from "node:sqlite";
-import type { DurableOperation, MissionPlan } from "@pilot/protocol";
+import type { DurableOperation, MissionPlan, MissionTask } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
-import { canonicalJSON } from "./operation-journal.ts";
+import { canonicalJSON, payloadHash } from "./operation-journal.ts";
+
+/** What Start compares for a task a confirmed revision published: any later change outside a revision shows. */
+export function publishedDefinition(
+	task: Pick<MissionTask, "title" | "body" | "dependsOn" | "assignment" | "decisionIds">,
+): string {
+	return payloadHash(
+		canonicalJSON({
+			title: task.title,
+			body: task.body ?? "",
+			dependsOn: task.dependsOn ?? [],
+			assignment: task.assignment ?? null,
+			decisionIds: task.decisionIds ?? [],
+		}),
+	);
+}
 
 export const MISSION_PLAN_SCHEMA = `
 CREATE TABLE IF NOT EXISTS mission_plans (
@@ -74,6 +89,27 @@ export class MissionPlanStore {
 				? this.port.one("SELECT state FROM mission_plans WHERE mission_id=? ORDER BY revision DESC LIMIT 1", id)
 				: this.port.one("SELECT state FROM mission_plans WHERE mission_id=? AND revision=?", id, revision);
 		return row ? JSON.parse(String(row.state)) : undefined;
+	}
+	/**
+	 * Saves the plan revision a confirmed mission revision makes, under that confirmation's own key. Runs inside the
+	 * confirmation's transaction, which applies once.
+	 */
+	amend(missionId: string, key: string, mutate: (state: MissionPlan) => MissionPlan): MissionPlan | undefined {
+		return this.port.transaction(() => {
+			const current = this.get(missionId);
+			if (!current) return undefined;
+			const state = mutate(structuredClone(current));
+			state.revision = current.revision + 1;
+			this.port.run(
+				"INSERT INTO mission_plans(mission_id,revision,operation_id,operation,state) VALUES(?,?,?,?,?)",
+				missionId,
+				state.revision,
+				key,
+				canonicalJSON({ kind: "revision-confirm", key }),
+				JSON.stringify(state),
+			);
+			return state;
+		});
 	}
 	lookup(op: DurableOperation): MissionPlan | undefined {
 		const row = this.port.one("SELECT operation,state FROM mission_plans WHERE operation_id=?", op.operationId);

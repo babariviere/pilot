@@ -27,6 +27,8 @@ In a planned mission, a worker's delivery report reaches To check: you check it,
 asks its coordinator shows on that page. Answer with Send back or a thread.
 After your first Start work, marking a task's result done finishes the task, and Pilot starts the next
 tasks that are ready, within the worker limit, Pause and Stop. A merged pull request of a task finishes it too.
+To add work to a published plan, ask in a thread or Revisit: the planner proposes new tasks, and they
+join the plan only when you confirm that revision. Adding tasks alone needs no Pause; they start like the others.
 On a mission page, a done task folds its report until Show report, and each task links its own chat.
 A request in New (a Linear issue or a Slack message) can also become a mission: Plan a mission… opens New
 with its title and link. Your Plan takes it out of New and links it to the mission, without changing

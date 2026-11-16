@@ -21,6 +21,11 @@ export interface MissionRevisionDelta {
 		audience?: MissionDecisionAudience;
 	}>;
 	corrections?: Array<{ kind: "instruction" | "permission"; text: string }>;
+	/**
+	 * New tasks, in order. dependsOn names existing tasks (ID or number) or the key of a new task listed earlier.
+	 * In a planned mission they join the published plan, so Start and starts by rule cover them.
+	 */
+	newTasks?: Array<{ key: string; title: string; body: string; dependsOn?: string[] }>;
 }
 
 export interface MissionRevisionProposal {

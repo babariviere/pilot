@@ -33,6 +33,15 @@ fn pending(ops: &[Value]) -> bool {
     crate::plan_host::unsettled_operation(ops).is_some()
 }
 
+/// Whether a revision only adds tasks. That changes nothing a working chat uses, so
+/// the daemon applies it without Pause.
+fn adds_only(d: &Value) -> bool {
+    d["goal"].is_null()
+        && d["markdown"].is_null()
+        && arr(&d["tasks"]).is_empty()
+        && arr(&d["decisions"]).is_empty()
+}
+
 /// Full current comparison, including unchanged open tasks and all assignment fields.
 pub fn view(read: &Value, ops: &[Value]) -> Revisit {
     let r = &read["revision"];
@@ -52,6 +61,7 @@ pub fn view(read: &Value, ops: &[Value]) -> Revisit {
     let repreview = p.is_object() && r["pending"]["current"] == false && paused;
     let revision = p.is_object().then(|| {
         let d = &p["delta"];
+        let adds_only = adds_only(d);
         let unknown = ops.iter().any(|op| {
             matches!(
                 op["kind"].as_str(),
@@ -96,6 +106,32 @@ pub fn view(read: &Value, ops: &[Value]) -> Revisit {
                     }
                 })
                 .collect(),
+            added: arr(&d["newTasks"])
+                .iter()
+                .map(|n| {
+                    let after: Vec<String> = arr(&n["dependsOn"])
+                        .iter()
+                        .map(|dep| {
+                            let key = s(dep);
+                            tasks
+                                .iter()
+                                .find(|t| t["id"] == *dep || t["number"].to_string() == key)
+                                .map_or(key, |t| format!("#{}", t["number"]))
+                        })
+                        .collect();
+                    let mut lines = vec![s(&n["body"])];
+                    if !after.is_empty() {
+                        lines.push(format!("After: {}", after.join(", ")));
+                    }
+                    TaskChange {
+                        id: s(&n["key"]),
+                        number: 0,
+                        title: s(&n["title"]),
+                        kind: ChangeKind::Adds,
+                        lines,
+                    }
+                })
+                .collect(),
             finished: tasks.iter().filter(finished).count() as u32,
             decisions: arr(&d["decisions"])
                 .iter()
@@ -129,6 +165,8 @@ pub fn view(read: &Value, ops: &[Value]) -> Revisit {
                 .collect(),
             pause: if paused {
                 PauseNeed::Paused
+            } else if adds_only {
+                PauseNeed::None
             } else {
                 PauseNeed::Needed
             },
@@ -215,6 +253,30 @@ mod tests {
         assert!(confirm(&r, &intent).is_err());
     }
     #[test]
+    fn a_revision_that_only_adds_tasks_shows_them_and_needs_no_pause() {
+        let mut r = read();
+        r["revision"]["pending"]["proposal"]["delta"] = json!({"newTasks":[
+            {"key":"export","title":"Export chats","body":"Outcome: export.","dependsOn":["open"]},
+            {"key":"docs","title":"Document it","body":"A guide.","dependsOn":["export"]}
+        ]});
+        let revision = view(&r, &[]).revision.expect("saved revision");
+        assert_eq!(revision.added.len(), 2);
+        assert_eq!(revision.added[0].kind, ChangeKind::Adds);
+        assert_eq!(
+            revision.added[0].lines,
+            vec!["Outcome: export.", "After: #1"]
+        );
+        assert_eq!(revision.added[1].lines[1], "After: export");
+        assert_eq!(revision.pause, PauseNeed::None);
+        assert!(revision.tasks.iter().all(|t| t.kind == ChangeKind::Stays));
+        let intent = ConfirmRevisionIntent {
+            mission_id: "mission".into(),
+            revision_id: "proposal".into(),
+            digest: "c".repeat(64),
+        };
+        assert!(confirm(&r, &intent).is_ok(), "adding tasks needs no Pause");
+    }
+    #[test]
     fn complete_comparison_and_unknown_operation_block_new_intents() {
         let r = read();
         let v = view(&r, &[]);
@@ -279,13 +341,13 @@ pub fn request(read: &Value, mission: &str) -> Result<(String, Value), Refusal> 
 pub fn confirm(read: &Value, intent: &ConfirmRevisionIntent) -> Result<(String, Value), Refusal> {
     let r = &read["revision"];
     let p = &r["pending"]["proposal"];
+    let paused = r["control"]["state"] == "paused" && r["control"]["held"] == true;
     if read["fresh"] != true
         || read["missionId"] != intent.mission_id
         || r["pending"]["current"] != true
         || p["id"] != intent.revision_id
         || p["digest"] != intent.digest
-        || r["control"]["state"] != "paused"
-        || r["control"]["held"] != true
+        || !(paused || adds_only(&p["delta"]))
     {
         return Err((
             OutcomeStatus::Rejected,

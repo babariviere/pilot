@@ -10,11 +10,11 @@ import {
 	type PlanningWorkerReply,
 	type PlanningWorkerRequest,
 } from "@pilot/kernel";
-import type { DurableOperation, MissionPlan, OperationReceipt, PlanQuestion } from "@pilot/protocol";
+import type { DurableOperation, MissionPlan, MissionTask, OperationReceipt, PlanQuestion } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { interviewDigest, interviewExact, interviewId, interviewText } from "./mission-interview-contract.ts";
 import { MissionInterviews } from "./mission-interviews.ts";
-import { PLAN_STATE_LIMIT } from "./mission-plan-store.ts";
+import { PLAN_STATE_LIMIT, publishedDefinition } from "./mission-plan-store.ts";
 import {
 	isPlanOperation,
 	LINKED_KNOWLEDGE,
@@ -103,6 +103,18 @@ const RESEARCH_CHATS = 2;
 const RESEARCH_RETRY_MS = 60_000;
 /** A start Pilot could not make by rule (no worker slot, paused, held) waits this long before the next try. Same as research. */
 const EXECUTION_RETRY_MS = RESEARCH_RETRY_MS;
+/**
+ * What a planner may do with a thread request. A revision proposal is inert: only the user's confirmation applies it.
+ */
+const THREAD_CHANGES =
+	"Do not start work. If the plan is published and the user asks for new work or a change, you may save one revision proposal (mission_plan action revision; newTasks for new work). It changes nothing until the user confirms it in Revisit: say so in your reply.";
+/**
+ * Whether the user asked the planner about the published plan: a Revisit, or a thread message it took. Only then may
+ * it save a revision proposal, which still changes nothing until the user confirms it.
+ */
+function userAsked(state: PlanningWorkerState): boolean {
+	return !!(state.revisit?.admitted || state.discussion?.admitted || state.threadQueue?.some((m) => m.delivered));
+}
 /** The planning kernel's refusal before it takes an input: nothing was added to the planner's history. */
 const REFUSED_BEFORE_ADMISSION = /Planning admission is held or busy/;
 /** A thread message the planner could not take now; it was saved to wait for it. */
@@ -683,7 +695,7 @@ export class PlanningWorkers {
 		const submitted = this.deps.store.interviews.latest(state.binding.missionId)?.submission;
 		const messages = this.messagesContent(state.binding.missionId, op.operationId);
 		if (op.kind === "plan-thread-messages")
-			return `The user wrote in mission threads while you could not take messages. Read current mission records; use Wayfinder only if needed. Do not change the agreement or start work.${messages}`;
+			return `The user wrote in mission threads while you could not take messages. Read current mission records; use Wayfinder only if needed. ${THREAD_CHANGES}${messages}`;
 		return (
 			(op.kind === "thread-send"
 				? this.discussionContent(op)
@@ -765,7 +777,7 @@ export class PlanningWorkers {
 		const topic = this.deps.store.threads.lookup(op);
 		if (!topic) throw new Error("Exact saved topic intent required");
 		const context = { id: topic.id, title: topic.title, references: topic.references, inputs: topic.inputs };
-		return `Discuss this one mission topic using lightweight clarification. The quoted user text is discussion, not execution, Start, agreement acceptance or approval. Read current mission records; use Wayfinder only if needed. Do not change the agreement or start work. Topic references (not a separate transcript): ${canonicalJSON(context)}\nOriginal input ${op.operationId}: ${JSON.stringify(JSON.parse(op.payload).text)}`;
+		return `Discuss this one mission topic using lightweight clarification. The quoted user text is discussion, not execution, Start, agreement acceptance or approval. Read current mission records; use Wayfinder only if needed. ${THREAD_CHANGES} Topic references (not a separate transcript): ${canonicalJSON(context)}\nOriginal input ${op.operationId}: ${JSON.stringify(JSON.parse(op.payload).text)}`;
 	}
 	private revisitPin(missionId: string) {
 		const state = this.deps.store.planningWorkers.get(missionId);
@@ -2184,7 +2196,7 @@ export class PlanningWorkers {
 		if (
 			state.phase !== "active" ||
 			(request.action === "revision"
-				? !published || !state.revisit?.admitted
+				? !published || !userAsked(state)
 				: request.action === "write"
 					? !isPlanOperation(request.request.purpose)
 					: request.request.purpose !== "interview-questions")
@@ -2193,7 +2205,7 @@ export class PlanningWorkers {
 		if (
 			published &&
 			(request.action === "write" ||
-				!state.revisit?.admitted ||
+				(request.action === "revision" ? !userAsked(state) : !state.revisit?.admitted) ||
 				(request.action === "questions" && request.request.kind !== "revisit"))
 		)
 			throw new Conflict("Published planning only saves requested Revisit questions or inert revisions");
@@ -2668,6 +2680,23 @@ export class PlanningWorkers {
 					!(t.dependsOn ?? []).some((id) => pin.tasks.find((d) => d.id === id)?.status !== "done"),
 			);
 		if (!task) throw new Conflict("No published task is ready");
+		const entry = pin.plan.publication!.tasks.find((p) => p.taskId === task.id)!;
+		if (entry.definition !== undefined) {
+			// A confirmed revision published this definition; any later change outside a revision shows here.
+			if (publishedDefinition(task) !== entry.definition || task.assignment)
+				throw new Conflict("Task scope changed since its confirmed revision; no Start authority");
+		} else this.matchesSlice(pin, task);
+		this.deps.store.prepareTaskStart(missionId, [task.id]);
+		const selection = await this.deps.sessions.selectTaskModel(
+			pin.project.path,
+			task.preferredModel,
+			task.preferredThinking,
+		);
+		if (hash(this.startPin(missionId)) !== hash(pin)) throw new Conflict("Start context changed");
+		return { pin, task, selection };
+	}
+	/** A task published with the plan must still be its slice, as published. */
+	private matchesSlice(pin: ReturnType<PlanningWorkers["startPin"]>, task: MissionTask): void {
 		const slice = pin.plan.slices.find((s) =>
 			pin.plan.publication!.tasks.some((p) => p.sliceId === s.id && p.taskId === task.id),
 		)!;
@@ -2683,14 +2712,6 @@ export class PlanningWorkers {
 			task.decisionIds?.length
 		)
 			throw new Conflict("Task scope changed since publication; no Start authority");
-		this.deps.store.prepareTaskStart(missionId, [task.id]);
-		const selection = await this.deps.sessions.selectTaskModel(
-			pin.project.path,
-			task.preferredModel,
-			task.preferredThinking,
-		);
-		if (hash(this.startPin(missionId)) !== hash(pin)) throw new Conflict("Start context changed");
-		return { pin, task, selection };
 	}
 	/**
 	 * After the user's first Start, Pilot keeps the published plan moving by rule, with no agent. Each time a task is

@@ -96,7 +96,7 @@ import {
 	nonCodePolicyWrite,
 } from "./mission-non-code-acceptance.ts";
 import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
-import { MISSION_PLAN_SCHEMA, MissionPlanStore } from "./mission-plan-store.ts";
+import { MISSION_PLAN_SCHEMA, MissionPlanStore, publishedDefinition } from "./mission-plan-store.ts";
 import { assignmentWrite, strictPlanningFields, TASK_WRITE_FIELDS } from "./mission-planning.ts";
 import { MissionReplica } from "./mission-replica.ts";
 import {
@@ -3202,10 +3202,10 @@ export class MissionStore {
 
 	private validateRevision(id: string, delta: MissionRevisionDelta): void {
 		if (!delta || typeof delta !== "object" || Array.isArray(delta)) throw new Error("Expected revision delta");
-		strictPlanningFields(delta, ["goal", "markdown", "tasks", "decisions", "corrections"]);
+		strictPlanningFields(delta, ["goal", "markdown", "tasks", "decisions", "corrections", "newTasks"]);
 		if (delta.goal !== undefined) revisionText(delta.goal, MAX_GOAL);
 		if (delta.markdown !== undefined) revisionText(delta.markdown, MAX_BRIEF);
-		for (const key of ["tasks", "decisions", "corrections"] as const)
+		for (const key of ["tasks", "decisions", "corrections", "newTasks"] as const)
 			if (delta[key] !== undefined && (!Array.isArray(delta[key]) || delta[key].length > 100))
 				throw new Error(`Revision ${key} must be an array of at most 100 entries`);
 		const seen = new Set<string>();
@@ -3249,19 +3249,78 @@ export class MissionStore {
 			if (!["instruction", "permission"].includes(correction.kind)) throw new Error("Unknown correction kind");
 			revisionText(correction.text, 1000);
 		}
+		const dropped = new Set(
+			(delta.tasks ?? []).filter((edit) => edit.drop).map((edit) => this.resolveTask(id, edit.id).id),
+		);
+		const keys = new Set<string>();
+		for (const add of delta.newTasks ?? []) {
+			strictPlanningFields(add, ["key", "title", "body", "dependsOn"]);
+			if (typeof add.key !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(add.key))
+				throw new Error("A new task key is 1 to 64 letters, digits, - or _");
+			if (keys.has(add.key)) throw new Error(`Duplicate new task key ${add.key}`);
+			revisionText(add.title, MAX_TITLE);
+			revisionText(add.body, MAX_TEXT);
+			if (add.dependsOn !== undefined && (!Array.isArray(add.dependsOn) || add.dependsOn.length > 100))
+				throw new Error("New task dependsOn must be an array of at most 100 entries");
+			for (const ref of add.dependsOn ?? []) {
+				if (typeof ref === "string" && keys.has(ref)) continue;
+				const task = this.resolveTask(id, ref);
+				if (task.status === "dropped" || dropped.has(task.id))
+					throw new Conflict(`New task ${add.key} cannot depend on dropped task #${task.number}`);
+			}
+			keys.add(add.key);
+		}
+	}
+
+	/**
+	 * In a planned mission, a confirmed revision becomes the published agreement: the current brief and answers, each
+	 * open published task as the revision left it, and the tasks it added. Start and starts by rule then use it.
+	 */
+	private republish(id: string, proposal: MissionRevisionProposal, added: Map<string, string>): void {
+		const plan = this.plans.get(id);
+		if (!plan?.publication) return;
+		const tasks = new Map(this.tasks(id).map((task) => [task.id, task]));
+		const open = (taskId: string) => {
+			const task = tasks.get(taskId);
+			return task && task.status !== "done" && task.status !== "dropped" ? task : undefined;
+		};
+		const brief = this.brief(id);
+		const submission = this.interviews.latest(id)?.submission;
+		this.plans.amend(id, `revision:${proposal.id}`, (state) => {
+			const publication = state.publication!;
+			publication.briefRevision = brief?.revision ?? publication.briefRevision;
+			publication.submissionDigest = submission?.digest ?? publication.submissionDigest;
+			publication.tasks = [
+				...publication.tasks.map((entry) => {
+					const task = open(entry.taskId);
+					return task ? { ...entry, definition: publishedDefinition(task) } : entry;
+				}),
+				...[...added].map(([key, taskId]) => ({
+					sliceId: `revision:${proposal.id}:${key}`,
+					taskId,
+					definition: publishedDefinition(tasks.get(taskId)!),
+				})),
+			];
+			return state;
+		});
 	}
 
 	private applyRevision(id: string, proposal: MissionRevisionProposal, humanSource: string): void {
 		const mission = this.require(id);
 		if (mission.status !== "active") throw new Conflict("Mission is inactive");
+		const delta = proposal.delta;
+		// Only adding tasks changes nothing a working chat uses, so it needs no Pause.
+		const addsOnly =
+			delta.goal === undefined && delta.markdown === undefined && !delta.tasks?.length && !delta.decisions?.length;
 		// A confirmed Pause proves the existing checkpoint protocol reached safe boundaries.
 		// Never cancel/restart a worker here or treat idle/model ACK as process-exit proof.
 		if (
-			this.members(id).length ||
-			this.one(
-				"SELECT 1 FROM tasks WHERE mission_id=? AND session_id IS NOT NULL AND status NOT IN ('done','dropped') LIMIT 1",
-				id,
-			)
+			!addsOnly &&
+			(this.members(id).length ||
+				this.one(
+					"SELECT 1 FROM tasks WHERE mission_id=? AND session_id IS NOT NULL AND status NOT IN ('done','dropped') LIMIT 1",
+					id,
+				))
 		) {
 			const control = this.controls.fenceCurrent(id);
 			if (!control.held || control.state !== "paused")
@@ -3271,7 +3330,6 @@ export class MissionStore {
 		this.referenceBatch = id;
 		try {
 			const actor = { proposedBySessionId: proposal.authorSessionId ?? undefined };
-			const delta = proposal.delta;
 			if (delta.goal !== undefined) this.update(id, { goal: delta.goal }, actor);
 			if (delta.markdown !== undefined) this.writeBrief(id, delta.markdown, mission.briefRevision, actor);
 			for (const edit of delta.tasks ?? []) {
@@ -3293,6 +3351,17 @@ export class MissionStore {
 					this.recordWithdrawal(id, before, { at: Date.now(), ...provenance, proposalId: proposal.id }, actor);
 				}
 			}
+			const added = new Map<string, string>();
+			for (const add of delta.newTasks ?? []) {
+				const dependsOn = (add.dependsOn ?? []).map((ref) => added.get(ref) ?? this.resolveTask(id, ref).id);
+				const task = this.addTask(
+					id,
+					{ title: add.title, body: add.body, ...(dependsOn.length ? { dependsOn } : {}) },
+					actor,
+				);
+				added.set(add.key, task.id);
+			}
+			this.republish(id, proposal, added);
 			this.event(
 				id,
 				"update",

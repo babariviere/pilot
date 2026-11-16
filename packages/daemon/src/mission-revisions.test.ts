@@ -219,6 +219,77 @@ test("running assignments require a safe Pause; apply keeps holds and invalidate
 	);
 });
 
+test("a revision adds new tasks in order, with dependencies on existing and earlier new tasks, and needs no Pause", async (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const { id } = store.create({
+		projectId: "p",
+		title: "M",
+		planningVersion: 1,
+		tasks: [{ title: "Work" }, { title: "Old" }],
+	});
+	store.join("worker", id);
+	store.updateTask(id, "1", { sessionId: "worker" });
+	for (const [delta, reason] of [
+		[{ newTasks: [{ key: "bad key", title: "T", body: "B" }] }, /key/],
+		[
+			{
+				newTasks: [
+					{ key: "a", title: "T", body: "B" },
+					{ key: "a", title: "T", body: "B" },
+				],
+			},
+			/Duplicate/,
+		],
+		[
+			{
+				newTasks: [
+					{ key: "a", title: "T", body: "B", dependsOn: ["b"] },
+					{ key: "b", title: "T", body: "B" },
+				],
+			},
+			/Unknown task|not found/i,
+		],
+		[
+			{ tasks: [{ id: "2", drop: true }], newTasks: [{ key: "a", title: "T", body: "B", dependsOn: ["2"] }] },
+			/dropped task #2/,
+		],
+		[{ newTasks: [{ key: "a", title: "T", body: "B", extra: 1 }] }, /extra|Unknown|field/i],
+	] as const)
+		await assert.rejects(proposal(store, id, delta as unknown as MissionRevisionDelta), reason);
+	const p = await proposal(store, id, {
+		newTasks: [
+			{
+				key: "export",
+				title: "Export chats",
+				body: "Outcome: Markdown export.\n\nAcceptance:\n- One file per chat",
+				dependsOn: ["1"],
+			},
+			{ key: "docs", title: "Document export", body: "Outcome: a guide.", dependsOn: ["export"] },
+		],
+	});
+	assert.equal(store.tasks(id).length, 2, "a proposal adds nothing");
+	await store.revisions.confirm(id, p.id, { digest: p.digest, humanSource: "user:answer" });
+	const work = store.resolveTask(id, "1"),
+		exported = store.resolveTask(id, "3"),
+		docs = store.resolveTask(id, "4");
+	assert.equal(exported.title, "Export chats");
+	assert.equal(exported.status, "todo");
+	assert.deepEqual(exported.dependsOn, [work.id]);
+	assert.deepEqual(docs.dependsOn, [exported.id]);
+	assert.equal(store.controls.current(id).held, false, "adding tasks needed no Pause and started nothing");
+	assert.equal(work.sessionId, "worker");
+	const edit = await proposal(store, id, {
+		tasks: [{ id: "3", title: "Export" }],
+		newTasks: [{ key: "x", title: "X", body: "B" }],
+	});
+	await assert.rejects(
+		store.revisions.confirm(id, edit.id, { digest: edit.digest, humanSource: "user:answer" }),
+		/Pause/,
+		"any other change still needs Pause",
+	);
+});
+
 test("durable reopen keeps proposal identity, replacement chains, provenance and lookup-only receipts", async (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "mission-revision-"));
 	let store = new MissionStore(join(dir, "missions.sqlite"));

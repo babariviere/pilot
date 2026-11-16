@@ -209,6 +209,29 @@ test("a message the planning agent refuses before taking it waits for it instead
 	assert.deepEqual((await f.threads.lookup(op))?.result, receipt.result, "a lost ACK reads the same");
 });
 
+test("after a thread message, the planner may save a revision proposal that changes nothing until confirmed", async (t) => {
+	const f = await fixture(t);
+	const propose = () =>
+		f.workers.call(f.binding, {
+			action: "revision",
+			toolCallId: randomUUID(),
+			request: {
+				purpose: "revision-propose",
+				source: f.store.revisions.source(f.missionId),
+				summary: "Add an export",
+				delta: { newTasks: [{ key: "export", title: "Export chats", body: "Outcome: export." }] },
+			},
+		});
+	await assert.rejects(propose(), /held or purpose unavailable/, "not before the user asks");
+	const op = await f.request({ purpose: "thread-send", text: "Can we also export chats?" });
+	assert.equal((await f.execute(op)).state, "accepted");
+	assert.match(f.inputs[0]!.content, /revision proposal/);
+	const before = f.store.tasks(f.missionId);
+	assert.equal(((await propose()).value as { state: string }).state, "accepted");
+	assert.deepEqual(f.store.tasks(f.missionId), before);
+	assert.deepEqual(f.store.revisions.pending(f.missionId)?.proposal.delta.newTasks?.[0]?.title, "Export chats");
+});
+
 test("waiting messages go to the planning agent in one turn once it is idle, then stop waiting", async (t) => {
 	const f = await fixture(t);
 	f.coordinator = { ...f.coordinator!, working: true };

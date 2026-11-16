@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import type { SessionPullRequest, SessionSummary } from "@pilot/protocol";
 import { publishedPlanningFixture } from "./published-planning.fixture.ts";
@@ -129,4 +130,71 @@ test("a merged PR that owns a planned task finishes it, and Pilot starts what it
 	await f.workers.settleResearch();
 	assert.equal(f.store.task(f.missionId, first!.id).status, "done");
 	assert.deepEqual(admitted, [second!.id]);
+});
+
+test("tasks a confirmed revision adds join the published plan and start by rule", async (t) => {
+	const f = await publishedPlanningFixture(t, { twoSlices: true });
+	const [first, second] = f.store.plans
+		.get(f.missionId)!
+		.publication!.tasks.map((p) => f.store.task(f.missionId, p.taskId));
+	assert.ok(first && second);
+	t.mock.method(f.sessions, "planningIdentity", () => ({ inputGeneration: 0, permission: { level: "build" } }));
+	t.mock.method(f.sessions, "lookupPublishedTask", async () => false);
+	const admitted: string[] = [];
+	t.mock.method(
+		f.sessions,
+		"admitPublishedTask",
+		async (
+			_request: unknown,
+			identity: { sessionId: string; operationId: string; taskId: string },
+			guard: (claimed: boolean) => void,
+		) => {
+			guard(false);
+			f.store.join(identity.sessionId, f.missionId);
+			f.store.claimTask(f.missionId, identity.taskId, identity.sessionId);
+			guard(true);
+			admitted.push(identity.taskId);
+			return { admissionId: identity.operationId, sessionId: identity.sessionId };
+		},
+	);
+	f.store.join("worker-1", f.missionId);
+	f.store.claimTask(f.missionId, first.id, "worker-1");
+	const state = f.store.planningWorkers.get(f.missionId)!;
+	f.store.planningWorkers.change(f.missionId, state.revision, (s) => {
+		s.start = { operation: f.submit, sessionId: "worker-1", taskId: first.id, admitted: true };
+	});
+	const proposal = await f.store.revisions.propose(
+		f.missionId,
+		{
+			operationId: randomUUID(),
+			source: f.store.revisions.source(f.missionId),
+			summary: "Add an export",
+			delta: {
+				newTasks: [{ key: "export", title: "Export chats", body: "Outcome: export.", dependsOn: [first.id] }],
+			},
+		},
+		{ sessionId: f.owner },
+	);
+	f.workers.startResearch();
+	await f.workers.settleResearch();
+	assert.deepEqual(admitted, [], "a proposal adds and starts nothing");
+	await f.store.revisions.confirm(f.missionId, proposal.id, { digest: proposal.digest, humanSource: "user:answer" });
+	const added = f.store.tasks(f.missionId).find((task) => task.title === "Export chats")!;
+	const publication = f.store.plans.get(f.missionId)!.publication!;
+	assert.deepEqual(
+		publication.tasks.map((p) => [p.taskId, !!p.definition]),
+		[
+			[first.id, true],
+			[second.id, true],
+			[added.id, true],
+		],
+	);
+	assert.equal(publication.tasks[2]!.sliceId, `revision:${proposal.id}:export`);
+	assert.equal(publication.briefRevision, f.store.brief(f.missionId)!.revision);
+	await f.workers.settleResearch();
+	assert.deepEqual(admitted, [], "the new task waits for its dependency");
+	f.store.updateTask(f.missionId, first.id, { status: "done" });
+	await f.workers.settleResearch();
+	assert.deepEqual(admitted.sort(), [second.id, added.id].sort());
+	assert.equal(f.store.task(f.missionId, added.id).status, "in_progress");
 });

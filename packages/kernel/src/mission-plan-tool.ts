@@ -240,7 +240,7 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 							delta: Type.Unsafe<MissionRevisionDelta>({
 								type: "object",
 								description:
-									"Inert MissionRevisionDelta: optional goal/markdown, tasks [{id,title?,body?,drop?,assignment?,dependsOn?,decisionIds?}], decisions [{id,reason,action:replace|withdraw,text?,audience?}], corrections [{kind:instruction|permission,text}]. Existing IDs only; no completed task edits. Corrections never apply permissions.",
+									"Inert MissionRevisionDelta: optional goal/markdown, tasks [{id,title?,body?,drop?,assignment?,dependsOn?,decisionIds?}], decisions [{id,reason,action:replace|withdraw,text?,audience?}], corrections [{kind:instruction|permission,text}], newTasks [{key,title,body,dependsOn?}]. tasks and decisions name existing IDs; no completed task edits. A new task's body holds its outcome and acceptance; dependsOn names existing tasks or earlier newTasks keys. Corrections never apply permissions.",
 							}),
 						},
 						{ additionalProperties: false },
