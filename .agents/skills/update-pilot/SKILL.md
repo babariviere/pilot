@@ -49,6 +49,8 @@ bash .agents/skills/update-pilot/scripts/install.sh <build>
 It refuses while any chat is working, because the restart would interrupt it. Then wait for the chats to go
 idle and retry; ask the user before you stop a chat. Quitting the GUI may print `User canceled (-128)`;
 the script still checks that the GUI quit. Done when it prints `INSTALLED <build>` and the GUI is open again.
+It also refuses within 4 minutes of a wake (`just woke`): a sleeping Mac wakes for short maintenance, and an
+install started then can be cut off by sleep while the GUI saves its forms. Retry later.
 
 The previous app is kept in `~/Applications/Pilot-install-<build>/retained/Pilot.app` for a manual rollback.
 Only the latest install keeps one: each install removes older install records and its own build folder.

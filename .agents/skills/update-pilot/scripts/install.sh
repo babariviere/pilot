@@ -15,6 +15,9 @@ API=http://127.0.0.1:4319
 codesign --verify --deep --strict '-R=identifier "com.babariviere.pilot-next"' "$NEW"
 working=$(curl -s -m3 "$API/api/sessions" | node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8"));console.log(a.filter(s=>s.working||s.state==="working").map(s=>s.title||s.id).join("; "))')
 [[ -z "$working" ]] || { echo "chats working: $working"; exit 1; }
+# A maintenance dark wake lasts at most about 3 minutes: installing in one lets the Mac sleep mid-quit.
+woke=$(sysctl -n kern.waketime | awk -F'[ ,]+' '{print $4}')
+(( $(date +%s) - woke >= 240 )) || { echo "just woke: try again once the Mac has been awake for 4 minutes"; exit 1; }
 previous=$(defaults read "$APP/Contents/Info.plist" CFBundleVersion)
 gui=$(pgrep -f "$APP/Contents/MacOS/pilot-desktop" || true)
 if [[ -n "$gui" ]]; then
