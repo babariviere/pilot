@@ -151,6 +151,15 @@ function Report(props: { work: DeliveredWork }) {
 			<If when={w().outcome}>
 				<Said label="It says" text={w().outcome?.reason || "The chat says it is done."} />
 			</If>
+			<If when={w().outcome && w().finalReply}>
+				<View testID="delivery-final-reply" class="gap-0.5">
+					<Text class="text-xs text-faint">Its last message</Text>
+					<Text class="text-sm leading-relaxed text-foreground">{w().finalReply?.text ?? ""}</Text>
+					<If when={w().finalReply?.shortened}>
+						<Text class="text-xs text-faint">Shortened here. The chat keeps the whole message.</Text>
+					</If>
+				</View>
+			</If>
 			<If when={nothing()}>
 				<Text class="text-sm text-muted-foreground">No report with this result.</Text>
 			</If>
@@ -892,7 +901,7 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 		const t = props.day.today();
 		return [...t.moving, ...t.notMoving, ...t.unreported].find((m) => m.id === s.missionId)?.title;
 	};
-	const title = () => props.place.title || titleOf(key, props.place.subject, missionTitle());
+	const title = () => props.place.title || work()?.title || titleOf(key, props.place.subject, missionTitle());
 	const origin = () =>
 		props.place.subject.kind === "task" ? `A task in ${missionTitle() ?? "a mission"}` : "A standalone chat";
 	const fresh = () => !!work() && !entry()?.reason;

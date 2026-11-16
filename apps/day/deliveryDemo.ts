@@ -152,6 +152,11 @@ export function demoResults(): DeliveredWork[] {
 		}),
 		result({ kind: "chat", projectId: PROJECT, sessionId: "explain-exports" }, "3", {
 			outcome: { outcomeAt: 1, reason: "The guide now explains CSV exports, with one example." },
+			title: "Explain CSV exports in the guide",
+			finalReply: {
+				text: "Done. The guide's Export section now explains CSV exports, with one example of a filtered export.",
+				shortened: false,
+			},
 		}),
 	];
 }

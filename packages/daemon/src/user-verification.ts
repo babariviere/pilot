@@ -14,11 +14,16 @@ import type { SessionManager } from "./sessions.ts";
 const id = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(v);
 const hash = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
 export const verificationKey = (subject: VerificationSubject) => payloadHash(canonicalJSON(subject));
+/**
+ * How much of a finished chat's last reply a result shows: about four screens of text. An answer fits; a longer one
+ * is cut and says so, and the chat keeps it whole. It keeps each result read small, since Day reads it when it opens.
+ */
+export const FINAL_REPLY_CHARS = 16_000;
 interface Dependencies {
 	store: MissionStore;
 	journal: OperationJournal;
 	projects: Pick<ProjectStore, "require">;
-	sessions: Pick<SessionManager, "get" | "sendDurable">;
+	sessions: Pick<SessionManager, "get" | "sendDurable" | "lastAssistantReply">;
 }
 
 /** User assessment is independent of agent completion, review, task status and production. */
@@ -110,6 +115,7 @@ export class UserVerifications {
 		this.subject(subject);
 		this.deps.projects.require(subject.projectId);
 		let ownerSessionId: string | null = null;
+		let title: string | undefined;
 		let identity: unknown = null;
 		let outputs: Pick<
 			DeliveredWork,
@@ -149,6 +155,8 @@ export class UserVerifications {
 			if (!chat || chat.projectId !== subject.projectId || this.deps.store.membership(chat.id))
 				throw new OperationRejected("Standalone chat belongs to another scope");
 			ownerSessionId = chat.id;
+			// The chat's own title names its result, so the page keeps it after a restart.
+			if (chat.title) title = chat.title;
 			if (
 				chat.outcome === "done" &&
 				Number.isSafeInteger(chat.outcomeAt) &&
@@ -171,6 +179,7 @@ export class UserVerifications {
 			targetId: key,
 			deliveryId,
 			ownerSessionId,
+			...(title ? { title } : {}),
 			...outputs,
 			production: "not_tracked",
 			verification,
@@ -196,8 +205,23 @@ export class UserVerifications {
 			outer?.state === "accepted" &&
 			outer.payloadHash === domain.payloadHash &&
 			canonicalJSON(outer.result) === canonicalJSON(current.verification);
+		// A finished chat's answer is its last reply: shown when it saved no report, read only for this one result.
+		const reply =
+			current.subject.kind === "chat" && current.outcome
+				? await this.deps.sessions
+						.lastAssistantReply(current.subject.sessionId, FINAL_REPLY_CHARS + 1)
+						.catch(() => undefined)
+				: undefined;
 		return {
 			...current,
+			...(reply?.trim()
+				? {
+						finalReply: {
+							text: reply.slice(0, FINAL_REPLY_CHARS),
+							shortened: reply.length > FINAL_REPLY_CHARS,
+						},
+					}
+				: {}),
 			verificationReceiptState: exact ? "accepted" : "unknown",
 			verificationCurrent: exact && current.verificationCurrent,
 			pendingOperationId:

@@ -47,6 +47,8 @@ export interface DeliveredWork {
 	deliveryId: string | null;
 	targetId: string;
 	ownerSessionId: string | null;
+	/** A standalone chat's own title, from the service. */
+	title?: string;
 	completion?: { commit: string; checks: string; issues: string };
 	nonCodeDelivery?: { kind: "non-code"; references: Evidence[]; checks: string; limitations: string };
 	submissionId?: string;
@@ -58,6 +60,8 @@ export interface DeliveredWork {
 		evidence: Array<Evidence | { kind: "snapshot"; snapshotId: string }>;
 	};
 	outcome?: { outcomeAt: number; reason?: string };
+	/** A finished standalone chat's last reply, word for word; `shortened` when Pilot cut it. Its words, not a report. */
+	finalReply?: { text: string; shortened: boolean };
 	pullRequests: Array<{
 		id: string;
 		url: string;

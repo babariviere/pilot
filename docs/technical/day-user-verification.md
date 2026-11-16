@@ -57,6 +57,12 @@ typed read model. Important fields:
 * `verificationReceiptState` is `accepted` only when both receipts agree.
   `pendingOperationId` blocks further assessment while an entered outcome is
   uncertain. Do not display success from the domain row alone.
+* `title` (standalone chats) is the chat's own title, so a result keeps its name after a restart.
+* `finalReply` (standalone chats that said they are done) is the chat's last reply, word for word,
+  up to `FINAL_REPLY_CHARS` (16,000) characters, with `shortened` when cut. A standalone chat
+  has no report tool, so its answer is often only this reply. Day shows it in the report block
+  as "Its last message": the chat's words, not a saved report or Pilot's check. It is read only
+  for a single result, never for discovery pages.
 
 Reads cross durability barriers and recheck live scope after receipt I/O.
 They never mark a result checked, subscribe/start a worker, or reconcile by

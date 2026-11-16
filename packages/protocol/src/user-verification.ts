@@ -57,6 +57,8 @@ export interface DeliveredWork {
 	/** Opaque OperationJournal target. Use unchanged; clients need not reproduce canonical hashing. */
 	targetId: string;
 	ownerSessionId: string | null;
+	/** A standalone chat's own title. Tasks are named by their mission's records instead. */
+	title?: string;
 	completion?: MissionCodeCompletion;
 	nonCodeDelivery?: MissionNonCodeDelivery;
 	/** Identity of the latest canonical evidence submission, not its review judgement. */
@@ -69,6 +71,11 @@ export interface DeliveredWork {
 		evidence: Array<MissionNonCodeDeliveryReference | { kind: "snapshot"; snapshotId: string }>;
 	};
 	outcome?: { outcomeAt: number; reason?: string };
+	/**
+	 * A finished standalone chat's last reply, word for word: what it answered, when it saved no report. Its words,
+	 * not a saved report or Pilot's check. `shortened` when the reply was longer than Pilot keeps here.
+	 */
+	finalReply?: { text: string; shortened: boolean };
 	pullRequests: MissionResource[];
 	artifacts: MissionArtifactLink[];
 	production: "not_tracked";

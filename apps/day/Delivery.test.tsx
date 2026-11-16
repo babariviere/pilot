@@ -231,6 +231,18 @@ test("a lost answer stays not confirmed with Check only; Check reads once and no
 	expect(counts(app)).toBe("Sends: 1 · Checks: 1");
 });
 
+test("a finished chat with no report shows its last message, word for word", async () => {
+	const app = await ready();
+	await app.press(DOCS_ROW);
+	await app.waitFor("id:delivery-final-reply");
+	expect(app.shows("Its last message")).toBe(true);
+	expect(
+		app.shows("Done. The guide's Export section now explains CSV exports, with one example of a filtered export."),
+	).toBe(true);
+	expect(app.shows("Shortened here. The chat keeps the whole message.")).toBe(false);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
 test("rapid presses while an answer is on its way send once", async () => {
 	const app = await ready();
 	await app.press(DOCS_ROW);

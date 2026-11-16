@@ -16,7 +16,7 @@ import { MissionControls } from "./mission-controls.ts";
 import { MissionStore } from "./missions.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
-import { UserVerifications } from "./user-verification.ts";
+import { FINAL_REPLY_CHARS, UserVerifications } from "./user-verification.ts";
 
 const host = { hostId: "daemon", daemonId: "daemon", lineageId: "lineage" };
 function operation(
@@ -72,8 +72,12 @@ async function fixture(t: TestContext) {
 	};
 	const sends: Array<{ id: string; message: string; operationId: string }> = [];
 	let send: "ok" | "lost" | "race" = "ok";
+	let lastReply: string | undefined;
 	const sessions = {
 		get: (id: string) => (id === chat.id ? structuredClone(chat) : undefined),
+		async lastAssistantReply(id: string, limit: number) {
+			return id === chat.id ? lastReply?.slice(0, limit) : undefined;
+		},
 		async sendDurable(
 			id: string,
 			message: string,
@@ -128,6 +132,9 @@ async function fixture(t: TestContext) {
 		},
 		get service() {
 			return service;
+		},
+		setReply: (text: string | undefined) => {
+			lastReply = text;
 		},
 		setChat: (value: Partial<SessionSummary>) => {
 			chat = { ...chat, ...value };
@@ -384,8 +391,17 @@ test("standalone outcomes are exact, scoped and separate from task status and ag
 	f.setChat({ missionId: undefined, outcome: "question", outcomeAt: 30 });
 	const subject: VerificationSubject = { kind: "chat", projectId: f.project.id, sessionId: "worker" };
 	assert.equal((await f.service.read(subject)).deliveryId, null);
+	f.setReply("Confirmed. Here is the proof.");
+	assert.equal((await f.service.read(subject)).finalReply, undefined, "no answer before the chat is done");
 	f.setChat({ outcome: "done", outcomeAt: 40, outcomeReason: "Fake delivered answer" });
 	const page = await f.service.read(subject);
+	// A finished chat shows its last reply and its own title, word for word.
+	assert.deepEqual(page.finalReply, { text: "Confirmed. Here is the proof.", shortened: false });
+	assert.equal(page.title, "Fake agent");
+	f.setReply("x".repeat(FINAL_REPLY_CHARS + 5));
+	const long = (await f.service.read(subject)).finalReply!;
+	assert.equal(long.text.length, FINAL_REPLY_CHARS);
+	assert.equal(long.shortened, true);
 	assert.equal((await f.run(operation(page))).state, "accepted");
 	f.setChat({ outcomeAt: 50 });
 	assert.equal((await f.service.read(subject)).verificationCurrent, false);

@@ -48,6 +48,7 @@ function LiveToCheck(props: { day: Day; mirror: DeliveryMirror }) {
 	const missionTitle = (id: string) => missions(props.day).find((m) => m.id === id)?.title;
 	const title = (op: { key: string; subject: DeliveryOp["subject"] }) =>
 		v().entries[op.key]?.title ??
+		v().entries[op.key]?.snapshot?.title ??
 		titleOf(op.key, op.subject, op.subject.kind === "task" ? missionTitle(op.subject.missionId) : undefined);
 	const rows = (): DeliveryEntry[] =>
 		v()
