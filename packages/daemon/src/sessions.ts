@@ -4739,6 +4739,11 @@ ${run.excerpt}`,
 	}
 
 	readonly diagnosticReadBroker = new DiagnosticReadBroker();
+	/** Saved native feedback-work admission only. Missing means no feedback authority. */
+	feedbackMetricsScope?: (
+		operationId: string,
+		sessionId: string,
+	) => { origin: import("@pilot/protocol").UserFeedback["origin"] } | undefined;
 	diagnosticDomainRead?: (request: DiagnosticContextRequest) => Promise<DiagnosticContextResponse>;
 	diagnosticFeatureUsage?: (host: OperationHost) => import("@pilot/protocol").FeatureUsageSnapshot;
 	private diagnosticContextReads = new Map<string, AbortController>();
@@ -5288,11 +5293,106 @@ ${run.excerpt}`,
 	}
 
 	/** Authorization comes only from supervised worker identity, never request fields. */
+	private scopedMetrics(callerId: string, input: unknown, signal?: AbortSignal): DiagnosticContextResponse {
+		const request = parseDiagnosticContext(input);
+		if (request.action !== "scoped_metrics") throw new Conflict("Invalid metrics selector");
+		const caller = this.require(callerId);
+		this.validateMode(caller);
+		if (
+			signal?.aborted ||
+			this.closing ||
+			caller.archivedAt !== undefined ||
+			caller.delegationFenced ||
+			caller.continuedTo
+		)
+			throw new Conflict("Scoped metrics admission is unavailable");
+		const host = this.diagnosticHost;
+		if (!host) throw new ServiceUnavailable("Diagnostic host identity is unavailable");
+		const id = request.sessionId ?? callerId;
+		const target = this.metas.get(id);
+		const member = this.missions?.membership(callerId);
+		const feedback = caller.createOperationId
+			? this.feedbackMetricsScope?.(caller.createOperationId, callerId)
+			: undefined;
+		let allowed = false;
+		if (caller.role === "insights") {
+			const admission = this.executionAdmission(callerId);
+			const settings = caller.insightsOwner
+				? this.insightsOwnerStore!.current(caller.insightsOwner.authority)!.settings
+				: this.insightsBacklog?.settings.current(this.insightsHostAdmission(callerId));
+			const retired = caller.insightsOwner
+				? this.insightsTransitionStore?.retiredReportId(caller.insightsOwner.authority.owner.workspaceId)
+				: undefined;
+			if (!settings) throw new Conflict("Scoped metrics requires current opted-in Insights settings");
+			allowed =
+				!!target &&
+				id !== retired &&
+				(!target.projectId || !!this.projects.get(target.projectId)) &&
+				insightsSourceAllowed(settings.settings, target);
+			admission.revalidate();
+		} else if (caller.role === "diagnostics") {
+			const ref = caller.diagnosticTarget;
+			allowed =
+				id === callerId || (!ref ? true : id === ref.sessionId && canonicalJSON(ref.host) === canonicalJSON(host));
+		} else if (member?.active) {
+			const targetMember = this.missions?.membership(id);
+			const projectId = this.missions!.spawnProject(member.missionId);
+			// Ordinary mission readers cannot inspect archived or former members.
+			allowed =
+				!!target &&
+				target.archivedAt === undefined &&
+				!!targetMember?.active &&
+				targetMember.missionId === member.missionId &&
+				!!this.projects.get(projectId) &&
+				caller.projectId === projectId &&
+				target.projectId === projectId;
+		} else if (feedback) {
+			const origin = feedback.origin;
+			const project = caller.projectId ? this.projects.get(caller.projectId) : undefined;
+			const originMember = origin?.kind === "mission" ? this.missions?.membership(id) : undefined;
+			allowed =
+				!!project &&
+				!!target &&
+				target.archivedAt === undefined &&
+				target.projectId === project.id &&
+				(id === callerId ||
+					(!!origin &&
+						target.projectId === origin.projectId &&
+						(origin.kind === "chat"
+							? id === origin.sessionId
+							: !!originMember?.active &&
+								originMember.missionId === origin.missionId &&
+								this.missions!.spawnProject(origin.missionId) === project.id)));
+		}
+		if (!allowed) throw new Conflict("Metrics target is outside admitted scope");
+		if (!target) return { ...diagnosticContextResponse(host, null), status: "missing", reason: "deleted" };
+		const worker = this.workers.get(id);
+		const context = worker?.usage?.context;
+		const number = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+		const snapshot: import("@pilot/protocol").ScopedMetricsSnapshot = {
+			sessionId: id,
+			usage: {
+				context:
+					context && number(context.contextWindow)
+						? {
+								contextWindow: context.contextWindow,
+								...(number(context.tokens) ? { tokens: context.tokens } : {}),
+								...(number(context.percent) ? { percent: context.percent } : {}),
+							}
+						: null,
+				ai: this.aiUsage.summary(id) ?? null,
+			},
+			coverage: "retained_snapshots_partial",
+		};
+		return diagnosticContextResponse(host, snapshot);
+	}
+
 	async diagnosticContext(callerId: string, input: unknown, signal?: AbortSignal): Promise<DiagnosticContextResponse> {
 		const caller = this.require(callerId);
 		this.validateMode(caller);
-		if (caller.role !== "diagnostics") throw new Conflict("Only diagnostics may read app-wide evidence");
 		const request = parseDiagnosticContext(input);
+		if (request.action === "scoped_metrics") return this.scopedMetrics(callerId, request, signal);
+		if (caller.role !== "diagnostics") throw new Conflict("Only diagnostics may read app-wide evidence");
 		const host = request.host ?? this.diagnosticHost;
 		if (!host || !this.diagnosticHost) throw new ServiceUnavailable("Diagnostic host identity is unavailable");
 		if (
@@ -5377,6 +5477,7 @@ ${run.excerpt}`,
 		sourceAllowed?: (id: string) => boolean,
 	): Promise<DiagnosticContextResponse> {
 		const request = parseDiagnosticContext(input);
+		if (request.action === "scoped_metrics") throw new Conflict("Scoped metrics requires supervised caller identity");
 		const host = request.host ?? this.diagnosticHost;
 		if (
 			!host ||
@@ -12779,6 +12880,11 @@ ${run.excerpt}`,
 					...(repairDiagnostics ? { repairDiagnostics } : {}),
 					...(usageHistory ? { usageHistory } : {}),
 					...(usageMission ? { usageMission } : {}),
+					...(meta.role ||
+					mission ||
+					(meta.createOperationId && this.feedbackMetricsScope?.(meta.createOperationId, id))
+						? { scopedMetrics: true }
+						: {}),
 					...(meta.role ? { role: meta.role } : {}),
 					...(diagnosticTarget ? { diagnosticTarget } : {}),
 					...(diagnosticScope ? { diagnosticScope } : {}),
@@ -13447,6 +13553,8 @@ ${run.excerpt}`,
 			void Promise.resolve()
 				.then(() => {
 					if (this.workers.get(meta.id) !== worker) throw new Conflict("Worker changed");
+					// Synchronous snapshots are admitted in the delivery turn below.
+					if (packet.request.action === "scoped_metrics") return;
 					if (meta.role === "insights") insights = this.executionAdmission(meta.id, worker);
 					return meta.role === "insights"
 						? this.insightsHistory(meta.id, worker, packet.request, controller.signal)
@@ -13454,8 +13562,13 @@ ${run.excerpt}`,
 				})
 				.then((result) => {
 					insights?.revalidate();
-					if (this.workers.get(meta.id) === worker && !controller.signal.aborted)
-						worker.send({ type: "diagnostics.context.result", callId: packet.callId, result });
+					if (this.workers.get(meta.id) === worker && !controller.signal.aborted) {
+						const evidence =
+							packet.request.action === "scoped_metrics"
+								? this.scopedMetrics(meta.id, packet.request, controller.signal)
+								: result;
+						worker.send({ type: "diagnostics.context.result", callId: packet.callId, result: evidence });
+					}
 				})
 				.catch(() => {
 					if (this.workers.get(meta.id) === worker)

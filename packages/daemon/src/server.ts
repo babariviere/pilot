@@ -76,6 +76,12 @@ import { CONNECTION_CONTROLS, ConnectionControls } from "./connection-controls.t
 import { DatabaseSettingsError } from "./databases.ts";
 import { DeliveredArtifacts } from "./delivered-artifact.ts";
 import { awaitDiagnosticRead, diagnosticContextResponse } from "./diagnostic-context.ts";
+import {
+	DIAGNOSTICS_CONTROLS,
+	DiagnosticsControls,
+	isDiagnosticsRevocation,
+	validateDiagnosticsIntent,
+} from "./diagnostics-controls.ts";
 import { EnvironmentApprovalRequired } from "./environment-profile.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
@@ -761,6 +767,8 @@ export function createDaemonServer(
 		if (!missions) throw new ServiceUnavailable("Retained feedback unavailable");
 		return retainedFeedbackReader(missions.store, sessions, projects, target);
 	};
+	sessions.feedbackMetricsScope = (operationId, sessionId) =>
+		missions?.store.feedback.metricsScope(operationId, sessionId);
 	const reviewRequests = missions ? optionalReviewRequests(missions.store, sessions, projects) : undefined;
 	const humanReviews = missions
 		? new HumanReviews({
@@ -971,9 +979,26 @@ export function createDaemonServer(
 	const connectionControls = new ConnectionControls(mcpSetup, mcp, _config.mcpSetupReadOnly);
 	const slackControls = tracking ? new SlackControls(projects, tracking) : undefined;
 	const modelControls = new ModelControls(models, projects, setup, sessions, _config.modelScopeReadOnly);
+	const diagnosticsControls =
+		telemetry && journal
+			? new DiagnosticsControls(
+					telemetry,
+					models,
+					sessions,
+					_config.home,
+					journal.destination,
+					async () => {
+						await tracking?.flushDiagnosticEvidence?.();
+					},
+					async () => {
+						await tracking?.clearDiagnosticEvidence?.();
+					},
+				)
+			: undefined;
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
 		if (op.kind === CONNECTION_CONTROLS) throw new Error("Connection outcome unknown; lookup only");
 		if (op.kind === SLACK_CONTROLS) throw new Error("Slack outcome unknown; lookup only");
+		if (op.kind === DIAGNOSTICS_CONTROLS) throw new Error("Diagnostics outcome unknown; lookup only");
 		if (op.kind === MODEL_CONTROLS) throw new Error("Model settings outcome unknown; lookup only");
 		if (isThreadOperation(op.kind)) {
 			if (!missionThreads) throw new Error("Topic lookup unavailable");
@@ -1282,6 +1307,12 @@ export function createDaemonServer(
 				return json(res, 200, mcp.check());
 			}
 			throw new HttpError(404, "Not found");
+		}
+		if (parts[1] === "diagnostics-controls" && parts.length === 2 && req.method === "GET") {
+			res.setHeader("cache-control", "no-store");
+			if (!githubSetup || !diagnosticsControls) throw new ServiceUnavailable("Native diagnostics unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			return json(res, 200, await diagnosticsControls.read());
 		}
 		if (parts[1] === "model-controls") {
 			res.setHeader("cache-control", "no-store");
@@ -1734,6 +1765,32 @@ export function createDaemonServer(
 						await journal.execute(operation, (op, entry) =>
 							connectionControls.admit(op, journal, entry.firstEntry),
 						),
+					);
+				} finally {
+					end();
+				}
+			}
+			if (operation?.kind === DIAGNOSTICS_CONTROLS) {
+				res.setHeader("cache-control", "no-store");
+				if (!githubSetup || !diagnosticsControls) throw new ServiceUnavailable("Native diagnostics unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				// Validate BEFORE lookup/reservation: unsafe collector strings never enter the durable journal.
+				try {
+					validateDiagnosticsIntent(operation, journal.destination);
+				} catch {
+					throw new HttpError(400, "Invalid native diagnostics intent");
+				}
+				const saved = await journal.lookup(operation);
+				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					return json(
+						res,
+						200,
+						await journal.execute(operation, (op, entry) => diagnosticsControls.admit(op, entry.firstEntry), {
+							safetyReduction: isDiagnosticsRevocation(operation),
+						}),
 					);
 				} finally {
 					end();

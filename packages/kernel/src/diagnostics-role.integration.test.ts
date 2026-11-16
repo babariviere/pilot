@@ -13,6 +13,7 @@ import { createDiagnosticLogTool } from "./diagnostic-log-tool.ts";
 import { createDiagnosticsTool } from "./diagnostics-tool.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { createRepairProposalTool } from "./repair-proposal-tool.ts";
+import { createScopedMetricsTool } from "./scoped-metrics-tool.ts";
 
 test("diagnostics profile loads only the host diagnostic tools across reloads", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-diagnostics-role-"));
@@ -176,7 +177,16 @@ export default (pi) => {
 		ask: { source },
 		diagnostics: true,
 		projectTrusted: true,
-		hostTools: [diagnostic, context, logs, history, proposal],
+		hostTools: [
+			diagnostic,
+			context,
+			logs,
+			history,
+			proposal,
+			createScopedMetricsTool(async () => {
+				throw new Error("Synthetic unavailable metrics");
+			}),
+		],
 		settingsManager: SettingsManager.inMemory({
 			defaultTools: ["bash", "write", "subagents", "codemode"],
 			extensions: [join(agentDir, "extensions", "evil.ts")],
@@ -236,6 +246,7 @@ export default (pi) => {
 		"diagnostic_logs",
 		"diagnostic_history",
 		"repair_proposal",
+		"scoped_metrics",
 	]);
 	assert.deepEqual(adapter.session.getCallableToolNames(), names());
 	assert.equal(existsSync(marker), false, "personal and project extensions never evaluate");
@@ -247,6 +258,7 @@ export default (pi) => {
 		"diagnostic_logs",
 		"diagnostic_history",
 		"repair_proposal",
+		"scoped_metrics",
 	]);
 	assert.deepEqual(adapter.session.getCallableToolNames(), names());
 	assert.equal(existsSync(marker), false);

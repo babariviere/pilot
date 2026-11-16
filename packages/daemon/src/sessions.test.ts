@@ -37,6 +37,7 @@ import { diagnosticContextResponse } from "./diagnostic-context.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { DaemonOperations, EventLoopWatchdog, operations } from "./event-loop-watchdog.ts";
 import { admitInsightsOperation, INSIGHTS_DISCLOSURE, INSIGHTS_SETUP_MESSAGE } from "./insights-native.ts";
+import { initialInsightsSettings } from "./insights-settings.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
@@ -3440,6 +3441,209 @@ test("diagnostics role reads other parked histories without legacy grants and va
 	);
 	assert.ok(denied?.result, denied?.error ?? "Assertion failed");
 	assert.equal(reads.length, 4);
+});
+
+test("scoped metrics uses current mission authority and never opens histories or app diagnostics", async (t) => {
+	const f = await insightsFixture(t);
+	const peer = await f.sessions.spawn({ projectId: f.project.id, message: "Peer" });
+	const other = await f.sessions.spawn({ projectId: f.project.id, message: "Unrelated" });
+	await Promise.all([f.sessions["starting"].get(peer.id), f.sessions["starting"].get(other.id)]);
+	f.members.set(peer.id, f.missionId);
+	const meta = f.sessions["metas"].get(f.id)!;
+	const worker = f.worker;
+	const broadRead = t.mock.method(f.sessions, "readDiagnosticContext", () => {
+		throw new Error("No history or app reads");
+	});
+	const before = f.workers.length;
+	f.worker.reportUsage({
+		context: Object.assign(
+			{ tokens: 123, contextWindow: 1000, percent: 12.3 },
+			{ privateContext: "RAW_CONTEXT_CANARY" },
+		),
+	});
+	const result = await f.sessions.diagnosticContext(peer.id, { action: "scoped_metrics", sessionId: f.id });
+	assert.equal(result.status, "available");
+	assert.deepEqual(Object.keys(result.data!), ["sessionId", "usage", "coverage"]);
+	assert.equal(Reflect.get(Reflect.get(result.data as object, "usage"), "context").tokens, 123);
+	assert.doesNotMatch(JSON.stringify(result), /RAW_CONTEXT_CANARY|privateContext/);
+	const targetMeta = f.sessions["metas"].get(f.id)!;
+	const targetProject = targetMeta.projectId;
+	targetMeta.projectId = "removed-project";
+	await assert.rejects(
+		f.sessions.diagnosticContext(peer.id, { action: "scoped_metrics", sessionId: f.id }),
+		/outside/,
+	);
+	targetMeta.projectId = targetProject;
+	targetMeta.archivedAt = 1;
+	await assert.rejects(
+		f.sessions.diagnosticContext(peer.id, { action: "scoped_metrics", sessionId: f.id }),
+		/outside/,
+	);
+	delete targetMeta.archivedAt;
+	const membership = f.bridge.membership;
+	const inactive = t.mock.method(f.bridge, "membership", (id: string) =>
+		id === f.id ? { missionId: f.missionId, active: false } : membership(id),
+	);
+	await assert.rejects(
+		f.sessions.diagnosticContext(peer.id, { action: "scoped_metrics", sessionId: f.id }),
+		/outside/,
+	);
+	inactive.mock.restore();
+	const peerMeta = f.sessions["metas"].get(peer.id)!;
+	peerMeta.projectId = "removed-project";
+	await assert.rejects(
+		f.sessions.diagnosticContext(peer.id, { action: "scoped_metrics", sessionId: f.id }),
+		/outside/,
+	);
+	peerMeta.projectId = f.project.id;
+	const project = t.mock.method(f.projects, "get", () => undefined);
+	await assert.rejects(
+		f.sessions.diagnosticContext(peer.id, { action: "scoped_metrics", sessionId: f.id }),
+		/outside/,
+	);
+	project.mock.restore();
+	assert.doesNotMatch(JSON.stringify(result), /subscription|message|history|logs|title|cwd/);
+	await assert.rejects(
+		f.sessions.diagnosticContext(peer.id, { action: "scoped_metrics", sessionId: other.id }),
+		/outside/,
+	);
+	await assert.rejects(f.sessions.diagnosticContext(other.id, { action: "scoped_metrics" }), /outside/);
+	await assert.rejects(f.sessions.diagnosticContext(peer.id, { action: "performance" }), /Only diagnostics/);
+	await assert.rejects(
+		f.sessions.diagnosticContext(peer.id, { action: "scoped_metrics", host: diagnosticHost }),
+		/Invalid/,
+	);
+	broadRead.mock.restore();
+	await assert.rejects(f.sessions.readDiagnosticContext({ action: "scoped_metrics" }), /supervised/);
+	f.sessions["onPacket"](meta, worker, {
+		type: "diagnostics.context.call",
+		callId: "metrics",
+		request: { action: "scoped_metrics" },
+	});
+	await until(() =>
+		(worker as FakeWorker).sent.some((p) => p.type === "diagnostics.context.result" && p.callId === "metrics"),
+	);
+	assert.ok(
+		(worker as FakeWorker).sent.some(
+			(p) => p.type === "diagnostics.context.result" && p.callId === "metrics" && p.error,
+		),
+	);
+	f.members.delete(peer.id);
+	await assert.rejects(f.sessions.diagnosticContext(peer.id, { action: "scoped_metrics" }), /outside/);
+	assert.equal(f.workers.length, before);
+});
+
+test("scoped metrics respects Insights revocation and exact feedback-work scope", async (t) => {
+	const store = new MissionStore(":memory:");
+	const f = await insightsFixture(t, {}, store);
+	t.after(() => store.close());
+	const settings = initialInsightsSettings("test/offline");
+	await store.insights.settings.save(
+		f.sessions.insightsHostAdmission(f.id),
+		randomUUID(),
+		settings,
+		0,
+		settings,
+		"test/offline",
+	);
+	const origin = await f.sessions.spawn({ projectId: f.project.id, message: "Origin" });
+	const unrelated = await f.sessions.spawn({ projectId: f.project.id, message: "Other" });
+	const feedbackId = randomUUID(),
+		operationId = randomUUID(),
+		chatId = randomUUID();
+	store.feedback.add({
+		id: feedbackId,
+		text: "Synthetic feedback",
+		recordedAt: 1,
+		operationId: randomUUID(),
+		origin: { kind: "chat", sessionId: origin.id, projectId: f.project.id, title: "Origin" },
+	});
+	store.feedback.addWork(
+		feedbackId,
+		{ kind: "triage", sessionId: chatId, projectId: f.project.id, operationId, recordedAt: 2 },
+		() => {},
+	);
+	f.sessions.feedbackMetricsScope = (op, id) => store.feedback.metricsScope(op, id);
+	const feedback = await f.sessions.spawnDurable({ projectId: f.project.id, message: "Triage" }, chatId, operationId);
+	await f.sessions["starting"].get(chatId);
+	assert.equal((await f.sessions.diagnosticContext(feedback.id, { action: "scoped_metrics" })).status, "available");
+	assert.equal(
+		(await f.sessions.diagnosticContext(feedback.id, { action: "scoped_metrics", sessionId: origin.id })).status,
+		"available",
+	);
+	await assert.rejects(
+		f.sessions.diagnosticContext(feedback.id, { action: "scoped_metrics", sessionId: unrelated.id }),
+		/outside/,
+	);
+	assert.equal(store.feedback.metricsScope(operationId, unrelated.id), undefined);
+	assert.equal(f.worker.spec.scopedMetrics, true);
+	assert.equal(
+		(await f.sessions.diagnosticContext(f.id, { action: "scoped_metrics", sessionId: origin.id })).status,
+		"available",
+	);
+	await f.sessions.revokeInsights(f.id, 1);
+	await assert.rejects(
+		f.sessions.diagnosticContext(f.id, { action: "scoped_metrics", sessionId: origin.id }),
+		/revoked|changed/,
+	);
+});
+
+test("scoped metrics applies effective Insights source exclusions before returning numeric evidence", async (t) => {
+	const store = new MissionStore(":memory:");
+	const f = await insightsFixture(t, {}, store);
+	t.after(() => store.close());
+	const source = await f.sessions.spawn({ projectId: f.project.id, message: "Source" });
+	await assert.rejects(f.sessions.diagnosticContext(f.id, { action: "scoped_metrics" }), /current opted-in/);
+	const settings = initialInsightsSettings("test/offline");
+	settings.scope.excludeSessions = [source.id];
+	await store.insights.settings.save(
+		f.sessions.insightsHostAdmission(f.id),
+		randomUUID(),
+		settings,
+		0,
+		settings,
+		"test/offline",
+	);
+	await assert.rejects(
+		f.sessions.diagnosticContext(f.id, { action: "scoped_metrics", sessionId: source.id }),
+		/outside/,
+	);
+	assert.equal((await f.sessions.diagnosticContext(f.id, { action: "scoped_metrics" })).status, "available");
+	const admitted = await f.sessions.spawn({ projectId: f.project.id, message: "Admitted source" });
+	await f.sessions["starting"].get(admitted.id);
+	assert.equal(
+		(await f.sessions.diagnosticContext(f.id, { action: "scoped_metrics", sessionId: admitted.id })).status,
+		"available",
+	);
+	f.sessions["metas"].delete(admitted.id);
+	await assert.rejects(
+		f.sessions.diagnosticContext(f.id, { action: "scoped_metrics", sessionId: admitted.id }),
+		/outside/,
+	);
+});
+
+test("scoped diagnosis metrics stays pinned and rejects cancelled reads", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({}, { diagnosticHost });
+	const target = await sessions.spawn({ projectId: f.project.id, message: "Target" });
+	const other = await sessions.spawn({ projectId: f.project.id, message: "Other" });
+	const specialist = await sessions.spawn({
+		message: "Diagnose",
+		role: "diagnostics",
+		diagnosticTarget: diagnosticTarget(target.id),
+	});
+	assert.equal(
+		(await sessions.diagnosticContext(specialist.id, { action: "scoped_metrics", sessionId: target.id })).status,
+		"available",
+	);
+	await assert.rejects(
+		sessions.diagnosticContext(specialist.id, { action: "scoped_metrics", sessionId: other.id }),
+		/outside/,
+	);
+	await assert.rejects(
+		sessions.diagnosticContext(specialist.id, { action: "scoped_metrics" }, AbortSignal.abort()),
+		/unavailable/,
+	);
 });
 
 test("diagnostic performance reads existing sanitized local snapshot only with persisted role", async (t) => {

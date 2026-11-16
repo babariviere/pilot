@@ -1,0 +1,47 @@
+/** Isolated real native diagnostics settings and receipt storage. No providers. */
+
+import { join } from "node:path";
+import { createInterface } from "node:readline";
+import { mock } from "node:test";
+import { ModelCatalog } from "../models.ts";
+import { nativePlanningFixture } from "../native-mission-planning.fixture.ts";
+import { TelemetrySettingsService } from "../telemetry-settings.ts";
+
+mock.method(ModelCatalog.prototype, "listTaskModels", async () => ({ models: [] }));
+let writes = 0,
+	lost = false;
+const update = TelemetrySettingsService.prototype.update;
+mock.method(
+	TelemetrySettingsService.prototype,
+	"update",
+	async function (this: TelemetrySettingsService, ...args: Parameters<typeof update>) {
+		writes++;
+		const result = await update.apply(this, args);
+		if (lost) {
+			lost = false;
+			throw new Error("Simulated lost domain acknowledgement");
+		}
+		return result;
+	},
+);
+const f = await nativePlanningFixture({ diagnostics: true });
+console.log(
+	JSON.stringify({
+		ledger: join(f.home, "commands.jsonl"),
+		source: {
+			profile: f.home,
+			port: Number(new URL(f.root).port),
+			home: { daemonId: f.hello.daemonId, lineageId: f.hello.lineageId },
+			project_id: f.project.id,
+			project_path: f.project.path,
+		},
+	}),
+);
+for await (const line of createInterface({ input: process.stdin })) {
+	const c = JSON.parse(line);
+	if (c.action === "quit") break;
+	if (c.action === "lost") lost = true;
+	console.log(JSON.stringify({ writes, sessions: f.sessions.list().length }));
+}
+process.stdin.destroy();
+await f.close();

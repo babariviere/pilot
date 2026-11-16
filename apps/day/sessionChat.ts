@@ -21,6 +21,7 @@ export type SessionChat = {
 	state: SessionChatState;
 	/** The chat's own reason for its state, such as why it failed. */
 	stateReason: string;
+	specialist?: boolean;
 	/** Rows read so far, oldest first. */
 	rows: ChatRow[];
 	/** Whether earlier rows can be read. */
@@ -59,6 +60,7 @@ function chatOf(x: unknown, sessionId: string): SessionChat | null {
 		sourceLabel: typeof c.sourceLabel === "string" ? c.sourceLabel : "",
 		state: (c.state ?? "unknown") as SessionChatState,
 		stateReason: typeof c.stateReason === "string" ? c.stateReason : "",
+		specialist: c.specialist === true,
 		rows: c.rows,
 		more: c.more === true,
 		reading: c.reading === true,

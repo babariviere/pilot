@@ -81,6 +81,7 @@ export class OperationJournal {
 	private legacyInsightsReservations = 0;
 	private fault?: unknown;
 	private readonly running = new Map<string, Promise<OperationReceipt>>();
+	private safetyReductionRunning = false;
 	private readonly directory: string;
 	readonly destination: OperationHost;
 	constructor(directory: string, destination: OperationHost) {
@@ -456,6 +457,7 @@ export class OperationJournal {
 	async execute(
 		op: DurableOperation,
 		handler: (op: DurableOperation, entry: { firstEntry: boolean }) => Promise<unknown>,
+		options: { safetyReduction?: boolean } = {},
 	): Promise<OperationReceipt> {
 		op = structuredClone(op);
 		// Only this atomic reservation can identify a new confirmation. A pending record,
@@ -464,7 +466,10 @@ export class OperationJournal {
 		if (receipt.state !== "pending") return receipt;
 		const running = this.running.get(op.operationId);
 		if (running) return running;
-		if (this.running.size >= 4) return receipt;
+		// One extra host-authorized reduction can stop collection even when four
+		// ordinary effects are stuck. Callers must validate an exact no-grant intent.
+		if (options.safetyReduction ? this.safetyReductionRunning : this.running.size >= 4) return receipt;
+		if (options.safetyReduction) this.safetyReductionRunning = true;
 		const work = (async () => {
 			let result: unknown;
 			let reason: string | undefined;
@@ -518,6 +523,7 @@ export class OperationJournal {
 			});
 		})().finally(() => {
 			this.running.delete(op.operationId);
+			if (options.safetyReduction) this.safetyReductionRunning = false;
 		});
 		this.running.set(op.operationId, work);
 		return work;

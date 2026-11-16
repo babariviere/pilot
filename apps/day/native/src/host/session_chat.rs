@@ -37,6 +37,7 @@ pub(crate) struct ChatState {
     pub state: &'static str,
     /// The chat's own reason for its state, such as why it failed.
     pub state_reason: String,
+    pub specialist: bool,
     pub pages: Pages,
     pub reading: bool,
     /// Why the last read failed. Empty after a good read.
@@ -57,7 +58,7 @@ impl ChatState {
             "reading":self.reading,"reason":self.reason});
         let chat = crate::plan_activity::chat(&rows);
         json!({"sessionId":self.session,"title":self.title,"state":self.state,
-            "stateReason":self.state_reason,"rows":chat.rows,"more":chat.more,
+            "stateReason":self.state_reason,"specialist":self.specialist,"rows":chat.rows,"more":chat.more,
             "reading":chat.reading,"reason":chat.reason,"sourcePath":self.source_path,"sourceLabel":self.source_label})
     }
 }
@@ -340,6 +341,7 @@ async fn read_chat(
                     merge(&mut state.pages, &read.page, older);
                     state.project = read.project.clone();
                     state.title = one_line(&read.session["title"], LINE_CHARS).unwrap_or_default();
+                    state.specialist = read.session["role"] == "diagnostics";
                     state.source_path = read.session["cwd"]
                         .as_str()
                         .filter(|s| s.len() <= 4096)
@@ -386,6 +388,39 @@ async fn fetch(
 ) -> Result<Read, Error> {
     let global = t.source.project.is_none() || t.focused;
     let path = format!("/api/sessions/{session}");
+    t.profile_gate().await?;
+    let meta = t.get(&path).await?;
+    if meta["role"] == "diagnostics" {
+        let scoped = |m: &Value| {
+            m["id"] == session
+                && m["role"] == "diagnostics"
+                && m["diagnosticScope"] == "app"
+                && matches!(
+                    m["diagnosticHost"]["hostId"].as_str(),
+                    Some("daemon" | "local")
+                )
+                && m["diagnosticHost"]["daemonId"] == t.source.home.daemon_id
+                && m["diagnosticHost"]["lineageId"] == t.source.home.lineage_id
+        };
+        if !scoped(&meta) {
+            return Err(Error::Identity);
+        }
+        let cursor = before.unwrap_or(NEWEST);
+        let history = t
+            .get(&format!("{path}/history?before={cursor}&limit={PAGE}"))
+            .await?;
+        let page = page(&history, "", before.is_none())?;
+        let current = t.get(&path).await?;
+        t.profile_gate().await?;
+        if !scoped(&current) {
+            return Err(Error::Stale);
+        }
+        return Ok(Read {
+            session: current,
+            page,
+            project: None,
+        });
+    }
     let (selected, project) = if !global {
         (None, None)
     } else if let Some(project) = known {

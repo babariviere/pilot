@@ -7,6 +7,7 @@
 import { cleanup, keymap, Scroll, Text, View } from "nsh";
 import { ChatTranscript } from "./ChatRows";
 import { closeChat } from "./chatView";
+import { DiagnosisReply } from "./DiagnosisSettings";
 import type { Day } from "./day";
 import type { SessionChat, SessionChatMirror } from "./sessionChat";
 import { Mark, type MarkKind, PAGE_COLUMN } from "./ui";
@@ -50,10 +51,12 @@ export function ChatScreen(props: { day: Day; sessionId: string }) {
 						{chat()?.title || "Chat"}
 					</Text>
 					<Text class="text-sm text-muted-foreground">
-						Read only. Reading it sends nothing and changes nothing.
+						{chat()?.specialist
+							? "Read-only specialist. Its findings are an assessment, not a verified cause. Reading sends nothing."
+							: "Read only. Reading it sends nothing and changes nothing."}
 					</Text>
 					<If when={state()}>
-						<If when={chat()?.sourcePath}>
+						<If when={!chat()?.specialist && chat()?.sourcePath}>
 							<View selectable class="gap-1">
 								<Text class="text-xs text-muted-foreground">{chat()?.sourceLabel ?? "Working copy"}</Text>
 								<Text testID="chat-source-path" class="text-xs text-faint">
@@ -79,6 +82,9 @@ export function ChatScreen(props: { day: Day; sessionId: string }) {
 					emptyWords="This chat has no messages yet."
 					onEarlier={() => void mirror.source.earlier()}
 				/>
+				<If when={chat()?.specialist && props.day.diagnosis}>
+					<DiagnosisReply controls={props.day.diagnosis!} sessionId={props.sessionId} />
+				</If>
 			</View>
 		</Scroll>
 	);

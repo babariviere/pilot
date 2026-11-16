@@ -21,11 +21,12 @@ import { KnowledgeService } from "./project-knowledge.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
+import { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { TerminalManager } from "./terminals.ts";
 import { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
 export async function nativePlanningFixture(
-	options: { native?: boolean; mcp?: McpStatusService; connections?: boolean } = {},
+	options: { native?: boolean; mcp?: McpStatusService; connections?: boolean; diagnostics?: boolean } = {},
 ) {
 	const home = await mkdtemp(join(tmpdir(), "native-planning-"));
 	const projects = new ProjectStore(home);
@@ -131,6 +132,7 @@ export async function nativePlanningFixture(
 		];
 		args[12] = hello;
 		args[11] = options.mcp;
+		if (options.diagnostics) args[16] = await TelemetrySettingsService.open(home, hello);
 		if (options.native !== false) args[17] = native;
 		server = createDaemonServer(...args);
 		await server.runtimeReady;

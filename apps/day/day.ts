@@ -6,6 +6,7 @@ import type { Today } from "pilot-day/native";
 import type { ArtifactSource } from "./artifactReads";
 import type { ConnectionControls } from "./connectionControls";
 import type { DeliveryMirror } from "./deliveryFeed";
+import type { DiagnosisControls } from "./diagnosisControls";
 import type { FeedbackMirror } from "./feedbackFeed";
 import type { DayFeed } from "./feeds";
 import type { IntakeMirror } from "./intakeFeed";
@@ -23,6 +24,7 @@ import type { ScopeMirror } from "./todayScope";
 export type Day = {
 	/** Native AI settings; absent from mock worlds unless explicitly supplied. */
 	models?: ModelControls;
+	diagnosis?: DiagnosisControls;
 	connections?: ConnectionControls;
 	slack?: SlackControls;
 	/** Sends intents. Never written to from TSX state. */

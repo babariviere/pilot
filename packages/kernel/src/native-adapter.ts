@@ -105,6 +105,7 @@ import type { AskContext } from "./policy.ts";
 import { Posthorse } from "./posthorse.ts";
 import { QUESTION_STYLE } from "./question-style.ts";
 import { REPAIR_PROPOSAL_TOOL } from "./repair-proposal-tool.ts";
+import { SCOPED_METRICS_TOOL } from "./scoped-metrics-tool.ts";
 import { SHELL_STATUS_DETAIL, shellDeadline } from "./shell-deadline.ts";
 import type { SubagentBridge } from "./subagents.ts";
 import { type ReportSubscriptionLimit, subscriptionRecovery } from "./subscription-limit.ts";
@@ -490,10 +491,11 @@ export class NativeAdapter {
 		if (missionInterview && (!options.coordinatorSources || readOnly))
 			throw new Error("Mission interview skills require a trusted coordinator host");
 		const allowedTools = insights
-			? [INSIGHTS_HISTORY_TOOL, INSIGHTS_BACKLOG_TOOL]
+			? [INSIGHTS_HISTORY_TOOL, INSIGHTS_BACKLOG_TOOL, SCOPED_METRICS_TOOL]
 			: diagnostics
 				? [
 						DIAGNOSTICS_TOOL,
+						SCOPED_METRICS_TOOL,
 						DIAGNOSTIC_CONTEXT_TOOL,
 						DIAGNOSTIC_LOG_TOOL,
 						DIAGNOSTIC_HISTORY_TOOL,

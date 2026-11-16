@@ -145,6 +145,7 @@ const sessions = new SessionManager(
 				? {
 						daemonLog: join(homedir(), "Library", "Logs", "Pilot", "pilotd.log"),
 						appLog: join(homedir(), "Library", "Logs", "Pilot", "App", "app.jsonl"),
+						dayAppRoot: join(homedir(), "Library", "Logs", "Pilot"),
 						nextAppRoot: join(homedir(), "Library", "Application Support", "Pilot Next", "diagnostics"),
 						nextAppControl: () => {
 							const settings = telemetry.settings();

@@ -9,6 +9,7 @@ pub(crate) mod connection_controls;
 pub(crate) mod delivery;
 pub(crate) mod delivery_artifact;
 pub(crate) mod delivery_work;
+pub(crate) mod diagnosis;
 mod enrollment;
 pub(crate) mod feedback;
 pub(crate) mod intake;
@@ -902,6 +903,7 @@ fn publish_planning(shared: &Shared, record: &planning::PlanningRecord) {
                 | "native-project-action"
                 | "user-verification"
                 | "project-preferences-update"
+                | "diagnostics-controls"
                 | "model-controls"
                 | "user-feedback"
         )
@@ -1268,6 +1270,7 @@ async fn run(
         publish_planning(&shared, record);
     }
     let (invalidated, events) = async_channel::bounded(1);
+    diagnosis::restore_log_hold(&root, &journal).await;
     let ws = tokio::spawn(watch(t.source.clone(), shared.clone(), invalidated));
     let mut events_open = true;
     // A global window's focused project. Its transport carries that project's
@@ -1369,6 +1372,7 @@ async fn run(
     }
     ws.abort();
     let _ = ws.await;
+    diagnosis::log_controls(&root.source, &serde_json::Value::Null, false).await;
     // Worker exit occurs only after journal and all entered request futures return.
     shared.change(|desk| desk.lose_read(FreshnessState::Stale, "Native host closed."));
     shared
@@ -2114,6 +2118,7 @@ async fn watch(source: Source, shared: Arc<Shared>, invalidated: Sender<()>) {
     let mut shown_offline = false;
     loop {
         let result = watch_once(&source, &shared, &invalidated).await;
+        diagnosis::log_controls(&source, &serde_json::Value::Null, false).await;
         let was = shared.connected.swap(false, Ordering::SeqCst);
         if shared.closed.load(Ordering::SeqCst) {
             return;
@@ -2169,6 +2174,11 @@ async fn watch_once(
     .map_err(|_| Error::Offline)?
     .map_err(|_| Error::Offline)?;
     let hello = t.profile_hello().await?;
+    let token = crate::day_log::admit_control();
+    if let Ok(settings) = t.get("/api/telemetry").await {
+        t.local()?;
+        diagnosis::log_controls_at(source, &settings, false, token).await;
+    }
     crate::day_log::event(
         "connection.open",
         serde_json::json!({"port":t.source.port,"daemonVersion":hello["daemonVersion"],
@@ -2183,6 +2193,24 @@ async fn watch_once(
         if let tokio_tungstenite::tungstenite::Message::Text(body) = frame {
             let v: serde_json::Value = serde_json::from_str(&body).map_err(|_| Error::Invalid)?;
             match v["type"].as_str() {
+                Some("diagnostics.next-control") => {
+                    if v["control"]["schemaVersion"] != 1
+                        || v["control"]["host"]["daemonId"] != source.home.daemon_id
+                        || v["control"]["host"]["lineageId"] != source.home.lineage_id
+                        || v["control"]["host"]["hostId"] != "daemon"
+                    {
+                        return Err(Error::Identity);
+                    }
+                    // A queued control frame can predate the initial HTTP read.
+                    // Re-read only on this setting-change notice, never poll.
+                    let token = crate::day_log::admit_control();
+                    let settings = t
+                        .get("/api/telemetry")
+                        .await
+                        .unwrap_or(serde_json::Value::Null);
+                    t.local()?;
+                    diagnosis::log_controls_at(source, &settings, false, token).await;
+                }
                 // Structural changes fence actions bound to the shown read.
                 Some("mission-catalog.changed" | "missions" | "mission" | "projects") => {
                     shared.epoch.fetch_add(1, Ordering::SeqCst);

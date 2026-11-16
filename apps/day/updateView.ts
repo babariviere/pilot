@@ -28,6 +28,7 @@ import {
 	remindersOf,
 	savedReminders,
 } from "./deliveryView";
+import { restoreDiagnosis, savedDiagnosis } from "./diagnosisDraft";
 import {
 	feedbackDraft,
 	feedbackImageBusy,
@@ -228,6 +229,7 @@ export function captureView(today?: Today): SavedView {
 		preferences: savedPreferences(),
 		projectSetup: savedProjectSetup(),
 		modelSettings: savedModelDraft(),
+		diagnosis: savedDiagnosis(),
 		connectionSettings: savedConnectionDraft(),
 		slackSettings: savedSlackDraft(),
 		knowledge: savedKnowledge(),
@@ -449,6 +451,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	restorePreferences(view.preferences ?? []);
 	restoreProjectSetup(view.projectSetup ?? []);
 	restoreModelDraft(view.modelSettings ?? "");
+	restoreDiagnosis(view.diagnosis ?? "");
 	restoreConnectionDraft(view.connectionSettings ?? "");
 	restoreSlackDraft(view.slackSettings ?? "");
 	restoreKnowledge(view.knowledge ?? "");

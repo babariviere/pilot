@@ -10,6 +10,7 @@
 import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, untracked, View } from "nsh";
 import { Button, Collapsible, Input } from "nsh/base";
 import { ConnectionSettings } from "./ConnectionSettings";
+import { DiagnosisSettings } from "./DiagnosisSettings";
 import type { Day } from "./day";
 import { KnowledgeSection } from "./KnowledgeSection";
 import { keepField, keepScroll } from "./kept";
@@ -565,6 +566,7 @@ export function SettingsScreen(props: { day: Day }) {
 				<If when={props.day.models}>{(controls) => <ModelSettingsSection controls={controls()} />}</If>
 				<If when={props.day.connections}>{(controls) => <ConnectionSettings controls={controls()} />}</If>
 				<If when={props.day.slack}>{(controls) => <SlackSettings controls={controls()} />}</If>
+				<If when={props.day.diagnosis}>{(controls) => <DiagnosisSettings controls={controls()} />}</If>
 				<Preferences mirror={mirror} />
 				<KnowledgeSection projectId={mirror.view().projectId} />
 				<ProjectsSection />

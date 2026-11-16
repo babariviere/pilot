@@ -26,6 +26,10 @@ It reuses the same profile, hands off the daemon and offers explicit legacy reti
 Opening `Pilot.app` from Finder discovers the profile like GPUI. Every launch without `--journal`
 keeps its window and drafts in `~/Library/Application Support/Pilot Day/window-journal`.
 Logs: `~/Library/Logs/Pilot/day.log` (`.1`-`.3`) and `pilotd.log`.
+Settings has separate local-count and remote-reporting consent, retained-copy details,
+and **Ask about Pilot**, an on-demand read-only specialist. Day logs start only after
+verified local diagnostic controls arrive. Clear reports the service and this app
+writer separately; OS logs, service stdout, exports and prior agent replies can remain.
 New Day distributions are named `Pilot.app`, display Pilot, and can install at
 `~/Applications/Pilot.app`. Legacy app paths and all profile/service identities stay unchanged.
 

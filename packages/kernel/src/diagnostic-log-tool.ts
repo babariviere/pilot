@@ -11,6 +11,7 @@ export type DiagnosticLogCall = (request: DiagnosticLogRequest, signal?: AbortSi
 const sources = [
 	"app",
 	"next_app",
+	"day_app",
 	"daemon",
 	"kernel_worker",
 	"native_report",

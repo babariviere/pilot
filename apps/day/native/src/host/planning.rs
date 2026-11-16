@@ -72,6 +72,7 @@ impl PlanningRecord {
                         | "native-project-action"
                         | "user-verification"
                         | "project-preferences-update"
+                        | "diagnostics-controls"
                         | "model-controls"
                         | "connection-controls"
                         | "slack-controls"
@@ -110,6 +111,9 @@ impl PlanningRecord {
         }
         if o["kind"] == super::preferences::KIND {
             super::preferences::validate_record(&self.source, o)?;
+        }
+        if o["kind"] == super::diagnosis::KIND {
+            super::diagnosis::validate_record(o)?;
         }
         if o["kind"] == super::model_controls::KIND {
             super::model_controls::validate_record(&self.source, o)?;
@@ -202,6 +206,7 @@ fn record_pinned(
                     | "native-project-action"
                     | "user-verification"
                     | "project-preferences-update"
+                    | "diagnostics-controls"
                     | "model-controls"
                     | "connection-controls"
                     | "slack-controls"
@@ -229,6 +234,7 @@ fn record_pinned(
                     | "native-project-action"
                     | "user-verification"
                     | "project-preferences-update"
+                    | "diagnostics-controls"
                     | "model-controls"
                     | "connection-controls"
                     | "slack-controls"
@@ -349,6 +355,9 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
     }
     if op["kind"] == super::preferences::KIND && r["state"] == "accepted" {
         super::preferences::exact_result(op, &r)?;
+    }
+    if op["kind"] == super::diagnosis::KIND && r["state"] == "accepted" {
+        super::diagnosis::exact_result(op, &r)?;
     }
     if op["kind"] == super::model_controls::KIND && r["state"] == "accepted" {
         super::model_controls::exact_result(op, &r)?;

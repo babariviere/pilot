@@ -120,6 +120,7 @@ import {
 import { refActivity } from "./ref-activity.ts";
 import { createRepairDiagnosticsTools } from "./repair-diagnostics-tools.ts";
 import { createRepairProposalTool, type RepairProposalCall } from "./repair-proposal-tool.ts";
+import { createScopedMetricsTool } from "./scoped-metrics-tool.ts";
 import { createSlackStatusTool, SLACK_STATUS_TOOL, type SlackStatusCall } from "./slack-status-tool.ts";
 import { findInputReceipt, openSessionStorage } from "./storage.ts";
 import { SubagentBridge, type SubagentCommand } from "./subagents.ts";
@@ -754,6 +755,9 @@ export class KernelSession {
 				],
 				subagents,
 				hostTools: [
+					...(spec.scopedMetrics && hooks.callDiagnosticContext
+						? [createScopedMetricsTool(hooks.callDiagnosticContext)]
+						: []),
 					...(spec.role === "insights" && hooks.callInsightsBacklog
 						? [createInsightsBacklogTool(hooks.callInsightsBacklog)]
 						: []),

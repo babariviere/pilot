@@ -38,6 +38,27 @@ Diagnostic availability varies by client; do not assume a legacy repair control 
 available in Pilot Next. Local diagnostic capture and optional reporting are separate
 settings. Remote reporting and product analytics default off.
 
+### Day diagnostics
+
+In Day, open **Settings → Diagnostics & privacy**. Local operational evidence,
+local feature counts, remote reporting and product analytics have separate controls.
+Turning on local counts never uploads them. Save applies the controls shown. **Turn
+off all collection and reporting** remains available when an earlier action is
+unconfirmed. It does not resend that action or delete other copies.
+
+**Ask about Pilot** starts only after you choose an eligible model, thinking level
+and question. Its app-wide read-only specialist can inspect protected evidence and
+saved chat history on this service. The question and selected evidence go to that
+model provider, separately from telemetry consent. Opening a saved diagnosis only
+reads it. A follow-up sends only when you select **Send follow-up**. Fixes need a
+separate explicit start; there is no continuous AI monitor.
+
+**Clear local diagnostics** requires confirmation. Its result distinguishes service
+evidence from this app writer. Other app processes, OS logs, retained stdout, exports,
+backups, previous agent replies and uploaded data can remain. Service receipts do
+not prove another writer physically deleted its files. See
+[native diagnostics controls](technical/native-diagnostics-controls.md) for limits.
+
 ## Updates and the daemon
 
 On macOS, choose **Pilot Next → Daemon → Reload** after changing pi extensions

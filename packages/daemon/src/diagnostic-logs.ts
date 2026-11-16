@@ -14,6 +14,7 @@ import type {
 	NextAppLogOmissions,
 } from "@pilot/kernel";
 import type { OperationHost } from "@pilot/protocol";
+import { dayAppLogLine } from "./day-app-log.ts";
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { nativeAppLogLine } from "./native-app-log.ts";
@@ -32,6 +33,7 @@ const MAX_REPORT_FILES = 32;
 const SOURCE_IDS = new Set<DiagnosticLogSourceId>([
 	"app",
 	"next_app",
+	"day_app",
 	"daemon",
 	"kernel_worker",
 	"native_report",
@@ -51,6 +53,7 @@ interface FileCandidate {
 	fallbackAt?: string;
 	privateApp?: boolean;
 	nextApp?: boolean;
+	dayApp?: boolean;
 }
 
 interface InspectedCandidate extends FileCandidate {
@@ -90,6 +93,8 @@ export interface DiagnosticLogReaderOptions {
 	appLog?: string;
 	/** Fixed Next slots only, never a model argument or export path. */
 	nextAppRoot?: string;
+	/** Fixed Day log directory only, never tool-selected. Uses the same host-local privacy epoch. */
+	dayAppRoot?: string;
 	nextAppControl?: () => { localDiagnostics: boolean; epoch: number } | undefined;
 	/** Fixed host-owned service reader. No selector, command or arguments come from tool input. */
 	serviceJournal?: (signal?: AbortSignal) => Promise<{
@@ -106,6 +111,8 @@ export interface DiagnosticLogReaderOptions {
 	maxOutputBytes?: number;
 	now?: () => Date;
 }
+
+const guardedSource = (source: unknown): boolean => source === "next_app" || source === "day_app";
 
 function opaque(prefix: string, value: object, secret: Buffer): string {
 	const encoded = Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -274,15 +281,15 @@ export class DiagnosticLogReader {
 					nextAppAllowed,
 				);
 				const descriptor = sources.get(parsed.source)!;
-				const control = parsed.source === "next_app" ? this.options.nextAppControl?.() : undefined;
+				const control = guardedSource(parsed.source) ? this.options.nextAppControl?.() : undefined;
 				const page = await this.search(descriptor, parsed);
-				if (parsed.source === "next_app" && !this.sameNextControl(control)) {
+				if (guardedSource(parsed.source) && !this.sameNextControl(control)) {
 					return {
 						...base,
 						page: {
 							...unavailablePage(parsed.source, descriptor, this.maxScanBytes),
 							status: this.options.nextAppControl?.()?.localDiagnostics === false ? "disabled" : "unavailable",
-							reason: "Next diagnostics controls changed during the read; run a fresh search",
+							reason: "App diagnostics controls changed during the read; run a fresh search",
 						},
 					};
 				}
@@ -297,20 +304,20 @@ export class DiagnosticLogReader {
 				signal,
 				nextAppAllowed,
 			);
-			const control = ref?.s === "next_app" ? this.options.nextAppControl?.() : undefined;
+			const control = guardedSource(ref?.s) ? this.options.nextAppControl?.() : undefined;
 			const excerpt = await this.excerpt(sources, parsed);
-			if (ref?.s === "next_app" && !this.sameNextControl(control))
+			if (guardedSource(ref?.s) && !this.sameNextControl(control))
 				return {
 					...base,
 					excerpt: {
-						source: "next_app",
+						source: ref!.s,
 						status: "unavailable",
 						before: [],
 						after: [],
 						scannedBytes: excerpt.scannedBytes,
 						maxScanBytes: this.maxScanBytes,
 						truncated: true,
-						reason: "Next diagnostics controls changed during the read; run a fresh search",
+						reason: "App diagnostics controls changed during the read; run a fresh search",
 					},
 				};
 			return { ...base, excerpt };
@@ -441,6 +448,53 @@ export class DiagnosticLogReader {
 					const current = this.options.nextAppControl?.();
 					if (!current?.localDiagnostics) return undefined;
 					const parsed = nextAppLogLine(raw, host, (this.options.now?.() ?? new Date()).getTime(), current.epoch);
+					if (parsed.omission) omissions[parsed.omission] = (omissions[parsed.omission] ?? 0) + 1;
+					return parsed.text;
+				},
+			});
+		}
+
+		if (selected.has("day_app")) {
+			const control = this.options.nextAppControl?.();
+			const enabled = localDiagnostics && control?.localDiagnostics === true;
+			const supported =
+				nextAppAllowed && (this.options.platform ?? process.platform) === "darwin" && !!this.options.dayAppRoot;
+			const files =
+				supported && enabled
+					? await this.fixedFiles(
+							[0, 1, 2, 3].map((n) => ({
+								token: `day-${n}`,
+								path: join(this.options.dayAppRoot!, n === 0 ? "day.log" : `day.log.${n}`),
+								rotated: n > 0,
+								privateApp: true,
+								nextApp: true,
+								dayApp: true,
+							})),
+						)
+					: { files: [], reason: "not_recorded" as const };
+			const omissions: NextAppLogOmissions = {};
+			result.set("day_app", {
+				id: "day_app",
+				scope: "host",
+				availability:
+					!localDiagnostics || control?.localDiagnostics === false
+						? "disabled"
+						: files.files.length
+							? "available"
+							: "unavailable",
+				coverage:
+					"Day closed operational event/error codes only, not message contents, delivery receipts, UI frames or current app liveness. Invalid, foreign, expired, future and cleared rows are excluded. Unknown controls prevent reads. Four private fixed slots, at most 1 MiB each; bounded scans may cover only part of retained history. Service stdout, OS logs, exports, GPUI logs and agent history are separate.",
+				retention: "bounded_local",
+				availableFiles: files.files.length,
+				rotatedFiles: files.files.filter((f) => f.rotated).length,
+				catalogTruncated: false,
+				reason: !localDiagnostics || control?.localDiagnostics === false ? "disabled" : files.reason,
+				files: files.files,
+				omissions,
+				line: (raw) => {
+					const current = this.options.nextAppControl?.();
+					if (!current?.localDiagnostics) return undefined;
+					const parsed = dayAppLogLine(raw, host, (this.options.now?.() ?? new Date()).getTime(), current.epoch);
 					if (parsed.omission) omissions[parsed.omission] = (omissions[parsed.omission] ?? 0) + 1;
 					return parsed.text;
 				},
@@ -757,7 +811,7 @@ export class DiagnosticLogReader {
 				candidate.privateApp &&
 				(stat.uid !== BigInt(process.getuid?.() ?? -1) ||
 					(stat.mode & 0o077n) !== 0n ||
-					stat.size > (candidate.nextApp ? 64n : 256n) * 1024n ||
+					stat.size > (candidate.dayApp ? 1024n : candidate.nextApp ? 64n : 256n) * 1024n ||
 					(candidate.nextApp === true && stat.nlink !== 1n))
 			)
 				return { reason: "unsafe_source" };
@@ -815,7 +869,7 @@ export class DiagnosticLogReader {
 					(before.uid !== BigInt(process.getuid?.() ?? -1) ||
 						(before.mode & 0o077n) !== 0n ||
 						before.nlink !== 1n ||
-						before.size > 65536n))
+						before.size > (candidate.dayApp ? 1048576n : 65536n)))
 			)
 				return { buffer: Buffer.alloc(0), changed: true };
 			const buffer = Buffer.alloc(length);
@@ -832,7 +886,7 @@ export class DiagnosticLogReader {
 						(after.uid !== before.uid ||
 							after.mode !== before.mode ||
 							after.nlink !== 1n ||
-							after.size > 65536n)),
+							after.size > (candidate.dayApp ? 1048576n : 65536n))),
 			};
 		} catch {
 			return { buffer: Buffer.alloc(0), changed: true };
@@ -970,7 +1024,7 @@ export class DiagnosticLogReader {
 			for (const range of ranges) {
 				const rawLength = range.end - range.start;
 				const absolute = start + range.start;
-				if (descriptor.id === "next_app") resume = absolute;
+				if (guardedSource(descriptor.id)) resume = absolute;
 				if (rawLength > MAX_RAW_RECORD_BYTES) {
 					oversizedRecords++;
 					continue;
@@ -1022,7 +1076,7 @@ export class DiagnosticLogReader {
 				!!nextCursor ||
 				records.some((row) => row.truncated),
 			...(nextCursor ? { nextCursor } : {}),
-			...(descriptor.reason || descriptor.id === "next_app" ? { reason: descriptor.coverage } : {}),
+			...(descriptor.reason || guardedSource(descriptor.id) ? { reason: descriptor.coverage } : {}),
 		};
 		page.encodedBytes = Buffer.byteLength(JSON.stringify(page));
 		while (page.encodedBytes > Math.max(1_024, this.maxOutputBytes - 1_024) && page.records.length) {
@@ -1073,8 +1127,8 @@ export class DiagnosticLogReader {
 		const ref = parseOpaque<RefPayload>(REF_PREFIX, request.ref, this.opaqueSecret);
 		if (
 			!ref ||
-			Object.keys(ref).sort().join(",") !== (ref.s === "next_app" ? "c,f,l,o,s,x" : "f,l,o,s,x") ||
-			(ref.s === "next_app" && (typeof ref.c !== "string" || !/^[a-f0-9]{64}$/.test(ref.c))) ||
+			Object.keys(ref).sort().join(",") !== (guardedSource(ref.s) ? "c,f,l,o,s,x" : "f,l,o,s,x") ||
+			(guardedSource(ref.s) && (typeof ref.c !== "string" || !/^[a-f0-9]{64}$/.test(ref.c))) ||
 			!SOURCE_IDS.has(ref.s) ||
 			!Number.isSafeInteger(ref.o) ||
 			ref.o < 0 ||
@@ -1112,7 +1166,7 @@ export class DiagnosticLogReader {
 		if (targetRead.changed) return this.changedExcerpt(ref.s, ref.l);
 		let scannedBytes = ref.l;
 		const raw = targetRead.buffer.toString("utf8");
-		if (descriptor.id === "next_app" && ref.c !== createHash("sha256").update(raw).digest("hex"))
+		if (guardedSource(descriptor.id) && ref.c !== createHash("sha256").update(raw).digest("hex"))
 			return this.changedExcerpt(ref.s, scannedBytes);
 		const safe = descriptor.line ? descriptor.line(raw) : sanitizeDiagnosticLogLine(raw);
 		if (safe === undefined)

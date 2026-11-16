@@ -49,9 +49,12 @@ export function parseDiagnosticContext(value: unknown): DiagnosticContextRequest
 			"issues",
 			"features",
 			"performance",
+			"scoped_metrics",
 			"refresh_health",
 		].includes(String(v.action))
 	)
+		return invalid();
+	if (v.action === "scoped_metrics" && Object.keys(v).some((key) => key !== "action" && key !== "sessionId"))
 		return invalid();
 	if (v.action === "performance" && Object.keys(v).some((key) => key !== "action" && key !== "host")) return invalid();
 	if (v.host !== undefined) {

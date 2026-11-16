@@ -74,6 +74,18 @@ export class UserFeedbackStore {
 		return row ? JSON.parse(String(row.record)) : undefined;
 	}
 
+	/** Exact saved native triage/fix admission, not agent-authored provenance. */
+	metricsScope(operationId: string, sessionId: string): { origin: UserFeedback["origin"] } | undefined {
+		const row = this.db.one(
+			"SELECT f.record AS feedback, w.record AS work FROM user_feedback_work w JOIN user_feedback f ON f.id=w.feedback_id WHERE w.operation_id=?",
+			operationId,
+		);
+		if (!row) return undefined;
+		const work = JSON.parse(String(row.work)) as UserFeedbackWork;
+		if ((work.kind !== "triage" && work.kind !== "fix") || work.sessionId !== sessionId) return undefined;
+		return { origin: (JSON.parse(String(row.feedback)) as UserFeedback).origin };
+	}
+
 	/** Saves one step. `check` runs inside the transaction with the item's current steps. */
 	addWork(feedbackId: string, work: UserFeedbackWork, check: (current: UserFeedbackWork[]) => void): UserFeedbackWork {
 		return this.db.transaction(() => {

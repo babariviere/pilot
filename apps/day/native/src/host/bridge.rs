@@ -309,6 +309,12 @@ async fn run(
     }
     if matches!(
         call.command,
+        Command::DiagnosisRead | Command::DiagnosisWrite(_) | Command::DiagnosisCheck(_)
+    ) {
+        return super::diagnosis::handle(root, journal, shared, &call.command, &call.gate).await;
+    }
+    if matches!(
+        call.command,
         Command::ModelsRead
             | Command::ModelsRecovery(_)
             | Command::ModelsWrite(_)
@@ -755,6 +761,9 @@ async fn run(
         | Command::SlackCheck(_)
         | Command::SlackSetAside(_) => {
             unreachable!("handled Slack command")
+        }
+        Command::DiagnosisRead | Command::DiagnosisWrite(_) | Command::DiagnosisCheck(_) => {
+            unreachable!("handled diagnosis command")
         }
         Command::UpdateRead
         | Command::UpdatePrepare(_)

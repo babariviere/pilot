@@ -2284,6 +2284,7 @@ export type {
 	ProjectArtifactRequest,
 	SavedArtifactContent,
 } from "./delivered-artifact.ts";
+export type * from "./diagnostics-controls.ts";
 export type {
 	ChatReport,
 	DeliveredWork,

@@ -1,4 +1,18 @@
+import type { AIUsageAccounting, ContextUsage } from "./index.ts";
 import type { OperationHost } from "./operations.ts";
+
+/** Protected worker IPC only. No host, project, history, log or app-wide selectors. */
+export interface ScopedMetricsRequest {
+	action: "scoped_metrics";
+	sessionId?: string;
+}
+
+/** Existing accounting only. Null means unavailable, never zero. Account quotas are excluded. */
+export interface ScopedMetricsSnapshot {
+	sessionId: string;
+	usage: { context: ContextUsage | null; ai: AIUsageAccounting | null };
+	coverage: "retained_snapshots_partial";
+}
 export type DiagnosticContextValue =
 	| null
 	| boolean
@@ -23,6 +37,8 @@ export interface DiagnosticContextRequest {
 		| "features"
 		/** Existing watchdog snapshot on this daemon only; optional host, no other selectors. */
 		| "performance"
+		/** Content-free local metrics. Scope comes from supervised caller authority. */
+		| "scoped_metrics"
 		| "refresh_health";
 	host?: OperationHost;
 	sessionId?: string;

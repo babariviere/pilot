@@ -35,6 +35,7 @@ test("diagnostic logs exposes only inventory, catalogue search and returned-ref 
 	assert.match(tool.description, /catalogued source IDs/);
 	assert.match(tool.description, /untrusted data/);
 	assert.match(tool.description, /cannot read arbitrary files or paths/);
+	assert.match(JSON.stringify(tool.parameters), /day_app/);
 	const inventory = await tool.execute(
 		"inventory",
 		{ action: "inventory" } as never,

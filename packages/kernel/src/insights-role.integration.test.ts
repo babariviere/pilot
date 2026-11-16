@@ -13,6 +13,7 @@ import { createInsightsHistoryTool } from "./insights-history-tool.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { pilotPrompt } from "./policy.ts";
 import type { KernelSpec } from "./protocol.ts";
+import { createScopedMetricsTool } from "./scoped-metrics-tool.ts";
 import { KernelSession } from "./session.ts";
 
 test("Insights profile excludes hostile resources and retains only closed host tools after reload", async (t) => {
@@ -68,7 +69,13 @@ export default () => { writeFileSync(${JSON.stringify(marker)}, "loaded"); };`;
 		ask: { source },
 		insights: true,
 		projectTrusted: true,
-		hostTools: [reader, backlog],
+		hostTools: [
+			reader,
+			backlog,
+			createScopedMetricsTool(async () => {
+				throw new Error("Synthetic unavailable metrics");
+			}),
+		],
 		settingsManager: SettingsManager.inMemory({
 			defaultTools: ["bash", "codemode", "subagent"],
 			extensions: [personalExtension],
@@ -107,9 +114,13 @@ export default () => { writeFileSync(${JSON.stringify(marker)}, "loaded"); };`;
 	for (let reload = 0; reload < 2; reload++) {
 		assert.deepEqual(
 			adapter.session.getAllTools().map((v) => v.name),
-			["insights_history", "insights_backlog"],
+			["insights_history", "insights_backlog", "scoped_metrics"],
 		);
-		assert.deepEqual(adapter.session.getCallableToolNames(), ["insights_history", "insights_backlog"]);
+		assert.deepEqual(adapter.session.getCallableToolNames(), [
+			"insights_history",
+			"insights_backlog",
+			"scoped_metrics",
+		]);
 		assert.equal(existsSync(marker), false);
 		assert.doesNotMatch(adapter.session.systemPrompt, /PRIVATE_CONTEXT_CANARY|IGNORE_RESTRICTIONS_CANARY/);
 		const tool = adapter.session.getToolDefinition("insights_history");

@@ -14,6 +14,7 @@ import { type Day, mirrorDay } from "./day";
 import { errorText, logEvent, setLogSink } from "./dayLog";
 import { ConnectedDelivery, deliveryKey, mirrorDelivery, type VerificationSubject } from "./deliveryFeed";
 import { deliveryTitles } from "./deliveryView";
+import { connectedDiagnosisControls } from "./diagnosisControls";
 import { ConnectedFeedback, mirrorFeedback } from "./feedbackFeed";
 import { ConnectedIntake, mirrorIntake } from "./intakeFeed";
 import { ConnectedLinear, mirrorLinear } from "./linearFeed";
@@ -302,6 +303,7 @@ async function connect() {
 	);
 	// New's projects are read when New opens; reading sends nothing.
 	day.models = connectedModelControls(window);
+	day.diagnosis = connectedDiagnosisControls(window);
 	day.connections = connectedConnectionControls(window);
 	day.power = connectedPower(window);
 	void day.power.read();

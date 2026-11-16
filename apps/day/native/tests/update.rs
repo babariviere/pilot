@@ -39,6 +39,7 @@ fn view() -> SavedView {
         linear: "project/ln-219".into(),
         today_project: "project".into(),
         model_settings: String::new(),
+        diagnosis: String::new(),
         connection_settings: String::new(),
         slack_settings: String::new(),
         knowledge: String::new(),
@@ -148,6 +149,20 @@ fn slack_draft_round_trips_and_legacy_windows_default_empty() {
     json.as_object_mut().unwrap().remove("slackSettings");
     let old: SavedView = nsh_core::element::from_json(&json).unwrap();
     assert!(old.slack_settings.is_empty());
+}
+
+#[test]
+fn diagnosis_drafts_round_trip_and_legacy_json_defaults_without_submission() {
+    let mut original = view();
+    original.diagnosis =
+        r#"{"question":"Why is planning waiting?","replies":{},"privacy":null}"#.into();
+    let mut json = serde_json::to_value(&original).unwrap();
+    let restored: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert_eq!(restored.diagnosis, original.diagnosis);
+    assert!(restored.text_bytes() >= restored.diagnosis.len());
+    json.as_object_mut().unwrap().remove("diagnosis");
+    let legacy: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert!(legacy.diagnosis.is_empty());
 }
 
 #[test]

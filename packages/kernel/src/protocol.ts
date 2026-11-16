@@ -34,6 +34,7 @@ export interface ExecutionEvidence {
 export type DiagnosticLogSourceId =
 	| "app"
 	| "next_app"
+	| "day_app"
 	| "daemon"
 	| "kernel_worker"
 	| "native_report"
@@ -133,6 +134,8 @@ export interface KernelSubagent extends SessionSubagent {
 }
 
 export interface KernelSpec {
+	/** Declares a protected host tool, not a metrics grant. Daemon checks each read. */
+	scopedMetrics?: boolean;
 	/** Creation-only trusted profile. Never inferred from membership or prompt text. */
 	planning?: import("./planning-worker.ts").PlanningWorkerBinding;
 	planningHeldOnOpen?: boolean;

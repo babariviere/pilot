@@ -346,6 +346,9 @@ pub struct SavedView {
     /// Unsaved model configuration only. Never a sign-in code or challenge.
     #[prop(default)]
     pub model_settings: String,
+    /// Unsent privacy and diagnosis drafts. Restore sends nothing.
+    #[prop(default)]
+    pub diagnosis: String,
     /// Unsent connection setup, never authentication responses. Restore sends nothing.
     #[prop(default)]
     pub connection_settings: String,
@@ -432,6 +435,7 @@ impl SavedView {
             + self.linear.len()
             + self.today_project.len()
             + self.model_settings.len()
+            + self.diagnosis.len()
             + self.connection_settings.len()
             + self.slack_settings.len()
             + self.knowledge.len()

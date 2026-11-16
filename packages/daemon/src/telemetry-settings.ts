@@ -1,10 +1,11 @@
 /** Host-owned telemetry consent and exporter configuration. No credentials or arbitrary headers are stored here. */
 import { createHmac, randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AIUsageBudget, DaemonHello, TelemetrySettings, TelemetrySettingsPatch } from "@pilot/protocol";
 import { type NodeTelemetryOptions, validateOtlpEndpoint } from "@pilot/telemetry";
 import { FeatureUsageStore } from "./feature-usage.ts";
+import { durableJSON } from "./operation-journal.ts";
 
 const FILE = "telemetry.json";
 const SCHEMA = 1;
@@ -172,6 +173,11 @@ export class TelemetrySettingsService {
 	private readonly listeners = new Set<(settings: TelemetrySettings) => void>();
 	private saving = Promise.resolve();
 	private nextControlKnown = true;
+	private revision = 0;
+	private effective?: TelemetrySettings;
+	get privacyRevision(): number {
+		return this.revision;
+	}
 
 	private constructor(home: string, hello: DaemonHello, value: StoredTelemetrySettings) {
 		this.featureUsage = new FeatureUsageStore(home);
@@ -198,6 +204,17 @@ export class TelemetrySettingsService {
 	}
 
 	settings(): TelemetrySettings {
+		// Pending disk writes are not runtime authority. Only reductions or a
+		// successfully persisted grant can replace this effective snapshot.
+		this.effective ??= this.storedSnapshot();
+		const settings = structuredClone(this.effective);
+		// Aggregate epochs can also rotate through the independent Clear operation.
+		if (this.featureUsage.collectionEpoch) settings.featureUsageEpoch = this.featureUsage.collectionEpoch;
+		else delete settings.featureUsageEpoch;
+		return settings;
+	}
+
+	private storedSnapshot(): TelemetrySettings {
 		return {
 			schemaVersion: SCHEMA,
 			hostKind: this.hostKind,
@@ -219,36 +236,95 @@ export class TelemetrySettingsService {
 
 	async update(input: unknown): Promise<TelemetrySettings> {
 		const next = patch(input);
-		const revokedAnalytics = this.value.productAnalytics && !next.productAnalytics;
+		const previous = this.settings();
+		this.effective ??= previous;
+		const revision = ++this.revision;
+		const revokedAnalytics = previous.productAnalytics && !next.productAnalytics;
 		const aiUsageBudget = Object.hasOwn(next, "aiUsageBudget")
 			? (next.aiUsageBudget ?? undefined)
-			: this.value.aiUsageBudget;
+			: previous.aiUsageBudget;
 		this.value = {
 			...this.value,
 			...next,
+			localFeatureUsage: next.localFeatureUsage ?? previous.localFeatureUsage === true,
 			...(!next.localDiagnostics || !this.nextControlKnown ? { nextDiagnosticsEpoch: nextEpoch() } : {}),
 			endpoint: next.endpoint,
 			aiUsageBudget,
 			updatedAt: new Date().toISOString(),
 			...(revokedAnalytics ? { analyticsId: randomIdentifier() } : {}),
 		};
-		await this.persist();
-		this.nextControlKnown = true;
-		await this.featureUsage.configure(this.value.localFeatureUsage === true);
-		const settings = this.settings();
-		for (const listener of this.listeners) {
-			try {
-				listener(settings);
-			} catch {}
+		// A user revocation stops effective collection even if the consent file cannot
+		// be written. Never publish a newly enabled bit or collector before durability.
+		const featureRevocation =
+			previous.localFeatureUsage === true && !this.value.localFeatureUsage
+				? this.featureUsage.configure(false).catch(() => undefined)
+				: undefined;
+		if (
+			(previous.localDiagnostics && !this.value.localDiagnostics) ||
+			(previous.localFeatureUsage && !this.value.localFeatureUsage) ||
+			(previous.remoteOperational && !this.value.remoteOperational) ||
+			(previous.productAnalytics && !this.value.productAnalytics)
+		) {
+			const reduced: TelemetrySettings = {
+				...previous,
+				localDiagnostics: previous.localDiagnostics && this.value.localDiagnostics,
+				localFeatureUsage: previous.localFeatureUsage === true && this.value.localFeatureUsage === true,
+				remoteOperational: previous.remoteOperational && this.value.remoteOperational,
+				productAnalytics: previous.productAnalytics && this.value.productAnalytics,
+				endpoint: previous.endpoint,
+			};
+			if (!reduced.productAnalytics) delete reduced.analyticsId;
+			this.notify(reduced);
 		}
+		await this.persist();
+		if (revision !== this.revision) return this.effective;
+		this.nextControlKnown = true;
+		// Consent takes effect even if deleting independently kept aggregate files fails.
+		// Publish before fallible cleanup so exporters and workers cannot keep prior grants.
+		let settings = this.storedSnapshot();
+		this.notify(settings);
+		if (revision !== this.revision) return this.settings();
+		try {
+			if (featureRevocation) await featureRevocation;
+			else await this.featureUsage.configure(this.value.localFeatureUsage === true);
+		} catch (error) {
+			// Disabled collection is already fenced synchronously by configure(). A save
+			// confirms consent, not physical deletion; explicit Clear reports cleanup failure.
+			if (this.value.localFeatureUsage === true) throw error;
+		}
+		if (revision !== this.revision) return this.effective;
+		const configured = this.storedSnapshot();
+		if (JSON.stringify(settings) !== JSON.stringify(configured)) this.notify(configured);
+		settings = configured;
 		return settings;
 	}
 
 	/** Persist a privacy epoch; only the native writer drains and clears its own slots. */
 	async clearNextDiagnostics(): Promise<void> {
-		this.value = { ...this.value, nextDiagnosticsEpoch: nextEpoch() };
+		const effective = this.settings();
+		const revision = ++this.revision;
+		// Clearing bytes never commits a pending enable or collector change.
+		this.value = {
+			...this.value,
+			localDiagnostics: effective.localDiagnostics,
+			localFeatureUsage: effective.localFeatureUsage === true,
+			remoteOperational: effective.remoteOperational,
+			productAnalytics: effective.productAnalytics,
+			endpoint: effective.endpoint,
+			aiUsageBudget: effective.aiUsageBudget,
+			nextDiagnosticsEpoch: nextEpoch(),
+		};
 		await this.persist();
-		for (const listener of this.listeners) listener(this.settings());
+		if (revision === this.revision) this.notify(this.storedSnapshot());
+	}
+
+	private notify(settings: TelemetrySettings): void {
+		this.effective = settings;
+		for (const listener of this.listeners) {
+			try {
+				listener(settings);
+			} catch {}
+		}
 	}
 
 	onChange(listener: (settings: TelemetrySettings) => void): () => void {
@@ -257,14 +333,15 @@ export class TelemetrySettingsService {
 	}
 
 	nodeOptions(serviceName: "pilot.daemon" | "pilot.kernel"): NodeTelemetryOptions {
+		const settings = this.settings();
 		return {
-			enabled: this.value.remoteOperational,
+			enabled: settings.remoteOperational,
 			serviceName,
 			serviceVersion: this.hello.daemonVersion,
 			environment: environment(),
 			hostKind: this.hostKind,
 			hostId: this.hostId(),
-			...(this.value.endpoint ? { endpoint: this.value.endpoint } : {}),
+			...(settings.endpoint ? { endpoint: settings.endpoint } : {}),
 		};
 	}
 
@@ -276,7 +353,7 @@ export class TelemetrySettingsService {
 			environment: options.environment,
 			hostKind: options.hostKind,
 			hostId: options.hostId!,
-			localDiagnostics: this.value.localDiagnostics,
+			localDiagnostics: this.settings().localDiagnostics,
 			...(options.endpoint ? { endpoint: options.endpoint } : {}),
 		};
 	}
@@ -292,16 +369,12 @@ export class TelemetrySettingsService {
 	}
 
 	private async persist(): Promise<void> {
-		const value = `${JSON.stringify(this.value)}\n`;
+		const value = structuredClone(this.value);
 		this.saving = this.saving
 			.catch(() => undefined)
 			.then(async () => {
 				await mkdir(dirname(this.file), { recursive: true, mode: 0o700 });
-				const temporary = `${this.file}.tmp`;
-				await writeFile(temporary, value, { mode: 0o600 });
-				await chmod(temporary, 0o600);
-				await rename(temporary, this.file);
-				await chmod(this.file, 0o600);
+				await durableJSON(this.file, value);
 			});
 		await this.saving;
 	}
