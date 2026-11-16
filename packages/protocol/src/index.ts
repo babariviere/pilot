@@ -988,6 +988,8 @@ export interface AgentQuestion {
 	options: Array<{ label: string; detail?: string; suggested?: boolean }>;
 	/** Several answers can be picked together. */
 	multiSelect?: boolean;
+	/** IDs of artifacts the asking chat saved (such as an NSH mockup) that the user should see to answer. At most 3. */
+	artifacts?: string[];
 	/**
 	 * Set on the db tool's access requests. The app answers them with POST /api/sessions/:id/database-access, never
 	 * with a message: the first option allows, the second denies. A typed reply declines.

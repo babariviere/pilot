@@ -185,7 +185,7 @@ export function missionPrompt(
 			: `- ${mission.coordinator === "other" ? "Another chat coordinates this mission" : "The user coordinates this mission; no coordinator chat reads comments promptly, so ask the user with `ask_user` when you need a decision or are blocked"}. Work on your tasks, and ${mission.planningVersion === undefined ? "add tasks for follow-up work you find" : "propose follow-up work with comment"} instead of widening your scope.`,
 		...(mission.coordinator === "user" && mission.role !== "explorer" && mission.role !== "reviewer"
 			? [
-					"- Screen work: the user sees a design before you build it. If your task lists chosen prototypes, build to match them. Otherwise, when your task adds or changes something the user sees, first publish an NSH mockup of it with the artifact tool (read the pilot-artifacts skill), then ask the user with `ask_user` to OK it in this chat. Write the product UI code only after they agree, and follow their changes.",
+					"- Screen work: the user sees a design before you build it. If your task lists chosen prototypes, build to match them. Otherwise, when your task adds or changes something the user sees, first publish an NSH mockup of it with the artifact tool (read the pilot-artifacts skill), then ask the user with `ask_user` to OK it in this chat, naming it in `artifacts` so they see it with the question. Write the product UI code only after they agree, and follow their changes.",
 				]
 			: []),
 		...(mission.planningVersion !== undefined

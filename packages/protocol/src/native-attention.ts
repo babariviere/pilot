@@ -4,7 +4,7 @@ import type {
 	HumanActionCommand,
 	HumanActionRecord,
 } from "./decision-assistance.ts";
-import type { AgentQuestion, SessionSummary } from "./index.ts";
+import type { AgentQuestion, ArtifactSummary, SessionSummary } from "./index.ts";
 import type { OperationHost } from "./operations.ts";
 
 /** Sent only over the authenticated native boundary. An actor field cannot authenticate a caller. */
@@ -17,6 +17,8 @@ export interface NativeAttentionQuestion {
 	scope: AssistanceScope;
 	question: AgentQuestion;
 	session: Pick<SessionSummary, "id" | "title" | "missionId" | "inputGeneration">;
+	/** The question's artifacts the chat still has, at their latest revision. Unknown IDs are left out. */
+	artifacts?: Array<Pick<ArtifactSummary, "id" | "title" | "kind" | "revision">>;
 }
 export interface NativeAttentionRead {
 	version: 1;

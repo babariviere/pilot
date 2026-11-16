@@ -443,6 +443,22 @@ pub struct Decision {
     pub help_unavailable: Option<String>,
     /// What the user picked or wrote on this revision and has not sent.
     pub draft: Draft,
+    /// Artifacts the asking chat attached to its question, such as a mockup
+    /// to look at before answering. Opening one sends nothing.
+    pub artifacts: Vec<DecisionArtifact>,
+}
+
+/// One artifact a chat attached to its question, at the revision it has now.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionArtifact {
+    /// The chat that saved it.
+    pub session_id: String,
+    pub artifact_id: String,
+    pub title: String,
+    /// Its kind, such as "nsh" or "image".
+    pub kind: String,
+    pub revision: u32,
 }
 
 /// What the user picked or wrote on one item and has not sent. Rust saves

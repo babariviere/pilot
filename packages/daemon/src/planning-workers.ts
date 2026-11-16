@@ -108,7 +108,7 @@ const EXECUTION_RETRY_MS = RESEARCH_RETRY_MS;
  * What a planner may do with a thread request. A revision proposal is inert: only the user's confirmation applies it.
  */
 const THREAD_CHANGES =
-	"Do not start work. If the plan is published and the user asks for new work or a change, you may save one revision proposal (mission_plan action revision; newTasks for new work). It changes nothing until the user confirms it in Revisit: say so in your reply. For a thread handoff, save one proposal per thread with its topicId, so it replaces no other thread's proposal.";
+	"Do not start work. If the plan is published and the user asks for new work or a change, you may save one revision proposal (mission_plan action revision; newTasks for new work). It changes nothing until the user confirms it in Revisit: say so in your reply. For a thread handoff, save one proposal per thread with its topicId, so it replaces no other thread's proposal. A revision cannot ask questions: never add a task whose only work is a prototype, a mockup or a user choice. For screen work, put the chosen mockup in newTasks[].prototype when the handoff names one; otherwise its worker shows a mockup and asks the user before building.";
 /**
  * Whether the user asked the planner about the published plan: a Revisit, or a thread message it took. Only then may
  * it save a revision proposal, which still changes nothing until the user confirms it.

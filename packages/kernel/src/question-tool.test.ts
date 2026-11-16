@@ -61,3 +61,15 @@ test("multiSelect needs several answers and keeps every suggestion", () => {
 	});
 	assert.deepEqual(normalizeQuestion({ question: "Anything else?" }), { question: "Anything else?", options: [] });
 });
+
+test("a question names at most three distinct artifacts", () => {
+	assert.deepEqual(normalizeQuestion({ question: "OK?", artifacts: [" mock ", "mock", "", "other"] }), {
+		question: "OK?",
+		options: [],
+		artifacts: ["mock", "other"],
+	});
+	assert.throws(
+		() => normalizeQuestion({ question: "OK?", artifacts: ["a", "b", "c", "d"] }),
+		/At most 3 artifacts are allowed per question/,
+	);
+});

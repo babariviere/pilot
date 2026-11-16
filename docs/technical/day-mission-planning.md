@@ -378,6 +378,15 @@ A merged pull request that owns a task (`ownership` link) also finishes it in th
 dependents start. Workers in these missions see the user as coordinator (`MissionContext.coordinator` is
 `user`): their prompt tells them to ask the user with `ask_user`, because no coordinator chat reads
 comments promptly. A task Pilot starts by rule says its dependencies were checked by the user.
+For screen work, a worker publishes an NSH mockup and names it in the question's `artifacts` (at most 3
+IDs of artifacts the chat saved). The attention read adds each one's title, kind and latest revision, and
+leaves out IDs the chat does not have; Day's question card shows them with Open. Answering a question
+does not need a current attention read: the answer names the question's exact scope, and the service
+refuses it when that changed.
+
+A revision cannot ask questions, so the planner adds no task whose only work is a prototype, a mockup or
+a user choice. A new screen task carries the thread's chosen mockup (`newTasks[].prototype`), or its
+worker shows a mockup and asks before building.
 
 ## Planning from a request in New
 

@@ -81,6 +81,13 @@ fn attention_read(host: &NativeHost) -> Result<Value, Error> {
     }
     Ok(read)
 }
+/// The read an answer is built from. An answer names its question's exact scope (event, content and
+/// authority digests) and the service refuses it when that changed, so an older read still qualifies.
+/// While agents work, mission events change the read faster than a slow read finishes; requiring a
+/// current read there refused every answer.
+fn answer_read(host: &NativeHost) -> Result<Value, Error> {
+    host.attention_snapshot().ok_or(Error::Stale)
+}
 
 /// Answers a read of the root's cached projections without the worker:
 /// Today, the opened planning page and the planning list. They read only
@@ -640,7 +647,7 @@ async fn run(
             Some(Work::AttentionRead)
         }
         Command::Reply(r) => {
-            let read = attention_read(host)?;
+            let read = answer_read(host)?;
             let view = today(host);
             let decision = view
                 .decisions

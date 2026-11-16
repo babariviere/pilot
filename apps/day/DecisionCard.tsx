@@ -10,6 +10,7 @@
 import { cleanup, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
 import { Checkbox, Input, Radio, RadioGroup } from "nsh/base";
 import type { Answer, Decision, DecisionOption } from "pilot-day/native";
+import type { ArtifactSource } from "./artifactReads";
 import {
 	ask,
 	canSend,
@@ -25,6 +26,7 @@ import {
 } from "./commands";
 import type { Day } from "./day";
 import { keepField } from "./kept";
+import { QuestionArtifacts } from "./QuestionArtifacts";
 import { Action, Bars, EvidenceChip, HelpChip, InlineAction, Mark, type MarkKind } from "./ui";
 import {
 	anchors,
@@ -256,6 +258,9 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 				<Text class="text-sm leading-relaxed text-card-foreground">
 					{helpOpen(id, "simpler") && d().simpler ? d().simpler : d().context}
 				</Text>
+			</If>
+			<If when={props.day.artifacts && d().artifacts.length > 0}>
+				<QuestionArtifacts source={props.day.artifacts as ArtifactSource} artifacts={d().artifacts} />
 			</If>
 
 			<If

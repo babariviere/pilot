@@ -48,6 +48,27 @@ test("native attention authenticates exact current home/project/origin and recei
 	assert.equal(f.sends, 0);
 });
 
+test("a question's artifacts show with their titles, and IDs the chat does not have are left out", async (t) => {
+	const f = await nativeAttentionFixture();
+	t.after(() => f.close());
+	assert.equal((await f.read()).questions[0]!.artifacts, undefined);
+	t.mock.method(f.sessions, "artifacts", async () => [
+		{
+			id: "mock",
+			sessionId: f.owner,
+			title: "Overview mockup",
+			kind: "nsh",
+			revision: 2,
+			createdAt: 1,
+			updatedAt: 2,
+		},
+	]);
+	f.question = { ...f.question, data: { ...f.question.data, artifacts: ["mock", "gone"] } };
+	assert.deepEqual((await f.read()).questions[0]!.artifacts, [
+		{ id: "mock", title: "Overview mockup", kind: "nsh", revision: 2 },
+	]);
+});
+
 test("progress, Later and opening permission never complete; changed permissions reject shown intent", async (t) => {
 	const f = await nativeAttentionFixture();
 	t.after(() => f.close());

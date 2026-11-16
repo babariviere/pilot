@@ -8,6 +8,8 @@ export const QUESTION_TOOL = "ask_user";
 /** Transcript entry kind holding an `AgentQuestion`. Written outside model context, so codemode calls show it too. */
 export { QUESTION_ENTRY } from "./question-entry.ts";
 export const MAX_QUESTION_OPTIONS = 9;
+/** At most this many artifacts per question: a question shows them all at once, so a few keep it readable. */
+export const MAX_QUESTION_ARTIFACTS = 3;
 
 /** Commits the question to the transcript. `callId` makes the write idempotent. */
 export type PublishQuestion = (callId: string, question: AgentQuestion, signal?: AbortSignal) => Promise<void>;
@@ -35,6 +37,13 @@ export function createQuestionTool(ask: AskQuestion): ToolDefinition {
 				),
 			),
 			multiSelect: Type.Optional(Type.Boolean()),
+			artifacts: Type.Optional(
+				Type.Array(Type.String({ minLength: 1, maxLength: 200 }), {
+					maxItems: MAX_QUESTION_ARTIFACTS,
+					description:
+						"IDs of artifacts you saved (such as an NSH mockup) that the user needs to see to answer. Pilot shows them with the question.",
+				}),
+			),
 		}),
 		executionMode: "sequential",
 		annotations: { readOnlyHint: true, openWorldHint: false },
@@ -60,6 +69,7 @@ export function normalizeQuestion(params: {
 	context?: string;
 	options?: Array<{ label: string; detail?: string; suggested?: boolean }>;
 	multiSelect?: boolean;
+	artifacts?: string[];
 }): AgentQuestion {
 	const question = params.question.trim();
 	if (!question) throw new Error("question must not be empty");
@@ -82,5 +92,14 @@ export function normalizeQuestion(params: {
 		}
 	}
 	const context = params.context?.trim();
-	return { question, ...(context ? { context } : {}), options, ...(multiSelect ? { multiSelect: true } : {}) };
+	const artifacts = [...new Set((params.artifacts ?? []).map((id) => id.trim()).filter(Boolean))];
+	if (artifacts.length > MAX_QUESTION_ARTIFACTS)
+		throw new Error(`At most ${MAX_QUESTION_ARTIFACTS} artifacts are allowed per question`);
+	return {
+		question,
+		...(context ? { context } : {}),
+		options,
+		...(multiSelect ? { multiSelect: true } : {}),
+		...(artifacts.length ? { artifacts } : {}),
+	};
 }

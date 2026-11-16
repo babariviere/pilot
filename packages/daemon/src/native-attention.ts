@@ -16,8 +16,8 @@ import type {
 	OperationHost,
 } from "@pilot/protocol";
 import { assistanceSource, nativeQuestionAssistance } from "./assistance-source.ts";
-import { attentionURL, verifyAttentionResources } from "./attention-resources.ts";
 import { ReadOnlyAttentionExecutor } from "./attention-executor.ts";
+import { attentionURL, verifyAttentionResources } from "./attention-resources.ts";
 import { AttentionError, AttentionService } from "./attention-service.ts";
 import { attentionDigest } from "./attention-store.ts";
 import type { MissionStore } from "./missions.ts";
@@ -277,6 +277,13 @@ export class NativeAttention {
 			Buffer.byteLength(JSON.stringify(data)) > 32768
 		)
 			return undefined;
+		// The question names artifacts by ID; the card needs their titles. IDs the chat no longer has are left out.
+		const named = Array.isArray(data.artifacts) ? data.artifacts.slice(0, 3) : [];
+		const saved = named.length ? await this.deps.sessions.artifacts(sessionId).catch(() => []) : [];
+		const artifacts = named.flatMap((id) => {
+			const a = saved.find((x) => x.id === id);
+			return a ? [{ id: a.id, title: a.title, kind: a.kind, revision: a.revision }] : [];
+		});
 		return {
 			scope: {
 				subject: { kind: "question", sessionId, entryId: q.id },
@@ -287,6 +294,7 @@ export class NativeAttention {
 			},
 			question: data,
 			session: { id: s.id, title: s.title, missionId: s.missionId, inputGeneration: s.inputGeneration ?? 0 },
+			...(artifacts.length ? { artifacts } : {}),
 		};
 	}
 	private async currentQuestion(projectId: string, subject: AssistanceSubject) {
