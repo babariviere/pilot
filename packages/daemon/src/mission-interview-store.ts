@@ -3,6 +3,7 @@ import type {
 	DurableOperation,
 	InterviewAgreementBinding,
 	InterviewQuestion,
+	InterviewSubmission,
 	InterviewWrite,
 	MissionInterview,
 	MissionPlan,
@@ -122,6 +123,25 @@ export class MissionInterviewStore {
 	/** Original submitted snapshots in append order, not later drafts carrying old answers.
 	 * Context is the immutable plan snapshot that opened that question set, never today's plan.
 	 * Callers must check current owner/project access and durability before exposing these records. */
+	/**
+	 * One submitted round of this mission by its submission ID, and its round number as the map counts it (1 plus the
+	 * rounds submitted before it). Reads two indexed rows, not the whole history.
+	 */
+	submitted(missionId: string, operationId: string): { round: number; submission: InterviewSubmission } | undefined {
+		const row = this.port.one(
+			"SELECT state FROM mission_interviews WHERE mission_id=? AND operation_id=? AND json_extract(state,'$.submission.operationId')=operation_id",
+			missionId,
+			operationId,
+		);
+		if (!row) return undefined;
+		const submission = (JSON.parse(String(row.state)) as MissionInterview).submission!;
+		const before = this.port.one(
+			"SELECT COUNT(*) AS n FROM mission_interviews WHERE mission_id=? AND operation_id=json_extract(state,'$.submission.operationId') AND json_extract(state,'$.submission.fence.questionSetRevision')<?",
+			missionId,
+			submission.fence.questionSetRevision,
+		);
+		return { round: 1 + Number(before?.n ?? 0), submission };
+	}
 	history(missionId: string): { interview: MissionInterview; plan: MissionPlan | null }[] {
 		return this.port
 			.all(

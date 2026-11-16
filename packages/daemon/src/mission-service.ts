@@ -1964,6 +1964,30 @@ export class MissionService {
 				});
 				return { map: (await reader.view(missionId)).map };
 			}
+			case "answers": {
+				// Read-only: one submitted interview round of this mission, so members build what the user answered.
+				this.assertSameProject(sessionId, missionId);
+				if (this.store.missionOf(sessionId) !== missionId) throw new Conflict("Mission membership required");
+				if (typeof args.id !== "string" || !args.id)
+					throw new Error("id must be an interview submission ID, as map's settledBy names it");
+				const found = this.store.interviews.submitted(missionId, args.id);
+				if (!found) throw new NotFound(`No submitted interview round ${args.id} in this mission`);
+				const { round, submission } = found;
+				return {
+					id: args.id,
+					round,
+					...(submission.kind ? { kind: submission.kind } : {}),
+					answers: submission.answers.map((a) => {
+						const question = submission.questions.find((q) => q.id === a.questionId);
+						return {
+							questionId: a.questionId,
+							question: question?.prompt ?? "",
+							choice: a.selectedOption?.meaning ?? null,
+							text: a.text,
+						};
+					}),
+				};
+			}
 			case "replaced": {
 				// Read-only: the old mission this one re-plans, so members can research what it delivered.
 				this.assertSameProject(sessionId, missionId);

@@ -172,6 +172,23 @@ test("member map keeps submitted interview provenance after a later round and re
 	await f.restart();
 	assert.deepEqual((await f.read(member)).map, first);
 	assert.equal(f.store.interviews.history(f.missionId)[0]!.interview.answers[0]!.text, "Exact saved choice");
+	// A member reads the round's exact answers by the ID the map names, instead of asking the user again.
+	const answers = (await f.service.call(member, "answers", { id: submission.operationId })) as {
+		round: number;
+		answers: { questionId: string; question: string; choice: string | null; text: string }[];
+	};
+	assert.equal(answers.round, 1);
+	assert.deepEqual(answers.answers, [
+		{
+			questionId: question.id,
+			question: question.prompt,
+			choice: question.options[0].meaning,
+			text: "Exact saved choice",
+		},
+	]);
+	await assert.rejects(f.service.call(member, "answers", { id: randomUUID() }), /No submitted interview round/);
+	await assert.rejects(f.service.call(member, "answers", {}), /submission ID/);
+	await assert.rejects(f.service.call(randomUUID(), "answers", { id: submission.operationId }), /mission/);
 });
 
 for (const change of ["leave", "rejoin", "mission", "session-project", "owner-project", "project-path"] as const) {
