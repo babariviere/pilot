@@ -310,7 +310,15 @@ export async function confirmRevision(plans: Plans, missionId: string) {
 	put(revisitBusy, missionId, true);
 	put(revisitMessages, missionId, "");
 	try {
-		const outcome = await plans.feed.confirmRevision({ missionId, ...pin });
+		let outcome = await plans.feed.confirmRevision({ missionId, ...pin });
+		// Refused before sending, often only because the page was read before the service restarted. Read it again,
+		// and confirm once more only if the same revision is still shown and current. Rust checks it again.
+		if (outcome.status === "stale") {
+			await plans.feed.open(missionId);
+			const now = plans.feed.page(missionId)?.revisit?.revision;
+			if (now?.id === pin.revisionId && now.digest === pin.digest && now.current)
+				outcome = await plans.feed.confirmRevision({ missionId, ...pin });
+		}
 		put(revisitMessages, missionId, outcome.message);
 	} catch {
 		put(revisitMessages, missionId, "Your confirmation is not confirmed. Check it; do not confirm again.");

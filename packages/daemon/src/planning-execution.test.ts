@@ -82,6 +82,27 @@ test("a refused start by rule is forgotten and waits before the next try", async
 	assert.equal(calls, 1, "no tight loop: the next try waits");
 });
 
+test("a ready task Pilot cannot start shows why on the planning page", async (t) => {
+	const f = await publishedPlanningFixture(t, { twoSlices: true });
+	const [first] = f.store.plans.get(f.missionId)!.publication!.tasks.map((p) => f.store.task(f.missionId, p.taskId));
+	t.mock.method(f.sessions, "planningIdentity", () => ({ inputGeneration: 1, permission: { level: "build" } }));
+	f.store.join("worker-1", f.missionId);
+	f.store.claimTask(f.missionId, first!.id, "worker-1");
+	const state = f.store.planningWorkers.get(f.missionId)!;
+	f.store.planningWorkers.change(f.missionId, state.revision, (s) => {
+		s.start = { operation: f.submit, sessionId: "worker-1", taskId: first!.id, admitted: true };
+	});
+	f.workers.startResearch();
+	await f.workers.settleResearch();
+	assert.doesNotMatch((await f.workers.startView(f.missionId)).reason, /could not start/, "nothing is ready yet");
+	f.store.updateTask(f.missionId, first!.id, { status: "done" });
+	await f.workers.settleResearch();
+	assert.equal(
+		(await f.workers.startView(f.missionId)).reason,
+		"Work started. Pilot could not start the next ready task: Planning owner was stopped or reconfigured; Start unavailable It tries again on the next change.",
+	);
+});
+
 test("a merged PR that owns a planned task finishes it, and Pilot starts what it unblocks", async (t) => {
 	const f = await publishedPlanningFixture(t, { twoSlices: true });
 	const [first, second] = f.store.plans

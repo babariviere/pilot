@@ -116,6 +116,12 @@ const THREAD_CHANGES =
 function userAsked(state: PlanningWorkerState): boolean {
 	return !!(state.revisit?.admitted || state.discussion?.admitted || state.threadQueue?.some((m) => m.delivered));
 }
+/** No published task is ready to start: not a reason to show. */
+class NoTaskReady extends Conflict {
+	constructor() {
+		super("No published task is ready");
+	}
+}
 /** Added to a task Pilot starts by rule, so its worker does not wait for a coordinator that does not exist. */
 const RULE_START_NOTE =
 	"Pilot started this task because its dependencies are done: the user checked their results. You can rely on them. No coordinator runs this mission: ask the user with `ask_user` when you need a decision.";
@@ -296,6 +302,8 @@ export class PlanningWorkers {
 	private readonly prototypeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	/** Per mission: no start by rule before this time, after one was refused. */
 	private readonly executionRetryAt = new Map<string, number>();
+	/** Per mission: why Pilot could not start the next ready task by rule, until a later try starts one or none is ready. */
+	private readonly executionWaits = new Map<string, string>();
 	/** Submitted rounds Pilot is sending by itself, or stopped trying because the map changed. */
 	private readonly resumeTried = new Set<string>();
 	/** The last time a submitted round was not sent, by mission, for the unstick log. Kept until it is sent. */
@@ -2659,9 +2667,11 @@ export class PlanningWorkers {
 				sessionId: state.start.sessionId,
 				taskId: state.start.taskId,
 				reason: state.start.admitted
-					? worker?.working
-						? "Work started. When you mark a task's result done, Pilot starts the next ready tasks."
-						: "Work started. When you mark a task's result done, Pilot starts the next ready tasks. Read the reports."
+					? this.executionWaits.has(missionId)
+						? `Work started. Pilot could not start the next ready task: ${this.executionWaits.get(missionId)} It tries again on the next change.`
+						: worker?.working
+							? "Work started. When you mark a task's result done, Pilot starts the next ready tasks."
+							: "Work started. When you mark a task's result done, Pilot starts the next ready tasks. Read the reports."
 					: "Start is not confirmed. Check only; do not start again.",
 			};
 		try {
@@ -2698,7 +2708,7 @@ export class PlanningWorkers {
 					!t.sessionId &&
 					!(t.dependsOn ?? []).some((id) => pin.tasks.find((d) => d.id === id)?.status !== "done"),
 			);
-		if (!task) throw new Conflict("No published task is ready");
+		if (!task) throw new NoTaskReady();
 		const entry = pin.plan.publication!.tasks.find((p) => p.taskId === task.id)!;
 		if (entry.definition !== undefined) {
 			// A confirmed revision published this definition; any later change outside a revision shows here.
@@ -2760,12 +2770,39 @@ export class PlanningWorkers {
 			let next: Awaited<ReturnType<PlanningWorkers["nextStart"]>>;
 			try {
 				next = await this.nextStart(missionId);
-			} catch {
-				return; // Nothing ready, held, or the published agreement changed.
+			} catch (error) {
+				// Nothing ready, held, or the published agreement changed. Only a ready task that cannot start is shown.
+				this.executionWait(
+					missionId,
+					error instanceof NoTaskReady || !this.hasReadyTask(missionId) ? undefined : String(error),
+				);
+				return;
 			}
 			if (tried.has(next.task.id)) return;
 			tried.add(next.task.id);
 			if (!(await this.autoStart(missionId, next))) return;
+		}
+	}
+	/** Whether a published task waits only for its start: todo, unassigned, and its dependencies done. */
+	private hasReadyTask(missionId: string): boolean {
+		const tasks = this.deps.store.tasks(missionId);
+		return !!this.deps.store.plans.get(missionId)?.publication?.tasks.some(({ taskId }) => {
+			const task = tasks.find((t) => t.id === taskId);
+			return (
+				task?.status === "todo" &&
+				!task.sessionId &&
+				!(task.dependsOn ?? []).some((id) => tasks.find((d) => d.id === id)?.status !== "done")
+			);
+		});
+	}
+	/** Saves why a ready task waits (or clears it), and logs a new reason once. Readers see it on their next read. */
+	private executionWait(missionId: string, reason: string | undefined): void {
+		const reasonText = reason?.replace(/^(Conflict|Error): /, "");
+		if (this.executionWaits.get(missionId) === reasonText) return;
+		if (reasonText === undefined) this.executionWaits.delete(missionId);
+		else {
+			this.executionWaits.set(missionId, reasonText);
+			console.warn(`pilotd: planning ${missionId} could not start the next ready task by rule: ${reasonText}`);
 		}
 	}
 	private changeAutoStart(
@@ -2831,11 +2868,12 @@ export class PlanningWorkers {
 			this.changeAutoStart(missionId, operationId, sessions.get(sessionId) ? "failed" : null, reason);
 			await store.durable();
 			this.executionRetryAt.set(missionId, Date.now() + EXECUTION_RETRY_MS);
-			console.warn(`pilotd: planning ${missionId} could not start #${task.number} by rule: ${reason}`);
+			this.executionWait(missionId, reason);
 			return false;
 		}
 		this.changeAutoStart(missionId, operationId, "admitted");
 		await store.durable();
+		this.executionWait(missionId, undefined);
 		await this.markRequestStarted(missionId, sessionId);
 		console.log(`pilotd: planning ${missionId} started #${task.number} ${task.title} by rule`);
 		return true;

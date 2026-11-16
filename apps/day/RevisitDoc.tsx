@@ -207,8 +207,14 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 	// The pin is the revision as the user opened it. Rust refuses it if anything changed.
 	const pinned = () => pin()?.revisionId === r().id && pin()?.digest === r().digest;
 	const unknown = () => r().confirm === "unknown" || r().confirm === "checking";
+	const message = () => revisitMessages()[id()] ?? "";
 	return (
 		<View testID="revision-confirm" class="gap-3 rounded-xl bg-muted px-4 py-3.5">
+			<If when={message()}>
+				<Text testID="revisit-message" role="alert" class="text-sm text-foreground">
+					{message()}
+				</Text>
+			</If>
 			<If when={why()}>
 				<View class="flex-row items-start gap-2.5">
 					<View class="pt-1.5">
@@ -479,7 +485,8 @@ export function RevisitSection(props: { plans: Plans; page: PlanPage; revisit: R
 						{(x) => <RevisionView plans={props.plans} page={props.page} revisit={r()} revision={x()} />}
 					</Each>
 				</If>
-				<If when={message()}>
+				{/* With a revision shown, its Confirm box shows the message, next to the button that sent it. */}
+				<If when={message() && !r().revision}>
 					<Text testID="revisit-message" role="alert" class="text-sm text-muted-foreground">
 						{message()}
 					</Text>
