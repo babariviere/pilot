@@ -1,14 +1,16 @@
 // Focused threads with a mission's coordinator: one subject each. The
 // mission overview lists them; a thread's page shows what it links, the
-// coordinator's ORIGINAL conversation (never a topic-only copy: only the
-// messages the thread names are marked as its own) and the reply box.
+// thread's own conversation (your messages and the replies saved as the
+// thread's, read from their ORIGINAL entries, never matched by guess) and
+// the reply box. Show activity adds the original history with other work
+// below, keeping the conversation, the draft and the scroll.
 // Talking here never starts, approves, resumes, archives or stops work. A
 // message is sent only to an active, unheld planning coordinator; when it
 // cannot take one, the page says why and nothing is sent. A sent message is
 // not the coordinator's answer. A lost answer stays Unknown: Check only
 // reads it, and the words stay until the service accepted them.
-import { cleanup, effect, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
-import { Input } from "nsh/base";
+import { cleanup, effect, keymap, Scroll, type ScrollRef, signal, Text, View, type ViewRef } from "nsh";
+import { Button, Input } from "nsh/base";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
 import { keepField, keepScroll, restoreScroll, scrollOf } from "./kept";
@@ -19,26 +21,34 @@ import {
 	historyKey,
 	MAX_TEXT_BYTES,
 	type MissionThreads,
+	messageTime,
+	type Original,
+	type ReplyState,
 	type ThreadOp,
 	type ThreadReference,
 	type ThreadsMirror,
 	type ThreadWrite,
 	type Topic,
+	type TopicMessage,
 	titleOf,
 	utf8Bytes,
 	type WaitingMessage,
 	type WriteResult,
 } from "./threadFeed";
 import {
+	activityOpen,
 	clearDraft,
 	closeThread,
 	draftKey,
 	linkOpen,
 	naming,
 	openThread,
+	originalKey,
+	originalOpen,
 	setDraft,
 	setMessage,
 	showDiscarded,
+	stepsOpen,
 	threadDrafts,
 	threadMessages,
 } from "./threadView";
@@ -522,33 +532,6 @@ function resolvedLine(topic: Topic, tasks: { id: string; number: number; title: 
 		: "A confirmed revision resolved this thread. Its history stays.";
 }
 
-/** The thread's messages with the planner from before it had a thread chat. The thread chat read them too. */
-function Earlier(props: { topic: Topic }) {
-	const open = signal(false);
-	return (
-		<If when={props.topic.chatSessionId && props.topic.earlier.length > 0}>
-			<View testID="thread-before-chat" class="gap-2">
-				<InlineAction
-					label={open() ? "Hide earlier messages" : `Earlier with the planner · ${props.topic.earlier.length}`}
-					onPress={() => open.set(!open())}
-				/>
-				<If when={open()}>
-					<View class="gap-3">
-						<Each of={props.topic.earlier.map((e, i) => ({ ...e, i }))} key={(e) => String(e.i)}>
-							{(e) => (
-								<View class="gap-1">
-									<Text class="text-xs text-faint">{e().role === "you" ? "You" : "Planner"}</Text>
-									<Text class="text-sm leading-relaxed text-muted-foreground">{e().text}</Text>
-								</View>
-							)}
-						</Each>
-					</View>
-				</If>
-			</View>
-		</If>
-	);
-}
-
 /** What the thread chat sent to the planner. It grants nothing; the planner proposes a revision to confirm. */
 function HandoffNote(props: { topic: Topic }) {
 	const h = () => props.topic.handoff;
@@ -580,16 +563,19 @@ function who(e: HistoryEntry): string {
 	return "";
 }
 
-/** One original message. The thread's own ones are marked; the rest is the coordinator's other work. */
+/** One original entry of the activity. The thread's own ones are marked; the rest is other work. */
 function Entry(props: {
 	mirror: ThreadsMirror;
 	missionId: string;
 	topic: Topic;
+	sessionId: string;
 	entry: HistoryEntry;
+	focused: boolean;
 	canLink: boolean;
 }) {
 	const own = () => props.entry.input || props.entry.referenced;
 	const tag = () => {
+		if (props.focused) return "The original of a message in this thread";
 		if (props.entry.input) return "Sent in this thread";
 		if (props.entry.referenced) return "Linked to this thread";
 		if (props.entry.sentIn && props.entry.sentIn !== props.topic.id) return "Sent in another thread";
@@ -603,7 +589,11 @@ function Entry(props: {
 		<View
 			testID={`entry-${props.entry.id}`}
 			class="gap-1 rounded-lg px-3 py-2"
-			classList={{ "bg-muted": own(), "bg-background": !own() }}
+			classList={{
+				"border border-border-strong": props.focused,
+				"bg-muted": own() && !props.focused,
+				"bg-background": !own() || props.focused,
+			}}
 		>
 			<View class="flex-row items-baseline gap-2">
 				<Text class="text-xs font-medium text-muted-foreground">{who(props.entry)}</Text>
@@ -623,11 +613,7 @@ function Entry(props: {
 								{
 									purpose: "thread-reference",
 									topicId: props.topic.id,
-									reference: {
-										kind: "history",
-										sessionId: props.topic.ownerSessionId,
-										entryId: props.entry.id,
-									},
+									reference: { kind: "history", sessionId: props.sessionId, entryId: props.entry.id },
 								},
 								null,
 							)
@@ -653,39 +639,110 @@ function Entry(props: {
 	);
 }
 
-/** Runs of tools and notes, folded into one quiet line. */
-type Shown = { kind: "entry"; entry: HistoryEntry } | { kind: "quiet"; id: number; count: number };
+/** Runs of tools and notes, folded into one quiet line that opens to show each one. */
+type Shown = { kind: "entry"; entry: HistoryEntry } | { kind: "quiet"; id: number; entries: HistoryEntry[] };
 
 function fold(entries: HistoryEntry[]): Shown[] {
 	const out: Shown[] = [];
 	for (const e of entries) {
 		if (e.role === "activity" && !e.referenced) {
 			const last = out[out.length - 1];
-			if (last?.kind === "quiet") last.count += 1;
-			else out.push({ kind: "quiet", id: e.id, count: 1 });
+			if (last?.kind === "quiet") last.entries.push(e);
+			else out.push({ kind: "quiet", id: e.id, entries: [e] });
 		} else out.push({ kind: "entry", entry: e });
 	}
 	return out;
 }
 
-/** The coordinator's original conversation, oldest first, with the thread's own messages marked. */
-function Conversation(props: { mirror: ThreadsMirror; missionId: string; topic: Topic; canLink: boolean }) {
-	const h = () => props.mirror.state().histories[historyKey(props.missionId, props.topic.id)];
+/** Folded tool calls and notes. Opening them shows what each one saved, exactly as the history keeps it. */
+function Steps(props: { missionId: string; topicId: string; sessionId: string; id: number; entries: HistoryEntry[] }) {
+	const key = () => `${draftKey(props.missionId, props.topicId)}/${props.sessionId}:${props.id}`;
+	const open = () => stepsOpen()[key()] === true;
+	const words = () =>
+		props.entries.length === 1 ? "One tool step or note" : `${props.entries.length} tool steps and notes`;
 	return (
-		<View testID="thread-history" class="gap-2">
-			<SectionTitle title={props.topic.chatSessionId ? "Conversation" : "Coordinator conversation"} />
+		<View class="gap-1.5 px-3">
+			<View class="flex-row">
+				<Button
+					testID={`steps-${props.id}`}
+					accessibilityLabel={`${words()}. ${open() ? "Hide them" : "Show what they did"}. This only reads.`}
+					onPress={() => {
+						glide();
+						stepsOpen.update((all) => ({ ...all, [key()]: !open() }));
+					}}
+					class="flex-row items-center gap-1.5 rounded-md py-0.5 focus-visible:ring-2 focus-visible:ring-ring/40"
+				>
+					<Text class="text-xs text-faint">{open() ? `Hide ${words().toLowerCase()}` : words()}</Text>
+				</Button>
+			</View>
+			<If when={open()}>
+				<View class="gap-1.5 border-l border-border pl-3">
+					<Each of={props.entries} key={(e) => String(e.id)}>
+						{(e) => (
+							<View testID={`step-${e().id}`} selectable class="gap-0.5">
+								<Text class="font-mono text-xs leading-relaxed text-muted-foreground">
+									{e().text || "This step saved no details."}
+								</Text>
+								<If when={e().shortened}>
+									<Text class="text-xs text-faint">Pilot shows the start of this step only.</Text>
+								</If>
+							</View>
+						)}
+					</Each>
+				</View>
+			</If>
+		</View>
+	);
+}
+
+/**
+ * The original conversation the thread reads, oldest first, with its other work and tool steps: the thread chat's
+ * or the coordinator's, which may hold replies no thread links. It shows below the thread's conversation on request.
+ */
+function Activity(props: { mirror: ThreadsMirror; missionId: string; topic: Topic; canLink: boolean }) {
+	const h = () => props.mirror.state().histories[historyKey(props.missionId, props.topic.id)];
+	const chat = () => h()?.scope === "thread-chat";
+	const read = (which: "older" | "latest", sessionId?: string) =>
+		void props.mirror.source.history(props.missionId, props.topic.id, which, sessionId);
+	return (
+		<View testID="thread-history" class="gap-2 rounded-xl bg-muted px-4 py-3">
+			<View class="flex-row flex-wrap items-center gap-2">
+				<Text class="text-sm font-medium text-foreground">
+					{chat() ? "Thread chat activity" : "Coordinator activity"}
+				</Text>
+				<View class="flex-1" />
+				{/* The other conversation the thread owns, one press away: never only the one Pilot opened first. */}
+				<If when={chat()}>
+					<Action
+						label="Coordinator activity"
+						testID="thread-activity-coordinator"
+						disabled={h()?.reading === true}
+						accessibilityLabel="Show the coordinator's original history, with replies no thread links. This only reads."
+						onPress={() => read("latest", props.topic.ownerSessionId)}
+					/>
+				</If>
+				<If when={!chat() && props.topic.chatSessionId}>
+					<Action
+						label="Thread chat activity"
+						testID="thread-activity-chat"
+						disabled={h()?.reading === true}
+						accessibilityLabel="Show this thread chat's original history. This only reads."
+						onPress={() => read("latest")}
+					/>
+				</If>
+			</View>
 			<Text class="text-xs text-muted-foreground">
-				{props.topic.chatSessionId
-					? "This thread's own chat. It reads the mission, asks what it needs, and sends what you agree on to the planner when you say so."
-					: "The coordinator's whole conversation, not only this thread. Messages this thread sent or linked are marked."}
+				{chat()
+					? "The thread chat's original history, with its tool steps."
+					: "The coordinator's original history. It includes work outside this thread; messages this thread sent or linked are marked."}
 			</Text>
 			<If when={h()?.more}>
 				<View class="flex-row">
 					<Action
-						label={h()?.reading ? "Reading…" : "Show earlier"}
+						label={h()?.reading ? "Reading…" : "Show earlier activity"}
 						testID="thread-earlier"
 						disabled={h()?.reading === true}
-						onPress={() => void props.mirror.source.history(props.missionId, props.topic.id, true)}
+						onPress={() => read("older")}
 					/>
 				</View>
 			</If>
@@ -694,39 +751,420 @@ function Conversation(props: { mirror: ThreadsMirror; missionId: string; topic: 
 					<View class="pt-1.5">
 						<Mark kind="unknown" />
 					</View>
-					<Text testID="thread-history-off" class="flex-1 text-sm text-foreground">
+					<Text testID="thread-history-off" role="alert" class="flex-1 text-sm text-foreground">
 						{h()?.reason ?? ""}
 					</Text>
 				</View>
 			</If>
 			<If when={!h() || (h()?.reading && h()?.entries.length === 0)}>
-				<Text class="text-sm text-muted-foreground">Reading the conversation…</Text>
+				<Text class="text-sm text-muted-foreground">Reading the activity…</Text>
 			</If>
 			<If when={h()?.availability === "live" && h()?.entries.length === 0 && !h()?.reading}>
-				<Text class="text-sm text-muted-foreground">
-					{props.topic.chatSessionId ? "No messages yet." : "The coordinator has no messages yet."}
-				</Text>
+				<Text class="text-sm text-muted-foreground">No activity yet.</Text>
 			</If>
 			<Each of={fold(h()?.entries ?? [])} key={(s) => (s.kind === "entry" ? `e${s.entry.id}` : `q${s.id}`)}>
 				{(s) => (
 					<If
 						when={s().kind === "entry"}
 						else={
-							<Text class="px-3 text-xs text-faint">
-								{(s() as { count: number }).count === 1
-									? "One tool step or note"
-									: `${(s() as { count: number }).count} tool steps and notes`}
-							</Text>
+							<Steps
+								missionId={props.missionId}
+								topicId={props.topic.id}
+								sessionId={h()?.sessionId ?? ""}
+								id={(s() as { id: number }).id}
+								entries={(s() as { entries: HistoryEntry[] }).entries}
+							/>
 						}
 					>
 						<Entry
 							mirror={props.mirror}
 							missionId={props.missionId}
 							topic={props.topic}
+							sessionId={h()?.sessionId ?? ""}
 							entry={(s() as { entry: HistoryEntry }).entry}
+							focused={h()?.focus?.entryId === (s() as { entry: HistoryEntry }).entry.id}
 							canLink={props.canLink}
 						/>
 					</If>
+				)}
+			</Each>
+			<If when={h()?.view === "original"}>
+				<View class="flex-row">
+					<Action
+						label={h()?.reading ? "Reading…" : "Show latest activity"}
+						testID="thread-activity-latest"
+						disabled={h()?.reading === true}
+						onPress={() => read("latest")}
+					/>
+				</View>
+			</If>
+		</View>
+	);
+}
+
+/**
+ * NSH's `<Scroll>` keeps its offset, not what shows: messages added above the viewport push the ones on screen
+ * down (only a `List` has maintainVisibleContentPosition, and this page is not one). Around a change that adds
+ * messages above `anchor`, this measures the anchor before and after and scrolls by the difference, so what was on
+ * screen stays put. Content added below the viewport moves nothing and is left alone.
+ */
+async function keepInView(
+	scroller: ScrollRef | null,
+	scrollY: () => number,
+	anchor: ViewRef | undefined,
+	change: () => Promise<void>,
+): Promise<void> {
+	const before = anchor ? await anchor.measure() : null;
+	const frame = scroller ? await scroller.measure() : null;
+	await change();
+	if (!scroller || !anchor || !before || !frame) return;
+	if (before.pagePosition.y > frame.pagePosition.y + frame.bounds.size.height) return;
+	const after = await anchor.measure();
+	if (!after) return;
+	const moved = after.pagePosition.y - before.pagePosition.y;
+	if (moved !== 0) scroller.scrollTo({ y: Math.max(0, scrollY() + moved), animated: false });
+}
+
+/** The page's scroll view, for keepInView. */
+type Place = { scroller: () => ScrollRef | null; scrollY: () => number };
+
+/** The activity, below the conversation on request. Opening it only reads; the draft and the conversation stay. */
+function ActivityToggle(props: { mirror: ThreadsMirror; missionId: string; topic: Topic; canLink: boolean }) {
+	const key = () => draftKey(props.missionId, props.topic.id);
+	const open = () => activityOpen()[key()] === true;
+	let button: ViewRef | undefined;
+	return (
+		<View testID="thread-activity" class="gap-3 border-t border-border pt-4">
+			<View class="flex-row">
+				<Action
+					label={open() ? "Hide activity" : "Show activity"}
+					testID="thread-activity-toggle"
+					anchor={(node) => {
+						button = node;
+					}}
+					accessibilityLabel={
+						open()
+							? "Hide the activity below this conversation. Your words stay."
+							: "Show the original history with other work and tool steps below this conversation. This only reads."
+					}
+					onPress={() => {
+						const hiding = open();
+						glide();
+						activityOpen.update((all) => ({ ...all, [key()]: !hiding }));
+						// Hiding a long activity shortens the page, and the scroll view clamps to it: keep the
+						// button that hid it on screen, where the user's eyes are.
+						if (hiding) button?.reveal({ vertical: "nearest", animated: false });
+					}}
+				/>
+			</View>
+			<If when={open()}>
+				<Activity mirror={props.mirror} missionId={props.missionId} topic={props.topic} canLink={props.canLink} />
+			</If>
+		</View>
+	);
+}
+
+const AUTHOR: Record<TopicMessage["author"], string> = { you: "You", chat: "Thread chat", coordinator: "Coordinator" };
+
+/** What a message of yours waits for. Nothing only when a saved link proves its answer; never a guess. */
+const REPLY: Record<ReplyState, string> = {
+	answered: "",
+	awaiting: "Awaiting a reply",
+	pending: "Waits to reach the agent",
+	unanswered: "The turn ended without a reply",
+	unknown: "Reply status unknown",
+};
+
+/** Where a message is saved, in words. */
+function savedIn(o: Original, topic: Topic): string {
+	const where =
+		o.sessionId === topic.ownerSessionId
+			? "the coordinator's conversation"
+			: o.sessionId === topic.chatSessionId
+				? "this thread's chat"
+				: "an earlier chat of this thread";
+	return `Saved as entry ${o.entryId} of ${where}.`;
+}
+
+/**
+ * What a reply linked whole may also cover: the other threads that link this exact saved reply, or other work. ""
+ * for a message of this thread alone.
+ */
+function sharedWords(m: TopicMessage, topic: Topic, topics: Topic[]): string {
+	const o = m.original;
+	if (m.author === "you" || !o) return "";
+	const others = topics.filter(
+		(t) =>
+			t.id !== topic.id &&
+			t.references.some((r) => r.kind === "history" && r.sessionId === o.sessionId && r.entryId === o.entryId),
+	).length;
+	if (others === 1) return "Also linked to another thread. Parts of this reply may be about it.";
+	if (others > 1) return `Also linked to ${others} other threads. Parts of this reply may be about them.`;
+	return m.shared ? "Shown whole from the coordinator's conversation. Parts of it may be about other work." : "";
+}
+
+/**
+ * One message of the thread's own conversation: who, when, the whole text, and its original on request. A send
+ * that waits to be placed has no original yet, and says so instead.
+ */
+function Message(props: {
+	mirror: ThreadsMirror;
+	missionId: string;
+	topic: Topic;
+	topics: Topic[];
+	message: TopicMessage;
+	now: number;
+	anchor: (node: ViewRef | null) => void;
+}) {
+	const m = () => props.message;
+	const key = () => originalKey(props.missionId, props.topic.id, m().key);
+	const open = () => originalOpen()[key()] === true;
+	const time = () => messageTime(m().at, props.now);
+	const shared = () => sharedWords(m(), props.topic, props.topics);
+	const showOriginal = () => {
+		const o = m().original;
+		if (!o) return;
+		const thread = draftKey(props.missionId, props.topic.id);
+		glide();
+		activityOpen.update((all) => ({ ...all, [thread]: true }));
+		void props.mirror.source.original(props.missionId, props.topic.id, o);
+	};
+	cleanup(() => props.anchor(null));
+	return (
+		<View ref={(node) => props.anchor(node)} testID={`message-${m().key}`} class="gap-2">
+			<View class="flex-row items-center gap-3">
+				<Text class="text-sm font-medium text-foreground">{AUTHOR[m().author]}</Text>
+				<Text class="text-xs text-muted-foreground">{time()}</Text>
+				<View class="flex-1" />
+				<If
+					when={m().original}
+					else={
+						<Text class="text-xs text-faint">
+							{m().reply === "pending"
+								? "Saved. Not placed in the conversation yet."
+								: "Saved. Where it was placed is unknown."}
+						</Text>
+					}
+				>
+					<Action
+						label={open() ? "Hide original" : "Original message"}
+						testID={`message-original-${m().key}`}
+						accessibilityLabel={`${open() ? "Hide where" : "Where"} ${m().author === "you" ? "your" : `the ${AUTHOR[m().author].toLowerCase()}'s`} message from ${time()} is saved. This only reads.`}
+						onPress={() => {
+							glide();
+							originalOpen.update((all) => ({ ...all, [key()]: !open() }));
+						}}
+					/>
+				</If>
+			</View>
+			<View selectable class={m().author === "you" ? "rounded-xl bg-muted px-4 py-3" : "py-1"}>
+				<Text class="text-base leading-relaxed text-foreground">{m().text}</Text>
+			</View>
+			{/* Only your messages wait for an answer; the agent's do not. */}
+			<If when={m().author === "you" && REPLY[m().reply]}>
+				<View class="flex-row items-center gap-1.5">
+					<Mark kind={m().reply === "unknown" ? "unknown" : "still"} />
+					<Text testID={`message-reply-${m().key}`} class="text-sm text-muted-foreground">
+						{REPLY[m().reply]}
+					</Text>
+				</View>
+			</If>
+			<If when={shared()}>
+				<Text testID={`message-shared-${m().key}`} class="text-xs text-muted-foreground">
+					{shared()}
+				</Text>
+			</If>
+			<If when={open() && m().original}>
+				<View testID={`message-origin-${m().key}`} class="gap-2 rounded-lg border border-border px-3 py-2">
+					<Text class="text-xs text-muted-foreground">
+						{m().original ? savedIn(m().original as Original, props.topic) : ""}
+					</Text>
+					<View class="flex-row">
+						<Action
+							label="Show in activity"
+							testID={`message-activity-${m().key}`}
+							accessibilityLabel="Open the activity below at this exact saved message. This only reads."
+							onPress={showOriginal}
+						/>
+					</View>
+				</View>
+			</If>
+		</View>
+	);
+}
+
+/**
+ * The thread's own conversation, oldest first: your messages and the replies saved as this thread's, across the
+ * coordinator's conversation and the thread's chats, then your sends that wait to be placed. Other work stays in
+ * the activity. Messages Pilot has not read between two it shows are marked, never closed up silently.
+ */
+function Conversation(props: {
+	mirror: ThreadsMirror;
+	missionId: string;
+	topic: Topic;
+	topics: Topic[];
+	place: Place;
+}) {
+	const c = () => props.mirror.state().conversations[historyKey(props.missionId, props.topic.id)];
+	const now = Date.now();
+	// Plain refs, read only to keep the reading place: never shown.
+	const anchors = new Map<string, ViewRef>();
+	let gapMark: ViewRef | undefined;
+	const anchorOf = (key: string) => (node: ViewRef | null) => {
+		if (node) anchors.set(key, node);
+		else anchors.delete(key);
+	};
+	const earlier = () => {
+		const now = c();
+		if (!now) return;
+		// New messages go above this one: the first after the gap, or the first shown.
+		const below = now.gap
+			? now.gap.newer
+				? anchors.get(now.gap.newer)
+				: gapMark
+			: anchors.get(now.messages[0]?.key ?? "");
+		void keepInView(props.place.scroller(), props.place.scrollY, below, () =>
+			props.mirror.source.earlierMessages(props.missionId, props.topic.id),
+		);
+	};
+	const gapAt = (key: string) => c()?.gap?.newer === key;
+	function Gap() {
+		return (
+			<View
+				ref={(node) => {
+					gapMark = node;
+				}}
+				testID="thread-gap"
+				class="gap-2 border-y border-dashed border-border py-3"
+			>
+				<Text class="text-sm text-muted-foreground">
+					Pilot has not read the messages between these yet. Some may belong to this thread.
+				</Text>
+				<View class="flex-row">
+					<Action
+						label={c()?.reading ? "Reading…" : "Show the messages between"}
+						testID="thread-gap-read"
+						disabled={c()?.reading === true}
+						accessibilityLabel="Read the messages Pilot has not read between these. This only reads."
+						onPress={earlier}
+					/>
+				</View>
+			</View>
+		);
+	}
+	return (
+		<View testID="thread-conversation" class="gap-6">
+			<If when={c()?.reason}>
+				<View class="gap-2">
+					<View class="flex-row items-start gap-2.5">
+						<View class="pt-1.5">
+							<Mark kind="unknown" />
+						</View>
+						<Text testID="thread-conversation-off" role="alert" class="flex-1 text-sm text-foreground">
+							{c()?.reason ?? ""}
+						</Text>
+					</View>
+					<View class="flex-row pl-3">
+						<Action
+							label="Read again"
+							icon="refresh"
+							testID="thread-conversation-read"
+							accessibilityLabel="Read this thread's conversation again. This sends nothing."
+							onPress={() => void props.mirror.source.history(props.missionId, props.topic.id)}
+						/>
+					</View>
+				</View>
+			</If>
+			<If when={c()?.availability === "live" && !c()?.complete}>
+				<Text testID="thread-unlinked" class="text-xs text-muted-foreground">
+					Some earlier replies may have no saved link to this thread. They stay in the activity, not in this
+					conversation.
+				</Text>
+			</If>
+			<If when={c()?.more && !c()?.gap}>
+				<View class="flex-row">
+					<Action
+						label={c()?.reading ? "Reading…" : "Show earlier messages"}
+						testID="thread-earlier-messages"
+						disabled={c()?.reading === true}
+						accessibilityLabel="Show this thread's earlier messages above. This only reads."
+						onPress={earlier}
+					/>
+				</View>
+			</If>
+			<If when={!c() || (c()?.availability === "reading" && c()?.messages.length === 0)}>
+				<Text class="text-sm text-muted-foreground">Reading the conversation…</Text>
+			</If>
+			{/* Your exact saved words whose place in time Pilot cannot tell: kept apart, never put in an invented order. */}
+			<If when={(c()?.queued ?? []).some((q) => q.reply === "unknown")}>
+				<View testID="thread-unplaced" class="gap-4 rounded-xl border border-dashed border-border px-4 py-3">
+					<View class="gap-1">
+						<Text class="text-sm font-medium text-foreground">Earlier messages with unknown placement</Text>
+						<Text class="text-xs text-muted-foreground">
+							Pilot saved these words but cannot tell where they sit in this conversation, or whether they were
+							answered.
+						</Text>
+					</View>
+					<Each of={(c()?.queued ?? []).filter((q) => q.reply === "unknown")} key={(m) => m.key}>
+						{(m) => (
+							<Message
+								mirror={props.mirror}
+								missionId={props.missionId}
+								topic={props.topic}
+								topics={props.topics}
+								message={m()}
+								now={now}
+								anchor={anchorOf(m().key)}
+							/>
+						)}
+					</Each>
+				</View>
+			</If>
+			<If
+				when={
+					c()?.availability === "live" &&
+					c()?.messages.length === 0 &&
+					c()?.queued.length === 0 &&
+					!c()?.reading &&
+					!c()?.more
+				}
+			>
+				<Text testID="thread-conversation-empty" class="text-sm text-muted-foreground">
+					No messages in this thread yet.
+				</Text>
+			</If>
+			<Each of={c()?.messages ?? []} key={(m) => m.key}>
+				{(m) => (
+					<View class="gap-6">
+						<If when={gapAt(m().key)}>
+							<Gap />
+						</If>
+						<Message
+							mirror={props.mirror}
+							missionId={props.missionId}
+							topic={props.topic}
+							topics={props.topics}
+							message={m()}
+							now={now}
+							anchor={anchorOf(m().key)}
+						/>
+					</View>
+				)}
+			</Each>
+			<If when={c()?.gap && !c()?.gap?.newer}>
+				<Gap />
+			</If>
+			<Each of={(c()?.queued ?? []).filter((q) => q.reply === "pending")} key={(m) => m.key}>
+				{(m) => (
+					<Message
+						mirror={props.mirror}
+						missionId={props.missionId}
+						topic={props.topic}
+						topics={props.topics}
+						message={m()}
+						now={now}
+						anchor={anchorOf(m().key)}
+					/>
 				)}
 			</Each>
 		</View>
@@ -942,6 +1380,16 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 		},
 		{ when: "always" },
 	);
+	// A changed thread (a new link or message) reads its newest messages again. Earlier pages, the activity, the
+	// draft and the scroll stay.
+	let revision: number | null = null;
+	effect(() => {
+		const r = topic()?.revision ?? null;
+		if (r === null) return;
+		const changed = revision !== null && r !== revision;
+		revision = r;
+		if (changed) void Promise.resolve().then(() => mirror.source.history(props.missionId, props.topicId));
+	});
 	const title = () => props.day.feed.mission(props.missionId)?.row.title ?? "";
 	const canWrite = () => m().availability === "live" && !m().writing && !m().ops.some(unsettled);
 	const place = `thread/${props.missionId}/${props.topicId}`;
@@ -951,8 +1399,8 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 	const scroller = signal<ScrollRef | null>(null);
 	effect(() => {
 		const node = scroller();
-		const h = mirror.state().histories[historyKey(props.missionId, props.topicId)];
-		if (waiting === null || !node || !h || h.entries.length === 0) return;
+		const c = mirror.state().conversations[historyKey(props.missionId, props.topicId)];
+		if (waiting === null || !node || !c || c.messages.length === 0) return;
 		const y = waiting;
 		waiting = null;
 		node.scrollTo({ y, animated: false });
@@ -995,7 +1443,7 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 											label="Read again"
 											icon="refresh"
 											testID="threads-read-again"
-											accessibilityLabel="Read this thread and the coordinator's conversation again. This sends nothing."
+											accessibilityLabel="Read this thread, its conversation and its activity again. This sends nothing."
 											onPress={() => {
 												void mirror.source.read(props.missionId);
 												void mirror.source.history(props.missionId, t().id);
@@ -1049,8 +1497,13 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 									canWrite={canWrite()}
 									projectId={props.day.delivery?.view().projectId ?? ""}
 								/>
-								<Earlier topic={t()} />
-								<Conversation mirror={mirror} missionId={props.missionId} topic={t()} canLink={canWrite()} />
+								<Conversation
+									mirror={mirror}
+									missionId={props.missionId}
+									topic={t()}
+									topics={m().snapshot?.topics ?? []}
+									place={{ scroller, scrollY: () => scrollOf(place) }}
+								/>
 								<HandoffNote topic={t()} />
 								<Unsettled
 									mirror={mirror}
@@ -1058,7 +1511,17 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 									ops={m().ops.filter(unsettled)}
 									testID="thread-unknown"
 								/>
-								<WaitingMessages messages={(m().snapshot?.waiting ?? []).filter((w) => w.topicId === t().id)} />
+								{/* A send the conversation already shows as waiting to be placed shows once, there. */}
+								<WaitingMessages
+									messages={(m().snapshot?.waiting ?? []).filter(
+										(w) =>
+											w.topicId === t().id &&
+											!(
+												mirror.state().conversations[historyKey(props.missionId, t().id)]?.queued ?? []
+											).some((q) => q.operationId === w.operationId),
+									)}
+								/>
+								<ActivityToggle mirror={mirror} missionId={props.missionId} topic={t()} canLink={canWrite()} />
 								<If when={t().disposition === "open"}>
 									<Composer mirror={mirror} missionId={props.missionId} topic={t()} m={m()} />
 								</If>

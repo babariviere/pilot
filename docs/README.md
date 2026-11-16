@@ -46,6 +46,11 @@ first sentence becomes the title. Each thread has its own read-only chat: it ans
 mission like the coordinator, asks one question at a time about work you suggest, and shows mockups for
 screen work. When you agree and say yes, it sends the work to the planner, which proposes a revision for
 that thread. Confirming it resolves the thread. Later and Discard keep the history. Talking never starts work.
+The thread opens its whole topic conversation in time order. Show earlier messages adds older pages;
+new replies do not remove messages already shown. Each message keeps access to its original history.
+Messages awaiting a reply say so. Older replies without a clear topic link are not silently included;
+the page explains gaps. Show activity opens underlying history below the conversation, including other
+coordinator work and tool calls. Reading either view sends nothing and keeps your reply draft.
 Feedback (in the header, or Send feedback on a mission) saves your words about Pilot, with the
 mission when you keep it. Choose the project with Pilot's code and a read-only agent triages what you
 send: it groups duplicates, may ask you a question and proposes a small fix, a mission or no change.

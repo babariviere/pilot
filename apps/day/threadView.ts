@@ -5,6 +5,7 @@
 // (updateView.ts). Only Send sends one, once.
 import { signal } from "nsh";
 import { glide } from "./motion";
+import type { ThreadsMirror } from "./threadFeed";
 
 /** The thread on screen, over its mission. */
 export type ThreadPlace = { missionId: string; topicId: string };
@@ -23,6 +24,22 @@ export const showDiscarded = signal<Record<string, boolean>>({});
 /** Threads whose "Link a task or decision" list is open. */
 export const linkOpen = signal<Record<string, boolean>>({});
 
+/**
+ * Threads whose activity shows below their conversation, by draftKey. Kept across live reads, pages and Back, so
+ * the page comes back as it was.
+ */
+export const activityOpen = signal<Record<string, boolean>>({});
+
+/** Messages whose Original message details show, by originalKey. */
+export const originalOpen = signal<Record<string, boolean>>({});
+
+/** Folded tool steps opened in a thread's activity, by "<draftKey>/<session>:<first entry>". */
+export const stepsOpen = signal<Record<string, boolean>>({});
+
+export function originalKey(missionId: string, topicId: string, message: string): string {
+	return `${missionId}/${topicId}/${message}`;
+}
+
 /** Missions where the user is naming a new thread. */
 export const naming = signal<Record<string, boolean>>({});
 
@@ -39,6 +56,18 @@ export function openThread(missionId: string, topicId: string) {
 /** Back to the mission. The draft stays. */
 export function closeThread() {
 	threadRoute.set(null);
+}
+
+/**
+ * Something changed in the service (day.changed): reads the thread on screen again, its mission's threads and its
+ * newest messages and activity. Passive and coalesced: it subscribes to nothing and starts no chat. Other
+ * threads read when they open.
+ */
+export function refreshOpenThread(threads: ThreadsMirror | undefined) {
+	const at = threadRoute();
+	if (!threads || !at) return;
+	void threads.source.read(at.missionId);
+	void threads.source.history(at.missionId, at.topicId);
 }
 
 export function setDraft(key: string, text: string) {
@@ -102,6 +131,9 @@ export function restoreThreads(place: string, lines: readonly string[]) {
 	naming.set(names);
 	threadMessages.set({});
 	linkOpen.set({});
+	activityOpen.set({});
+	originalOpen.set({});
+	stepsOpen.set({});
 	showDiscarded.set({});
 }
 

@@ -1,8 +1,10 @@
 // A mission's focused threads with its coordinator, over the native root
 // (docs/technical/mission-threads.md). day.threads.read reads the mission's
 // topics and whether discussion is open now; day.threads.history reads one
-// page of the topic's ORIGINAL coordinator conversation, never a topic-only
-// copy. A write (start a thread, Later/Discard/Reopen, link, send) is one
+// page of one ORIGINAL conversation the topic owns (its coordinator's or a
+// thread chat's) and, with it, the topic's own messages in that page: only
+// entries a saved link or a dedicated chat ties to the topic, never a guess
+// and never a copy. A write (start a thread, Later/Discard/Reopen, link, send) is one
 // journaled operation Rust sends once; a lost answer stays Unknown and Check
 // only looks up its receipt. Talking here never starts, approves, resumes or
 // stops work. A send the service accepted is not the coordinator's answer.
@@ -39,8 +41,6 @@ export type Topic = {
 	handoff: Handoff | null;
 	/** The tasks of the confirmed revision that resolved it. */
 	resolvedTaskIds: string[];
-	/** Its messages with the planner before it had a thread chat. */
-	earlier: { role: "you" | "coordinator"; text: string }[];
 };
 
 /** Names for references. Not a second task list. */
@@ -115,21 +115,92 @@ export type HistoryEntry = {
 	sentIn: string | null;
 };
 
-/** One topic's page of the coordinator conversation, oldest first. */
+/** One exact saved entry of an original conversation. */
+export type Original = { sessionId: string; entryId: number };
+
+/** One topic's page of an original conversation (its activity), oldest first. One session at a time. */
 export type TopicHistory = {
 	availability: "reading" | "live" | "unavailable";
 	reason: string;
 	sessionId: string;
+	/** Whose conversation: the coordinator's, or a thread chat's. "" before the first read. */
+	scope: "coordinator-history" | "thread-chat" | "";
 	entries: HistoryEntry[];
 	more: boolean;
 	nextBefore: number | null;
+	reading: boolean;
+	/** The exact entry an Original message asked for, when this page holds it. */
+	focus: Original | null;
+	/**
+	 * What the user chose to see: the newest of the thread's own conversation ("default", which live reads keep
+	 * fresh), another conversation it owns ("session"), or the stretch around an Original message ("original").
+	 * Live reads never move a chosen view.
+	 */
+	view: "default" | "session" | "original";
+};
+
+/**
+ * Whether a message of yours has an answer, from the saved link between the message and the turn that took it:
+ * "pending" waits to reach the agent, "awaiting" was taken and has no answer yet, "unanswered" was taken and the
+ * turn ended without one. "unknown" claims nothing.
+ */
+export type ReplyState = "answered" | "awaiting" | "pending" | "unanswered" | "unknown";
+
+/** One message of a topic's own conversation, from its original entry. */
+export type TopicMessage = {
+	/**
+	 * "<session>:<entry>", with ":<operation>" when one entry carries several sends: entry IDs repeat across
+	 * conversations. "queued:<operation>" for a send not placed in a conversation yet.
+	 */
+	key: string;
+	author: "you" | "chat" | "coordinator";
+	text: string;
+	/** When it was written, or null when its entry has no time. */
+	at: number | null;
+	reply: ReplyState;
+	/** A coordinator reply linked whole: its words may also be about other work or threads. */
+	shared: boolean;
+	/** The exact saved entry, or null for a send that waits to be placed: Pilot never invents one. */
+	original: Original | null;
+	/** The send's operation, when Pilot knows it. */
+	operationId: string | null;
+};
+
+/** Where a read of earlier messages goes on from. */
+export type Cursor = { more: boolean; nextBefore: number | null; nextSessionId: string | null };
+
+/**
+ * Messages Pilot has not read between two it shows: a newest page that did not reach what showed before. Reads
+ * of earlier messages fill it first, then go on from `resume`; `under` is a gap still open below it.
+ */
+export type ConversationGap = {
+	/** The newest message before the gap. */
+	older: TopicMessage;
+	/** The oldest message read after the gap, or null when none was: the gap is at the end. */
+	newer: string | null;
+	resume: Cursor;
+	under: ConversationGap | null;
+};
+
+/** A topic's own conversation as far as Pilot read it, oldest first, across the conversations it owns. */
+export type TopicConversation = Cursor & {
+	availability: "reading" | "live" | "unavailable";
+	reason: string;
+	messages: TopicMessage[];
+	/** Your accepted sends that wait to be placed in a conversation, in the order sent. */
+	queued: TopicMessage[];
+	/** Every earlier coordinator reply is linked. When false, some may sit only in the activity. */
+	complete: boolean;
+	gap: ConversationGap | null;
 	reading: boolean;
 };
 
 export type ThreadsState = {
 	missions: Record<string, MissionThreads>;
-	/** By historyKey(mission, topic). */
+	/** Activity by historyKey(mission, topic). */
 	histories: Record<string, TopicHistory>;
+	/** The topic's own conversation by historyKey(mission, topic). */
+	conversations: Record<string, TopicConversation>;
 };
 
 /** One explicit user write. The root picks the operation ID and a new topic's ID. */
@@ -154,8 +225,21 @@ export interface ThreadsSource {
 	onChange(listener: (state: ThreadsState) => void): () => void;
 	/** Reads a mission's threads again. Passive: it sends and settles nothing. */
 	read(missionId: string): Promise<void>;
-	/** Reads the newest page of a topic's coordinator conversation, or the page before what shows. Passive. */
-	history(missionId: string, topicId: string, older?: boolean): Promise<void>;
+	/**
+	 * Reads the newest page of a topic's conversation and activity ("newest", which leaves an activity view the user
+	 * chose), the activity page before what shows ("older"), or the newest activity of the thread or of one exact
+	 * conversation it owns ("latest", as the user asks). Passive.
+	 */
+	history(
+		missionId: string,
+		topicId: string,
+		which?: "newest" | "older" | "latest",
+		sessionId?: string,
+	): Promise<void>;
+	/** Reads the topic's own messages before what shows, across the conversations it owns. Passive. */
+	earlierMessages(missionId: string, topicId: string): Promise<void>;
+	/** Reads the activity page that ends at this exact saved entry. Passive. */
+	original(missionId: string, topicId: string, original: Original): Promise<void>;
 	/** Sends one write once, against the exact source shown. Never resent. */
 	write(missionId: string, source: string, write: ThreadWrite): Promise<WriteResult>;
 	/** Reads one unsettled write's saved receipt. Never sends it again. */
@@ -187,6 +271,20 @@ export function titleOf(message: string): string {
 
 export function historyKey(missionId: string, topicId: string): string {
 	return `${missionId}/${topicId}`;
+}
+
+/** A message's time: "Today, 09:10", "Yesterday, 16:20", "12 Nov 2025, 09:10", or "Time unknown". */
+export function messageTime(at: number | null, now: number): string {
+	if (at === null || !Number.isFinite(at) || at <= 0) return "Time unknown";
+	const d = new Date(at);
+	const two = (n: number) => String(n).padStart(2, "0");
+	const clock = `${two(d.getHours())}:${two(d.getMinutes())}`;
+	const day = (t: Date) => new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime();
+	const today = day(new Date(now));
+	if (day(d) === today) return `Today, ${clock}`;
+	if (day(d) === new Date(today).setDate(new Date(today).getDate() - 1)) return `Yesterday, ${clock}`;
+	const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()];
+	return `${d.getDate()} ${month} ${d.getFullYear()}, ${clock}`;
 }
 
 /** The UTF-8 length of `text`, as the service counts its limit. */
@@ -321,11 +419,6 @@ function topicOf(x: unknown): Topic | null {
 		resolvedTaskIds: Array.isArray((t.resolvedBy as { taskIds?: unknown } | null)?.taskIds)
 			? ((t.resolvedBy as { taskIds: unknown[] }).taskIds.filter((i) => typeof i === "string") as string[])
 			: [],
-		earlier: Array.isArray(t.earlier)
-			? (t.earlier as Record<string, unknown>[])
-					.filter((e) => (e?.role === "you" || e?.role === "coordinator") && typeof e.text === "string")
-					.map((e) => ({ role: e.role as "you" | "coordinator", text: e.text as string }))
-			: [],
 	};
 }
 
@@ -431,6 +524,281 @@ function entryOf(x: unknown): HistoryEntry | null {
 	};
 }
 
+/** The topic's own messages in one page, as day.threads.history gives them. */
+export type ConversationPage = Cursor & {
+	messages: TopicMessage[];
+	/** Your sends that wait to be placed, as of this read; null when the service does not say. */
+	queued: TopicMessage[] | null;
+	complete: boolean;
+};
+
+/** One page of a topic's activity, with its own messages in it. */
+export type HistoryPage = {
+	sessionId: string;
+	scope: "coordinator-history" | "thread-chat";
+	entries: HistoryEntry[];
+	more: boolean;
+	nextBefore: number | null;
+	/** null: this service sends no conversation, so it cannot show one. */
+	conversation: ConversationPage | null;
+};
+
+const REPLY_STATES = new Set<string>(["answered", "awaiting", "pending", "unanswered", "unknown"]);
+const OPERATION = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** The topic's messages of a page from session `sessionId`, or null when any is not one exact saved entry. */
+export function conversationOf(x: unknown, sessionId: string): ConversationPage | null {
+	const c = x as Record<string, unknown> | null;
+	if (!c || typeof c !== "object" || !Array.isArray(c.entries) || typeof c.more !== "boolean") return null;
+	const messages: TopicMessage[] = [];
+	const keys = new Set<string>();
+	for (const raw of c.entries as Record<string, unknown>[]) {
+		const o = raw?.original as Record<string, unknown> | null;
+		const op = raw?.operationId;
+		if (
+			!raw ||
+			typeof raw.id !== "number" ||
+			raw.sessionId !== sessionId ||
+			(raw.role !== "you" && raw.role !== "chat" && raw.role !== "coordinator") ||
+			typeof raw.text !== "string" ||
+			(op !== undefined && op !== null && (typeof op !== "string" || !OPERATION.test(op))) ||
+			!o ||
+			o.kind !== "history" ||
+			o.sessionId !== sessionId ||
+			o.entryId !== raw.id
+		)
+			return null;
+		const operationId = typeof op === "string" ? op : null;
+		// One original entry may carry several sends: each is its own message, with the same original.
+		const key = operationId ? `${sessionId}:${raw.id}:${operationId}` : `${sessionId}:${raw.id}`;
+		if (keys.has(key)) return null;
+		keys.add(key);
+		messages.push({
+			key,
+			author: raw.role,
+			text: raw.text,
+			at: typeof raw.timestamp === "number" ? raw.timestamp : null,
+			reply:
+				raw.role === "you" && REPLY_STATES.has(str(raw.replyState)) ? (raw.replyState as ReplyState) : "unknown",
+			shared: raw.shared === true,
+			original: { sessionId, entryId: raw.id },
+			operationId,
+		});
+	}
+	let queued: TopicMessage[] | null = null;
+	if (Array.isArray(c.queuedMessages)) {
+		queued = [];
+		for (const q of c.queuedMessages as Record<string, unknown>[]) {
+			if (
+				!q ||
+				typeof q.operationId !== "string" ||
+				!OPERATION.test(q.operationId) ||
+				typeof q.text !== "string" ||
+				(q.replyState !== "pending" && q.replyState !== "unknown")
+			)
+				return null;
+			queued.push({
+				key: `queued:${q.operationId}`,
+				author: "you",
+				text: q.text,
+				at: typeof q.timestamp === "number" ? q.timestamp : null,
+				// "pending": it waits to be placed. "unknown": your exact saved words, placed where Pilot cannot tell.
+				reply: q.replyState,
+				shared: false,
+				original: null,
+				operationId: q.operationId,
+			});
+		}
+	}
+	return {
+		messages,
+		queued,
+		more: c.more,
+		nextBefore: typeof c.nextBefore === "number" ? c.nextBefore : null,
+		nextSessionId: typeof c.nextSessionId === "string" ? c.nextSessionId : null,
+		complete: c.earlierContext === "complete",
+	};
+}
+
+/** A history page for exactly this mission and topic, or null. */
+export function historyPageOf(x: unknown, missionId: string, topicId: string): HistoryPage | null {
+	const s = x as Record<string, unknown> | null;
+	if (!s || s.missionId !== missionId || s.topicId !== topicId || !Array.isArray(s.entries)) return null;
+	const sessionId = str(s.sessionId);
+	return {
+		sessionId,
+		scope: s.scope === "thread-chat" ? "thread-chat" : "coordinator-history",
+		entries: s.entries.map(entryOf).filter((e): e is HistoryEntry => e !== null),
+		more: s.more === true,
+		nextBefore: typeof s.nextBefore === "number" ? s.nextBefore : null,
+		conversation: s.conversation === undefined ? null : (conversationOf(s.conversation, sessionId) ?? null),
+	};
+}
+
+/**
+ * Oldest first: by time, an entry without one at the place of the one before it, and pages in the order read.
+ * Only the order changes.
+ */
+function chronological(messages: TopicMessage[]): TopicMessage[] {
+	let last = 0;
+	const timed = messages.map((m, i) => {
+		if (m.at !== null) last = m.at;
+		return { m, t: m.at ?? last, i };
+	});
+	return timed.sort((a, b) => a.t - b.t || a.i - b.i).map((x) => x.m);
+}
+
+/** Whether a page's read reaches back to message `m`: it holds it, or it read past it in its conversation. */
+function reaches(page: ConversationPage, m: TopicMessage): boolean {
+	if (page.messages.some((x) => x.key === m.key)) return true;
+	if (!page.more) return true;
+	const o = m.original;
+	return o !== null && page.nextSessionId === o.sessionId && page.nextBefore !== null && page.nextBefore <= o.entryId;
+}
+
+const cursorOf = (c: Cursor): Cursor => ({ more: c.more, nextBefore: c.nextBefore, nextSessionId: c.nextSessionId });
+
+/**
+ * Adds a page to the conversation shown, never dropping a message already shown: pages join by message. A newest
+ * page that reaches what showed keeps the read point of the earliest messages. One that does not leaves a gap
+ * between them, which the next reads of earlier messages fill before going on. An earlier page fills the gap
+ * first, and closes it once it reaches the messages before it.
+ */
+export function joinConversation(
+	prior: TopicConversation | undefined,
+	page: ConversationPage,
+	earlier: boolean,
+): TopicConversation {
+	const before = prior?.messages ?? [];
+	const fresh = new Map(page.messages.map((m) => [m.key, m]));
+	const known = new Set(before.map((m) => m.key));
+	const added = page.messages.filter((m) => !known.has(m.key));
+	const joined = earlier
+		? [...added, ...before.map((m) => fresh.get(m.key) ?? m)]
+		: [...before.map((m) => fresh.get(m.key) ?? m), ...added];
+	const messages = chronological(joined);
+	let cursor: Cursor = cursorOf(page);
+	let gap = prior?.gap ?? null;
+	if (!earlier && before.length > 0 && prior) {
+		const newest = chronological(before)[before.length - 1] as TopicMessage;
+		if (reaches(page, newest)) cursor = cursorOf(prior);
+		else
+			gap = {
+				older: newest,
+				newer: chronological(added)[0]?.key ?? null,
+				resume: cursorOf(prior),
+				under: prior.gap,
+			};
+	} else if (earlier && gap) {
+		if (reaches(page, gap.older)) {
+			cursor = gap.resume;
+			gap = gap.under;
+		} else {
+			const oldest = chronological(added)[0];
+			if (oldest) gap = { ...gap, newer: oldest.key };
+		}
+	}
+	// A placed send shows as its message; a send still waiting shows once, at the end.
+	const placed = new Set(messages.flatMap((m) => (m.operationId ? [m.operationId] : [])));
+	const queued = (earlier ? (prior?.queued ?? []) : (page.queued ?? prior?.queued ?? [])).filter(
+		(q) => !placed.has(q.operationId ?? ""),
+	);
+	return {
+		availability: "live",
+		reason: "",
+		messages,
+		queued,
+		...cursor,
+		complete: earlier ? (prior?.complete ?? page.complete) : page.complete,
+		gap,
+		reading: false,
+	};
+}
+
+/** Adds a page to the activity shown: entries never change, so pages of one session join by ID. */
+export function joinActivity(
+	prior: TopicHistory | undefined,
+	page: HistoryPage,
+	which: "newest" | "older" | "original" | "latest",
+	focus: Original | null,
+	view: TopicHistory["view"],
+): TopicHistory {
+	const same = prior?.sessionId === page.sessionId ? prior : undefined;
+	const ids = new Set(page.entries.map((e) => e.id));
+	const oldest = page.entries[0]?.id ?? Number.MAX_SAFE_INTEGER;
+	const joins = which === "older" || (which === "newest" && (same?.entries ?? []).some((e) => ids.has(e.id)));
+	const kept = joins ? (same?.entries ?? []).filter((e) => !ids.has(e.id)) : [];
+	const keepsOlder = which === "newest" && kept.some((e) => e.id < oldest);
+	const entries = [...kept, ...page.entries].sort((a, b) => a.id - b.id);
+	const keptFocus = which === "older" || which === "newest" ? (same?.focus ?? null) : null;
+	const wanted = focus ?? keptFocus;
+	return {
+		availability: "live",
+		reason: "",
+		sessionId: page.sessionId,
+		scope: page.scope,
+		entries,
+		more: keepsOlder ? (same?.more ?? false) : page.more,
+		nextBefore: keepsOlder ? (same?.nextBefore ?? null) : page.nextBefore,
+		reading: false,
+		focus: wanted && entries.some((e) => e.id === wanted.entryId) ? wanted : null,
+		view,
+	};
+}
+
+/** A conversation the service does not send yet: never shown as an empty one. */
+export const NO_CONVERSATION =
+	"This Pilot service cannot show a thread's own conversation yet. Show activity has the original conversation.";
+
+/** Why a topic's conversation could not be read. Never shown as an empty one. */
+export function conversationReason(refusal: Refusal): string {
+	switch (refusal) {
+		case "stale":
+			return "Pilot cannot read this thread's conversation now: the thread, its chat or access changed.";
+		case "offline":
+			return "Pilot could not reach its service to read this thread's conversation.";
+		default:
+			return "Pilot could not read this thread's conversation.";
+	}
+}
+
+/** A read that failed: what showed stays, said to be from the last read. */
+export function failedConversation(prior: TopicConversation | undefined, reason: string): TopicConversation {
+	const shown = (prior?.messages.length ?? 0) + (prior?.queued.length ?? 0) > 0;
+	return {
+		availability: shown ? "live" : "unavailable",
+		reason: shown ? `${reason} What shows is from Pilot's last read.` : reason,
+		messages: prior?.messages ?? [],
+		queued: prior?.queued ?? [],
+		more: prior?.more ?? false,
+		nextBefore: prior?.nextBefore ?? null,
+		nextSessionId: prior?.nextSessionId ?? null,
+		complete: prior?.complete ?? false,
+		gap: prior?.gap ?? null,
+		reading: false,
+	};
+}
+
+/** An activity read that failed: what showed stays, said to be from the last read. */
+export function failedActivity(prior: TopicHistory | undefined, reason: string): TopicHistory {
+	const shown = (prior?.entries.length ?? 0) > 0;
+	return {
+		availability: shown ? "live" : "unavailable",
+		reason: shown ? `${reason} What shows is from Pilot's last read.` : reason,
+		sessionId: prior?.sessionId ?? "",
+		scope: prior?.scope ?? "",
+		entries: prior?.entries ?? [],
+		more: prior?.more ?? false,
+		nextBefore: prior?.nextBefore ?? null,
+		reading: false,
+		focus: prior?.focus ?? null,
+		view: prior?.view ?? "default",
+	};
+}
+
+/** How many pages one read of earlier messages reads at most to find one: pages may hold none of the topic's. */
+export const EARLIER_PAGES = 8;
+
 /** What a receipt says. Only an accepted receipt proves the write; it never proves an answer. */
 export function outcomeOf(x: unknown, write?: ThreadWrite): WriteResult {
 	const o = x as Record<string, unknown> | null;
@@ -465,6 +833,184 @@ export function outcomeOf(x: unknown, write?: ThreadWrite): WriteResult {
 	}
 }
 
+/** Reads one page of a topic's original conversation: its activity and the topic's own messages in it. */
+export type PageReader = (
+	missionId: string,
+	topicId: string,
+	before: number | null,
+	sessionId: string | null,
+) => Promise<{ page: HistoryPage | null; refusal: Refusal }>;
+
+/**
+ * Every topic's conversation and activity shown, kept by historyKey, so a page read for one topic never shows in
+ * another. Reads of one topic run one at a time, in the order asked, so a late answer never overwrites a newer
+ * one; a read asked again while it waits its turn runs once. The connected window reads pages from its root; the
+ * mock window from its script.
+ */
+export class TopicReads {
+	#histories = new Map<string, TopicHistory>();
+	#conversations = new Map<string, TopicConversation>();
+	#turns = new Map<string, Promise<void>>();
+	#waiting = new Map<string, Set<string>>();
+	#read: PageReader;
+	#publish: () => void;
+	#closed: () => boolean;
+
+	constructor(read: PageReader, publish: () => void, closed: () => boolean) {
+		this.#read = read;
+		this.#publish = publish;
+		this.#closed = closed;
+	}
+
+	histories(): Record<string, TopicHistory> {
+		return Object.fromEntries(this.#histories);
+	}
+
+	conversations(): Record<string, TopicConversation> {
+		return Object.fromEntries(this.#conversations);
+	}
+
+	/** Whether this topic's newest page was read, so a live change reads it again. */
+	shown(key: string): boolean {
+		return this.#conversations.has(key) || this.#histories.has(key);
+	}
+
+	/** Runs `work` after the topic's other reads. The same read waiting its turn runs once. */
+	#turn(key: string, what: string, work: () => Promise<void>): Promise<void> {
+		let waiting = this.#waiting.get(key);
+		if (!waiting) {
+			waiting = new Set();
+			this.#waiting.set(key, waiting);
+		}
+		const last = this.#turns.get(key) ?? Promise.resolve();
+		if (waiting.has(what)) return last;
+		waiting.add(what);
+		const next = last.then(() => {
+			waiting.delete(what);
+			return this.#closed() ? undefined : work();
+		});
+		const settled = next.catch(() => undefined);
+		this.#turns.set(key, settled);
+		return settled;
+	}
+
+	#set(key: string, history?: TopicHistory, conversation?: TopicConversation) {
+		if (history) this.#histories.set(key, history);
+		if (conversation) this.#conversations.set(key, conversation);
+		this.#publish();
+	}
+
+	history(
+		missionId: string,
+		topicId: string,
+		which: "newest" | "older" | "latest" = "newest",
+		sessionId?: string,
+	): Promise<void> {
+		const key = historyKey(missionId, topicId);
+		return this.#turn(key, `history:${which}:${sessionId ?? ""}`, async () => {
+			const now = this.#histories.get(key);
+			if (which === "older" && !now?.nextBefore) return;
+			// A newest read leaves an activity the user moved; Show latest activity moves it back.
+			const activity = which !== "newest" || !now || now.view === "default";
+			const conversation = which === "newest" || (which === "latest" && !sessionId);
+			this.#set(
+				key,
+				activity
+					? { ...(now ?? failedActivity(undefined, "")), reading: true, reason: now?.reason ?? "" }
+					: undefined,
+				conversation ? readingConversationOf(this.#conversations.get(key)) : undefined,
+			);
+			const { page, refusal } = await this.#read(
+				missionId,
+				topicId,
+				which === "older" ? (now?.nextBefore ?? null) : null,
+				which === "older" ? (now?.sessionId ?? null) : (sessionId ?? null),
+			);
+			if (this.#closed()) return;
+			const priorActivity = this.#histories.get(key);
+			const priorConversation = this.#conversations.get(key);
+			this.#set(
+				key,
+				activity
+					? page
+						? joinActivity(
+								priorActivity,
+								page,
+								which,
+								null,
+								which === "older" ? (priorActivity?.view ?? "default") : sessionId ? "session" : "default",
+							)
+						: failedActivity(priorActivity, historyReason(refusal))
+					: undefined,
+				conversation
+					? !page
+						? failedConversation(priorConversation, conversationReason(refusal))
+						: page.conversation
+							? joinConversation(priorConversation, page.conversation, false)
+							: failedConversation(undefined, NO_CONVERSATION)
+					: undefined,
+			);
+		});
+	}
+
+	earlierMessages(missionId: string, topicId: string): Promise<void> {
+		const key = historyKey(missionId, topicId);
+		return this.#turn(key, "earlier", async () => {
+			let now = this.#conversations.get(key);
+			if (!now?.more) return;
+			this.#set(key, undefined, readingConversationOf(now));
+			// A page of an original conversation may hold none of this topic's messages: read on, a few pages at most.
+			for (let n = 0; n < EARLIER_PAGES && now.more; n++) {
+				const shown = now.messages.length;
+				const gap = now.gap;
+				const { page, refusal } = await this.#read(missionId, topicId, now.nextBefore, now.nextSessionId);
+				if (this.#closed()) return;
+				const prior = this.#conversations.get(key);
+				if (!page?.conversation) {
+					now = failedConversation(prior, page ? NO_CONVERSATION : conversationReason(refusal));
+					break;
+				}
+				now = joinConversation(prior, page.conversation, true);
+				if (now.messages.length > shown || now.gap !== gap) break;
+				this.#set(key, undefined, { ...now, reading: true });
+			}
+			this.#set(key, undefined, { ...now, reading: false });
+		});
+	}
+
+	original(missionId: string, topicId: string, original: Original): Promise<void> {
+		const key = historyKey(missionId, topicId);
+		return this.#turn(key, `original:${original.sessionId}:${original.entryId}`, async () => {
+			const now = this.#histories.get(key);
+			if (now?.sessionId === original.sessionId && now.entries.some((e) => e.id === original.entryId)) {
+				this.#set(key, { ...now, focus: original });
+				return;
+			}
+			this.#set(key, { ...(now ?? failedActivity(undefined, "")), reading: true, reason: now?.reason ?? "" });
+			// The page that ends at this exact entry: before is the next ID.
+			const { page, refusal } = await this.#read(missionId, topicId, original.entryId + 1, original.sessionId);
+			if (this.#closed()) return;
+			const prior = this.#histories.get(key);
+			this.#set(
+				key,
+				page?.sessionId === original.sessionId && page.entries.some((e) => e.id === original.entryId)
+					? joinActivity(prior, page, "original", original, "original")
+					: failedActivity(prior, page ? ORIGINAL_MISSING : historyReason(refusal)),
+			);
+		});
+	}
+}
+
+/** Marks a read on its way, keeping what shows. */
+function readingConversationOf(prior: TopicConversation | undefined): TopicConversation {
+	return {
+		...(prior ?? failedConversation(undefined, "")),
+		availability: prior?.availability === "live" ? "live" : "reading",
+		reason: prior?.reason ?? "",
+		reading: true,
+	};
+}
+
 const EMPTY: MissionThreads = { availability: "idle", reason: "", failed: "", snapshot: null, ops: [], writing: false };
 
 /** The connected window's threads: its native root's own project. */
@@ -478,7 +1024,11 @@ export class ConnectedThreads implements ThreadsSource {
 	#again = new Set<string>();
 	#writing = new Set<string>();
 	#checking = new Set<string>();
-	#histories = new Map<string, TopicHistory>();
+	#topics = new TopicReads(
+		(missionId, topicId, before, sessionId) => this.#page(missionId, topicId, before, sessionId),
+		() => this.#publish(),
+		() => this.#closed,
+	);
 	#listeners = new Map<number, (state: ThreadsState) => void>();
 	#next = 0;
 	#closed = false;
@@ -510,7 +1060,11 @@ export class ConnectedThreads implements ThreadsSource {
 				writing: this.#writing.has(id),
 			};
 		}
-		return { missions, histories: Object.fromEntries(this.#histories) };
+		return {
+			missions,
+			histories: this.#topics.histories(),
+			conversations: this.#topics.conversations(),
+		};
 	}
 
 	onChange(listener: (state: ThreadsState) => void): () => void {
@@ -569,69 +1123,38 @@ export class ConnectedThreads implements ThreadsSource {
 		return work;
 	}
 
-	async history(missionId: string, topicId: string, older = false): Promise<void> {
-		const key = historyKey(missionId, topicId);
-		const now = this.#histories.get(key);
-		if (now?.reading) return;
-		const before = older ? now?.nextBefore : null;
-		if (older && !before) return;
-		this.#histories.set(key, {
-			availability: now?.availability === "live" ? "live" : "reading",
-			reason: now?.reason ?? "",
-			sessionId: now?.sessionId ?? "",
-			entries: now?.entries ?? [],
-			more: now?.more ?? false,
-			nextBefore: now?.nextBefore ?? null,
-			reading: true,
-		});
-		this.#publish();
+	/** One day.threads.history page. `sessionId` only names an exact conversation a cursor or a message gave. */
+	async #page(
+		missionId: string,
+		topicId: string,
+		before: number | null,
+		sessionId: string | null,
+	): Promise<{ page: HistoryPage | null; refusal: Refusal }> {
 		const r = await call<unknown>(this.#window, "day.threads.history", {
 			missionId,
 			topicId,
-			before: before ?? null,
+			before,
+			...(sessionId ? { sessionId } : {}),
 		});
-		if (this.#closed) return;
-		const prior = this.#histories.get(key);
-		const s = r.ok ? (r.snapshot as Record<string, unknown> | null) : null;
-		if (r.ok && s && s.missionId === missionId && s.topicId === topicId && Array.isArray(s.entries)) {
-			const page = s.entries.map(entryOf).filter((e): e is HistoryEntry => e !== null);
-			// Entries never change, so pages join by ID. A fresh newest page keeps
-			// the older pages already shown, and where to read before them.
-			const oldest = page[0]?.id ?? Number.MAX_SAFE_INTEGER;
-			const ids = new Set(page.map((e) => e.id));
-			// Without an overlap there may be a gap: start again from the newest page.
-			const joins = older || (prior?.entries ?? []).some((e) => ids.has(e.id));
-			const kept = joins ? (prior?.entries ?? []).filter((e) => !ids.has(e.id)) : [];
-			const entries = [...kept, ...page].sort((a, b) => a.id - b.id);
-			const keepsOlder = !older && kept.some((e) => e.id < oldest);
-			this.#histories.set(key, {
-				availability: "live",
-				reason: "",
-				sessionId: str(s.sessionId),
-				entries,
-				more: keepsOlder ? (prior?.more ?? false) : s.more === true,
-				nextBefore: keepsOlder
-					? (prior?.nextBefore ?? null)
-					: typeof s.nextBefore === "number"
-						? s.nextBefore
-						: null,
-				reading: false,
-			});
-		} else {
-			const refusal: Refusal = r.ok ? "invalid" : r.refusal;
-			this.#histories.set(key, {
-				availability: prior?.entries.length ? "live" : "unavailable",
-				reason: prior?.entries.length
-					? `${historyReason(refusal)} What shows is from Pilot's last read.`
-					: historyReason(refusal),
-				sessionId: prior?.sessionId ?? "",
-				entries: prior?.entries ?? [],
-				more: prior?.more ?? false,
-				nextBefore: prior?.nextBefore ?? null,
-				reading: false,
-			});
-		}
-		this.#publish();
+		if (!r.ok) return { page: null, refusal: r.refusal };
+		return { page: historyPageOf(r.snapshot, missionId, topicId), refusal: "invalid" };
+	}
+
+	history(
+		missionId: string,
+		topicId: string,
+		which: "newest" | "older" | "latest" = "newest",
+		sessionId?: string,
+	): Promise<void> {
+		return this.#topics.history(missionId, topicId, which, sessionId);
+	}
+
+	earlierMessages(missionId: string, topicId: string): Promise<void> {
+		return this.#topics.earlierMessages(missionId, topicId);
+	}
+
+	original(missionId: string, topicId: string, original: Original): Promise<void> {
+		return this.#topics.original(missionId, topicId, original);
 	}
 
 	async write(missionId: string, source: string, write: ThreadWrite): Promise<WriteResult> {
@@ -690,6 +1213,9 @@ export class ConnectedThreads implements ThreadsSource {
 		this.#listeners.clear();
 	}
 }
+
+/** The exact entry an Original message names is not in what the service read. */
+export const ORIGINAL_MISSING = "Pilot could not find that exact message in its original conversation.";
 
 /** Why a coordinator conversation could not be read. Never shown as an empty one. */
 export function historyReason(refusal: Refusal): string {

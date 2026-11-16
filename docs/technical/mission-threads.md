@@ -18,11 +18,11 @@ Authenticated routes (the existing native app capability, `x-pilot-github-capabi
 
 - `GET /api/projects/:projectId/missions/:missionId/threads` returns `MissionThreadsView`.
 - `GET /api/projects/:projectId/missions/:missionId/threads/:topicId/history?before=N&limit=N`
-  reads the original coordinator history without opening or subscribing to its worker. Default
-  limit is 32, maximum 100. Entries keep original IDs, roles and payloads. This is explicitly
-  **coordinator history**, not a topic-only transcript. Only exact referenced entries and saved
-  input operation identities belong to a topic; unrelated assistant output is not silently
-  attributed to whichever topic the UI has open.
+  reads original history without opening or subscribing to its worker. Default limit is 32,
+  maximum 100. Entries keep original IDs, roles and payloads. The response also projects the
+  exact topic conversation from original records, not a second saved transcript. Dedicated
+  thread-chat ownership, exact input operation identities and explicit history links establish
+  topic membership. Unlinked coordinator output stays in activity, not whichever topic is open.
 
 Reads require the current active mission, same-project current coordinator and membership, and
 valid project/session access. History also checks the original coordinator's project. Historical
@@ -111,17 +111,22 @@ acceptance are not established by these backend checks.
 
 A mission's overview lists its threads (open, then Later; discarded on request) and starts a new
 one from its first message: the first sentence becomes the title (`titleOf`, at most 80
-characters), then Day sends the message in the new thread. A thread's page shows its links, the original coordinator conversation
-and a reply box. Only entries the topic names are marked as its own: messages it sent (by exact
-operation ID in `pilot.planning-input` entries) and history references. Other entries stay
-labelled as the coordinator's conversation. Tool results fold into one quiet line.
+characters), then Day sends the message in the new thread. A thread's page opens its topic
+conversation in chronological order, with original-message access and a reply box. Older pages
+are added without removing messages already shown. Show activity discloses original history below
+the conversation, including unrelated coordinator output and tools. Reading either view has no
+send, Start or approval effect. Drafts and Back context stay attached to the exact mission/topic.
+Unlinked older replies remain uncertain instead of being assigned by position or text matching.
 
 The native root (`apps/day/native/src/host/threads.rs`) adds four exact methods:
 
 - `day.threads.read {missionId}` reads the topics view plus task and decision names from the
   mission detail. It requires `nativeThreads`. A 404 or 409 is a refused scope, never an empty list.
-- `day.threads.history {missionId, topicId, before|null}` reads one page of 32 original entries.
-  Long entries show their first 8000 bytes and say so.
+- `day.threads.history {missionId, topicId, before|null, sessionId?}` reads one page of 32 original
+  entries from an authorized topic source. Its `conversation` projection keeps complete message text,
+  author, timestamp when known and original entry identity. Activity previews keep their 8000-byte
+  limit and say when shortened. Conversation pagination carries both the session and entry cursor,
+  including earlier dedicated chats after a thread reopens.
 - `day.threads.write {missionId, source, purpose, topicId?, title|disposition|reference|text}`
   names the exact `source` the window showed. The root reads again and refuses a changed source
   (Stale). A send to a topic that is not open, or while neither `discussion.available` nor
@@ -134,3 +139,13 @@ planning admission of the same operation. Accepted means the coordinator has the
 that it answered. An unsettled write on a mission blocks further thread and planning writes for
 that mission until Check settles it. Unsent words are kept by mission and thread in the saved
 view (`thread`, `threads`) across Back, close and update; only an accepted send clears them.
+
+Reply state comes from durable input submissions, not from the next assistant text. The cold reader
+joins exact request, input-entry and answer-entry identities without opening a kernel or reading
+message bodies. A queued input is pending, a placed input awaits a reply, a completed submission names
+its answer, and an unanswered terminal input stays unanswered. Missing older links stay unknown.
+An explicitly linked coordinator message can cover several topics: show its original words whole
+and label that limit rather than inventing topic-specific excerpts.
+When an old send's placement link is gone, its exact journal text remains available with placement
+and reply status unknown. A known direct or batch placement does not become pending merely because
+the user has not loaded its history page. Saved sends never receive fabricated original entry IDs.

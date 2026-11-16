@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { type TestContext, test } from "node:test";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { type ConversationId, type EntryId, MemoryStorage } from "@earendil-works/pi-durable";
 import type { EntryRecord, SessionSummary, SpawnRequest } from "@pilot/protocol";
 import type { MissionThreadReference, MissionThreadWrite } from "../../protocol/src/mission-thread.ts";
@@ -15,6 +16,7 @@ type ThreadInput = {
 
 async function fixture(t: TestContext, native = false) {
 	const f = await publishedPlanningFixture(t, { native });
+	t.mock.method(f.sessions, "inputCausality", async () => []);
 	const threads = new MissionThreads({ ...f, workers: f.workers });
 	const topicId = randomUUID();
 	const request = async (write: ThreadInput, id = topicId) => {
@@ -377,4 +379,148 @@ test("HTTP topics require native authority, preserve metadata across reopen, and
 	await f.restart();
 	assert.equal((await (await f.post(create, true)).json()).state, "accepted");
 	assert.equal(f.store.threads.get(f.missionId, topicId).title, "Question");
+});
+
+test("conversation keeps reopened originals, full text, exact origins and independent cursors", async (t) => {
+	const f = await fixture(t);
+	const c = threadChats(t, f);
+	const first = await f.request({ purpose: "thread-send", text: "first" });
+	assert.equal((await f.execute(first)).state, "accepted");
+	await f.execute(await f.request({ purpose: "thread-disposition", disposition: "discarded" }));
+	await f.execute(await f.request({ purpose: "thread-disposition", disposition: "open" }));
+	assert.equal((await f.execute(await f.request({ purpose: "thread-send", text: "second" }))).state, "accepted");
+	const storage = new MemoryStorage();
+	const make = async (kind: string, text: string): Promise<EntryRecord> => ({
+		id: await storage.mintId<EntryId>(),
+		conversationId: await storage.mintId<ConversationId>(),
+		kind,
+		model: [{ role: "user", content: text, timestamp: 1 }],
+	});
+	const old = await make("pi.user", "old"),
+		latest = await make("pi.user", "é".repeat(12000));
+	let answered = false;
+	t.mock.method(f.sessions, "inputCausality", async () => [
+		{ entryId: Number(latest.id), status: answered ? ("done" as const) : ("placed" as const) },
+	]);
+	t.mock.method(f.sessions, "history", async (id: string) => ({
+		entries: [id === "chat-1" ? old : latest],
+		more: false,
+	}));
+	const newest = await f.threads.history(f.project.id, f.missionId, f.topicId);
+	assert.equal(newest.sessionId, "chat-2");
+	assert.equal(newest.conversation.entries[0]!.text, "é".repeat(12000));
+	assert.equal(newest.conversation.entries[0]!.replyState, "awaiting");
+	answered = true;
+	const refreshed = await f.threads.history(f.project.id, f.missionId, f.topicId);
+	assert.equal(
+		refreshed.conversation.entries[0]!.replyState,
+		"answered",
+		"late causal updates refresh without sending",
+	);
+	assert.deepEqual(newest.conversation.entries[0]!.original, {
+		kind: "history",
+		sessionId: "chat-2",
+		entryId: Number(latest.id),
+	});
+	assert.equal(newest.conversation.nextSessionId, "chat-1");
+	const previous = await f.threads.history(f.project.id, f.missionId, f.topicId, undefined, 32, "chat-1");
+	assert.equal(previous.conversation.entries[0]!.text, "old");
+	assert.equal(previous.conversation.nextSessionId, f.owner);
+	assert.equal(previous.conversation.earlierContext, "complete");
+	assert.equal(c.spawned.length, 2, "reads never spawn");
+	await assert.rejects(
+		f.threads.history(f.project.id, f.missionId, f.topicId, undefined, 32, "unrelated"),
+		/Exact topic/,
+	);
+	c.live.set("chat-1", { ...c.live.get("chat-1")!, projectId: "foreign" });
+	await assert.rejects(
+		f.threads.history(f.project.id, f.missionId, f.topicId, undefined, 32, "chat-1"),
+		/inaccessible/,
+	);
+});
+
+test("conversation refuses a chat whose mission membership changes during history I/O", async (t) => {
+	const f = await fixture(t);
+	const c = threadChats(t, f);
+	await f.execute(await f.request({ purpose: "thread-send", text: "hello" }));
+	t.mock.method(f.sessions, "history", async () => {
+		c.live.set("chat-1", { ...c.live.get("chat-1")!, projectId: "foreign" });
+		return { entries: [], more: false };
+	});
+	await assert.rejects(f.threads.history(f.project.id, f.missionId, f.topicId), /inaccessible/);
+});
+
+test("legacy user words survive lost carrier links while the chat keeps its existing context", async (t) => {
+	const f = await fixture(t);
+	const chats = threadChats(t, f);
+	const legacy = await f.request({ purpose: "thread-send", text: "Exact old user words" });
+	await f.journal.execute(legacy, async () => ({
+		topic: f.store.threads.amend(f.missionId, f.topicId, (topic) => {
+			topic.inputs.push({ operationId: legacy.operationId, sessionId: f.owner, at: 1 });
+		}),
+		queued: true,
+	}));
+	t.mock.method(f.sessions, "history", async () => ({ entries: [], more: false }));
+	const unplaced = await f.threads.history(f.project.id, f.missionId, f.topicId);
+	assert.deepEqual(unplaced.conversation.queuedMessages, [
+		{
+			operationId: legacy.operationId,
+			text: "Exact old user words",
+			timestamp: 1,
+			replyState: "unknown",
+		},
+	]);
+	const storage = new MemoryStorage();
+	const input: EntryRecord = {
+		id: await storage.mintId<EntryId>(),
+		conversationId: await storage.mintId<ConversationId>(),
+		kind: "pilot.planning-input",
+		data: { operation: JSON.stringify(legacy) },
+	};
+	const oldReply: EntryRecord = {
+		id: await storage.mintId<EntryId>(),
+		conversationId: input.conversationId,
+		kind: "pi.assistant",
+		model: [fauxAssistantMessage("Legacy context, not an explicit topic reply")],
+	};
+	t.mock.method(f.sessions, "history", async (sessionId: string) => ({
+		entries: sessionId === f.owner ? [input, oldReply] : [],
+		more: false,
+	}));
+	await f.execute(await f.request({ purpose: "thread-send", text: "Follow-up" }));
+	assert.equal(chats.spawned.length, 1);
+	assert.deepEqual(f.store.threads.get(f.missionId, f.topicId).earlier, [
+		{ role: "you", text: "Exact old user words" },
+		{ role: "coordinator", text: "Legacy context, not an explicit topic reply" },
+	]);
+	const conversation = await f.threads.history(f.project.id, f.missionId, f.topicId, undefined, 32, f.owner);
+	assert.equal(
+		conversation.conversation.entries.some((e) => e.role === "coordinator"),
+		false,
+		"legacy context capture is not evidence for the displayed conversation",
+	);
+	t.mock.method(f.sessions, "inputCausality", async (sessionId: string) =>
+		sessionId === f.owner
+			? [{ requestId: legacy.operationId, entryId: Number(input.id), status: "placed" as const }]
+			: [],
+	);
+	const chatPage = await f.threads.history(f.project.id, f.missionId, f.topicId);
+	assert.deepEqual(
+		chatPage.conversation.queuedMessages,
+		[],
+		"known legacy placements do not become pending or unknown just because their page is not shown",
+	);
+	const carrier = f.operation(f.missionId, { purpose: "plan-thread-messages", operationIds: [legacy.operationId] });
+	await f.journal.execute(carrier, async () => ({ saved: true }));
+	t.mock.method(f.sessions, "inputCausality", async (sessionId: string) =>
+		sessionId === f.owner
+			? [{ requestId: carrier.operationId, entryId: Number(input.id), status: "placed" as const }]
+			: [],
+	);
+	const batchPage = await f.threads.history(f.project.id, f.missionId, f.topicId);
+	assert.deepEqual(
+		batchPage.conversation.queuedMessages,
+		[],
+		"a placed batch also suppresses its sends even when the carrier page was not read",
+	);
 });

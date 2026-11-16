@@ -9,6 +9,7 @@ import type {
 import { Conflict } from "./errors.ts";
 import { interviewExact, interviewId } from "./mission-interview-contract.ts";
 import { revisionText } from "./mission-revisions.ts";
+import { threadBatch, threadConversationEntries } from "./mission-thread-conversation.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
 import type { PlanningWorkers } from "./planning-workers.ts";
@@ -106,6 +107,7 @@ export class MissionThreads {
 		topicId: string,
 		before = Number.MAX_SAFE_INTEGER,
 		limit = 32,
+		sessionId?: string,
 	): Promise<MissionThreadHistory> {
 		if (!Number.isSafeInteger(before) || before < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
 			throw new Error("Invalid topic history cursor or limit");
@@ -113,20 +115,189 @@ export class MissionThreads {
 		this.scope(id, projectId);
 		const source = this.source(id),
 			topic = this.deps.store.threads.get(id, topicId);
-		const chat = topic.chat?.sessionId;
-		if (chat) {
-			const session = this.deps.sessions.get(chat);
-			if (!session || session.projectId !== topic.projectId)
-				throw new Conflict("Thread chat history is inaccessible");
-			const history = await this.deps.sessions.history(chat, before, limit);
-			if (this.source(id) !== source) throw new Conflict("Topic history source changed");
-			return { topic, sessionId: chat, scope: "thread-chat", history };
+		// Immutable accepted effects keep old chat bindings when reopening replaces topic.chat.
+		const receipts = await this.deps.journal.targetReceipts("thread-send", id);
+		const [originalSends, batches] = await Promise.all([
+			this.deps.journal.operations("thread-send", id),
+			this.deps.journal.operations("plan-thread-messages", id),
+		]);
+		const sends = new Map<string, string>();
+		for (const op of originalSends) {
+			const payload = JSON.parse(op.payload) as { topicId?: string; text?: string };
+			if (
+				payload.topicId === topicId &&
+				typeof payload.text === "string" &&
+				topic.inputs.some((i) => i.operationId === op.operationId)
+			)
+				sends.set(op.operationId, payload.text);
 		}
-		this.historyOwner(id, topic);
-		const history = await this.deps.sessions.history(topic.ownerSessionId, before, limit);
-		this.historyOwner(id, topic);
+		const carriers = new Map<string, string[]>();
+		for (const op of batches) {
+			const ids: unknown = JSON.parse(op.payload).operationIds;
+			if (Array.isArray(ids) && ids.every((value) => typeof value === "string")) carriers.set(op.operationId, ids);
+		}
+		for (const message of this.deps.store.planningWorkers.get(id)?.threadQueue ?? []) {
+			if (message.carriedBy && !message.handoff)
+				carriers.set(message.carriedBy, [...(carriers.get(message.carriedBy) ?? []), message.operationId]);
+		}
+		const chats = new Map<string, string>();
+		for (const receipt of receipts) {
+			const result = receipt.result as { topic?: MissionThread; chat?: { sessionId?: string } } | undefined;
+			if (
+				receipt.state === "accepted" &&
+				result?.topic?.id === topicId &&
+				result.topic.projectId === projectId &&
+				result.topic.missionId === id &&
+				result.chat?.sessionId
+			)
+				chats.set(receipt.operationId, result.chat.sessionId);
+		}
+		for (const link of topic.chats ?? []) chats.set(link.operationId, link.sessionId);
+		if (topic.chat?.sessionId) chats.set(topic.chat.operationId, topic.chat.sessionId);
+		const sources = [
+			...new Set([
+				topic.ownerSessionId,
+				...topic.inputs.flatMap((i) => (chats.has(i.operationId) ? [chats.get(i.operationId)!] : [])),
+				...chats.values(),
+			]),
+		];
+		const selected = sessionId ?? sources.at(-1)!;
+		const index = sources.indexOf(selected);
+		if (index < 0) throw new Conflict("Exact topic history session required");
+		const chat = selected !== topic.ownerSessionId;
+		const qualify = () => {
+			this.scope(id, projectId);
+			const session = this.deps.sessions.get(selected),
+				member = this.deps.store.membership(selected);
+			if (!session || session.projectId !== projectId || (chat && member?.missionId !== id))
+				throw new Conflict("Thread chat history is inaccessible");
+		};
+		qualify();
+		const history = await this.deps.sessions.history(selected, before, limit);
+		const causality = await this.deps.sessions.inputCausality(
+			selected,
+			history.entries.map((e) => Number(e.id)),
+			topic.inputs.map((i) => i.operationId),
+		);
+		for (const entry of history.entries) {
+			const batch = threadBatch(entry);
+			if (batch) carriers.set(batch.operationId, batch.inputIds);
+		}
+		// A reply page need not contain its input. Resolve exact carrier entries only, with limited I/O.
+		if (!chat && sends.size) {
+			const answerIds = new Set(history.entries.map((e) => Number(e.id)));
+			const missing = [
+				...new Set(
+					causality
+						.filter(
+							(c) =>
+								c.entryId &&
+								c.answerId &&
+								answerIds.has(c.answerId) &&
+								!carriers.has(c.requestId ?? "") &&
+								!sends.has(c.requestId ?? ""),
+						)
+						.map((c) => c.entryId!),
+				),
+			].slice(0, limit);
+			for (let start = 0; start < missing.length; start += 4) {
+				const pages = await Promise.all(
+					missing.slice(start, start + 4).map((entryId) => this.deps.sessions.history(selected, entryId + 1, 1)),
+				);
+				for (const page of pages)
+					for (const entry of page.entries) {
+						if (!missing.includes(Number(entry.id))) continue;
+						const batch = threadBatch(entry);
+						if (batch) carriers.set(batch.operationId, batch.inputIds);
+					}
+			}
+		}
+		// Older sends can have no surviving carrier link. Keep their exact words, but do not
+		// call a known placement unknown merely because its history page is not on screen.
+		const legacy = topic.inputs.filter((i) => !chats.has(i.operationId));
+		const legacyIds = new Set(legacy.map((i) => i.operationId));
+		const legacyRequests = [
+			...new Set([
+				...legacyIds,
+				...[...carriers].filter(([, ids]) => ids.some((i) => legacyIds.has(i))).map(([id]) => id),
+			]),
+		];
+		const placed = new Set<string>();
+		if (legacyRequests.length) this.historyOwner(id, topic);
+		for (let start = 0; start < legacyRequests.length; start += 2048) {
+			const links = await this.deps.sessions.inputCausality(
+				topic.ownerSessionId,
+				[],
+				legacyRequests.slice(start, start + 2048),
+			);
+			for (const link of links)
+				if (link.requestId && link.entryId) {
+					placed.add(link.requestId);
+					for (const input of carriers.get(link.requestId) ?? []) placed.add(input);
+				}
+		}
+		if (legacyRequests.length) this.historyOwner(id, topic);
+		const waiting = new Set(
+			(this.deps.workers?.waitingMessages(id) ?? []).filter((m) => m.topicId === topicId).map((m) => m.operationId),
+		);
+		qualify();
 		if (this.source(id) !== source) throw new Conflict("Topic history source changed");
-		return { topic, sessionId: topic.ownerSessionId, scope: "coordinator-history", history };
+		const oldest = history.entries[0]?.id;
+		if (history.more && (!oldest || oldest >= before)) throw new Conflict("Topic history cursor did not advance");
+		const older = index > 0 ? sources[index - 1]! : null;
+		return {
+			topic,
+			sessionId: selected,
+			scope: chat ? "thread-chat" : "coordinator-history",
+			history,
+			conversation: {
+				queuedMessages: [
+					...causality.flatMap((c) =>
+						c.status === "queued" && c.requestId && sends.has(c.requestId) && chats.get(c.requestId) === selected
+							? [
+									{
+										operationId: c.requestId,
+										text: sends.get(c.requestId)!,
+										timestamp: topic.inputs.find((i) => i.operationId === c.requestId)?.at ?? null,
+										replyState: "pending" as const,
+									},
+								]
+							: [],
+					),
+					...topic.inputs.flatMap((input) =>
+						!chats.has(input.operationId) && sends.has(input.operationId) && !placed.has(input.operationId)
+							? [
+									{
+										operationId: input.operationId,
+										text: sends.get(input.operationId)!,
+										timestamp: input.at ?? null,
+										replyState: waiting.has(input.operationId) ? ("pending" as const) : ("unknown" as const),
+									},
+								]
+							: [],
+					),
+				],
+				entries: threadConversationEntries(
+					topic,
+					selected,
+					history.entries,
+					chat,
+					waiting,
+					causality,
+					sends,
+					carriers,
+				),
+				more: history.more || older !== null,
+				nextBefore: history.more ? Number(oldest) : null,
+				nextSessionId: history.more ? selected : older,
+				earlierContext:
+					topic.inputs.every((i) => chats.has(i.operationId)) &&
+					!topic.references.some((r) => r.kind === "history") &&
+					!topic.earlier?.length
+						? "complete"
+						: "unknown",
+			},
+		};
 	}
 	private envelope(op: DurableOperation) {
 		if (
@@ -280,7 +451,7 @@ export class MissionThreads {
 			)
 				next.references.push(request.reference);
 			if (request.purpose === "thread-send")
-				next.inputs.push({ sessionId: next.ownerSessionId, operationId: op.operationId });
+				next.inputs.push({ sessionId: next.ownerSessionId, operationId: op.operationId, at: Date.now() });
 			return next;
 		});
 		const source = this.source(op.targetId);
@@ -301,6 +472,8 @@ export class MissionThreads {
 			await sessions.send(live, text, "followUp", op.operationId);
 			return { sessionId: live };
 		}
+		// Preserve the thread chat's existing context contract. This legacy snapshot is not
+		// evidence of topic membership and is never used by the conversation projection.
 		const earlier =
 			topic.earlier === undefined && topic.inputs.some((i) => i.operationId !== op.operationId)
 				? await this.earlier(topic, op.operationId).catch((error: unknown) => {
@@ -309,6 +482,8 @@ export class MissionThreads {
 					})
 				: undefined;
 		store.threads.amend(op.targetId, topic.id, (t) => {
+			if (t.chat?.sessionId && !t.chats?.some((c) => c.sessionId === t.chat!.sessionId))
+				t.chats = [...(t.chats ?? []), { operationId: t.chat.operationId, sessionId: t.chat.sessionId }];
 			t.chat = { operationId: op.operationId };
 			if (earlier && t.earlier === undefined) t.earlier = earlier;
 		});
@@ -358,10 +533,7 @@ export class MissionThreads {
 			await store.durable();
 		}
 	}
-	/**
-	 * The thread's messages with the planning agent from before thread chats: the user's sends and the agent's replies
-	 * that followed each. Read once, when its first thread chat starts, so the chat knows what was said.
-	 */
+	/** Existing model-context snapshot for old thread chats, not the topic conversation read model. */
 	private async earlier(topic: MissionThread, skip: string): Promise<NonNullable<MissionThread["earlier"]>> {
 		const sent = new Map<string, string>();
 		for (const op of await this.deps.journal.operations("thread-send", topic.missionId)) {

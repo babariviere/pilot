@@ -47,8 +47,10 @@ a mission without a planning worker refuses `thread-send`, because no planner wo
 ## Moving older threads
 
 At startup, `MissionThreads.migrate()` moves thread messages that still waited for the planning agent to their
-thread chats. When a thread's first chat starts, Pilot saves its earlier messages with the planning agent once
-(`earlier`): the user's sends from the journal and the agent's replies after each in its history.
+thread chats. The thread view reads earlier conversation from original records through exact input and history
+links, not by assigning whatever assistant messages followed a user message. The existing `earlier` context
+capture for the thread chat stays unchanged, but the new conversation does not use its uncertain associations. Reopening a
+thread keeps access to its previous chat histories through saved chat bindings and accepted operation receipts.
 
 ## Code
 

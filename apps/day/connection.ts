@@ -29,6 +29,7 @@ import { mirrorRituals, type Rituals, rootRecap } from "./ritualFeed";
 import { ConnectedSessionChat, mirrorSessionChat } from "./sessionChat";
 import { connectedSlackControls } from "./slackControls";
 import { ConnectedThreads, mirrorThreads } from "./threadFeed";
+import { refreshOpenThread } from "./threadView";
 import { ConnectedScope, mirrorScope, todayProject } from "./todayScope";
 import type { Update } from "./updateFeed";
 import { captureView, restoreView, saveForms } from "./updateView";
@@ -148,6 +149,8 @@ function refresh() {
 		open.state === "open" && settingsOpen() ? open.day.connections?.read() : undefined,
 		open.state === "open" ? open.day.power?.read() : undefined,
 		open.state === "open" && settingsOpen() ? open.day.slack?.read() : undefined,
+		// The thread on screen reads its newest messages again: a chat's reply changes no thread revision.
+		open.state === "open" ? refreshOpenThread(open.day.threads) : undefined,
 	]).catch((error: unknown) => {
 		console.error("Pilot could not read this window again:", error);
 	});

@@ -2655,6 +2655,7 @@ export function createDaemonServer(
 						parts[6]!,
 						before === null ? undefined : Number(before),
 						limit === null ? undefined : Number(limit),
+						url.searchParams.get("sessionId") ?? undefined,
 					),
 				);
 			}

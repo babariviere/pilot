@@ -7,6 +7,7 @@ import {
 	snapshotWorkerEntry,
 } from "@pilot/kernel";
 import type { DiagnosticHistoryPage, DiagnosticTargetReference, TranscriptContext } from "@pilot/protocol";
+import type { MissionThreadInputCausality } from "../../protocol/src/mission-thread.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import { isWatchNotice } from "./worker-notice.ts";
 
@@ -29,6 +30,7 @@ type Job = {
 	diagnosticHistory?: { target: DiagnosticTargetReference; before?: number; limit: number };
 	todoCount?: boolean;
 	inputReceipt?: string;
+	inputCausality?: { entryIds: number[]; requestIds: string[] };
 	resolve(view: SizedSessionView): void;
 	reject(error: Error): void;
 };
@@ -42,6 +44,33 @@ export class ColdViewReader {
 
 	constructor(entry: URL = snapshotWorkerEntry) {
 		this.entry = entry;
+	}
+
+	/** Exact submission links, without starting a kernel or reading message bodies. */
+	readInputCausality(
+		directory: string,
+		entryIds: number[],
+		requestIds: string[],
+	): Promise<MissionThreadInputCausality[]> {
+		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
+		if (entryIds.length > 100 || requestIds.length > 2048) return Promise.reject(new Error("Too many input links"));
+		if (this.waiting.length >= MAX_QUEUED_READS)
+			return Promise.reject(new ServiceUnavailable("Session history is busy"));
+		return new Promise<SizedSessionView>((resolve, reject) => {
+			this.waiting.push({
+				directory,
+				cwd: directory,
+				includeTodos: false,
+				inputCausality: { entryIds, requestIds },
+				resolve,
+				reject,
+			});
+			this.drain();
+		}).then((view) => {
+			const links = (view as unknown as { inputCausality?: MissionThreadInputCausality[] }).inputCausality;
+			if (!Array.isArray(links)) throw new Error("Invalid input causality read");
+			return links;
+		});
 	}
 
 	readAcceptedInput(directory: string, requestId: string): Promise<boolean> {
@@ -202,6 +231,7 @@ export class ColdViewReader {
 						...(job.diagnosticHistory === undefined ? {} : { diagnosticHistory: job.diagnosticHistory }),
 						...(job.todoCount ? { todoCount: true } : {}),
 						...(job.inputReceipt === undefined ? {} : { inputReceipt: job.inputReceipt }),
+						...(job.inputCausality === undefined ? {} : { inputCausality: job.inputCausality }),
 					},
 					execArgv: [],
 				});

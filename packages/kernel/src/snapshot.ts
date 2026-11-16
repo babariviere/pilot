@@ -19,6 +19,7 @@ import type {
 	SessionCompletion,
 	TranscriptContext,
 } from "@pilot/protocol";
+import type { MissionThreadInputCausality } from "../../protocol/src/mission-thread.ts";
 import { activeConversation, lineage } from "./attempts.ts";
 import { AttentionDoc, normalizeCompletion } from "./attention.ts";
 import { chatEventEntries } from "./chat-events.ts";
@@ -45,6 +46,56 @@ export async function readAcceptedInput(directory: string, requestId: string): P
 	if (!storage) return false;
 	try {
 		return (await findInputReceipt(storage, requestId, context)) !== undefined;
+	} finally {
+		await storage.close(context);
+	}
+}
+
+/** Original input/answer links only. Runs in the cold reader, never on the daemon event loop. */
+export async function readInputCausality(
+	directory: string,
+	entryIds: number[],
+	requestIds: string[],
+): Promise<MissionThreadInputCausality[]> {
+	// These are the history page and topic-event limits. They bound the requested join and its result,
+	// not the amount of history kept. Scan submission metadata in pages without loading message bodies.
+	if (
+		entryIds.length > 100 ||
+		requestIds.length > 2048 ||
+		entryIds.some((id) => !Number.isSafeInteger(id) || id < 1) ||
+		requestIds.some((id) => typeof id !== "string" || !id)
+	)
+		throw new Error("Invalid input causality read");
+	if (!entryIds.length && !requestIds.length) return [];
+	const storage = await openSessionReader(directory);
+	if (!storage) throw new Error("Input history is unavailable");
+	try {
+		const entries = new Set(entryIds),
+			requests = new Set(requestIds);
+		const links: MissionThreadInputCausality[] = [];
+		let cursor: Cursor | undefined;
+		do {
+			const page = await storage.scanSubmissions({}, 256, cursor, context);
+			for (const input of page.items) {
+				if (
+					input.type !== "input" ||
+					!(
+						(input.requestId !== undefined && requests.has(input.requestId)) ||
+						(input.entry !== undefined && entries.has(Number(input.entry))) ||
+						(input.status === "done" && entries.has(Number(input.answer)))
+					)
+				)
+					continue;
+				links.push({
+					...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+					...(input.entry === undefined ? {} : { entryId: Number(input.entry) }),
+					...(input.status === "done" ? { answerId: Number(input.answer) } : {}),
+					status: input.status,
+				});
+			}
+			cursor = page.next;
+		} while (cursor !== undefined);
+		return links;
 	} finally {
 		await storage.close(context);
 	}

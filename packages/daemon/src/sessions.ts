@@ -11278,6 +11278,12 @@ ${run.excerpt}`,
 	 * Entries older than the active transcript (hidden by compaction or reset), read from storage without waking a
 	 * parked kernel. Readers do not block the live writer, so this works while the session runs.
 	 */
+	async inputCausality(id: string, entryIds: number[], requestIds: string[]) {
+		const meta = this.require(id);
+		this.validateMode(meta);
+		return this.coldReader.readInputCausality(join(this.dir(id), "durable"), entryIds, requestIds);
+	}
+
 	async history(
 		id: string,
 		before: number,

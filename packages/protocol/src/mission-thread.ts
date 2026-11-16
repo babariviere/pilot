@@ -39,12 +39,14 @@ export interface MissionThread {
 	createdBy: { kind: "user"; operationId: string; host: OperationHost };
 	references: MissionThreadReference[];
 	/** Saved input intents, not admission proof. Look up the exact operation receipt. */
-	inputs: { operationId: string; sessionId: string }[];
+	inputs: { operationId: string; sessionId: string; at?: number }[];
 	/**
 	 * The thread chat: a read-only chat that discusses this thread with the user. The operation that started it, and
 	 * its session once started. A closed (resolved or discarded) thread's chat is archived; reopening starts a new one.
 	 */
 	chat?: { operationId: string; sessionId?: string };
+	/** Original dedicated chats, including closed chats. Links only, never copied messages. */
+	chats?: Array<{ operationId: string; sessionId: string }>;
 	/** The latest handoff to the planner. */
 	handoff?: MissionThreadHandoff;
 	/** The confirmed revision that resolved the thread, and the tasks it added. */
@@ -79,4 +81,42 @@ export interface MissionThreadHistory {
 	/** The thread chat's history once it has one; before that, the original coordinator history. */
 	scope: "coordinator-history" | "thread-chat";
 	history: SessionHistoryPage;
+	conversation: MissionThreadConversation;
+}
+
+/** A read projection of original records. Missing reply links never imply an answer. */
+export interface MissionThreadConversation {
+	/** Exact queued sends or legacy sends whose original placement is unknown. Never invent an entry ID. */
+	queuedMessages: Array<{
+		operationId: string;
+		text: string;
+		timestamp: number | null;
+		replyState: "pending" | "unknown";
+	}>;
+	entries: Array<{
+		id: number;
+		/** Distinguishes several exact user sends carried by one original planning input. */
+		operationId?: string;
+		sessionId: string;
+		role: "you" | "chat" | "coordinator";
+		text: string;
+		/** An explicitly linked coordinator reply is shown whole, not claimed as a topic-only answer. */
+		shared: boolean;
+		timestamp: number | null;
+		replyState: "unknown" | "pending" | "awaiting" | "answered" | "unanswered";
+		original: Extract<MissionThreadReference, { kind: "history" }>;
+	}>;
+	more: boolean;
+	nextBefore: number | null;
+	nextSessionId: string | null;
+	/** Coordinator records without exact topic links stay in original activity. */
+	earlierContext: "unknown" | "complete";
+}
+
+/** Exact durable submission lifecycle. A shared answer does not establish topic-only attribution. */
+export interface MissionThreadInputCausality {
+	requestId?: string;
+	entryId?: number;
+	answerId?: number;
+	status: "queued" | "placed" | "done" | "unanswered";
 }
