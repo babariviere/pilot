@@ -96,6 +96,9 @@ pub const METHODS: &[&str] = &[
     "day.plan.dropEarlierAnswers",
     "day.plan.repairStart",
     "day.plan.repairApply",
+    "day.plan.revisit",
+    "day.plan.confirmRevision",
+    "day.plan.checkRevision",
     "day.plan.checkWork",
     "day.plan.check",
     "day.plan.checkNew",
@@ -340,6 +343,13 @@ pub(crate) enum Command {
     RepairStart(String),
     /// Apply the repair agent's fix (plan-continue or interview-save).
     RepairApply(crate::plan::RepairApplyIntent),
+    /// Ask Pilot to compare the published plan with what the user wants now (plan-revisit), or for a fresh
+    /// preview of a stale proposal after Pause (revision-preview).
+    Revisit(String),
+    /// Apply the exact revision the user confirmed (revision-confirm).
+    ConfirmRevision(crate::plan::ConfirmRevisionIntent),
+    /// Look up a Revisit write whose answer was lost. Never resends.
+    CheckRevision(crate::plan::RevisionRef),
     PlanCheck {
         mission: String,
         interview: String,
@@ -958,6 +968,22 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             id(&r.question_id)?;
             C::AskQuestion(r)
         }
+        "day.plan.revisit" => {
+            let r: crate::plan::RevisitIntent = decode(&args)?;
+            mission(&r.mission_id)?;
+            C::Revisit(r.mission_id)
+        }
+        "day.plan.confirmRevision" => {
+            let r: crate::plan::ConfirmRevisionIntent = decode(&args)?;
+            mission(&r.mission_id)?;
+            id(&r.revision_id)?;
+            C::ConfirmRevision(r)
+        }
+        "day.plan.checkRevision" => {
+            let r: crate::plan::RevisionRef = decode(&args)?;
+            mission(&r.mission_id)?;
+            C::CheckRevision(r)
+        }
         "day.mission.pause" => {
             let r: crate::model::PauseIntent = decode(&args)?;
             mission(&r.mission_id)?;
@@ -1548,6 +1574,42 @@ mod tests {
         gate.save_sequence += 1; // Another form save was enqueued behind this ACK.
         assert_eq!(ack.admit(&gate), Err(Error::Stale));
         assert_eq!(Command::Flush(1, 8, None).admit(&gate), Ok(()));
+    }
+
+    #[test]
+    fn revision_commands_reach_the_host_and_args_are_exact() {
+        assert!(matches!(
+            command("day.plan.revisit", json!({"missionId":"m"})),
+            Ok(Command::Revisit(m)) if m == "m"
+        ));
+        assert!(matches!(
+            command(
+                "day.plan.confirmRevision",
+                json!({"missionId":"m","revisionId":"r","digest":"d"})
+            ),
+            Ok(Command::ConfirmRevision(_))
+        ));
+        assert!(matches!(
+            command(
+                "day.plan.checkRevision",
+                json!({"missionId":"m","revisionId":"r"})
+            ),
+            Ok(Command::CheckRevision(_))
+        ));
+        for name in [
+            "day.plan.revisit",
+            "day.plan.confirmRevision",
+            "day.plan.checkRevision",
+        ] {
+            assert!(METHODS.contains(&name), "{name}");
+        }
+        assert!(
+            command(
+                "day.plan.confirmRevision",
+                json!({"missionId":"m","revisionId":"r"})
+            )
+            .is_err()
+        );
     }
 
     #[test]

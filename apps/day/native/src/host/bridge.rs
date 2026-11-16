@@ -565,6 +565,30 @@ async fn run(
         Command::RepairApply(intent) => Some(planning_request(host, &intent.mission_id, |read| {
             plan_host::repair_apply_request(read, intent)
         })?),
+        Command::Revisit(mission) => Some(planning_request(host, mission, |read| {
+            crate::plan_revision_host::request(read, mission)
+        })?),
+        Command::ConfirmRevision(intent) => {
+            Some(planning_request(host, &intent.mission_id, |read| {
+                crate::plan_revision_host::confirm(read, intent)
+            })?)
+        }
+        Command::CheckRevision(r) => {
+            let id = host
+                .planning_operations(&r.mission_id)
+                .iter()
+                .find(|o| {
+                    matches!(
+                        o["kind"].as_str(),
+                        Some("plan-revisit" | "revision-preview" | "revision-confirm")
+                    ) && matches!(o["state"].as_str(), Some("pending" | "unknown"))
+                        && (r.revision_id.is_empty() || o["proposalId"] == r.revision_id)
+                })
+                .and_then(|o| o["operationId"].as_str())
+                .ok_or(Error::Unknown)?
+                .to_owned();
+            Some(Work::CheckPlanning(id))
+        }
         Command::CheckWork(mission) => {
             let id = host
                 .planning_operations(mission)
@@ -732,6 +756,9 @@ async fn run(
         | Command::DropEarlierAnswers(id)
         | Command::RepairStart(id)
         | Command::RepairApply(crate::plan::RepairApplyIntent { mission_id: id, .. })
+        | Command::Revisit(id)
+        | Command::ConfirmRevision(crate::plan::ConfirmRevisionIntent { mission_id: id, .. })
+        | Command::CheckRevision(crate::plan::RevisionRef { mission_id: id, .. })
         | Command::CheckWork(id) => {
             // Losing a newer read cannot erase an entered write's exact outcome.
             value = planning(host, id).unwrap_or(Value::Null);

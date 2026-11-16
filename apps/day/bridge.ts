@@ -979,6 +979,32 @@ export class ConnectedPlans implements PlanningFeed {
 		return this.#outcome(r.outcome, missionId);
 	}
 
+	/** Asks Pilot to compare the published plan with what the user wants now, or for a fresh preview after Pause. */
+	async revisit(intent: { missionId: string }): Promise<PlanOutcome> {
+		return this.#planWrite(intent.missionId, "day.plan.revisit", { missionId: intent.missionId });
+	}
+
+	/** Applies the exact revision the user opened, by its id and digest. A changed revision is refused. */
+	async confirmRevision(intent: { missionId: string; revisionId: string; digest: string }): Promise<PlanOutcome> {
+		return this.#planWrite(intent.missionId, "day.plan.confirmRevision", { ...intent });
+	}
+
+	/** Looks up a Revisit write whose answer was lost. It never sends again. */
+	async checkRevision(intent: { missionId: string; revisionId: string }): Promise<PlanOutcome> {
+		return this.#planWrite(intent.missionId, "day.plan.checkRevision", { ...intent });
+	}
+
+	/** One planning write over the bridge: the page it returns replaces the shown one. */
+	async #planWrite(missionId: string, name: string, args: Record<string, string>): Promise<PlanOutcome> {
+		const r = await call<PlanPage | null>(this.#window, name, args);
+		if (!r.ok) {
+			void this.refresh();
+			return this.#refused(r.refusal, missionId);
+		}
+		this.#take(missionId, r.snapshot);
+		return this.#outcome(r.outcome, missionId);
+	}
+
 	/** Unstick's fix: removes saved answers to an earlier wording, so new answers save. */
 	async dropEarlierAnswers(intent: { missionId: string }): Promise<PlanOutcome> {
 		const missionId = intent.missionId;
