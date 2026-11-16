@@ -32,6 +32,11 @@ pub const METHODS: &[&str] = &[
     "day.intake.read",
     "day.linear.read",
     "day.preferences.read",
+    "day.models.read",
+    "day.models.write",
+    "day.models.check",
+    "day.models.signIn",
+    "day.models.recovery",
     "day.preferences.save",
     "day.preferences.check",
     "day.preferences.history",
@@ -237,6 +242,11 @@ pub(crate) enum Command {
     IntakeRead,
     LinearRead,
     PreferencesRead,
+    ModelsRead,
+    ModelsRecovery(String),
+    ModelsWrite(crate::host::model_controls::Intent),
+    ModelsCheck(String),
+    ModelsSignIn(crate::host::model_controls::SignIn),
     PreferencesSave(crate::host::preferences::Intent),
     PreferencesCheck(String),
     PreferencesHistory(crate::host::preferences::History),
@@ -532,6 +542,42 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 return Err(Error::Invalid);
             }
             C::PreferencesRead
+        }
+        "day.models.read" => {
+            if args != json!({}) {
+                return Err(Error::Invalid);
+            }
+            C::ModelsRead
+        }
+        "day.models.write" => {
+            let r: crate::host::model_controls::Intent = exact(args)?;
+            r.validate()?;
+            C::ModelsWrite(r)
+        }
+        "day.models.signIn" => {
+            let r: crate::host::model_controls::SignIn = exact(args)?;
+            r.validate()?;
+            C::ModelsSignIn(r)
+        }
+        "day.models.check" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Lookup {
+                operation_id: String,
+            }
+            let r: Lookup = exact(args)?;
+            mission(&r.operation_id)?;
+            C::ModelsCheck(r.operation_id)
+        }
+        "day.models.recovery" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Request {
+                session_id: String,
+            }
+            let r: Request = exact(args)?;
+            mission(&r.session_id)?;
+            C::ModelsRecovery(r.session_id)
         }
         "day.preferences.save" => {
             let r: crate::host::preferences::Intent = exact(args)?;
@@ -1005,6 +1051,8 @@ impl Command {
                     | Self::IntakeRead
                     | Self::LinearRead
                     | Self::PreferencesRead
+                    | Self::ModelsRead
+                    | Self::ModelsRecovery(_)
                     | Self::PreferencesHistory(_)
                     | Self::FeedbackRead(_)
                     | Self::ThreadsRead(_)

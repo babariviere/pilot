@@ -13,6 +13,7 @@ pub(crate) mod feedback;
 pub(crate) mod intake;
 mod inventory;
 mod journal;
+pub(crate) mod model_controls;
 #[cfg(target_os = "macos")]
 mod native_clock;
 pub(crate) mod navigation;
@@ -894,6 +895,7 @@ fn publish_planning(shared: &Shared, record: &planning::PlanningRecord) {
                 | "native-project-action"
                 | "user-verification"
                 | "project-preferences-update"
+                | "model-controls"
                 | "user-feedback"
         )
     ) || record.operation["kind"]

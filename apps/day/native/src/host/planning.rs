@@ -72,6 +72,7 @@ impl PlanningRecord {
                         | "native-project-action"
                         | "user-verification"
                         | "project-preferences-update"
+                        | "model-controls"
                         | "user-feedback"
                         | "feedback-work"
                         | "thread-create"
@@ -107,6 +108,9 @@ impl PlanningRecord {
         }
         if o["kind"] == super::preferences::KIND {
             super::preferences::validate_record(&self.source, o)?;
+        }
+        if o["kind"] == super::model_controls::KIND {
+            super::model_controls::validate_record(&self.source, o)?;
         }
         if o["kind"] == super::feedback::KIND {
             super::feedback::validate_record(o)?;
@@ -190,6 +194,7 @@ fn record_pinned(
                     | "native-project-action"
                     | "user-verification"
                     | "project-preferences-update"
+                    | "model-controls"
                     | "user-feedback"
                     | "feedback-work"
                     | "thread-create"
@@ -214,6 +219,7 @@ fn record_pinned(
                     | "native-project-action"
                     | "user-verification"
                     | "project-preferences-update"
+                    | "model-controls"
                     | "user-feedback"
                     | "feedback-work"
                     | "thread-create"
@@ -331,6 +337,9 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
     }
     if op["kind"] == super::preferences::KIND && r["state"] == "accepted" {
         super::preferences::exact_result(op, &r)?;
+    }
+    if op["kind"] == super::model_controls::KIND && r["state"] == "accepted" {
+        super::model_controls::exact_result(op, &r)?;
     }
     if op["kind"] == super::feedback::KIND && r["state"] == "accepted" {
         super::feedback::exact_result(op, &r)?;

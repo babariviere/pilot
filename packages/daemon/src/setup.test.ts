@@ -9,6 +9,7 @@ import { CredentialClient } from "@pilot/kernel/credential-client";
 import type { SetupChallenge, SetupRun, SetupServerMessage } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { CredentialBroker } from "./credential-broker.ts";
+import { GitHubSetupService } from "./github-setup.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -88,9 +89,11 @@ if((await c.pi.list()).some(v=>v.providerId!=='anthropic'))throw Error('list sco
 	assert.throws(() => setup.start(runRequest), /still running/);
 	await until(() => messages.some((message) => message.type === "setup.challenge"));
 	const challenge = (messages.find((m) => m.type === "setup.challenge") as { challenge: SetupChallenge }).challenge;
+	assert.deepEqual(setup.nativeChallenge(run.id), challenge);
 	assert.throws(() => setup.answer(run.id, challenge.id, "private-code#wrong-state"), /complete code#state/);
 	const answer = `private-code#${new URL(challenge.url).searchParams.get("state")}`;
 	setup.answer(run.id, challenge.id, answer);
+	assert.equal(setup.nativeChallenge(run.id), null);
 	assert.throws(() => setup.answer(run.id, challenge.id, answer), /no longer/);
 	await until(() => setup.get(run.id).state === "done");
 	assert.equal(setup.blockers().length, 0);
@@ -206,6 +209,14 @@ test("real setup HTTP/WebSocket API works without chats and refuses unsupported 
 	const projects = new ProjectStore(dir),
 		sessions = new SessionManager(dir, projects),
 		terminals = new TerminalManager();
+	const native = new GitHubSetupService(
+		dir,
+		{ hostId: "local", daemonId: "fixture", lineageId: "lineage" },
+		{ userHome: dir, env: {} },
+	);
+	await native.status();
+	const capability = JSON.parse(await readFile(join(dir, "github-app-capability"), "utf8")).token;
+	t.after(() => native.close());
 	const server = createDaemonServer(
 		{ home: dir, host: "127.0.0.1", port: 0 },
 		sessions,
@@ -221,6 +232,10 @@ test("real setup HTTP/WebSocket API works without chats and refuses unsupported 
 		undefined,
 		undefined,
 		setup,
+		undefined,
+		undefined,
+		undefined,
+		native,
 	);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
@@ -247,12 +262,28 @@ test("real setup HTTP/WebSocket API works without chats and refuses unsupported 
 	ws.on("message", (raw) => messages.push(JSON.parse(String(raw))));
 	await once(ws, "open");
 	await until(() => messages.some((m) => m.type === "setup.challenge"));
+	const signIn = `${base}/api/model-controls/sign-in/${run.id}`;
+	const denied = await fetch(signIn);
+	assert.notEqual(denied.status, 200);
+	await denied.arrayBuffer();
+	const challengeRead = await fetch(signIn, { headers: { "x-pilot-github-capability": capability } });
+	assert.equal(challengeRead.status, 200);
+	assert.equal((await challengeRead.json()).challenge.type, "manual_code");
+	const staleNative = await fetch(signIn, {
+		method: "POST",
+		headers: { "content-type": "application/json", "x-pilot-github-capability": capability },
+		body: JSON.stringify({ challengeId: "stale", answer: "private-native-code" }),
+	});
+	assert.equal(staleNative.status, 409);
+	assert.doesNotMatch(await staleNative.text(), /private-native-code/);
 	ws.send(JSON.stringify({ type: "setup.answer", challengeId: "old-run-challenge", answer: "private-code" }));
 	await until(() => messages.some((m) => m.type === "setup.error"));
 	assert.equal(JSON.stringify(messages).includes("private-code"), false);
 	const cancelled = await fetch(`${base}/api/setup/runs/${run.id}`, { method: "DELETE" });
 	assert.equal(cancelled.status, 200);
 	assert.equal(((await cancelled.json()) as SetupRun).reauthenticationRequired, true);
+	const afterCancel = await fetch(signIn, { headers: { "x-pilot-github-capability": capability } });
+	assert.equal((await afterCancel.json()).challenge, null);
 	assert.equal((await fetch(`${base}/api/setup/runs`)).status, 200);
 	assert.equal((await fetch(`${base}/api/setup`, { headers: { origin: "https://evil.test" } })).status, 403);
 	const unsupported = await fetch(`${base}/api/setup/runs`, {

@@ -7,6 +7,7 @@ import {
 	DiffView,
 	type DiffViewClasses,
 	type DiffViewRef,
+	Input,
 	Radio,
 	Select,
 	type SelectItem,
@@ -37,6 +38,33 @@ import update from "./icons/update.svg";
  * width here for all pages. Long paragraphs inside may keep a narrower measure for comfortable reading.
  */
 export const PAGE_COLUMN = "w-full max-w-5xl self-center px-6 pb-24 pt-10";
+
+/** A labelled single-line settings field. The page owns its value. */
+export function Field(props: {
+	label: string;
+	value: string;
+	masked?: boolean;
+	placeholder?: string;
+	testID?: string;
+	onChange: (value: string) => void;
+}) {
+	return (
+		<View class="gap-1.5">
+			<Text class="text-sm text-foreground">{props.label}</Text>
+			<Input
+				masked={props.masked}
+				autoCorrect={false}
+				autoCapitalize="none"
+				testID={props.testID}
+				accessibilityLabel={props.label}
+				value={props.value}
+				placeholder={props.placeholder}
+				onChange={({ value }) => props.onChange(value)}
+				class="min-h-9 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
+			/>
+		</View>
+	);
+}
 
 // One small family of line icons, drawn on a 16-point grid with the same
 // stroke. They are template images: the class's tint colors them. They

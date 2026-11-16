@@ -102,6 +102,7 @@ import { parseMissionLifecycle } from "./mission-lifecycle.ts";
 import type { MissionService } from "./mission-service.ts";
 import { isThreadOperation, MissionThreads } from "./mission-threads.ts";
 import type { MissionStore } from "./missions.ts";
+import { MODEL_CONTROLS, ModelControls } from "./model-controls.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
 import type { ModelCatalog } from "./models.ts";
 import { NativeAttention } from "./native-attention.ts";
@@ -963,7 +964,9 @@ export function createDaemonServer(
 					journal,
 				})
 			: undefined;
+	const modelControls = new ModelControls(models, projects, setup, sessions, _config.modelScopeReadOnly);
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
+		if (op.kind === MODEL_CONTROLS) throw new Error("Model settings outcome unknown; lookup only");
 		if (isThreadOperation(op.kind)) {
 			if (!missionThreads) throw new Error("Topic lookup unavailable");
 			return missionThreads.admit(op, false);
@@ -1253,6 +1256,40 @@ export function createDaemonServer(
 			throw new SetupError(404, "Unknown GitHub import operation.");
 		}
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "model-controls") {
+			res.setHeader("cache-control", "no-store");
+			if (!githubSetup) throw new ServiceUnavailable("Native model settings unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (parts.length === 4 && parts[2] === "recovery" && req.method === "GET") {
+				try {
+					return json(res, 200, await modelControls.recovery(url.searchParams.get("projectId") ?? "", parts[3]!));
+				} catch {
+					throw new HttpError(409, "Failed work or eligible models changed. Read again.");
+				}
+			}
+			if (parts.length === 2 && req.method === "GET") {
+				try {
+					return json(res, 200, await modelControls.read(url.searchParams.get("projectId") ?? undefined));
+				} catch {
+					throw new ServiceUnavailable("AI settings could not be read.");
+				}
+			}
+			if (parts.length === 4 && parts[2] === "sign-in" && setup) {
+				if (req.method === "GET")
+					return json(res, 200, { run: setup.get(parts[3]!), challenge: setup.nativeChallenge(parts[3]!) });
+				if (req.method === "POST") {
+					// setup-provider limits responses to 4096 ASCII bytes; 8KiB includes JSON and the challenge ID.
+					const body = await readJson<{ challengeId: string; answer: string }>(req, 8192);
+					try {
+						setup.answer(parts[3]!, body.challengeId, body.answer);
+					} catch {
+						throw new HttpError(409, "This sign-in answer could not be accepted. Check the current sign-in.");
+					}
+					return json(res, 200, { accepted: true });
+				}
+			}
+			throw new HttpError(404, "Not found");
+		}
 		if (parts[1] === "setup") {
 			res.setHeader("cache-control", "no-store");
 			if (parts[2] === "github" && parts.length === 3) {
@@ -1632,6 +1669,24 @@ export function createDaemonServer(
 						res,
 						200,
 						await journal.execute(operation, (op, entry) => planningWorkers.enroll(op, entry.firstEntry)),
+					);
+				} finally {
+					end();
+				}
+			}
+			if (operation?.kind === MODEL_CONTROLS) {
+				res.setHeader("cache-control", "no-store");
+				if (!githubSetup) throw new ServiceUnavailable("Native model settings unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				const saved = await journal.lookup(operation);
+				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					return json(
+						res,
+						200,
+						await journal.execute(operation, (op, entry) => modelControls.admit(op, journal, entry.firstEntry)),
 					);
 				} finally {
 					end();

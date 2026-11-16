@@ -9,6 +9,7 @@ import type { FeedbackMirror } from "./feedbackFeed";
 import type { DayFeed } from "./feeds";
 import type { IntakeMirror } from "./intakeFeed";
 import type { LinearMirror } from "./linearFeed";
+import type { ModelControls } from "./modelControls";
 import { glide } from "./motion";
 import type { PreferencesMirror } from "./preferencesFeed";
 import type { SessionChatMirror } from "./sessionChat";
@@ -17,6 +18,8 @@ import type { ScopeMirror } from "./todayScope";
 
 /** Today's read model as Rust last published it, and the feed to change it. */
 export type Day = {
+	/** Native AI settings; absent from mock worlds unless explicitly supplied. */
+	models?: ModelControls;
 	/** Sends intents. Never written to from TSX state. */
 	feed: DayFeed;
 	/** A mirror of Rust's read model. Only the feed's listener sets it. */

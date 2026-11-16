@@ -107,6 +107,11 @@ export class SetupService {
 	list(): SetupRun[] {
 		return [...this.runs.values()].map((run) => ({ ...run.state }));
 	}
+	/** Native sign-in only: current ephemeral challenge, never output, answers or credentials. */
+	nativeChallenge(id: string): SetupChallenge | null {
+		const run = this.require(id);
+		return run.challenge && busy(run) && !run.answered && !run.cancellation ? { ...run.challenge } : null;
+	}
 	start(request: SetupStartRequest): SetupRun {
 		if (
 			!request ||

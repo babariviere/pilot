@@ -38,6 +38,7 @@ fn view() -> SavedView {
         reminders: vec![format!("task/project/export/t1#{}\nreport", "a".repeat(64))],
         linear: "project/ln-219".into(),
         today_project: "project".into(),
+        model_settings: String::new(),
         settings: true,
         project_setup: vec![
             "/Users/test/source".into(),
@@ -82,6 +83,19 @@ fn deferred_feedback_round_trips_and_old_windows_default_to_none() {
         invalid.feedback_later = vec![key.into()];
         assert!(!invalid.feedback_valid(), "{key}");
     }
+}
+
+#[test]
+fn unsaved_model_configuration_round_trips_without_becoming_an_action() {
+    let mut original = view();
+    original.model_settings = r#"{"kind":"defaults","binding":"earlier-read","project":"project","defaults":{"defaultModel":"chosen"},"patterns":[],"replacement":"24"}"#.into();
+    let mut json = serde_json::to_value(&original).unwrap();
+    let restored: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert_eq!(restored.model_settings, original.model_settings);
+    assert!(restored.text_bytes() >= restored.model_settings.len());
+    json.as_object_mut().unwrap().remove("modelSettings");
+    let old: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert!(old.model_settings.is_empty());
 }
 
 #[test]

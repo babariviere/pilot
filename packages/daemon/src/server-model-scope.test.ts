@@ -4,8 +4,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type TestContext, test } from "node:test";
+import { before, type TestContext, test } from "node:test";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import type { ModelList, ModelScope, ModelScopeConflict, ModelScopeUpdateResponse } from "@pilot/protocol";
 import { GitHubSetupService } from "./github-setup.ts";
 import { modelScopeHash } from "./model-scope.ts";
@@ -15,6 +16,8 @@ import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
+
+before(() => installCredentialBrokerHooks());
 
 async function fixture(t: TestContext, readOnly = false) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-model-scope-api-"));
@@ -104,7 +107,8 @@ test("models GET resolves exact cwd or project path without writes or session/pr
 	await mkdir(nested);
 	const globalFile = join(local.home, "settings.json");
 	const projectFile = join(projectPath, ".pi", "settings.json");
-	const globalBytes = '{"defaultProvider":"fixture","defaultModel":"one","defaultThinkingLevel":"low"}';
+	const globalBytes =
+		'{"defaultProvider":"fixture","defaultModel":"one","defaultThinkingLevel":"low","pilotTaskPriceLimit":1}';
 	const projectBytes = '{"defaultModel":"two","defaultThinkingLevel":"high","enabledModels":["fixture/two:off"]}';
 	await writeFile(globalFile, globalBytes);
 	await writeFile(projectFile, projectBytes);

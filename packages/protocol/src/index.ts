@@ -1839,6 +1839,8 @@ export interface ModelOption {
 /** GET /api/models?projectId=… or ?cwd=…; purpose=task-start applies the task-start price cap. */
 export interface ModelList {
 	models: ModelOption[];
+	/** Task-start maximum catalogue input + output dollars per million tokens. Null blocks new starts. */
+	priceCeiling?: { limit: number | null; source: "reference" | "replacement" | "unavailable" };
 	/** Raw configured pi default for that directory, not a resolved/validated fallback. */
 	defaultModel?: string;
 	/** Passive fresh Build Pi startup selection without a request.model/Project.model override,

@@ -1,4 +1,4 @@
-// Settings: for now one section, this project's preferences. They are small
+// Settings combines native AI controls with this project's preferences. These are small
 // choices the user made, which coordinators follow when they plan and work
 // in this project. They never give Pilot permission to do anything, and
 // they are not shared with other projects.
@@ -11,6 +11,7 @@ import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, untrack
 import { Button, Collapsible, Input } from "nsh/base";
 import type { Day } from "./day";
 import { keepField, keepScroll } from "./kept";
+import { ModelSettingsSection } from "./ModelSettings";
 import { glide } from "./motion";
 import { ProjectsSection } from "./ProjectsSection";
 import {
@@ -550,6 +551,7 @@ export function SettingsScreen(props: { day: Day }) {
 				<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
 					Settings
 				</Text>
+				<If when={props.day.models}>{(controls) => <ModelSettingsSection controls={controls()} />}</If>
 				<Preferences mirror={mirror} />
 				<ProjectsSection />
 				<History mirror={mirror} />

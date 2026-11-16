@@ -16,6 +16,7 @@ import { deliveryTitles } from "./deliveryView";
 import { ConnectedFeedback, mirrorFeedback } from "./feedbackFeed";
 import { ConnectedIntake, mirrorIntake } from "./intakeFeed";
 import { ConnectedLinear, mirrorLinear } from "./linearFeed";
+import { connectedModelControls } from "./modelControls";
 import { flushAll } from "./planCommands";
 import { mirrorPlanning, type Plans } from "./planning";
 import { answerDrafts, answerPicks } from "./planView";
@@ -293,6 +294,7 @@ async function connect() {
 		mirrorSessionChat(new ConnectedSessionChat(window)),
 	);
 	// New's projects are read when New opens; reading sends nothing.
+	day.models = connectedModelControls(window);
 	const plans = mirrorPlanning(planFeed, mirrorChats(new ConnectedChats(window)));
 	const rituals = mirrorRituals(ritualFeed, rootRecap);
 	const update = await connectedUpdates(window);

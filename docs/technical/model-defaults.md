@@ -8,17 +8,33 @@ override from `/api/projects`; they must not save resolved values as explicit ov
 All new fields are optional. Existing `defaultModel` remains the raw configured value and
 `ModelOption.thinking` remains the raw scope-pattern pin. Legacy clients can ignore the additions.
 
-| Field | Meaning |
-| --- | --- |
-| `resolvedDefaultModel` | Core fresh Build Pi selection with no request/project model override, only if present in the returned choices. Uses the pinned SDK `findInitialModel`, including its authenticated default and provider fallback ordering. Missing passive metadata, no model, or an out-of-scope choice means omission, not a guessed first scoped model. |
-| `models[].defaultThinking` | Fresh Build chat with that explicit model and omitted thinking: per-model setting, global setting, then the initial SDK model's already-clamped thinking, clamped again to the target model. |
-| `models[].modelChangeThinking` | Existing-session `changeModel` with omitted thinking: scope pin, per-model setting, then global setting, clamped to the target. Absent when current session thinking is required. Non-thinking targets always report `off`. |
-| `models[].taskDefaultThinking` | Only with `purpose=task-start`: the actual task selector's scope pin, per-model setting, global setting, then `medium`, clamped. |
+| Field                          | Meaning                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `resolvedDefaultModel`         | Core fresh Build Pi selection with no request/project model override, only if present in the returned choices. Uses the pinned SDK `findInitialModel`, including its authenticated default and provider fallback ordering. Missing passive metadata, no model, or an out-of-scope choice means omission, not a guessed first scoped model. |
+| `models[].defaultThinking`     | Fresh Build chat with that explicit model and omitted thinking: per-model setting, global setting, then the initial SDK model's already-clamped thinking, clamped again to the target model.                                                                                                                                               |
+| `models[].modelChangeThinking` | Existing-session `changeModel` with omitted thinking: scope pin, per-model setting, then global setting, clamped to the target. Absent when current session thinking is required. Non-thinking targets always report `off`.                                                                                                                |
+| `models[].taskDefaultThinking` | Only with `purpose=task-start`: the actual task selector's scope pin, per-model setting, global setting, then `medium`, clamped.                                                                                                                                                                                                           |
 
 With `purpose=task-start`, `resolvedDefaultModel` instead describes the task selector's admitted
 default: raw configured default or first allowed model when unconfigured. A configured default
 outside scope or above the price cap is rejected by task admission and omitted here. It does not
 fall back through the SDK's provider policy. Explicit task/project overrides are still separate.
+
+`priceCeiling` on task-start lists reports the applied input + output catalogue
+dollars per million tokens. Scoped reference models supply the ceiling. If their
+prices are unavailable, `pilotTaskPriceLimit` in global Pi settings supplies an
+explicit positive replacement. Without either, the list is empty and admission
+refuses the affected start, rather than removing the cap. Ordinary catalogue reads
+and running chats are unchanged.
+
+Day's native `model-controls` operation uses the existing immutable operation
+journal and native host capability. Reads fence global and project configuration;
+saves preserve unrelated settings bytes and advanced per-model thinking. Recovery
+never re-enters an uncertain save, login, cancel or logout. Sign-in challenges and
+answers use a separate ephemeral endpoint, never a durable operation payload or
+window capture. Failed-chat replacement uses the session's source token and actual
+cwd, then revalidates the capped catalogue inside the passive save guard. It does
+not resume work.
 
 ## Existing runtime differences
 

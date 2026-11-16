@@ -5,6 +5,8 @@
  * `auth.json`, `models.json` or `models-store.json` changes (with a backstop TTL for credential sources
  * outside those files). Settings are re-read on every request, so scope and default changes apply immediately.
  */
+
+import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
@@ -33,6 +35,7 @@ import {
 	type ModelRecommendationTask,
 	recommendMissionModel,
 } from "./mission-model-recommendation.ts";
+import { type ModelDefaults, readModelDefaults, writeModelDefaults } from "./model-controls-store.ts";
 import { modelChangeThinking, newChatDefaults, taskDefaultThinking } from "./model-defaults.ts";
 import { modelScopeHash, modelScopeUpdate, readModelScopeValue, writeModelScope } from "./model-scope.ts";
 import { readModelSettings, settingsPath } from "./model-settings.ts";
@@ -275,6 +278,19 @@ export class ModelCatalog {
 			return Promise.reject(error);
 		}
 	}
+	modelDefaults() {
+		return readModelDefaults(this.agentDir);
+	}
+	async configurationHash(cwd: string) {
+		const settings = await readModelSettings(cwd, this.agentDir);
+		return createHash("sha256")
+			.update(JSON.stringify([settings.getGlobalSettings(), settings.getProjectSettings()]))
+			.digest("hex");
+	}
+	async saveDefaults(expectedHash: string, defaults: ModelDefaults) {
+		await writeModelDefaults(this.agentDir, expectedHash, defaults);
+		this.lists.clear();
+	}
 
 	/** Host-local settings only. Resolution returns identifiers/codes, never runtime models or auth errors. */
 	async scope(projectCwd?: string): Promise<ModelScope> {
@@ -349,11 +365,12 @@ export class ModelCatalog {
 
 	/** The same scoped, price-capped choices used by start admission. */
 	async listTaskModels(cwd: string): Promise<ModelList> {
-		const { list, settings, allowed } = await this.taskModels(cwd);
+		const { list, settings, allowed, cap, capSource } = await this.taskModels(cwd);
 		const { resolvedDefaultModel: _newChatDefault, ...legacy } = list;
 		const name = list.defaultModel ?? allowed[0]?.option.id;
 		return {
 			...legacy,
+			priceCeiling: { limit: cap ?? null, source: capSource },
 			models: allowed.map(({ option, model }) => ({
 				...option,
 				taskDefaultThinking: taskDefaultThinking(settings, model!, option.thinking),
@@ -383,21 +400,38 @@ export class ModelCatalog {
 			model: runtime.getModel(option.provider, option.id.slice(option.provider.length + 1)),
 		}));
 		const price = (model: ChatModel) => model.cost.input + model.cost.output;
+		const priced = (model: ChatModel) =>
+			Number.isFinite(model.cost.input) &&
+			model.cost.input >= 0 &&
+			Number.isFinite(model.cost.output) &&
+			model.cost.output >= 0;
 		const references = scoped.filter(
-			({ model }) => model && TASK_START_REFERENCE_MODELS.some((id) => id === model.id),
+			({ model }) => model && priced(model) && TASK_START_REFERENCE_MODELS.some((id) => id === model.id),
 		);
-		const cap = references.length ? Math.max(...references.map(({ model }) => price(model!))) : undefined;
-		if (cap === undefined)
-			console.warn(
-				`pilotd: no task-start reference models in scope for ${cwd}; using the scope without a price cap`,
-			);
-		const allowed = scoped.filter(({ model }) => model && (cap === undefined || price(model) <= cap));
-		return { list, settings, scoped, price, cap, allowed };
+		const replacement = (settings.getGlobalSettings() as unknown as { pilotTaskPriceLimit?: unknown })
+			.pilotTaskPriceLimit;
+		const hasReplacement = typeof replacement === "number" && Number.isFinite(replacement) && replacement > 0;
+		const cap = references.length
+			? Math.max(...references.map(({ model }) => price(model!)))
+			: hasReplacement
+				? replacement
+				: undefined;
+		const capSource = references.length
+			? ("reference" as const)
+			: hasReplacement
+				? ("replacement" as const)
+				: ("unavailable" as const);
+		const allowed = scoped.filter(({ model }) => model && priced(model) && cap !== undefined && price(model) <= cap);
+		return { list, settings, scoped, price, cap, capSource, allowed };
 	}
 
 	/** Validate before spawning, including the default, so neither HTTP nor tool calls bypass the cap. */
 	async selectTaskModel(cwd: string, model?: string, thinking?: string): Promise<{ model: string; thinking: string }> {
 		const { list, settings, scoped, price, cap, allowed } = await this.taskModels(cwd);
+		if (cap === undefined)
+			throw new Error(
+				"Task-start reference prices are unavailable. Set a replacement price limit in Settings. No model was started.",
+			);
 		const choices = () =>
 			`Allowed models: ${
 				allowed

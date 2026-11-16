@@ -950,6 +950,7 @@ async function taskCatalog(t: TestContext, settings: Record<string, unknown> = {
 			defaultProvider: "test",
 			defaultModel: "small",
 			defaultThinkingLevel: "low",
+			pilotTaskPriceLimit: 30,
 			...settings,
 		}),
 	);
@@ -1114,19 +1115,40 @@ test("unscoped task starts cap combined input+output at the highest scoped refer
 	});
 });
 
-test("one scoped reference sets the cap; neither reference falls back to the scope and logs", async (t) => {
+test("one scoped reference sets the cap; missing references require an explicit replacement limit", async (t) => {
 	const one = await taskCatalog(t, { enabledModels: ["test/claude-opus-5-5", "test/at-cap"] });
 	await assert.rejects(one.catalog.selectTaskModel(one.root, "test/at-cap"), /price cap \(\$24\/M/);
-	const fallback = await taskCatalog(t, { enabledModels: ["test/frontier"] });
-	const warn = t.mock.method(console, "warn", () => {});
+	const fallback = await taskCatalog(t, { enabledModels: ["test/frontier"], pilotTaskPriceLimit: null });
+	await assert.rejects(
+		fallback.catalog.selectTaskModel(fallback.root, "test/frontier"),
+		/reference prices are unavailable/,
+	);
+	assert.deepEqual((await fallback.catalog.listTaskModels(fallback.root)).priceCeiling, {
+		limit: null,
+		source: "unavailable",
+	});
+	assert.deepEqual((await fallback.catalog.listTaskModels(fallback.root)).models, []);
+	await mkdir(join(fallback.root, ".pi"));
+	await writeFile(join(fallback.root, ".pi", "settings.json"), JSON.stringify({ pilotTaskPriceLimit: 1e9 }));
+	assert.deepEqual(
+		(await fallback.catalog.listTaskModels(fallback.root)).models,
+		[],
+		"repository settings cannot raise the user's global replacement limit",
+	);
+	await fallback.catalog.saveDefaults((await fallback.catalog.modelDefaults()).defaultsHash, {
+		defaultProvider: "test",
+		defaultModel: "frontier",
+		defaultThinkingLevel: "low",
+		pilotTaskPriceLimit: 31,
+	});
 	assert.deepEqual(await fallback.catalog.selectTaskModel(fallback.root, "test/frontier"), {
 		model: "test/frontier",
 		thinking: "low",
 	});
-	assert.match(
-		String(warn.mock.calls[0]?.arguments[0]),
-		/no task-start reference models in scope.*without a price cap/,
-	);
+	assert.deepEqual((await fallback.catalog.listTaskModels(fallback.root)).priceCeiling, {
+		limit: 31,
+		source: "replacement",
+	});
 	await assert.rejects(
 		fallback.catalog.selectTaskModel(fallback.root, "test/small"),
 		/not available in the project's scope/,

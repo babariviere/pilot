@@ -1,6 +1,6 @@
 /** Global enabledModels CAS. Never loads credentials or writes through SettingsManager's migrations. */
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ModelScopeConflict, ModelScopeUpdateRequest } from "@pilot/protocol";
 import { settingsPath, withModelSettingsLock } from "./model-settings.ts";
@@ -10,9 +10,11 @@ export const MAX_SCOPE_PATTERN_BYTES = 256;
 
 export class ModelScopeSettingsError extends Error {
 	readonly status: 422 | 503;
-	constructor(status: 422 | 503) {
+	readonly mayHaveWritten: boolean;
+	constructor(status: 422 | 503, mayHaveWritten = false) {
 		super("settings unreadable");
 		this.status = status;
+		this.mayHaveWritten = mayHaveWritten;
 	}
 }
 
@@ -135,27 +137,27 @@ function members(text: string): Array<{ key: string; start: number; end: number;
 	return result;
 }
 
-function edit(text: string, patterns: string[] | null): string {
+export function editModelSetting(text: string, key: string, value: unknown): string {
 	const entries = members(text);
 	// Work backwards so duplicate keys are handled too, without invalidating earlier offsets.
-	const found = entries.filter((entry) => entry.key === "enabledModels");
-	if (patterns !== null && !found.length) {
+	const found = entries.filter((entry) => entry.key === key);
+	if (value !== null && !found.length) {
 		const end = text.lastIndexOf("}");
-		return `${text.slice(0, end)}${entries.length ? "," : ""}\n  "enabledModels": ${JSON.stringify(patterns)}\n${text.slice(end)}`;
+		return `${text.slice(0, end)}${entries.length ? "," : ""}\n  ${JSON.stringify(key)}: ${JSON.stringify(value)}\n${text.slice(end)}`;
 	}
-	if (patterns === null) {
+	if (value === null) {
 		// Delete one at a time and re-scan: adjacent duplicate keys may share their separating comma.
 		const entry = found.at(-1);
 		if (!entry) return text;
 		const previous = entries[entries.indexOf(entry) - 1];
 		const start = entry.comma === undefined && previous?.comma !== undefined ? previous.comma : entry.start;
 		const end = entry.comma === undefined ? entry.end : entry.comma + 1;
-		return edit(text.slice(0, start) + text.slice(end), null);
+		return editModelSetting(text.slice(0, start) + text.slice(end), key, null);
 	}
 	for (const entry of found.reverse()) {
 		const colon = text.indexOf(":", entry.start + JSON.stringify(entry.key).length);
 		const start = colon + 1 + (text.slice(colon + 1).match(/^\s*/)?.[0].length ?? 0);
-		text = text.slice(0, start) + JSON.stringify(patterns) + text.slice(entry.end);
+		text = text.slice(0, start) + JSON.stringify(value) + text.slice(entry.end);
 	}
 	return text;
 }
@@ -166,6 +168,7 @@ export async function writeModelScope(
 ): Promise<{ changed: boolean; scopeHash: string }> {
 	input = modelScopeUpdate(input);
 	const path = join(settingsPath(agentDir), "settings.json");
+	let mayHaveWritten = false;
 	try {
 		await mkdir(dirname(path), { recursive: true, mode: 0o700 });
 		return await withModelSettingsLock(
@@ -184,7 +187,7 @@ export async function writeModelScope(
 				if (JSON.stringify(current) === JSON.stringify(input.enabledModels)) return { changed: false, scopeHash };
 				if (input.expectedHash !== scopeHash)
 					throw new ModelScopeConflictError({ error: "scope_conflict", scopeHash, enabledModels: current });
-				const next = edit(text, input.enabledModels);
+				const next = editModelSetting(text, "enabledModels", input.enabledModels);
 				// Follow an existing settings symlink just like the SDK, but atomically replace its target.
 				let destination = path;
 				try {
@@ -202,10 +205,23 @@ export async function writeModelScope(
 				);
 				const temporary = `${destination}.${randomUUID()}.tmp`;
 				try {
-					await writeFile(temporary, next, { mode, flag: "wx" });
+					const file = await open(temporary, "wx", mode);
+					try {
+						await file.writeFile(next);
+						await file.sync();
+					} finally {
+						await file.close();
+					}
 					await chmod(temporary, mode);
 					assertOwned();
+					mayHaveWritten = true;
 					await rename(temporary, destination);
+					const directory = await open(dirname(destination), "r");
+					try {
+						await directory.sync();
+					} finally {
+						await directory.close();
+					}
 				} finally {
 					await rm(temporary, { force: true });
 				}
@@ -216,6 +232,6 @@ export async function writeModelScope(
 		);
 	} catch (error) {
 		if (error instanceof ModelScopeConflictError || error instanceof ModelScopeSettingsError) throw error;
-		throw new ModelScopeSettingsError(503);
+		throw new ModelScopeSettingsError(503, mayHaveWritten);
 	}
 }

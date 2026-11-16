@@ -5,6 +5,25 @@ Configure providers in pi first, then select a model and thinking level for your
 Missing authentication or unavailable models should be fixed at the source, not
 worked around by repeatedly sending the same request.
 
+## Day AI settings
+
+In Day, **Settings → AI** shows the chosen model list, shared defaults, the
+selected project's override and the effective thinking for each action. Existing
+per-model settings, advanced patterns and project Pi configuration stay intact.
+Editing shared settings does not switch running chats.
+
+Task starts keep the reference-price ceiling. If reference prices are missing,
+set a replacement input + output price limit before starting affected work. Pilot
+does not silently choose another configured model. Failed work offers eligible
+replacements from that chat's actual source copy. **Save for next attempt** saves
+only that preference, without starting or retrying the chat.
+
+**Provider sign-in** offers the provider's supported device or browser-code flow,
+with **Check sign-in**, **Cancel sign-in** and explicit sign out. Codes stay out of
+chats, saved drafts and command receipts. Sign out removes the stored credential,
+not environment variables or the provider's own authorization. An uncertain
+settings action stays Unknown. **Check receipt** reads its result without resending.
+
 ## Scoped models
 
 **Settings → Scoped models** edits pi's global model list on this Mac. Search,

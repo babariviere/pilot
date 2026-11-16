@@ -270,6 +270,16 @@ async fn run(
     }
     if matches!(
         call.command,
+        Command::ModelsRead
+            | Command::ModelsRecovery(_)
+            | Command::ModelsWrite(_)
+            | Command::ModelsCheck(_)
+            | Command::ModelsSignIn(_)
+    ) {
+        return super::model_controls::handle(t, journal, shared, &call.command, &call.gate).await;
+    }
+    if matches!(
+        call.command,
         Command::FeedbackImage(_)
             | Command::FeedbackRead(_)
             | Command::FeedbackSend(_)
@@ -440,6 +450,11 @@ async fn run(
         | Command::PreferencesHistory(_) => {
             unreachable!("handled preferences command")
         }
+        Command::ModelsRead
+        | Command::ModelsRecovery(_)
+        | Command::ModelsWrite(_)
+        | Command::ModelsCheck(_)
+        | Command::ModelsSignIn(_) => unreachable!("handled model controls"),
         Command::FeedbackImage(_)
         | Command::FeedbackRead(_)
         | Command::FeedbackSend(_)

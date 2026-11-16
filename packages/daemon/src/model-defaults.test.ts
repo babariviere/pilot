@@ -192,6 +192,7 @@ test("failed passive auth snapshot never triggers active credential resolution o
 
 test("task-start metadata matches actual admission, with scope thinking rather than new-chat inheritance", async (t) => {
 	const { root, catalog } = await fixture(t, {
+		pilotTaskPriceLimit: 30,
 		enabledModels: ["test/second:off", "test/first"],
 		modelThinkingLevels: { "test/second": "high" },
 	});
