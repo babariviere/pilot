@@ -112,6 +112,10 @@ async function openCsv(app: Awaited<ReturnType<typeof ready>>) {
 	await app.press(CSV_ROW);
 	await app.waitFor("id:delivery");
 	await app.waitFor("id:your-check");
+	// The primary image opens automatically, even when its saved bytes are unavailable.
+	// These source-focused cases close it before inspecting other outputs.
+	await app.waitFor("Hide preview");
+	await pressCheck(app, `id:output-preview-${IMAGE}`);
 }
 
 // NSH 0.5 rejects a covered press before dispatching any event. If a lower
@@ -209,7 +213,7 @@ test("Send back needs a note, sends its exact words once and keeps them until th
 	await app.waitFor("Your unsent note is kept. Send back… shows it again.");
 	await app.keyboard.press("escape");
 	await app.waitFor("id:to-check");
-	await app.press(CSV_ROW);
+	await openCsv(app);
 	await pressCheck(app, "id:send-back-open");
 	expect(app.value("id:send-back-note")).toBe(note);
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
@@ -382,7 +386,7 @@ test("Inspect source reads one exact pin once, as plain text that never runs, an
 	expect(app.texts().includes("HTML, revision 3")).toBe(true);
 	expect(app.texts().includes("Visual, latest revision")).toBe(true);
 	// Opening the page reads no source; a link without a pin has no Inspect source.
-	expect(reads(app)).toBe("Source reads: []");
+	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1]`);
 	expect(app.shows(`id:output-source-${UNPINNED}`)).toBe(false);
 	expect(app.texts().includes("No pinned revision")).toBe(true);
 	await app.press(`id:output-source-${HTML}`);
@@ -391,14 +395,14 @@ test("Inspect source reads one exact pin once, as plain text that never runs, an
 	expect(app.texts().includes("Source · HTML · revision 3")).toBe(true);
 	expect(app.texts().includes("Scroll check page")).toBe(true);
 	expect(app.texts().includes("Saved copy, 208 bytes.")).toBe(true);
-	expect(app.shows("Preview")).toBe(false);
-	expect(reads(app)).toBe(`Source reads: [${HTML}@3]`);
+	expect(app.shows("Preview")).toBe(true);
+	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1 ${HTML}@3]`);
 	// Looking is not the user's check.
 	expect(app.texts().includes("Not checked yet.")).toBe(true);
 	expect(app.shows("id:mark-done")).toBe(true);
 	// An image shows its title and kind only. Each output keeps its own view.
 	await app.press(`id:output-source-${IMAGE}`);
-	await app.waitFor("Pilot shows only an image's title and kind here. It does not draw images.");
+	await app.waitFor("This service does not provide this image's saved bytes here. Its title and version are kept.");
 	expect(app.texts().includes("Source · Image · revision 1")).toBe(true);
 	expect(showsSource(app, HTML_SOURCE)).toBe(true);
 	await app.press(`id:output-source-${IMAGE}`);
@@ -417,7 +421,7 @@ test("Inspect source reads one exact pin once, as plain text that never runs, an
 	// Reopening shows no source and reads none again.
 	await openCsv(app);
 	expect(app.shows("id:artifact-source")).toBe(false);
-	expect(reads(app)).toBe(`Source reads: [${HTML}@3 ${IMAGE}@1 ${VISUAL}@2]`);
+	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1 ${HTML}@3 ${IMAGE}@1 ${VISUAL}@2 ${IMAGE}@1]`);
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
 });
 
@@ -437,10 +441,10 @@ test("each output reads on its own, and a hidden read's late answer is dropped",
 	expect(app.texts().includes("Reading the saved source…")).toBe(false);
 	await app.press("Release reads");
 	await app.press(`id:output-source-${IMAGE}`);
-	await app.waitFor("Pilot shows only an image's title and kind here. It does not draw images.");
+	await app.waitFor("This service does not provide this image's saved bytes here. Its title and version are kept.");
 	expect(showsSource(app, HTML_SOURCE)).toBe(false);
 	expect(showsSource(app, VISUAL_SOURCE)).toBe(true);
-	expect(reads(app)).toBe(`Source reads: [${VISUAL}@2 ${HTML}@3 ${IMAGE}@1]`);
+	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1 ${VISUAL}@2 ${HTML}@3 ${IMAGE}@1]`);
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
 });
 
@@ -493,10 +497,12 @@ test("a newer result or a failed read of the result hides the source at once", a
 	await app.waitFor("id:artifact-source-text");
 	await app.press("New result");
 	await app.waitFor("id:mark-done");
+	await app.waitFor("Hide preview");
+	await pressCheck(app, `id:output-preview-${IMAGE}`);
 	expect(app.shows("id:artifact-source")).toBe(false);
 	expect(showsSource(app, HTML_SOURCE)).toBe(false);
 	// The newer result's own pin reads again only on a press.
-	expect(reads(app)).toBe(`Source reads: [${HTML}@3]`);
+	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1 ${HTML}@3 ${IMAGE}@1]`);
 	await app.press(`id:output-source-${HTML}`);
 	await app.waitFor("id:artifact-source-text");
 	await app.press("Lose service");
@@ -504,7 +510,7 @@ test("a newer result or a failed read of the result hides the source at once", a
 	expect(app.shows("id:artifact-source")).toBe(false);
 	expect(showsSource(app, HTML_SOURCE)).toBe(false);
 	expect(app.enabled(`id:output-source-${HTML}`)).toBe(false);
-	expect(reads(app)).toBe(`Source reads: [${HTML}@3 ${HTML}@3]`);
+	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1 ${HTML}@3 ${IMAGE}@1 ${HTML}@3]`);
 });
 
 test("a save and reopen keeps the note, drops a shown source and reads nothing again", async () => {
@@ -516,10 +522,12 @@ test("a save and reopen keeps the note, drops a shown source and reads nothing a
 	await app.waitFor("id:artifact-source-text");
 	await app.press("Save and reopen");
 	await app.waitFor("id:send-back-note");
+	await app.waitFor("Hide preview");
+	await pressCheck(app, `id:output-preview-${IMAGE}`, -2_000);
 	expect(app.value("id:send-back-note")).toBe("Keep exact words 💬");
 	expect(app.shows("id:artifact-source")).toBe(false);
 	expect(showsSource(app, HTML_SOURCE)).toBe(false);
-	expect(reads(app)).toBe(`Source reads: [${HTML}@3]`);
+	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1 ${HTML}@3 ${IMAGE}@1]`);
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
 });
 
@@ -554,6 +562,24 @@ test("only the exact inert answer for the pin asked is shown", () => {
 	expect(
 		capturedOf({ ...reply, content: { state: "unavailable", reason: "oversize" } }, asked, "html")?.content,
 	).toEqual({ state: "unavailable", reason: "oversize" });
+});
+
+test("comparison names both saved pins, sends nothing and closes before the result", async () => {
+	const app = await ready();
+	await openCsv(app);
+	await pressCheck(app, "id:outputs-compare");
+	await pressCheck(app, "label:Before");
+	await app.press("Scroll check page · revision 3");
+	await app.waitFor("Source · HTML · revision 3");
+	await pressCheck(app, "label:After");
+	await app.press("Load timing · revision 2");
+	await app.waitFor("Source · Visual · revision 2");
+	expect(showsSource(app, HTML_SOURCE)).toBe(true);
+	expect(showsSource(app, VISUAL_SOURCE)).toBe(true);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+	await app.keyboard.press("escape");
+	expect(app.shows("id:outputs-before")).toBe(false);
+	expect(app.shows("id:delivery")).toBe(true);
 });
 
 test("NSH artifacts read as inert saved source, never as a preview", () => {

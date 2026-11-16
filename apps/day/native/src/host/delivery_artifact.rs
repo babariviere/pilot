@@ -106,7 +106,7 @@ pub(super) async fn read(t: &Transport, request: &Request) -> Result<Value, Erro
 }
 
 /// The artifact kinds Pilot names. Others are refused, not shown as text.
-pub(super) fn kind_ok(kind: &str) -> bool {
+pub(crate) fn kind_ok(kind: &str) -> bool {
     matches!(
         kind,
         "html" | "react" | "swiftui" | "shader" | "visual" | "image" | "nsh"
@@ -114,8 +114,8 @@ pub(super) fn kind_ok(kind: &str) -> bool {
 }
 
 /// The inert content of one saved revision: exact text, or a known reason.
-/// Only these fields reach the VM; images never carry bytes.
-pub(super) fn content(content: &Value, kind: &str) -> Result<Value, Error> {
+/// Only these fields reach the VM. Raster bytes are validated before disclosure.
+pub(crate) fn content(content: &Value, kind: &str) -> Result<Value, Error> {
     Ok(match content["state"].as_str() {
         Some("text") if kind != "image" => {
             let source = content["source"]
@@ -131,6 +131,23 @@ pub(super) fn content(content: &Value, kind: &str) -> Result<Value, Error> {
                 .filter(|n| *n <= 1024 * 1024)
                 .ok_or(Error::Invalid)?;
             json!({"state":"text","source":source,"containerSha256":digest,"containerBytes":bytes})
+        }
+        Some("image") if kind == "image" => {
+            let source = content["source"].as_str().ok_or(Error::Invalid)?;
+            if let Err(error) = crate::artifact_export::image(source) {
+                return Ok(
+                    json!({"state":"unavailable","reason": if error == "oversized image" { "oversize" } else { "invalid" }}),
+                );
+            }
+            let digest = content["containerSha256"]
+                .as_str()
+                .filter(|s| delivery::digest(s))
+                .ok_or(Error::Invalid)?;
+            let bytes = content["containerBytes"]
+                .as_u64()
+                .filter(|n| *n <= 1024 * 1024)
+                .ok_or(Error::Invalid)?;
+            json!({"state":"image","source":source,"containerSha256":digest,"containerBytes":bytes})
         }
         Some("unavailable") => {
             let reason = content["reason"].as_str().ok_or(Error::Invalid)?;

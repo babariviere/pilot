@@ -13,10 +13,10 @@ import { artifactPreviewsAvailable } from "./bridge";
 import { kindName } from "./deliveryView";
 import { glide } from "./motion";
 import { SourcePanel } from "./SourcePanel";
-import { Action, Mark, SectionTitle } from "./ui";
+import { Action, Field, Mark, SectionTitle } from "./ui";
 
 /** The artifact open on a page, by its card's key. */
-type Opened = Shown & { key: string; generation: number };
+type Opened = Shown & { key: string; generation: number; row: ArtifactRow };
 
 /** What one page's gallery shows. It lives with the page and is never saved. */
 export type Shelf = {
@@ -74,6 +74,7 @@ async function openRow(shelf: Shelf, source: ArtifactSource, row: ArtifactRow) {
 		artifact: null,
 		message: "",
 		generation,
+		row,
 	};
 	glide();
 	shelf.open.set(reading);
@@ -130,8 +131,39 @@ function Card(props: { source: ArtifactSource; shelf: Shelf; row: ArtifactRow; i
 }
 
 /** The open artifact, under its row: its preview or saved source, and Close. */
-function Viewer(props: { shelf: Shelf }) {
+function Viewer(props: { shelf: Shelf; source: ArtifactSource }) {
 	const now = () => props.shelf.open() as Opened;
+	const before = signal<Shown | null>(null);
+	let comparison = 0;
+	let openedGeneration = -1;
+	effect(() => {
+		const generation = props.shelf.open()?.generation ?? -1;
+		if (generation === openedGeneration) return;
+		openedGeneration = generation;
+		comparison++;
+		before.set(null);
+	});
+	const compare = async () => {
+		const current = now();
+		if (current.pin.revision <= 1) return;
+		const run = ++comparison;
+		const row = { ...current.row, revision: current.pin.revision - 1 };
+		const reading: Shown = {
+			...current,
+			pin: { revision: row.revision },
+			state: "reading",
+			artifact: null,
+			preview: false,
+		};
+		before.set(reading);
+		const result = await props.source.read(row);
+		if (run !== comparison || props.shelf.open()?.generation !== current.generation) return;
+		before.set(
+			result.status === "shown"
+				? { ...reading, state: "shown", artifact: result.artifact }
+				: { ...reading, state: "refused", message: result.message },
+		);
+	};
 	const toggle = () => {
 		glide();
 		props.shelf.open.set({ ...now(), preview: !now().preview });
@@ -139,6 +171,25 @@ function Viewer(props: { shelf: Shelf }) {
 	return (
 		<View testID="artifact-viewer" class="gap-2 pt-1">
 			<View class="flex-row items-center justify-end gap-1">
+				<If when={now().state === "refused"}>
+					<Action
+						label="Retry read"
+						testID="artifact-viewer-retry"
+						onPress={() => void openRow(props.shelf, props.source, now().row)}
+					/>
+				</If>
+				<If when={now().state === "shown" && now().pin.revision > 1}>
+					<Action
+						label={before() ? "Close comparison" : "Compare previous version"}
+						testID="artifact-compare"
+						onPress={() => {
+							if (before()) {
+								comparison++;
+								before.set(null);
+							} else void compare();
+						}}
+					/>
+				</If>
 				<If when={now().kind === "nsh" && artifactPreviewsAvailable() && now().state === "shown"}>
 					<Action
 						label={now().preview ? "Inspect source" : "Show preview"}
@@ -156,6 +207,15 @@ function Viewer(props: { shelf: Shelf }) {
 				</If>
 				<Action label="Close" testID="artifact-viewer-close" onPress={() => props.shelf.hideLast()} />
 			</View>
+			<If when={before()}>
+				<Text role="header" class="text-sm font-medium text-foreground">
+					Before
+				</Text>
+				<SourcePanel inspection={before()!} />
+				<Text role="header" class="text-sm font-medium text-foreground">
+					After
+				</Text>
+			</If>
 			<If when={now().preview} else={<SourcePanel inspection={now()} />}>
 				<ArtifactPreview inspection={now()} />
 			</If>
@@ -189,7 +249,7 @@ function Grid(props: { source: ArtifactSource; shelf: Shelf; rows: ArtifactRow[]
 							</Each>
 						</View>
 						<If when={run().some((row) => rowKey(row) === props.shelf.open()?.key)}>
-							<Viewer shelf={props.shelf} />
+							<Viewer shelf={props.shelf} source={props.source} />
 						</If>
 					</View>
 				)}
@@ -224,12 +284,21 @@ export function ArtifactShelf(props: {
 	empty: string;
 }) {
 	const listing = signal<Listing>({ status: "reading" });
+	const query = signal("");
+	cleanup(() => {
+		props.shelf.open.set(null);
+		props.shelf.anchors.clear();
+		if (fullView()?.shelf === props.shelf) fullView.set(null);
+	});
 	void props.source.list(props.missionId).then((r) => {
 		listing.set(r.ok ? { status: "shown", list: r.list } : { status: "refused", message: r.message });
 	});
 	const rows = () => {
 		const l = listing();
-		return l.status === "shown" ? l.list.rows : [];
+		const q = query().trim().toLocaleLowerCase();
+		return l.status === "shown"
+			? l.list.rows.filter((r) => !q || `${r.title} ${r.kind} ${r.taskTitle ?? ""}`.toLocaleLowerCase().includes(q))
+			: [];
 	};
 	const groups = () =>
 		props.missionId ? byTask(rows()) : rows().length > 0 ? [{ id: "all", label: "", rows: rows() }] : [];
@@ -243,6 +312,17 @@ export function ArtifactShelf(props: {
 	};
 	return (
 		<View testID={props.testID} class="gap-1">
+			<If when={listing().status === "shown"}>
+				<Field
+					label="Search loaded outputs"
+					testID="artifact-search"
+					value={query()}
+					onChange={(value) => {
+						props.shelf.hideLast();
+						query.set(value);
+					}}
+				/>
+			</If>
 			<If when={listing().status === "reading"}>
 				<Text class="text-sm text-muted-foreground">Reading saved artifacts…</Text>
 			</If>
@@ -255,7 +335,9 @@ export function ArtifactShelf(props: {
 				</View>
 			</If>
 			<If when={listed() && rows().length === 0}>
-				<Text class="text-sm text-muted-foreground">{props.empty}</Text>
+				<Text class="text-sm text-muted-foreground">
+					{query().trim() ? "No loaded outputs match this search." : props.empty}
+				</Text>
 			</If>
 			<Each of={groups()} key={(g) => g.id}>
 				{(g) => (
@@ -280,7 +362,7 @@ const fullView = signal<{ shown: Opened; shelf: Shelf } | null>(null);
 /** Shows the open artifact in the full window. The card's own viewer closes, so one preview runs. */
 function openFull(shelf: Shelf) {
 	const now = shelf.open();
-	if (!now || now.state !== "shown") return;
+	if (now?.state !== "shown") return;
 	glide();
 	fullView.set({ shown: now, shelf });
 	shelf.open.set(null);

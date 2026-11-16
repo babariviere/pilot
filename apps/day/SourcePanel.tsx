@@ -1,8 +1,10 @@
 // One shown saved source: its title, kind and revision, then the saved text
-// exactly as stored, or why it is not shown. Plain text only; nothing runs it.
+// exactly as stored, or why it is not shown. Raster images draw; code never runs here.
 import { signal, Text, View } from "nsh";
+import { ArtifactExport } from "./ArtifactExport";
 import type { Shown } from "./artifactReads";
 import { excerpt, kindName, sizeOf, unavailableLine } from "./deliveryView";
+import { SavedImage } from "./SavedImage";
 import { Action } from "./ui";
 
 export function SourcePanel(props: { inspection: Shown }) {
@@ -23,8 +25,10 @@ export function SourcePanel(props: { inspection: Shown }) {
 	};
 	return (
 		<View testID="artifact-source" selectable class="gap-2 rounded-xl bg-muted px-4 py-3">
-			<Text class="text-xs text-faint">{`Source · ${kindName(i().kind)} · revision ${i().pin.revision}`}</Text>
-			<If when={saved()}>
+			<If when={saved()?.content.state !== "image"}>
+				<Text class="text-xs text-faint">{`Source · ${kindName(i().kind)} · revision ${i().pin.revision}`}</Text>
+			</If>
+			<If when={saved() && saved()?.content.state !== "image"}>
 				<Text role="header" class="text-sm font-medium text-foreground">
 					{saved()?.metadata.title || i().title || "Artifact"}
 				</Text>
@@ -48,15 +52,21 @@ export function SourcePanel(props: { inspection: Shown }) {
 					</View>
 				</If>
 				<Text class="text-xs text-faint">{`Saved copy, ${sizeOf(bytes())}.`}</Text>
+				<ArtifactExport artifact={saved()!} />
+			</If>
+			<If when={saved()?.content.state === "image"}>
+				<SavedImage inspection={i()} />
 			</If>
 			<If when={unavailable()}>
 				<Text testID="artifact-source-unavailable" class="text-sm text-muted-foreground">
 					{unavailable()}
 				</Text>
 			</If>
-			<Text class="text-xs text-faint">
-				Plain text from this saved revision. Pilot does not run or draw it, and looking records nothing.
-			</Text>
+			<If when={i().kind !== "image"}>
+				<Text class="text-xs text-faint">
+					Plain text from this saved revision. Pilot does not run or draw it, and looking records nothing.
+				</Text>
+			</If>
 		</View>
 	);
 }

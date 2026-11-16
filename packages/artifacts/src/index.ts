@@ -1,4 +1,4 @@
-export { imageSize, loadArtifactImage, MAX_IMAGE_SOURCE_BYTES } from "./image.ts";
+export { imageSize, loadArtifactImage, MAX_IMAGE_SOURCE_BYTES, validateImageSource } from "./image.ts";
 export { artifactHostAvailable } from "./nsh-host.ts";
 export {
 	captureNshSource,

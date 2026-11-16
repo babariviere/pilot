@@ -98,3 +98,53 @@ test("a mission groups its cards by task and keeps each pinned revision", async 
 	await app.waitFor("export default () => <Text>Revision one</Text>;");
 	expect(reads(app)).toBe(`Reads: [${NSH}@1]`);
 });
+
+test("search is local and comparison reads exact older versions", async () => {
+	const app = await open("./ArtifactsFixture.tsx", desktop);
+	await app.waitFor("Timeline");
+	await app.type("id:artifact-search", "Report");
+	expect(app.shows("Timeline")).toBe(false);
+	expect(app.shows("Report page")).toBe(true);
+	expect(reads(app)).toBe("Reads: []");
+	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
+	await app.waitFor("<p>Saved page</p>");
+	await app.press("id:artifact-compare");
+	await app.waitFor("<p>Before page</p>");
+	expect(app.shows("<p>Saved page</p>")).toBe(true);
+	expect(app.shows("Source · HTML · revision 3")).toBe(true);
+	expect(app.shows("Source · HTML · revision 4")).toBe(true);
+	expect(reads(app)).toBe(`Reads: [${HTML}@4 ${HTML}@3]`);
+	await app.press("id:artifact-viewer-close");
+	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
+	await app.waitFor("<p>Saved page</p>");
+	expect(app.shows("<p>Before page</p>")).toBe(false);
+});
+
+test("failed reads retry the same pin and images offer versioned export", async () => {
+	const app = await open("./ArtifactsFixture.tsx", desktop);
+	await app.waitFor("Timeline");
+	await app.press("Refuse reads");
+	await app.press(`id:artifact-card-/chat-a/${NSH}/2`);
+	await app.waitFor("id:artifact-source-refused");
+	await app.press("Allow reads");
+	await app.press("id:artifact-viewer-retry");
+	await app.waitFor("export default () => <Text>Revision two</Text>;");
+	expect(reads(app)).toBe(`Reads: [${NSH}@2 ${NSH}@2]`);
+	await app.press("id:artifact-viewer-close");
+	await app.press("id:artifact-card-/chat-b/1b2c3d4e-0000-4000-8000-000000000003/1");
+	await app.waitFor("Screenshot · Image · revision 1");
+	expect(app.shows("Export image…")).toBe(true);
+});
+
+test("switching cards in one row drops the previous comparison", async () => {
+	const app = await open("./ArtifactsFixture.tsx", desktop);
+	await app.waitFor("Timeline");
+	await app.press(`id:artifact-card-/chat-a/${NSH}/2`);
+	await app.waitFor("export default () => <Text>Revision two</Text>;");
+	await app.press("id:artifact-compare");
+	await app.waitFor("export default () => <Text>Revision one</Text>;");
+	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
+	await app.waitFor("<p>Saved page</p>");
+	expect(app.shows("export default () => <Text>Revision one</Text>;")).toBe(false);
+	expect(app.shows("Before")).toBe(false);
+});

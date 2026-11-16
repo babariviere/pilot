@@ -100,7 +100,7 @@ fn the_screen_gets_typed_read_models_and_intents() {
 }
 
 #[test]
-fn the_only_exports_are_the_feeds_and_they_have_no_transport() {
+fn exports_are_feeds_and_the_local_exporter_without_transport_or_paths() {
     let ts = ts();
     let mut values: Vec<&str> = ts
         .lines()
@@ -110,6 +110,7 @@ fn the_only_exports_are_the_feeds_and_they_have_no_transport() {
     assert_eq!(
         values,
         [
+            "export declare class ArtifactExport {",
             "export declare class ChangesFeed {",
             "export declare class PlanFeed {",
             "export declare class RitualFeed {",
@@ -118,13 +119,25 @@ fn the_only_exports_are_the_feeds_and_they_have_no_transport() {
         ],
         "{ts}"
     );
+    assert!(ts.contains("  save(snapshot: string): Promise<string>;"));
     // Control commands are built in Rust: TSX names only the mission, the
     // revision it showed and, for Resume, the Pause it showed. It never sees
-    // a home, coordinator or a new operation it could forge. Standalone New's
-    // saved ChatChoice names a canonical project only, not a daemon destination.
-    let (before, rest) = ts.split_once("export interface ChatChoice {").unwrap();
-    let (_, after) = rest.split_once("\n}").unwrap();
-    let without_choice = format!("{before}{after}");
+    // a home or a new operation it could forge. These existing read models
+    // name display context, not authority for a control command. Allow only
+    // these exact fields on their named types, never the same field on an intent.
+    let mut without_read_context = ts.clone();
+    for (name, field) in [
+        ("ChatChoice", "  projectId: string;\n"),
+        ("Problem", "  projectId: string;\n"),
+        ("MissionPage", "  coordinatorSessionId?: string | null;\n"),
+    ] {
+        let header = format!("export interface {name} {{");
+        let (before, rest) = without_read_context.split_once(&header).unwrap();
+        let (body, after) = rest.split_once("\n}").unwrap();
+        assert!(body.contains(field), "missing read context: {name}.{field}");
+        without_read_context =
+            format!("{before}{header}{}\n}}{after}", body.replacen(field, "", 1));
+    }
     for word in [
         "url",
         "fetch",
@@ -138,13 +151,13 @@ fn the_only_exports_are_the_feeds_and_they_have_no_transport() {
         "expectedrevision",
     ] {
         assert!(
-            ![":", "?:"]
-                .iter()
-                .any(|end| ts.to_lowercase().contains(&format!(" {word}{end}"))),
+            ![":", "?:"].iter().any(|end| without_read_context
+                .to_lowercase()
+                .contains(&format!(" {word}{end}"))),
             "the boundary names {word:?}:\n{ts}"
         );
     }
-    assert!(!without_choice.to_lowercase().contains(" projectid:"));
+    assert!(!without_read_context.to_lowercase().contains(" projectid:"));
     assert_eq!(
         pilot_day_native::registry().undocumented(),
         Vec::<String>::new()

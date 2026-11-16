@@ -236,7 +236,7 @@ export async function inspectArtifact(
 	link: ArtifactLink,
 	mode: "source" | "preview" = "source",
 ) {
-	if (mode === "preview" && link.kind !== "nsh") return;
+	if (mode === "preview" && link.kind !== "nsh" && link.kind !== "image") return;
 	const pin = artifactSelection(shown, link);
 	if (!pin) return;
 	const row = inspectionKey(key, link);
@@ -257,9 +257,10 @@ export async function inspectArtifact(
 	glide();
 	inspections.update((all) => {
 		const next = { ...all, [row]: reading };
-		if (mode === "preview") {
+		// Raster images also consume decoded native memory when opened as source.
+		if (mode === "preview" || link.kind === "image") {
 			const open = Object.entries(next)
-				.filter(([, i]) => i.key === key && i.preview)
+				.filter(([, i]) => i.key === key && (i.preview || i.kind === "image"))
 				.sort(([, a], [, b]) => a.generation - b.generation);
 			for (const [k] of open.slice(0, Math.max(0, open.length - MAX_PREVIEWS))) delete next[k];
 		}
@@ -344,7 +345,8 @@ export function unavailableLine(kind: string, reason: string): string {
 		case "invalid":
 			return "This revision's saved copy is damaged, so Pilot does not show it.";
 		default:
-			if (kind === "image") return "Pilot shows only an image's title and kind here. It does not draw images.";
+			if (kind === "image")
+				return "This service does not provide this image's saved bytes here. Its title and version are kept.";
 			if (kind === "nsh") return "Pilot does not run NSH artifacts yet, and cannot show this source here.";
 			return "Pilot cannot show this kind of source here.";
 	}

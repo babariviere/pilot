@@ -6,6 +6,7 @@
 import { effect, nativeComponent, signal, Text, View, type ViewRef } from "nsh";
 import type { SavedArtifact, Shown } from "./artifactReads";
 import { rested, showsInPage } from "./onScreen";
+import { SourcePanel } from "./SourcePanel";
 import { Action } from "./ui";
 
 type State = { state: string; message: string };
@@ -65,13 +66,17 @@ export function ArtifactPreview(props: { inspection: Shown; fill?: boolean }) {
 					{state().message}
 				</Text>
 			</If>
-			<If when={state().state === "stopped"}>
-				<View class="flex-row items-start gap-4">
-					<Text role="alert" testID="artifact-preview-stopped" class="flex-1 text-sm text-needs-ink">
-						{`This preview was stopped: ${state().message}. Pilot limits each preview so a runaway mock cannot use up Day's memory or time. Start again resets it.`}
+			<If when={state().state === "error" || state().state === "stopped"}>
+				<If when={state().state === "stopped"}>
+					<Text role="alert" testID="artifact-preview-stopped" class="text-sm text-needs-ink">
+						{`This preview was stopped: ${state().message}. Pilot limits each preview's memory and time. Retry preview resets it.`}
 					</Text>
-					<Action label="Start again" icon="refresh" testID="artifact-preview-restart" onPress={startAgain} />
-				</View>
+				</If>
+				<Text class="text-sm text-muted-foreground">
+					The saved source is still readable below. Retry starts a fresh preview.
+				</Text>
+				<Action label="Retry preview" testID="artifact-preview-retry" onPress={startAgain} />
+				<SourcePanel inspection={props.inspection} />
 			</If>
 			<If when={present()}>
 				<View
@@ -104,6 +109,9 @@ export function ArtifactPreview(props: { inspection: Shown; fill?: boolean }) {
 				</View>
 			</If>
 			<Text class="text-xs text-faint">Changes stay in this preview. Opening it does not mark the work done.</Text>
+			<If when={present() && state().state !== "error" && state().state !== "stopped"}>
+				<Action label="Reset" testID="artifact-preview-reset" onPress={startAgain} />
+			</If>
 		</View>
 	);
 }

@@ -4,6 +4,31 @@
 //! window, provider or external write. Reading records and sends nothing.
 include!("support/intake_fixture.rs");
 
+#[test]
+fn saved_image_crosses_the_real_daemon_and_native_projection_as_inline_bytes_only() {
+    let mut f = Fixture::with_daemon("day-delivered-artifact.ts");
+    let image = f.stats("image");
+    let b = f.bridge();
+    let page = f.call(&b, "day.delivery.read", f.info["task"].clone());
+    let page = &page["value"]["snapshot"];
+    let row = page["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["artifactId"] == image["imageId"])
+        .unwrap();
+    let result = f.call(&b, "day.delivery.artifact", json!({"subject":page["subject"],"targetId":page["targetId"],
+        "deliveryId":page["deliveryId"],"ownerSessionId":page["ownerSessionId"],"sourceSessionId":row["sessionId"],
+        "artifactId":row["artifactId"],"revision":1}));
+    let saved = &result["value"]["snapshot"];
+    assert_eq!(saved["metadata"]["title"], "Saved screenshot", "{result}");
+    assert_eq!(saved["content"]["state"], "image", "{result}");
+    assert_eq!(saved["content"]["source"], image["imageSource"]);
+    assert!(saved.get("html").is_none());
+    assert!(saved.get("path").is_none());
+    close(b);
+}
+
 fn rows(v: &Value) -> &Vec<Value> {
     v["value"]["snapshot"]["rows"].as_array().unwrap()
 }

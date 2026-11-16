@@ -1,6 +1,6 @@
 /** Native-user output inspection. Never consumes reviewer allocations or executes saved source. */
 import { createHash } from "node:crypto";
-import { ArtifactNotFound, StoredArtifactTooLarge } from "@pilot/artifacts";
+import { ArtifactNotFound, imageSize, StoredArtifactTooLarge, validateImageSource } from "@pilot/artifacts";
 import type {
 	ArtifactKind,
 	DeliveredArtifact,
@@ -42,7 +42,7 @@ async function capture(
 
 /**
  * The inert answer for one captured container: its text, or why it is held back.
- * Images never carry bytes; oversize is never cut. Source holding one of Pilot's own secrets (such as the app
+ * Images carry only validated inline raster bytes; oversize is never cut. Source holding one of Pilot's own secrets (such as the app
  * capability) is held back. The log redactor is not used here: it flags ordinary code such as an NSH
  * `key={…}`, and the same source is readable in the chat that wrote it.
  */
@@ -53,15 +53,24 @@ function describe(
 	knownSecrets: readonly string[],
 ): { metadata: { title: string; kind: ArtifactKind }; content: SavedArtifactContent } {
 	const metadata = { title, kind: a.kind };
-	if (a.kind === "image") return { metadata, content: { state: "unavailable", reason: "unsupported" } };
-	if (Buffer.byteLength(a.source) > 512 * 1024)
+	if (a.kind !== "image" && Buffer.byteLength(a.source) > 512 * 1024)
 		return { metadata, content: { state: "unavailable", reason: "oversize" } };
 	if (title !== a.title || knownSecrets.some((s) => s && (a.source.includes(s) || a.title.includes(s))))
 		return { metadata: { ...metadata, title: "Artifact" }, content: { state: "unavailable", reason: "redacted" } };
+	if (a.kind === "image") {
+		try {
+			validateImageSource(a.source);
+			const size = imageSize(a.source);
+			if (size && (size.width > 8192 || size.height > 8192 || size.width * size.height > 16 * 1024 * 1024))
+				return { metadata, content: { state: "unavailable", reason: "oversize" } };
+		} catch {
+			return { metadata, content: { state: "unavailable", reason: "invalid" } };
+		}
+	}
 	return {
 		metadata,
 		content: {
-			state: "text",
+			state: a.kind === "image" ? "image" : "text",
 			source: a.source,
 			containerSha256: createHash("sha256").update(bytes).digest("hex"),
 			containerBytes: bytes.byteLength,

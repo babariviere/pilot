@@ -5,10 +5,13 @@
 //! transport of its own, and the app's capabilities deny network, sockets,
 //! files and processes. The isolated connected runner grants only the exact
 //! native methods in [`bridge::METHODS`]; the development config grants none.
+//! App-owned export asks the user for a destination with the system Save dialog.
+//! Captured engines have neither that native class nor filesystem grants.
 //! The mock worlds ([`fixture`] and the scenario feeds) are test support for
 //! the headless fixture entries; the connected host never reads them.
 
 pub mod actions;
+pub mod artifact_export;
 #[cfg(unix)]
 pub mod artifact_runtime;
 #[cfg(unix)]
@@ -24,13 +27,11 @@ pub mod changes_desk;
 pub mod changes_feed;
 pub mod changes_project;
 pub mod contract;
-pub mod desk;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
 pub mod daemon_handoff;
-#[cfg(all(target_os = "macos", feature = "macos-host"))]
-mod service_start;
 #[cfg(unix)]
 pub mod day_log;
+pub mod desk;
 pub mod feed;
 pub mod fixture;
 mod handoff;
@@ -59,6 +60,8 @@ pub mod ritual;
 pub mod ritual_feed;
 mod ritual_results;
 pub mod root;
+#[cfg(all(target_os = "macos", feature = "macos-host"))]
+mod service_start;
 pub mod update;
 pub mod update_feed;
 
@@ -74,6 +77,7 @@ pub use crate::{
 #[native_module("pilot-day/native")]
 fn native(registry: &mut Registry) {
     registry
+        .class::<artifact_export::ArtifactExport>()
         .class::<TodayFeed>()
         .class::<PlanFeed>()
         .class::<ChangesFeed>()

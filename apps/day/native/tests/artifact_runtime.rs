@@ -123,6 +123,7 @@ fn captured_runtime_rejects_wrong_identity_and_host_imports_before_execution() {
     assert!(artifact_runtime::config(swapped).is_err());
     for source in [
         "import {Bridge} from 'pilot-day/native'; export default () => Bridge;",
+        "import {ArtifactExport} from 'pilot-day/native'; export default () => new ArtifactExport();",
         "import {host} from 'nsh'; export default () => host;",
         "import {readFile} from 'fs/promises'; export default () => readFile;",
         "export default () => import('process');",

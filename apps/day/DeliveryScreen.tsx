@@ -9,13 +9,12 @@
 // only, until its own receipt says how it ended.
 // An artifact's pinned revision shows its saved source as plain text on a
 // press of Inspect source, read once. NSH opens in the app's isolated native
-// preview: every pinned one, up to four, on its own when the page opens.
+// preview: the primary useful output opens when the page opens.
 // Each output keeps its own view; previews pause out of view. A newer
 // result or lost read hides them; looking records nothing.
 import { effect, keymap, Scroll, signal, Text, untracked, View, type ViewRef } from "nsh";
 import { Checkbox, Input } from "nsh/base";
 import { ArtifactPreview } from "./ArtifactPreview";
-import { MAX_PREVIEWS } from "./artifactReads";
 import { artifactPreviewsAvailable } from "./bridge";
 import type { Day } from "./day";
 import { artifactSelection } from "./deliveryArtifact";
@@ -75,6 +74,7 @@ import {
 } from "./deliveryView";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
+import { OutputComparison } from "./OutputComparison";
 import { pageScroll, scrolled } from "./onScreen";
 import { SourcePanel } from "./SourcePanel";
 import { Action, Mark, PAGE_COLUMN, RowLink, SectionTitle } from "./ui";
@@ -260,7 +260,7 @@ function ArtifactOutput(props: {
 							} else void inspectArtifact(props.mirror.source, key(), props.work, props.link);
 						}}
 					/>
-					<If when={props.link.kind === "nsh" && artifactPreviewsAvailable()}>
+					<If when={props.link.kind === "image" || (props.link.kind === "nsh" && artifactPreviewsAvailable())}>
 						<Action
 							label={mine()?.preview ? "Hide preview" : "Preview"}
 							testID={`output-preview-${props.link.artifactId}`}
@@ -281,7 +281,9 @@ function ArtifactOutput(props: {
 			</View>
 			<If when={mine()}>
 				<If when={mine()?.preview} else={<SourcePanel inspection={mine() as Inspection} />}>
-					<ArtifactPreview inspection={mine() as Inspection} />
+					<If when={props.link.kind === "image"} else={<ArtifactPreview inspection={mine() as Inspection} />}>
+						<SourcePanel inspection={mine() as Inspection} />
+					</If>
 				</If>
 			</If>
 		</View>
@@ -366,6 +368,7 @@ function Outputs(props: {
 					/>
 				)}
 			</Each>
+			<OutputComparison work={w()} source={props.mirror.source} fresh={props.fresh} />
 			<If when={commit()}>
 				<View class="flex-row items-baseline gap-3 border-t border-border py-2.5">
 					<Text class="flex-1 text-sm text-foreground">{`Commit ${commit()?.slice(0, 12) ?? ""}`}</Text>
@@ -953,15 +956,19 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 		const ok = fresh();
 		untracked(() => dropInspections(key, (i) => !!w && ok && inspectionCurrent(i, key, w)));
 	});
-	// Pinned NSH outputs, up to four, open in their previews once per delivery:
+	// The first pinned image or native preview opens once per delivery:
 	// Hide keeps one closed, and a newer delivery opens its own. The sandbox,
 	// not a press, is the safety boundary. Others open on a press.
 	let previewed = "";
 	effect(() => {
 		const w = work();
-		if (!w?.deliveryId || !fresh() || !artifactPreviewsAvailable() || w.deliveryId === previewed) return;
+		if (!w?.deliveryId || !fresh() || w.deliveryId === previewed) return;
 		previewed = w.deliveryId;
-		const shown = w.artifacts.filter((a) => a.kind === "nsh" && artifactSelection(w, a)).slice(0, MAX_PREVIEWS);
+		const shown = w.artifacts
+			.filter(
+				(a) => (a.kind === "image" || (a.kind === "nsh" && artifactPreviewsAvailable())) && artifactSelection(w, a),
+			)
+			.slice(0, 1);
 		untracked(() => {
 			for (const link of shown) void inspectArtifact(mirror.source, key, w, link, "preview");
 		});
@@ -976,7 +983,7 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 			void showWork(mirror.source, key, w);
 		});
 	});
-	// Escape works from the note too: the note closes first and keeps its words,
+	// An open output comparison owns Escape first. Otherwise the note closes and keeps its words,
 	// then the source or preview opened last, then the page.
 	keymap.bind(
 		"escape",

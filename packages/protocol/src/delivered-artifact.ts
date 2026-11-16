@@ -23,6 +23,7 @@ export interface DeliveredArtifact {
 
 export type SavedArtifactContent =
 	| { state: "text"; source: string; containerSha256: string; containerBytes: number }
+	| { state: "image"; source: string; containerSha256: string; containerBytes: number }
 	| { state: "unavailable"; reason: "missing" | "oversize" | "redacted" | "unsupported" | "invalid" };
 
 /**

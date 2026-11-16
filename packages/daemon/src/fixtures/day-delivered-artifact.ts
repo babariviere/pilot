@@ -111,10 +111,29 @@ console.log(
 	}),
 );
 let nshId: string | undefined;
+let imageId: string | undefined;
+const imageSource =
+	"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==";
 const nshSource = "import {Text} from 'nsh'; export default () => <Text>Saved preview, revision one</Text>;";
 for await (const line of createInterface({ input: process.stdin })) {
 	const { action } = JSON.parse(line);
 	if (action === "quit") break;
+	if (action === "image" && !imageId) {
+		const artifacts = new ArtifactStore(join(f.home, "sessions", worker.id), {
+			sessionId: worker.id,
+			projectId: f.project.id,
+		});
+		const saved = await artifacts.create({ title: "Saved screenshot", kind: "image", source: imageSource });
+		imageId = saved.id;
+		f.store.linkArtifact(mission.id, {
+			taskId: task.id,
+			sessionId: worker.id,
+			artifactId: saved.id,
+			title: saved.title,
+			kind: "image",
+			revision: 1,
+		});
+	}
 	if (action === "nsh" && !nshId) {
 		const artifacts = new ArtifactStore(join(f.home, "sessions", worker.id), {
 			sessionId: worker.id,
@@ -149,7 +168,7 @@ for await (const line of createInterface({ input: process.stdin })) {
 	if (action === "missing") await rename(join(directory, "1.json"), join(directory, "saved.json"));
 	if (action === "oversize") await writeFile(join(directory, "1.json"), " ".repeat(1024 * 1024 + 1));
 	if (action === "redacted")
-		await writeFile(join(directory, "1.json"), JSON.stringify({ ...artifact, source: "password=synthetic" }));
+		await writeFile(join(directory, "1.json"), JSON.stringify({ ...artifact, source: `show(${f.capability})` }));
 	if (action === "stale") f.store.updateTask(mission.id, task.id, { body: "new definition" });
 	if (action === "leave") f.store.leave(worker.id);
 	await f.store.durable();
@@ -161,6 +180,8 @@ for await (const line of createInterface({ input: process.stdin })) {
 			deliveryReads,
 			posts,
 			nshId,
+			imageId,
+			imageSource,
 			nshSource,
 			longBytes: await readFile(join(longDirectory, "1.json"), "utf8"),
 			messages: meta.pending.filter((p: { content: string }) => p.content !== "Synthetic work only"),

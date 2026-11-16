@@ -44,8 +44,8 @@ export function ArtifactsScreen(props: { source: ArtifactSource }) {
 					empty="No chat in this project has saved an artifact yet."
 				/>
 				<Text class="text-xs text-faint">
-					Open a card to see it: NSH in its preview, other kinds as plain text. Previews run apart from Pilot,
-					change only their own state and pause out of view. Looking records nothing.
+					Open a card to see a saved image, NSH preview or readable source. Previews run apart from Pilot, change
+					only their own state and pause out of view. Looking records nothing.
 				</Text>
 			</View>
 		</Scroll>

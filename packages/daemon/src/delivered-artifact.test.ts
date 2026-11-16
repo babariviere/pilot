@@ -276,3 +276,37 @@ for (const kind of ["html", "react", "swiftui", "shader", "visual", "image", "ns
 		}
 	});
 }
+
+test("image inspection returns only exact inline raster bytes, not HTML or URLs", async (t) => {
+	const f = await fixture(t);
+	const source =
+		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==";
+	const file = join(f.directory, "1.json");
+	f.store.linkArtifact(f.mission.id, {
+		taskId: f.task.id,
+		sessionId: f.worker.id,
+		artifactId: f.artifact.id,
+		title: "Screenshot",
+		kind: "image",
+		revision: 1,
+	});
+	const bytes = JSON.stringify({ ...f.artifact, kind: "image", source, html: "not the image" });
+	await writeFile(file, bytes);
+	const value = await (await f.read()).json();
+	assert.deepEqual(value.content, {
+		state: "image",
+		source,
+		containerSha256: createHash("sha256").update(bytes).digest("hex"),
+		containerBytes: Buffer.byteLength(bytes),
+	});
+	assert.equal("html" in value, false);
+	for (const invalid of [
+		"https://example.com/picture.png",
+		"file:///private/picture.png",
+		"data:image/svg+xml;base64,AAAA",
+		"data:image/png;base64,AAAA",
+	]) {
+		await writeFile(file, JSON.stringify({ ...f.artifact, kind: "image", source: invalid }));
+		assert.deepEqual((await (await f.read()).json()).content, { state: "unavailable", reason: "invalid" });
+	}
+});

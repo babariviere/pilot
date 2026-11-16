@@ -1,4 +1,6 @@
 // Inert wire view only. Do not import the daemon's Node/provider type graph into NSH.
+
+import { validImageSource } from "./artifactReads";
 import { call, type Refusal } from "./bridge";
 import type { ArtifactSelection, CapturedArtifact } from "./deliveryArtifactContract";
 import type { DeliveredWork } from "./deliveryContract";
@@ -48,7 +50,7 @@ export function samePin(a: ArtifactSelection, b: ArtifactSelection): boolean {
 /**
  * The reply, when it is exactly the inert answer for `asked`: the same pin,
  * the linked kind, rendering unsupported and only text or a known reason.
- * Anything else is not shown. Images never carry bytes.
+ * Anything else is not shown. Images carry inline raster bytes only.
  */
 export function capturedOf(x: unknown, asked: ArtifactSelection, kind: string): CapturedArtifact | null {
 	const a = x as CapturedArtifact | null;
@@ -81,6 +83,26 @@ export function capturedOf(x: unknown, asked: ArtifactSelection, kind: string): 
 			metadata: { title: m.title, kind: m.kind },
 			rendering: "unsupported",
 			content: { state: "unavailable", reason: c.reason },
+		};
+	}
+	if (
+		c.state === "image" &&
+		m.kind === "image" &&
+		validImageSource(c.source) &&
+		typeof c.containerSha256 === "string" &&
+		typeof c.containerBytes === "number"
+	) {
+		return {
+			version: 1,
+			reference: asked,
+			metadata: { title: m.title, kind: m.kind },
+			rendering: "unsupported",
+			content: {
+				state: "image",
+				source: c.source,
+				containerSha256: c.containerSha256,
+				containerBytes: c.containerBytes,
+			},
 		};
 	}
 	return null;

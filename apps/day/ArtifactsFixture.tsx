@@ -10,14 +10,20 @@ import { Action } from "./ui";
 
 const NSH = "1b2c3d4e-0000-4000-8000-000000000001";
 const HTML = "1b2c3d4e-0000-4000-8000-000000000002";
+const IMAGE = "1b2c3d4e-0000-4000-8000-000000000003";
+const PIXEL =
+	"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==";
 const SOURCES: Record<string, string> = {
 	[`${NSH}@2`]: "export default () => <Text>Revision two</Text>;",
 	[`${NSH}@1`]: "export default () => <Text>Revision one</Text>;",
 	[`${HTML}@4`]: "<p>Saved page</p>",
+	[`${HTML}@3`]: "<p>Before page</p>",
+	[`${IMAGE}@1`]: PIXEL,
 };
 const project: ArtifactRow[] = [
 	{ sessionId: "chat-a", artifactId: NSH, title: "Timeline", kind: "nsh", revision: 2, updatedAt: 3 },
 	{ sessionId: "chat-b", artifactId: HTML, title: "Report page", kind: "html", revision: 4, updatedAt: 2 },
+	{ sessionId: "chat-b", artifactId: IMAGE, title: "Screenshot", kind: "image", revision: 1, updatedAt: 1 },
 ];
 const mission: ArtifactRow[] = [
 	{ ...project[1], pinned: true, taskId: "t2", taskTitle: "Write the report" },
@@ -47,7 +53,12 @@ const source: ArtifactSource = {
 				reference: { sourceSessionId: row.sessionId, artifactId: row.artifactId, revision: row.revision ?? 0 },
 				metadata: { title: row.title, kind: row.kind },
 				rendering: "unsupported",
-				content: { state: "text", source: text, containerSha256: "a".repeat(64), containerBytes: text.length },
+				content: {
+					state: row.kind === "image" ? "image" : "text",
+					source: text,
+					containerSha256: "a".repeat(64),
+					containerBytes: text.length,
+				},
 			},
 		};
 	},
@@ -78,6 +89,7 @@ mount(() => (
 			<View class="flex-row flex-wrap gap-1">
 				<Action label="Mission page" onPress={() => page.set("mission")} />
 				<Action label="Refuse reads" onPress={() => (script.refuseReads = true)} />
+				<Action label="Allow reads" onPress={() => (script.refuseReads = false)} />
 				<Action
 					label="Reopen refused"
 					onPress={() => {

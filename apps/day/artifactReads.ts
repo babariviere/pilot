@@ -15,6 +15,7 @@ export type SavedArtifact = {
 	rendering: "unsupported";
 	content:
 		| { state: "text"; source: string; containerSha256: string; containerBytes: number }
+		| { state: "image"; source: string; containerSha256: string; containerBytes: number }
 		| { state: "unavailable"; reason: string };
 };
 
@@ -96,8 +97,18 @@ export function savedOf(x: unknown, row: ArtifactRow): SavedArtifact | null {
 		return null;
 	const c = a.content;
 	if (c?.state === "text" && row.kind !== "image" && typeof c.source === "string") return a;
+	if (c?.state === "image" && row.kind === "image" && validImageSource(c.source)) return a;
 	if (c?.state === "unavailable" && REASONS.has(c.reason)) return a;
 	return null;
+}
+
+/** Inline raster bytes only. Never let a saved image become a URL or a path. */
+export function validImageSource(source: unknown): source is string {
+	return (
+		typeof source === "string" &&
+		source.length <= 1024 * 1024 &&
+		/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(source)
+	);
 }
 
 function listMessage(refusal: Refusal): string {
