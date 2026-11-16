@@ -266,6 +266,23 @@ export class UserVerifications {
 				current.pendingOperationId ?? (current.verification && !exact ? current.verification.operationId : null),
 		};
 	}
+	/**
+	 * In a planned mission with no execution coordinator, no one else finishes tasks, so the user's check moves the
+	 * task: Done finishes it, and a send-back or reopen of a finished task puts it back in progress. The planning host
+	 * then starts the next ready tasks. The check stays saved if this fails; marking it again retries.
+	 */
+	private followCheck(missionId: string, taskId: string, state: "done" | "sent_back" | "open"): void {
+		try {
+			if (!this.deps.store.plannedWithoutCoordinator(missionId)) return;
+			const task = this.deps.store.task(missionId, taskId);
+			if (state === "done" && task.status !== "done")
+				this.deps.store.updateTask(missionId, taskId, { status: "done" });
+			else if (state !== "done" && task.status === "done")
+				this.deps.store.updateTask(missionId, taskId, { status: "in_progress" });
+		} catch (error) {
+			console.warn(`pilotd: could not follow the user's check of task ${taskId}: ${error}`);
+		}
+	}
 	private request(op: DurableOperation): UserVerificationIntent {
 		let p: UserVerificationIntent;
 		try {
@@ -419,6 +436,7 @@ export class UserVerifications {
 			};
 			this.deps.store.userVerifications.settle(key, { ...reservation, verification });
 			await this.deps.store.durable();
+			if (p.subject.kind === "task") this.followCheck(p.subject.missionId, p.subject.taskId, verification.state);
 			return verification;
 		} catch (error) {
 			throw new Error("Verification outcome is uncertain; Check only", { cause: error });

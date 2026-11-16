@@ -28,6 +28,15 @@ export interface PlanningWorkerState {
 	continuation: { operation: DurableOperation; entered: boolean } | null;
 	/** Entered Start is lookup-only across restart, even when no kernel receipt can be found. */
 	start?: { operation: DurableOperation; sessionId: string; taskId: string; admitted: boolean };
+	/** Tasks Pilot started by rule after the user's Start, one per task. A crash while `starting` leaves a lookup only. */
+	autoStarts?: Array<{
+		operationId: string;
+		sessionId: string;
+		taskId: string;
+		state: "starting" | "admitted" | "failed";
+		reason?: string;
+		at: number;
+	}>;
 	/** Explicit native check-up admission. An entered but unacknowledged turn is lookup-only. */
 	revisit?: { operation: DurableOperation; admitted: boolean };
 	/** User topic input, never a Start or permission to release a hold. */

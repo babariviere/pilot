@@ -506,11 +506,10 @@ test("a planned mission with no execution coordinator shows the worker's deliver
 	// To check discovers it, and the user's check works on it.
 	assert.deepEqual((await f.service.list(f.project.id)).items[0]?.subject, f.subject);
 	assert.equal((await f.run(operation(page))).state, "accepted");
-	assert.equal(
-		f.store.task(f.mission.id, f.task.id).status !== "done",
-		true,
-		"Done is the user's check, not task status",
-	);
+	// No one else finishes tasks here, so the user's Done finishes it, and a reopen puts it back in progress.
+	assert.equal(f.store.task(f.mission.id, f.task.id).status, "done");
+	assert.equal((await f.run(operation(await f.service.read(f.subject), "reopen"))).state, "accepted");
+	assert.equal(f.store.task(f.mission.id, f.task.id).status, "in_progress");
 });
 
 test("task status and PR merge observations never turn into verification or production", async (t) => {

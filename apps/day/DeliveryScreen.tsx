@@ -152,7 +152,8 @@ function Report(props: { work: DeliveredWork }) {
 			<If when={w().workerDelivery}>
 				<View testID="delivery-worker-report" class="gap-3">
 					<Text class="text-xs text-faint">
-						The worker's delivery report. No coordinator runs this mission, so you check it here.
+						The worker's delivery report. No coordinator runs this mission: marking it done finishes the task, and
+						Pilot starts the next ready tasks.
 					</Text>
 					<Said label="It says" text={w().workerDelivery?.summary ?? ""} />
 					<Said label="Checks it ran" text={w().workerDelivery?.checks ?? ""} />

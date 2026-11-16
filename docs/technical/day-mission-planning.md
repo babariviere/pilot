@@ -361,3 +361,14 @@ rounds/revisions, traced publication, spec invalidation, permissions, owner ABA 
 Its `shared map` tests cover reopen, the same object across reads, fog graduation, dependency moves,
 changed decision/Knowledge claims and published task links without authority.
 Existing interview, workflow, journal and coordinator source suites remain the regression gates.
+
+## Starting the next tasks
+
+The user's Start work admits the first ready published task (`state.start`). After that, in a planned
+mission whose coordinator is still the planning chat, Pilot starts tasks by rule, with no agent:
+`PlanningWorkers.reconcileExecution` runs on each mission change and starts every published task whose
+dependencies are done, through the same checks as Start (current published agreement, task scope, controls,
+worker slots). A task becomes done when the user marks its result done (see
+[day-user-verification.md](day-user-verification.md)). Each start is saved in `state.autoStarts` before any
+worker effect; a crash while `starting` leaves a lookup only. A refused start (no slot, paused, held) is
+forgotten and tried again on a later change, at most once a minute.

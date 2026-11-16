@@ -10,7 +10,7 @@ import { KnowledgeService } from "./project-knowledge.ts";
 
 export async function publishedPlanningFixture(
 	t: TestContext,
-	options: { native?: boolean; published?: boolean; knowledge?: boolean } = {},
+	options: { native?: boolean; published?: boolean; knowledge?: boolean; twoSlices?: boolean } = {},
 ) {
 	const f = await nativePlanningFixture({ native: options.native ?? false });
 	t.after(() => f.close());
@@ -46,6 +46,19 @@ export async function publishedPlanningFixture(
 					dependsOn: [],
 					owners: ["sol-backend"],
 				},
+				...(options.twoSlices
+					? [
+							{
+								id: "two",
+								title: "Exporter",
+								outcome: "Write archive",
+								acceptance: ["Same bytes"],
+								storyIds: ["one"],
+								dependsOn: ["one"],
+								owners: ["sol-backend"],
+							},
+						]
+					: []),
 			],
 		} as { purpose: string });
 	if (published) await f.plan({ purpose: "plan-review", expectedRevision: 2 } as { purpose: string });

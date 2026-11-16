@@ -96,6 +96,8 @@ const RECENT_MISSIONS = 50;
 /** Research chats a mission may run at once. The mission's worker cap also applies. */
 const RESEARCH_CHATS = 2;
 const RESEARCH_RETRY_MS = 60_000;
+/** A start Pilot could not make by rule (no worker slot, paused, held) waits this long before the next try. Same as research. */
+const EXECUTION_RETRY_MS = RESEARCH_RETRY_MS;
 /** Research chats per question: the first, and one more when the planner unclaims weak findings. */
 const RESEARCH_ATTEMPTS = 2;
 /** Research findings per planning turn, at most. */
@@ -268,6 +270,8 @@ export class PlanningWorkers {
 	private readonly continuing = new Set<string>();
 	/** Time-limit timers of running prototype chats, by chat. Cleared on close. */
 	private readonly prototypeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	/** Per mission: no start by rule before this time, after one was refused. */
+	private readonly executionRetryAt = new Map<string, number>();
 	/** Submitted rounds Pilot is sending by itself, or stopped trying because the map changed. */
 	private readonly resumeTried = new Set<string>();
 	/** The last time a submitted round was not sent, by mission, for the unstick log. Kept until it is sent. */
@@ -1657,10 +1661,14 @@ export class PlanningWorkers {
 				while (research.dirty.size && !this.closing.signal.aborted) {
 					const ids = [...research.dirty];
 					research.dirty.clear();
-					for (const id of ids)
+					for (const id of ids) {
 						await this.reconcileResearch(id).catch((error: unknown) =>
 							console.warn(`pilotd: planning research for ${id} failed: ${error}`),
 						);
+						await this.reconcileExecution(id).catch((error: unknown) =>
+							console.warn(`pilotd: planning work for ${id} failed: ${error}`),
+						);
+					}
 				}
 			})
 			.finally(() => {
@@ -2558,43 +2566,12 @@ export class PlanningWorkers {
 				taskId: state.start.taskId,
 				reason: state.start.admitted
 					? worker?.working
-						? "One background task admitted and working. Reports show its progress."
-						: "One background task admitted, not running now. Read its report."
+						? "Work started. When you mark a task's result done, Pilot starts the next ready tasks."
+						: "Work started. When you mark a task's result done, Pilot starts the next ready tasks. Read the reports."
 					: "Start is not confirmed. Check only; do not start again.",
 			};
 		try {
-			const pin = this.startPin(missionId);
-			const task = pin.plan
-				.publication!.tasks.map(({ taskId }) => pin.tasks.find((t) => t.id === taskId)!)
-				.find(
-					(t) =>
-						t?.status === "todo" &&
-						!t.sessionId &&
-						!(t.dependsOn ?? []).some((id) => pin.tasks.find((d) => d.id === id)?.status !== "done"),
-				);
-			if (!task) throw new Conflict("No published task is ready");
-			const slice = pin.plan.slices.find((s) =>
-				pin.plan.publication!.tasks.some((p) => p.sliceId === s.id && p.taskId === task.id),
-			)!;
-			const body = `${slice.outcome}\n\nSpec revision: ${pin.plan.publication!.briefRevision}\nStories: ${slice.storyIds.join(", ")}\nOwnership: ${slice.owners.join(", ")}\n\nAcceptance:\n${slice.acceptance.map((s) => `- ${s}`).join("\n")}`;
-			const dependencies = slice.dependsOn.map(
-				(id) => pin.plan.publication!.tasks.find((p) => p.sliceId === id)!.taskId,
-			);
-			if (
-				task.title !== slice.title ||
-				task.body !== body ||
-				canonicalJSON(task.dependsOn ?? []) !== canonicalJSON(dependencies) ||
-				task.assignment ||
-				task.decisionIds?.length
-			)
-				throw new Conflict("Task scope changed since publication; no Start authority");
-			this.deps.store.prepareTaskStart(missionId, [task.id]);
-			const selection = await this.deps.sessions.selectTaskModel(
-				pin.project.path,
-				task.preferredModel,
-				task.preferredThinking,
-			);
-			if (hash(this.startPin(missionId)) !== hash(pin)) throw new Conflict("Start context changed");
+			const { pin, task, selection } = await this.nextStart(missionId);
 			return {
 				available: true as const,
 				state: "ready",
@@ -2615,6 +2592,149 @@ export class PlanningWorkers {
 				reason: e instanceof Error ? e.message : "Start authority unavailable",
 			};
 		}
+	}
+	/** The first published task that is ready to start, with its pin and model. Throws when none is. */
+	private async nextStart(missionId: string) {
+		const pin = this.startPin(missionId);
+		const task = pin.plan
+			.publication!.tasks.map(({ taskId }) => pin.tasks.find((t) => t.id === taskId)!)
+			.find(
+				(t) =>
+					t?.status === "todo" &&
+					!t.sessionId &&
+					!(t.dependsOn ?? []).some((id) => pin.tasks.find((d) => d.id === id)?.status !== "done"),
+			);
+		if (!task) throw new Conflict("No published task is ready");
+		const slice = pin.plan.slices.find((s) =>
+			pin.plan.publication!.tasks.some((p) => p.sliceId === s.id && p.taskId === task.id),
+		)!;
+		const body = `${slice.outcome}\n\nSpec revision: ${pin.plan.publication!.briefRevision}\nStories: ${slice.storyIds.join(", ")}\nOwnership: ${slice.owners.join(", ")}\n\nAcceptance:\n${slice.acceptance.map((s) => `- ${s}`).join("\n")}`;
+		const dependencies = slice.dependsOn.map(
+			(id) => pin.plan.publication!.tasks.find((p) => p.sliceId === id)!.taskId,
+		);
+		if (
+			task.title !== slice.title ||
+			task.body !== body ||
+			canonicalJSON(task.dependsOn ?? []) !== canonicalJSON(dependencies) ||
+			task.assignment ||
+			task.decisionIds?.length
+		)
+			throw new Conflict("Task scope changed since publication; no Start authority");
+		this.deps.store.prepareTaskStart(missionId, [task.id]);
+		const selection = await this.deps.sessions.selectTaskModel(
+			pin.project.path,
+			task.preferredModel,
+			task.preferredThinking,
+		);
+		if (hash(this.startPin(missionId)) !== hash(pin)) throw new Conflict("Start context changed");
+		return { pin, task, selection };
+	}
+	/**
+	 * After the user's first Start, Pilot keeps the published plan moving by rule, with no agent. Each time a task is
+	 * done (in these missions, the user marked its result done), it starts every published task whose dependencies are
+	 * done. Only in planned missions with no execution coordinator. Worker slots, Pause, Stop, dispatch holds and the
+	 * published-agreement checks of Start still apply. A refused start is forgotten and tried again on a later change,
+	 * at most once per EXECUTION_RETRY_MS.
+	 */
+	private async reconcileExecution(missionId: string): Promise<void> {
+		const { store, sessions } = this.deps;
+		const state = store.planningWorkers.get(missionId);
+		if (!state?.start?.admitted || !store.plannedWithoutCoordinator(missionId)) return;
+		// A start this host entered but did not finish is lookup-only, like the user's Start.
+		for (const s of state.autoStarts ?? []) {
+			if (s.state !== "starting") continue;
+			const admitted = await sessions.lookupPublishedTask(s.sessionId, s.operationId);
+			this.changeAutoStart(
+				missionId,
+				s.operationId,
+				admitted ? "admitted" : sessions.get(s.sessionId) ? "failed" : null,
+			);
+			await store.durable();
+		}
+		if ((this.executionRetryAt.get(missionId) ?? 0) > Date.now()) return;
+		const tried = new Set<string>();
+		for (;;) {
+			let next: Awaited<ReturnType<PlanningWorkers["nextStart"]>>;
+			try {
+				next = await this.nextStart(missionId);
+			} catch {
+				return; // Nothing ready, held, or the published agreement changed.
+			}
+			if (tried.has(next.task.id)) return;
+			tried.add(next.task.id);
+			if (!(await this.autoStart(missionId, next))) return;
+		}
+	}
+	private changeAutoStart(
+		missionId: string,
+		operationId: string,
+		next: "admitted" | "failed" | null,
+		reason?: string,
+	): void {
+		const current = this.deps.store.planningWorkers.get(missionId)!;
+		this.deps.store.planningWorkers.change(missionId, current.revision, (s) => {
+			const list = s.autoStarts ?? [];
+			const at = list.findIndex((a) => a.operationId === operationId);
+			if (at < 0) return;
+			if (next === null) list.splice(at, 1);
+			else list[at] = { ...list[at]!, state: next, ...(reason ? { reason } : {}) };
+		});
+	}
+	private async autoStart(
+		missionId: string,
+		next: Awaited<ReturnType<PlanningWorkers["nextStart"]>>,
+	): Promise<boolean> {
+		const { store, sessions } = this.deps;
+		const { pin, task, selection } = next;
+		const operationId = randomUUID(),
+			sessionId = randomUUID();
+		const current = store.planningWorkers.get(missionId)!;
+		store.planningWorkers.change(missionId, current.revision, (s) => {
+			s.autoStarts = [
+				...(s.autoStarts ?? []),
+				{ operationId, sessionId, taskId: task.id, state: "starting", at: Date.now() },
+			];
+		});
+		await store.durable(); // The record precedes every worker effect, so a crash leaves a lookup.
+		const check = (claimed: boolean) => {
+			const live = this.startPin(missionId);
+			if (claimed) {
+				const actual = live.tasks.find((t) => t.id === task.id);
+				if (!actual || actual.sessionId !== sessionId || actual.status !== "in_progress")
+					throw new Conflict("Start assignment changed");
+				live.tasks = live.tasks.map((t) =>
+					t.id !== task.id
+						? t
+						: { ...t, sessionId: task.sessionId, status: task.status, updatedAt: task.updatedAt },
+				);
+			}
+			if (hash(live) !== hash(pin)) throw new Conflict("Published plan, owner, project or controls changed");
+		};
+		try {
+			await sessions.admitPublishedTask(
+				{
+					projectId: pin.project.id,
+					missionId,
+					message: taskMessage([task]),
+					title: task.title,
+					mode: "build",
+					...selection,
+				},
+				{ sessionId, taskId: task.id, operationId, ownerSessionId: pin.binding.ownerSessionId },
+				check,
+			);
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			this.changeAutoStart(missionId, operationId, sessions.get(sessionId) ? "failed" : null, reason);
+			await store.durable();
+			this.executionRetryAt.set(missionId, Date.now() + EXECUTION_RETRY_MS);
+			console.warn(`pilotd: planning ${missionId} could not start #${task.number} by rule: ${reason}`);
+			return false;
+		}
+		this.changeAutoStart(missionId, operationId, "admitted");
+		await store.durable();
+		console.log(`pilotd: planning ${missionId} started #${task.number} ${task.title} by rule`);
+		return true;
 	}
 	/** Only an authenticated, explicit native Start enters this method. No submission calls it. */
 	start(op: DurableOperation, firstEntry: boolean): Promise<unknown> {

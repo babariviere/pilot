@@ -25,6 +25,8 @@ the changes its agent owns, the chat's saved pushes and pull requests, and what 
 A push with no saved result stays Unknown. It is Pilot's record, not the agent's report or your check.
 In a planned mission, a worker's delivery report reaches To check: you check it, and what the worker
 asks its coordinator shows on that page. Answer with Send back or a thread.
+After your first Start work, marking a task's result done finishes the task, and Pilot starts the next
+tasks that are ready, within the worker limit, Pause and Stop.
 A chat started from Slack, Linear or a schedule saves a report for its result page: its answer, how
 it knows, its limits, your next step and links. A chat with no report shows its last message instead.
 For published native plans, Revisit mission requests planning only. Review new questions and
