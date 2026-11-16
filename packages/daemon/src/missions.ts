@@ -2109,6 +2109,12 @@ export class MissionStore {
 					id,
 					pr.url,
 				).map(taskFrom);
+				// No coordinator finishes tasks in a planned mission run by its planning chat: a merged owned PR does,
+				// so Pilot can start the tasks it unblocks. The user still checks the result.
+				if (pr.state === "merged" && this.plannedWithoutCoordinator(id))
+					for (const [i, task] of tasks.entries())
+						if (task.status !== "done" && task.status !== "dropped")
+							tasks[i] = this.updateTask(id, task.id, { status: "done" });
 				const taskText = tasks.map(
 					(task) => `task #${task.number}${pr.state === "merged" && task.status === "done" ? " marked done" : ""}`,
 				);
@@ -3030,12 +3036,12 @@ export class MissionStore {
 	 * completes tasks, so workers' delivery reports go to the user's To check instead.
 	 */
 	plannedWithoutCoordinator(missionId: string): boolean {
-		const coordinator = this.one(
-			"SELECT coordinator_session_id FROM missions WHERE id=?",
+		// One indexed read, no record parse: this runs on every mission event and context read.
+		return !!this.one(
+			`SELECT 1 FROM missions m JOIN planning_workers p ON p.mission_id = m.id
+			WHERE m.id = ? AND m.coordinator_session_id = json_extract(p.record, '$.binding.ownerSessionId')`,
 			missionId,
-		)?.coordinator_session_id;
-		const owner = this.planningWorkers.get(missionId)?.binding.ownerSessionId;
-		return typeof coordinator === "string" && coordinator === owner;
+		);
 	}
 
 	/**

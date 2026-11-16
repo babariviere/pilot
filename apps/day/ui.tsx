@@ -1,6 +1,6 @@
 // The Day screen's styled controls, drawn from nsh/base behavior and the
 // theme's tokens. Pages compose these; they do not restyle base controls.
-import { Image, type JSX, Text, View, type ViewRef } from "nsh";
+import { Image, type JSX, signal, Text, View, type ViewRef } from "nsh";
 import {
 	Button,
 	type DiffFile,
@@ -241,6 +241,35 @@ export function InlineAction(props: { label: string; testID?: string; onPress: (
 		</Button>
 	);
 }
+
+/**
+ * An agent's evidence: the sentences it says back its report. Long and many, so a quiet wrapped list rather than
+ * chips, with the first three shown and the rest one press away. Chips stay for short labels.
+ */
+export function EvidenceList(props: { items: string[]; testID?: string }) {
+	const all = signal(false);
+	const shown = () => (all() ? props.items : props.items.slice(0, EVIDENCE_SHOWN));
+	return (
+		<If when={props.items.length > 0}>
+			<View testID={props.testID} selectable class="gap-1 border-l-2 border-border pl-3">
+				<Each of={shown()} key={(e) => e}>
+					{(e) => <Text class="text-xs leading-relaxed text-muted-foreground">{e()}</Text>}
+				</Each>
+				<If when={props.items.length > EVIDENCE_SHOWN}>
+					<View class="-ml-3 flex-row">
+						<Action
+							testID={props.testID ? `${props.testID}-more` : undefined}
+							label={all() ? "Show less" : `Show ${props.items.length - EVIDENCE_SHOWN} more`}
+							onPress={() => all.set(!all())}
+						/>
+					</View>
+				</If>
+			</View>
+		</If>
+	);
+}
+/** Evidence lines shown before "Show more": enough to judge a report at a glance. */
+const EVIDENCE_SHOWN = 3;
 
 /** A help toggle on a decision card. */
 export function HelpChip(props: {

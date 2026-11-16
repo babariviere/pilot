@@ -98,6 +98,9 @@ const RESEARCH_CHATS = 2;
 const RESEARCH_RETRY_MS = 60_000;
 /** A start Pilot could not make by rule (no worker slot, paused, held) waits this long before the next try. Same as research. */
 const EXECUTION_RETRY_MS = RESEARCH_RETRY_MS;
+/** Added to a task Pilot starts by rule, so its worker does not wait for a coordinator that does not exist. */
+const RULE_START_NOTE =
+	"Pilot started this task because its dependencies are done: the user checked their results. You can rely on them. No coordinator runs this mission: ask the user with `ask_user` when you need a decision.";
 /** Research chats per question: the first, and one more when the planner unclaims weak findings. */
 const RESEARCH_ATTEMPTS = 2;
 /** Research findings per planning turn, at most. */
@@ -2715,7 +2718,7 @@ export class PlanningWorkers {
 				{
 					projectId: pin.project.id,
 					missionId,
-					message: taskMessage([task]),
+					message: taskMessage([task], RULE_START_NOTE),
 					title: task.title,
 					mode: "build",
 					...selection,

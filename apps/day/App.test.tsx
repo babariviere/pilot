@@ -254,8 +254,7 @@ test("a mission opens with its report, tasks and working chats, and Escape goes 
 		"Agent report · 12 min ago · references not checked by Pilot",
 		"Integration tests on Linux",
 		"In progress",
-		"Working now",
-		"since 34 min ago",
+		"Open its chat · working now",
 		RUNNING,
 	]) {
 		expect(app.shows(text)).toBe(true);
@@ -273,9 +272,9 @@ test("a mission's coordinator, task and working chats open read only, and Back r
 	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-search");
 	await app.waitFor("id:mission-coordinator-chat");
-	// Task 3's chat is under Working now, so it has one link, there.
-	expect(app.shows("id:mission-chat-w-search")).toBe(true);
-	expect(app.shows("id:task-chat-search-3")).toBe(false);
+	// Task 3's chat links from its task, also while it works, and only there.
+	expect(app.shows("id:mission-chat-w-search")).toBe(false);
+	expect(app.shows("id:task-chat-search-3")).toBe(true);
 	expect(app.shows("id:task-chat-search-1")).toBe(false);
 	await app.press("id:mission-coordinator-chat");
 	await app.waitFor("I am checking the open tasks.");
@@ -286,7 +285,7 @@ test("a mission's coordinator, task and working chats open read only, and Back r
 	await app.press("role:button[Back to Faster search]");
 	await app.waitFor("id:mission-coordinator-chat");
 	expect(app.shows("id:chat")).toBe(false);
-	await app.press("id:mission-chat-w-search");
+	await app.press("id:task-chat-search-3");
 	await app.waitFor("The task is done.");
 	await app.press("id:back");
 	await app.waitFor("id:mission-coordinator-chat");
@@ -718,6 +717,9 @@ test("a mission's tasks show what their agents linked, and merged is not release
 	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-native");
 	await app.waitFor("id:outputs-native-4");
+	// A done task folds its report and outputs until Show.
+	expect(app.shows("PR #412 · Native chat view")).toBe(false);
+	await app.press("id:task-more-native-2");
 	for (const text of [
 		"PR #431 · Load older messages while streaming",
 		"Open, not merged. state last checked 5 min ago. Checks not observed.",

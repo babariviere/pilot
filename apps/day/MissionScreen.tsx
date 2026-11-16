@@ -26,7 +26,7 @@ import { goalDraft, openNew, openPlan, replacesDraft } from "./planView";
 import { MissionThreadsSection } from "./ThreadScreen";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
 import { naming } from "./threadView";
-import { Action, EvidenceChip, Mark, PAGE_COLUMN, RowLink, SectionTitle, Track } from "./ui";
+import { Action, EvidenceList, Mark, PAGE_COLUMN, RowLink, SectionTitle, Track } from "./ui";
 import {
 	archiving,
 	closeMission,
@@ -80,12 +80,8 @@ function Report(props: { report: ReportLine }) {
 				<Text class="text-sm text-muted-foreground">{`Next: ${props.report.nextStep}`}</Text>
 			</If>
 			<ReportedOutput report={props.report} />
-			<View class="flex-row flex-wrap items-center gap-1.5">
-				<Each of={props.report.evidence} key={(e) => e}>
-					{(e) => <EvidenceChip evidence={{ label: e(), tone: "neutral" }} />}
-				</Each>
-				<Text class="text-xs text-faint">{meta()}</Text>
-			</View>
+			<EvidenceList items={props.report.evidence} testID="report-evidence" />
+			<Text class="text-xs text-faint">{meta()}</Text>
 		</View>
 	);
 }
@@ -525,6 +521,11 @@ function Waiting(props: { day: Day; row: MissionRow }) {
 function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
 	const project = () => props.day.delivery?.view().projectId ?? "";
 	const checkable = () => !!project() && (props.task.status === "done" || props.task.status === "inReview");
+	// A done task folds its report and outputs: the list stays short, and Show brings them back.
+	const open = signal(false);
+	const folded = () => props.task.status === "done" && !open();
+	const foldable = () => props.task.status === "done" && (!!props.task.report || props.task.outputs.length > 0);
+	const working = () => props.page.chats.some((c) => c.id === props.task.sessionId);
 	const check = () => {
 		const missionId = props.page.row.id;
 		// Coming back keeps this page where it was.
@@ -541,21 +542,19 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
 				<Text class="flex-1 text-sm text-foreground">{props.task.title}</Text>
 				<Text class="text-xs text-muted-foreground">{taskWord(props.task.status)}</Text>
 			</View>
-			<If when={props.task.report}>
+			<If when={props.task.report && !folded()}>
 				<View selectable class="gap-0.5 pl-10">
 					<Text class="text-sm text-muted-foreground">{props.task.report?.summary ?? ""}</Text>
 					<If when={props.task.report?.nextStep}>
 						<Text class="text-sm text-muted-foreground">{`Next: ${props.task.report?.nextStep}`}</Text>
 					</If>
-					<Each of={props.task.report?.evidence ?? []} key={(e) => e}>
-						{(e) => <Text class="text-xs text-muted-foreground">{e()}</Text>}
-					</Each>
+					<EvidenceList items={props.task.report?.evidence ?? []} testID={`task-evidence-${props.task.id}`} />
 					<Text class="text-xs text-faint">{props.task.report ? provenance(props.task.report) : ""}</Text>
 					<Text class="text-xs text-faint">Agent assessment, not verified progress or acceptance.</Text>
 					<ReportedOutput report={props.task.report as ReportLine} />
 				</View>
 			</If>
-			<If when={props.task.outputs.length > 0}>
+			<If when={props.task.outputs.length > 0 && !folded()}>
 				<View testID={`outputs-${props.task.id}`} class="gap-1 pl-10 pt-1">
 					<Text class="text-xs text-faint">Outputs, as linked by its agents</Text>
 					<Each of={props.task.outputs} key={(o) => o.id}>
@@ -574,26 +573,32 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
 					</If>
 				</View>
 			</If>
-			<If when={checkable()}>
+			<If when={checkable() || foldable()}>
 				<View class="flex-row pl-8">
-					<Action
-						testID={`check-result-${props.task.id}`}
-						label="Check the result"
-						accessibilityLabel={`Check the result of #${props.task.number} ${props.task.title}. Opening it records nothing.`}
-						onPress={check}
-					/>
+					<If when={checkable()}>
+						<Action
+							testID={`check-result-${props.task.id}`}
+							label="Check the result"
+							accessibilityLabel={`Check the result of #${props.task.number} ${props.task.title}. Opening it records nothing.`}
+							onPress={check}
+						/>
+					</If>
+					<If when={foldable()}>
+						<Action
+							testID={`task-more-${props.task.id}`}
+							label={open() ? "Hide report" : "Show report"}
+							accessibilityLabel={`${open() ? "Hide" : "Show"} the report and outputs of #${props.task.number} ${props.task.title}.`}
+							onPress={() => open.set(!open())}
+						/>
+					</If>
 				</View>
 			</If>
-			{/* A chat already under Working now keeps its one link there. */}
-			<If
-				when={
-					props.task.sessionId && props.day.chat && !props.page.chats.some((c) => c.id === props.task.sessionId)
-				}
-			>
+			{/* A task's chat has its one link here, also while it works; Working now lists the other chats. */}
+			<If when={props.task.sessionId && props.day.chat}>
 				<View class="flex-row pl-10 pt-1">
 					<RowLink
 						testID={`task-chat-${props.task.id}`}
-						title="Open its chat"
+						title={working() ? "Open its chat · working now" : "Open its chat"}
 						accessibilityLabel={`Open the chat of #${props.task.number} ${props.task.title}, read only. Opening it sends nothing.`}
 						onPress={() => openMemberChat(props.page, props.task.sessionId ?? "")}
 					/>
@@ -767,6 +772,8 @@ function PlanLink(props: { plans: Plans; missionId: string }) {
 // `MissionPage` in Rust and its own section here; nothing else changes.
 function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf }) {
 	const row = () => props.page.row;
+	// A task's chat links from its task; Working now lists the mission's other working chats.
+	const others = () => props.page.chats.filter((c) => !props.page.tasks.some((t) => t.sessionId === c.id));
 	return (
 		<View class="gap-10">
 			<View class="gap-3">
@@ -872,12 +879,12 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 				/>
 			</If>
 
-			<If when={props.page.chats.length > 0}>
+			<If when={others().length > 0}>
 				<View class="gap-1">
 					<View class="pb-2">
-						<SectionTitle title="Working now" count={props.page.chats.length} />
+						<SectionTitle title="Working now" count={others().length} />
 					</View>
-					<Each of={props.page.chats} key={(c) => c.id}>
+					<Each of={others()} key={(c) => c.id}>
 						{(c) => (
 							<If
 								when={props.day.chat}

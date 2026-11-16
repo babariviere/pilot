@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { SessionPullRequest, SessionSummary } from "@pilot/protocol";
 import { publishedPlanningFixture } from "./published-planning.fixture.ts";
 
 test("after the user's Start, marking a task done starts the next ready task by rule", async (t) => {
@@ -78,4 +79,54 @@ test("a refused start by rule is forgotten and waits before the next try", async
 	f.store.updateTask(f.missionId, first!.id, { body: first!.body });
 	await f.workers.settleResearch();
 	assert.equal(calls, 1, "no tight loop: the next try waits");
+});
+
+test("a merged PR that owns a planned task finishes it, and Pilot starts what it unblocks", async (t) => {
+	const f = await publishedPlanningFixture(t, { twoSlices: true });
+	const [first, second] = f.store.plans
+		.get(f.missionId)!
+		.publication!.tasks.map((p) => f.store.task(f.missionId, p.taskId));
+	t.mock.method(f.sessions, "planningIdentity", () => ({ inputGeneration: 0, permission: { level: "build" } }));
+	const admitted: string[] = [];
+	t.mock.method(
+		f.sessions,
+		"admitPublishedTask",
+		async (
+			_request: unknown,
+			identity: { sessionId: string; operationId: string; taskId: string },
+			guard: (claimed: boolean) => void,
+		) => {
+			guard(false);
+			f.store.join(identity.sessionId, f.missionId);
+			f.store.claimTask(f.missionId, identity.taskId, identity.sessionId);
+			guard(true);
+			admitted.push(identity.taskId);
+			return { admissionId: identity.operationId, sessionId: identity.sessionId };
+		},
+	);
+	f.store.join("worker-1", f.missionId);
+	f.store.claimTask(f.missionId, first!.id, "worker-1");
+	const state = f.store.planningWorkers.get(f.missionId)!;
+	f.store.planningWorkers.change(f.missionId, state.revision, (s) => {
+		s.start = { operation: f.submit, sessionId: "worker-1", taskId: first!.id, admitted: true };
+	});
+	const url = "https://github.com/o/r/pull/7";
+	f.store.addResource(f.missionId, { taskId: first!.id, url });
+	const chat = { id: "worker-1", title: "Importer", state: "idle" } as SessionSummary;
+	const pr = (state: "open" | "merged"): SessionPullRequest => ({
+		number: 7,
+		url,
+		title: "Importer",
+		state,
+		checkedAt: Date.now() + 1000,
+		...(state === "merged" ? { mergedAt: Date.now() + 1000 } : {}),
+	});
+	f.workers.startResearch();
+	f.store.recordMemberPullRequests(chat, [pr("open")]);
+	await f.workers.settleResearch();
+	assert.deepEqual(admitted, []);
+	f.store.recordMemberPullRequests(chat, [pr("merged")]);
+	await f.workers.settleResearch();
+	assert.equal(f.store.task(f.missionId, first!.id).status, "done");
+	assert.deepEqual(admitted, [second!.id]);
 });

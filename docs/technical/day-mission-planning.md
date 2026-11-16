@@ -372,3 +372,8 @@ worker slots). A task becomes done when the user marks its result done (see
 [day-user-verification.md](day-user-verification.md)). Each start is saved in `state.autoStarts` before any
 worker effect; a crash while `starting` leaves a lookup only. A refused start (no slot, paused, held) is
 forgotten and tried again on a later change, at most once a minute.
+
+A merged pull request that owns a task (`ownership` link) also finishes it in these missions, so its
+dependents start. Workers in these missions see the user as coordinator (`MissionContext.coordinator` is
+`user`): their prompt tells them to ask the user with `ask_user`, because no coordinator chat reads
+comments promptly. A task Pilot starts by rule says its dependencies were checked by the user.

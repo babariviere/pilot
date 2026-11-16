@@ -1336,11 +1336,14 @@ export class MissionService {
 			title: mission.title,
 			goal: mission.goal,
 			status: mission.status,
+			// A planned mission run by its planning chat has no execution coordinator: the user decides.
 			coordinator: !mission.coordinatorSessionId
 				? "user"
 				: mission.coordinatorSessionId === sessionId
 					? "self"
-					: "other",
+					: this.store.plannedWithoutCoordinator(mission.id)
+						? "user"
+						: "other",
 			tasks: detail.tasks
 				.filter((task) => task.sessionId === sessionId && task.status !== "done" && task.status !== "dropped")
 				.map((task) => ({
