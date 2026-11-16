@@ -1,4 +1,5 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: Verify private replica rows and immutable retained envelopes.
+
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -8,13 +9,14 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { DurableOperation } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
+import { InsightsJournal } from "./insights-journal.ts";
 import { InsightsLegacy, type InsightsLegacySelector } from "./insights-legacy.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
 import { canonicalJSON, OperationJournal, payloadHash } from "./operation-journal.ts";
-import { createDaemonServer } from "./server.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { fixture as sessionFixture } from "./testing/session-workspace.ts";
 
 const host = { hostId: "daemon", daemonId: "synthetic", lineageId: "synthetic" };
@@ -149,7 +151,7 @@ test("foreign lineage/context and unknown mission remain unavailable, never an e
 
 test("legacy projection pins rows before journal I/O and rejects a newer replacement row", async (t) => {
 	const f = await fixture(t),
-		original = f.journal.replacementReferences.bind(f.journal);
+		original = InsightsJournal.prototype.replacementReferences;
 	let release!: () => void, entered!: () => void;
 	const hold = new Promise<void>((r) => {
 			release = r;
@@ -158,12 +160,16 @@ test("legacy projection pins rows before journal I/O and rejects a newer replace
 			entered = r;
 		});
 	t.after(release);
-	t.mock.method(f.journal, "replacementReferences", async (...args: Parameters<typeof original>) => {
-		const snapshot = await original(...args);
-		entered();
-		await hold;
-		return snapshot;
-	});
+	t.mock.method(
+		InsightsJournal.prototype,
+		"replacementReferences",
+		async function (this: InsightsJournal, ...args: Parameters<typeof original>) {
+			const snapshot = await original.apply(this, args);
+			entered();
+			await hold;
+			return snapshot;
+		},
+	);
 	const read = f.service.page(f.selector, "finding");
 	await start;
 	await f.store.insights.call(f.sessions.insightsHostAdmission(f.report), {
@@ -199,15 +205,15 @@ test("archived legacy missions remain readable; deletion still owns their lifecy
 
 test("native legacy HTTP is bounded, exact-ID, authenticated and passive", async (t) => {
 	const f = await fixture(t);
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		{ list: async () => assert.fail("Projection never resolves models") } as unknown as ModelCatalog,
-		new TerminalManager(),
-		{ store: f.store, service: f.missionService },
-	];
-	args[12] = {
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: { list: async () => assert.fail("Projection never resolves models") } as unknown as ModelCatalog,
+		terminals: new TerminalManager(),
+		missions: { store: f.store, service: f.missionService },
+	};
+	args.hello = {
 		...host,
 		daemonVersion: "synthetic",
 		protocolVersion: 1,
@@ -222,12 +228,12 @@ test("native legacy HTTP is bounded, exact-ID, authenticated and passive", async
 			independentExecution: true,
 		},
 	};
-	args[17] = {
+	args.nativeAuthority = {
 		authenticate: async (token: unknown) => {
 			if (token !== "native") throw new Conflict("Native confirmation required");
 		},
-	} as NonNullable<(typeof args)[17]>;
-	const server = createDaemonServer(...args);
+	};
+	const server = createDaemonServer(args);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

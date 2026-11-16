@@ -8,6 +8,8 @@ import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { ArtifactNotFound, ArtifactStore, captureNshSource, ensureArtifactScratch } from "@pilot/artifacts";
 import type { ArtifactRevision, ArtifactWrite } from "@pilot/protocol";
+import { Type } from "typebox";
+import { Compile } from "typebox/compile";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
 
@@ -237,6 +239,42 @@ test("Ask inspects stored SwiftUI source without entering rendering or publicati
 	};
 	assert.ok(output.anyOf.some((entry) => entry.properties.artifact?.properties.kind?.enum.includes("swiftui")));
 	assert.equal(f.notifications, 0);
+});
+
+test("NSH read schema accepts fresh and historical metadata without rewriting it", async () => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "nsh-tool-schema-")));
+	try {
+		const store = new ArtifactStore(root, { sessionId: "owner" });
+		const f = fixture({
+			store,
+			nshSessionDirectory: root,
+			captureNsh: async () => ({ source: "export default () => null;\r\n", entry: "view.tsx" }),
+		});
+		await f.call("create", { title: "Fresh", kind: "nsh", sourcePath: "view.tsx" });
+		const [saved] = await store.list();
+		assert.ok(saved);
+		const fresh = await f.call("get", { id: saved.id });
+		// Select the read branch: the publication-reference branch permits extra artifact fields.
+		const output = f.tools[0]!.outputSchema as {
+			anyOf: Array<{ properties?: { artifact?: { properties?: Record<string, unknown> } } }>;
+		};
+		const schema = output.anyOf.find((branch) => "source" in (branch.properties?.artifact?.properties ?? {}));
+		assert.ok(schema);
+		const check = Compile(Type.Unsafe(schema));
+		assert.equal(check.Check(fresh.structuredContent), true);
+		const original = await store.get(saved.id);
+		assert.ok(original.nsh);
+		const historical = {
+			...original,
+			nsh: { ...original.nsh, runtime: "nsh older-release", rendering: "unsupported" as const },
+		};
+		const reader = fixture({ store: { ...f.store, get: async () => historical } });
+		const read = await reader.call("get", { id: historical.id });
+		assert.equal(check.Check(read.structuredContent), true);
+		assert.deepEqual((read.structuredContent as { artifact: { nsh: unknown } }).artifact.nsh, historical.nsh);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });
 
 test("create awaits committed publication before notification and returns only a pinned reference", async () => {

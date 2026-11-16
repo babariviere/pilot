@@ -9,8 +9,8 @@ import type { Automation } from "@pilot/protocol";
 import { ChatSettingsService } from "./chat-settings.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { ModelCatalog } from "./models.ts";
-import { createDaemonServer } from "./server.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { deferred, fixture, until } from "./testing/session-workspace.ts";
 
 const hook = (id: string, on: Automation["on"] = ["workspace.created"]): Automation => ({
@@ -238,32 +238,17 @@ test("manual setup HTTP action requires the live setting and native authority", 
 	await native.status();
 	const token = JSON.parse(await readFile(join(f.home, "github-app-capability"), "utf8")).token as string;
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		new ModelCatalog(f.home),
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		false,
-		undefined,
-		undefined,
-		native,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		settings,
-	);
+		legacyAdmissionFrozen: false,
+		githubSetup: native,
+		nativeAuthority: native.nativeAuthority,
+		chatSettings: settings,
+	});
 	t.after(async () => {
 		await terminals.shutdown();
 		await native.close();

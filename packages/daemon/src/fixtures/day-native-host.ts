@@ -18,9 +18,9 @@ import type { MissionService } from "../mission-service.ts";
 import { MissionStore } from "../missions.ts";
 import type { ModelCatalog } from "../models.ts";
 import { ProjectStore } from "../projects.ts";
-import { createDaemonServer } from "../server.ts";
 import type { SessionManager } from "../sessions.ts";
 import type { TerminalManager } from "../terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "../testing/daemon-server.ts";
 
 const home = await mkdtemp(join(tmpdir(), "day-native-host-"));
 await mkdir(join(home, "project"));
@@ -106,26 +106,18 @@ const native = new GitHubSetupService(
 	{ userHome: home, env: {} },
 );
 await native.status();
-const server = createDaemonServer(
-	{ home, host: "127.0.0.1", port: 0 },
+const server = createDaemonServer({
+	config: { home, host: "127.0.0.1", port: 0 },
 	sessions,
 	projects,
-	{} as ModelCatalog,
-	{ isRunning: () => false } as unknown as TerminalManager,
-	{ store, service: { reports, controls } as MissionService },
-	undefined,
-	undefined,
-	undefined,
-	undefined,
-	undefined,
-	undefined,
+	models: {} as ModelCatalog,
+	terminals: { isRunning: () => false } as unknown as TerminalManager,
+	missions: { store, service: { reports, controls } as MissionService },
 	hello,
-	undefined,
-	false,
-	undefined,
-	undefined,
-	native,
-);
+	legacyAdmissionFrozen: false,
+	githubSetup: native,
+	nativeAuthority: native.nativeAuthority,
+});
 assert.ok(planningBridge, "Production server installs its trusted bridge even in the no-worker fixture");
 await server.runtimeReady;
 server.listen(0, "127.0.0.1");
@@ -359,7 +351,7 @@ await Promise.all([
 	new Promise<void>((resolve) => proxy.close(() => resolve())),
 	new Promise<void>((resolve) => server.close(() => resolve())),
 ]);
-await server.closePlanning();
+await server.closeServices();
 assert.equal(planningBridge, undefined, "Joined close releases only this server's bridge");
 await native.close();
 store.close();

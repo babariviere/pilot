@@ -1,29 +1,23 @@
 /** Offline kernel-activity hot-path comparison. node scripts/bench/daemon-activity.ts <baseline commit> */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { MissionStore } from "../../packages/daemon/src/missions.ts";
 import type { SessionSummary } from "../../packages/protocol/src/index.ts";
+import { loadBaseline } from "./baseline.ts";
 
 const baseline = process.argv[2];
 if (!baseline || !/^[a-f\d]{6,40}$/.test(baseline)) throw new Error("Pass a baseline commit hash");
-const root = fileURLToPath(new URL("../../", import.meta.url));
 const home = await mkdtemp(join(tmpdir(), "pilot-activity-bench-"));
+let cleanupBaseline: (() => Promise<void>) | undefined;
 try {
-	const source = execFileSync("git", ["show", `${baseline}:packages/daemon/src/missions.ts`], {
-		cwd: root,
-		encoding: "utf8",
-		maxBuffer: 1024 * 1024,
-	}).replaceAll('from "./', `from "${join(root, "packages/daemon/src")}/`);
-	const legacyPath = join(home, "baseline.ts");
-	await writeFile(legacyPath, source);
-	const { MissionStore: LegacyStore } = (await import(pathToFileURL(legacyPath).href)) as {
+	const loaded = await loadBaseline<{
 		MissionStore: typeof MissionStore;
-	};
+	}>(baseline, new URL("../../packages/daemon/src/missions.ts", import.meta.url));
+	cleanupBaseline = loaded.cleanup;
+	const { MissionStore: LegacyStore } = loaded.module;
 	const seed = join(home, "seed.sqlite");
 	const seedStore = new MissionStore(seed);
 	const { id } = seedStore.create({ projectId: "fixture", title: "Fixture" });
@@ -108,5 +102,6 @@ try {
 		);
 	}
 } finally {
+	await cleanupBaseline?.();
 	await rm(home, { recursive: true, force: true });
 }

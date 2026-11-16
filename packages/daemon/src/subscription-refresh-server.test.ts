@@ -8,10 +8,10 @@ import { test } from "node:test";
 import { daemonHello } from "./hello.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { SubscriptionRefresh } from "./subscription-refresh.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("subscription refresh is explicit, identity-pinned, coalesced and never starts an agent", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "subscription-refresh-"));
@@ -37,16 +37,16 @@ test("subscription refresh is explicit, identity-pinned, coalesced and never sta
 			usage: { provider, fetchedAt: 1000, windows: [{ label: "5h", usedPercent: 42 }] },
 		};
 	});
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-	];
-	args[12] = hello;
-	args[22] = subscriptions;
-	const server = createDaemonServer(...args);
+	};
+	args.hello = hello;
+	args.subscriptions = subscriptions;
+	const server = createDaemonServer(args);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

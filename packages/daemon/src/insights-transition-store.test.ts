@@ -1,6 +1,7 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: Storage proof/fault tests inspect exact replica rows.
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { DurableOperation, InsightsLegacySelector } from "@pilot/protocol";
@@ -15,7 +16,7 @@ const host = { hostId: "daemon", daemonId: "synthetic", lineageId: "synthetic" }
 async function fixture(t: TestContext, uppercaseReport = false) {
 	const f = await sessionFixture(t, { diagnosticHost: host }),
 		store = new MissionStore(join(f.home, "missions.sqlite"));
-	new MissionService(store, f.sessions, f.projects);
+	const service = new MissionService(store, f.sessions, f.projects);
 	const mission = store.create({ projectId: f.project.id, title: "Original user mission" }),
 		report = uppercaseReport ? randomUUID().toUpperCase() : randomUUID();
 	await f.sessions.spawnInsightsDurable(
@@ -133,12 +134,12 @@ async function fixture(t: TestContext, uppercaseReport = false) {
 	const closeStore = async () => {
 		if (closed) return;
 		closed = true;
+		await service.notices.stop();
+		await service.continuations.stop();
+		service.dispose();
 		await store.close();
 	};
-	t.after(async () => {
-		await f.sessions.shutdown();
-		await closeStore();
-	});
+	f.beforeRemove(closeStore);
 	return { ...f, store, closeStore, legacy, authority, snapshot, op, guard, finding, position, source };
 }
 
@@ -255,10 +256,19 @@ test("committed transfer receipt, old-ID denial and original rows survive cold r
 	await f.closeStore();
 	const reopened = new MissionStore(join(f.home, "missions.sqlite")),
 		sessions = await f.manager();
-	new MissionService(reopened, sessions, f.projects);
-	t.after(async () => {
-		await sessions.shutdown();
+	const reopenedService = new MissionService(reopened, sessions, f.projects);
+	let reopenedClosed = false;
+	f.beforeRemove(async () => {
+		assert.equal((await stat(f.home)).isDirectory(), true, "the fixture must retain the home while stores close");
+		await reopenedService.notices.stop();
+		await reopenedService.continuations.stop();
+		reopenedService.dispose();
 		await reopened.close();
+		reopenedClosed = true;
+	});
+	t.after(async () => {
+		assert.equal(reopenedClosed, true, "shared cleanup must join the reopened store before deleting its home");
+		await assert.rejects(stat(f.root), { code: "ENOENT" });
 	});
 	assert.equal((await reopened.insightsTransition.lookup(f.op, () => {})).state, "committed");
 	assert.throws(() => sessions.insightsReplacementTarget(f.legacy.reportSessionId), /fenced/);

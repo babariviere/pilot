@@ -2,7 +2,7 @@
 // hangs off its mission's overview: Back goes to the mission. Drafts are
 // kept by mission and thread, so a message is never sent to another thread
 // or mission, and they stay across Back, other pages, close and update
-// (updateView.ts). Only Send sends one, once.
+// (windowState.ts). Only Send sends one, once.
 import { signal } from "nsh";
 import type { ThreadsMirror } from "./threadFeed";
 import { glide } from "./ui";
@@ -140,4 +140,16 @@ export function restoreThreads(place: string, lines: readonly string[]) {
 /** A new window: no thread and no unsent words. */
 export function forgetThreads() {
 	restoreThreads("", []);
+}
+
+export function captureThreadView(): Pick<import("pilot-day/native").SavedView, "thread" | "threads"> {
+	return { thread: savedThread(), threads: savedThreadDrafts() };
+}
+
+/** A saved thread can return only over its own mission. Its drafts stay unsent. */
+export function restoreThreadView(
+	view: Pick<import("pilot-day/native").SavedView, "place" | "id" | "thread" | "threads">,
+) {
+	const thread = view.thread ?? "";
+	restoreThreads(view.place === "mission" && thread.startsWith(`${view.id}/`) ? thread : "", view.threads ?? []);
 }

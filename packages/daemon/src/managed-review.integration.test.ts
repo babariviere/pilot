@@ -15,9 +15,9 @@ import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import type { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import type { SessionManager, SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { fixture, jj } from "./testing/session-workspace.ts";
 
 type NativeReviewPage = {
@@ -79,14 +79,14 @@ async function serve(
 	const store = new MissionStore(join(home, "missions.sqlite"));
 	const service = new MissionService(store, sessions, projects);
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-		{ store, service },
-	);
+		missions: { store, service },
+	});
 	let closing: Promise<void> | undefined;
 	const close = () =>
 		(closing ??= (async () => {
@@ -99,7 +99,7 @@ async function serve(
 						server.close((error) => (error ? reject(error) : resolve()));
 						server.closeAllConnections();
 					}),
-				() => server.closePlanning(),
+				() => server.closeServices(),
 				() => service.notices.stop(),
 				() => sessions.shutdown(),
 				() => terminals.shutdown(),

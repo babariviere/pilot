@@ -20,7 +20,7 @@ export type ResumeChat = (sessionId: string, message: string, requestId: string)
 export type SlackWaitingWatcher = (context: SourcePollContext) => Promise<boolean>;
 
 export function createSlackWaitingWatcher(
-	store: Pick<TrackedItemStore, "reserveSlackWaiting" | "slackWaitingResult" | "reserveSlackRead">,
+	store: Pick<TrackedItemStore, "reserveSlackWaiting" | "slackWaitingResult">,
 	resume: ResumeChat,
 	now = Date.now,
 ): SlackWaitingWatcher {

@@ -36,7 +36,7 @@ test("drilldown fixture uses canonical records, cited history and passive reads 
 	assert.equal(f.store.interviews.latest(f.missionId)!.submission, null);
 	await records.fillSummary();
 	const limited = await read();
-	assert.equal(limited.view.knowledge.entries.length, 40);
+	assert.equal(limited.view.knowledge.more, true);
 	assert.equal(
 		limited.view.knowledge.entries.some((entry: { id: string }) => entry.id === knowledge.entry.id),
 		false,

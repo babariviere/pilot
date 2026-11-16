@@ -2234,6 +2234,7 @@ export const DEFAULT_PORT = 4319;
 export type * from "./environment.ts";
 export * from "./feature-events.ts";
 export * from "./feature-usage.ts";
+export type * from "./funding.ts";
 export type { DaemonCapabilities, DaemonHello } from "./hello.ts";
 export { DAEMON_PROTOCOL_VERSION, MINIMUM_CLIENT_PROTOCOL_VERSION } from "./hello.ts";
 export type * from "./human-review.ts";

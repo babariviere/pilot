@@ -17,9 +17,9 @@ import {
 import { WebSocket } from "ws";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("chat socket continues trace context through cold history without content attributes", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-chat-open-trace-"));
@@ -63,13 +63,13 @@ test("chat socket continues trace context through cold history without content a
 		hostKind: "local",
 		exporter,
 	});
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

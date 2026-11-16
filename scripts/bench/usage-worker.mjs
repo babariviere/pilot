@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = process.argv[2] ?? fileURLToPath(new URL("../../", import.meta.url));
@@ -55,9 +55,8 @@ try {
 	await writeFile(generatorFile, generator);
 	const { buildUsageWorker } = await import(pathToFileURL(generatorFile));
 	const binary = await readFile(process.execPath);
-	const node = join(directory, "runtime/node/bin/node");
-	await mkdir(dirname(node), { recursive: true });
-	await copyFile(process.execPath, node);
+	// This probe stages worker sources, not the invoking Node's shared-library closure.
+	const node = process.execPath;
 	const hashes = {};
 	const sources = {};
 	for (const name of [...modules, "usage-history.bench"]) {
@@ -69,6 +68,7 @@ try {
 		JSON.stringify({
 			metadata: {
 				kind: "isolated-shipped-worker-leaf-not-installed-daemon",
+				nodeExecution: "invoking-executable-in-place",
 				platform: process.platform,
 				arch: process.arch,
 				versions: process.versions,

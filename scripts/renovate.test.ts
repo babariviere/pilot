@@ -119,10 +119,8 @@ test("Renovate changes validate offline, and update PRs check production runtime
 	assert.match(validator, /--strict --no-global renovate\.json/);
 	assert.match(validator, /scripts\/renovate-contract\.mjs/);
 	const workflow = readFileSync(new URL("../.github/workflows/tests.yaml", import.meta.url), "utf8");
-	const step = workflow.split("- name: Verify packaged dependency updates\n")[1]!.split("\n      - ")[0]!;
-	assert.match(step, /if: github\.event_name == 'pull_request' && startsWith\(github\.head_ref, 'renovate\/'\)/);
-	assert.match(step, /bundle-runtime\.sh "\$stage\/runtime"/);
-	assert.match(step, /ditto -c -k --keepParent/);
-	assert.match(step, /ditto -x -k/);
-	assert.match(step, /check-runtime\.sh "\$stage\/relocated\/runtime"/);
+	assert.match(
+		workflow,
+		/if:\s*github\.event_name == 'pull_request' && startsWith\(github\.head_ref, 'renovate\/'\)\s+run:\s*bash scripts\/check-packaged-dependencies\.sh/,
+	);
 });

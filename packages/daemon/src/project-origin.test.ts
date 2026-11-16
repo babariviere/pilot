@@ -8,9 +8,9 @@ import { test } from "node:test";
 import { ModelCatalog } from "./models.ts";
 import { projectOriginIdentity as identity } from "./project-origin.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { run } from "./workspaces.ts";
 
 test("origin identity folds SSH/HTTPS and GitHub case only, never credentials, forks or arbitrary path case", () => {
@@ -62,13 +62,13 @@ test("production origin route is bounded local config only, refreshes changes an
 	const history = t.mock.method(sessions, "history", async () => {
 		throw new Error("No history");
 	});
-	const server = createDaemonServer(
-		{ home: directory, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: directory, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(directory),
+		models: new ModelCatalog(directory),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		await terminals.shutdown();

@@ -16,12 +16,12 @@ import { ConnectedDelivery, deliveryKey, mirrorDelivery, type VerificationSubjec
 import { deliveryTitles } from "./deliveryView";
 import { connectedDiagnosisControls } from "./diagnosisControls";
 import { ConnectedFeedback, mirrorFeedback } from "./feedbackFeed";
-import { ConnectedIntake, mirrorIntake } from "./intakeFeed";
+import { ConnectedIntake, type IntakeMirror, mirrorIntake } from "./intakeFeed";
 import { ConnectedLinear, mirrorLinear } from "./linearFeed";
 import { connectedModelControls } from "./modelControls";
 import { flushAll } from "./planCommands";
 import { mirrorPlanning, type Plans } from "./planning";
-import { answerDrafts, answerPicks } from "./planView";
+import { pendingAnswers } from "./planView";
 import { connectedPower } from "./power";
 import { ConnectedPreferences, mirrorPreferences } from "./preferencesFeed";
 import { settingsOpen } from "./preferencesView";
@@ -32,7 +32,7 @@ import { ConnectedThreads, mirrorThreads } from "./threadFeed";
 import { refreshOpenThread } from "./threadView";
 import { ConnectedScope, mirrorScope, todayProject } from "./todayScope";
 import type { Update } from "./updateFeed";
-import { captureView, restoreView, saveForms } from "./updateView";
+import { captureView, restoreView, saveForms } from "./windowState";
 
 /** Whether this window has its feeds yet, and which. */
 export type Connection =
@@ -87,7 +87,7 @@ async function flushForms(window: string, generation: number, today: ConnectedTo
 	}
 	const drafts = await today.saveDrafts();
 	await flushAll(plans);
-	const waiting = Object.keys(answerDrafts()).length + Object.keys(answerPicks()).length;
+	const waiting = pendingAnswers();
 	if (!drafts) logEvent("forms.unsaved", "Today's drafts could not be saved.");
 	if (waiting > 0) logEvent("forms.unsaved", `${waiting} interview answers could not be saved.`);
 	if (!drafts || waiting > 0 || generation !== latestFlush || windowId() !== window) return;
@@ -104,6 +104,7 @@ let ritualFeed: ConnectedRituals | null = null;
 let todayFeed: ConnectedToday | null = null;
 let planFeed: ConnectedPlans | null = null;
 let feedbackFeed: ConnectedFeedback | null = null;
+let connectedFeeds: OpeningFeeds | null = null;
 let pendingFlush: number | null = null;
 /** The next automatic read after a passing failure, and its delay. */
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -112,6 +113,38 @@ let retries = 0;
 const RETRIES = 5;
 let scopeReading = false;
 let scopeAgain = false;
+
+// Before admission the attempt owns partial construction. After admission the
+// window keeps the same owner. Mirrors take ownership of their source exactly once.
+class OpeningFeeds {
+	readonly today: ConnectedToday;
+	readonly plan: ConnectedPlans;
+	intake: IntakeMirror | null = null;
+	day: Day | null = null;
+	plans: Plans | null = null;
+	rituals: Rituals | null = null;
+	update: Update | null = null;
+	closed = false;
+
+	constructor(today: ConnectedToday, plan: ConnectedPlans) {
+		this.today = today;
+		this.plan = plan;
+	}
+
+	close() {
+		if (this.closed) return;
+		this.closed = true;
+		if (this.day) this.day.close();
+		else {
+			this.today.dispose();
+			this.intake?.close();
+		}
+		if (this.plans) this.plans.close();
+		else this.plan.dispose();
+		this.rituals?.close();
+		this.update?.close();
+	}
+}
 
 /** Coalesce stream invalidations. No timer or service polling. */
 async function refreshScope() {
@@ -132,6 +165,7 @@ async function refreshScope() {
 
 function current(): boolean {
 	if (window && windowId() === window) return true;
+	connectedFeeds?.close();
 	connection.set({ state: "none", reason: unreadable("identity"), canRead: false });
 	return false;
 }
@@ -241,104 +275,121 @@ async function connect() {
 	const setup = await call<Setup | null>(window, "day.plan.prepare", {});
 	if (!current()) return;
 	const today = new ConnectedToday(window, first.snapshot);
-	todayFeed = today;
-	planFeed = new ConnectedPlans(window, setup.ok ? (setup.snapshot ?? null) : null, setup.ok ? null : setup.refusal);
-	// Every mission in planning, read once before Today shows, so a valid empty
-	// list and one that could not be read never look alike. Later changes
-	// arrive as invalidations and read the root's cached list.
-	await planFeed.readInventory();
-	if (!current()) return;
-	// The selected project's requests, read once before Today shows, so an
-	// unreadable page and having none never look alike. Rust picks the project.
-	const intakeFeed = new ConnectedIntake(window);
-	await intakeFeed.read();
-	if (!current()) return;
-	const intake = mirrorIntake(intakeFeed);
-	// Requests started as standalone chats: their results join To check once
-	// the chat says it is done. Their titles name them there.
-	const started = (): VerificationSubject[] => {
-		const v = intake.view();
-		if (!v.projectId) return [];
-		const subjects: VerificationSubject[] = [];
-		const titles: Record<string, string> = {};
-		for (const op of v.started) {
-			if (!op.sessionId) continue;
-			const subject: VerificationSubject = { kind: "chat", projectId: v.projectId, sessionId: op.sessionId };
-			subjects.push(subject);
-			if (op.title) titles[deliveryKey(subject)] = op.title;
-		}
-		if (Object.keys(titles).length > 0) deliveryTitles.update((all) => ({ ...titles, ...all }));
-		return subjects;
-	};
-	const deliveryFeed = new ConnectedDelivery(window, started);
-	let starts = intake.view().started.length;
-	intakeFeed.onChange((next) => {
-		if (next.started.length === starts) return;
-		starts = next.started.length;
-		void deliveryFeed.readSaved();
-	});
-	// Invalidations read only the root's cached Today. When its request
-	// preview changed, the request pages are read once more; nothing is sent.
-	let requests = JSON.stringify(first.snapshot.intake);
-	today.onChange((next) => {
-		const now = JSON.stringify(next.intake);
-		if (now === requests) return;
-		requests = now;
-		void intakeFeed.read();
-	});
-	// The saved Linear issues, the project's preferences, a mission's threads,
-	// saved artifacts and a chat Pilot started are read only when their page
-	// opens. Feedback also supplies Today's New section and follows the same
-	// stream invalidations.
-	feedbackFeed = new ConnectedFeedback(window);
-	void feedbackFeed.read();
-	const day = mirrorDay(
-		today,
-		intake,
-		mirrorDelivery(deliveryFeed),
-		mirrorLinear(new ConnectedLinear(window)),
-		mirrorScope(new ConnectedScope(window)),
-		mirrorPreferences(new ConnectedPreferences(window)),
-		mirrorThreads(new ConnectedThreads(window)),
-		mirrorFeedback(feedbackFeed),
-		new ConnectedArtifacts(window),
-		mirrorSessionChat(new ConnectedSessionChat(window)),
-	);
-	// New's projects are read when New opens; reading sends nothing.
-	day.models = connectedModelControls(window);
-	day.diagnosis = connectedDiagnosisControls(window);
-	day.connections = connectedConnectionControls(window);
-	day.power = connectedPower(window);
-	void day.power.read();
-	day.slack = connectedSlackControls(window, () => void intakeFeed.read());
-	const plans = mirrorPlanning(planFeed, mirrorChats(new ConnectedChats(window)));
-	const rituals = mirrorRituals(ritualFeed, rootRecap);
-	const update = await connectedUpdates(window);
-	if (!current()) return;
-	// An actual updater successor uses its verified restore/ACK path. Ordinary
-	// startup uses only this source's close capture, never a historical update ACK.
-	if (!update?.service().restore) {
-		const saved = await call<SavedView | null>(window, "day.window.read", {});
+	const plan = new ConnectedPlans(window, setup.ok ? (setup.snapshot ?? null) : null, setup.ok ? null : setup.refusal);
+	const feeds = new OpeningFeeds(today, plan);
+	let admitted = false;
+	try {
+		// Every mission in planning, read once before Today shows, so a valid empty
+		// list and one that could not be read never look alike. Later changes
+		// arrive as invalidations and read the root's cached list.
+		await plan.readInventory();
 		if (!current()) return;
-		if (!saved.ok) {
-			// Do not admit forms or a close capture that could overwrite a draft
-			// whose saved window we could not read. Reading again opens afresh and
-			// reads the saved window first. A service that is still starting
-			// refuses for a moment, so a passing refusal can be read again.
-			connection.set({
-				state: "none",
-				reason: unreadable(saved.refusal),
-				canRead: !["denied", "identity", "closed", "busy"].includes(saved.refusal),
-			});
-			return;
+		// The selected project's requests, read once before Today shows, so an
+		// unreadable page and having none never look alike. Rust picks the project.
+		const intakeFeed = new ConnectedIntake(window);
+		const intake = mirrorIntake(intakeFeed);
+		feeds.intake = intake;
+		await intakeFeed.read();
+		if (!current()) return;
+		// Requests started as standalone chats: their results join To check once
+		// the chat says it is done. Their titles name them there.
+		const started = (): VerificationSubject[] => {
+			if (feeds.closed) return [];
+			const v = intake.view();
+			if (!v.projectId) return [];
+			const subjects: VerificationSubject[] = [];
+			const titles: Record<string, string> = {};
+			for (const op of v.started) {
+				if (!op.sessionId) continue;
+				const subject: VerificationSubject = { kind: "chat", projectId: v.projectId, sessionId: op.sessionId };
+				subjects.push(subject);
+				if (op.title) titles[deliveryKey(subject)] = op.title;
+			}
+			if (Object.keys(titles).length > 0) deliveryTitles.update((all) => ({ ...titles, ...all }));
+			return subjects;
+		};
+		const deliveryFeed = new ConnectedDelivery(window, started);
+		let starts = intake.view().started.length;
+		intakeFeed.onChange((next) => {
+			if (feeds.closed) return;
+			if (next.started.length === starts) return;
+			starts = next.started.length;
+			void deliveryFeed.readSaved();
+		});
+		// Invalidations read only the root's cached Today. When its request
+		// preview changed, the request pages are read once more; nothing is sent.
+		let requests = JSON.stringify(first.snapshot.intake);
+		today.onChange((next) => {
+			if (feeds.closed) return;
+			const now = JSON.stringify(next.intake);
+			if (now === requests) return;
+			requests = now;
+			void intakeFeed.read();
+		});
+		// The saved Linear issues, the project's preferences, a mission's threads,
+		// saved artifacts and a chat Pilot started are read only when their page
+		// opens. Feedback also supplies Today's New section and follows the same
+		// stream invalidations.
+		const feedback = new ConnectedFeedback(window);
+		void feedback.read();
+		const day = mirrorDay(today, {
+			intake,
+			delivery: mirrorDelivery(deliveryFeed),
+			linear: mirrorLinear(new ConnectedLinear(window)),
+			scope: mirrorScope(new ConnectedScope(window)),
+			preferences: mirrorPreferences(new ConnectedPreferences(window)),
+			threads: mirrorThreads(new ConnectedThreads(window)),
+			feedback: mirrorFeedback(feedback),
+			artifacts: new ConnectedArtifacts(window),
+			chat: mirrorSessionChat(new ConnectedSessionChat(window)),
+		});
+		feeds.day = day;
+		// New's projects are read when New opens; reading sends nothing.
+		day.models = connectedModelControls(window);
+		day.diagnosis = connectedDiagnosisControls(window);
+		day.connections = connectedConnectionControls(window);
+		day.power = connectedPower(window);
+		void day.power.read();
+		day.slack = connectedSlackControls(window, () => void intakeFeed.read());
+		const plans = mirrorPlanning(plan, mirrorChats(new ConnectedChats(window)));
+		feeds.plans = plans;
+		const rituals = mirrorRituals(ritualFeed, rootRecap);
+		feeds.rituals = rituals;
+		const update = await connectedUpdates(window);
+		feeds.update = update;
+		if (!current()) return;
+		// An actual updater successor uses its verified restore/ACK path. Ordinary
+		// startup uses only this source's close capture, never a historical update ACK.
+		if (!update?.service().restore) {
+			const saved = await call<SavedView | null>(window, "day.window.read", {});
+			if (!current()) return;
+			if (!saved.ok) {
+				// Do not admit forms or a close capture that could overwrite a draft
+				// whose saved window we could not read. Reading again opens afresh and
+				// reads the saved window first. A service that is still starting
+				// refuses for a moment, so a passing refusal can be read again.
+				connection.set({
+					state: "none",
+					reason: unreadable(saved.refusal),
+					canRead: !["denied", "identity", "closed", "busy"].includes(saved.refusal),
+				});
+				return;
+			}
+			if (saved.snapshot) restoreView(saved.snapshot, undefined, day.today(), !!day.linear, !!day.preferences);
 		}
-		if (saved.snapshot) restoreView(saved.snapshot, undefined, day.today(), !!day.linear, !!day.preferences);
+		connectedFeeds = feeds;
+		todayFeed = today;
+		planFeed = plan;
+		feedbackFeed = feedback;
+		admitted = true;
+		connection.set({ state: "open", day, plans, rituals, update });
+		flushPending();
+		// Changes received while opening are not lost: read the cached views once
+		// more after the feeds exist. This reads no service.
+		refresh();
+	} finally {
+		if (!admitted) feeds.close();
 	}
-	connection.set({ state: "open", day, plans, rituals, update });
-	flushPending();
-	// Changes received while opening are not lost: read the cached views once
-	// more after the feeds exist. This reads no service.
-	refresh();
 }
 
 /**

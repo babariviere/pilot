@@ -109,7 +109,11 @@ export function parseStoredVisualRevision(
 	bytes: Uint8Array,
 	expected: { id: string; revision: number; sessionId: string; projectId?: string },
 ): StoredVisualRevision {
-	const { artifact } = parseStoredArtifactRevision(bytes, expected);
+	return storedVisualRevision(parseStoredArtifactRevision(bytes, expected));
+}
+
+/** Narrow a validated container without decoding or hydrating its bytes again. */
+export function storedVisualRevision({ bytes, artifact }: StoredArtifactRevision): StoredVisualRevision {
 	if (artifact.kind !== "visual") throw new Error("Unsupported stored artifact kind");
 	if (
 		artifact.libraries.length ||

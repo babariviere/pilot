@@ -16,9 +16,9 @@ import { NativeReviewReader } from "./native-review.ts";
 import { ProjectStore } from "./projects.ts";
 import type { ReviewCaptureRequest } from "./review-snapshot-contract.ts";
 import { ReviewSnapshotStore } from "./review-snapshots.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { fixture, jj } from "./testing/shared-workspace.ts";
 
 test("native retained reads are exact, scoped, paged, revocable and survive workspace loss", async () => {
@@ -204,14 +204,14 @@ test("production call-changes route reads a real retained pair and original BOM 
 	const sessionId = randomUUID();
 	store.join(sessionId, mission.id);
 	const scope = { version: 1 as const, sessionId, missionId: mission.id, taskIds: ["task"] };
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-		{ store, service },
-	);
+		missions: { store, service },
+	});
 	t.after(async () => {
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		await service.notices.stop();

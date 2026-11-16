@@ -6,9 +6,9 @@ import type { ArtifactRevision, ArtifactSummary, ArtifactWrite } from "@pilot/pr
 import { assertArtifactWriteKind, prepareArtifact, prepareArtifactWrite } from "./render.ts";
 import {
 	parseStoredArtifactRevision,
-	parseStoredVisualRevision,
 	readStoredFile,
 	STORED_REVISION_LIMITS,
+	storedVisualRevision,
 } from "./stored-revision.ts";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -136,7 +136,7 @@ export class ArtifactStore {
 	 * No rendering, latest fallback, worker wake, or changes to the revision write path. */
 	async readStoredRevision(id: string, revision: number, signal?: AbortSignal) {
 		const stored = await this.readCapturedRevision(id, revision, signal);
-		return parseStoredVisualRevision(stored.bytes, { ...this.identity, id, revision });
+		return storedVisualRevision(stored);
 	}
 
 	/** Passive numbered container read for text inspection. Never prepares HTML, images or callbacks. */

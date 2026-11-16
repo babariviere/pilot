@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { DurableOperation, InsightsWorkspaceOwner } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
+import { InsightsJournal } from "./insights-journal.ts";
 import { type InsightsOwnerStore, projectOwnerExecution } from "./insights-owner-store.ts";
 import type { InsightsWorkspaceAuthority, InsightsWorkspaceStore } from "./insights-workspace-store.ts";
 import type { ModelCatalog } from "./models.ts";
@@ -136,7 +137,7 @@ export class InsightsOwner {
 			transferred.guard();
 			return transferred.guard;
 		}
-		const journal = await this.deps.journal.legacyInsightsGuard();
+		const journal = await new InsightsJournal(this.deps.journal).legacyInsightsGuard();
 		const guard = () => {
 			journal();
 			this.deps.sessions.assertNoLegacyInsights();

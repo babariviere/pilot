@@ -1,6 +1,5 @@
-// The only path between the Today screen and Rust: a typed read model
-// mirrored in one signal, and typed intents on the feed. The feed has no
-// transport, and nsh.json denies network, sockets, files and processes.
+// Today's presentation mirror. Native owns service selection and credentials;
+// the connected source reaches it only through the window's host channel.
 import { type Signal, signal } from "nsh";
 import type { Today } from "pilot-day/native";
 import type { ArtifactSource } from "./artifactReads";
@@ -85,16 +84,12 @@ export type Day = {
 /** Mirrors `feed`'s read model, mock or connected. Closing stops listening and frees the feeds. */
 export function mirrorDay(
 	feed: DayFeed,
-	intake?: IntakeMirror,
-	delivery?: DeliveryMirror,
-	linear?: LinearMirror,
-	scope?: ScopeMirror,
-	preferences?: PreferencesMirror,
-	threads?: ThreadsMirror,
-	feedback?: FeedbackMirror,
-	artifacts?: ArtifactSource,
-	chat?: SessionChatMirror,
+	features: Pick<
+		Day,
+		"intake" | "delivery" | "linear" | "scope" | "preferences" | "threads" | "feedback" | "artifacts" | "chat"
+	> = {},
 ): Day {
+	const { intake, delivery, linear, scope, preferences, threads, feedback, artifacts, chat } = features;
 	const today = signal(feed.snapshot());
 	const stop = feed.onChange((next) => {
 		// Items that arrive or leave, and missions that change group, glide to

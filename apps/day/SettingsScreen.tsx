@@ -6,7 +6,7 @@
 // it started from. Save sends that whole list once; a newer list never
 // silently replaces typed text, and a draft for another project is never
 // saved here. A Save whose answer was lost stays Unknown: Check only reads
-// its result. Leaving, closing or updating keeps the draft (updateView.ts).
+// its result. Leaving, closing or updating keeps the draft (windowState.ts).
 import { effect, keymap, Scroll, type ScrollRef, signal, Text, untracked, View } from "nsh";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { DiagnosisSettings } from "./DiagnosisSettings";

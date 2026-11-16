@@ -14,9 +14,9 @@ import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("recurring schedule writes require native authority, live setting and exact home", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-hook-api-"));
@@ -48,32 +48,19 @@ test("recurring schedule writes require native authority, live setting and exact
 		home: { daemonId: hello.daemonId, lineageId: hello.lineageId! },
 	});
 	await schedules.load();
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
 		schedules,
-		undefined,
-		undefined,
-		undefined,
 		hello,
-		undefined,
-		false,
-		undefined,
-		undefined,
-		native,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		settings,
-	);
+		legacyAdmissionFrozen: false,
+		githubSetup: native,
+		nativeAuthority: native.nativeAuthority,
+		chatSettings: settings,
+	});
 	t.after(async () => {
 		await schedules.stop();
 		await store.close();

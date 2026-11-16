@@ -11,8 +11,8 @@ import type { SessionSummary } from "@pilot/protocol";
 import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.ts";
 import { Conflict } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
-import { createDaemonServer } from "./server.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 import { assertHistory, DAY, fixture, jj, seedHistory } from "./testing/session-workspace.ts";
 
@@ -182,13 +182,13 @@ test("HTTP reclaim-workspace enforces method, origin and active-session guards, 
 	const f = await fixture(t);
 	const created = await f.spawn();
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		new ModelCatalog(join(f.home, "agent")),
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(join(f.home, "agent")),
 		terminals,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sessions/${created.id}/reclaim-workspace`;

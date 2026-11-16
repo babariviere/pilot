@@ -11,9 +11,9 @@ import { forkMainViewWorker } from "./main-view.ts";
 import { ModelCatalog } from "./models.ts";
 import { detectPlatformCapabilities } from "./platform.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("Linux only probes its Rust power helper, never Mac toolchains or unrestricted isolation", async () => {
 	const unexpected = async () => assert.fail("Linux must not touch Mac helpers/toolchains");
@@ -116,21 +116,14 @@ test("hello is a bounded no-store read with origin protection and no account/pat
 			async () => ({ available: false }),
 		),
 	);
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		hello,
-	);
+	});
 	t.after(async () => {
 		await terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));

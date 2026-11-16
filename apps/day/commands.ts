@@ -295,3 +295,21 @@ export function later(day: Day, item: Item | undefined) {
 	if (item.kind === "decision") laterDecision(day, item.decision);
 	else if (item.action.delivery === "idle") void laterAction(day, item.action);
 }
+
+/** Saves Today's edited forms at their shown revisions; returns the first refused title. */
+export function saveTodayForms(day: Day): string {
+	const today = day.today();
+	const typed = new Set([...Object.keys(picks()), ...Object.keys(drafts()), ...Object.keys(replies())]);
+	let refused = "";
+	for (const decision of today.decisions) {
+		if (!typed.has(decision.id) || decision.sentOption) continue;
+		if (saveDecisionDraft(day, decision).status !== "accepted") refused ||= decision.title;
+	}
+	for (const action of today.actions) {
+		if (!(action.id in reports())) continue;
+		if (saveActionDraft(day, action).status !== "accepted") refused ||= action.title;
+	}
+	day.feed.flushDrafts();
+
+	return refused;
+}

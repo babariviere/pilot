@@ -14,9 +14,9 @@ import { ModelCatalog } from "./models.ts";
 import { NativeReviewReader, NoRetainedBinding } from "./native-review.ts";
 import { ProjectStore } from "./projects.ts";
 import { type ReviewSnapshot, snapshotManifest } from "./review-snapshot-contract.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 function snapshot(): ReviewSnapshot {
 	const repositoryId = "a".repeat(64),
@@ -482,14 +482,14 @@ test("native Review HTTP admits current scope and rejects writes, cross-scope an
 				},
 			),
 	);
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-		{ store, service },
-	);
+		missions: { store, service },
+	});
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 	t.after(async () => {
 		await new Promise<void>((r) => server.close(() => r()));
@@ -634,14 +634,14 @@ test("project/chat Review adapters preserve bodies, narrow current scope and per
 		},
 	);
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-		{ store, service },
-	);
+		missions: { store, service },
+	});
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 	t.after(async () => {
 		await new Promise<void>((r) => server.close(() => r()));
@@ -1012,13 +1012,13 @@ test("standalone Review GETs work without a mission service and create no retain
 		createdAt: 1,
 		updatedAt: 1,
 	});
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	);
+	});
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 	t.after(async () => {
 		await new Promise<void>((r) => server.close(() => r()));

@@ -11,7 +11,7 @@ import { NewScreen } from "./NewScreen";
 import { mirrorPlanning } from "./planning";
 import { planRoute } from "./planView";
 import { Action } from "./ui";
-import { captureView, restoreView, startFresh } from "./updateView";
+import { captureView, restoreView, startFresh } from "./windowState";
 
 const chats = new ScriptedChats(DEMO_PROJECTS, DEMO_PROJECTS[0].projectId);
 const plans = mirrorPlanning(new PlanFeed("fresh"), mirrorChats(chats));

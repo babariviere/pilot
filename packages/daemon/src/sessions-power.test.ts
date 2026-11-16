@@ -8,6 +8,7 @@ import type { KernelCommand, KernelSpec } from "@pilot/kernel";
 import type { AgentEvent, SessionState } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const snapshot: AgentEvent = {
 	type: "snapshot",
@@ -35,30 +36,37 @@ test("sleep preparation persists every recovery marker without waiting for batch
 	});
 	const workers: SessionWorker[] = [];
 	let closing = 0;
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		title: async () => undefined,
-		worker(_spec, packet, exited) {
-			const worker = {
-				state: "idle" as SessionState,
-				busy: false,
-				ready: Promise.resolve(),
-				send() {},
-				async request() {
-					this.state = "working";
-					this.busy = true;
-					packet({ type: "working", working: true });
-				},
-				async close() {
-					closing++;
-					await closingWait;
-					exited(this, 0);
-				},
-			};
-			workers.push(worker);
-			queueMicrotask(() => packet({ type: "ready", working: false, model: "test/model", usage: {} }));
-			return worker;
+	const sessions = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker(_spec, packet, exited) {
+				const worker = {
+					state: "idle" as SessionState,
+					busy: false,
+					ready: Promise.resolve(),
+					send() {},
+					async request() {
+						this.state = "working";
+						this.busy = true;
+						packet({ type: "working", working: true });
+					},
+					async close() {
+						closing++;
+						await closingWait;
+						exited(this, 0);
+					},
+				};
+				workers.push(worker);
+				queueMicrotask(() => packet({ type: "ready", working: false, model: "test/model", usage: {} }));
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	t.after(async () => {
 		release();
 		await sessions.shutdown();
@@ -109,49 +117,60 @@ test("sleep pause closes workers without abort, persists across restart, and res
 	const managers: SessionManager[] = [];
 	const specs: KernelSpec[] = [];
 	const manager = async () => {
-		const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-			title: async () => undefined,
-			snapshot: async () => ({ events: [snapshot] }),
-			worker(spec, packet, exited) {
-				specs.push(spec);
-				const worker = {
-					id: spec.sessionId,
-					commands: [] as KernelCommand[],
-					closed: false,
-					state: "idle" as SessionState,
-					busy: false,
-					ready: Promise.resolve(),
-					send(command: KernelCommand) {
-						this.commands.push(command);
-					},
-					async request(command: Extract<KernelCommand, { requestId: string }>) {
-						this.commands.push(command);
-						if (command.type === "input") {
-							this.state = "working";
-							this.busy = true;
-							packet({ type: "working", working: true });
-						} else if (command.type === "abort") {
-							this.state = "idle";
-							this.busy = false;
+		const sessions = new SessionManager(
+			home,
+			new ProjectStore(home),
+			undefined,
+			{
+				title: async () => undefined,
+				snapshot: async () => ({ events: [snapshot] }),
+				worker(spec, packet, exited) {
+					specs.push(spec);
+					const worker = {
+						id: spec.sessionId,
+						commands: [] as KernelCommand[],
+						closed: false,
+						state: "idle" as SessionState,
+						busy: false,
+						ready: Promise.resolve(),
+						send(command: KernelCommand) {
+							this.commands.push(command);
+						},
+						async request(command: Extract<KernelCommand, { requestId: string }>) {
+							this.commands.push(command);
+							if (command.type === "input") {
+								this.state = "working";
+								this.busy = true;
+								packet({ type: "working", working: true });
+							} else if (command.type === "abort") {
+								this.state = "idle";
+								this.busy = false;
+								packet({
+									type: "working",
+									working: false,
+									completion: { outcome: "stopped", outcomeAt: Date.now() },
+								});
+							}
+						},
+						async close() {
+							this.closed = true;
+							// Closing must not consume pending work or turn the sleep pause into a completion/error.
 							packet({
 								type: "working",
 								working: false,
-								completion: { outcome: "stopped", outcomeAt: Date.now() },
+								completion: { outcome: "failed", outcomeAt: Date.now() },
 							});
-						}
-					},
-					async close() {
-						this.closed = true;
-						// Closing must not consume pending work or turn the sleep pause into a completion/error.
-						packet({ type: "working", working: false, completion: { outcome: "failed", outcomeAt: Date.now() } });
-						exited(this, 0);
-					},
-				};
-				queueMicrotask(() => packet({ type: "ready", working: false, model: "test/model", usage: {} }));
-				workers.push(worker);
-				return worker;
+							exited(this, 0);
+						},
+					};
+					queueMicrotask(() => packet({ type: "ready", working: false, model: "test/model", usage: {} }));
+					workers.push(worker);
+					return worker;
+				},
 			},
-		});
+			{},
+			offlineSessionOptions(),
+		);
 		managers.push(sessions);
 		await sessions.load();
 		return sessions;
@@ -233,33 +252,40 @@ test("sleep preserves the pending result turn after the last live job ends", asy
 	const home = await mkdtemp(join(tmpdir(), "pilot-sleep-job-result-"));
 	const workers: Array<SessionWorker & { closed: boolean }> = [];
 	let finishJob!: () => void;
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		title: async () => undefined,
-		worker(_spec, packet, exited) {
-			const worker = {
-				state: "idle" as SessionState,
-				busy: false,
-				ready: Promise.resolve(),
-				closed: false,
-				send() {},
-				async request() {},
-				async close() {
-					this.closed = true;
-					exited(this, 0);
-				},
-			};
-			finishJob = () => {
-				packet({
-					type: "jobs.changed",
-					jobs: [{ id: "tests", name: "Tests", state: "running", startedAt: 1, outputPath: "/tmp/tests.log" }],
-				});
-				packet({ type: "jobs.changed", jobs: [] });
-			};
-			workers.push(worker);
-			queueMicrotask(() => packet({ type: "ready", working: false, model: "test/model", usage: {} }));
-			return worker;
+	const sessions = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker(_spec, packet, exited) {
+				const worker = {
+					state: "idle" as SessionState,
+					busy: false,
+					ready: Promise.resolve(),
+					closed: false,
+					send() {},
+					async request() {},
+					async close() {
+						this.closed = true;
+						exited(this, 0);
+					},
+				};
+				finishJob = () => {
+					packet({
+						type: "jobs.changed",
+						jobs: [{ id: "tests", name: "Tests", state: "running", startedAt: 1, outputPath: "/tmp/tests.log" }],
+					});
+					packet({ type: "jobs.changed", jobs: [] });
+				};
+				workers.push(worker);
+				queueMicrotask(() => packet({ type: "ready", working: false, model: "test/model", usage: {} }));
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	t.after(async () => {
 		await sessions.shutdown();
 		await rm(home, { recursive: true, force: true });
@@ -305,32 +331,39 @@ test("wake drains paused startup, and another sleep cancels an in-flight resume 
 		resolve: () => resolveReady(),
 	};
 	const workers: Array<SessionWorker & { commands: KernelCommand[]; closed: boolean }> = [];
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		title: async () => undefined,
-		worker(_spec, packet, exited) {
-			const worker = {
-				commands: [] as KernelCommand[],
-				closed: false,
-				state: "starting" as SessionState,
-				busy: true,
-				ready: ready.promise,
-				send(command: KernelCommand) {
-					this.commands.push(command);
-				},
-				async request(command: Extract<KernelCommand, { requestId: string }>) {
-					assert.equal(this.closed, false, "an old startup cannot deliver after a sleep pause");
-					this.commands.push(command);
-					packet({ type: "working", working: true });
-				},
-				async close() {
-					this.closed = true;
-					exited(this, 0);
-				},
-			};
-			workers.push(worker);
-			return worker;
+	const sessions = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker(_spec, packet, exited) {
+				const worker = {
+					commands: [] as KernelCommand[],
+					closed: false,
+					state: "starting" as SessionState,
+					busy: true,
+					ready: ready.promise,
+					send(command: KernelCommand) {
+						this.commands.push(command);
+					},
+					async request(command: Extract<KernelCommand, { requestId: string }>) {
+						assert.equal(this.closed, false, "an old startup cannot deliver after a sleep pause");
+						this.commands.push(command);
+						packet({ type: "working", working: true });
+					},
+					async close() {
+						this.closed = true;
+						exited(this, 0);
+					},
+				};
+				workers.push(worker);
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	t.after(async () => {
 		ready.resolve();
 		await sessions.shutdown();

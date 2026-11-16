@@ -110,6 +110,42 @@ for (const failure of [undefined, "prepare", "stop", "stopped", "replace", "star
 	});
 }
 
+test("malformed recovery entry keeps its bytes and never enters host effects", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "day-legacy-recovery-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const entered = join(root, "legacy-recovery-entered.json");
+	const effects: string[] = [];
+	const host = {
+		async prepare() {
+			effects.push("prepare");
+			return {};
+		},
+		async stop() {
+			effects.push("stop");
+		},
+		async stopped() {
+			effects.push("stopped");
+		},
+		async replace() {
+			effects.push("replace");
+		},
+		async start() {
+			effects.push("start");
+		},
+		async verify() {
+			effects.push("verify");
+			return {};
+		},
+	};
+	for (const bytes of ["", '{"evidence":']) {
+		await writeFile(entered, bytes, { mode: 0o600 });
+		await assert.rejects(recoverOnce(root, host), SyntaxError);
+		assert.deepEqual(effects, []);
+		assert.equal(await readFile(entered, "utf8"), bytes);
+		assert.deepEqual(await readdir(root), ["legacy-recovery-entered.json"]);
+	}
+});
+
 test("concurrent recovery cannot stop twice", async () => {
 	const root = await mkdtemp(join(tmpdir(), "day-legacy-recovery-"));
 	let stops = 0;

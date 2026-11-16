@@ -10,6 +10,7 @@ import type { KernelSpec } from "@pilot/kernel";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager, type SessionMissionBridge } from "./sessions.ts";
 import { copyGitSeed } from "./testing/git-seed.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 import { run } from "./workspaces.ts";
 
 test("promotion unbinds PRs, shares main, retains scratch, and demotion restores a normal workspace", async (t) => {
@@ -53,6 +54,7 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 				throw new Error("No GitHub calls allowed for coordinators");
 			},
 		},
+		offlineSessionOptions(),
 	);
 	let coordinator = true;
 	const bridge: SessionMissionBridge = {
@@ -245,6 +247,7 @@ test("Git-only direct chats gain a read-only source view and an isolated workspa
 				throw new Error("No GitHub calls");
 			},
 		},
+		offlineSessionOptions(),
 	);
 	await manager.load();
 	let coordinator = true;
@@ -345,6 +348,7 @@ test("every cold worker-open entry point preserves the coordinator source role a
 						throw new Error("No GitHub calls");
 					},
 				},
+				offlineSessionOptions(),
 			);
 			manager.setMissionBridge({
 				membership: () => ({ missionId: "g", active: true, coordinator: true }),

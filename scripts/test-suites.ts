@@ -51,6 +51,15 @@ export function testInLane(path: string, lane: TestLane): boolean {
 	return macosCoverage.has(path);
 }
 
+export function testLaneFiles(files: string[], lane: TestLane): string[] {
+	if (lane === "macos") {
+		const discovered = new Set(files);
+		const missing = [...macosCoverage].filter((path) => !discovered.has(path));
+		if (missing.length) throw new Error(`Configured macos tests were not discovered: ${missing.join(", ")}`);
+	}
+	return files.filter((path) => testInLane(path, lane));
+}
+
 export function testLimits(env: Record<string, string | undefined>) {
 	const positive = (name: string, fallback: number): number => {
 		const raw = env[name] ?? String(fallback);

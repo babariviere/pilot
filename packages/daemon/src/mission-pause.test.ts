@@ -10,6 +10,7 @@ import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 function deferred() {
 	let resolve!: () => void;
@@ -30,54 +31,62 @@ async function fixture(
 		closed: string[] = [];
 	let closeGate: Promise<void> | undefined;
 	let closing: (() => void) | undefined;
-	const sessions = new SessionManager(home, projects, undefined, {
-		title: async () => undefined,
-		worker: (spec, receive) => {
-			const resumed = opened.includes(spec.sessionId);
-			opened.push(spec.sessionId);
-			const ready = resumed && options.readyLost ? Promise.reject(new Error("ready ACK lost")) : Promise.resolve();
-			void ready.catch(() => {});
-			const worker: SessionWorker = {
-				ready,
-				state: "working",
-				busy: false,
-				send: (command) => {
-					commands.push({ id: spec.sessionId, command });
-				},
-				request: async (command) => {
-					commands.push({ id: spec.sessionId, command });
-					if (command.type === "checkpointLifecycle") {
-						if (options.lostAck) throw new Error("close ACK lost");
-						receive({
-							type: "lifecycle.checkpointed",
-							requestId: command.requestId,
-							operationId: command.operationId,
-							conversationId: `conversation:${spec.sessionId}`,
-							children: [
-								{
-									name: "child",
-									storage: "/private/child",
-									conversationId: "child-conversation",
-									state: "idle",
-								},
-							],
-							jobs: options.remainingJobs ?? 0,
-							hasChildren: false,
-						} as KernelPacket);
-					}
-				},
-				close: async () => {
-					closing?.();
-					await closeGate;
-					if (options.failExit) throw new Error("worker exit uncertain");
-					closed.push(spec.sessionId);
-				},
-				jobs: async () => [],
-				hasChildren: async () => false,
-			};
-			return worker;
+	const sessions = new SessionManager(
+		home,
+		projects,
+		undefined,
+		{
+			title: async () => undefined,
+			worker: (spec, receive) => {
+				const resumed = opened.includes(spec.sessionId);
+				opened.push(spec.sessionId);
+				const ready =
+					resumed && options.readyLost ? Promise.reject(new Error("ready ACK lost")) : Promise.resolve();
+				void ready.catch(() => {});
+				const worker: SessionWorker = {
+					ready,
+					state: "working",
+					busy: false,
+					send: (command) => {
+						commands.push({ id: spec.sessionId, command });
+					},
+					request: async (command) => {
+						commands.push({ id: spec.sessionId, command });
+						if (command.type === "checkpointLifecycle") {
+							if (options.lostAck) throw new Error("close ACK lost");
+							receive({
+								type: "lifecycle.checkpointed",
+								requestId: command.requestId,
+								operationId: command.operationId,
+								conversationId: `conversation:${spec.sessionId}`,
+								children: [
+									{
+										name: "child",
+										storage: "/private/child",
+										conversationId: "child-conversation",
+										state: "idle",
+									},
+								],
+								jobs: options.remainingJobs ?? 0,
+								hasChildren: false,
+							} as KernelPacket);
+						}
+					},
+					close: async () => {
+						closing?.();
+						await closeGate;
+						if (options.failExit) throw new Error("worker exit uncertain");
+						closed.push(spec.sessionId);
+					},
+					jobs: async () => [],
+					hasChildren: async () => false,
+				};
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	const service = new MissionService(store, sessions, projects);
 	service.controls.setScheduleDrain(async () => {});
 	await sessions.load();
@@ -279,19 +288,26 @@ test("cold queued input is admission-only, never a fabricated kernel census", as
 	);
 	const fence = { missionId: "mission", pauseGeneration: 1, stopGeneration: 0, held: true };
 	const commands: KernelCommand[] = [];
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		title: async () => undefined,
-		worker: () => ({
-			ready: Promise.resolve(),
-			state: "idle",
-			busy: false,
-			send() {},
-			request: async (command) => {
-				commands.push(command);
-			},
-			close: async () => {},
-		}),
-	});
+	const sessions = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: () => ({
+				ready: Promise.resolve(),
+				state: "idle",
+				busy: false,
+				send() {},
+				request: async (command) => {
+					commands.push(command);
+				},
+				close: async () => {},
+			}),
+		},
+		{},
+		offlineSessionOptions(),
+	);
 	sessions.setMissionBridge({
 		upgradeResumeFence: () => fence,
 		membership: () => ({ missionId: "mission", active: true }),

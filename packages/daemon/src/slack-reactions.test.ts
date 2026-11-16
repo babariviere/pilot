@@ -424,7 +424,7 @@ test("reaction reads keep batch, fairness and recheck limits without an hourly c
 		for (let i = 0; i < 12; i++) used += (await items.reserveSlackReactions("p", t + 500 + i, 0)).reads.length;
 		assert.equal(used, 116);
 		assert.equal((await items.reserveSlackReactions("p", t + 600, 0)).reads.length, 8);
-		assert.equal((await items.reserveSlack("CEXAMPLE", parent, t + 600, "p")).state, "reserved");
+		assert.equal((await items.reserveSlack("CEXAMPLE", parent, "p")).state, "reserved");
 		assert.equal((await items.reserveSlackReactions("p", t + 600, 0, true)).reads.length, 8);
 		assert.equal((await items.reserveSlackReactions("p", t + 601, 0)).reads.length, 8);
 		assert.equal((await items.reserveSlackReactions("p", t + 3_600_000 + 1_000)).reads.length, 8);

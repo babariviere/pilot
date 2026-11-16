@@ -1,6 +1,12 @@
 /** Private, versioned worker binding. Never accepted from model arguments or generic SpawnRequest. */
-import type { DurableOperation, InterviewVersion, OperationHost, PlanWrite } from "@pilot/protocol";
-import type { MissionRevisionDelta } from "../../protocol/src/mission-revision.ts";
+import type {
+	DurableOperation,
+	InterviewVersion,
+	MissionRevisionDelta,
+	OperationHost,
+	PlanWrite,
+} from "@pilot/protocol";
+import { canonicalJSON } from "./canonical-json.ts";
 
 export const PLANNING_PROFILE = {
 	version: 1,
@@ -62,7 +68,7 @@ export interface PlanningInput {
 export function assertPlanningBinding(binding: PlanningWorkerBinding): void {
 	if (
 		binding?.version !== 1 ||
-		planningJSON(binding.profile) !== planningJSON(PLANNING_PROFILE) ||
+		canonicalJSON(binding.profile) !== canonicalJSON(PLANNING_PROFILE) ||
 		!binding.home?.startsWith("/") ||
 		![
 			binding.projectId,
@@ -75,12 +81,4 @@ export function assertPlanningBinding(binding: PlanningWorkerBinding): void {
 		!binding.host.lineageId
 	)
 		throw new Error("Trusted planning worker binding unavailable");
-}
-
-export function planningJSON(value: unknown): string {
-	return JSON.stringify(value, (_key, item: unknown) =>
-		item && typeof item === "object" && !Array.isArray(item)
-			? Object.fromEntries(Object.entries(item).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-			: item,
-	);
 }

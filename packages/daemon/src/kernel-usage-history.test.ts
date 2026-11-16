@@ -1,3 +1,4 @@
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 // biome-ignore-all lint/complexity/useLiteralKeys: Exercise the trusted worker IPC seam without launching agents.
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -39,7 +40,7 @@ test("kernel history ingestion is separate, epoch-fenced and restricted to the c
 		home,
 		{ worker: () => new CaptureWorker() },
 		{},
-		{ usageHistory: store },
+		offlineSessionOptions({ usageHistory: store }),
 	);
 	t.after(async () => {
 		await manager.shutdown();

@@ -16,11 +16,11 @@ import { ModelRuntime, SettingsManager, wrapRegisteredTool } from "@earendil-wor
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import type { AgentEvent } from "@pilot/protocol";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
+import { callParentTodo, startParentBridge } from "./parent-bridge.ts";
 import { PosthorseDoc } from "./posthorse.ts";
 import { KernelSession } from "./session.ts";
 import { readSessionSnapshot, readSessionTodoCount } from "./snapshot.ts";
 import { openSessionStorage } from "./storage.ts";
-import { callParentTodo, startTodoBridge } from "./todo-bridge.ts";
 import {
 	applyTodo,
 	TODO_BODY_BYTES,
@@ -249,7 +249,7 @@ test("a child cannot fall back to checkout storage when its parent bridge closes
 		if (previous === undefined) delete process.env.PILOT_TODO_BRIDGE;
 		else process.env.PILOT_TODO_BRIDGE = previous;
 	});
-	const bridge = await startTodoBridge(async () => []);
+	const bridge = await startParentBridge(async () => []);
 	assert.deepEqual(await callParentTodo({ action: "list" }, "child"), []);
 	await bridge.close();
 	await assert.rejects(callParentTodo({ action: "list" }, "child"), /unavailable/);
@@ -264,7 +264,7 @@ test("parent bridge shutdown drains admitted commits before releasing its owner"
 	const admitted = new Promise<void>((resolve) => {
 		started = resolve;
 	});
-	const bridge = await startTodoBridge(async () => {
+	const bridge = await startParentBridge(async () => {
 		started();
 		await gate;
 		return [];

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -12,9 +12,9 @@ import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 function deferred() {
 	let resolve!: () => void;
@@ -75,16 +75,16 @@ test("receipt HTTP lookup is isolated from unrelated mission durability", async 
 			independentExecution: true,
 		},
 	};
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-		{ service, store },
-	];
-	args[12] = hello;
-	const server = createDaemonServer(...args);
+		missions: { service, store },
+	};
+	args.hello = hello;
+	const server = createDaemonServer(args);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -227,15 +227,15 @@ test("receipt HTTP lookup reports journal initialization failure", async (t) => 
 	const terminals = new TerminalManager(),
 		store = new MissionStore(":memory:");
 	const service = new MissionService(store, sessions, projects);
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-		{ store, service },
-	];
-	args[12] = {
+		missions: { store, service },
+	};
+	args.hello = {
 		daemonId: "daemon",
 		lineageId: "lineage",
 		daemonVersion: "test",
@@ -251,7 +251,7 @@ test("receipt HTTP lookup reports journal initialization failure", async (t) => 
 			independentExecution: true,
 		},
 	};
-	const server = createDaemonServer(...args);
+	const server = createDaemonServer(args);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

@@ -182,7 +182,7 @@ test("legacy global boolean cache migrates without calls or budget charges; new 
 			assert.deepEqual(disk.slackCached("C1", "3.000001", project), { state: "error" });
 			assert.deepEqual(disk.slackCached("C1", "4.000001", project), { state: "pending" });
 		}
-		assert.deepEqual(disk.reserveSlack("C1", "5.000001", 0, "p"), { state: "reserved" });
+		assert.deepEqual(disk.reserveSlack("C1", "5.000001", "p"), { state: "reserved" });
 		disk.finishSlack(
 			"C1",
 			"5.000001",
@@ -190,7 +190,7 @@ test("legacy global boolean cache migrates without calls or budget charges; new 
 			"p",
 		);
 		assert.equal(disk.slackCached("C1", "5.000001", "other"), undefined);
-		assert.deepEqual(disk.reserveSlack("C1", "5.000001", 0, "other"), { state: "reserved" });
+		assert.deepEqual(disk.reserveSlack("C1", "5.000001", "other"), { state: "reserved" });
 	} finally {
 		disk.close();
 	}

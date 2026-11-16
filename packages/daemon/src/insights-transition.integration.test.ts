@@ -23,8 +23,8 @@ import type { ModelCatalog } from "./models.ts";
 import { canonicalJSON, OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import { createDaemonServer } from "./server.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { fixture as sessionFixture } from "./testing/session-workspace.ts";
 
 const host = { hostId: "daemon", daemonId: "synthetic", lineageId: "synthetic-lineage" };
@@ -606,16 +606,16 @@ for (const committed of [false, true])
 
 test("native HTTP transfer preview, confirmation, status and Check are authenticated and passive until confirmation", async (t) => {
 	const f = await fixture(t);
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		f.models,
-		new TerminalManager(),
-		{ service: f.service, store: f.store },
-	];
-	args[8] = f.schedules;
-	args[12] = {
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: f.models,
+		terminals: new TerminalManager(),
+		missions: { service: f.service, store: f.store },
+	};
+	args.schedules = f.schedules;
+	args.hello = {
 		...host,
 		daemonVersion: "synthetic",
 		protocolVersion: 1,
@@ -630,12 +630,12 @@ test("native HTTP transfer preview, confirmation, status and Check are authentic
 			independentExecution: true,
 		},
 	};
-	args[17] = {
+	args.nativeAuthority = {
 		authenticate: async (token: unknown) => {
 			if (token !== "native") throw new Conflict("Native confirmation required");
 		},
-	} as NonNullable<(typeof args)[17]>;
-	const server = createDaemonServer(...args);
+	};
+	const server = createDaemonServer(args);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

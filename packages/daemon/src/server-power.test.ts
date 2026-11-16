@@ -11,9 +11,9 @@ import { ModelCatalog } from "./models.ts";
 import { PowerService } from "./power.ts";
 import type { PowerCommand, PowerSample } from "./power-helper.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("power GET only copies cached policy/status, without starting or refreshing the helper", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-power-read-"));
@@ -53,19 +53,14 @@ test("power GET only copies cached policy/status, without starting or refreshing
 			async close() {},
 		};
 	});
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		power,
-	);
+	});
 	t.after(async () => {
 		await power.stop();
 		await sessions.shutdown();
@@ -159,19 +154,14 @@ test("Energy API persists setup, pushes initial/changed state, and keeps HTTP or
 	});
 	await power.start();
 	await power.settled();
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		power,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

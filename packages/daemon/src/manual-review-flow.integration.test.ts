@@ -25,9 +25,9 @@ import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { payloadHash } from "./operation-journal.ts";
-import { createDaemonServer } from "./server.ts";
 import type { SessionFactories, SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { fixture, jj, until } from "./testing/session-workspace.ts";
 
 const host = { hostId: "daemon", daemonId: "manual-review-fixture", lineageId: "manual-review-lineage" };
@@ -112,17 +112,18 @@ test("normal managed agent changes support native manual feedback, exact retries
 		await native.status();
 		// The actual app-owned capability boundary, not a body actor or agent-tool grant.
 		capability = JSON.parse(readFileSync(join(f.home, "github-app-capability"), "utf8")).token as string;
-		const args: Parameters<typeof createDaemonServer> = [
-			{ home: f.home, host: "127.0.0.1", port: 0 },
+		const args: Parameters<typeof createDaemonServer>[0] = {
+			config: { home: f.home, host: "127.0.0.1", port: 0 },
 			sessions,
-			f.projects,
-			new ModelCatalog(f.home),
+			projects: f.projects,
+			models: new ModelCatalog(f.home),
 			terminals,
-			{ store, service },
-		];
-		args[12] = hello;
-		args[17] = native;
-		const server = createDaemonServer(...args);
+			missions: { store, service },
+		};
+		args.hello = hello;
+		args.githubSetup = native;
+		args.nativeAuthority = args.githubSetup?.nativeAuthority;
+		const server = createDaemonServer(args);
 		server.listen(0, "127.0.0.1");
 		await once(server, "listening");
 		api = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
@@ -132,7 +133,7 @@ test("normal managed agent changes support native manual feedback, exact retries
 				server.close(() => resolve());
 				server.closeAllConnections();
 			});
-			await server.closePlanning();
+			await server.closeServices();
 			service.notices.stop();
 			await sessions.shutdown();
 			await terminals.shutdown();

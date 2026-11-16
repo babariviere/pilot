@@ -20,9 +20,9 @@ import type { MissionService } from "../mission-service.ts";
 import { MissionStore } from "../missions.ts";
 import { ModelCatalog } from "../models.ts";
 import { ProjectStore } from "../projects.ts";
-import { createDaemonServer } from "../server.ts";
 import { SessionManager } from "../sessions.ts";
 import { TerminalManager } from "../terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "../testing/daemon-server.ts";
 import { fixture, jj } from "../testing/shared-workspace.ts";
 
 const f = fixture();
@@ -124,17 +124,18 @@ const service = () =>
 let server!: ReturnType<typeof createDaemonServer>;
 let port = 0;
 async function start() {
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		{ store, service: service() },
-	];
-	args[12] = hello;
-	args[17] = native;
-	server = createDaemonServer(...args);
+		missions: { store, service: service() },
+	};
+	args.hello = hello;
+	args.githubSetup = native;
+	args.nativeAuthority = args.githubSetup?.nativeAuthority;
+	server = createDaemonServer(args);
 	await server.runtimeReady;
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");

@@ -14,6 +14,7 @@ import { mergeReadiness } from "./pull-request-readiness.ts";
 import type { PullRequestResult } from "./pull-requests.ts";
 import { CommandRejected, SessionManager, type SessionWorker, WorkerUnavailable } from "./sessions.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 import type { Runner } from "./workspaces.ts";
 
 type Meta = Parameters<SessionManager["save"]>[0];
@@ -335,7 +336,7 @@ async function setup(cooldownMs?: number) {
 				},
 			},
 			{ runner: legacyGitHub(runner), intervalMs: 60 * 60_000 },
-			{ prFollowUpCooldownMs: cooldownMs },
+			offlineSessionOptions({ prFollowUpCooldownMs: cooldownMs }),
 		);
 	let manager = makeManager();
 	await manager.load();

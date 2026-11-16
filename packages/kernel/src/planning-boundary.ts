@@ -11,8 +11,9 @@ import {
 	LiveDoc,
 	ToolTask,
 } from "@earendil-works/pi-durable";
+import { canonicalJSON } from "./canonical-json.ts";
 import { HeldInputsDoc } from "./held-inputs-doc.ts";
-import { type PlanningInput, type PlanningRound, type PlanningWorkerBinding, planningJSON } from "./planning-worker.ts";
+import type { PlanningInput, PlanningRound, PlanningWorkerBinding } from "./planning-worker.ts";
 
 export const PlanningWorkerDoc = defineDoc<{
 	binding: string | null;
@@ -52,11 +53,11 @@ export async function holdPlanning(
 ): Promise<void> {
 	await conversation.commit(async (tx) => {
 		const state = await tx.doc(PlanningWorkerDoc, conversation.id);
-		if (state.binding && state.binding !== planningJSON(binding)) throw new Error("Planning binding changed");
+		if (state.binding && state.binding !== canonicalJSON(binding)) throw new Error("Planning binding changed");
 		const held = await tx.doc(HeldInputsDoc, conversation.id);
 		const inbox = await tx.doc(InboxDoc, conversation.id);
-		state.binding = planningJSON(binding);
-		state.hold = planningJSON(round);
+		state.binding = canonicalJSON(binding);
+		state.hold = canonicalJSON(round);
 		held.planning = true;
 		held.items.push(...inbox.items.filter((item) => item.mode !== "write"));
 		inbox.items = inbox.items.filter((item) => item.mode === "write");
@@ -71,7 +72,7 @@ export async function admitPlanningInput(
 	guard: () => Promise<void>,
 	context: Context,
 ): Promise<void> {
-	const receipt = planningJSON({
+	const receipt = canonicalJSON({
 		binding: input.binding,
 		operation: input.operation,
 		hold: input.hold,
@@ -85,8 +86,8 @@ export async function admitPlanningInput(
 			return;
 		}
 		if (
-			(state.binding && state.binding !== planningJSON(input.binding)) ||
-			state.hold !== (input.hold ? planningJSON(input.hold) : null) ||
+			(state.binding && state.binding !== canonicalJSON(input.binding)) ||
+			state.hold !== (input.hold ? canonicalJSON(input.hold) : null) ||
 			Object.keys(state.receipts).length >= 128
 		)
 			throw new Error("Exact planning hold required");
@@ -131,7 +132,7 @@ export async function admitPlanningInput(
 		// Last asynchronous preparation, inside the mutation transaction. Host pins allocation,
 		// owner, controls, configuration and exact op. A later Stop cancels this admitted run.
 		await guard();
-		state.binding = planningJSON(input.binding);
+		state.binding = canonicalJSON(input.binding);
 		state.hold = null;
 		state.receipts[input.operation.operationId] = receipt;
 		held.planning = false;

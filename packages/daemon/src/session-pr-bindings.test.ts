@@ -9,6 +9,7 @@ import type { KernelCommand } from "@pilot/kernel";
 import { ProjectStore } from "./projects.ts";
 import { type PullRequestBinding, SessionManager, type SessionMissionBridge, type SessionWorker } from "./sessions.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 import type { Runner } from "./workspaces.ts";
 
 type Meta = Parameters<SessionManager["save"]>[0];
@@ -161,6 +162,7 @@ async function setup() {
 				},
 			},
 			{ runner, intervalMs: 60 * 60_000 },
+			offlineSessionOptions(),
 		);
 		if (bridge) manager.setMissionBridge(bridge);
 		return manager;

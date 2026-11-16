@@ -467,8 +467,6 @@ export class NativeAdapter {
 		});
 	}
 
-	/** The Harness copies the array before dispatch, but retains its message identities. */
-
 	static async open(options: NativeAdapterOptions): Promise<NativeAdapter> {
 		await installCredentialBrokerHooks({ descendants: true });
 		const diagnostics = !!options.diagnostics;

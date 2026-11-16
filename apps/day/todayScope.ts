@@ -76,6 +76,11 @@ export interface ScopeSource {
 	read(scope: string, generation: number): Promise<{ ok: true; snapshot: unknown } | { ok: false; refusal: Refusal }>;
 }
 
+/** A saved scope changes only the view, never native project authority. */
+export function restoreTodayScope(saved = "") {
+	todayProject.set(saved || "all");
+}
+
 /** Why the scope read is not shown, in one calm sentence. */
 export function scopeReason(refusal: Refusal): string {
 	switch (refusal) {

@@ -7,7 +7,8 @@ import type { TrackedItem, TrackingJson } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { decodeMcpResult, dedicatedSourceTool, validSourceArguments } from "./source-tool-rules.ts";
 import { SourceRegistry } from "./sources.ts";
-import { TrackedItemStore, validatePatch } from "./tracked-items.ts";
+import { validatePatch } from "./tracked-item-patch.ts";
+import { TrackedItemStore } from "./tracked-items.ts";
 
 type Response = Parameters<typeof decodeMcpResult>[0];
 const parentTs = "1780000000.123456";

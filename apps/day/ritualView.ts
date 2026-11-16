@@ -70,3 +70,47 @@ export function backFromStandup() {
 	const at = ritualRoute();
 	ritualRoute.set(at?.kind === "standup" && at.from ? { kind: at.from } : null);
 }
+
+function ritualWords(at: RitualRoute): string {
+	if (!at) return "";
+	if (at.kind === "standup") return at.from ? `standup/${at.from}` : "standup";
+	return at.kind;
+}
+
+function ritualOf(words: string): RitualRoute {
+	switch (words) {
+		case "start":
+		case "end":
+			return { kind: words };
+		case "standup":
+			return { kind: "standup", from: null };
+		case "standup/start":
+			return { kind: "standup", from: "start" };
+		case "standup/end":
+			return { kind: "standup", from: "end" };
+		default:
+			return null;
+	}
+}
+
+/** The ritual's date and visible step, never its durable marks. */
+export function captureRitualView(
+	today?: Today,
+): Pick<import("pilot-day/native").SavedView, "ritual" | "date" | "step"> {
+	const ritual = ritualWords(ritualRoute());
+	return { ritual, date: ritual ? (today?.date ?? "") : "", step: ritual === "start" ? startStep() : 0 };
+}
+
+export function restoreRitualView(
+	view: Pick<import("pilot-day/native").SavedView, "ritual" | "date" | "step">,
+	today?: Today,
+) {
+	const ritual = view.date && today && view.date === today.date ? ritualOf(view.ritual ?? "") : null;
+	ritualRoute.set(ritual);
+	startStep.set(ritual?.kind === "start" ? Math.min(view.step ?? 0, 2) : 0);
+}
+
+export function resetRitualView() {
+	ritualRoute.set(null);
+	startStep.set(0);
+}

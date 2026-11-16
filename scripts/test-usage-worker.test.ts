@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -92,7 +93,9 @@ test("offline shipped and diagnostic worker graphs run with provenance and bound
 		.map((line) => JSON.parse(line));
 	const metadata = lines.shift().metadata;
 	assert.equal(metadata.kind, "isolated-shipped-worker-leaf-not-installed-daemon");
-	assert.match(metadata.nodeSha256, /^[a-f0-9]{64}$/);
+	assert.equal(metadata.nodeExecution, "invoking-executable-in-place");
+	assert.equal(metadata.nodeSha256, createHash("sha256").update(readFileSync(process.execPath)).digest("hex"));
+	assert.equal(metadata.versions.node, process.versions.node);
 	assert.equal(Object.keys(metadata.sourceSha256).length, 5);
 	assert.ok(!metadata.environmentKeys.includes("NODE_OPTIONS"));
 	assert.deepEqual(metadata.environmentKeys, ["HOME", "PATH", "PI_OFFLINE"]);

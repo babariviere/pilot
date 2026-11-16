@@ -11,9 +11,10 @@ import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { openSessionStorage } from "../../kernel/src/storage.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 async function fixture(t: TestContext) {
 	const home = await mkdtemp(join(tmpdir(), "retained-history-"));
@@ -26,21 +27,28 @@ async function fixture(t: TestContext) {
 		await rm(home, { recursive: true, force: true });
 	});
 	const open = async () => {
-		const manager = new SessionManager(home, projects, undefined, {
-			title: async () => undefined,
-			worker: (spec, onPacket) => {
-				starts.push(spec.sessionId);
-				queueMicrotask(() => onPacket({ type: "ready", model: "test/model", working: false, usage: {} }));
-				return {
-					state: "idle",
-					busy: false,
-					ready: Promise.resolve(),
-					send: () => {},
-					close: async () => {},
-					request: async () => {},
-				};
+		const manager = new SessionManager(
+			home,
+			projects,
+			undefined,
+			{
+				title: async () => undefined,
+				worker: (spec, onPacket) => {
+					starts.push(spec.sessionId);
+					queueMicrotask(() => onPacket({ type: "ready", model: "test/model", working: false, usage: {} }));
+					return {
+						state: "idle",
+						busy: false,
+						ready: Promise.resolve(),
+						send: () => {},
+						close: async () => {},
+						request: async () => {},
+					};
+				},
 			},
-		});
+			{},
+			offlineSessionOptions(),
+		);
 		managers.push(manager);
 		await manager.load();
 		return manager;
@@ -143,13 +151,13 @@ test("retired HTTP surfaces are absent, not disabled feature implementations", a
 	const f = await fixture(t);
 	const sessions = await f.open();
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
 		sessions,
-		f.projects,
-		new ModelCatalog(f.home),
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
 		terminals,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

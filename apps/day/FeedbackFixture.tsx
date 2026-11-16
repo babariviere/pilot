@@ -31,7 +31,7 @@ import { MockDayScreen, openDay } from "./mockFeeds";
 import { goalDraft } from "./planView";
 import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessionChat";
 import { Action } from "./ui";
-import { captureView, restoreView, startFresh } from "./updateView";
+import { captureView, restoreView, startFresh } from "./windowState";
 
 type Next = "accept" | "unknown" | "reject";
 

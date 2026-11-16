@@ -331,7 +331,7 @@ test("an unresolved or refused group search retries after a day without stopping
 
 test("mention discovery and classification continue beyond the retired hourly cap", async (t) => {
 	const f = await fixture(t);
-	for (let i = 0; i < 150; i++) await f.store.reserveSlack(channel, `${i + 1}.000002`, now, "budget");
+	for (let i = 0; i < 150; i++) await f.store.reserveSlack(channel, `${i + 1}.000002`, "budget");
 	f.history(history([{ ts: parent, text: "<@U000000099> export crashes" }]));
 	const refreshed = await f.poll(f.context);
 	assert.equal(refreshed.issue, undefined);

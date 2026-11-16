@@ -16,10 +16,10 @@ import type {
 	DiagnosticHistoryEntry,
 	DiagnosticHistoryPage,
 	DiagnosticTargetReference,
+	MissionThreadInputCausality,
 	SessionCompletion,
 	TranscriptContext,
 } from "@pilot/protocol";
-import type { MissionThreadInputCausality } from "../../protocol/src/mission-thread.ts";
 import { activeConversation, lineage } from "./attempts.ts";
 import { AttentionDoc, normalizeCompletion } from "./attention.ts";
 import { chatEventEntries } from "./chat-events.ts";

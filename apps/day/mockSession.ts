@@ -17,18 +17,13 @@ import { mirrorThreads } from "./threadFeed";
  * The mock app's feed: the decisions world, with demo results to check, saved Linear issues, preferences,
  * threads and read-only chats.
  */
-export const day = mirrorDay(
-	new TodayFeed(),
-	undefined,
-	mirrorDelivery(new ScriptedDelivery()),
-	mirrorLinear(new ScriptedLinear()),
-	undefined,
-	mirrorPreferences(new ScriptedPreferences()),
-	mirrorThreads(new ScriptedThreads()),
-	undefined,
-	undefined,
-	openMockChat(),
-);
+export const day = mirrorDay(new TodayFeed(), {
+	delivery: mirrorDelivery(new ScriptedDelivery()),
+	linear: mirrorLinear(new ScriptedLinear()),
+	preferences: mirrorPreferences(new ScriptedPreferences()),
+	threads: mirrorThreads(new ScriptedThreads()),
+	chat: openMockChat(),
+});
 /** The mock app's planning feed: one mission interview in progress. */
 export const plans = openPlanning();
 /** The mock app's Changes feed: kept changes in every state. */

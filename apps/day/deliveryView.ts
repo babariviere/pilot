@@ -2,7 +2,7 @@
 // result's exact key, so it survives reads, new deliveries and hot updates.
 // Unsent Send back notes are kept exactly as typed; a close or an update
 // saves them in the window's SavedView, and a restored window shows them
-// again without sending anything (updateView.ts).
+// again without sending anything (windowState.ts).
 import { signal } from "nsh";
 import { MAX_PREVIEWS } from "./artifactReads";
 import { type ArtifactSelection, artifactSelection, samePin } from "./deliveryArtifact";
@@ -98,6 +98,46 @@ export async function showWork(source: DeliverySource, key: string, shown: Deliv
 				? { ...reading, state: "shown", work: r.work }
 				: { ...reading, state: "refused", message: r.status === "refused" ? r.message : "" },
 	}));
+}
+
+type SavedDeliveryView = Pick<import("pilot-day/native").SavedView, "delivery" | "notes" | "reminders">;
+
+/** Keeps unsent notes and reminders, never inspection content or acceptance. */
+export function captureDeliveryView(): SavedDeliveryView {
+	return {
+		delivery: deliveryRoute()?.key ?? "",
+		notes: Object.entries(backNotes())
+			.filter(([, note]) => note !== "")
+			.map(([key, note]) => `${key}\n${note}`),
+		reminders: savedReminders(),
+	};
+}
+
+export function restoreDeliveryView(view: SavedDeliveryView) {
+	const delivery = view.delivery ? subjectOf(view.delivery) : null;
+	hideInspection();
+	deliveryRoute.set(delivery ? { key: view.delivery ?? "", subject: delivery, title: "" } : null);
+	const notes: Record<string, string> = {};
+	for (const entry of view.notes ?? []) {
+		const at = entry.indexOf("\n");
+		if (at > 0 && subjectOf(entry.slice(0, at))) notes[entry.slice(0, at)] = entry.slice(at + 1);
+	}
+	backNotes.set(notes);
+	backOpen.set(Object.fromEntries(Object.keys(notes).map((key) => [key, true])));
+	reminders.set(remindersOf(view.reminders ?? []));
+}
+
+export function resetDeliveryView() {
+	deliveryRoute.set(null);
+	deliveryTitles.set({});
+	backNotes.set({});
+	backOpen.set({});
+	doneAsk.set(null);
+	reminders.set({});
+	deliveryMessages.set({});
+	outputMessages.set({});
+	// A restored window never keeps or rereads a shown source.
+	hideInspection();
 }
 
 /** Closes one result's Agent work. An answer still on its way is not shown. */

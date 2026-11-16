@@ -1,33 +1,28 @@
 /** Offline startup recovery comparison. node scripts/bench/mission-recovery.ts <baseline commit> [samples] */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { MissionNotices } from "../../packages/daemon/src/mission-notices.ts";
 import { MissionService } from "../../packages/daemon/src/mission-service.ts";
 import { MissionStore } from "../../packages/daemon/src/missions.ts";
 import type { ProjectStore } from "../../packages/daemon/src/projects.ts";
 import type { SessionManager } from "../../packages/daemon/src/sessions.ts";
 import type { SessionSummary } from "../../packages/protocol/src/index.ts";
+import { loadBaseline } from "./baseline.ts";
 
 const baseline = process.argv[2];
 const rounds = Number(process.argv[3] ?? 3);
 if (!baseline || !/^[a-f\d]{6,40}$/.test(baseline)) throw new Error("Pass a baseline commit hash");
 if (!Number.isInteger(rounds) || rounds < 1 || rounds > 10) throw new Error("Samples must be between 1 and 10");
-const root = fileURLToPath(new URL("../../", import.meta.url));
 const home = await mkdtemp(join(tmpdir(), "pilot-recovery-bench-"));
+let cleanupBaseline: (() => Promise<void>) | undefined;
 try {
-	const source = execFileSync("git", ["show", `${baseline}:packages/daemon/src/mission-notices.ts`], {
-		cwd: root,
-		encoding: "utf8",
-	}).replaceAll('from "./', `from "${join(root, "packages/daemon/src")}/`);
-	const legacyPath = join(home, "baseline.ts");
-	await writeFile(legacyPath, source);
-	const { MissionNotices: LegacyNotices } = (await import(pathToFileURL(legacyPath).href)) as {
+	const loaded = await loadBaseline<{
 		MissionNotices: typeof MissionNotices;
-	};
+	}>(baseline, new URL("../../packages/daemon/src/mission-notices.ts", import.meta.url));
+	cleanupBaseline = loaded.cleanup;
+	const { MissionNotices: LegacyNotices } = loaded.module;
 	const samples = new Map<string, { wallMs: number; cpuMs: number; notifications: number; details: number }[]>();
 	for (let round = 0; round <= rounds; round++) {
 		const variants = [
@@ -129,5 +124,6 @@ try {
 		);
 	}
 } finally {
+	await cleanupBaseline?.();
 	await rm(home, { recursive: true, force: true });
 }

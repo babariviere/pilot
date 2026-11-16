@@ -21,7 +21,8 @@ import type { Day } from "./day";
 import type { Plans } from "./planning";
 import { Action, Arrive, glide, Mark, type MarkKind, Page, Panel, SectionTitle } from "./ui";
 import type { Update } from "./updateFeed";
-import { captureView, closeUpdate, restoreView, saveForms, startFresh, updateBusy, updateMessage } from "./updateView";
+import { closeUpdate, updateBusy, updateMessage } from "./updateView";
+import { captureView, restoreView, saveForms, startFresh } from "./windowState";
 
 const NUMBERS = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
 

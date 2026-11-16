@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { FEATURE_NAMES, type FeatureEvent, parseFeatureEvent } from "./feature-events.ts";
+import { FEATURE_NAMES, type FeatureEvent } from "@pilot/protocol";
+import { parseFeatureEvent } from "./feature-events.ts";
 
 test("feature catalog accepts each closed stage", () => {
 	for (const feature of FEATURE_NAMES) {

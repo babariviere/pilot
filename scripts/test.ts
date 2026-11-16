@@ -4,7 +4,7 @@ import {
 	discoverTests,
 	type Suite,
 	type TestLane,
-	testInLane,
+	testLaneFiles,
 	testLimits,
 	testSuite,
 	testWeight,
@@ -35,8 +35,8 @@ for (const argument of process.argv.slice(2)) {
 if (lane === "macos" && process.platform !== "darwin" && !list)
 	throw new Error("The macos test lane requires macOS; use --list to inspect it on other hosts.");
 const { concurrency, timeoutMs } = testLimits(process.env);
-const files = (await discoverTests(root))
-	.filter((path) => (suite === "all" || testSuite(path) === suite) && testInLane(path, lane))
+const files = testLaneFiles(await discoverTests(root), lane)
+	.filter((path) => suite === "all" || testSuite(path) === suite)
 	.sort((a, b) => testWeight(b) - testWeight(a) || a.localeCompare(b));
 if (!files.length) throw new Error(`No tests in suite: ${suite}, lane: ${lane}`);
 if (list) {

@@ -11,9 +11,9 @@ import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
 import { KnowledgeService } from "./project-knowledge.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("knowledge HTTP reads are passive and writes act for the user with CAS", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-knowledge-api-"));
@@ -33,14 +33,14 @@ test("knowledge HTTP reads are passive and writes act for the user with CAS", as
 	} as unknown as SessionManager;
 	const store = new MissionStore(join(home, "missions.sqlite"));
 	const knowledge = new KnowledgeService(store, projects, sessions);
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		{} as ModelCatalog,
-		{ isRunning: () => false } as unknown as TerminalManager,
-		{ service: {} as MissionService, store, knowledge },
-	);
+		models: {} as ModelCatalog,
+		terminals: { isRunning: () => false } as unknown as TerminalManager,
+		missions: { service: {} as MissionService, store, knowledge },
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

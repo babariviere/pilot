@@ -1,4 +1,38 @@
 include!("support/intake_fixture.rs");
+
+#[test]
+fn compiled_native_intake_and_linear_reads_reach_authenticated_project_routes() {
+    let mut f = Fixture::new();
+    let bridge = f.bridge();
+    let project = f.info["source"]["project_id"].clone();
+    // Calls cross the released bridge, compiled Rust transport and real router.
+    // Incorrect URI templates or capability headers fail the actual reads.
+    for method in ["day.intake.read", "day.linear.read"] {
+        let result = f.call(&bridge, method, json!({}));
+        let snapshot = &result["value"]["snapshot"];
+        assert_eq!(snapshot["version"], 1, "{method}: {result}");
+        assert_eq!(snapshot["projectId"], project, "{method}: {result}");
+        let forged = f.call(&bridge, method, json!({"projectId":"other"}));
+        assert!(!forged["error"].is_null(), "{method}: {forged}");
+    }
+    // Revoke the real local credential rather than a route-specific proxy mode.
+    use std::os::unix::fs::PermissionsExt;
+    let capability = PathBuf::from(f.info["source"]["profile"].as_str().unwrap())
+        .join("github-app-capability");
+    std::fs::set_permissions(&capability, std::fs::Permissions::from_mode(0o644)).unwrap();
+    for method in ["day.intake.read", "day.linear.read"] {
+        let result = f.call(&bridge, method, json!({}));
+        assert_eq!(result["error"], "identity", "{method}: {result}");
+        assert!(result["value"].is_null(), "denial is not an empty result");
+    }
+    std::fs::set_permissions(&capability, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let stats = f.stats("stats");
+    for field in ["posts", "lookups", "sessions", "external"] {
+        assert_eq!(stats[field], 0, "passive reads changed {field}: {stats}");
+    }
+    close(bridge);
+}
+
 fn intent(snapshot: &Value) -> Value {
     let item = &snapshot["sources"][1]["items"][0];
     json!({"itemId":item["id"],"revision":item["revision"],"contextDigest":snapshot["contextDigest"]})

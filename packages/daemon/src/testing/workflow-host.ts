@@ -17,9 +17,9 @@ import type { MissionService } from "../mission-service.ts";
 import { MissionStore } from "../missions.ts";
 import { ModelCatalog } from "../models.ts";
 import { ProjectStore } from "../projects.ts";
-import { createDaemonServer } from "../server.ts";
 import { SessionManager } from "../sessions.ts";
 import { TerminalManager } from "../terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./daemon-server.ts";
 
 const host = { hostId: "daemon", daemonId: "test-daemon", lineageId: "test-lineage" };
 const hello: DaemonHello = {
@@ -53,17 +53,18 @@ async function daemon(home: string, projectId?: string) {
 	const terminals = new TerminalManager();
 	const native = new GitHubSetupService(home, host, { userHome: home, env: {} });
 	await native.status();
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		{ store, service: {} as MissionService },
-	];
-	args[12] = hello;
-	args[17] = native;
-	const server = createDaemonServer(...args);
+		missions: { store, service: {} as MissionService },
+	};
+	args.hello = hello;
+	args.githubSetup = native;
+	args.nativeAuthority = args.githubSetup?.nativeAuthority;
+	const server = createDaemonServer(args);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	return {

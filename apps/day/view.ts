@@ -271,3 +271,60 @@ export function move(today: Today, step: number) {
 
 /** Where each card's keyboard focus goes, by card id. The cards set it. */
 export const anchors = new Map<string, () => ViewRef | undefined>();
+
+type SavedTodayView = {
+	focused: string;
+	help?: string[];
+	todayY?: number;
+	todayRow?: string;
+};
+
+/** Today's disclosures and return position, without draft text owned by Rust. */
+export function captureTodayView(): SavedTodayView {
+	return {
+		focused: focused() ?? "",
+		help: Object.entries(help()).flatMap(([item, kinds]) => kinds.map((kind) => `${item}/${kind}`)),
+		todayY: Math.max(0, todayPlace.y),
+		todayRow: todayPlace.row ?? "",
+	};
+}
+
+/** Restores the mission place without invoking its navigation actions. */
+export function restoreMissionPlace(view: { place: import("pilot-day/native").SavedView["place"]; id: string }) {
+	route.set(view.place === "mission" ? view.id : null);
+}
+
+/** Restores only valid disclosures; it never answers a decision. */
+export function restoreTodayView(view: SavedTodayView) {
+	focused.set(view.focused || null);
+	const kinds: readonly Help[] = ["simpler", "more", "visual", "ask", "details"];
+	const open: Record<string, Help[]> = {};
+	for (const entry of view.help ?? []) {
+		const at = entry.lastIndexOf("/");
+		const kind = entry.slice(at + 1) as Help;
+		if (at > 0 && kinds.includes(kind)) open[entry.slice(0, at)] = [...(open[entry.slice(0, at)] ?? []), kind];
+	}
+	help.set(open);
+}
+
+/** Restores Today's return position before scroll and field restoration. */
+export function restoreTodayPosition(view: { todayY?: number; todayRow?: string }): number {
+	todayPlace.y = Math.max(0, view.todayY ?? 0);
+	todayPlace.row = view.todayRow || null;
+	return todayPlace.y;
+}
+
+/** A fresh window clears view-local state; durable drafts return separately. */
+export function resetTodayView() {
+	picks.set({});
+	help.set({});
+	drafts.set({});
+	replies.set({});
+	reports.set({});
+	messages.set({});
+	asking.set({});
+	controlMessages.set({});
+	focused.set(null);
+	route.set(null);
+	confirming.set(null);
+}

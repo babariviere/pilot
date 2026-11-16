@@ -13,7 +13,7 @@ const MAX_REQUEST_BYTES = 512 * 1024;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const BRIDGE_ENV = "PILOT_TODO_BRIDGE";
 
-export async function startTodoBridge(
+export async function startParentBridge(
 	call: TodoCall,
 	reportLimit?: ReportSubscriptionLimit,
 	reportUsage?: PublishUsage,
@@ -60,7 +60,6 @@ export async function startTodoBridge(
 			let result: unknown;
 			if (req.url === "/usage-history-epoch") result = await acquireUsageEpoch!();
 			else if (req.url === "/usage-history") {
-				if (bytes > 4096) throw new Error("Invalid usage record");
 				result = await reportUsage!(body);
 			} else if (req.url === "/subscription-limit") {
 				if (

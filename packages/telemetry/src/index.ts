@@ -35,68 +35,111 @@ const OTLP_SINGLE_ATTEMPT_TIMEOUT_MS = 750;
 const ATTRIBUTE_LIMIT = 24;
 const ATTRIBUTE_VALUE_BYTES = 64;
 
+const SPAN_NAMES = [
+	"pilot.message.send",
+	"pilot.chat.open",
+	"pilot.daemon.request",
+	"pilot.kernel.request",
+	"pilot.event_loop.stall",
+	"pilot.ai.usage",
+	"pilot.tool.call",
+	"pilot.tool.cancel_wait",
+	"pilot.feature",
+] as const;
+
+const OPERATIONS = [
+	"message.send",
+	"chat.open",
+	"daemon.request",
+	"kernel.request",
+	"event_loop.stall",
+	"ai.usage",
+	"tool.call",
+	"tool.cancel_wait",
+] as const;
+
+const PHASES = [
+	"api",
+	"admission",
+	"startup_wait",
+	"preparation",
+	"provider",
+	"publication",
+	"first_visible",
+	"history_read",
+	"reduction",
+	"first_transcript",
+] as const;
+
+const OUTCOMES = ["success", "failure", "cancelled", "timeout", "interrupted", "unavailable"] as const;
+
+const REASONS = [
+	"none",
+	"user",
+	"sleep",
+	"update",
+	"quota",
+	"usage_limit",
+	"connectivity",
+	"startup_timeout",
+	"process_exit",
+	"recovery_backoff",
+	"parked_idle",
+	"synchronous_work",
+	"waiting",
+	"unknown",
+] as const;
+
+const HISTORY_BUCKETS = ["0", "1-100", "101-1000", "1001+"] as const;
+
+const PROGRESS_KINDS = ["thinking", "text", "tool", "none"] as const;
+
+const FRAME_OBSERVATIONS = ["available", "occluded", "asleep", "unsupported"] as const;
+
+const TOOL_CATEGORIES = [
+	"shell",
+	"filesystem",
+	"network",
+	"background",
+	"codemode",
+	"mcp",
+	"orchestration",
+	"other",
+] as const;
+
+const AI_SCOPES = ["direct", "child", "session"] as const;
+
+const AI_REASONING_STATUS = ["reported", "partial", "unavailable"] as const;
+
+const AI_ESTIMATE_STATUS = ["catalog_estimate", "partial_catalog_estimate", "unavailable"] as const;
+
+const AI_BILLED_STATUS = ["known", "unavailable"] as const;
+
+const AI_SUBSCRIPTION_COVERAGE = ["covered", "not_covered", "unknown"] as const;
+
+const AI_LAUNCH_REASONS = [
+	"initial",
+	"parked_wake",
+	"user_resume",
+	"crash_recovery",
+	"startup_retry",
+	"replacement",
+	"unknown",
+] as const;
+
 export type TelemetryServiceName = "pilot.daemon" | "pilot.kernel";
 export type TelemetryEnvironment = "release" | "development" | "test";
 export type TelemetryHostKind = "local" | "devbox";
-export type TelemetrySpanName =
-	| "pilot.message.send"
-	| "pilot.chat.open"
-	| "pilot.daemon.request"
-	| "pilot.kernel.request"
-	| "pilot.event_loop.stall"
-	| "pilot.ai.usage"
-	| "pilot.tool.call"
-	| "pilot.tool.cancel_wait"
-	| "pilot.feature";
+export type TelemetrySpanName = (typeof SPAN_NAMES)[number];
 
-export type TelemetryToolCategory =
-	| "shell"
-	| "filesystem"
-	| "network"
-	| "background"
-	| "codemode"
-	| "mcp"
-	| "orchestration"
-	| "other";
+export type TelemetryToolCategory = (typeof TOOL_CATEGORIES)[number];
 
-export type TelemetryPhase =
-	| "api"
-	| "admission"
-	| "startup_wait"
-	| "preparation"
-	| "provider"
-	| "publication"
-	| "first_visible"
-	| "history_read"
-	| "reduction"
-	| "first_transcript";
-export type TelemetryOutcome = "success" | "failure" | "cancelled" | "timeout" | "interrupted" | "unavailable";
-export type TelemetryReason =
-	| "none"
-	| "user"
-	| "sleep"
-	| "update"
-	| "quota"
-	| "usage_limit"
-	| "connectivity"
-	| "startup_timeout"
-	| "process_exit"
-	| "recovery_backoff"
-	| "parked_idle"
-	| "synchronous_work"
-	| "waiting"
-	| "unknown";
+export type TelemetryPhase = (typeof PHASES)[number];
+export type TelemetryOutcome = (typeof OUTCOMES)[number];
+export type TelemetryReason = (typeof REASONS)[number];
 
 export interface TelemetryAttributes {
-	"pilot.operation"?:
-		| "message.send"
-		| "chat.open"
-		| "daemon.request"
-		| "kernel.request"
-		| "event_loop.stall"
-		| "ai.usage"
-		| "tool.call"
-		| "tool.cancel_wait";
+	"pilot.operation"?: (typeof OPERATIONS)[number];
 	"pilot.phase"?: TelemetryPhase;
 	"pilot.outcome"?: TelemetryOutcome;
 	"pilot.reason"?: TelemetryReason;
@@ -104,20 +147,20 @@ export interface TelemetryAttributes {
 	"pilot.recovered"?: boolean;
 	"pilot.retry_count"?: number;
 	"pilot.queue_depth"?: number;
-	"pilot.history_bucket"?: "0" | "1-100" | "101-1000" | "1001+";
-	"pilot.progress_kind"?: "thinking" | "text" | "tool" | "none";
-	"pilot.frame_observation"?: "available" | "occluded" | "asleep" | "unsupported";
+	"pilot.history_bucket"?: (typeof HISTORY_BUCKETS)[number];
+	"pilot.progress_kind"?: (typeof PROGRESS_KINDS)[number];
+	"pilot.frame_observation"?: (typeof FRAME_OBSERVATIONS)[number];
 	"pilot.tool.category"?: TelemetryToolCategory;
 	"pilot.tool.nested"?: boolean;
 	"pilot.tool.dispatch_ms"?: number;
 	"pilot.tool.execution_ms"?: number;
-	"pilot.ai.scope"?: "direct" | "child" | "session";
+	"pilot.ai.scope"?: (typeof AI_SCOPES)[number];
 	"pilot.ai.input_tokens"?: number;
 	"pilot.ai.output_tokens"?: number;
 	"pilot.ai.cache_read_tokens"?: number;
 	"pilot.ai.cache_write_tokens"?: number;
 	"pilot.ai.reasoning_tokens"?: number;
-	"pilot.ai.reasoning_status"?: "reported" | "partial" | "unavailable";
+	"pilot.ai.reasoning_status"?: (typeof AI_REASONING_STATUS)[number];
 	"pilot.ai.activity_count"?: number;
 	"pilot.ai.success_count"?: number;
 	"pilot.ai.failure_count"?: number;
@@ -136,26 +179,19 @@ export interface TelemetryAttributes {
 	"pilot.ai.compaction_after_tokens"?: number;
 	"pilot.ai.compaction_removed_tokens"?: number;
 	"pilot.ai.launch_count"?: number;
-	"pilot.ai.launch_reason"?:
-		| "initial"
-		| "parked_wake"
-		| "user_resume"
-		| "crash_recovery"
-		| "startup_retry"
-		| "replacement"
-		| "unknown";
+	"pilot.ai.launch_reason"?: (typeof AI_LAUNCH_REASONS)[number];
 	"pilot.ai.prepared_context_count"?: number;
 	"pilot.ai.prepared_context_tokens"?: number;
 	"pilot.ai.elapsed_ms"?: number;
 	"pilot.ai.active_ms"?: number;
 	"pilot.ai.paused_ms"?: number;
 	"pilot.ai.idle_ms"?: number;
-	"pilot.ai.estimate_status"?: "catalog_estimate" | "partial_catalog_estimate" | "unavailable";
+	"pilot.ai.estimate_status"?: (typeof AI_ESTIMATE_STATUS)[number];
 	"pilot.ai.estimated_usd_micros"?: number;
 	"pilot.ai.pricing_source"?: "pi_catalog";
-	"pilot.ai.billed_status"?: "known" | "unavailable";
+	"pilot.ai.billed_status"?: (typeof AI_BILLED_STATUS)[number];
 	"pilot.ai.billed_usd_micros"?: number;
-	"pilot.ai.subscription_coverage"?: "covered" | "not_covered" | "unknown";
+	"pilot.ai.subscription_coverage"?: (typeof AI_SUBSCRIPTION_COVERAGE)[number];
 }
 
 /** The only daemon/kernel propagation format. Baggage and tracestate are deliberately absent. */
@@ -227,90 +263,21 @@ export type TelemetryInFlightEvent =
 			outcome: TelemetryLifecycleOutcome;
 	  };
 
-const SPAN_NAMES = new Set<TelemetrySpanName>([
-	"pilot.message.send",
-	"pilot.chat.open",
-	"pilot.daemon.request",
-	"pilot.kernel.request",
-	"pilot.event_loop.stall",
-	"pilot.ai.usage",
-	"pilot.tool.call",
-	"pilot.tool.cancel_wait",
-	"pilot.feature",
-]);
-const OPERATIONS = new Set([
-	"message.send",
-	"chat.open",
-	"daemon.request",
-	"kernel.request",
-	"event_loop.stall",
-	"ai.usage",
-	"tool.call",
-	"tool.cancel_wait",
-]);
-const PHASES = new Set<TelemetryPhase>([
-	"api",
-	"admission",
-	"startup_wait",
-	"preparation",
-	"provider",
-	"publication",
-	"first_visible",
-	"history_read",
-	"reduction",
-	"first_transcript",
-]);
-const OUTCOMES = new Set<TelemetryOutcome>([
-	"success",
-	"failure",
-	"cancelled",
-	"timeout",
-	"interrupted",
-	"unavailable",
-]);
-const REASONS = new Set<TelemetryReason>([
-	"none",
-	"user",
-	"sleep",
-	"update",
-	"quota",
-	"usage_limit",
-	"connectivity",
-	"startup_timeout",
-	"process_exit",
-	"recovery_backoff",
-	"parked_idle",
-	"synchronous_work",
-	"waiting",
-	"unknown",
-]);
-const HISTORY_BUCKETS = new Set(["0", "1-100", "101-1000", "1001+"]);
-const PROGRESS_KINDS = new Set(["thinking", "text", "tool", "none"]);
-const FRAME_OBSERVATIONS = new Set(["available", "occluded", "asleep", "unsupported"]);
-const TOOL_CATEGORIES = new Set<TelemetryToolCategory>([
-	"shell",
-	"filesystem",
-	"network",
-	"background",
-	"codemode",
-	"mcp",
-	"orchestration",
-	"other",
-]);
-const AI_SCOPES = new Set(["direct", "child", "session"]);
-const AI_REASONING_STATUS = new Set(["reported", "partial", "unavailable"]);
-const AI_ESTIMATE_STATUS = new Set(["catalog_estimate", "partial_catalog_estimate", "unavailable"]);
-const AI_BILLED_STATUS = new Set(["known", "unavailable"]);
-const AI_SUBSCRIPTION_COVERAGE = new Set(["covered", "not_covered", "unknown"]);
-const AI_LAUNCH_REASONS = new Set([
-	"initial",
-	"parked_wake",
-	"user_resume",
-	"crash_recovery",
-	"startup_retry",
-	"replacement",
-	"unknown",
-]);
+const SPAN_NAMES_SET = new Set<string>(SPAN_NAMES);
+const OPERATIONS_SET = new Set<string>(OPERATIONS);
+const PHASES_SET = new Set<string>(PHASES);
+const OUTCOMES_SET = new Set<string>(OUTCOMES);
+const REASONS_SET = new Set<string>(REASONS);
+const HISTORY_BUCKETS_SET = new Set<string>(HISTORY_BUCKETS);
+const PROGRESS_KINDS_SET = new Set<string>(PROGRESS_KINDS);
+const FRAME_OBSERVATIONS_SET = new Set<string>(FRAME_OBSERVATIONS);
+const TOOL_CATEGORIES_SET = new Set<string>(TOOL_CATEGORIES);
+const AI_SCOPES_SET = new Set<string>(AI_SCOPES);
+const AI_REASONING_STATUS_SET = new Set<string>(AI_REASONING_STATUS);
+const AI_ESTIMATE_STATUS_SET = new Set<string>(AI_ESTIMATE_STATUS);
+const AI_BILLED_STATUS_SET = new Set<string>(AI_BILLED_STATUS);
+const AI_SUBSCRIPTION_COVERAGE_SET = new Set<string>(AI_SUBSCRIPTION_COVERAGE);
+const AI_LAUNCH_REASONS_SET = new Set<string>(AI_LAUNCH_REASONS);
 const TRACEPARENT = /^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$/;
 const setter: TextMapSetter<TraceCarrier> = {
 	set(carrier, key, value) {
@@ -337,27 +304,27 @@ export function telemetryAttributes(value: TelemetryAttributes): TelemetryAttrib
 	const entries = Object.entries(value as Record<string, unknown>);
 	if (entries.length > ATTRIBUTE_LIMIT) return;
 	for (const [key, field] of entries) {
-		if (key === "pilot.operation" && closedString(field, OPERATIONS)) continue;
-		if (key === "pilot.phase" && closedString(field, PHASES)) continue;
-		if (key === "pilot.outcome" && closedString(field, OUTCOMES)) continue;
-		if (key === "pilot.reason" && closedString(field, REASONS)) continue;
+		if (key === "pilot.operation" && closedString(field, OPERATIONS_SET)) continue;
+		if (key === "pilot.phase" && closedString(field, PHASES_SET)) continue;
+		if (key === "pilot.outcome" && closedString(field, OUTCOMES_SET)) continue;
+		if (key === "pilot.reason" && closedString(field, REASONS_SET)) continue;
 		if ((key === "pilot.cold" || key === "pilot.recovered") && typeof field === "boolean") continue;
 		if (key === "pilot.retry_count" && Number.isInteger(field) && (field as number) >= 0 && (field as number) <= 8)
 			continue;
 		if (key === "pilot.queue_depth" && Number.isInteger(field) && (field as number) >= 0 && (field as number) <= 512)
 			continue;
-		if (key === "pilot.history_bucket" && closedString(field, HISTORY_BUCKETS)) continue;
-		if (key === "pilot.progress_kind" && closedString(field, PROGRESS_KINDS)) continue;
-		if (key === "pilot.frame_observation" && closedString(field, FRAME_OBSERVATIONS)) continue;
-		if (key === "pilot.tool.category" && closedString(field, TOOL_CATEGORIES)) continue;
+		if (key === "pilot.history_bucket" && closedString(field, HISTORY_BUCKETS_SET)) continue;
+		if (key === "pilot.progress_kind" && closedString(field, PROGRESS_KINDS_SET)) continue;
+		if (key === "pilot.frame_observation" && closedString(field, FRAME_OBSERVATIONS_SET)) continue;
+		if (key === "pilot.tool.category" && closedString(field, TOOL_CATEGORIES_SET)) continue;
 		if (key === "pilot.tool.nested" && typeof field === "boolean") continue;
-		if (key === "pilot.ai.scope" && closedString(field, AI_SCOPES)) continue;
-		if (key === "pilot.ai.reasoning_status" && closedString(field, AI_REASONING_STATUS)) continue;
-		if (key === "pilot.ai.estimate_status" && closedString(field, AI_ESTIMATE_STATUS)) continue;
+		if (key === "pilot.ai.scope" && closedString(field, AI_SCOPES_SET)) continue;
+		if (key === "pilot.ai.reasoning_status" && closedString(field, AI_REASONING_STATUS_SET)) continue;
+		if (key === "pilot.ai.estimate_status" && closedString(field, AI_ESTIMATE_STATUS_SET)) continue;
 		if (key === "pilot.ai.pricing_source" && field === "pi_catalog") continue;
-		if (key === "pilot.ai.billed_status" && closedString(field, AI_BILLED_STATUS)) continue;
-		if (key === "pilot.ai.subscription_coverage" && closedString(field, AI_SUBSCRIPTION_COVERAGE)) continue;
-		if (key === "pilot.ai.launch_reason" && closedString(field, AI_LAUNCH_REASONS)) continue;
+		if (key === "pilot.ai.billed_status" && closedString(field, AI_BILLED_STATUS_SET)) continue;
+		if (key === "pilot.ai.subscription_coverage" && closedString(field, AI_SUBSCRIPTION_COVERAGE_SET)) continue;
+		if (key === "pilot.ai.launch_reason" && closedString(field, AI_LAUNCH_REASONS_SET)) continue;
 		if (
 			[
 				"pilot.ai.input_tokens",
@@ -725,7 +692,7 @@ export class NodeTelemetry {
 		options: { parent?: TraceCarrier; startTime?: Date } = {},
 	): TelemetrySpan {
 		if (!this.exportEnabled && !this.observe) return NOOP_SPAN;
-		if (!SPAN_NAMES.has(name)) {
+		if (!SPAN_NAMES_SET.has(name)) {
 			this.stats.invalid++;
 			return NOOP_SPAN;
 		}
@@ -825,7 +792,7 @@ let current = new NodeTelemetry({
 	hostKind: "local",
 });
 
-/** Process-local installation. Production stays disabled until explicit configuration is added. */
+/** Process-local installation, configured by the host's explicit telemetry consent. */
 export function configureNodeTelemetry(options: NodeTelemetryOptions): NodeTelemetry {
 	const previous = current;
 	current = new NodeTelemetry(options);

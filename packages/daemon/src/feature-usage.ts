@@ -5,13 +5,13 @@ import { chmod, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
 	FEATURE_NAMES,
-	parseFeatureEvent,
 	type FeatureUsageBatch,
 	type FeatureUsageCell,
 	type FeatureUsageSnapshot,
 	type OperationHost,
 } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
+import { parseFeatureEvent } from "./feature-events.ts";
 
 const DAY = 86_400_000;
 const LIMIT = 16;

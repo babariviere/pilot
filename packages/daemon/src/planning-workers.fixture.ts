@@ -21,10 +21,11 @@ import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager, Worker } from "./sessions.ts";
 import type { SourceRegistry } from "./sources.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const exec = promisify(execFile);
 export async function planningWorkerFixture(
@@ -216,7 +217,7 @@ export default pi => {
 				},
 			},
 			{},
-			{ diagnosticHost: host },
+			offlineSessionOptions({ diagnosticHost: host }),
 		);
 	let sessions = newSessions();
 	let service = new MissionService(store, sessions, projects);
@@ -231,18 +232,19 @@ export default pi => {
 		await native.status();
 		capability = JSON.parse(await readFile(join(home, "github-app-capability"), "utf8")).token;
 		terminals = new TerminalManager();
-		const args: Parameters<typeof createDaemonServer> = [
-			{ home, host: "127.0.0.1", port: 0 },
+		const args: Parameters<typeof createDaemonServer>[0] = {
+			config: { home, host: "127.0.0.1", port: 0 },
 			sessions,
 			projects,
-			new ModelCatalog(agent),
+			models: new ModelCatalog(agent),
 			terminals,
-			{ service, store },
-		];
-		if (tracking) args[9] = tracking.tracking as SourceRegistry;
-		args[12] = hello;
-		args[17] = native;
-		server = createDaemonServer(...args);
+			missions: { service, store },
+		};
+		if (tracking) args.tracking = tracking.tracking as SourceRegistry;
+		args.hello = hello;
+		args.githubSetup = native;
+		args.nativeAuthority = args.githubSetup?.nativeAuthority;
+		server = createDaemonServer(args);
 		await server.runtimeReady;
 		server.listen(0, "127.0.0.1");
 		await once(server, "listening");
@@ -306,7 +308,7 @@ export default pi => {
 	const stop = async () => {
 		server.closeAllConnections();
 		await new Promise<void>((r) => server.close(() => r()));
-		await server.closePlanning();
+		await server.closeServices();
 		await sessions.shutdown();
 		await terminals.shutdown();
 		await native.close();

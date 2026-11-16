@@ -20,22 +20,19 @@ import { LinearSizeDisk } from "./linear-size.ts";
 import { SlackCaseDisk } from "./slack-cases.ts";
 import { parseSlackClassification, type SlackClassification } from "./slack-classifier.ts";
 import { SLACK_SEARCH_CHARS } from "./slack-format.ts";
+import {
+	SLACK_REACTION_BATCH,
+	SLACK_REACTION_RECHECK_MS,
+	SLACK_WAITING_BATCH,
+	SLACK_WAITING_INTERVAL_MS,
+} from "./slack-poll-policy.ts";
 import { type SlackReactionOwner, validSlackReactionOwner } from "./slack-reaction-owner.ts";
 import type { SlackRemovalFailure } from "./source-tool-rules.ts";
+import { validatePatch } from "./tracked-item-patch.ts";
 import { TriageGuideDisk } from "./triage-guide-disk.ts";
 
 export type SlackCache = { state: "pending" | "error" } | { state: "done"; result: SlackClassification };
 export type SlackReservation = SlackCache | { state: "reserved" };
-/** Legacy diagnostic value, not an admission limit. */
-export const SLACK_HOURLY_BUDGET = 100;
-/** Legacy diagnostic window, kept for callers reading old budget data. */
-export const SLACK_BUDGET_WINDOW_MS = 3_600_000;
-export const SLACK_REACTION_BATCH = 8;
-/** Waiting messages read per poll, and how often one message's thread is read for new replies. */
-export const SLACK_WAITING_BATCH = 4;
-export const SLACK_WAITING_INTERVAL_MS = 10 * 60_000;
-/** An open item's ✅ is checked at most this often. */
-export const SLACK_REACTION_RECHECK_MS = 3_600_000;
 /** A Slack group handle's ID, learned once by search. id is null while it could not be resolved. */
 export interface SlackGroupId {
 	id: string | null;
@@ -397,19 +394,8 @@ export class TrackedItemDisk {
 			? { state: "done", result: parseSlackClassification(String(row.result)) }
 			: { state: row.state === "error" ? "error" : "pending" };
 	}
-	/** Compatibility admission. Slack reads have no local hourly cap. */
-	reserveSlackRead(_now: number, _force = false): boolean {
-		return true;
-	}
 	/** Crash-safe classification admission unless cached. Only explicit imports retry failed or interrupted attempts. */
-	reserveSlack(
-		channel: string,
-		ts: string,
-		_now: number,
-		projectId: string,
-		retry = false,
-		_force = false,
-	): SlackReservation {
+	reserveSlack(channel: string, ts: string, projectId: string, retry = false): SlackReservation {
 		validateSlackKey(channel, ts, projectId);
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
@@ -1596,64 +1582,4 @@ function validateInput(item: TrackedInput): void {
 		Buffer.byteLength(JSON.stringify(item.metadata)) > 16 * 1024
 	)
 		throw new Error("Invalid tracked item metadata");
-}
-export function validatePatch(value: unknown): asserts value is TrackedItemPatch {
-	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid tracked item patch");
-	const patch = value as TrackedItemPatch;
-	if (
-		Object.keys(value).some(
-			(key) => !["dismissed", "sessionId", "missionId", "slack", "start", "linearSize"].includes(key),
-		)
-	)
-		throw new Error("Unknown tracked item field");
-	if (patch.linearSize !== undefined && !["quick_fix", "needs_planning", "unknown"].includes(patch.linearSize))
-		throw new Error("Invalid Linear size");
-	if (patch.start !== undefined && typeof patch.start !== "boolean") throw new Error("start must be a boolean");
-	if (
-		patch.start &&
-		(Number(!!patch.sessionId) + Number(!!patch.missionId) !== 1 ||
-			patch.dismissed !== undefined ||
-			patch.sessionId === null ||
-			patch.missionId === null)
-	)
-		throw new Error("start requires exactly one chat or mission link");
-	if (patch.slack !== undefined) {
-		const fields = patch.slack;
-		if (
-			!fields ||
-			typeof fields !== "object" ||
-			Array.isArray(fields) ||
-			Object.keys(fields).some((key) => !["type", "label", "severity", "status"].includes(key))
-		)
-			throw new Error("Invalid Slack overrides");
-		if (fields.type !== undefined && !["bug", "question", "request", "unknown"].includes(fields.type))
-			throw new Error("Invalid Slack type");
-		if (fields.severity !== undefined && !["low", "medium", "high", "critical"].includes(fields.severity))
-			throw new Error("Invalid Slack severity");
-		if (
-			fields.status !== undefined &&
-			!["open", "in_progress", "waiting", "done", "dismissed"].includes(fields.status)
-		)
-			throw new Error("Invalid Slack status");
-		if (
-			fields.status !== undefined &&
-			patch.dismissed !== undefined &&
-			patch.dismissed !== (fields.status === "dismissed")
-		)
-			throw new Error("Conflicting Slack status and dismissed fields");
-		if (
-			fields.label !== undefined &&
-			fields.label !== null &&
-			(typeof fields.label !== "string" ||
-				!fields.label.trim() ||
-				fields.label.length > 80 ||
-				/[\x00-\x1f]/.test(fields.label))
-		)
-			throw new Error("Invalid Slack label");
-	}
-	if (patch.dismissed !== undefined && typeof patch.dismissed !== "boolean")
-		throw new Error("dismissed must be a boolean");
-	for (const link of [patch.sessionId, patch.missionId])
-		if (link !== undefined && link !== null && (typeof link !== "string" || !link.trim() || link.length > 200))
-			throw new Error("Invalid tracked item link");
 }

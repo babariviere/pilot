@@ -19,10 +19,10 @@ import { ModelCatalog } from "./models.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { KnowledgeService } from "./project-knowledge.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
 export async function nativePlanningFixture(
@@ -108,13 +108,13 @@ export async function nativePlanningFixture(
 		native = new GitHubSetupService(home, { ...host, hostId: "local" }, { userHome: home, env: {} });
 		await native.status();
 		capability = JSON.parse(await readFile(join(home, "github-app-capability"), "utf8")).token;
-		const args: Parameters<typeof createDaemonServer> = [
-			{ home, host: "127.0.0.1", port: 0, ...(options.connections ? { agentDir: home } : {}) },
+		const args: Parameters<typeof createDaemonServer>[0] = {
+			config: { home, host: "127.0.0.1", port: 0, ...(options.connections ? { agentDir: home } : {}) },
 			sessions,
 			projects,
-			new ModelCatalog(home),
+			models: new ModelCatalog(home),
 			terminals,
-			{
+			missions: {
 				store,
 				knowledge: new KnowledgeService(store, projects, sessions),
 				service: {
@@ -129,12 +129,13 @@ export async function nativePlanningFixture(
 					}),
 				} as MissionService,
 			},
-		];
-		args[12] = hello;
-		args[11] = options.mcp;
-		if (options.diagnostics) args[16] = await TelemetrySettingsService.open(home, hello);
-		if (options.native !== false) args[17] = native;
-		server = createDaemonServer(...args);
+		};
+		args.hello = hello;
+		args.mcp = options.mcp;
+		if (options.diagnostics) args.telemetry = await TelemetrySettingsService.open(home, hello);
+		if (options.native !== false) args.githubSetup = native;
+		args.nativeAuthority = args.githubSetup?.nativeAuthority;
+		server = createDaemonServer(args);
 		await server.runtimeReady;
 		server.listen(0, "127.0.0.1");
 		await once(server, "listening");
@@ -144,7 +145,7 @@ export async function nativePlanningFixture(
 	const stop = async () => {
 		server.closeAllConnections();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
-		await server.closePlanning();
+		await server.closeServices();
 		await native.close();
 		await store.durable();
 	};
@@ -171,7 +172,7 @@ export async function nativePlanningFixture(
 			return journal;
 		},
 		confirmations,
-		closePlanning: () => server.closePlanning(),
+		closeServices: () => server.closeServices(),
 		set coordinator(value: SessionSummary | undefined) {
 			coordinator = value;
 		},

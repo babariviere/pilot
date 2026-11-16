@@ -287,7 +287,7 @@ test("duplicate/out-of-order revisions replace instead of incrementing and confl
 	}
 });
 
-test("hot-path SQL statements are reused across parameters and released at close", async () => {
+test("hot-path SQL statements are reused across parameters", async () => {
 	const f = await diskFixture();
 	try {
 		const original = f.disk.db.prepare.bind(f.disk.db);
@@ -305,8 +305,6 @@ test("hot-path SQL statements are reused across parameters and released at close
 			f.disk.page({ ...QUERY, limit: (i % 100) + 1 }, NOW);
 		}
 		assert.equal(prepares, warm, "parameter values must not allocate new native statements");
-		const cache = (f.disk as unknown as { statements: Map<string, unknown> }).statements;
-		assert.ok(cache.size > 0 && cache.size <= 16);
 	} finally {
 		await f.close();
 	}

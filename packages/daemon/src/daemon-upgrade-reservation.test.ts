@@ -12,9 +12,10 @@ import { ModelCatalog } from "./models.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { ownRuntime } from "./runtime-owner.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 async function fixture(t: TestContext) {
 	const root = await mkdtemp(join(tmpdir(), "pilot-upgrade-reservation-"));
@@ -56,13 +57,20 @@ async function fixture(t: TestContext) {
 		jobs: async () => [],
 		hasChildren: async () => false,
 	};
-	const sessions = new SessionManager(home, projects, undefined, {
-		title: async () => undefined,
-		worker: (_spec, receive) => {
-			report = receive;
-			return worker;
+	const sessions = new SessionManager(
+		home,
+		projects,
+		undefined,
+		{
+			title: async () => undefined,
+			worker: (_spec, receive) => {
+				report = receive;
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	let shellStarts = 0;
 	const terminals = new TerminalManager(() => {
 		shellStarts++;
@@ -75,16 +83,16 @@ async function fixture(t: TestContext) {
 		systemSleepEvents: false,
 		swiftUIArtifacts: false,
 	});
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	];
-	args[12] = hello;
-	args[21] = owner;
-	const server = createDaemonServer(...args);
+	};
+	args.hello = hello;
+	args.bootstrap = owner;
+	const server = createDaemonServer(args);
 	owner.ready(hello);
 	t.after(async () => {
 		await owner.close();

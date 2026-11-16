@@ -12,10 +12,10 @@ import { CredentialBroker } from "./credential-broker.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { SetupService } from "./setup.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 const worker = new URL("./setup-worker.ts", import.meta.url).href;
 const clientModule = new URL("../../kernel/src/credential-client.ts", import.meta.url).href;
@@ -217,26 +217,16 @@ test("real setup HTTP/WebSocket API works without chats and refuses unsupported 
 	await native.status();
 	const capability = JSON.parse(await readFile(join(dir, "github-app-capability"), "utf8")).token;
 	t.after(() => native.close());
-	const server = createDaemonServer(
-		{ home: dir, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: dir, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(dir),
+		models: new ModelCatalog(dir),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		setup,
-		undefined,
-		undefined,
-		undefined,
-		native,
-	);
+		githubSetup: native,
+		nativeAuthority: native.nativeAuthority,
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

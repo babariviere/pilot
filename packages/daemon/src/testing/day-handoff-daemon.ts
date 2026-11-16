@@ -6,9 +6,10 @@ import { daemonHello } from "../hello.ts";
 import { ModelCatalog } from "../models.ts";
 import { ProjectStore } from "../projects.ts";
 import { ownRuntime, type RuntimeBuild } from "../runtime-owner.ts";
-import { createDaemonServer } from "../server.ts";
 import { SessionManager, Worker } from "../sessions.ts";
 import { TerminalManager } from "../terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./daemon-server.ts";
+import { offlineSessionOptions } from "./offline-session-options.ts";
 
 const [home, portText, buildText, seed] = process.argv.slice(2);
 if (!home || !portText || !buildText) throw new Error("Missing private fixture inputs");
@@ -26,48 +27,41 @@ const projects = new ProjectStore(home);
 const modes = ["healthy", "unresponsive", "healthy", "job"];
 let starts = 0;
 const opened: string[] = [];
-const sessions = new SessionManager(home, projects, undefined, {
-	title: async () => undefined,
-	worker: (spec, receive, exit) => {
-		starts++;
-		opened.push(spec.sessionId);
-		const child = fork(
-			new URL("./update-pause-worker.ts", import.meta.url),
-			[modes.shift() ?? "healthy", join(home, "canceled-job")],
-			{
-				execArgv: [],
-				stdio: ["ignore", "ignore", "ignore", "ipc"],
-				env: { PATH: process.env.PATH },
-			},
-		);
-		return new Worker(spec, receive, exit, undefined, { child });
+const sessions = new SessionManager(
+	home,
+	projects,
+	undefined,
+	{
+		title: async () => undefined,
+		worker: (spec, receive, exit) => {
+			starts++;
+			opened.push(spec.sessionId);
+			const child = fork(
+				new URL("./update-pause-worker.ts", import.meta.url),
+				[modes.shift() ?? "healthy", join(home, "canceled-job")],
+				{
+					execArgv: [],
+					stdio: ["ignore", "ignore", "ignore", "ipc"],
+					env: { PATH: process.env.PATH },
+				},
+			);
+			return new Worker(spec, receive, exit, undefined, { child });
+		},
 	},
-});
+	{},
+	offlineSessionOptions(),
+);
 const terminals = new TerminalManager();
-const server = createDaemonServer(
-	{ home, port, host: "127.0.0.1" },
+const server = createDaemonServer({
+	config: { home, port, host: "127.0.0.1" },
 	sessions,
 	projects,
-	new ModelCatalog(home),
+	models: new ModelCatalog(home),
 	terminals,
-	undefined,
-	undefined,
-	undefined,
-	undefined,
-	undefined,
-	undefined,
-	undefined,
 	hello,
-	undefined,
-	false,
-	undefined,
-	undefined,
-	undefined,
-	undefined,
-	undefined,
-	undefined,
-	owner,
-);
+	legacyAdmissionFrozen: false,
+	bootstrap: owner,
+});
 await server.runtimeReady;
 // Use the same combined maintenance state as ordinary daemon startup.
 await sessions.load(server.runtimeFrozen());

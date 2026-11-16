@@ -45,7 +45,6 @@ import { payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import { createDaemonServer } from "./server.ts";
 import {
 	CommandRejected,
 	Worker as KernelWorker,
@@ -57,6 +56,8 @@ import {
 } from "./sessions.ts";
 import type { SubagentWatchUpdate } from "./subagent-watches.ts";
 import type { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 type Command = Extract<KernelCommand, { type: "input" | "abort" | "pauseInputs" | "resumeInputs" | "reloadPi" }>;
 type Spec = Extract<KernelCommand, { type: "start" }>["spec"];
@@ -929,6 +930,7 @@ test("PR observers receive persisted full chat heads and startup baselines, neve
 		undefined,
 		{ worker: f.workerFactory(), title: async () => undefined },
 		{ runner },
+		offlineSessionOptions(),
 	);
 	t.after(() => reopened.shutdown());
 	const recovered: typeof observed = [];
@@ -1354,7 +1356,7 @@ async function fixture(t: TestContext) {
 				...factories,
 			},
 			pullRequests,
-			options,
+			offlineSessionOptions(options),
 		);
 		managers.push(sessions);
 		beforeLoad?.(sessions);
@@ -4752,17 +4754,17 @@ test("POST returns durable starting session before clone or worker, guarding cha
 		},
 	});
 	let terminalsStarted = 0;
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
 		sessions,
-		f.projects,
-		{} as ModelCatalog,
-		{
+		projects: f.projects,
+		models: {} as ModelCatalog,
+		terminals: {
 			attach() {
 				terminalsStarted++;
 			},
 		} as unknown as TerminalManager,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	let ws: WebSocket | undefined;
@@ -6103,13 +6105,13 @@ test("legacy persisted outcomes do not leak through HTTP or initial WebSocket se
 		}),
 	);
 	const sessions = await f.manager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
 		sessions,
-		f.projects,
-		{} as ModelCatalog,
-		{} as TerminalManager,
-	);
+		projects: f.projects,
+		models: {} as ModelCatalog,
+		terminals: {} as TerminalManager,
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	let ws: WebSocket | undefined;
@@ -7355,15 +7357,15 @@ test("native Insights durable operations and passive HTTP pages use explicit aut
 	t.after(() => store.close());
 	const service = new MissionService(store, f.sessions, f.projects);
 	f.sessions.setMissionBridge(f.bridge);
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		{} as ModelCatalog,
-		{} as TerminalManager,
-		{ store, service },
-	];
-	args[12] = {
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: {} as ModelCatalog,
+		terminals: {} as TerminalManager,
+		missions: { store, service },
+	};
+	args.hello = {
 		daemonId: "daemon",
 		lineageId: "lineage",
 		daemonVersion: "test",
@@ -7379,12 +7381,12 @@ test("native Insights durable operations and passive HTTP pages use explicit aut
 			independentExecution: true,
 		},
 	};
-	args[17] = {
+	args.nativeAuthority = {
 		authenticate: async (token: unknown) => {
 			if (token !== "synthetic-native") throw new Conflict("Native only");
 		},
-	} as NonNullable<(typeof args)[17]>;
-	const server = createDaemonServer(...args);
+	};
+	const server = createDaemonServer(args);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

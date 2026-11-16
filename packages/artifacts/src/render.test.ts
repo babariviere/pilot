@@ -1,7 +1,23 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import type { ArtifactWrite } from "@pilot/protocol";
 import { prepareArtifact, validateArtifact } from "./render.ts";
+
+test("NSH preparation carries exact source metadata without producing a document", async () => {
+	const source = '\uFEFFexport default () => "é😀";\r\n';
+	assert.deepEqual(await prepareArtifact({ title: "Source", kind: "nsh", source, entry: "view.tsx" }), {
+		html: "",
+		libraries: [],
+		nsh: {
+			api: 1,
+			runtime: "nsh 0.5.0",
+			entry: "view.tsx",
+			sourceSha256: createHash("sha256").update(source).digest("hex"),
+			sourceBytes: Buffer.byteLength(source),
+		},
+	});
+});
 
 for (const kind of ["html", "react", "swiftui", "future"]) {
 	test(`${kind} cannot be validated or prepared, even with executable source`, async () => {

@@ -225,14 +225,7 @@ export function createSlackPoller(
 									projectId: context.project.id,
 								});
 					context.signal.throwIfAborted();
-					const reservation = await store.reserveSlack(
-						page.channel,
-						message.threadTs,
-						now(),
-						context.project.id,
-						false,
-						context.force,
-					);
+					const reservation = await store.reserveSlack(page.channel, message.threadTs, context.project.id, false);
 					if (reservation.state === "reserved") {
 						const channel = page.channel;
 						const work = (async (): Promise<SlackCache> => {
@@ -393,7 +386,7 @@ export function createSlackAdder(
 		}
 		context.signal.throwIfAborted();
 		let result: SlackClassification | undefined;
-		const reservation = await store.reserveSlack(link.channel, link.threadTs, now(), context.project.id, true);
+		const reservation = await store.reserveSlack(link.channel, link.threadTs, context.project.id, true);
 		if (reservation.state === "done") result = reservation.result;
 		else if (reservation.state === "reserved") {
 			try {

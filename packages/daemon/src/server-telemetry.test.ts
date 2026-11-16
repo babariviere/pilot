@@ -9,10 +9,10 @@ import type { DaemonHello, TelemetrySettings } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("telemetry API keeps controls host-scoped, validates mutations and clears without starting sessions", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-telemetry-api-"));
@@ -38,25 +38,15 @@ test("telemetry API keeps controls host-scoped, validates mutations and clears w
 	const telemetry = await TelemetrySettingsService.open(home, hello);
 	sessions.configureTelemetry(telemetry.kernelSettings(), telemetry.settings().aiUsageBudget);
 	telemetry.onChange((settings) => sessions.configureTelemetry(telemetry.kernelSettings(), settings.aiUsageBudget));
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		hello,
-		undefined,
-		undefined,
-		undefined,
 		telemetry,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

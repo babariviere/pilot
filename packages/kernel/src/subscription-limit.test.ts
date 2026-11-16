@@ -6,8 +6,8 @@ import { test } from "node:test";
 import { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
 import { createAssistantMessageEventStream, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { OfflineGate, offlineRequestStream } from "./connectivity.ts";
+import { callParentSubscriptionLimit, startParentBridge } from "./parent-bridge.ts";
 import { subscriptionLimitReport, subscriptionRecovery } from "./subscription-limit.ts";
-import { callParentSubscriptionLimit, startTodoBridge } from "./todo-bridge.ts";
 
 function deferred() {
 	let resolve!: () => void;
@@ -152,7 +152,7 @@ test("children report usage limits through the existing private parent capabilit
 	const entered = deferred(),
 		finish = deferred();
 	let done = false;
-	const bridge = await startTodoBridge(
+	const bridge = await startParentBridge(
 		async () => [],
 		async (limit) => {
 			assert.deepEqual(limit, { provider: "anthropic" });

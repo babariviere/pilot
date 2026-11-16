@@ -54,6 +54,7 @@ import {
 } from "./attempts.ts";
 import { reconcileCompletion } from "./attention.ts";
 import { autoCompactionThreshold, shouldAutoCompact } from "./auto-compaction.ts";
+import { canonicalJSON } from "./canonical-json.ts";
 import { chatEvents, compactionEvents } from "./chat-events.ts";
 import { createChatReportTool } from "./chat-report-tool.ts";
 import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
@@ -71,8 +72,8 @@ import {
 	holdOnStop,
 	initializeQuestionHold,
 	pauseInputs,
-	publishQuestionWithHeld,
 	pendingQuestionToolBlock,
+	publishQuestionWithHeld,
 	questionBoundary,
 	type SystemMessageStateEvent,
 } from "./held-inputs.ts";
@@ -82,6 +83,8 @@ import { InputOrigins, inputOrigin } from "./input-origin.ts";
 import { createInsightsBacklogTool, type InsightsBacklogCall } from "./insights-backlog-tool.ts";
 import { createInsightsHistoryTool } from "./insights-history-tool.ts";
 import { validateInsightsOwnerBinding } from "./insights-owner-binding.ts";
+import { interviewQuestion, StandaloneInterviewDoc } from "./interview-state.ts";
+import { createInterviewTool } from "./interview-tool.ts";
 import { JobsMonitor } from "./jobs.ts";
 import { createKnowledgeTool, createProjectPreferencesTool } from "./knowledge-tools.ts";
 import { createLiveUpdateTools } from "./live-update-tool.ts";
@@ -103,14 +106,11 @@ import {
 	type PlanningWorkerBinding,
 	type PlanningWorkerReply,
 	type PlanningWorkerRequest,
-	planningJSON,
 } from "./planning-worker.ts";
 import type { WorkspaceContext } from "./policy.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
 import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
-import { createInterviewTool } from "./interview-tool.ts";
-import { interviewQuestion, StandaloneInterviewDoc } from "./interview-state.ts";
 import { createQuestionTool, type PublishQuestion } from "./question-tool.ts";
 import {
 	editQueuedMessage,
@@ -126,7 +126,7 @@ import { createScopedMetricsTool } from "./scoped-metrics-tool.ts";
 import { createSlackStatusTool, SLACK_STATUS_TOOL, type SlackStatusCall } from "./slack-status-tool.ts";
 import { findInputReceipt, openSessionStorage } from "./storage.ts";
 import { SubagentBridge, type SubagentCommand } from "./subagents.ts";
-import { startTodoBridge } from "./todo-bridge.ts";
+import { startParentBridge } from "./parent-bridge.ts";
 import { createTodoTool } from "./todo-tool.ts";
 import {
 	applyTodo,
@@ -276,7 +276,7 @@ export class KernelSession {
 	private readonly release: () => void;
 	private readonly status: AgentEventStream;
 	private jobsMonitor?: JobsMonitor;
-	private todoBridge?: { close(): Promise<void> };
+	private parentBridge?: { close(): Promise<void> };
 	#openTodoCount = 0;
 
 	get openTodoCount(): number {
@@ -427,7 +427,7 @@ export class KernelSession {
 				: new PerformanceLog(join(spec.storageDir, "performance.jsonl"));
 		let adapter: NativeAdapter | undefined;
 		let harness: Harness | undefined;
-		let todoBridge: { close(): Promise<void> } | undefined;
+		let parentBridge: { close(): Promise<void> } | undefined;
 		let openedSession: KernelSession | undefined;
 		let openTodoCount = 0;
 		const jobs = new JobsMonitor(
@@ -713,7 +713,7 @@ export class KernelSession {
 				},
 			};
 			if (!spec.pilot?.ask)
-				todoBridge = await startTodoBridge(
+				parentBridge = await startParentBridge(
 					callTodo,
 					hooks.reportSubscriptionLimit,
 					hooks.reportUsageHistory,
@@ -1021,7 +1021,7 @@ export class KernelSession {
 				hooks.callMemory,
 			);
 			openedSession = session;
-			session.todoBridge = todoBridge;
+			session.parentBridge = parentBridge;
 			session.#openTodoCount = openTodoCount;
 			session.#compactSession = compaction.compactSession;
 			serializeCompaction = (work) => session.serializeInput(work);
@@ -1178,7 +1178,7 @@ export class KernelSession {
 			return session;
 		} catch (error) {
 			await jobs.close();
-			await todoBridge?.close().catch(() => undefined);
+			await parentBridge?.close().catch(() => undefined);
 			if (harness) await harness.close(context).catch(() => undefined);
 			else await owned.storage.close(context).catch(() => undefined);
 			await adapter?.close().catch(() => undefined);
@@ -1558,7 +1558,7 @@ export class KernelSession {
 	async submitPlanning(input: PlanningInput): Promise<void> {
 		if (
 			!this.planningBinding ||
-			planningJSON(input.binding) !== planningJSON(this.planningBinding) ||
+			canonicalJSON(input.binding) !== canonicalJSON(this.planningBinding) ||
 			!this.planningGuard ||
 			this.#closing ||
 			this.#changingModel ||
@@ -2173,7 +2173,7 @@ export class KernelSession {
 			for (const id of [...this.#watches.keys()]) await this.unwatch(id).catch(() => undefined);
 			await this.status.stop().catch(() => undefined);
 			try {
-				await this.todoBridge?.close();
+				await this.parentBridge?.close();
 				await this.harness.close(context);
 			} finally {
 				try {

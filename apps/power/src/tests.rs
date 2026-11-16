@@ -249,6 +249,134 @@ fn model() -> runtime::Runtime<Operations, Vec<u8>> {
 }
 
 #[test]
+fn command_decoder_keeps_wire_types_and_ignores_extra_fields() {
+    use protocol::{Command, CommandFrame, decode_command};
+    use serde_json::json;
+
+    for frame in [
+        json!({"action":"heartbeat"}),
+        json!({"action":"heartbeat","id":false}),
+    ] {
+        assert_eq!(decode_command(&frame), CommandFrame::Heartbeat, "{frame}");
+    }
+    for id in [json!(-1), json!(i64::MIN), json!(i64::MAX)] {
+        let frame = json!({"id":id,"action":"activity","awake":true,"closedLid":false,"extra":1});
+        assert_eq!(
+            decode_command(&frame),
+            CommandFrame::Request {
+                id: id.as_i64().unwrap(),
+                command: Command::Activity {
+                    awake: true,
+                    closed_lid: false
+                },
+            },
+            "{frame}"
+        );
+    }
+    for generation in [0, u64::MAX] {
+        let frame = json!({"id":1,"action":"allowSleep","generation":generation});
+        assert_eq!(
+            decode_command(&frame),
+            CommandFrame::Request {
+                id: 1,
+                command: Command::AllowSleep { generation },
+            },
+            "{frame}"
+        );
+    }
+    for action in [json!(null), json!(false), json!(1), json!([]), json!({})] {
+        let frame = json!({"id":1,"action":action});
+        assert_eq!(
+            decode_command(&frame),
+            CommandFrame::MissingAction { id: Some(1) },
+            "{frame}"
+        );
+    }
+    assert_eq!(
+        decode_command(&json!({"id":1})),
+        CommandFrame::MissingAction { id: Some(1) }
+    );
+    assert_eq!(
+        decode_command(&json!(null)),
+        CommandFrame::MissingAction { id: None }
+    );
+    assert_eq!(
+        decode_command(&json!({"action":"sleep"})),
+        CommandFrame::MissingId
+    );
+    for id in [
+        json!(null),
+        json!(false),
+        json!("1"),
+        json!(1.5),
+        json!(u64::MAX),
+    ] {
+        let frame = json!({"id":id,"action":"sleep"});
+        assert_eq!(decode_command(&frame), CommandFrame::MissingId, "{frame}");
+    }
+    for frame in [
+        json!({"id":1,"action":"unknown"}),
+        json!({"id":1,"action":"activity","awake":true}),
+        json!({"id":1,"action":"activity","awake":1,"closedLid":false}),
+        json!({"id":1,"action":"activity","awake":true,"closedLid":"false"}),
+        json!({"id":1,"action":"allowSleep"}),
+        json!({"id":1,"action":"allowSleep","generation":-1}),
+        json!({"id":1,"action":"allowSleep","generation":1.5}),
+        json!({"id":1,"action":"allowSleep","generation":"1"}),
+    ] {
+        assert_eq!(
+            decode_command(&frame),
+            CommandFrame::Request {
+                id: 1,
+                command: Command::Invalid
+            },
+            "{frame}"
+        );
+    }
+}
+
+#[test]
+fn macos_command_rejection_keeps_missing_action_distinct_from_invalid_payload() {
+    use serde_json::json;
+    for frame in [
+        json!({"id":1}),
+        json!({"id":1,"action":false}),
+        json!({"action":"sleep"}),
+    ] {
+        let mut state = model();
+        state.output.clear();
+        state.command(frame.clone(), Duration::ZERO);
+        assert!(state.stopping, "{frame}");
+        assert_eq!(state.ops.shutdowns, 1, "{frame}");
+        assert!(state.output.is_empty(), "{frame}");
+        assert!(state.ops.activities.is_empty());
+        assert!(state.ops.authorized.is_empty());
+        assert_eq!(state.ops.sleep_attempts, 0);
+    }
+    for frame in [
+        json!({"id":1,"action":"activity","awake":true,"closedLid":0}),
+        json!({"id":1,"action":"allowSleep","generation":-1}),
+        json!({"id":1,"action":"unknown"}),
+    ] {
+        let mut state = model();
+        state.output.clear();
+        state.command(frame.clone(), Duration::ZERO);
+        assert!(!state.stopping, "{frame}");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&state.output).unwrap(),
+            json!({"id":1,"ok":false}),
+            "{frame}"
+        );
+        assert!(state.ops.activities.is_empty());
+        assert!(state.ops.allowed.is_empty());
+        assert!(state.ops.authorized.is_empty());
+        assert_eq!(state.ops.sleep_attempts, 0);
+        state.command(json!({"action":"heartbeat","id":false}), Duration::ZERO);
+        assert_eq!(state.ops.heartbeats, 1);
+    }
+}
+
+#[test]
 fn protocol_activity_sleep_generation_and_permission_contract() {
     let mut state = model();
     state.command(

@@ -14,11 +14,12 @@ import type { Day } from "./day";
 import { closeDelivery, deliveryRoute, hideInspection } from "./deliveryView";
 import { closeFeedback, feedbackOpen, openFeedback } from "./feedbackView";
 import { closeLinear, linearOpen, openLinear } from "./linearView";
-import type { Plans } from "./planning";
+import { type Plans, planningListShape } from "./planning";
 import { closePlanning, openNew, openPlan, planRoute } from "./planView";
 import { closeSettings, openSettings, settingsOpen } from "./preferencesView";
 import { backFromStandup, closeRitual, ritualRoute } from "./ritualView";
 import { closeThread, threadRoute } from "./threadView";
+import { glide } from "./ui";
 import { closeUpdate, updateEntry, updateOpen } from "./updateView";
 import { closeMission, openMission, route } from "./view";
 
@@ -67,6 +68,16 @@ export type Shown =
 	| "thread"
 	| "mission"
 	| "today";
+
+/** Animates published planning-list changes only on the resolved Today screen. */
+export function animatePlanningList(plans: Plans, at: () => Shown): () => void {
+	let previous = planningListShape(plans.planning());
+	return plans.feed.onChange((next) => {
+		const shape = planningListShape(next);
+		if (at() === "today" && shape !== previous) glide();
+		previous = shape;
+	});
+}
 
 /** Which screen the window shows now, in the same order `DayScreen` picks it. */
 export function shown(places: Places): Shown {

@@ -12,11 +12,11 @@ import { pollLinear } from "./linear-source.ts";
 import type { ModelCatalog } from "./models.ts";
 import { PiReload } from "./pi-reload.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
 import { SourceSignInRequired } from "./source-tool-rules.ts";
 import { SourceRegistry } from "./sources.ts";
 import type { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
 test("tracking HTTP, WS invalidation and DashboardProviders.tracked share project-scoped data", async (t) => {
@@ -62,18 +62,14 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 		onArtifactsChanged: () => () => {},
 		setWorkspaceProcessGuard() {},
 	} as unknown as SessionManager;
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		{} as ModelCatalog,
-		{ isRunning: () => false } as unknown as TerminalManager,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
+		models: {} as ModelCatalog,
+		terminals: { isRunning: () => false } as unknown as TerminalManager,
 		tracking,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
@@ -384,18 +380,14 @@ test("Linear cycle/fallback and transient prefill are exposed through the tracki
 		onArtifactsChanged: () => () => {},
 		setWorkspaceProcessGuard() {},
 	} as unknown as SessionManager;
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		{} as ModelCatalog,
-		{ isRunning: () => false } as unknown as TerminalManager,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
+		models: {} as ModelCatalog,
+		terminals: { isRunning: () => false } as unknown as TerminalManager,
 		tracking,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

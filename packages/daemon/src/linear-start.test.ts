@@ -8,7 +8,8 @@ import { linearStart, pollLinear } from "./linear-source.ts";
 import { startedWorkflowStates, workflowStates } from "./linear-workflow.ts";
 import { ProjectStore, validateTrackingConfig } from "./projects.ts";
 import { type SourcePollContext, SourceRegistry } from "./sources.ts";
-import { TrackedItemStore, validatePatch } from "./tracked-items.ts";
+import { validatePatch } from "./tracked-item-patch.ts";
+import { TrackedItemStore } from "./tracked-items.ts";
 
 function fake() {
 	const issue = {

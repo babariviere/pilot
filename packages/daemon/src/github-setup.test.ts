@@ -187,9 +187,9 @@ function idle(service: GitHubSetupService) {
 
 test("native capability, exact key approval, independent identity verification and revocation", async (t) => {
 	const f = await fixture(t);
-	await assert.rejects(f.service.authenticate("not-app"), /native app/);
+	await assert.rejects(f.service.nativeAuthority.authenticate("not-app"), /native app/);
 	const token = JSON.parse(await readFile(join(f.home, "github-app-capability"), "utf8")).token;
-	await f.service.authenticate(token);
+	await f.service.nativeAuthority.authenticate(token);
 	const prepared = await f.service.act(action("prepare_key"));
 	assert.equal(prepared.account, "octocat");
 	assert.equal(prepared.phase, "key_ready");

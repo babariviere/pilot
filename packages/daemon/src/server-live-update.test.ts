@@ -7,7 +7,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { WebSocket } from "ws";
-import type { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
 import { LiveUpdateService } from "./live-update.ts";
 import { ModelCatalog } from "./models.ts";
@@ -16,10 +15,10 @@ import { ProjectStore } from "./projects.ts";
 import type { RuntimeContributor } from "./runtime-admission.ts";
 import { RuntimeBackground } from "./runtime-background.ts";
 import type { RuntimeOwner } from "./runtime-owner.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
-import { SetupError } from "./setup.ts";
+import { SetupError } from "./setup-error.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 const source = "a".repeat(40);
 const proposal = {
@@ -88,9 +87,7 @@ async function fixture(
 		async authenticate(capability: unknown) {
 			if (capability !== "native-fixture") throw new SetupError(403, "Native authority required");
 		},
-		freezeAdmissions: () => () => {},
-		blockers: () => [],
-	} as unknown as GitHubSetupService;
+	};
 	let update!: Parameters<RuntimeOwner["updates"]>[0];
 	const http = createServer();
 	const owner: RuntimeOwner = {
@@ -105,33 +102,18 @@ async function fixture(
 		},
 		close: async () => {},
 	};
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		hello,
-		undefined,
-		false,
-		undefined,
-		undefined,
-		auth,
-		undefined,
-		undefined,
-		undefined,
-		owner,
-		undefined,
-		undefined,
-		{ service, contributors: contributor ? [contributor] : [] },
-	);
+		legacyAdmissionFrozen: false,
+		nativeAuthority: auth,
+		bootstrap: owner,
+		liveUpdate: { service, contributors: contributor ? [contributor] : [] },
+	});
 	t.after(async () => {
 		await service.close();
 		await sessions.shutdown();
@@ -237,12 +219,12 @@ test("terminal persistence never starts journal recovery before explicit post-re
 	assert.equal(scans, 0, "server assembly does not recover before session metadata loads");
 	assert.equal((await f.request("/accept", { id: proposal.id, phase: "proposed" })).status, 200);
 	assert.equal(background.frozen, true);
-	f.server.recoverOperations();
+	f.server.services.recoverOperations();
 	assert.equal(scans, 0, "active maintenance suppresses recovery");
 	assert.equal((await f.request("/cancel", { id: proposal.id, phase: "draining" })).status, 200);
 	assert.equal(background.frozen, false);
 	assert.equal(scans, 0, "a terminal persistence event is not post-release authorization");
-	f.server.recoverOperations();
+	f.server.services.recoverOperations();
 	assert.equal(scans, 1, "startup/resume explicitly drives recovery after metadata and release");
 });
 

@@ -15,9 +15,10 @@ import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { sessionObservers } from "./testing/session-observers.ts";
 
 async function until<T>(check: () => T | undefined | false): Promise<T> {
 	const deadline = Date.now() + 3_000;
@@ -39,18 +40,14 @@ async function fixture(t: TestContext) {
 	const project = await projects.create({ path: projectDir, workspace: "direct" });
 	const store = new MissionStore(":memory:");
 	const chats = new Map<string, SessionSummary>();
-	const listeners = new Set<(session: SessionSummary) => void>();
+	const observers = sessionObservers();
 	const sessions = {
+		...observers,
 		piReload: { onChange: () => () => {}, status: () => ({ state: "idle" }) },
 		setWorkspaceProcessGuard() {},
 		list: (query: { projectId?: string; archived?: string } = {}) =>
 			[...chats.values()].filter((chat) => !query.projectId || chat.projectId === query.projectId),
 		get: (id: string) => chats.get(id),
-		onChange(listener: (session: SessionSummary) => void) {
-			listeners.add(listener);
-			return () => listeners.delete(listener);
-		},
-		onArtifactsChanged: () => () => {},
 	} as unknown as SessionManager;
 	const put = (chat: Partial<SessionSummary> & { id: string }) => {
 		const value: SessionSummary = {
@@ -63,20 +60,20 @@ async function fixture(t: TestContext) {
 			...chat,
 		};
 		chats.set(value.id, value);
-		for (const listener of listeners) listener(value);
+		observers.emit(value);
 		return value;
 	};
 	const providerListeners = new Set<() => void>();
 	const memory = new ProjectMemoryService(join(home, "data"));
 	let pending = [] as Array<{ id: string; title: string; kind: "chat"; trigger: "at"; state: "pending" }>;
-	const server = createDaemonServer(
-		{ home: join(home, "data"), host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: join(home, "data"), host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		{} as ModelCatalog,
-		{ isRunning: () => false } as unknown as TerminalManager,
-		{ service: { reports: new MissionReports(store) } as MissionService, store },
-		{
+		models: {} as ModelCatalog,
+		terminals: { isRunning: () => false } as unknown as TerminalManager,
+		missions: { service: { reports: new MissionReports(store) } as MissionService, store },
+		dashboardProviders: {
 			scheduled: () => pending,
 			onChange(listener) {
 				providerListeners.add(listener);
@@ -84,11 +81,7 @@ async function fixture(t: TestContext) {
 			},
 		},
 		memory,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		{
+		hello: {
 			daemonId: "synthetic-daemon",
 			lineageId: "synthetic-lineage",
 			daemonVersion: "0.0.0",
@@ -104,7 +97,7 @@ async function fixture(t: TestContext) {
 				coordinatorIsolation: false,
 			},
 		},
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const port = (server.address() as AddressInfo).port;

@@ -173,14 +173,14 @@ for (const change of ["Stop", "Pause", "close"] as const) {
 				}
 				if (change === "close") {
 					// Closing joins this entered input. It must not settle before the guard refuses.
-					void f.server.closePlanning();
+					void f.server.closeServices();
 				}
 			}
 			return original.apply(this, args);
 		});
 		const receipt = await f.post(f.op);
 		assert.equal(receipt.state, "pending", JSON.stringify(receipt));
-		await f.server.closePlanning();
+		await f.server.closeServices();
 		assert.equal(await f.requestCount(), count);
 		assert.equal(
 			await f.sessions.lookupPublishedTask(

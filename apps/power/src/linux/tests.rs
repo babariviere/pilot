@@ -342,6 +342,88 @@ async fn real_pipe_eof_and_helper_process_death_close_native_resource_ownership(
     }
 }
 
+// Fake command handling should finish well before the 20-second heartbeat lease;
+// two seconds allows local bus scheduling without letting lease expiry pass a test.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[tokio::test]
+async fn malformed_actions_with_ids_reject_without_stopping_or_native_work() {
+    let f = Fixture::new().await;
+    let (send, output, helper) = start(&f);
+    tokio::time::timeout(COMMAND_TIMEOUT, output.wait(|v| v["type"] == "state"))
+        .await
+        .expect("initial fake-bus state must arrive before command testing");
+    for frame in [
+        json!({"id":1}),
+        json!({"id":2,"action":false}),
+        json!({"id":3,"action":"activity","awake":1,"closedLid":false}),
+        json!({"id":4,"action":"activity","awake":true,"closedLid":true}),
+        json!({"id":5,"action":"allowSleep","generation":-1}),
+        json!({"id":6,"action":"unknown"}),
+    ] {
+        command(&send, frame.clone());
+        let reply = tokio::time::timeout(COMMAND_TIMEOUT, output.wait(|v| v["id"] == frame["id"]))
+            .await
+            .unwrap_or_else(|_| panic!("missing rejection reply for {frame}"));
+        assert_eq!(reply["ok"], false, "{frame}");
+    }
+    command(&send, json!({"action":"heartbeat","id":false}));
+    command(&send, json!({"id":-1,"action":"sleep","extra":true}));
+    let reply = tokio::time::timeout(COMMAND_TIMEOUT, output.wait(|v| v["id"] == -1))
+        .await
+        .expect("valid sleep request must still reply after rejected commands");
+    assert_eq!(reply["ok"], true);
+    assert!(f.calls().is_empty());
+    assert!(
+        f.delay_open(0),
+        "rejected generation must not release preparation FD"
+    );
+    drop(send);
+    tokio::time::timeout(COMMAND_TIMEOUT, helper)
+        .await
+        .expect("EOF must stop helper before heartbeat lease expiry")
+        .unwrap()
+        .unwrap();
+    assert!(!f.delay_open(0));
+}
+
+#[tokio::test]
+async fn invalid_request_ids_stop_without_reply_or_native_work() {
+    for frame in [
+        json!({"action":"sleep"}),
+        json!({"id":1.5,"action":"activity","awake":true,"closedLid":false}),
+        json!({"id":u64::MAX,"action":"authorize"}),
+        json!({"action":false}),
+    ] {
+        let f = Fixture::new().await;
+        let (send, output, helper) = start(&f);
+        tokio::time::timeout(COMMAND_TIMEOUT, output.wait(|v| v["type"] == "state"))
+            .await
+            .expect("initial fake-bus state must arrive before command testing");
+        command(&send, frame.clone());
+        tokio::time::timeout(COMMAND_TIMEOUT, helper)
+            .await
+            .unwrap_or_else(|_| panic!("invalid request must stop before lease expiry: {frame}"))
+            .unwrap()
+            .unwrap();
+        // Keep the sender alive until exit, so EOF cannot substitute for rejection.
+        drop(send);
+        assert!(f.calls().is_empty(), "{frame}");
+        assert!(!f.delay_open(0), "{frame}");
+        let bytes = output.0.lock().unwrap();
+        for line in bytes
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+        {
+            let value: Value = serde_json::from_slice(line).unwrap();
+            assert!(
+                value.get("id").is_none(),
+                "unexpected reply for {frame}: {value}"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn kde_pending_active_and_user_blocked_states_are_not_confused() {
     let f = Fixture::new().await;

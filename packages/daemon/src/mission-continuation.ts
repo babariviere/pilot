@@ -66,10 +66,11 @@ export class MissionContinuations {
 	private readonly host: ContinuationHost;
 	private policySource?: ContinuationPolicySource;
 	private stopPolicy?: () => void;
+	private readonly stopStore: () => void;
 	constructor(store: MissionStore, host: ContinuationHost) {
 		this.store = store;
 		this.host = host;
-		store.onChange(() => this.schedule());
+		this.stopStore = store.onChange(() => this.schedule());
 	}
 	setPolicySource(source: ContinuationPolicySource): void {
 		if (this.policySource) throw new Conflict("Continuation policy source is already bound");
@@ -83,6 +84,7 @@ export class MissionContinuations {
 	}
 	async stop(): Promise<void> {
 		this.stopped = true;
+		this.stopStore();
 		this.stopPolicy?.();
 		await this.running;
 	}

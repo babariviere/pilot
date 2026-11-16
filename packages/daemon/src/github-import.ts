@@ -8,7 +8,7 @@ import { durableJSON } from "./operation-journal.ts";
 import { projectDestination } from "./project-destination.ts";
 import type { ProjectStore } from "./projects.ts";
 import { RuntimeAdmission } from "./runtime-admission.ts";
-import { SetupError } from "./setup.ts";
+import { SetupError } from "./setup-error.ts";
 import { type ProcessOptions, type ProcessResult, subprocesses } from "./subprocess.ts";
 
 type Stored = GitHubImportOperation & { device?: number; inode?: number; existing?: boolean; cloned?: boolean };

@@ -2,7 +2,7 @@
 // preferences as the user is editing them. The draft names the project and
 // the revision it started from, so it is never saved to another project or
 // over a newer list without the user choosing. Leaving the page, closing or
-// updating keeps it (updateView.ts); only Save sends it, once.
+// updating keeps it (windowState.ts); only Save sends it, once.
 import { signal } from "nsh";
 import type { ProjectPreference, ProjectPreferences } from "./preferencesFeed";
 import { glide } from "./ui";
@@ -27,6 +27,21 @@ export function openSettings() {
 	glide();
 	preferencesMessage.set("");
 	settingsOpen.set(true);
+}
+
+export function capturePreferencesView(): Pick<import("pilot-day/native").SavedView, "settings" | "preferences"> {
+	return { settings: settingsOpen(), preferences: savedPreferences() };
+}
+
+/** Restore the place separately, after all settings drafts are restored. */
+export function restoreSettingsPlace(saved: boolean | undefined, available: boolean) {
+	settingsOpen.set(available && saved === true);
+}
+
+export function resetPreferencesView() {
+	settingsOpen.set(false);
+	preferencesDraft.set(null);
+	preferencesMessage.set("");
 }
 
 /** Back to Today. The draft stays. */

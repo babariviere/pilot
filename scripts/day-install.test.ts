@@ -105,6 +105,37 @@ async function fixture() {
 	};
 }
 
+test("malformed installation entry keeps its bytes and never enters native effects", async () => {
+	for (const bytes of ["", '{"operationId":']) {
+		const f = await fixture();
+		try {
+			await mkdir(f.selection.installDirectory);
+			const entered = join(f.selection.installDirectory, "handoff-entered.json");
+			await writeFile(entered, bytes, { mode: 0o600 });
+			const effects: string[] = [];
+			await assert.rejects(
+				migrate(
+					f.selection,
+					async () => {
+						effects.push("verify");
+					},
+					() => {
+						effects.push("native");
+						return {};
+					},
+				),
+				SyntaxError,
+			);
+			assert.deepEqual(effects, []);
+			assert.deepEqual(f.requests, []);
+			assert.equal(await readFile(entered, "utf8"), bytes);
+			assert.deepEqual(await readdir(f.selection.installDirectory), ["handoff-entered.json"]);
+		} finally {
+			await f.close();
+		}
+	}
+});
+
 test("flat Pilot.app installation preserves legacy files and refuses replacement", async () => {
 	const f = await fixture();
 	try {

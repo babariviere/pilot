@@ -10,7 +10,7 @@ import { type LinearDemoMode, ScriptedLinear } from "./linearDemo";
 import { mirrorLinear } from "./linearFeed";
 import { MockDayScreen, openDay } from "./mockFeeds";
 import { Action } from "./ui";
-import { captureView, restoreView, startFresh } from "./updateView";
+import { captureView, restoreView, startFresh } from "./windowState";
 
 const linear = new ScriptedLinear();
 

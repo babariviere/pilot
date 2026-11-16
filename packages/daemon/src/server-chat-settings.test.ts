@@ -10,9 +10,9 @@ import { ChatSettingsService } from "./chat-settings.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("chat settings HTTP validates exact PATCH, reports conflicts and unavailable persistence", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-chat-settings-api-"));
@@ -27,32 +27,17 @@ test("chat settings HTTP validates exact PATCH, reports conflicts and unavailabl
 	);
 	await native.status();
 	const token = JSON.parse(await readFile(join(home, "github-app-capability"), "utf8")).token as string;
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		false,
-		undefined,
-		undefined,
-		native,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		settings,
-	);
+		legacyAdmissionFrozen: false,
+		githubSetup: native,
+		nativeAuthority: native.nativeAuthority,
+		chatSettings: settings,
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/chat-settings`;

@@ -186,6 +186,18 @@ importers:
       '@biomejs/biome':
         specifier: 2.6.7
         version: 2.6.7
+      '@earendil-works/chord':
+        specifier: 1.5.2
+        version: 1.5.2(esbuild@0.28.2)(ws@8.22.1)
+      '@earendil-works/pi-ai':
+        specifier: 1.5.2
+        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)
+      '@earendil-works/pi-durable':
+        specifier: 1.5.2
+        version: 1.5.2(patch_hash=c78e4f08f9aa843d195054b9537600dde372f79d2bdfbde8add5b12ddea0a2e3)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.4)(ws@8.22.1)
+      '@pilot/kernel':
+        specifier: workspace:*
+        version: link:packages/kernel
       '@types/node':
         specifier: ^26.6.6
         version: 26.6.6
@@ -195,6 +207,9 @@ importers:
       tsx:
         specifier: ^4.23.15
         version: 4.23.15
+      ws:
+        specifier: ^8.22.1
+        version: 8.22.1
 
   packages/artifacts:
     dependencies:

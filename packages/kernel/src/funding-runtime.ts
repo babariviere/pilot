@@ -10,7 +10,7 @@ import {
 	type ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { FundingTokens } from "../../protocol/src/funding.ts";
+import type { FundingTokens } from "@pilot/protocol";
 
 export interface FundingAdmission {
 	reserve(id: string, model: Model<Api>, outputTokens: number): Promise<void>;

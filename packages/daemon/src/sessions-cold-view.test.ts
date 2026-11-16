@@ -15,6 +15,7 @@ import { AttentionDoc } from "../../kernel/src/attention.ts";
 import { openSessionStorage } from "../../kernel/src/storage.ts";
 import { ProjectStore } from "./projects.ts";
 import { type SessionFactories, SessionManager, type SessionWorker } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const cold: AgentEvent = {
 	type: "snapshot",
@@ -123,7 +124,7 @@ async function fixture(
 			undefined,
 			{ worker, ...(snapshot ? { snapshot } : {}) },
 			{},
-			{ idleParkMs: Number.POSITIVE_INFINITY },
+			offlineSessionOptions({ idleParkMs: Number.POSITIVE_INFINITY }),
 		);
 		managers.push(manager);
 		await manager.load();

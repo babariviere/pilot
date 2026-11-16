@@ -14,10 +14,11 @@ import { Conflict } from "./errors.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { continuationAnswer, continuationHandoff, continuationQueuedInputs } from "./session-continuation.ts";
 import { SessionManager, type SessionMissionBridge, type SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 type Spec = Extract<KernelCommand, { type: "start" }>["spec"];
 type Command = Extract<KernelCommand, { requestId: string }>;
@@ -169,7 +170,7 @@ async function fixture(t: TestContext) {
 				},
 			},
 			{ runner: async () => "" },
-			{ models, idleParkMs: Infinity, workspaceRetentionMs: Infinity },
+			offlineSessionOptions({ models, idleParkMs: Infinity, workspaceRetentionMs: Infinity }),
 		);
 		if (bridge) sessions.setMissionBridge(bridge);
 		t.mock.method(sessions, "subscriptionPaused", () => true);
@@ -462,13 +463,13 @@ for (const phase of ["target-metadata", "mission-transaction", "after-mission-tr
 
 test("continuation HTTP route validates input and only admits quota-paused chats", async (t) => {
 	const f = await fixture(t);
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		f.models,
-		new TerminalManager(),
-	);
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: f.models,
+		terminals: new TerminalManager(),
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));

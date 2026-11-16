@@ -35,6 +35,7 @@ import { type RefreshEvidenceInput, RefreshEvidenceStore } from "./refresh-evide
 import { RuntimeBackground } from "./runtime-background.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
 import { parseSlackMessageLink, SlackFormatChanged } from "./slack-format.ts";
+import { SLACK_BUDGET_WINDOW_MS, SLACK_HOURLY_BUDGET, SLACK_REACTION_RECHECK_MS } from "./slack-poll-policy.ts";
 import type { SlackReactionOwner } from "./slack-reaction-owner.ts";
 import { addSlackDone, refreshSlackReactions, removeSlackEyes } from "./slack-reactions.ts";
 import { type SlackAdder, slackChannelProgress, slackExcerpt, slackThread } from "./slack-source.ts";
@@ -56,7 +57,6 @@ import {
 	SourceToolError,
 } from "./source-tool-rules.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
-import { SLACK_BUDGET_WINDOW_MS, SLACK_HOURLY_BUDGET, SLACK_REACTION_RECHECK_MS } from "./tracked-items-disk.ts";
 import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
 import type { TriageGroomer } from "./triage-grooming.ts";
 

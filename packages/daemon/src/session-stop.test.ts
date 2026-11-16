@@ -9,6 +9,7 @@ import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import type { SessionState } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 type Command = Extract<KernelCommand, { requestId: string }>;
 
@@ -42,15 +43,22 @@ async function fixture(t: TestContext) {
 	);
 	const workers: FakeWorker[] = [];
 	let reply: FakeWorker["reply"];
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		worker: (_spec, onPacket) => {
-			const worker = new FakeWorker(onPacket);
-			worker.reply = (command) => reply?.(command);
-			workers.push(worker);
-			queueMicrotask(() => onPacket({ type: "ready", model: "provider/model", working: false, usage: {} }));
-			return worker;
+	const sessions = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{
+			worker: (_spec, onPacket) => {
+				const worker = new FakeWorker(onPacket);
+				worker.reply = (command) => reply?.(command);
+				workers.push(worker);
+				queueMicrotask(() => onPacket({ type: "ready", model: "provider/model", working: false, usage: {} }));
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	await sessions.load();
 	t.after(async () => {
 		await sessions.shutdown();

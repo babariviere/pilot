@@ -11,9 +11,9 @@ import type { MergePullRequestRequest } from "@pilot/protocol";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { mergeTarget, PullRequestMerger } from "./pull-request-merge.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import type { Runner } from "./workspaces.ts";
 
 const url = "https://github.com/octo/repo/pull/42";
@@ -179,13 +179,13 @@ test("native merge routes validate confirmation fields and browser origins", asy
 	const previews = t.mock.method(sessions, "previewPullRequestMerge", async () => ({ headSha: sha }));
 	const merges = t.mock.method(sessions, "mergePullRequest", async () => {});
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: "/unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));

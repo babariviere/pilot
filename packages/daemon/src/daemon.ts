@@ -15,6 +15,7 @@ import { loadConfig } from "./config.ts";
 import { migratePilotConfig } from "./config-migration.ts";
 import { ConnectivityService } from "./connectivity.ts";
 import { CredentialBroker } from "./credential-broker.ts";
+import { createDaemonServices } from "./daemon-services.ts";
 import { EnvironmentService } from "./environment.ts";
 import { EnvironmentStateStore } from "./environment-state.ts";
 import { Conflict, NotFound } from "./errors.ts";
@@ -406,7 +407,7 @@ async function resumeRuntime(): Promise<void> {
 		backgroundInitialized = true;
 	}
 	await recoverCompletions();
-	server.recoverOperations();
+	daemonServices.recoverOperations();
 }
 const identity = runtimeOwner?.identity();
 const liveUpdate = new LiveUpdateService(config.home, projects, () => sessions.freezeAdmissions(), resumeRuntime, {
@@ -423,36 +424,34 @@ const liveUpdate = new LiveUpdateService(config.home, projects, () => sessions.f
 });
 sessions.setLiveUpdate(liveUpdate);
 const subscriptions = new SubscriptionRefresh((provider) => models.refreshSubscription(provider));
-const server = createDaemonServer(
+const daemonServices = createDaemonServices({
 	config,
 	sessions,
 	projects,
 	models,
 	terminals,
-	{
+	missions: {
 		service: missionService,
 		store: missionStore,
 		knowledge,
 	},
-	undefined,
 	memory,
 	schedules,
 	tracking,
 	power,
-	mcpStatus,
+	mcp: mcpStatus,
 	hello,
 	setup,
-	legacyUpdateFrozen,
-	undefined,
+	legacyAdmissionFrozen: legacyUpdateFrozen,
 	telemetry,
 	githubSetup,
+	nativeAuthority: githubSetup.nativeAuthority,
 	githubImport,
-	undefined,
 	environment,
-	runtimeOwner,
+	bootstrap: runtimeOwner,
 	subscriptions,
 	chatSettings,
-	{
+	liveUpdate: {
 		service: liveUpdate,
 		contributors: [
 			startupWork,
@@ -472,7 +471,8 @@ const server = createDaemonServer(
 			linearPrChecks.runtime,
 		],
 	},
-);
+});
+const server = createDaemonServer(daemonServices);
 await server.runtimeReady;
 // Persist unknown (admitting) before interrupted work can reopen, even with no app or pending schedule.
 await connectivity.start();
@@ -523,7 +523,14 @@ async function stop(): Promise<void> {
 			await missionService.notices.stop();
 			await missionService.continuations.stop();
 			await githubImport.close();
-			await Promise.all([setup.close(), githubSetup.close(), terminals.shutdown(), sessions.shutdown()]);
+			await Promise.all([
+				daemonServices.close(),
+				setup.close(),
+				githubSetup.close(),
+				terminals.shutdown(),
+				sessions.shutdown(),
+			]);
+			missionService.dispose();
 			await telemetry.featureUsage.close();
 			await credentials.close();
 			stopSlackCompletions();

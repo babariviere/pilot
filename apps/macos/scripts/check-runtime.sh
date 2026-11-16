@@ -33,8 +33,8 @@ process.env.PI_CODING_AGENT_DIR = isolated;
 let parent;
 globalThis.fetch = () => { throw new Error('Runtime profile smoke test must stay offline'); };
 try {
-  const sdk = import.meta.resolve('@earendil-works/pi-coding-agent');
-  const config = await import(new URL('./bundle/chunks/chunk-MMDXLZVS.js', sdk).href);
+  const { loadSdkMcpEditor } = await import('./packages/kernel/src/sdk-mcp-editors.ts');
+  const config = await loadSdkMcpEditor('cli');
   const mcpPath = join(isolated, 'mcp.json');
   config.addMcpServerConfig(mcpPath, 'fixture', { url: 'https://example.test/mcp' });
   const { McpSetupStore } = await import('./packages/daemon/src/mcp-setup.ts');

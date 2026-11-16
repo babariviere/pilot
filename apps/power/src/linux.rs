@@ -1,5 +1,5 @@
 //! KDE automatic-suspend inhibition only. Never use logind sleep:block or idle.
-use crate::protocol;
+use crate::protocol::{self, Command, CommandFrame};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::{io::Write, os::fd::OwnedFd, time::Duration};
@@ -149,34 +149,35 @@ async fn serve_connected<W: Write>(
             }
             frame = input.recv() => {
                 let Some(Some(frame)) = frame else { break };
-                if frame["action"] == "heartbeat" {
-                    lease.as_mut().reset(tokio::time::Instant::now() + LEASE);
-                    continue;
-                }
-                let Some(id) = frame["id"].as_i64() else { break };
-                let ok = match frame["action"].as_str() {
-                    Some("activity") => match (frame["awake"].as_bool(), frame["closedLid"].as_bool()) {
-                        (Some(awake), Some(false)) => {
-                            if awake && !sleeping && cookie.is_none() {
-                                cookie = Some(policy.call::<_, _, u32>("AddInhibition", &(AUTOMATIC_SUSPEND, WHO, WHY)).await?);
-                            } else if !awake && let Some(value) = cookie.take() {
-                                policy.call::<_, _, ()>("ReleaseInhibition", &(value,)).await?;
-                                inhibition_active = false;
-                            }
-                            if cookie.is_some() {
-                                inhibition_active = active(&policy.get_property::<Vec<Inhibition>>("ActiveInhibitions").await?);
-                            }
-                            true
+                let (id, command) = match protocol::decode_command(&frame) {
+                    CommandFrame::Heartbeat => {
+                        lease.as_mut().reset(tokio::time::Instant::now() + LEASE);
+                        continue;
+                    }
+                    CommandFrame::Request { id, command } => (id, command),
+                    CommandFrame::MissingAction { id: Some(id) } => (id, Command::Invalid),
+                    CommandFrame::MissingAction { id: None } | CommandFrame::MissingId => break,
+                };
+                let ok = match command {
+                    Command::Activity { awake, closed_lid: false } => {
+                        if awake && !sleeping && cookie.is_none() {
+                            cookie = Some(policy.call::<_, _, u32>("AddInhibition", &(AUTOMATIC_SUSPEND, WHO, WHY)).await?);
+                        } else if !awake && let Some(value) = cookie.take() {
+                            policy.call::<_, _, ()>("ReleaseInhibition", &(value,)).await?;
+                            inhibition_active = false;
                         }
-                        _ => false,
+                        if cookie.is_some() {
+                            inhibition_active = active(&policy.get_property::<Vec<Inhibition>>("ActiveInhibitions").await?);
+                        }
+                        true
                     },
-                    Some("allowSleep") => {
-                        if sleeping && frame["generation"].as_u64() == Some(generation) { delay_fd.take(); }
-                        frame["generation"].as_u64().is_some()
+                    Command::AllowSleep { generation: requested } => {
+                        if sleeping && requested == generation { delay_fd.take(); }
+                        true
                     }
                     // No authorization, closed-lid override, or sleep-triggering API on Linux.
-                    Some("authorize") => false,
-                    Some("sleep") => true,
+                    Command::Authorize => false,
+                    Command::Sleep => true,
                     _ => false,
                 };
                 protocol::emit(output, &json!({"id":id,"ok":ok}))?;

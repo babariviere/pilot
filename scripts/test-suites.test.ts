@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { discoverTests, testInLane, testLimits, testSuite, testWeight } from "./test-suites.ts";
+import { discoverTests, testInLane, testLaneFiles, testLimits, testSuite, testWeight } from "./test-suites.ts";
 
 test("suite defaults and explicit classifications keep integration out of the fast path", () => {
 	for (const [path, suite] of [
@@ -53,30 +53,26 @@ test("runner limits preserve bounded concurrency and the two-minute per-test dea
 	}
 });
 
-test("CI lanes cover every discovered test and default new tests to Linux", async () => {
+test("CI lane selection validates configured paths and defaults new tests to Linux", async () => {
 	const files = await discoverTests(fileURLToPath(new URL("../", import.meta.url)));
-	for (const path of files) {
-		assert.equal(testInLane(path, "all"), true);
-		assert.ok(testInLane(path, "portable") || testInLane(path, "macos"), `Ungated test: ${path}`);
-	}
+	assert.deepEqual(testLaneFiles(files, "all"), files);
+	assert.deepEqual(testLaneFiles(files, "portable"), files);
 	assert.equal(testInLane("packages/daemon/src/new-feature.test.ts", "portable"), true);
 	assert.equal(testInLane("packages/daemon/src/new-feature.test.ts", "macos"), false);
 	assert.equal(testInLane("packages/kernel/src/ask.integration.test.ts", "portable"), true);
 	assert.equal(testInLane("packages/kernel/src/ask.integration.test.ts", "macos"), true);
-	const macos = files.filter((path) => testInLane(path, "macos")).sort();
-	assert.deepEqual(macos, [
-		"packages/daemon/src/coordinator-role.test.ts",
-		"packages/daemon/src/main-view.test.ts",
-		"packages/daemon/src/platform.test.ts",
-		"packages/daemon/src/pty-input.test.ts",
-		"packages/daemon/src/schedule-detection.test.ts",
-		"packages/daemon/src/terminal-output.test.ts",
-		"packages/daemon/src/terminals.test.ts",
-		"packages/daemon/src/workspace-terminal-server.test.ts",
-		"packages/kernel/src/ask.integration.test.ts",
-		"packages/kernel/src/bundled-extensions.integration.test.ts",
-		"packages/kernel/src/runtime-environment.test.ts",
-	]);
+	assert.deepEqual(
+		testLaneFiles(files, "macos"),
+		files.filter((path) => testInLane(path, "macos")),
+	);
+	assert.throws(
+		() =>
+			testLaneFiles(
+				files.filter((path) => path !== "packages/kernel/src/ask.integration.test.ts"),
+				"macos",
+			),
+		/Configured macos tests were not discovered: packages\/kernel\/src\/ask.integration.test.ts/,
+	);
 });
 
 test("runner lists lane and suite intersections without running tests, and rejects unknown lanes", async () => {

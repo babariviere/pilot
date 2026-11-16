@@ -22,8 +22,8 @@ import { dispositionTarget } from "../human-reviews.ts";
 import { MissionService } from "../mission-service.ts";
 import { MissionStore } from "../missions.ts";
 import { ModelCatalog } from "../models.ts";
-import { createDaemonServer } from "../server.ts";
 import { TerminalManager } from "../terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./daemon-server.ts";
 import { copyGitSeed } from "./git-seed.ts";
 import { fixture, git, jj } from "./session-workspace.ts";
 
@@ -79,17 +79,18 @@ async function main(): Promise<number> {
 	const native = new GitHubSetupService(f.home, host, { userHome: f.home, env: {} });
 	await native.status();
 	const capability = JSON.parse(readFileSync(join(f.home, "github-app-capability"), "utf8")).token as string;
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home: f.home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
 		sessions,
-		f.projects,
-		new ModelCatalog(f.home),
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
 		terminals,
-		{ store, service },
-	];
-	args[12] = hello;
-	args[17] = native;
-	const daemon = createDaemonServer(...args);
+		missions: { store, service },
+	};
+	args.hello = hello;
+	args.githubSetup = native;
+	args.nativeAuthority = args.githubSetup?.nativeAuthority;
+	const daemon = createDaemonServer(args);
 	daemon.listen(0, "127.0.0.1");
 	await once(daemon, "listening");
 	const api = `http://127.0.0.1:${(daemon.address() as AddressInfo).port}/api`;

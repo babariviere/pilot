@@ -11,9 +11,9 @@ import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { fixture, jj } from "./testing/shared-workspace.ts";
 import { WorkerReviewDelivery } from "./worker-review-delivery.ts";
 
@@ -130,17 +130,18 @@ async function host(t: TestContext, enabled = true) {
 			independentExecution: true,
 		},
 	};
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		enabled ? { store, service } : undefined,
-	];
-	args[12] = hello;
-	args[17] = native;
-	const server = createDaemonServer(...args);
+		missions: enabled ? { store, service } : undefined,
+	};
+	args.hello = hello;
+	args.githubSetup = native;
+	args.nativeAuthority = args.githubSetup?.nativeAuthority;
+	const server = createDaemonServer(args);
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	t.after(async () => {
 		await new Promise<void>((resolve) => server.close(() => resolve()));

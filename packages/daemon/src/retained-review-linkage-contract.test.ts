@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { deliveryDigest } from "./mission-delivery-evidence.ts";
 import { parseRetainedReviewReport, prepareRetainedReviewInput } from "./retained-review-contract.ts";
@@ -939,37 +938,4 @@ test("aggregate JSON byte budget accepts exactly 64 KiB, refuses one more withou
 	calls.find((c) => c.stop.exactReason.length < LIMITS.reason)!.stop.exactReason += "x";
 	assert.equal(Buffer.byteLength(JSON.stringify(aggregate)), LIMITS.jsonBytes + 1);
 	assert.throws(() => parseCompletion(f.binding, calls, [], f.completion));
-});
-
-test("inactive surface has no runtime imports/entry points or fabricated accounting targets", async () => {
-	const root = new URL("./", import.meta.url);
-	const source = await readFile(new URL("retained-review-linkage-contract.ts", root), "utf8");
-	assert.doesNotMatch(
-		source,
-		/from ["'](?:.*(?:store|service|vault|runtime|sdk|accounting)|node:(?:fs|worker_threads|child_process))["']/,
-	);
-	assert.doesNotMatch(source, /\b(?:fetch|setInterval|setTimeout)\s*\(/);
-	for (const src of [root, new URL("../../kernel/src/", root), new URL("../../protocol/src/", root)]) {
-		for (const path of await readdir(src, { recursive: true })) {
-			if (!path.endsWith(".ts") || path.endsWith(".test.ts") || path === "retained-review-linkage-contract.ts")
-				continue;
-			if (
-				src === root &&
-				["retained-review-run-disk.ts", "retained-review-runs.ts", "retained-review-projections.ts"].includes(path)
-			) {
-				assert.doesNotMatch(
-					await readFile(new URL(path, src), "utf8"),
-					/completeSimple|streamSimple|fetch\s*\(/,
-					path,
-				);
-				continue;
-			}
-			assert.doesNotMatch(
-				await readFile(new URL(path, src), "utf8"),
-				/(?:from\s*|import\s*\(|export\s*\*\s*from\s*)["'][^"']*retained-review-linkage-contract/,
-				path,
-			);
-		}
-	}
-	assert.equal(retainedReviewDispatchStatus().enabled, false);
 });

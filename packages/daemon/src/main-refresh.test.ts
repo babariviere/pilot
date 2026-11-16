@@ -7,27 +7,35 @@ import { type TestContext, test } from "node:test";
 import type { KernelCommand } from "@pilot/kernel";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 async function fixture(t: TestContext, working = false) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-main-refresh-"));
 	const commands: KernelCommand[] = [];
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		title: async () => undefined,
-		worker: (_spec, report) => {
-			assert.ok(working, "scheduler fixture must not start a worker");
-			return {
-				ready: Promise.resolve(),
-				state: "working",
-				busy: true,
-				send: (command) => {
-					commands.push(command);
-					if (command.type === "update.pause") report({ type: "update.paused", id: command.id });
-				},
-				request: async () => {},
-				close: async () => {},
-			};
+	const sessions = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: (_spec, report) => {
+				assert.ok(working, "scheduler fixture must not start a worker");
+				return {
+					ready: Promise.resolve(),
+					state: "working",
+					busy: true,
+					send: (command) => {
+						commands.push(command);
+						if (command.type === "update.pause") report({ type: "update.paused", id: command.id });
+					},
+					request: async () => {},
+					close: async () => {},
+				};
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	t.after(async () => {
 		await sessions.shutdown();
 		await rm(home, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -55,6 +55,43 @@ test("an unknown outcome is noted once; recovery at the next start does not log 
 	});
 	assert.equal(JSON.parse(await readFile(file, "utf8")).unknown, "Error: Another reason");
 	assert.equal((await restarted.lookup(op))!.state, "pending");
+});
+
+test("acquired cold reader sees saved originals and synchronously observes later reservations", async (t) => {
+	const { directory, journal } = await fixture(t);
+	const saved = operation();
+	await journal.execute(saved, async () => {
+		throw new Error("Exact unknown outcome");
+	});
+	const original = await readFile(join(directory, `${payloadHash(saved.operationId)}.json`), "utf8");
+	const reopened = new OperationJournal(directory, destination);
+	const read = await reopened.openReader(({ records, pendingKinds, failed }) => ({
+		entries: [...records].map((record) => ({ id: record.operation.operationId, original: record.original() })),
+		pendingKinds: [...pendingKinds],
+		failed,
+	}));
+	assert.deepEqual(read(), { entries: [{ id: saved.operationId, original }], pendingKinds: [], failed: false });
+	const later = operation(2);
+	const pending = reopened.reserve(later);
+	assert.deepEqual(read().pendingKinds, [later.kind], "an acquired reader sees reservation before its first await");
+	await pending;
+	assert.deepEqual(read().pendingKinds, []);
+	assert.deepEqual(
+		read().entries.map((entry) => entry.id),
+		[saved.operationId, later.operationId],
+	);
+	assert.equal(read().entries[0]!.original, original);
+});
+
+test("an acquired reader sees a later persistence fault without reopening", async (t) => {
+	const { directory, journal } = await fixture(t);
+	await journal.reserve(operation());
+	const failed = await journal.openReader((state) => state.failed);
+	assert.equal(failed(), false);
+	const blocked = operation(2);
+	await mkdir(join(directory, `${payloadHash(blocked.operationId)}.json`));
+	await assert.rejects(journal.reserve(blocked));
+	assert.equal(failed(), true);
 });
 
 test("reservation survives crash before admission, repeated acknowledgment loss returns one stable receipt", async (t) => {

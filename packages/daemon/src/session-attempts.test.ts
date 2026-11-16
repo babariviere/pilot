@@ -12,9 +12,10 @@ import type { RewindResponse, SessionAttempt, SessionState, SessionSummary } fro
 import { Conflict } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { CommandRejected, SessionManager, type SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 type Command = Extract<KernelCommand, { requestId: string }>;
 const attempts: SessionAttempt[] = [
@@ -82,24 +83,31 @@ async function fixture(t: TestContext, patch: Record<string, unknown> = {}) {
 			: command.type === "activateAttempt"
 				? { type: "rewound", requestId: command.requestId, switched: false }
 				: undefined;
-	const sessions = new SessionManager(home, projects, undefined, {
-		worker: (_spec, onPacket) => {
-			const worker = new FakeWorker(onPacket);
-			worker.reply = (command) => reply?.(command);
-			workers.push(worker);
-			const generation = workers.length;
-			queueMicrotask(() =>
-				onPacket({
-					type: "ready",
-					model: "provider/model",
-					working: false,
-					usage: worker.usage,
-					...(generation > 1 ? { attempts } : {}),
-				}),
-			);
-			return worker;
+	const sessions = new SessionManager(
+		home,
+		projects,
+		undefined,
+		{
+			worker: (_spec, onPacket) => {
+				const worker = new FakeWorker(onPacket);
+				worker.reply = (command) => reply?.(command);
+				workers.push(worker);
+				const generation = workers.length;
+				queueMicrotask(() =>
+					onPacket({
+						type: "ready",
+						model: "provider/model",
+						working: false,
+						usage: worker.usage,
+						...(generation > 1 ? { attempts } : {}),
+					}),
+				);
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	await sessions.load();
 	t.after(async () => {
 		await sessions.shutdown();
@@ -209,13 +217,13 @@ test("busy kernels, archived chats, and concurrent changes reject without restar
 
 test("HTTP rewind and attempt activation validate input and return the session", async (t) => {
 	const f = await fixture(t);
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		new ModelCatalog("/unused"),
-		new TerminalManager(),
-	);
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog("/unused"),
+		terminals: new TerminalManager(),
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));

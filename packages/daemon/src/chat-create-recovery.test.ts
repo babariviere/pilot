@@ -14,9 +14,9 @@ import { openSessionStorage } from "../../kernel/src/storage.ts";
 import { ModelCatalog } from "./models.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { CommandRejected, SessionManager, type SessionMissionBridge } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 const host = { hostId: "box", daemonId: "remote", lineageId: "remote-lineage" };
 const barrier = () => {
@@ -67,21 +67,14 @@ async function fixture(t: TestContext, home: string) {
 	t.mock.method(sessions as unknown as { start(): Promise<Map<string, Error>> }, "start", async () => new Map());
 	await sessions.load();
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		hello,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/operations`;

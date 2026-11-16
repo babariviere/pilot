@@ -14,7 +14,7 @@ import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
 import { openDay } from "./mockFeeds";
 import { ToCheck } from "./ToCheck";
 import { Action } from "./ui";
-import { captureView, restoreView, startFresh } from "./updateView";
+import { captureView, restoreView, startFresh } from "./windowState";
 
 const source = new ScriptedDelivery();
 const day = { ...openDay(), delivery: mirrorDelivery(source) };

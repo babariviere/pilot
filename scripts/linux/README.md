@@ -15,16 +15,21 @@ Packaging no longer provisions a disposable SSH service or exercises a remote up
 Packaging uses the installed pnpm. CI mounts its pnpm installation into the build container;
 the packaging script does not bootstrap a package manager with npm.
 
-Release assets remain independently signed: `runtime-manifest.json` binds the exact version,
-tag, commit, archive size/SHA256, protocol range and measured ABI requirements;
-`runtime-manifest.json.sig` signs the exact manifest bytes. `runtime-abi.json` is inside the archive.
-Configure `LINUX_RUNTIME_PRIVATE_KEY` as an Actions secret and its raw 32-byte base64 public key as
-the `LINUX_RUNTIME_PUBLIC_KEY` repository variable. The Mac app no longer embeds or consumes this key.
+The headless workflow builds unsigned PR artifacts. `runtime-manifest.json` binds the exact version,
+tag, commit, archive size/SHA256, protocol range and measured ABI requirements.
+`runtime-abi.json` is inside the archive. PR packaging never signs, publishes or accesses release secrets.
 An unsigned checksum beside an archive is not an authentication authority.
 
-Release publication still waits for verified macOS and Linux assets from the matching source commit.
-PR packaging never signs, publishes or accesses release secrets. No source or package verification
-here proves deployment on a user's machine.
+For a separate manual signing operation, `release-manifest.mjs sign <output-directory>` requires
+`LINUX_RUNTIME_PRIVATE_KEY` (Ed25519 PEM) and `LINUX_RUNTIME_PUBLIC_KEY` (raw 32-byte base64).
+It checks the key pair and actual archive before writing `runtime-manifest.json.sig`, which signs
+the exact manifest bytes. Verification must use an independently trusted public key.
+The Mac app no longer embeds or consumes this headless key.
+
+The stable release workflow packages GUI assets instead. It does not call the headless signing CLI
+or publish these PR artifacts. See [the GUI release contract](../../apps/desktop/docs/releases.md)
+and `.github/workflows/release.yaml` for the current publication path.
+No source or package verification here proves deployment on a user's machine.
 
 ## Same-machine service
 

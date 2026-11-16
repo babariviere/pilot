@@ -1,6 +1,7 @@
 /** Canonical saved sources shared by passive native drilldown tests. No worker/provider. */
 import { randomUUID } from "node:crypto";
 import { interviewDigest } from "./mission-interview-contract.ts";
+import { LINKED_KNOWLEDGE } from "./mission-plans.ts";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 
 export async function mapSourceFixture() {
@@ -71,7 +72,7 @@ export async function mapSourceFixture() {
 		decision,
 		knowledge,
 		async fillSummary() {
-			for (let i = 0; i < 41; i++) {
+			for (let i = 0; i <= LINKED_KNOWLEDGE; i++) {
 				const extra = f.store.knowledge.write(f.project.id, undefined, write(0, `Other saved finding ${i}`));
 				f.store.knowledge.setLink(f.missionId, extra.entry.id, 0, { linked: true }, { type: "user" });
 			}

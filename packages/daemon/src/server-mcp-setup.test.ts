@@ -9,7 +9,7 @@ import type { McpSetupSnapshot } from "@pilot/protocol";
 import { GitHubSetupService } from "./github-setup.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 
@@ -25,26 +25,15 @@ async function fixture(t: TestContext, readOnly = false) {
 	);
 	await native.status();
 	const capability = JSON.parse(await readFile(join(home, "github-app-capability"), "utf8")).token as string;
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0, agentDir: home, mcpSetupReadOnly: readOnly },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0, agentDir: home, mcpSetupReadOnly: readOnly },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		native,
-	);
+		githubSetup: native,
+		nativeAuthority: native.nativeAuthority,
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

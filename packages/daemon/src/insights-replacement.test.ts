@@ -26,9 +26,10 @@ import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const host = { hostId: "daemon", daemonId: "synthetic", lineageId: "replacement-fixture" };
 const model: ModelOption = {
@@ -73,7 +74,7 @@ async function fixture(t: TestContext) {
 				},
 			},
 			{},
-			{ diagnosticHost: { ...host } },
+			offlineSessionOptions({ diagnosticHost: { ...host } }),
 		);
 		service = new MissionService(missions, sessions, projects);
 		await sessions.load();
@@ -813,16 +814,16 @@ test("disabled scheduling and saved successor settings refuse implicit activatio
 test("HTTP replacement is native-gated; preview and status are passive, scoped, no-store and lineage-bound", async (t) => {
 	const f = await fixture(t);
 	await f.deleteOld();
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		f.models,
-		new TerminalManager(),
-		{ store: f.missions, service: f.service },
-	];
-	args[8] = f.schedules;
-	args[12] = {
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: f.models,
+		terminals: new TerminalManager(),
+		missions: { store: f.missions, service: f.service },
+	};
+	args.schedules = f.schedules;
+	args.hello = {
 		...host,
 		daemonVersion: "synthetic",
 		protocolVersion: 1,
@@ -837,12 +838,12 @@ test("HTTP replacement is native-gated; preview and status are passive, scoped, 
 			independentExecution: true,
 		},
 	};
-	args[17] = {
+	args.nativeAuthority = {
 		authenticate: async (token: unknown) => {
 			if (token !== "native-confirmed") throw new Error("Native confirmation required");
 		},
-	} as NonNullable<(typeof args)[17]>;
-	const server = createDaemonServer(...args);
+	};
+	const server = createDaemonServer(args);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

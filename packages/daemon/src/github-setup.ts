@@ -1,14 +1,15 @@
 /** Fixed GitHub.com onboarding, owned by the host. No shell, Mac credentials or SSH config edits. */
-import { createHash, randomBytes } from "node:crypto";
-import { lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { lstat, mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { GitHubSetupAction, GitHubSetupStatus, OperationHost } from "@pilot/protocol";
 import { clearGitHubKeyTransport, installGitHubKeyTransport } from "./github-git-transport.ts";
+import { NativeAppCapability } from "./native-app-capability.ts";
 import { durableJSON } from "./operation-journal.ts";
 import { RuntimeAdmission } from "./runtime-admission.ts";
-import { SetupError } from "./setup.ts";
+import { SetupError } from "./setup-error.ts";
 import { type ProcessOptions, type ProcessResult, subprocesses } from "./subprocess.ts";
 
 type Command = (file: string, args: string[], options: ProcessOptions) => Promise<ProcessResult>;
@@ -22,6 +23,7 @@ interface OAuthReply {
 	error?: string;
 }
 type Options = {
+	nativeAuthority?: NativeAppCapability;
 	userHome?: string;
 	env?: NodeJS.ProcessEnv;
 	command?: Command;
@@ -49,7 +51,7 @@ export class GitHubSetupService extends RuntimeAdmission {
 	private readonly wait: (ms: number, signal: AbortSignal) => Promise<void>;
 	private state: GitHubSetupStatus = { phase: "idle", apiReady: false, sshReady: false };
 	private completed: string[] = [];
-	private capability = "";
+	readonly nativeAuthority: NativeAppCapability;
 	private readonly loaded: Promise<void>;
 	private locked = false;
 	private authorization?: AbortController;
@@ -63,6 +65,7 @@ export class GitHubSetupService extends RuntimeAdmission {
 	constructor(home: string, identity: OperationHost, options: Options = {}) {
 		super();
 		this.home = home;
+		this.nativeAuthority = options.nativeAuthority ?? new NativeAppCapability(home, identity);
 		this.wait = options.wait ?? ((ms, signal) => delay(ms, undefined, { signal }));
 		this.directory = join(home, "github-setup");
 		this.userHome = options.userHome ?? homedir();
@@ -81,10 +84,10 @@ export class GitHubSetupService extends RuntimeAdmission {
 			GH_PROMPT_DISABLED: "1",
 			GIT_TERMINAL_PROMPT: "0",
 		};
-		this.loaded = this.load(identity);
+		this.loaded = this.load();
 		void this.loaded.catch(() => {}); // Routes report initialization failure without an unhandled rejection.
 	}
-	private async load(identity: OperationHost) {
+	private async load() {
 		await mkdir(this.directory, { recursive: true, mode: 0o700 });
 		const info = await lstat(this.directory);
 		if (!info.isDirectory() || info.isSymbolicLink() || info.mode & 0o077)
@@ -104,17 +107,9 @@ export class GitHubSetupService extends RuntimeAdmission {
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
-		this.capability = randomBytes(32).toString("hex");
-		const file = join(this.home, "github-app-capability");
-		await writeFile(`${file}.tmp`, JSON.stringify({ ...identity, token: this.capability }), { mode: 0o600 });
-		await rename(`${file}.tmp`, file);
+		await this.nativeAuthority.open();
 		if (this.state.sshIdentity !== "existing" && this.state.keyId && this.state.publicKey)
 			await installGitHubKeyTransport(this.home, this.keyPath, this.transportEnvironment);
-	}
-	async authenticate(token: unknown): Promise<void> {
-		await this.loaded;
-		if (typeof token !== "string" || token.length !== 64 || token !== this.capability)
-			throw new SetupError(403, "This operation requires the native app's host-authenticated GitHub action.");
 	}
 	async status(): Promise<GitHubSetupStatus> {
 		await this.loaded;

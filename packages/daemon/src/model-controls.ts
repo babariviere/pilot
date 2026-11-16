@@ -9,7 +9,8 @@ import type { ModelCatalog } from "./models.ts";
 import { type OperationJournal, OperationRejected, sameHost } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
-import { SetupError, type SetupService } from "./setup.ts";
+import type { SetupService } from "./setup.ts";
+import { SetupError } from "./setup-error.ts";
 
 export const MODEL_CONTROLS = "model-controls";
 type ProviderSetup = Pick<SetupService, "readiness" | "list" | "start" | "cancel" | "logout">;

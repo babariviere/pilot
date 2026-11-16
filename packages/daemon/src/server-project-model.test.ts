@@ -8,9 +8,9 @@ import { test } from "node:test";
 import type { Project } from "@pilot/protocol";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("project model PATCH silently overwrites a save made after client preflight", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-project-model-race-"));
@@ -31,7 +31,13 @@ test("project model PATCH silently overwrites a save made after client preflight
 	const list = t.mock.method(models, "list", async () => {
 		assert.fail("project model PATCH must not read provider accounts or refresh the catalogue");
 	});
-	const server = createDaemonServer({ home, host: "127.0.0.1", port: 0 }, sessions, projects, models, terminals);
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		models,
+		terminals,
+	});
 	t.after(async () => {
 		await sessions.shutdown();
 		await terminals.shutdown();
@@ -62,7 +68,14 @@ test("project model PATCH silently overwrites a save made after client preflight
 	const stale = await patch(JSON.parse(captured));
 	assert.equal(stale.status, 200, "current contract accepts the stale Save instead of refusing it");
 	const saved = (await stale.json()) as Project;
-	assert.deepEqual(saved, { ...project, name: "Updated elsewhere 日本語", model: "provider/captured*#~" });
+	assert.equal(typeof saved.workflowGeneration, "string");
+	assert.notEqual(saved.workflowGeneration, project.workflowGeneration);
+	assert.deepEqual(saved, {
+		...project,
+		name: "Updated elsewhere 日本語",
+		model: "provider/captured*#~",
+		workflowGeneration: saved.workflowGeneration,
+	});
 	const reopened = new ProjectStore(home);
 	await reopened.load();
 	assert.deepEqual(reopened.require(project.id), saved, "the unseen model selection is overwritten durably");
@@ -71,6 +84,12 @@ test("project model PATCH silently overwrites a save made after client preflight
 
 	const cleared = await patch({ model: "" });
 	assert.equal(cleared.status, 200);
+	const clearedProject = (await cleared.json()) as Project;
 	const { model: _model, ...withoutModel } = saved;
-	assert.deepEqual(await cleared.json(), withoutModel, "empty string clears only the project model override");
+	assert.notEqual(clearedProject.workflowGeneration, saved.workflowGeneration);
+	assert.deepEqual(
+		clearedProject,
+		{ ...withoutModel, workflowGeneration: clearedProject.workflowGeneration },
+		"empty string clears the model and advances its workflow fence",
+	);
 });

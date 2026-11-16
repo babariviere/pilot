@@ -10,6 +10,7 @@ import { type TestContext, test } from "node:test";
 import type { DurableOperation, InsightsWorkspaceReservePayload, ModelOption } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { parseInsightsBacklog } from "./insights-backlog.ts";
+import { InsightsJournal } from "./insights-journal.ts";
 import { InsightsWorkspace, type InsightsWorkspaceDependencies } from "./insights-workspace.ts";
 import type { InsightsWorkspaceAdmission, InsightsWorkspaceAuthority } from "./insights-workspace-store.ts";
 import { MissionService } from "./mission-service.ts";
@@ -19,9 +20,10 @@ import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const host = { hostId: "daemon", daemonId: "synthetic", lineageId: "synthetic-lineage" };
 const model: ModelOption = {
@@ -337,7 +339,7 @@ test("legacy journal reservations fence new UUIDs and preserve immutable v1 byte
 
 test("a retained guard sees legacy reservation before its filesystem publication finishes", async (t) => {
 	const f = await fixture(t);
-	const guard = await f.journal.legacyInsightsGuard();
+	const guard = await new InsightsJournal(f.journal).legacyInsightsGuard();
 	guard();
 	const journal = f.journal as unknown as { persist(file: string, value: unknown): Promise<void> };
 	const persist = journal.persist.bind(journal),
@@ -666,7 +668,7 @@ test("native HTTP routes are passive, capability-gated and never wake source/rep
 			},
 		},
 		{},
-		{ diagnosticHost: host },
+		offlineSessionOptions({ diagnosticHost: host }),
 	);
 	const service = new MissionService(f.missions, sessions, f.projects);
 	await sessions.load();
@@ -685,16 +687,16 @@ test("native HTTP routes are passive, capability-gated and never wake source/rep
 		await schedules.stop();
 		await scheduleStore.close();
 	});
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home: f.home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
 		sessions,
-		f.projects,
-		f.models as ModelCatalog,
-		new TerminalManager(),
-		{ store: f.missions, service },
-	];
-	args[8] = schedules;
-	args[12] = {
+		projects: f.projects,
+		models: f.models as ModelCatalog,
+		terminals: new TerminalManager(),
+		missions: { store: f.missions, service },
+	};
+	args.schedules = schedules;
+	args.hello = {
 		...host,
 		daemonVersion: "synthetic",
 		protocolVersion: 1,
@@ -709,12 +711,12 @@ test("native HTTP routes are passive, capability-gated and never wake source/rep
 			independentExecution: true,
 		},
 	};
-	args[17] = {
+	args.nativeAuthority = {
 		authenticate: async (token: unknown) => {
 			if (token !== "native") throw new Conflict("Native confirmation required");
 		},
-	} as NonNullable<(typeof args)[17]>;
-	const server = createDaemonServer(...args);
+	};
+	const server = createDaemonServer(args);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	f.cleanup(async () => {

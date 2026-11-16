@@ -4,6 +4,52 @@ use serde_json::Value;
 use serde_json::json;
 use std::io::{self, Read, Write};
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Command {
+    Activity { awake: bool, closed_lid: bool },
+    AllowSleep { generation: u64 },
+    Authorize,
+    Sleep,
+    Invalid,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CommandFrame {
+    Heartbeat,
+    Request { id: i64, command: Command },
+    // macOS stops here; Linux rejects the request if its ID is valid.
+    MissingAction { id: Option<i64> },
+    MissingId,
+}
+
+pub(crate) fn decode_command(value: &Value) -> CommandFrame {
+    let Some(action) = value["action"].as_str() else {
+        return CommandFrame::MissingAction {
+            id: value["id"].as_i64(),
+        };
+    };
+    if action == "heartbeat" {
+        return CommandFrame::Heartbeat;
+    }
+    let Some(id) = value["id"].as_i64() else {
+        return CommandFrame::MissingId;
+    };
+    let command = match action {
+        "activity" => match (value["awake"].as_bool(), value["closedLid"].as_bool()) {
+            (Some(awake), Some(closed_lid)) => Command::Activity { awake, closed_lid },
+            _ => Command::Invalid,
+        },
+        "allowSleep" => match value["generation"].as_u64() {
+            Some(generation) => Command::AllowSleep { generation },
+            None => Command::Invalid,
+        },
+        "authorize" => Command::Authorize,
+        "sleep" => Command::Sleep,
+        _ => Command::Invalid,
+    };
+    CommandFrame::Request { id, command }
+}
+
 pub(crate) struct Frames<R> {
     input: R,
     buffer: Vec<u8>,

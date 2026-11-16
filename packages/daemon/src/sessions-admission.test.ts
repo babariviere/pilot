@@ -13,6 +13,7 @@ import { ServiceUnavailable } from "./errors.ts";
 import { ProjectStore } from "./projects.ts";
 import type { SessionWorker } from "./sessions.ts";
 import { SessionManager, Worker } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 test("update reservation accepts idle or drained sessions and never drains workers itself", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-idle-update-"));
@@ -97,12 +98,19 @@ test("a lease rejects spawn, send, queued mutations and subscription reopening b
 			JSON.stringify({ id, cwd: home, title: "Parked", createdAt: 0, updatedAt: 0 }),
 		);
 		let workersCreated = 0;
-		const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-			worker: () => {
-				workersCreated++;
-				assert.fail("an update lease must not reopen a parked worker");
+		const sessions = new SessionManager(
+			home,
+			new ProjectStore(home),
+			undefined,
+			{
+				worker: () => {
+					workersCreated++;
+					assert.fail("an update lease must not reopen a parked worker");
+				},
 			},
-		});
+			{},
+			offlineSessionOptions(),
+		);
 		await sessions.load();
 		assert.deepEqual(sessions.prepareUpdate(), { ready: true });
 		await assert.rejects(sessions.spawn({ cwd: home, message: "hello" }), ServiceUnavailable);
@@ -145,11 +153,18 @@ test("real Worker blocks accepted-before-working and queued inbox gaps until a f
 	});
 	// Inject this one transport. A process-wide fork mock can also catch the
 	// unrelated spare-worker timer under load and manufacture a second owner.
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		title: async () => undefined,
-		worker: (spec, receive, exit) =>
-			new Worker(spec, receive, exit, undefined, { child: child as unknown as ChildProcess }),
-	});
+	const sessions = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: (spec, receive, exit) =>
+				new Worker(spec, receive, exit, undefined, { child: child as unknown as ChildProcess }),
+		},
+		{},
+		offlineSessionOptions(),
+	);
 	t.after(async () => {
 		await sessions.shutdown();
 		await rm(home, { recursive: true, force: true });

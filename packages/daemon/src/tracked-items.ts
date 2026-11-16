@@ -35,7 +35,6 @@ import type {
 } from "./tracked-items-disk.ts";
 
 export type { InboxQuery, InboxTracked, SourceCheckpoint, TrackedInput, TrackedQuery } from "./tracked-items-disk.ts";
-export { validatePatch } from "./tracked-items-disk.ts";
 
 type Snapshot = {
 	projectId: string;
@@ -146,22 +145,11 @@ export class TrackedItemStore {
 		return this.rpc("slackCached", { channel, ts, projectId });
 	}
 	/** retry reclassifies a cached failure, for a message the user added by hand. */
-	reserveSlack(
-		channel: string,
-		ts: string,
-		now: number,
-		projectId: string,
-		retry = false,
-		force = false,
-	): Promise<SlackReservation> {
-		return this.rpc("reserveSlack", { channel, ts, now, projectId, retry, force });
+	reserveSlack(channel: string, ts: string, projectId: string, retry = false): Promise<SlackReservation> {
+		return this.rpc("reserveSlack", { channel, ts, projectId, retry });
 	}
 	finishSlack(channel: string, ts: string, result: SlackClassification | undefined, projectId: string): Promise<void> {
 		return this.rpc("finishSlack", { channel, ts, result, projectId });
-	}
-	/** One read against the shared hourly Slack budget. */
-	reserveSlackRead(now: number, force = false): Promise<boolean> {
-		return this.rpc("reserveSlackRead", { now, force });
 	}
 	/** Learned IDs of Slack group handles, shared by all projects. */
 	slackGroups(handles: string[]): Promise<Record<string, SlackGroupId>> {

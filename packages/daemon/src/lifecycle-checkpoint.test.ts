@@ -14,6 +14,7 @@ import {
 } from "./lifecycle-checkpoint.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const target: LifecycleRuntime = {
 	runtimeRoot: "/immutable/candidate/runtime",
@@ -86,28 +87,35 @@ async function fixture(
 	}
 	const opened: { id: string; stopOnOpen?: boolean }[] = [];
 	const commands: KernelCommand[] = [];
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		title: async () => undefined,
-		worker: (spec) => {
-			opened.push({ id: spec.sessionId, stopOnOpen: spec.stopOnOpen });
-			const ready = options.failReady ? Promise.reject(new Error("ready ACK lost")) : Promise.resolve();
-			void ready.catch(() => undefined);
-			return {
-				ready,
-				state: "idle",
-				busy: false,
-				send: (command) => {
-					commands.push(command);
-				},
-				request: async (command) => {
-					commands.push(command);
-				},
-				close: async () => {},
-				jobs: async () => [],
-				hasChildren: async () => false,
-			};
+	const sessions = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: (spec) => {
+				opened.push({ id: spec.sessionId, stopOnOpen: spec.stopOnOpen });
+				const ready = options.failReady ? Promise.reject(new Error("ready ACK lost")) : Promise.resolve();
+				void ready.catch(() => undefined);
+				return {
+					ready,
+					state: "idle",
+					busy: false,
+					send: (command) => {
+						commands.push(command);
+					},
+					request: async (command) => {
+						commands.push(command);
+					},
+					close: async () => {},
+					jobs: async () => [],
+					hasChildren: async () => false,
+				};
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	sessions.bindLifecycleRuntime({
 		boot: options.boot ?? "new-boot",
 		host: { daemonId: "daemon", lineageId: "lineage" },

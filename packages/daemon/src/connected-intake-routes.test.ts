@@ -1,30 +1,15 @@
-/** Source-matched Day request shapes against the production router, not a route stub or daemon process. */
+/** Native intake request contracts against the production router, with offline sources. */
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import type { SavedLinearRead, TodayIntake } from "@pilot/protocol";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
 
-async function clientRequests() {
-	const host = await readFile(new URL("../../../apps/day/native/src/host/intake.rs", import.meta.url), "utf8");
-	const transport = await readFile(new URL("../../../apps/day/native/src/host/transport.rs", import.meta.url), "utf8");
-	// Use the actual production URI templates. A host change must update this compatibility test.
-	const paths = [...host.matchAll(/"(\/api\/projects\/\{\}\/(?:intake|saved-linear))"/g)].map((m) => m[1]!);
-	assert.deepEqual(paths.sort(), ["/api/projects/{}/intake", "/api/projects/{}/saved-linear"]);
-	const get = transport.slice(
-		transport.indexOf("pub async fn get("),
-		transport.indexOf("pub async fn planning_inventory("),
-	);
-	assert.match(get, /\.get\(self\.url\(path\)\)/);
-	const headers = [...get.matchAll(/\.header\("([^"]+)"/g)].map((m) => m[1]!);
-	assert.deepEqual(headers, ["x-pilot-github-capability"]);
-	return paths.map((template) => ({
-		path: (projectId: string) => template.replace("{}", projectId),
-		header: headers[0]!,
+const clientRequests = () =>
+	["intake", "saved-linear"].map((read) => ({
+		path: (projectId: string) => `/api/projects/${projectId}/${read}`,
+		header: "x-pilot-github-capability",
 	}));
-}
-
-test("production Day intake/Linear URIs reach the real router with exact project and native auth", async (t) => {
+test("intake/Linear requests reach the real router with exact project and native auth", async (t) => {
 	const f = await nativeIntakeFixture();
 	t.after(() => f.close());
 	f.tracking.register("linear", async () => ({ items: [] }));
@@ -90,7 +75,7 @@ test("production Day intake/Linear URIs reach the real router with exact project
 	assert.deepEqual(f.stats(), { external: 0, sessions: 0 });
 });
 
-test("source-matched reads distinguish not configured, saved rows, missing services and unsupported routes", async (t) => {
+test("intake reads distinguish not configured, saved rows, missing services and unsupported routes", async (t) => {
 	const clients = await clientRequests();
 	const f = await nativeIntakeFixture();
 	t.after(() => f.close());
@@ -131,7 +116,13 @@ test("source-matched reads distinguish not configured, saved rows, missing servi
 		assert.equal(r.status, 200, "unconfigured is a supported response, not missing API support");
 		const page = (await r.json()) as TodayIntake | SavedLinearRead;
 		if ("sources" in page) {
-			assert.ok(page.sources.every((s) => s.status === "not_configured" && s.items.length === 0));
+			assert.deepEqual(
+				page.sources.map((s) => [s.source, s.status, s.items.length]),
+				[
+					["slack", "not_configured", 0],
+					["linear", "idle", 0],
+				],
+			);
 		} else {
 			assert.equal(page.configurationCurrent, false);
 			assert.equal(page.source.status, "not_configured");

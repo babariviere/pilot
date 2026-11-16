@@ -12,9 +12,9 @@ import { payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 // Contract characterization, not a new admission policy. Never start a scheduler,
 // advance a dispatch timer, or invoke any real session/provider in these fixtures.
@@ -91,16 +91,16 @@ async function fixture(t: TestContext, name = "a") {
 			independentExecution: true,
 		},
 	};
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		{} as ModelCatalog,
-		{ isRunning: () => false } as unknown as TerminalManager,
-	];
-	args[8] = schedules;
-	args[12] = hello;
-	const server = createDaemonServer(...args);
+		models: {} as ModelCatalog,
+		terminals: { isRunning: () => false } as unknown as TerminalManager,
+	};
+	args.schedules = schedules;
+	args.hello = hello;
+	const server = createDaemonServer(args);
 	const url = await listen(server);
 	t.after(async () => {
 		await close(server);

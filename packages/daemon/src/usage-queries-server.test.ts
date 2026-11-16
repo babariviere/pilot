@@ -9,9 +9,9 @@ import type { UsageAnalyticsQuery, UsageAnalyticsResult } from "@pilot/protocol"
 import { daemonHello } from "./hello.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { UsageQueryCapacityError } from "./usage-history.ts";
 
 test("versioned GET query/page boundary is read-only, bounded, host-fenced and content-free", async (t) => {
@@ -30,21 +30,14 @@ test("versioned GET query/page boundary is read-only, bounded, host-fenced and c
 		},
 		{},
 	);
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		hello,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

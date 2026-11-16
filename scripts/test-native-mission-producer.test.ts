@@ -12,7 +12,7 @@ import {
 } from "../packages/daemon/src/mission-catalog.ts";
 import { ModelCatalog } from "../packages/daemon/src/models.ts";
 import { ProjectStore } from "../packages/daemon/src/projects.ts";
-import { createDaemonServer } from "../packages/daemon/src/server.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "../packages/daemon/src/testing/daemon-server.ts";
 import { SessionManager } from "../packages/daemon/src/sessions.ts";
 import { TerminalManager } from "../packages/daemon/src/terminals.ts";
 import type { Mission, OperationHost } from "../packages/protocol/src/index.ts";
@@ -74,15 +74,15 @@ test("native mission fixtures are real production HTTP/service payloads, not a s
 	const history = t.mock.method(sessions, "history", async () => {
 		throw new Error("History must not be read");
 	});
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home: directory, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home: directory, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(directory),
+		models: new ModelCatalog(directory),
 		terminals,
-	];
-	args[19] = sources;
-	const server = createDaemonServer(...args);
+	};
+	args.catalog = sources;
+	const server = createDaemonServer(args);
 	t.after(async () => {
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		await terminals.shutdown();

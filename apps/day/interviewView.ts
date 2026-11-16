@@ -17,6 +17,36 @@ export function answerKey(interview: Interview, question: Question): string {
 	return `${interview.id}/${question.id}`;
 }
 
+type SavedInterviewView = Pick<import("pilot-day/native").SavedView, "questions" | "seeAll">;
+
+/** Encodes round-scoped question identities without splitting their scope. */
+export function captureInterviewView(): SavedInterviewView {
+	return {
+		questions: Object.entries(atQuestion()).map(([interview, question]) => `${interview}/${question}`),
+		seeAll: Object.entries(seeAll())
+			.filter(([, all]) => all)
+			.map(([interview]) => interview),
+	};
+}
+
+/** Restores disclosure state, not answers or submissions. */
+export function restoreInterviewView(view: SavedInterviewView) {
+	const shown: Record<string, string> = {};
+	for (const entry of view.questions) {
+		// Scope and round identities can contain slashes; question IDs cannot.
+		const at = entry.lastIndexOf("/");
+		if (at > 0) shown[entry.slice(0, at)] = entry.slice(at + 1);
+	}
+	atQuestion.set(shown);
+	seeAll.set(Object.fromEntries((view.seeAll ?? []).map((interview) => [interview, true])));
+}
+
+export function resetInterviewView() {
+	atQuestion.set({});
+	writing.set({});
+	seeAll.set({});
+}
+
 /** Sets one key's value in a keyed store. */
 export function put<T>(store: Signal<Record<string, T>>, key: string, value: T) {
 	store.update((all) => ({ ...all, [key]: value }));

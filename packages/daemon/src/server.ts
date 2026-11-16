@@ -1,9 +1,7 @@
 /** HTTP API and WebSocket event streams. */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { join } from "node:path";
 import type { RetainedCallQuery } from "@pilot/kernel/retained-calls";
 import type {
-	AttachmentChatPayload,
 	AttachmentUpload,
 	BindPullRequestRequest,
 	ChangeModelRequest,
@@ -63,112 +61,61 @@ import type {
 	UsageAnalyticsQuery,
 	UsageHistoryQuery,
 } from "@pilot/protocol";
-import { nodeTelemetry, type TraceCarrier, traceCarrier } from "@pilot/telemetry";
+import { nodeTelemetry, traceCarrier } from "@pilot/telemetry";
 import { type WebSocket, WebSocketServer } from "ws";
-import { AttachmentStore } from "./attachment-store.ts";
-import type { ReadOnlyAttentionExecutor } from "./attention-executor.ts";
 import { createSocketSender } from "./backpressure.ts";
-import { RepositoryChanges } from "./changes.ts";
-import { type ChatSettingsService, InvalidChatSettings } from "./chat-settings.ts";
+import { InvalidChatSettings } from "./chat-settings.ts";
 import { ChatStreams } from "./chat-streams.ts";
-import type { DaemonConfig } from "./config.ts";
-import { CONNECTION_CONTROLS, ConnectionControls } from "./connection-controls.ts";
+import { CONNECTION_CONTROLS } from "./connection-controls.ts";
+import type { DaemonServices } from "./daemon-services.ts";
 import { DatabaseSettingsError } from "./databases.ts";
-import { DeliveredArtifacts } from "./delivered-artifact.ts";
-import { awaitDiagnosticRead, diagnosticContextResponse } from "./diagnostic-context.ts";
-import {
-	DIAGNOSTICS_CONTROLS,
-	DiagnosticsControls,
-	isDiagnosticsRevocation,
-	validateDiagnosticsIntent,
-} from "./diagnostics-controls.ts";
+import { awaitDiagnosticRead } from "./diagnostic-context.ts";
+import { DIAGNOSTICS_CONTROLS, isDiagnosticsRevocation, validateDiagnosticsIntent } from "./diagnostics-controls.ts";
 import { EnvironmentApprovalRequired } from "./environment-profile.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
-import type { GitHubImportService } from "./github-import.ts";
-import type { GitHubSetupService } from "./github-setup.ts";
-import { GlobalUpdatePreparation } from "./global-update-preparation.ts";
-import { dispositionTarget, HumanReviews } from "./human-reviews.ts";
-import { InsightsApply } from "./insights-apply.ts";
+import { dispositionTarget } from "./human-reviews.ts";
 import { insightsSetupDefaults } from "./insights-defaults.ts";
-import { InsightsEnable } from "./insights-enable.ts";
-import { InsightsLegacy, type InsightsLegacySelector } from "./insights-legacy.ts";
-import { admitInsightsOperation, insightsFindingsPage, isInsightsOperation } from "./insights-native.ts";
-import { InsightsOwner, isInsightsOwnerOperation } from "./insights-owner.ts";
-import { InsightsReplacement } from "./insights-replacement.ts";
-import { InsightsTransition } from "./insights-transition.ts";
-import { InsightsWorkspace, isInsightsWorkspaceOperation } from "./insights-workspace.ts";
+import type { InsightsLegacySelector } from "./insights-legacy.ts";
+import { insightsFindingsPage, isInsightsOperation } from "./insights-native.ts";
+import { isInsightsOwnerOperation } from "./insights-owner.ts";
+import { isInsightsWorkspaceOperation } from "./insights-workspace.ts";
 import { LandedChanges } from "./landed-changes.ts";
-import type { LiveUpdate, LiveUpdateIdentity, LiveUpdateService, LiveUpdateTarget } from "./live-update.ts";
-import { MachineInformationReader } from "./machine.ts";
-import { McpSetupError, McpSetupStore } from "./mcp-setup.ts";
-import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
-import { buildMissionCatalog, type MissionCatalogSources } from "./mission-catalog.ts";
+import type { LiveUpdate, LiveUpdateIdentity, LiveUpdateTarget } from "./live-update.ts";
+import { McpSetupError } from "./mcp-setup.ts";
+import { SignInUnavailable } from "./mcp-status.ts";
+import { buildMissionCatalog } from "./mission-catalog.ts";
 import { parseMissionControl } from "./mission-controls.ts";
 import { parseMissionLifecycle } from "./mission-lifecycle.ts";
 import type { MissionService } from "./mission-service.ts";
-import { isThreadOperation, MissionThreads } from "./mission-threads.ts";
+import { isThreadOperation } from "./mission-threads.ts";
 import type { MissionStore } from "./missions.ts";
-import { MODEL_CONTROLS, ModelControls } from "./model-controls.ts";
+import { MODEL_CONTROLS } from "./model-controls.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
-import type { ModelCatalog } from "./models.ts";
-import { NativeAttention } from "./native-attention.ts";
-import { NativeChat } from "./native-chat.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
-import { isIntakeOperation, NativeIntake } from "./native-intake.ts";
-import {
-	isNativePlanningOperation,
-	NativeMissionPlanning,
-	PlanningInventoryCapacity,
-} from "./native-mission-planning.ts";
-import { NativeProjects, PROJECT_ACTION } from "./native-projects.ts";
-import { canonicalJSON, durableJSON, OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
+import { isIntakeOperation } from "./native-intake.ts";
+import { isNativePlanningOperation, PlanningInventoryCapacity } from "./native-mission-planning.ts";
+import { PROJECT_ACTION } from "./native-projects.ts";
+import { canonicalJSON, OperationRejected } from "./operation-journal.ts";
 import { isAllowedOrigin } from "./origin.ts";
-import { PathCompletionReader } from "./path-completion.ts";
 import { PlanningActivityNotices } from "./planning-activity.ts";
-import { PlanningWorkers } from "./planning-workers.ts";
-import type { PowerService } from "./power.ts";
-import { type DashboardProviders, ProjectDashboardService } from "./project-dashboard.ts";
-import type { KnowledgeService } from "./project-knowledge.ts";
-import type { ProjectMemoryService } from "./project-memory.ts";
-import { AutomationsRevisionConflict, EnvironmentRevisionConflict, expandHome, type ProjectStore } from "./projects.ts";
+import { AutomationsRevisionConflict, EnvironmentRevisionConflict, expandHome } from "./projects.ts";
 import { PTY_INPUT_CHUNK } from "./pty-input.ts";
-import { RepositoryBrowser } from "./repository-browser.ts";
 import { isRetiredDevboxOperation } from "./retired-devboxes.ts";
-import { optionalReviewRequests, retainedFeedbackReader } from "./review-request-access.ts";
-import { ReviewStore } from "./reviews.ts";
-import type { RuntimeContributor } from "./runtime-admission.ts";
-import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
-import type { ScheduleService } from "./schedules.ts";
-import { CommandRejected, NotFound, type SessionManager } from "./sessions.ts";
-import { SetupError, type SetupService } from "./setup.ts";
-import { SLACK_CONTROLS, SlackControls } from "./slack-controls.ts";
+import { RuntimeResources } from "./runtime-admission.ts";
+import { NotFound } from "./sessions.ts";
+import { SetupError } from "./setup-error.ts";
+import { SLACK_CONTROLS } from "./slack-controls.ts";
 import { parseSlackMessageLink } from "./slack-format.ts";
-import { SlackImportRefused, type SourceRegistry } from "./sources.ts";
+import { SlackImportRefused } from "./sources.ts";
 import { parseTaskModel } from "./task-model.ts";
 import type { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { terminalSender } from "./terminal-output.ts";
-import type { TerminalManager } from "./terminals.ts";
-import { validatePatch } from "./tracked-items.ts";
-import { type ReservationReceipt, UpdateReservation } from "./update-reservation.ts";
+import { validatePatch } from "./tracked-item-patch.ts";
 import { UsageQueryCapacityError } from "./usage-history.ts";
 import { usageAnalyticsQuery } from "./usage-history-validation.ts";
-import { UserFeedbackService } from "./user-feedback.ts";
-import { FEEDBACK_WORK, isFeedbackAnswer, UserFeedbackWorkService } from "./user-feedback-work.ts";
-import { UserVerifications } from "./user-verification.ts";
-import { isWorkflowOperation, WorkflowConfirmations } from "./workflow-confirmations.ts";
-
-/** Native host capability authenticates locally verified updater checkpoints, not agent assertions.
- * The capability holder must validate the signed staged candidate and measured source/GUI build,
- * retain its exact immutable runtime target, and observe the old GUI exit plus the replacement
- * executable/receipt before reporting gui-ready. The daemon validates the durable transaction and
- * process-captured daemon identity. It does not claim to verify native signatures from JSON.
- * Never pass this capability to workers or expose these transitions through session IPC.
- */
-export interface RuntimeUpdateIntegration {
-	service: LiveUpdateService;
-	contributors?: readonly RuntimeContributor[];
-}
+import { FEEDBACK_WORK, isFeedbackAnswer } from "./user-feedback-work.ts";
+import { isWorkflowOperation } from "./workflow-confirmations.ts";
 
 const MAX_BODY = 1024 * 1024;
 const HISTORY_PAGE_DEFAULT = 100;
@@ -384,119 +331,87 @@ function closeReason(message: string): string {
 	return reason;
 }
 
-export function createDaemonServer(
-	_config: DaemonConfig,
-	sessions: SessionManager,
-	projects: ProjectStore,
-	models: ModelCatalog,
-	terminals: TerminalManager,
-	missions?: { service: MissionService; store: MissionStore; knowledge?: KnowledgeService },
-	dashboardProviders?: DashboardProviders,
-	memory?: ProjectMemoryService,
-	schedules?: ScheduleService,
-	tracking?: SourceRegistry,
-	power?: PowerService,
-	mcp?: McpStatusService,
-	hello?: DaemonHello,
-	setup?: SetupService,
-	legacyAdmissionFrozen = false,
-	_reserved?: undefined,
-	telemetry?: TelemetrySettingsService,
-	githubSetup?: GitHubSetupService,
-	githubImport?: GitHubImportService,
-	catalog?: MissionCatalogSources,
-	environment?: import("./environment.ts").EnvironmentService,
-	bootstrap?: import("./runtime-owner.ts").RuntimeOwner,
-	subscriptions?: import("./subscription-refresh.ts").SubscriptionRefresh,
-	chatSettings?: ChatSettingsService,
-	liveUpdate?: RuntimeUpdateIntegration,
-	attentionExecutor?: ReadOnlyAttentionExecutor,
-): Server & {
+export function createDaemonServer(services: DaemonServices): Server & {
 	runtimeResources: RuntimeResources;
 	runtimeReady: Promise<void>;
 	runtimeFrozen(): boolean;
-	recoverOperations(): void;
-	closePlanning(): Promise<void>;
+	closeServices(): Promise<void>;
 } {
-	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
-	sessions.diagnosticFeatureUsage = telemetry ? (host) => telemetry.featureUsage.snapshot(host) : undefined;
-	sessions.diagnosticDomainRead = async (request) => {
-		const host = request.host!;
-		const limit = request.limit ?? 8,
-			offset = request.before ?? 0;
-		const response = (data: unknown, count: number, more: boolean) =>
-			diagnosticContextResponse(host, data, { scanned: count, more, ...(more ? { before: offset + count } : {}) });
-		if (request.action === "refresh_health" && tracking) {
-			const snapshot = tracking.refreshHealth({
-				projectId: request.projectId,
-				kind: request.query as "slack" | "linear" | undefined,
-				offset,
-				limit,
-				channelOffset: request.channelOffset,
-			});
-			return response(snapshot, snapshot.scanned, snapshot.more);
-		}
-		if (request.action === "features" && telemetry) {
-			const snapshot = telemetry.featureUsage.snapshot(host);
-			const cells = snapshot.cells.filter(
-				(cell) =>
-					(!request.query || cell.feature === request.query) &&
-					(!request.since || cell.day >= request.since) &&
-					(!request.until || cell.day <= request.until),
-			);
-			const rows = cells.slice(offset, offset + limit);
-			return response(
-				{
-					...snapshot,
-					cells: rows,
-					requestedWindow: { since: request.since, until: request.until },
-					coverage: "partial_native_ui_observations_only_missing_cells_are_unknown_not_zero",
-				},
-				rows.length,
-				offset + rows.length < cells.length,
-			);
-		}
-		if (request.action === "projects") {
-			const list = projects.list();
-			const rows = list.slice(offset, offset + limit).map((p) => ({ id: p.id, name: p.name }));
-			return response({ projects: rows }, rows.length, offset + rows.length < list.length);
-		}
-		if (request.action === "missions" && missions) {
-			const list = missions.store.list(request.projectId);
-			const rows = list.slice(offset, offset + limit);
-			return response({ missions: rows }, rows.length, offset + rows.length < list.length);
-		}
-		if (request.action === "mission" && missions) {
-			if (!missions.store.get(request.missionId!))
-				return { ...response(null, 0, false), status: "missing", reason: "deleted" };
-			const tasks = missions.store.tasks(request.missionId!);
-			const rows = tasks.slice(offset, offset + limit);
-			const linearSync = missions.store.linearSyncDiagnostics(request.missionId!, offset, limit);
-			const more = offset + rows.length < tasks.length || linearSync.more;
-			return response(
-				{
-					mission: missions.store.get(request.missionId!),
-					brief: missions.store.brief(request.missionId!),
-					tasks: rows,
-					// Why planning moves, waits or is stuck, read-only. Null without a planning agent.
-					planning: planningWorkers?.diagnosticPlanning(request.missionId!) ?? null,
-					linearSync: { ...linearSync, coverage: "Persisted mission sync only, no network fetch" },
-				},
-				Math.max(rows.length, linearSync.tickets.length),
-				more,
-			);
-		}
-		if (request.action === "issues" && tracking) {
-			projects.require(request.projectId!);
-			const items = await tracking.listItems({ projectId: request.projectId!, limit, offset, dismissed: false });
-			return response(
-				{ ...items, coverage: "retained_current_integration_binding_only_no_network_fetch" },
-				items.items.length,
-				items.items.length === limit,
-			);
-		}
-		return { ...response(null, 0, false), status: "unavailable", reason: "unsupported" };
-	};
+	const {
+		dependencies: options,
+		admitOperation,
+		machine,
+		reviews,
+		mcpSetup,
+		dashboards,
+		repositoryChanges,
+		pathCompletion,
+		repositories,
+		attachments,
+		transfers,
+		mutations,
+		runtimeSources,
+		runtimeResources,
+		globalUpdate,
+		runtimeReady,
+		runtimeFrozen,
+		reservations,
+		journal,
+		feedbackReader,
+		reviewRequests,
+		humanReviews,
+		workflowConfirmations,
+		planningWorkers,
+		nativePlanning,
+		missionThreads,
+		nativeIntake,
+		nativeChat,
+		nativeProjects,
+		userVerifications,
+		feedbackWork,
+		userFeedback,
+		deliveredArtifacts,
+		nativeAttention,
+		insightsWorkspace,
+		insightsTransition,
+		insightsOwner,
+		insightsLegacy,
+		insightsEnable,
+		insightsApply,
+		insightsReplacement,
+		connectionControls,
+		slackControls,
+		modelControls,
+		diagnosticsControls,
+	} = services;
+	const {
+		config: _config,
+		sessions,
+		projects,
+		models,
+		terminals,
+		missions,
+		dashboardProviders,
+		memory,
+		schedules,
+		tracking,
+		power,
+		mcp,
+		hello,
+		setup,
+		legacyAdmissionFrozen = false,
+		telemetry,
+		githubSetup,
+		githubImport,
+		catalog,
+		environment,
+		bootstrap,
+		subscriptions,
+		chatSettings,
+		liveUpdate,
+		attentionExecutor,
+		nativeAuthority,
+	} = options;
 	const catalogMissions = new Map((missions?.store.list() ?? []).map((mission) => [mission.id, mission]));
 	const catalogHost = hello?.lineageId
 		? { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId }
@@ -511,649 +426,6 @@ export function createDaemonServer(
 					sharedContext: () => catalogGroups,
 				}
 			: undefined);
-	const machine = new MachineInformationReader(_config.home, hello?.daemonVersion ?? "unknown");
-	const reviews = new ReviewStore(_config.home);
-	const mcpSetup = new McpSetupStore(_config.agentDir);
-	const dashboards = new ProjectDashboardService({
-		sessions,
-		projects,
-		reviews,
-		...(missions ? { missions: missions.store } : {}),
-		providers: {
-			...dashboardProviders,
-			...(tracking ? { tracked: (id: string) => tracking.dashboard(id) } : {}),
-			...(tracking ? { inbox: (id: string) => tracking.inboxCount(id) } : {}),
-			...(memory ? { memory: (id: string) => memory.summary(id) } : {}),
-			...(schedules
-				? {
-						scheduled: (id: string) => schedules.dashboard(id),
-						scheduledProjects: () => schedules.noticeProjects(),
-					}
-				: {}),
-			onChange(listener) {
-				const stops = [
-					dashboardProviders?.onChange?.(listener),
-					memory?.onChange(listener),
-					schedules?.onChange(listener),
-					tracking?.onChange(listener),
-				];
-				return () => {
-					for (const stop of stops) stop?.();
-				};
-			},
-		},
-	});
-	const repositoryChanges = new RepositoryChanges();
-	const pathCompletion = new PathCompletionReader();
-	const repositories = new RepositoryBrowser(projects);
-	const attachments = new AttachmentStore(_config.home);
-	const transfers = new RuntimeAdmission();
-	const mutations = new RuntimeAdmission();
-	const runtimeSources = [
-		terminals,
-		attachments,
-		sessions,
-		transfers,
-		mutations,
-		...(githubSetup ? [githubSetup] : []),
-		...(githubImport ? [githubImport] : []),
-		...(setup ? [setup] : []),
-		...(attentionExecutor ? [attentionExecutor.maintenance] : []),
-	];
-	const runtimeResources = new RuntimeResources([...runtimeSources, ...(liveUpdate?.contributors ?? [])]);
-	if (bootstrap)
-		sessions.bindLifecycleRuntime({
-			...bootstrap.identity(),
-			...(hello?.lineageId ? { host: { daemonId: hello.daemonId, lineageId: hello.lineageId } } : {}),
-		});
-	liveUpdate?.service.attach(runtimeResources);
-	// Freeze synchronously before loading retained maintenance, before any recovery is admitted.
-	const globalUpdate =
-		bootstrap && hello?.lineageId
-			? new GlobalUpdatePreparation(
-					new OperationJournal(join(_config.home, "global-update-operations"), {
-						hostId: "daemon",
-						daemonId: hello.daemonId,
-						lineageId: hello.lineageId,
-					}),
-					runtimeResources,
-					sessions,
-				)
-			: undefined;
-	const runtimeReady = Promise.all([liveUpdate?.service.load(), globalUpdate?.load()]).then(() => undefined);
-	// Startup restore is allowed under maintenance, but work and recovery are not.
-	const runtimeFrozen = () => legacyAdmissionFrozen || !!liveUpdate?.service.frozen || !!globalUpdate?.frozen;
-	let lifecycleInterrupted = false;
-	const reservations = new UpdateReservation(
-		new RuntimeResources(
-			// An app update keeps pilotd running, so paused agents and open terminals need not block it.
-			runtimeSources.map((source) =>
-				source === sessions
-					? {
-							freezeAdmissions: () => sessions.freezeAdmissions(),
-							blockers: () => sessions.updateReservationBlockers(),
-						}
-					: source === terminals
-						? {
-								freezeAdmissions: () => terminals.freezeAdmissions(),
-								blockers: () => terminals.admissionBlockers(),
-							}
-						: source,
-			),
-		),
-		undefined,
-		undefined,
-		{
-			freezeAdmissions: () => {
-				const release = runtimeResources.freezeAdmissions();
-				return () => {
-					release();
-					if (lifecycleInterrupted) {
-						lifecycleInterrupted = false;
-						void sessions.resumeMaintenance().catch((error) => console.warn("pilotd: lifecycle recovery", error));
-					}
-				};
-			},
-			blockers: () => runtimeResources.blockers(),
-		},
-		// Stop/Restart cannot interrupt an unfinished run merely because it paused.
-		() => sessions.prepareUpdate().ready,
-		async (operationId, purpose, replacement) => {
-			// Intent is on disk before the first interrupted tool/job. The native
-			// handoff journal separately owns service stop/start and runtime identity.
-			await durableJSON(join(_config.home, ".daemon-lifecycle.json"), {
-				schema: 1,
-				operationId,
-				purpose,
-				phase: "checkpointing",
-			});
-			lifecycleInterrupted = true;
-			const checkpoints = await Promise.allSettled([
-				sessions.checkpointLifecycle(operationId, purpose, replacement),
-				terminals.checkpointLifecycle(),
-			]);
-			const failed = checkpoints.find((result) => result.status === "rejected");
-			if (failed?.status === "rejected") {
-				// Exact failed attempt evidence, not a quiescence/resume receipt.
-				await durableJSON(join(_config.home, ".daemon-lifecycle.json"), {
-					schema: 1,
-					operationId,
-					purpose,
-					phase: "refused",
-					affectedSessions: sessions.lifecycleManifest(operationId),
-				});
-				throw failed.reason;
-			}
-			await durableJSON(join(_config.home, ".daemon-lifecycle.json"), {
-				schema: 1,
-				operationId,
-				purpose,
-				phase: "checkpointed",
-				affectedSessions: sessions.lifecycleManifest(operationId),
-			});
-		},
-	);
-	let coordinatedReservation: { operationId: string; binding: string } | undefined;
-	bootstrap?.updates(async (action, value) => {
-		await runtimeReady;
-		if (!value || typeof value !== "object") throw new Error("update_receipt_invalid");
-		if ("globalUpdate" in value) {
-			// Existing native owner proof only. Never an agent/session or TSX route.
-			// A preparation receipt is not signature/process/replacement authority.
-			if (!globalUpdate) throw new Conflict("Invalid global update");
-			const input = value as { globalUpdate: DurableOperation; release?: DurableOperation; runtime?: unknown };
-			const operation = input.globalUpdate;
-			if (action === "release") {
-				if (Object.keys(value).sort().join() !== "globalUpdate,release,runtime" || !input.release)
-					throw new Conflict("Invalid global release");
-				// The native service owner verifies the signed app and exact successor
-				// (or rollback) before sending. Compare process-captured identity here,
-				// never a mutable owner file, public hello or a matching version alone.
-				const verifyRuntime = async () => {
-					const current = bootstrap?.identity();
-					if (
-						!current?.build ||
-						!current.runtimeRoot ||
-						canonicalJSON(input.runtime) !==
-							canonicalJSON({ boot: current.boot, build: current.build, runtimeRoot: current.runtimeRoot })
-					)
-						throw new Conflict("Global release runtime changed");
-				};
-				await verifyRuntime();
-				return globalUpdate.release(input.release, operation, verifyRuntime);
-			}
-			if (Object.keys(value).join() !== "globalUpdate") throw new Conflict("Invalid global update");
-			if (action === "inspect") return (await globalUpdate.lookup(operation)) ?? null;
-			if (action === "prepare") return globalUpdate.prepare(operation);
-			if (action === "verify") return globalUpdate.verify(operation);
-			throw new Conflict("Native verified global update release is not configured");
-		}
-		if (globalUpdate?.frozen) throw new Conflict("Global update owns admissions; inspect the original operation");
-		const receipt = value as ReservationReceipt & {
-			liveUpdate?: LiveUpdateTarget & { id: string; guiBuild: string };
-		};
-		const coordinated = receipt.liveUpdate;
-		let binding: string | undefined;
-		if (liveUpdate?.service.frozen || coordinated) {
-			const update = liveUpdate?.service.snapshot();
-			const target = update?.target as (LiveUpdateTarget & { guiBuild: string }) | undefined;
-			if (
-				!update ||
-				!target ||
-				!coordinated ||
-				Object.keys(coordinated).sort().join(",") !== "build,guiBuild,id,runtimeRoot,source" ||
-				coordinated.id !== update.id ||
-				coordinated.guiBuild !== update.build ||
-				coordinated.guiBuild !== target.guiBuild ||
-				coordinated.source !== target.source ||
-				coordinated.runtimeRoot !== target.runtimeRoot ||
-				!coordinated.build ||
-				Object.keys(coordinated.build).sort().join(",") !== Object.keys(target.build).sort().join(",") ||
-				Object.entries(target.build).some(
-					([key, v]) => coordinated.build[key as keyof typeof target.build] !== v,
-				) ||
-				!(
-					(update.phase === "gui-installing" && receipt.purpose === undefined) ||
-					(update.phase === "daemon-installing" && receipt.purpose === "daemon-upgrade")
-				)
-			)
-				throw new Conflict("Coordinated live update reservation does not match durable intent");
-			binding = JSON.stringify([update.id, target.source, target.guiBuild, target.runtimeRoot, target.build]);
-			if (
-				action !== "prepare" &&
-				action !== "inspect" &&
-				(coordinatedReservation?.operationId !== receipt.operationId || coordinatedReservation.binding !== binding)
-			)
-				throw new Conflict("Coordinated live update reservation changed");
-		}
-		if (action === "inspect") return receipt;
-		if (action === "prepare") {
-			const prepared = await reservations.prepare(
-				receipt.operationId,
-				receipt.purpose,
-				receipt.interrupt,
-				receipt.replacement,
-			);
-			coordinatedReservation = binding ? { operationId: receipt.operationId, binding } : undefined;
-			return coordinated ? { ...prepared, liveUpdate: structuredClone(coordinated) } : prepared;
-		}
-		if (action === "cancel") {
-			reservations.cancel(receipt);
-			coordinatedReservation = undefined;
-			return receipt;
-		}
-		const verified = reservations.verify(receipt);
-		return coordinated ? { ...verified, liveUpdate: structuredClone(coordinated) } : verified;
-	});
-	if (legacyAdmissionFrozen) runtimeResources.freezeAdmissions();
-	const journal = hello?.lineageId
-		? new OperationJournal(join(_config.home, "operations"), {
-				hostId: "daemon",
-				daemonId: hello.daemonId,
-				lineageId: hello.lineageId,
-			})
-		: undefined;
-	const admitOperation = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
-		const end = mutations.begin({ kind: "operation", id: op.operationId });
-		try {
-			return await admitOperationHeld(op, trace);
-		} finally {
-			end();
-		}
-	};
-	const feedbackReader = (
-		target: Pick<import("@pilot/protocol").ReviewDispositionTarget, "projectId" | "sessionId" | "snapshotId">,
-	) => {
-		if (!missions) throw new ServiceUnavailable("Retained feedback unavailable");
-		return retainedFeedbackReader(missions.store, sessions, projects, target);
-	};
-	sessions.feedbackMetricsScope = (operationId, sessionId) =>
-		missions?.store.feedback.metricsScope(operationId, sessionId);
-	const reviewRequests = missions ? optionalReviewRequests(missions.store, sessions, projects) : undefined;
-	const humanReviews = missions
-		? new HumanReviews({
-				store: missions.store.humanReviews,
-				qualify: (target) => feedbackReader(target).qualify(target),
-				requirement: (target) => missions.store.reviewRequests.requirement(target),
-				// Real required-check/fresh-review producers remain absent. Approve refuses.
-			})
-		: undefined;
-	const workflowConfirmations =
-		journal && missions
-			? new WorkflowConfirmations({
-					store: missions.store,
-					journal,
-					authorize: (projectId, coordinatorSessionId) => {
-						const project = projects.require(projectId);
-						const coordinator = sessions.get(coordinatorSessionId);
-						if (!coordinator || coordinator.projectId !== projectId || coordinator.archivedAt)
-							throw new Conflict("Workflow coordinator project or availability changed");
-						return payloadHash(
-							canonicalJSON({
-								project,
-								coordinator: {
-									id: coordinatorSessionId,
-									projectId: coordinator.projectId,
-									mode: coordinator.mode,
-									role: coordinator.role,
-								},
-							}),
-						);
-					},
-					dispositions: humanReviews,
-					// No consent configuration, provider executor or review prerequisite producer is installed here.
-				})
-			: undefined;
-	const planningWorkers =
-		journal && missions && workflowConfirmations
-			? new PlanningWorkers({
-					home: _config.home,
-					store: missions.store,
-					journal,
-					projects,
-					sessions,
-					confirmations: workflowConfirmations,
-					...(missions.knowledge ? { knowledge: missions.knowledge } : {}),
-					...(tracking ? { tracking } : {}),
-				})
-			: undefined;
-	const nativePlanning =
-		journal && missions && workflowConfirmations
-			? new NativeMissionPlanning({
-					store: missions.store,
-					journal,
-					projects,
-					sessions,
-					confirmations: workflowConfirmations,
-					workers: planningWorkers,
-				})
-			: undefined;
-	// Ready research questions start read-only research chats (D28), within existing limits.
-	planningWorkers?.startResearch();
-	const missionThreads =
-		journal && missions
-			? new MissionThreads({ store: missions.store, journal, projects, sessions, workers: planningWorkers })
-			: undefined;
-	// Thread messages that still wait for a planning agent go to their thread chats instead.
-	void missionThreads?.migrate().catch((error: unknown) => console.warn(`pilotd: thread migration failed: ${error}`));
-	const nativeIntake =
-		journal && tracking
-			? new NativeIntake({ journal, tracking, projects, sessions, missions: missions?.store })
-			: undefined;
-	const nativeChat = journal ? new NativeChat({ journal, projects, sessions }) : undefined;
-	const nativeProjects =
-		journal && githubSetup && githubImport
-			? new NativeProjects({ journal, projects, setup: githubSetup, imports: githubImport })
-			: undefined;
-	const userVerifications =
-		journal && missions ? new UserVerifications({ journal, store: missions.store, projects, sessions }) : undefined;
-	const feedbackWork =
-		missions && nativeChat
-			? new UserFeedbackWorkService({ store: missions.store, chats: nativeChat, sessions, attachments })
-			: undefined;
-	const userFeedback = missions
-		? new UserFeedbackService({ store: missions.store, projects, sessions, work: feedbackWork, attachments })
-		: undefined;
-	const deliveredArtifacts =
-		userVerifications && missions
-			? new DeliveredArtifacts({ store: missions.store, projects, sessions, verifications: userVerifications })
-			: undefined;
-	const nativeAttention =
-		journal && missions
-			? new NativeAttention({
-					home: journal.destination,
-					store: missions.store,
-					projects,
-					sessions,
-					journal,
-					executor: attentionExecutor,
-					// Startup supplies no executor. Dependent-work consumers remain separate adapters.
-				})
-			: undefined;
-	const insightsWorkspace =
-		journal && missions && schedules
-			? new InsightsWorkspace({
-					home: _config.home,
-					host: journal.destination,
-					projects,
-					models,
-					store: missions.store.insightsWorkspace,
-					journal,
-					legacyGuard: () => {
-						sessions.assertNoLegacyInsights();
-						schedules.assertNoLegacyInsights(journal.destination);
-					},
-				})
-			: undefined;
-	const insightsTransition =
-		journal &&
-		missions?.store.insightsTransition &&
-		missions.store.insightsWorkspace &&
-		sessions.insightsAdmissionEpoch &&
-		schedules
-			? new InsightsTransition({
-					home: _config.home,
-					projects,
-					mission: (id) => {
-						const m = missions.store.require(id);
-						return { projectId: m.projectId, status: m.status };
-					},
-					workspace: missions.store.insightsWorkspace,
-					store: missions.store.insightsTransition,
-					journal,
-					sessions,
-					schedules,
-				})
-			: undefined;
-	const insightsOwner =
-		journal && missions?.store.insightsOwner && sessions.insightsAdmissionEpoch && schedules
-			? new InsightsOwner({
-					home: _config.home,
-					projects,
-					models,
-					workspace: missions.store.insightsWorkspace,
-					store: missions.store.insightsOwner,
-					transition: insightsTransition,
-					sessions,
-					schedules,
-					journal,
-				})
-			: undefined;
-	const insightsLegacy =
-		journal && missions?.store.insightsLegacy
-			? new InsightsLegacy({
-					home: _config.home,
-					host: journal.destination,
-					projects,
-					sessions,
-					journal,
-					records: missions.store.insightsLegacy,
-					mission: (id) => {
-						const m = missions.store.require(id);
-						return { projectId: m.projectId, status: m.status };
-					},
-				})
-			: undefined;
-	const insightsEnable =
-		journal && missions && schedules
-			? new InsightsEnable({
-					home: _config.home,
-					host: journal.destination,
-					projects,
-					missions: missions.store,
-					models,
-					sessions,
-					schedules,
-					journal,
-				})
-			: undefined;
-	const insightsApply =
-		journal && missions && schedules && insightsEnable
-			? new InsightsApply(
-					{
-						home: _config.home,
-						host: journal.destination,
-						projects,
-						missions: missions.store,
-						models,
-						sessions,
-						schedules,
-						journal,
-					},
-					insightsEnable,
-				)
-			: undefined;
-	const insightsReplacement =
-		journal && missions && schedules
-			? new InsightsReplacement({
-					home: _config.home,
-					host: journal.destination,
-					projects,
-					missions: missions.store,
-					models,
-					sessions,
-					schedules,
-					journal,
-				})
-			: undefined;
-	const connectionControls = new ConnectionControls(mcpSetup, mcp, _config.mcpSetupReadOnly);
-	const slackControls = tracking ? new SlackControls(projects, tracking) : undefined;
-	const modelControls = new ModelControls(models, projects, setup, sessions, _config.modelScopeReadOnly);
-	const diagnosticsControls =
-		telemetry && journal
-			? new DiagnosticsControls(
-					telemetry,
-					models,
-					sessions,
-					_config.home,
-					journal.destination,
-					async () => {
-						await tracking?.flushDiagnosticEvidence?.();
-					},
-					async () => {
-						await tracking?.clearDiagnosticEvidence?.();
-					},
-				)
-			: undefined;
-	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
-		if (op.kind === CONNECTION_CONTROLS) throw new Error("Connection outcome unknown; lookup only");
-		if (op.kind === SLACK_CONTROLS) throw new Error("Slack outcome unknown; lookup only");
-		if (op.kind === DIAGNOSTICS_CONTROLS) throw new Error("Diagnostics outcome unknown; lookup only");
-		if (op.kind === MODEL_CONTROLS) throw new Error("Model settings outcome unknown; lookup only");
-		if (isThreadOperation(op.kind)) {
-			if (!missionThreads) throw new Error("Topic lookup unavailable");
-			return missionThreads.admit(op, false);
-		}
-		if (op.kind === "project-preferences-update") throw new Error("Preference outcome is unknown; Check only");
-		if (op.kind === PROJECT_ACTION) {
-			if (!nativeProjects) throw new Error("Project setup outcome is unknown; Check only");
-			return nativeProjects.recover(op);
-		}
-		if (op.kind === "user-feedback") throw new Error("Feedback outcome is unknown; Check only");
-		if (op.kind === FEEDBACK_WORK) {
-			// Only an answer settles, by exact accepted-input lookup; nothing is sent again.
-			if (!feedbackWork) throw new Error("Feedback step outcome is unknown; Check only");
-			return feedbackWork.recover(op);
-		}
-		if (op.kind === "user-verification") throw new Error("Verification outcome is unknown; Check only");
-		if (op.kind === "attention-answer") {
-			if (!nativeAttention) throw new OperationRejected("Native attention unavailable");
-			return nativeAttention.answer(op, false);
-		}
-		if (planningWorkers?.owns(op)) return planningWorkers.recover(op);
-		if (op.kind === "native-chat-create") {
-			throw new Error("Chat creation outcome is unknown; check its saved receipt");
-		}
-		if (isIntakeOperation(op.kind)) {
-			// Recovery is lookup-only; pending intake effects never enter again.
-			throw new Error("Intake outcome is unknown; check its saved receipt");
-		}
-		if (isNativePlanningOperation(op.kind)) {
-			if (!nativePlanning) throw new OperationRejected("Native planning unavailable");
-			return nativePlanning.admit(op, false);
-		}
-		if (op.kind === "insights-workspace-transfer") {
-			if (!insightsTransition) throw new OperationRejected("Insights transition unavailable");
-			return insightsTransition.admit(op, false);
-		}
-		if (isInsightsOwnerOperation(op.kind)) {
-			if (!insightsOwner) throw new OperationRejected("Owner Insights execution unavailable");
-			return insightsOwner.admit(op);
-		}
-		if (isInsightsWorkspaceOperation(op.kind)) {
-			if (!insightsWorkspace) throw new OperationRejected("App-owned Insights workspace unavailable");
-			return insightsWorkspace.admit(op);
-		}
-		if (isInsightsOperation(op.kind)) insightsWorkspace?.assertLegacyAllowed();
-		if (isWorkflowOperation(op.kind)) {
-			if (!workflowConfirmations) throw new OperationRejected("Workflow confirmations are unavailable");
-			return workflowConfirmations.admit(op);
-		}
-		let payload: unknown;
-		try {
-			payload = JSON.parse(op.payload);
-		} catch {
-			throw new OperationRejected("Invalid payload JSON");
-		}
-		if (!payload || typeof payload !== "object" || Array.isArray(payload))
-			throw new OperationRejected("Expected operation object");
-		if (op.kind === "insights-replace") {
-			if (!insightsReplacement) throw new OperationRejected("Insights replacement is unavailable");
-			return insightsReplacement.replace(op, payload as import("@pilot/protocol").InsightsReplacementPayload);
-		}
-		if (op.kind === "insights-apply") {
-			if (!insightsApply) throw new OperationRejected("Insights Apply is unavailable");
-			return insightsApply.apply(op, payload as import("@pilot/protocol").InsightsApplyPayload);
-		}
-		if (op.kind === "insights-settings") {
-			if (!insightsEnable) throw new OperationRejected("Insights settings are unavailable");
-			return insightsEnable.saveSettings(op, payload as import("@pilot/protocol").InsightsSettingsPayload);
-		}
-		if (op.kind === "insights-enable") {
-			if (!insightsEnable) throw new OperationRejected("Weekly Insights is unavailable");
-			return insightsEnable.enable(op, payload as import("@pilot/protocol").InsightsEnablePayload);
-		}
-		if (isInsightsOperation(op.kind)) {
-			if (!missions) throw new OperationRejected("Insights is unavailable");
-			return admitInsightsOperation(sessions, missions.store.insights, op, payload as Record<string, unknown>);
-		}
-		const attached = op.kind === "chat-create-attached" || op.kind === "chat-send-attached";
-		if (attached) {
-			const body = payload as AttachmentChatPayload<SpawnRequest | SendRequest>;
-			if (!body.request || typeof body.request.message !== "string")
-				throw new OperationRejected("Invalid attached message");
-			const paths = await attachments.adopt(op, body.attachments);
-			const suffix = paths.length
-				? "\n\nAttached images (use the read tool to view these files):\n" +
-					paths.map((path) => `- \`${path}\``).join("\n")
-				: "";
-			payload = { ...body.request, message: body.request.message + suffix };
-		}
-		if (
-			op.kind === "chat-create" ||
-			op.kind === "chat-create-attached" ||
-			op.kind === "diagnostics-create" ||
-			op.kind === "repair-create"
-		) {
-			const request = payload as SpawnRequest;
-			if (typeof request.message !== "string" || !request.message.trim())
-				throw new OperationRejected("message is required");
-			if (op.kind === "diagnostics-create" && request.role !== "diagnostics")
-				throw new OperationRejected("diagnostics-create requires a diagnostics specialist");
-			if (
-				op.kind === "repair-create" &&
-				(request.role !== undefined || request.mode !== "build" || request.diagnosticRepair === undefined)
-			)
-				throw new OperationRejected("repair-create requires an ordinary Build chat");
-			if (op.kind !== "repair-create" && request.diagnosticRepair !== undefined)
-				throw new OperationRejected("diagnostic repair authority requires repair-create");
-			const session = await sessions.spawnDurable(request, op.targetId, op.operationId);
-			return { sessionId: session.id };
-		}
-		if (op.kind === "chat-send" || op.kind === "chat-send-attached") {
-			const request = payload as SendRequest & { questionReplyId?: number; inputGeneration?: number };
-			if (
-				typeof request.message !== "string" ||
-				!request.message.trim() ||
-				(request.mode !== undefined && request.mode !== "steer" && request.mode !== "followUp") ||
-				(request.questionReplyId !== undefined &&
-					(!Number.isSafeInteger(request.questionReplyId) || request.questionReplyId <= 0)) ||
-				(request.inputGeneration !== undefined &&
-					(!Number.isSafeInteger(request.inputGeneration) || request.inputGeneration < 0))
-			)
-				throw new OperationRejected("Invalid message");
-			try {
-				await sessions.sendDurable(op.targetId, request.message, request.mode ?? "followUp", op.operationId, {
-					explicitModelRecovery: true,
-					trace,
-					questionReplyId: request.questionReplyId,
-					inputGeneration: request.inputGeneration,
-				});
-			} catch (error) {
-				if (
-					error instanceof CommandRejected &&
-					(error.code === "stale_question" || (error.code === "stopped" && request.inputGeneration !== undefined))
-				)
-					throw new OperationRejected(error.message);
-				throw error;
-			}
-			return { sessionId: op.targetId };
-		}
-		throw new OperationRejected("Unsupported operation kind");
-	};
-	// Only registered idempotent handlers resume. An interrupted handler always retains the same target.
-	let operationRecovery: Promise<void> | undefined;
-	const recoverOperations = () => {
-		if (journal && !operationRecovery && !runtimeFrozen())
-			operationRecovery = journal
-				.recover(admitOperation, (op) => !isRetiredDevboxOperation(op.kind))
-				.catch((error) => console.warn("pilotd: operation recovery", error))
-				.finally(() => {
-					operationRecovery = undefined;
-				});
-	};
-	// The startup owner calls recovery only after session metadata has loaded.
-	if (!liveUpdate) recoverOperations();
 	let checkpointPending: Promise<unknown> = Promise.resolve();
 	let checkpointQueued = 0;
 	const nativeCheckpoint = <T>(work: () => Promise<T>): Promise<T> => {
@@ -1172,13 +444,13 @@ export function createDaemonServer(
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
 		if (parts[1] === "native-attention" && req.method === "POST" && parts.length <= 3) {
 			res.setHeader("cache-control", "no-store");
-			if (!githubSetup || !nativeAttention) throw new ServiceUnavailable("Native attention unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !nativeAttention) throw new ServiceUnavailable("Native attention unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 			const end = mutations.begin({ kind: "operation", id: "native-attention" });
 			try {
 				const answer = await nativeAttention.dispatch(await readJson(req), parts[2] === "receipt");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				return json(res, 200, answer);
 			} finally {
 				end();
@@ -1186,8 +458,8 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "runtime-update") {
 			res.setHeader("cache-control", "no-store");
-			if (!githubSetup || !liveUpdate) throw new ServiceUnavailable("Coordinated live update is unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !liveUpdate) throw new ServiceUnavailable("Coordinated live update is unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			await runtimeReady;
 			if (parts.length === 2 && req.method === "GET")
 				return json(res, 200, { update: liveUpdate.service.snapshot(), frozen: liveUpdate.service.frozen });
@@ -1273,8 +545,8 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "github-import") {
 			res.setHeader("cache-control", "no-store");
-			if (!githubSetup || !githubImport) throw new SetupError(503, "GitHub import is unavailable on this host.");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !githubImport) throw new SetupError(503, "GitHub import is unavailable on this host.");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			if (parts.length === 3 && parts[2] === "preview" && req.method === "POST") {
 				const body = await readJson<{ url: string; destination?: string }>(req);
 				return json(res, 200, await githubImport.preview(body.url, body.destination));
@@ -1291,16 +563,16 @@ export function createDaemonServer(
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
 		if (parts[1] === "slack-controls") {
 			res.setHeader("cache-control", "no-store");
-			if (!githubSetup || !slackControls) throw new ServiceUnavailable("Native Slack unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !slackControls) throw new ServiceUnavailable("Native Slack unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			if (parts.length === 2 && req.method === "GET")
 				return json(res, 200, slackControls.read(url.searchParams.get("projectId") ?? ""));
 			throw new HttpError(404, "Not found");
 		}
 		if (parts[1] === "connection-controls") {
 			res.setHeader("cache-control", "no-store");
-			if (!githubSetup) throw new ServiceUnavailable("Native connections unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority) throw new ServiceUnavailable("Native connections unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			if (parts.length === 2 && req.method === "GET") return json(res, 200, await connectionControls.read());
 			if (parts.length === 3 && parts[2] === "check" && req.method === "POST") {
 				if (!mcp) throw new ServiceUnavailable("Connection checks unavailable");
@@ -1310,14 +582,14 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "diagnostics-controls" && parts.length === 2 && req.method === "GET") {
 			res.setHeader("cache-control", "no-store");
-			if (!githubSetup || !diagnosticsControls) throw new ServiceUnavailable("Native diagnostics unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !diagnosticsControls) throw new ServiceUnavailable("Native diagnostics unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			return json(res, 200, await diagnosticsControls.read());
 		}
 		if (parts[1] === "model-controls") {
 			res.setHeader("cache-control", "no-store");
-			if (!githubSetup) throw new ServiceUnavailable("Native model settings unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority) throw new ServiceUnavailable("Native model settings unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			if (parts.length === 4 && parts[2] === "recovery" && req.method === "GET") {
 				try {
 					return json(res, 200, await modelControls.recovery(url.searchParams.get("projectId") ?? "", parts[3]!));
@@ -1351,8 +623,9 @@ export function createDaemonServer(
 		if (parts[1] === "setup") {
 			res.setHeader("cache-control", "no-store");
 			if (parts[2] === "github" && parts.length === 3) {
-				if (!githubSetup) throw new SetupError(503, "GitHub setup requires a paired host identity.");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!githubSetup || !nativeAuthority)
+					throw new SetupError(503, "GitHub setup requires a paired host identity.");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (req.method === "GET") return json(res, 200, await githubSetup.status());
 				if (req.method === "POST") return json(res, 200, await githubSetup.act(await readJson(req)));
 				throw new SetupError(404, "Unknown GitHub setup operation.");
@@ -1448,8 +721,9 @@ export function createDaemonServer(
 		if (parts[1] === "insights" && parts[2] === "legacy") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
-			if (!insightsLegacy || !githubSetup) throw new ServiceUnavailable("Legacy Insights projection unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!insightsLegacy || !nativeAuthority)
+				throw new ServiceUnavailable("Legacy Insights projection unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			for (const key of url.searchParams.keys())
 				if (!["selector", "cursor"].includes(key) || url.searchParams.getAll(key).length !== 1)
 					throw new HttpError(400, "Invalid legacy query");
@@ -1476,9 +750,9 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "insights" && parts[2] === "workspace" && parts[3] === "transfer") {
 			res.setHeader("cache-control", "no-store");
-			if (!insightsTransition || !journal || !githubSetup)
+			if (!insightsTransition || !journal || !nativeAuthority)
 				throw new ServiceUnavailable("Insights transition unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			if (parts.length !== 5 || !["preflight", "check"].includes(parts[4]!)) throw new HttpError(404, "Not found");
 			if (parts[4] === "check") {
 				if (req.method !== "POST" || [...url.searchParams.keys()].length)
@@ -1501,9 +775,9 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "insights" && parts[2] === "workspace" && parts[3] === "execution") {
 			res.setHeader("cache-control", "no-store");
-			if (!insightsOwner || !insightsWorkspace || !journal || !githubSetup)
+			if (!insightsOwner || !insightsWorkspace || !journal || !nativeAuthority)
 				throw new ServiceUnavailable("Owner Insights execution unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			if ([...url.searchParams.keys()].length) throw new HttpError(400, "Execution queries must be exact");
 			if (parts.length === 5 && parts[4] === "check") {
 				if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
@@ -1698,8 +972,8 @@ export function createDaemonServer(
 			const operation = await readJson<DurableOperation>(req);
 			if (operation?.kind === "attention-answer") {
 				res.setHeader("cache-control", "no-store");
-				if (!githubSetup || !nativeAttention) throw new ServiceUnavailable("Native attention unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority || !nativeAttention) throw new ServiceUnavailable("Native attention unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await nativeAttention.lookupAnswer(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1715,9 +989,9 @@ export function createDaemonServer(
 				}
 			}
 			if (operation?.kind === "planning-enroll") {
-				if (!githubSetup || !planningWorkers)
+				if (!nativeAuthority || !planningWorkers)
 					throw new ServiceUnavailable("Planning worker enrollment unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1734,8 +1008,8 @@ export function createDaemonServer(
 			}
 			if (operation?.kind === SLACK_CONTROLS) {
 				res.setHeader("cache-control", "no-store");
-				if (!githubSetup || !slackControls) throw new ServiceUnavailable("Native Slack unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority || !slackControls) throw new ServiceUnavailable("Native Slack unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1752,8 +1026,8 @@ export function createDaemonServer(
 			}
 			if (operation?.kind === CONNECTION_CONTROLS) {
 				res.setHeader("cache-control", "no-store");
-				if (!githubSetup) throw new ServiceUnavailable("Native connections unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority) throw new ServiceUnavailable("Native connections unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1772,8 +1046,9 @@ export function createDaemonServer(
 			}
 			if (operation?.kind === DIAGNOSTICS_CONTROLS) {
 				res.setHeader("cache-control", "no-store");
-				if (!githubSetup || !diagnosticsControls) throw new ServiceUnavailable("Native diagnostics unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority || !diagnosticsControls)
+					throw new ServiceUnavailable("Native diagnostics unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				// Validate BEFORE lookup/reservation: unsafe collector strings never enter the durable journal.
 				try {
@@ -1798,8 +1073,8 @@ export function createDaemonServer(
 			}
 			if (operation?.kind === MODEL_CONTROLS) {
 				res.setHeader("cache-control", "no-store");
-				if (!githubSetup) throw new ServiceUnavailable("Native model settings unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority) throw new ServiceUnavailable("Native model settings unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1817,8 +1092,9 @@ export function createDaemonServer(
 			if (operation?.kind === "project-preferences-update") {
 				res.setHeader("cache-control", "no-store");
 				const preferences = missions?.knowledge?.preferences;
-				if (!githubSetup || !preferences) throw new ServiceUnavailable("Native project preferences unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority || !preferences)
+					throw new ServiceUnavailable("Native project preferences unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1837,8 +1113,8 @@ export function createDaemonServer(
 			}
 			if (operation?.kind === "user-feedback") {
 				res.setHeader("cache-control", "no-store");
-				if (!githubSetup || !userFeedback) throw new ServiceUnavailable("User feedback unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority || !userFeedback) throw new ServiceUnavailable("User feedback unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1857,8 +1133,8 @@ export function createDaemonServer(
 			}
 			if (operation?.kind === FEEDBACK_WORK) {
 				res.setHeader("cache-control", "no-store");
-				if (!githubSetup || !feedbackWork) throw new ServiceUnavailable("Feedback triage unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority || !feedbackWork) throw new ServiceUnavailable("Feedback triage unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
 				if (parts[2] === "receipt" && saved?.state === "pending" && isFeedbackAnswer(operation)) {
@@ -1884,8 +1160,8 @@ export function createDaemonServer(
 			}
 			if (operation?.kind === "user-verification") {
 				res.setHeader("cache-control", "no-store");
-				if (!githubSetup || !userVerifications) throw new ServiceUnavailable("User verification unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority || !userVerifications) throw new ServiceUnavailable("User verification unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await userVerifications.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved);
@@ -1898,8 +1174,8 @@ export function createDaemonServer(
 				}
 			}
 			if (operation?.kind === PROJECT_ACTION) {
-				if (!githubSetup || !nativeProjects) throw new ServiceUnavailable("Native projects unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority || !nativeProjects) throw new ServiceUnavailable("Native projects unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				if (parts[2] === "receipt") {
 					const saved = await journal.lookup(operation);
@@ -1924,8 +1200,8 @@ export function createDaemonServer(
 			}
 			if (operation?.kind === "native-chat-create") {
 				res.setHeader("cache-control", "no-store");
-				if (!githubSetup || !nativeChat) throw new ServiceUnavailable("Native chat creation unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native chat creation unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await nativeChat.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1942,8 +1218,8 @@ export function createDaemonServer(
 			}
 			if (isIntakeOperation(operation?.kind)) {
 				res.setHeader("cache-control", "no-store");
-				if (!githubSetup || !nativeIntake) throw new ServiceUnavailable("Native intake unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority || !nativeIntake) throw new ServiceUnavailable("Native intake unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await nativeIntake.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1960,8 +1236,8 @@ export function createDaemonServer(
 			}
 			if (isThreadOperation(operation?.kind)) {
 				res.setHeader("cache-control", "no-store");
-				if (!githubSetup || !missionThreads) throw new ServiceUnavailable("Native topics unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority || !missionThreads) throw new ServiceUnavailable("Native topics unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await missionThreads.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1978,8 +1254,8 @@ export function createDaemonServer(
 			}
 			if (isNativePlanningOperation(operation?.kind)) {
 				res.setHeader("cache-control", "no-store");
-				if (!githubSetup || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				// Requalify reads, including terminal duplicates. No unauthenticated receipt escape.
 				const saved = await nativePlanning.lookup(operation);
@@ -1996,14 +1272,14 @@ export function createDaemonServer(
 				}
 			}
 			if (operation?.kind === "insights-workspace-transfer" && parts[2] === "receipt") {
-				if (!githubSetup) throw new ServiceUnavailable("Native transfer lookup unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority) throw new ServiceUnavailable("Native transfer lookup unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			}
 			if (operation?.kind === "review-disposition") {
 				res.setHeader("cache-control", "no-store");
 				// Check and duplicate lookup must not expose inaccessible feedback through a journal receipt.
-				if (!githubSetup || !humanReviews) throw new ServiceUnavailable("Native feedback is unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority || !humanReviews) throw new ServiceUnavailable("Native feedback is unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				await humanReviews.lookup(operation);
 			}
 			if (parts[2] !== "receipt" && typeof operation?.kind === "string" && isRetiredDevboxOperation(operation.kind))
@@ -2017,8 +1293,8 @@ export function createDaemonServer(
 					isWorkflowOperation(operation?.kind)) &&
 				parts[2] !== "receipt"
 			) {
-				if (!githubSetup) throw new ServiceUnavailable("Native repair confirmation is unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority) throw new ServiceUnavailable("Native repair confirmation is unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			}
 			if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 			if (parts[2] !== "receipt" && isInsightsOperation(operation?.kind)) insightsWorkspace?.assertLegacyAllowed();
@@ -2083,8 +1359,8 @@ export function createDaemonServer(
 				return json(res, 200, await reviewRequests.history(parts[3]!, after()));
 			// Purpose-specific native actions reuse the existing Local app capability. Neither
 			// a body actor nor the ordinary mission REST API can impersonate a native user.
-			if (!githubSetup) throw new ServiceUnavailable("Native Review request actions unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority) throw new ServiceUnavailable("Native Review request actions unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			const actor = { kind: "native-user" as const };
 			if (req.method === "GET" && parts.length === 5 && parts[3] === "operations")
 				return json(res, 200, (await reviewRequests.lookup(parts[4]!, actor)) ?? { state: "unknown" });
@@ -2104,8 +1380,8 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "review-feedback") {
 			res.setHeader("cache-control", "no-store");
-			if (!humanReviews || !githubSetup) throw new ServiceUnavailable("Native feedback is unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!humanReviews || !nativeAuthority) throw new ServiceUnavailable("Native feedback is unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			if (parts.length === 3 && parts[2] === "target" && req.method === "POST") {
 				const input = await readJson<{ projectId: string; sessionId: string; snapshotId: string }>(req, 1024);
 				if (!input || Object.keys(input).sort().join(",") !== "projectId,sessionId,snapshotId")
@@ -2156,25 +1432,25 @@ export function createDaemonServer(
 					questionReplies: 1,
 					durableInputGeneration: 1,
 					globalUpdate: globalUpdate ? 1 : undefined,
-					insights: missions && githubSetup && hello.lineageId ? 1 : undefined,
-					insightsEnable: insightsEnable && githubSetup ? 1 : undefined,
-					insightsSettings: insightsEnable && githubSetup ? 1 : undefined,
-					insightsApply: insightsApply && githubSetup ? 1 : undefined,
-					insightsReplacement: insightsReplacement && githubSetup ? 1 : undefined,
-					insightsWorkspace: insightsWorkspace && githubSetup ? 2 : undefined,
-					insightsWorkspaceExecution: insightsOwner && githubSetup ? 2 : undefined,
-					insightsWorkspaceTransition: insightsTransition && githubSetup ? 2 : undefined,
+					insights: missions && nativeAuthority && hello.lineageId ? 1 : undefined,
+					insightsEnable: insightsEnable && nativeAuthority ? 1 : undefined,
+					insightsSettings: insightsEnable && nativeAuthority ? 1 : undefined,
+					insightsApply: insightsApply && nativeAuthority ? 1 : undefined,
+					insightsReplacement: insightsReplacement && nativeAuthority ? 1 : undefined,
+					insightsWorkspace: insightsWorkspace && nativeAuthority ? 2 : undefined,
+					insightsWorkspaceExecution: insightsOwner && nativeAuthority ? 2 : undefined,
+					insightsWorkspaceTransition: insightsTransition && nativeAuthority ? 2 : undefined,
 					automations: chatSettings?.automationsEnabled() ? 1 : undefined,
 					guardedMissionConversion: missions ? true : undefined,
 					passiveMissionLifecycle: missions ? true : undefined,
 					passiveMissionCompletion: missions ? true : undefined,
 					passiveTaskModel: missions ? true : undefined,
 					dayOverview: missions ? 1 : undefined,
-					missionControls: missions && githubSetup && hello.lineageId ? 1 : undefined,
-					nativePlanning: nativePlanning && githubSetup ? 1 : undefined,
-					nativeThreads: missionThreads && githubSetup ? 1 : undefined,
-					nativeAttention: nativeAttention && githubSetup ? 1 : undefined,
-					missionReplanning: planningWorkers && githubSetup ? 1 : undefined,
+					missionControls: missions && nativeAuthority && hello.lineageId ? 1 : undefined,
+					nativePlanning: nativePlanning && nativeAuthority ? 1 : undefined,
+					nativeThreads: missionThreads && nativeAuthority ? 1 : undefined,
+					nativeAttention: nativeAttention && nativeAuthority ? 1 : undefined,
+					missionReplanning: planningWorkers && nativeAuthority ? 1 : undefined,
 					passiveFailedModel: hello?.lineageId ? true : undefined,
 					guardedQueue: true,
 					sessionPathCandidates: hello.lineageId ? 1 : undefined,
@@ -2214,9 +1490,9 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "mcp" && parts[2] === "setup" && parts.length === 3) {
 			res.setHeader("cache-control", "no-store");
-			if (!githubSetup) return json(res, 503, { error: "mcp_setup_unavailable" });
+			if (!nativeAuthority) return json(res, 503, { error: "mcp_setup_unavailable" });
 			try {
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			} catch {
 				return json(res, 403, { error: "native_action_required" });
 			}
@@ -2293,9 +1569,9 @@ export function createDaemonServer(
 				return jsonText(res, 200, await schedules.snapshot(url.searchParams.get("projectId") ?? undefined));
 			const authorizeRecurring = async () => {
 				if (!chatSettings?.automationsEnabled()) throw new ServiceUnavailable("Automations are disabled");
-				if (!githubSetup) throw new HttpError(403, "native_action_required");
+				if (!nativeAuthority) throw new HttpError(403, "native_action_required");
 				try {
-					await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+					await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				} catch {
 					throw new HttpError(403, "native_action_required");
 				}
@@ -2489,8 +1765,8 @@ export function createDaemonServer(
 			throw new HttpError(404, "Unknown tracking operation");
 		}
 		if (parts[1] === "native-projects" && parts.length === 3) {
-			if (!githubSetup || !nativeProjects) throw new ServiceUnavailable("Native projects unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !nativeProjects) throw new ServiceUnavailable("Native projects unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			res.setHeader("cache-control", "no-store");
 			if (parts[2] === "setup" && req.method === "GET") return json(res, 200, await nativeProjects.read());
 			if (parts[2] === "preview" && req.method === "POST") {
@@ -2504,15 +1780,15 @@ export function createDaemonServer(
 		if (parts[1] === "native-projects" && parts.length === 2) {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Project inventory is read-only");
-			if (!githubSetup || !nativeChat) throw new ServiceUnavailable("Native projects unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native projects unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			return json(res, 200, nativeChat.inventory());
 		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "chat-profile") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Chat selection is read-only");
-			if (!githubSetup || !nativeChat) throw new ServiceUnavailable("Native chat selection unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native chat selection unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			return json(res, 200, await nativeChat.prepare(parts[2]!, url.searchParams.get("mode") ?? ""));
 		}
 		if (
@@ -2525,8 +1801,8 @@ export function createDaemonServer(
 		) {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Delivered artifact is read-only");
-			if (!githubSetup || !deliveredArtifacts) throw new ServiceUnavailable("Delivered artifact unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !deliveredArtifacts) throw new ServiceUnavailable("Delivered artifact unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			const fields = ["targetId", "deliveryId", "ownerSessionId", "sourceSessionId", "artifactId", "revision"];
 			if (
 				[...url.searchParams.keys()].length !== fields.length ||
@@ -2555,8 +1831,8 @@ export function createDaemonServer(
 		if (parts[1] === "projects" && parts.length === 6 && parts[3] === "artifacts") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Project artifact is read-only");
-			if (!githubSetup || !deliveredArtifacts) throw new ServiceUnavailable("Project artifact unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !deliveredArtifacts) throw new ServiceUnavailable("Project artifact unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			const revisions = url.searchParams.getAll("revision");
 			if ([...url.searchParams.keys()].some((k) => k !== "revision") || revisions.length !== 1)
 				throw new OperationRejected("Exact artifact revision required");
@@ -2578,8 +1854,8 @@ export function createDaemonServer(
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "delivered-work") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Delivery discovery is read-only");
-			if (!githubSetup || !userVerifications) throw new ServiceUnavailable("User verification unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !userVerifications) throw new ServiceUnavailable("User verification unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			const cursor = url.searchParams.get("after");
 			if (
 				[...url.searchParams.keys()].some((k) => k !== "after") ||
@@ -2596,8 +1872,8 @@ export function createDaemonServer(
 		) {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Delivered work read is read-only");
-			if (!githubSetup || !userVerifications) throw new ServiceUnavailable("User verification unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !userVerifications) throw new ServiceUnavailable("User verification unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			return json(
 				res,
 				200,
@@ -2611,8 +1887,8 @@ export function createDaemonServer(
 		if (parts[1] === "projects" && parts.length === 4 && (parts[3] === "intake" || parts[3] === "saved-linear")) {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Intake read is read-only");
-			if (!githubSetup || !nativeIntake) throw new ServiceUnavailable("Native intake unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !nativeIntake) throw new ServiceUnavailable("Native intake unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			return json(
 				res,
 				200,
@@ -2622,8 +1898,8 @@ export function createDaemonServer(
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "planning-inventory") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Planning inventory is read-only");
-			if (!githubSetup || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			try {
 				return json(res, 200, await nativePlanning.inventory(parts[2]!));
 			} catch (error) {
@@ -2640,8 +1916,8 @@ export function createDaemonServer(
 		if (parts[1] === "projects" && parts[3] === "missions" && parts[5] === "threads") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Topics are read-only here");
-			if (!githubSetup || !missionThreads) throw new ServiceUnavailable("Native topics unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !missionThreads) throw new ServiceUnavailable("Native topics unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			if (parts.length === 6) return json(res, 200, await missionThreads.read(parts[2]!, parts[4]!));
 			if (parts.length === 8 && parts[7] === "history") {
 				const before = url.searchParams.get("before"),
@@ -2664,8 +1940,8 @@ export function createDaemonServer(
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "planning-profile") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Planning profile is read-only");
-			if (!githubSetup || !planningWorkers) throw new ServiceUnavailable("Trusted planning profile unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !planningWorkers) throw new ServiceUnavailable("Trusted planning profile unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			const funding = await sessions.funding?.read(parts[2]!);
 			return json(res, 200, {
 				...planningWorkers.profile(parts[2]!),
@@ -2675,8 +1951,8 @@ export function createDaemonServer(
 		if (parts[1] === "projects" && parts.length === 6 && parts[3] === "missions" && parts[5] === "planning") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Planning preparation is read-only");
-			if (!githubSetup || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			return json(res, 200, await nativePlanning.read(parts[2]!, parts[4]!));
 		}
 		if (
@@ -2688,8 +1964,8 @@ export function createDaemonServer(
 		) {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "The planning chat is read-only");
-			if (!githubSetup || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			const before = url.searchParams.get("before"),
 				limit = url.searchParams.get("limit");
 			return json(
@@ -2716,8 +1992,8 @@ export function createDaemonServer(
 					(await missions.service.controls.lookup(parts[2]!, parts[5]!)) ?? { state: "unknown" },
 				);
 			if (req.method === "POST" && parts.length === 4) {
-				if (!githubSetup) throw new ServiceUnavailable("Native mission controls unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority) throw new ServiceUnavailable("Native mission controls unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				const write = parseMissionControl(await readJson(req, 4096), catalogHost);
 				return json(res, 200, await missions.service.controls.execute(parts[2]!, write));
 			}
@@ -2744,8 +2020,8 @@ export function createDaemonServer(
 			// Stop re-planning. Only the link changes; both missions stay as they are.
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
-			if (!githubSetup) throw new ServiceUnavailable("Mission re-planning unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority) throw new ServiceUnavailable("Mission re-planning unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			const body = await readJson<{ action?: unknown; newMissionId?: unknown }>(req, 4096);
 			if (
 				!body ||
@@ -2854,8 +2130,8 @@ export function createDaemonServer(
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "publication-audit") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Publication audit is read-only");
-			if (!githubSetup) throw new ServiceUnavailable("Publication audit unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority) throw new ServiceUnavailable("Publication audit unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			const expected = url.searchParams.getAll("expectedProjectId");
 			if (expected.length !== 1 || [...url.searchParams.keys()].some((k) => k !== "expectedProjectId"))
 				throw new HttpError(400, "Exact expectedProjectId required");
@@ -3055,9 +2331,9 @@ export function createDaemonServer(
 		if (parts[1] === "projects" && parts[3] === "databases" && parts.length === 4) {
 			res.setHeader("cache-control", "no-store");
 			projects.require(parts[2]!);
-			if (!githubSetup) return json(res, 503, { error: "Native host actions are unavailable." });
+			if (!nativeAuthority) return json(res, 503, { error: "Native host actions are unavailable." });
 			try {
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			} catch {
 				return json(res, 403, { error: "Database settings require a native app action." });
 			}
@@ -3075,8 +2351,8 @@ export function createDaemonServer(
 		if (parts[1] === "feedback" && parts.length === 2) {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
-			if (!githubSetup || !userFeedback) throw new ServiceUnavailable("User feedback unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority || !userFeedback) throw new ServiceUnavailable("User feedback unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			return json(
 				res,
 				200,
@@ -3094,8 +2370,8 @@ export function createDaemonServer(
 			res.setHeader("cache-control", "no-store");
 			if (parts.length === 4 && req.method === "GET") return json(res, 200, await preferences.read(projectId));
 			if (parts.length === 4 && req.method === "PUT") {
-				if (!githubSetup) throw new ServiceUnavailable("Native preferences authority unavailable");
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (!nativeAuthority) throw new ServiceUnavailable("Native preferences authority unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				return json(res, 200, await preferences.write(projectId, await readJson(req, 16 * 1024)));
 			}
 			if (parts.length === 5 && parts[4] === "history" && req.method === "GET")
@@ -3270,8 +2546,8 @@ export function createDaemonServer(
 			parts.length === 3 &&
 			(req.method === "GET" || req.method === "PUT")
 		) {
-			if (!githubSetup) throw new ServiceUnavailable("Native repair project setup is unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority) throw new ServiceUnavailable("Native repair project setup is unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			res.setHeader("cache-control", "no-store");
 			return json(
 				res,
@@ -3293,8 +2569,8 @@ export function createDaemonServer(
 			parts.length === 3 &&
 			req.method === "POST"
 		) {
-			if (!githubSetup) throw new ServiceUnavailable("Protected native diagnostic reads are unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!nativeAuthority) throw new ServiceUnavailable("Protected native diagnostic reads are unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			if (parts[2] === "read") {
 				const controller = new AbortController();
 				const timer = setTimeout(() => controller.abort(), 10_000);
@@ -3317,8 +2593,8 @@ export function createDaemonServer(
 			return json(res, 200, { accepted: true });
 		}
 		if (parts[1] === "diagnostics" && parts[2] === "feature-usage" && parts.length === 3 && req.method === "PUT") {
-			if (!telemetry || !githubSetup) throw new ServiceUnavailable("Native feature collection is unavailable");
-			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (!telemetry || !nativeAuthority) throw new ServiceUnavailable("Native feature collection is unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			await telemetry.featureUsage.replace(await readJson(req, 96 * 1024));
 			return json(res, 200, { accepted: true });
 		}
@@ -3333,9 +2609,9 @@ export function createDaemonServer(
 			if (req.method === "PATCH") {
 				const input = await readJson(req);
 				if (input && typeof input === "object" && Object.hasOwn(input, "automations")) {
-					if (!githubSetup) throw new ServiceUnavailable("Native settings authority unavailable");
+					if (!nativeAuthority) throw new ServiceUnavailable("Native settings authority unavailable");
 					try {
-						await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+						await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 					} catch {
 						return json(res, 403, { error: "native_action_required" });
 					}
@@ -3405,9 +2681,9 @@ export function createDaemonServer(
 				if (_config.modelScopeReadOnly) return json(res, 403, { error: "read_only" });
 				// Reuse the native host-action boundary, not a chat grant or an agent-supplied identity.
 				// The capability's historical filename/header is shared with GitHub setup/import.
-				if (!githubSetup) return json(res, 503, { error: "model_scope_unavailable" });
+				if (!nativeAuthority) return json(res, 503, { error: "model_scope_unavailable" });
 				try {
-					await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+					await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				} catch {
 					return json(res, 403, { error: "native_action_required" });
 				}
@@ -3459,9 +2735,9 @@ export function createDaemonServer(
 			return json(res, 200, await projects.origin(parts[2]!));
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "automations" && req.method === "PUT") {
 			if (!chatSettings?.automationsEnabled()) return json(res, 404, { error: "automations_unavailable" });
-			if (!githubSetup) return json(res, 503, { error: "automations_unavailable" });
+			if (!nativeAuthority) return json(res, 503, { error: "automations_unavailable" });
 			try {
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			} catch {
 				return json(res, 403, { error: "native_action_required" });
 			}
@@ -3481,9 +2757,9 @@ export function createDaemonServer(
 			req.method === "POST"
 		) {
 			if (!chatSettings?.automationsEnabled()) return json(res, 404, { error: "automations_unavailable" });
-			if (!githubSetup) return json(res, 503, { error: "automations_unavailable" });
+			if (!nativeAuthority) return json(res, 503, { error: "automations_unavailable" });
 			try {
-				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			} catch {
 				return json(res, 403, { error: "native_action_required" });
 			}
@@ -3821,9 +3097,9 @@ export function createDaemonServer(
 			const id = parts[2]!;
 			if (parts[3] === "setup") {
 				if (!chatSettings?.automationsEnabled()) return json(res, 404, { error: "automations_unavailable" });
-				if (!githubSetup) return json(res, 503, { error: "automations_unavailable" });
+				if (!nativeAuthority) return json(res, 503, { error: "automations_unavailable" });
 				try {
-					await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+					await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				} catch {
 					return json(res, 403, { error: "native_action_required" });
 				}
@@ -4140,9 +3416,13 @@ export function createDaemonServer(
 		});
 	};
 	const server = bootstrap ? (bootstrap.install(handleRequest), bootstrap.server) : createServer(handleRequest);
+	const closeHandlers: (() => void)[] = [];
+	const onClose = (close: () => void) => closeHandlers.push(close);
 	server.once("close", () => {
-		reservations.close();
-		void planningWorkers?.close();
+		for (const close of closeHandlers.splice(0)) close();
+	});
+	onClose(() => {
+		void services.close();
 	});
 
 	// The control socket carries only small subscription messages. Terminal pastes use the terminal socket.
@@ -4151,19 +3431,19 @@ export function createDaemonServer(
 	// output burst or slow reader never delays another stream or the sidebar, and overload resets only that stream.
 	const streamWss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
 	const terminalWss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
-	server.on("close", () => {
+	onClose(() => {
 		for (const ws of terminalWss.clients) ws.terminate();
 		terminalWss.close();
 	});
 	const setupWss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
-	server.on("close", () => {
+	onClose(() => {
 		for (const ws of setupWss.clients) ws.terminate();
 		setupWss.close();
 	});
 	const chatStreams = new ChatStreams((sessionId, listener, trace, recent) =>
 		sessions.subscribe(sessionId, listener, trace, recent),
 	);
-	server.on("close", () => chatStreams.close());
+	onClose(() => chatStreams.close());
 	server.on("upgrade", (req, socket, head) => {
 		const url = new URL(req.url ?? "/", "http://localhost");
 		if (!isAllowedOrigin(req.headers.origin)) {
@@ -4306,7 +3586,7 @@ export function createDaemonServer(
 	});
 	// Small coalesced invalidation only. Never put action text/files or a receipt in WS frames.
 	const stopAttentionWatch = missions?.store.attention.onChange(invalidateMissionCatalog);
-	server.on("close", () => {
+	onClose(() => {
 		stopAttentionWatch?.();
 		stopDiagnosticReads?.();
 		stopNextControl?.();
@@ -4314,10 +3594,10 @@ export function createDaemonServer(
 		clearTimeout(missionCatalogTimer);
 	});
 	const stopPowerWatch = power?.onChange(() => broadcast({ type: "power", power: power.status() }));
-	server.on("close", () => stopPowerWatch?.());
+	onClose(() => stopPowerWatch?.());
 	const stopMcpWatch = mcp?.onChange((status) => broadcast({ type: "mcp", mcp: status }));
 	const stopPiReloadWatch = sessions.piReload.onChange((reload) => broadcast({ type: "pi.reload", reload }));
-	server.on("close", () => {
+	onClose(() => {
 		stopMcpWatch?.();
 		stopPiReloadWatch();
 	});
@@ -4339,7 +3619,7 @@ export function createDaemonServer(
 		}, DASHBOARD_DEBOUNCE_MS);
 		schedulesTimer.unref();
 	});
-	server.on("close", () => {
+	onClose(() => {
 		stopSchedulesWatch?.();
 		clearTimeout(schedulesTimer);
 	});
@@ -4359,16 +3639,17 @@ export function createDaemonServer(
 		}, DASHBOARD_DEBOUNCE_MS);
 		sourceTimer.unref();
 	});
-	server.on("close", () => {
+	onClose(() => {
 		stopTrackingWatch?.();
 		clearTimeout(sourceTimer);
 	});
-	projects.onChange((list) => {
+	const stopProjectsWatch = projects.onChange((list) => {
 		sessions.resumeFlows?.();
 		invalidateMissionCatalog();
 		broadcast({ type: "projects", projects: list });
 	});
-	sessions.onArtifactsChanged((sessionId, artifacts) => {
+	onClose(stopProjectsWatch);
+	const stopArtifactsWatch = sessions.onArtifactsChanged((sessionId, artifacts) => {
 		artifactVersions.set(sessionId, (artifactVersions.get(sessionId) ?? 0) + 1);
 		const message: ServerMessage = { type: "artifacts", sessionId, artifacts };
 		broadcast(message);
@@ -4378,6 +3659,7 @@ export function createDaemonServer(
 			for (const send of chats) send(data);
 		}
 	});
+	onClose(stopArtifactsWatch);
 	/** Subscribed sockets per mission. Detail is read once per change and shared. */
 	const missionSubscribers = new Map<string, Set<WebSocket>>();
 	/** Subscribed sockets per project dashboard, and the last content sent for each (to push only real changes). */
@@ -4424,13 +3706,12 @@ export function createDaemonServer(
 		dashboardTimer = setTimeout(refreshDashboards, DASHBOARD_DEBOUNCE_MS);
 		dashboardTimer.unref();
 	});
-	server.on("close", () => {
+	onClose(() => {
 		stopDashboardWatch();
 		clearTimeout(dashboardTimer);
 		dashboardTimer = undefined;
 	});
-	// Keep this the last `sessions.onChange` registration: server.test.ts drives the most recent listener.
-	sessions.onChange((session) => {
+	const stopSessionsWatch = sessions.onChange((session) => {
 		invalidateMissionCatalog();
 		const previous = repositoryVersions.get(session.id);
 		const version = repositoryVersion(session);
@@ -4441,6 +3722,7 @@ export function createDaemonServer(
 		}
 		broadcast({ type: "session", session });
 	});
+	onClose(stopSessionsWatch);
 	const pushMission = (missionId: string, targets: Iterable<WebSocket>) => {
 		if (!missions) return;
 		const detail = missions.store.get(missionId) ? missions.store.detail(missionId) : undefined;
@@ -4452,7 +3734,7 @@ export function createDaemonServer(
 		let pending = new Set<string>();
 		let scheduled = false;
 		// Coalesce bursts (a mission and its tasks created together) into one list and one detail per mission.
-		missions.store.onChange((missionId) => {
+		const stopMissionsWatch = missions.store.onChange((missionId) => {
 			invalidateMissionCatalog();
 			pending.add(missionId);
 			if (scheduled) return;
@@ -4468,6 +3750,7 @@ export function createDaemonServer(
 				}
 			});
 		});
+		onClose(stopMissionsWatch);
 	}
 
 	wss.on("connection", (ws: WebSocket) => {
@@ -4744,10 +4027,7 @@ export function createDaemonServer(
 		runtimeResources,
 		runtimeReady,
 		runtimeFrozen,
-		recoverOperations,
-		closePlanning: async () => {
-			await Promise.all([planningWorkers?.close(), nativeAttention?.close()]);
-		},
+		closeServices: services.close,
 	});
 }
 /** Mission routes under /api/missions and /api/sessions/:id/mission. Returns false when nothing matched. */

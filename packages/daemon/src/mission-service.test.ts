@@ -35,11 +35,12 @@ import { ProjectStore } from "./projects.ts";
 import type { PullRequestOptions } from "./pull-requests.ts";
 import { retainedReviewDescriptor } from "./retained-review-contract.ts";
 import type { ReviewSnapshot, ReviewSnapshotStore } from "./review-snapshots.ts";
-import { createDaemonServer } from "./server.ts";
 import { CommandRejected, SessionManager, type SessionWorker } from "./sessions.ts";
 import { SUBSCRIPTION_USAGE_MAX_AGE_MS, type SubscriptionUsageSource } from "./subscription-usage.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 
 function legacyArtifacts(f: { home: string; project: { id: string } }, sessionId: string) {
@@ -1656,14 +1657,14 @@ test("planning v1 binds worker IPC identity and keeps coordinator/user no-PR com
 	assert.equal(f.store.retiredMember(member.id), false);
 	f.store.updateTask(mission.id, task.id, { status: "blocked" });
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		new ModelCatalog(f.home),
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
 		terminals,
-		{ service: f.service, store: f.store },
-	);
+		missions: { service: f.service, store: f.store },
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		server.closeAllConnections();
@@ -1984,14 +1985,14 @@ test("oversized imported mission text survives tool and HTTP reads without rewri
 	};
 	assert.equal(decisions.decisions[0]?.text, text);
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		new ModelCatalog(f.home),
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
 		terminals,
-		{ service: f.service, store: f.store },
-	);
+		missions: { service: f.service, store: f.store },
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		server.closeAllConnections();
@@ -2630,14 +2631,14 @@ test("Revisit local user revision routes discover pending and require fresh exac
 	const f = await fixture(t);
 	const mission = f.store.create({ projectId: f.project.id, title: "Revisit", brief: "Original" });
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		new ModelCatalog(f.home),
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
 		terminals,
-		{ service: f.service, store: f.store },
-	);
+		missions: { service: f.service, store: f.store },
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		server.closeAllConnections();
@@ -2696,14 +2697,14 @@ test("local user replacement route preserves text and rejects bad links and inpu
 	const old = f.store.addDecision(mission.id, "Old");
 	const next = f.store.addDecision(mission.id, "New");
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		new ModelCatalog(f.home),
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
 		terminals,
-		{ service: f.service, store: f.store },
-	);
+		missions: { service: f.service, store: f.store },
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		server.closeAllConnections();
@@ -2858,14 +2859,14 @@ test("user withdrawal acceptance HTTP waits for durability, preserves history an
 	const old = f.store.addDecision(mission.id, "Protected rule", {}, "all");
 	const proposal = f.store.proposeWithdrawal(mission.id, "D1", "Obsolete", "request", { sessionId: lead.id });
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		new ModelCatalog(f.home),
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
 		terminals,
-		{ service: f.service, store: f.store },
-	);
+		missions: { service: f.service, store: f.store },
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		server.closeAllConnections();
@@ -3792,7 +3793,7 @@ async function fixture(
 			},
 		},
 		{ ...pullRequests, ...(pullRequests.runner ? { runner: legacyGitHub(pullRequests.runner) } : {}) },
-		{ ...(usageSource ? { subscriptionUsage: () => usageSource } : {}) },
+		offlineSessionOptions({ ...(usageSource ? { subscriptionUsage: () => usageSource } : {}) }),
 	);
 	// No repository or subprocesses in this service fixture. Real source-role coverage lives in coordinator-role.test.ts.
 	const roleHost = sessions as unknown as {
@@ -4871,6 +4872,7 @@ test("daemon restart replays a durable notice once with the same request ID", as
 				throw new Error("GitHub unavailable");
 			},
 		},
+		offlineSessionOptions(),
 	);
 	const service = new MissionService(f.store, reopened, f.projects);
 	try {
@@ -5562,20 +5564,14 @@ test("conversion HTTP advertises guarded admission and rejects a stale second re
 	const f = await fixture(t);
 	const chat = await f.spawn();
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		new ModelCatalog(f.home),
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
 		terminals,
-		{ service: f.service, store: f.store },
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		{
+		missions: { service: f.service, store: f.store },
+		hello: {
 			daemonId: "synthetic-daemon",
 			lineageId: "synthetic-lineage",
 			daemonVersion: "test",
@@ -5591,7 +5587,7 @@ test("conversion HTTP advertises guarded admission and rejects a stale second re
 				independentExecution: true,
 			},
 		},
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	try {
@@ -6143,14 +6139,14 @@ for (const [firstVia, secondVia] of [
 		});
 		const task = f.store.resolveTask(mission.id, "1");
 		const terminals = new TerminalManager();
-		const server = createDaemonServer(
-			{ home: f.home, host: "127.0.0.1", port: 0 },
-			f.sessions,
-			f.projects,
-			new ModelCatalog(f.home),
+		const server = createDaemonServer({
+			config: { home: f.home, host: "127.0.0.1", port: 0 },
+			sessions: f.sessions,
+			projects: f.projects,
+			models: new ModelCatalog(f.home),
 			terminals,
-			{ service: f.service, store: f.store },
-		);
+			missions: { service: f.service, store: f.store },
+		});
 		t.after(async () => {
 			terminals.shutdown();
 			server.closeAllConnections();
@@ -7322,6 +7318,7 @@ test("cold reopen never repairs or starts an interrupted pre-admission continuat
 				throw new Error("No GitHub in fixture");
 			},
 		},
+		offlineSessionOptions(),
 	);
 	t.mock.method(reopened as unknown as { refreshMainViews(): Promise<void> }, "refreshMainViews", async () => {});
 	const service = new MissionService(f.store, reopened, f.projects);
@@ -7831,20 +7828,14 @@ test("passive task model HTTP validates scope and ACK after durability without r
 		assert.fail("no Linear reconciliation"),
 	);
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		new ModelCatalog(f.home),
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
 		terminals,
-		{ service: f.service, store: f.store },
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		{
+		missions: { service: f.service, store: f.store },
+		hello: {
 			daemonId: "synthetic-daemon",
 			lineageId: "synthetic-lineage",
 			daemonVersion: "test",
@@ -7860,7 +7851,7 @@ test("passive task model HTTP validates scope and ACK after durability without r
 				independentExecution: true,
 			},
 		},
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		server.closeAllConnections();
@@ -7951,14 +7942,14 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 	const catalog = new ModelCatalog(f.home);
 	const cappedModels = { models: [{ id: "test/small", provider: "test", name: "Small" }] };
 	const modelList = t.mock.method(catalog, "listTaskModels", async () => cappedModels);
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		catalog,
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: catalog,
 		terminals,
-		{ service: f.service, store: f.store },
-	);
+		missions: { service: f.service, store: f.store },
+	});
 	let ws: WebSocket | undefined;
 	// After hooks run in registration order: close the socket before the server waits for it.
 	t.after(async () => {
@@ -8598,20 +8589,14 @@ test("passive completion HTTP ACK waits for durability and preserves working mem
 		assert.fail("no Linear reconciliation"),
 	);
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		new ModelCatalog(f.home),
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
 		terminals,
-		{ service: f.service, store: f.store },
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		{
+		missions: { service: f.service, store: f.store },
+		hello: {
 			daemonId: "synthetic-daemon",
 			lineageId: "synthetic-lineage",
 			daemonVersion: "test",
@@ -8627,7 +8612,7 @@ test("passive completion HTTP ACK waits for durability and preserves working mem
 				independentExecution: true,
 			},
 		},
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		server.closeAllConnections();

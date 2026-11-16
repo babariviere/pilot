@@ -8,9 +8,9 @@ import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { fixture, jj } from "./testing/shared-workspace.ts";
 
 test("real session host custody admits a committed checkpoint and rejects project, repository, worker and membership changes", async (t) => {
@@ -54,14 +54,14 @@ test("real session host custody admits a committed checkpoint and rejects projec
 	};
 	const reader = sessions.nativeReviewReader(id, mission.id, project.id, authorize);
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-		{ store, service },
-	);
+		missions: { store, service },
+	});
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/missions/${mission.id}/review/${id}`;
 	const chatRoot = root.replace(`/missions/${mission.id}/review/${id}`, `/sessions/${id}/review`);

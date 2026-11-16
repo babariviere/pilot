@@ -2,7 +2,7 @@
 // the user kept one, the exact mission or chat they are about. Opening the
 // page from a mission names that mission only when the draft is empty; a
 // draft with words keeps its own origin until the user picks another.
-// Leaving the page, closing or updating keeps the draft (updateView.ts);
+// Leaving the page, closing or updating keeps the draft (windowState.ts);
 // only Send sends it, once.
 // Unsent answers to a triage's question and the project the user chose for
 // triage are kept the same way. Restoring them sends and starts nothing.
@@ -40,6 +40,48 @@ export function feedbackDraftKey(d: FeedbackDraft): string {
 		origin: originKey(d.origin),
 		attachments: (d.attachments ?? []).map((a) => [a.uploadId, a.sha256, a.bytes]),
 	});
+}
+
+type SavedFeedbackView = Pick<
+	import("pilot-day/native").SavedView,
+	| "feedbackOpen"
+	| "feedback"
+	| "feedbackImages"
+	| "feedbackDrafts"
+	| "feedbackProject"
+	| "feedbackAnswers"
+	| "feedbackLater"
+>;
+
+/** Unfinished imports block capture and close with the same explanation. */
+export function feedbackCloseRefusal(): string | null {
+	return feedbackImageBusy() || feedbackImagePending()
+		? "Finish attaching your feedback image, or remove it before closing."
+		: null;
+}
+
+export function captureFeedbackView(): SavedFeedbackView {
+	return {
+		feedbackOpen: feedbackOpen(),
+		feedback: savedFeedback(),
+		feedbackImages: JSON.stringify(feedbackDraft().attachments ?? []),
+		feedbackDrafts: feedbackKeptDrafts().map((d) => JSON.stringify(d)),
+		feedbackProject: feedbackProject() ?? "",
+		feedbackAnswers: savedAnswers(),
+		feedbackLater: feedbackLater(),
+	};
+}
+
+/** Every restored draft stays unsent and keeps its own origin. */
+export function restoreFeedbackView(view: SavedFeedbackView) {
+	restoreFeedback(view.feedback ?? "");
+	const images = view.feedbackImages;
+	if (images) feedbackDraft.update((d) => ({ ...d, attachments: JSON.parse(images) }));
+	feedbackKeptDrafts.set((view.feedbackDrafts ?? []).map((d) => JSON.parse(d)));
+	feedbackOpen.set(view.feedbackOpen === true);
+	feedbackProject.set(view.feedbackProject || null);
+	restoreAnswers(view.feedbackAnswers ?? []);
+	feedbackLater.set(view.feedbackLater ?? []);
 }
 
 export function keepFeedbackDraft(d: FeedbackDraft) {

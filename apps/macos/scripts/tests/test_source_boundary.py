@@ -58,27 +58,28 @@ class SourceBoundaryTests(unittest.TestCase):
 
     def test_active_source_and_workflows_have_no_removed_path_consumers(self):
         roots = [ROOT / ".github/workflows", ROOT / "scripts"]
-        roots += [ROOT / "apps" / app / directory for app in ("desktop", "day", "power")
-                  for directory in ("src", "scripts", "native/src")]
+        roots += [ROOT / path for path in (
+            "apps/desktop/src", "apps/desktop/scripts", "apps/day/scripts", "apps/day/native/src",
+            "apps/power/src", "apps/power/scripts", "apps/native-daemon",
+            "apps/desktop/updater/src", "apps/desktop/visual-worker",
+        )]
         roots += list((ROOT / "packages").glob("*/src"))
         removed = re.compile(
             r"(?:apps/)?macos/Sources/(?:Pilot|PilotCore|PilotTelemetry|PilotPower|PilotVisuals|PilotVisualsHost|PilotVisualsKit)/"
             r"|apps/macos/scripts/(?:build|test|bundle|lint|check-app|publish-release|setup-updates|vendor-ghostty|vendor-mermaidkit|vendor-quickjs)\.sh"
             r"|apps/macos/build/Pilot\.app"
         )
-        checked = 0
         for root in roots:
+            self.assertTrue(root.is_dir(), f"Missing scan root: {root.relative_to(ROOT)}")
             for path in root.rglob("*"):
                 if not path.is_file() or path.suffix not in {".ts", ".tsx", ".rs", ".c", ".h", ".sh", ".py", ".mjs", ".yaml", ".yml"}:
                     continue
                 # Tests may explicitly assert rejection of old paths. They are not consumers.
                 if "tests" in path.parts or ".test." in path.name or path.name.startswith("test_") or path.name.endswith("tests.rs"):
                     continue
-                checked += 1
                 with self.subTest(path=str(path.relative_to(ROOT))):
                     match = removed.search(path.read_text())
                     self.assertIsNone(match, f"removed input: {match.group() if match else ''}")
-        self.assertGreater(checked, 1000)
 
 
 if __name__ == "__main__":

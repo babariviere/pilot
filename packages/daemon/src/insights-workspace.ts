@@ -11,6 +11,7 @@ import type {
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { resolveInsightsInitialModel } from "./insights-defaults.ts";
+import { InsightsJournal } from "./insights-journal.ts";
 import {
 	initialInsightsSettings,
 	resolveInsightsSettingsModel,
@@ -103,7 +104,7 @@ export class InsightsWorkspace {
 		if (!same(a, this.authority(a.owner.projectId))) throw new Conflict("workspace_identity_changed");
 	}
 	private async freshGuard(): Promise<() => void> {
-		const journalGuard = await this.deps.journal.legacyInsightsGuard();
+		const journalGuard = await new InsightsJournal(this.deps.journal).legacyInsightsGuard();
 		const guard = () => {
 			journalGuard();
 			this.deps.legacyGuard();

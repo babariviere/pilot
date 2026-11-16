@@ -17,9 +17,10 @@ import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { NotFound, SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const sessionId = randomUUID();
 const artifactId = randomUUID();
@@ -96,7 +97,14 @@ async function registry(t: TestContext) {
 	});
 	const runner = t.mock.fn(async () => "[]");
 	const manager = async () => {
-		const sessions = new SessionManager(home, projects, undefined, { worker: launch }, { runner });
+		const sessions = new SessionManager(
+			home,
+			projects,
+			undefined,
+			{ worker: launch },
+			{ runner },
+			offlineSessionOptions(),
+		);
 		managers.push(sessions);
 		await sessions.load();
 		// Artifact reads are independent of PR discovery. Drain the initial sweep and remove its timer.
@@ -280,14 +288,14 @@ async function api(t: TestContext, mockReads = true, withMissions = false) {
 			await missions.durable();
 			missions.close();
 		});
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		{} as ModelCatalog,
+		models: {} as ModelCatalog,
 		terminals,
-		missions ? { store: missions, service: new MissionService(missions, sessions, projects) } : undefined,
-	);
+		missions: missions ? { store: missions, service: new MissionService(missions, sessions, projects) } : undefined,
+	});
 	const sockets = new Set<Socket>();
 	server.on("connection", (socket) => {
 		sockets.add(socket);

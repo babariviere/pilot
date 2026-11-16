@@ -208,7 +208,7 @@ test("bounded pages rotate channels; pagination pins time range and resumes acro
 test("classification continues beyond the legacy hourly cap; malformed output stays cached", async (t) => {
 	const f = await fixture(t);
 	for (let i = 0; i < 150; i++)
-		assert.equal((await f.store.reserveSlack("C9", `${i + 1}.000001`, now, "budget")).state, "reserved");
+		assert.equal((await f.store.reserveSlack("C9", `${i + 1}.000001`, "budget")).state, "reserved");
 	let calls = 0;
 	const poll = createSlackPoller(
 		f.store,
@@ -267,7 +267,7 @@ test("same-project concurrent polls share the classification; cancellation and c
 	const results = await Promise.all([first, second]);
 	assert.equal(calls, 1);
 	assert.ok(results.every((result) => result.items.length === 1));
-	await f.store.reserveSlack("C000000001", "1791892801.000001", now, f.project.id);
+	await f.store.reserveSlack("C000000001", "1791892801.000001", f.project.id);
 	const interrupted = await poll({ ...context, call: async () => standalone("C000000001", 2) });
 	assert.equal(interrupted.issue, "slack_classification");
 	assert.equal(calls, 1);
@@ -295,7 +295,7 @@ test("ordinary and forced refreshes share cache and still respect Slack retry de
 	await projects.load();
 	const project = await projects.create({ path: f.home, tracking: { slackChannels: ["C000000001"] } });
 	await f.store.load([project.id]);
-	for (let i = 0; i < 150; i++) await f.store.reserveSlackRead(now);
+
 	let classified = 0;
 	const registry = new SourceRegistry(projects, f.store, {
 		call: async (_kind, tool) => (tool === "reactions" ? { present: false } : standalone()),
@@ -332,7 +332,7 @@ test("ordinary and forced refreshes share cache and still respect Slack retry de
 	assert.equal(waitingForced, true);
 	assert.equal(classified, 1);
 	assert.equal((await f.store.list({ projectId: project.id })).items.length, 1);
-	assert.equal(await f.store.reserveSlackRead(now), true);
+
 	mode = "rate";
 	const rateLimited = await registry.poll(id, true);
 	assert.equal(rateLimited.budgetLimited, undefined);

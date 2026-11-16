@@ -10,6 +10,7 @@ import type { SessionState, SessionSummary } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
 import { type SubscriptionProvider, SubscriptionUsageCache } from "./subscription-usage.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 class FakeWorker implements SessionWorker {
 	ready = Promise.resolve();
@@ -64,12 +65,12 @@ async function fixture(t: TestContext, models: Record<string, string>) {
 			},
 		},
 		{},
-		{
+		offlineSessionOptions({
 			subscriptionUsage: (onChange) => {
 				cache = new SubscriptionUsageCache(onChange, { agentDir, intervalMs: 60_000 });
 				return cache;
 			},
-		},
+		}),
 	);
 	await sessions.load();
 	// node:test runs after-hooks in registration order, so managers reopened by a test register here and
@@ -299,9 +300,9 @@ test("a known pause and its per-chat force survive daemon restart when provider 
 			worker: () => new FakeWorker({ provider: "openai-codex" }),
 		},
 		{},
-		{
+		offlineSessionOptions({
 			subscriptionUsage: () => ({ get: () => undefined, start: async () => {}, close() {} }),
-		},
+		}),
 	);
 	f.adopt(reopened);
 	await reopened.load();
@@ -347,9 +348,9 @@ test("provider-reported limits acknowledge only a persisted resumable pause, and
 		f.agentDir,
 		{ worker: () => new FakeWorker({ provider: "openai-codex" }) },
 		{},
-		{
+		offlineSessionOptions({
 			subscriptionUsage: () => ({ get: () => undefined, start: async () => {}, close() {} }),
-		},
+		}),
 	);
 	f.adopt(reopened);
 	await reopened.load();

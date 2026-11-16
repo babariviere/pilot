@@ -90,7 +90,7 @@ Remaining full-store costs are explicit:
 
 ## Reproducible measurements
 
-`node packages/kernel/bench/paged-history.ts` creates and deletes its own SQLite
+`node scripts/bench/paged-history.ts` creates and deletes its own SQLite
 fixture, 6,000 approximately 2 KiB bodies and 1,500 input submissions. Five
 alternating full/recent reads use fresh worker threads against warm OS caches.
 There is no compaction marker, live generation or large tool output in this

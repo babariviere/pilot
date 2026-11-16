@@ -14,9 +14,10 @@ import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import type { DaemonConfig } from "./config.ts";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { type SessionFactories, SessionManager, type SessionWorker } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 import { run } from "./workspaces.ts";
 
 type Spec = Extract<KernelCommand, { type: "start" }>["spec"];
@@ -91,27 +92,34 @@ async function fixture(t: TestContext) {
 	const managers: SessionManager[] = [];
 	let clones = 0;
 	const manager = async (factories: SessionFactories = {}) => {
-		const sessions = new SessionManager(home, projects, undefined, {
-			title: async () => undefined,
-			workspace: async (_source, path) => {
-				clones++;
-				await mkdir(path, { recursive: true });
-				return { path, base: "HEAD", jj: false };
+		const sessions = new SessionManager(
+			home,
+			projects,
+			undefined,
+			{
+				title: async () => undefined,
+				workspace: async (_source, path) => {
+					clones++;
+					await mkdir(path, { recursive: true });
+					return { path, base: "HEAD", jj: false };
+				},
+				worker: (spec) => {
+					specs.push(spec);
+					const worker: SessionWorker = {
+						state: "idle",
+						busy: false,
+						ready: Promise.resolve(),
+						send: () => {},
+						request: async () => {},
+						close: async () => {},
+					};
+					return worker;
+				},
+				...factories,
 			},
-			worker: (spec) => {
-				specs.push(spec);
-				const worker: SessionWorker = {
-					state: "idle",
-					busy: false,
-					ready: Promise.resolve(),
-					send: () => {},
-					request: async () => {},
-					close: async () => {},
-				};
-				return worker;
-			},
-			...factories,
-		});
+			{},
+			offlineSessionOptions(),
+		);
 		managers.push(sessions);
 		await sessions.load();
 		return sessions;
@@ -536,13 +544,13 @@ test("direct project origin heads are available only with Ask branches mode, and
 			terminalCalls++;
 		},
 	} as unknown as TerminalManager;
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 } as DaemonConfig,
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 } as DaemonConfig,
 		sessions,
-		f.projects,
-		{} as ModelCatalog,
+		projects: f.projects,
+		models: {} as ModelCatalog,
 		terminals,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

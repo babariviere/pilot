@@ -28,6 +28,34 @@ export function showChanges() {
 	changesRoute.set({ kind: "list" });
 }
 
+/** Only the chosen tab is durable; status and open details are transient. */
+export function captureChangesTab(): string {
+	const change = changesRoute();
+	return change?.kind === "change" ? (changeTabs()[change.snapshotId] ?? "") : "";
+}
+
+export function resetChangesView() {
+	changeTabs.set({});
+	changeMessages.set({});
+	detailsOpen.set({});
+	changesRoute.set(null);
+	listMessage.set("");
+}
+
+/** Restoring a saved change performs only its existing passive read. */
+export function restoreChangesView(
+	view: Pick<import("pilot-day/native").SavedView, "place" | "id" | "tab">,
+	changes?: import("./changeFeed").Changes,
+) {
+	if (view.place === "change" && changes) {
+		changesRoute.set({ kind: "change", snapshotId: view.id });
+		if (view.tab === "diff" || view.tab === "history") changeTabs.set({ [view.id]: view.tab });
+		void changes.feed.open({ snapshotId: view.id });
+	} else {
+		changesRoute.set(view.place === "changes" && changes ? { kind: "list" } : null);
+	}
+}
+
 /** Opens one kept snapshot. The screen asks Rust to read it. */
 export function showChange(snapshotId: string) {
 	changesRoute.set({ kind: "change", snapshotId });

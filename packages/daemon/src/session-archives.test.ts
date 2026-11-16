@@ -14,11 +14,12 @@ import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { applyActivity } from "./session-outcomes.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 type Meta = Parameters<SessionManager["save"]>[0];
 type Command = Parameters<SessionWorker["request"]>[0];
@@ -122,6 +123,7 @@ async function fixture(gitRunner?: (args: string[]) => string | undefined) {
 					return file === "git" && args[0] === "branch" ? "" : "[]";
 				}),
 			},
+			offlineSessionOptions(),
 		);
 		managers.push(sessions);
 		configure?.(sessions);
@@ -1318,14 +1320,14 @@ test("HTTP archive browsing narrows by mission and project, including inactive m
 	const store = new MissionStore(":memory:");
 	const missions = new MissionService(store, sessions, projects);
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(join(home, "agent")),
+		models: new ModelCatalog(join(home, "agent")),
 		terminals,
-		{ service: missions, store },
-	);
+		missions: { service: missions, store },
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -1373,13 +1375,13 @@ test("HTTP archive browsing narrows by mission and project, including inactive m
 test("HTTP archive browsing works globally and per project; WebSocket sync includes archives", async () => {
 	const { home, projects, first, second, sessions, ids, cleanup } = await fixture();
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(join(home, "agent")),
+		models: new ModelCatalog(join(home, "agent")),
 		terminals,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -1770,21 +1772,15 @@ test("passive lifecycle HTTP pins home, holds ACK for durability and exposes pos
 		},
 	};
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		new ModelCatalog(join(f.home, "agent")),
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(join(f.home, "agent")),
 		terminals,
-		{ service: f.service, store: f.store },
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
+		missions: { service: f.service, store: f.store },
 		hello,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

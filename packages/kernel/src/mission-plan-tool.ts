@@ -1,7 +1,6 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { InterviewWrite, PlanWrite } from "@pilot/protocol";
+import type { InterviewWrite, MissionRevisionDelta, PlanWrite } from "@pilot/protocol";
 import { Type } from "typebox";
-import type { MissionRevisionDelta } from "../../protocol/src/mission-revision.ts";
 import { interviewQuestionSchema } from "./interview-tool.ts";
 
 export interface NativePlanningPort {

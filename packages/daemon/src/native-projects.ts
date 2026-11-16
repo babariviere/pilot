@@ -5,7 +5,7 @@ import { type GitHubImportService, importRepository } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
 import { type OperationJournal, OperationRejected, sameHost } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
-import { SetupError } from "./setup.ts";
+import { SetupError } from "./setup-error.ts";
 
 export const PROJECT_ACTION = "native-project-action";
 function registered(p: Project) {

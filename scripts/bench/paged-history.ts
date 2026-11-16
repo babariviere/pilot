@@ -1,4 +1,4 @@
-/** Synthetic only: node packages/kernel/bench/paged-history.ts. Never reads a real session. */
+/** Synthetic only: node scripts/bench/paged-history.ts. Never reads a real session. */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,9 +7,9 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import type { AgentEvent } from "@pilot/protocol";
-import { ChatStreams } from "../../daemon/src/chat-streams.ts";
-import { HeldInputsDoc } from "../src/held-inputs-doc.ts";
-import { openSessionStorage } from "../src/storage.ts";
+import { ChatStreams } from "../../packages/daemon/src/chat-streams.ts";
+import { HeldInputsDoc } from "../../packages/kernel/src/held-inputs-doc.ts";
+import { openSessionStorage } from "../../packages/kernel/src/storage.ts";
 
 const directory = await mkdtemp(join(tmpdir(), "pilot-paged-bench-"));
 const owned = await openSessionStorage(directory);
@@ -55,7 +55,11 @@ try {
             })().catch(e=>{throw e});`,
 				{
 					eval: true,
-					workerData: { directory, recent, module: new URL("../src/snapshot.ts", import.meta.url).href },
+					workerData: {
+						directory,
+						recent,
+						module: new URL("../../packages/kernel/src/snapshot.ts", import.meta.url).href,
+					},
 				},
 			);
 			const result = await new Promise<{

@@ -391,8 +391,10 @@ export interface SessionManagerOptions {
 	workspaceSetupHoldMs?: number;
 	/** One host-owned accounting store, shared with separate background completions. */
 	usageHistory?: UsageHistoryStore;
-	/** Agent database access. Defaults to the agent directory's config, except with injected test workers. */
-	databases?: DatabaseService;
+	/** Supply accounting generation/floors to workers. Does not change user capture consent. Defaults to true. */
+	workerUsageHistory?: boolean;
+	/** Agent database access. Defaults to the agent directory's config; false explicitly disables it. */
+	databases?: DatabaseService | false;
 	credentials?: CredentialBroker;
 	/** Delay after an automatic PR follow-up finishes. Defaults to five minutes. */
 	prFollowUpCooldownMs?: number;
@@ -400,8 +402,8 @@ export interface SessionManagerOptions {
 	prFollowUpCiWaitMs?: number;
 	/** Close idle, unwatched kernels after this long. Their sessions reopen on demand. Defaults to 10 minutes. */
 	idleParkMs?: number;
-	/** Account-wide subscription usage. Defaults to pi's shared usage cache, or none with injected workers. */
-	subscriptionUsage?: (onChange: (provider: SubscriptionProvider) => void) => SubscriptionUsageSource;
+	/** Account-wide subscription usage. Defaults to pi's shared usage cache; false explicitly disables it. */
+	subscriptionUsage?: false | ((onChange: (provider: SubscriptionProvider) => void) => SubscriptionUsageSource);
 	startupTimeoutMs?: number;
 	commandTimeoutMs?: number;
 	/** Reclaim shared workspaces, and prune legacy clones, this long after archival. Defaults to 1 day; Infinity disables. */
@@ -2443,6 +2445,7 @@ export class SessionManager {
 	private readonly aiUsage: AIUsageLedger;
 	/** Local accounting only. Never include raw records in diagnostics or telemetry. */
 	readonly usageHistory: UsageHistoryStore;
+	private readonly workerUsageHistory: boolean;
 	private legacyUsageMigration?: Promise<void>;
 	private readonly autoRebase: PullRequestAutoRebase;
 	/** A handoff must not relinquish the workspace in the middle of a daemon-owned rebase. */
@@ -2501,8 +2504,9 @@ export class SessionManager {
 		if (!factories.worker) this.pool = new WorkerPool();
 		const onUsage = (provider: SubscriptionProvider) => this.subscriptionUsageChanged(provider);
 		this.subscriptionUsage =
-			options.subscriptionUsage?.(onUsage) ??
-			(factories.worker ? undefined : new SubscriptionUsageCache(onUsage, { agentDir }));
+			options.subscriptionUsage === false
+				? undefined
+				: (options.subscriptionUsage?.(onUsage) ?? new SubscriptionUsageCache(onUsage, { agentDir }));
 		this.home = home;
 		this.diagnosticHost = options.diagnosticHost;
 		this.repairProject = new DiagnosticRepairProjectStore(home, projects, this.diagnosticHost);
@@ -2511,13 +2515,14 @@ export class SessionManager {
 		this.nativeDiagnostics = new NativeDiagnosticsStore(home);
 		this.aiUsage = new AIUsageLedger(home);
 		this.usageHistory = options.usageHistory ?? new UsageHistoryStore(home);
+		this.workerUsageHistory = options.workerUsageHistory ?? true;
 		this.telemetry = options.telemetry ? { ...options.telemetry } : undefined;
 		this.lifecycle.setEnabled(options.telemetry?.localDiagnostics ?? true);
 		this.nativeDiagnostics.setEnabled(options.telemetry?.localDiagnostics ?? true);
 		this.projects = projects;
 		this.agentDir = agentDir;
 		this.factories = factories;
-		this.databases = options.databases ?? (factories.worker ? undefined : new DatabaseService());
+		this.databases = options.databases === false ? undefined : (options.databases ?? new DatabaseService());
 		this.modelCatalog = options.models ?? new ModelCatalog(agentDir);
 		this.runner = pullRequests.runner ?? run;
 		this.pullRequestMerger = new PullRequestMerger(this.runner);
@@ -12837,7 +12842,7 @@ ${run.excerpt}`,
 			});
 		const mission = operations.time("worker.context", () => this.missions?.context(id));
 		const usageMission = this.missions?.usageAttribution?.(id);
-		const usageHistory = !this.factories.worker
+		const usageHistory = this.workerUsageHistory
 			? await this.usageHistory.status().then(
 					({ generation, captureFloor, retentionFloor }) => ({ generation, captureFloor, retentionFloor }),
 					() => undefined,

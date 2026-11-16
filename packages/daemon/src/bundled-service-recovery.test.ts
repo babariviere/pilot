@@ -13,6 +13,7 @@ import { canonicalJSON, OperationJournal, payloadHash } from "./operation-journa
 import { ProjectStore } from "./projects.ts";
 import { RuntimeResources } from "./runtime-admission.ts";
 import { SessionManager, Worker } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const identity = { hostId: "local", daemonId: "daemon", lineageId: "lineage" };
 const draft = "  unsent 👩🏽‍💻\n漢字  ";
@@ -86,19 +87,26 @@ async function fixture(
 	const children: ChildProcess[] = [];
 	const opened: string[] = [];
 	function manager() {
-		const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-			title: async () => undefined,
-			worker: (spec, receive, exit) => {
-				opened.push(spec.sessionId);
-				const child = fork(new URL("./testing/update-pause-worker.ts", import.meta.url), ["healthy"], {
-					execArgv: [],
-					stdio: ["ignore", "ignore", "ignore", "ipc"],
-					env: { PATH: process.env.PATH },
-				});
-				children.push(child);
-				return new Worker(spec, receive, exit, undefined, { child });
+		const sessions = new SessionManager(
+			home,
+			new ProjectStore(home),
+			undefined,
+			{
+				title: async () => undefined,
+				worker: (spec, receive, exit) => {
+					opened.push(spec.sessionId);
+					const child = fork(new URL("./testing/update-pause-worker.ts", import.meta.url), ["healthy"], {
+						execArgv: [],
+						stdio: ["ignore", "ignore", "ignore", "ipc"],
+						env: { PATH: process.env.PATH },
+					});
+					children.push(child);
+					return new Worker(spec, receive, exit, undefined, { child });
+				},
 			},
-		});
+			{},
+			offlineSessionOptions(),
+		);
 		sessions.bindLifecycleRuntime({
 			boot: "new-boot",
 			host: { daemonId: identity.daemonId, lineageId: identity.lineageId },

@@ -115,6 +115,15 @@ binary/source hashes and use separate-process seeding and the credential-free al
 This establishes **isolated shipped-worker execution equivalence**, not a rebuilt package or full installed-daemon
 measurement. No installs, deployments, production data, providers or windows were used.
 
+Current probe behavior (November 2026): `scripts/bench/usage-worker.mjs` now runs
+the invoking `process.execPath` in place and labels metadata
+`nodeExecution: invoking-executable-in-place`. It still freezes the worker source
+graph and records the exact executable, source and generator hashes, runtime
+versions and isolated environment. Copying a Homebrew executable alone does not
+stage its shared-library closure. This leaf probe does not qualify Node
+distribution relocation; packaged-runtime relocation checks remain separate.
+The October Node 24 evidence below is historical and has not been rerun or changed.
+
 Unlike the prior harness invocation, final measured children do **not** receive `--expose-gc`; no forced GC runs.
 The old `main_gc_only` stage label is a no-op in these samples. Different idle/peak values from the previous
 source-mode run are not a newly implemented production improvement. Ambient host load is uncontrolled; raw

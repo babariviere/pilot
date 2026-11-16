@@ -29,6 +29,19 @@ export function openLinear() {
 	linearOpen.set(true);
 }
 
+/** Reset before applying a saved place, without navigation animation. */
+export function resetLinearView() {
+	linearOpen.set(false);
+	openIssue.set(null);
+	linearProject.set(null);
+	focusIssue.set(null);
+}
+
+export function restoreLinearView(saved: string | undefined, available: boolean) {
+	resetLinearView();
+	if (available && saved) restoreLinear(saved);
+}
+
 /** Back to Today. */
 export function closeLinear() {
 	openIssue.set(null);

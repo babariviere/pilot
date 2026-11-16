@@ -154,6 +154,7 @@ const DRAFT_AFTER_MS = 700;
 
 /** Today over the root: the latest read, this run's Later order and sends on their way. */
 export class ConnectedToday implements DayFeed {
+	#closed = false;
 	#window: string;
 	#today: Today;
 	#missions = new Map<string, MissionPage | null>();
@@ -195,6 +196,7 @@ export class ConnectedToday implements DayFeed {
 	}
 
 	#publish() {
+		if (this.#closed) return;
 		const today = this.snapshot();
 		for (const listener of this.#listeners.values()) listener(today);
 	}
@@ -206,6 +208,7 @@ export class ConnectedToday implements DayFeed {
 
 	/** Reads Today again after an invalidation. Bursts collapse into one more read. */
 	refresh(): Promise<void> {
+		if (this.#closed) return Promise.resolve();
 		this.#readVersion += 1;
 		// The shown read stays until the next one lands. Marking it stale on
 		// every notice repainted Today on each daemon event (flicker). Rust
@@ -220,6 +223,7 @@ export class ConnectedToday implements DayFeed {
 				this.#again = false;
 				const version = this.#readVersion;
 				const r = await call<Today>(this.#window, "day.today.read", {});
+				if (this.#closed) return;
 				if (version !== this.#readVersion) continue;
 				if (r.ok) this.#take(r.snapshot);
 				else {
@@ -419,6 +423,7 @@ export class ConnectedToday implements DayFeed {
 	}
 
 	dispose(): void {
+		this.#closed = true;
 		if (this.#draftTimer !== undefined) clearTimeout(this.#draftTimer);
 		this.#listeners.clear();
 	}
@@ -547,6 +552,7 @@ function inventoryRows(planning: Planning | null | undefined): PlanRow[] | null 
 
 /** Planning over the root: the setup, every mission in planning, the pages opened here and saves on their way. */
 export class ConnectedPlans implements PlanningFeed {
+	#closed = false;
 	#window: string;
 	#setup: Setup | null;
 	#setupRead = 0;
@@ -613,6 +619,7 @@ export class ConnectedPlans implements PlanningFeed {
 	}
 
 	#publish() {
+		if (this.#closed) return;
 		this.#revision += 1;
 		const planning = this.snapshot();
 		for (const listener of this.#listeners.values()) listener(planning);
@@ -649,10 +656,12 @@ export class ConnectedPlans implements PlanningFeed {
 	 * Passive: it answers, saves and starts nothing. Runs at open and on Read again.
 	 */
 	readInventory(): Promise<void> {
+		if (this.#closed) return Promise.resolve();
 		if (this.#inventoryReading) return this.#inventoryReading;
 		const version = ++this.#inventoryVersion;
 		this.#inventoryReading = (async () => {
 			const reply = await call<Planning>(this.#window, "day.plan.inventory", {});
+			if (this.#closed) return;
 			if (version === this.#inventoryVersion || (!reply.ok && this.#inventory.state === "off")) {
 				// A read's own notice can deliver its unavailable cache first.
 				// Keep the exact refusal, but never replace newer valid rows.
@@ -691,6 +700,7 @@ export class ConnectedPlans implements PlanningFeed {
 	 * then it shows as it was; one timer publishes again when the time is up.
 	 */
 	#lagging(missionId: string): boolean {
+		if (this.#closed) return false;
 		const now = Date.now();
 		const since = this.#lagSince.get(missionId) ?? now;
 		this.#lagSince.set(missionId, since);
@@ -811,6 +821,7 @@ export class ConnectedPlans implements PlanningFeed {
 	 * collapse into one more read.
 	 */
 	refresh(): Promise<void> {
+		if (this.#closed) return Promise.resolve();
 		// The open page is read again below; other pages are marked older
 		// there. Not marking the open page first keeps it from flickering.
 		this.#refreshVersion += 1;
@@ -823,7 +834,7 @@ export class ConnectedPlans implements PlanningFeed {
 			do {
 				this.#again = false;
 				await this.#readCached();
-			} while (this.#again);
+			} while (this.#again && !this.#closed);
 		})().finally(() => {
 			this.#refreshing = null;
 		});
@@ -835,7 +846,7 @@ export class ConnectedPlans implements PlanningFeed {
 		const id = this.#selected;
 		for (const missionId of this.#pages.keys()) if (missionId !== id) this.#older.add(missionId);
 		const inventory = await call<Planning>(this.#window, "day.plan.inventorySnapshot", {});
-		if (version !== this.#refreshVersion) return;
+		if (this.#closed || version !== this.#refreshVersion) return;
 		this.#takeInventory(inventory);
 		if (!id) return;
 		const r = await call<PlanPage>(this.#window, "day.plan.snapshot", { missionId: id });
@@ -1135,6 +1146,9 @@ export class ConnectedPlans implements PlanningFeed {
 	}
 
 	dispose(): void {
+		this.#closed = true;
+		if (this.#lagTimer !== null) clearTimeout(this.#lagTimer);
+		this.#lagTimer = null;
 		this.#listeners.clear();
 	}
 }

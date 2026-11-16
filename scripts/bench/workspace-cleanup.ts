@@ -3,18 +3,17 @@
  * Uses real filesystem traversal, but replays Git/jj listings to isolate inspection CPU and event-loop cost.
  */
 // biome-ignore-all lint/complexity/useLiteralKeys: Measure the private inspection seam, not repository commands.
-import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { promisify } from "node:util";
 import { SharedWorkspaceStore } from "../../packages/daemon/src/shared-workspaces.ts";
 import type { Runner } from "../../packages/daemon/src/workspaces.ts";
+import { loadBaseline } from "./baseline.ts";
 
 const root = await mkdtemp(join(tmpdir(), "pilot-cleanup-bench-"));
+let cleanupBaseline: (() => Promise<void>) | undefined;
 try {
 	const tree = join(root, "tree");
 	const files: string[] = [];
@@ -41,21 +40,13 @@ try {
 	const variants: [string, typeof SharedWorkspaceStore][] = [];
 	const baseline = process.argv[2];
 	if (baseline) {
-		const { stdout } = await promisify(execFile)(
+		const loaded = await loadBaseline<{ SharedWorkspaceStore: typeof SharedWorkspaceStore }>(
+			baseline,
+			new URL("../../packages/daemon/src/shared-workspaces.ts", import.meta.url),
 			"jj",
-			["file", "show", "-r", baseline, "packages/daemon/src/shared-workspaces.ts"],
-			{ maxBuffer: 1024 * 1024 },
 		);
-		const directory = dirname(
-			fileURLToPath(new URL("../../packages/daemon/src/shared-workspaces.ts", import.meta.url)),
-		);
-		const source = stdout.replace(
-			/from "(\.\/[^"]+)"/g,
-			(_, path: string) => `from ${JSON.stringify(pathToFileURL(resolve(directory, path)).href)}`,
-		);
-		const module = join(root, "baseline.ts");
-		await writeFile(module, source);
-		variants.push([baseline, (await import(pathToFileURL(module).href)).SharedWorkspaceStore]);
+		cleanupBaseline = loaded.cleanup;
+		variants.push([baseline, loaded.module.SharedWorkspaceStore]);
 	}
 	variants.push(["current", SharedWorkspaceStore]);
 	console.log(`${files.length} tracked files, ${outputs.length} ignored dependency directories; 5ms streaming timer`);
@@ -84,5 +75,6 @@ try {
 		}
 	}
 } finally {
+	await cleanupBaseline?.();
 	await rm(root, { recursive: true, force: true });
 }

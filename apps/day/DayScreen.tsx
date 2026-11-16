@@ -3,32 +3,29 @@
 // stays over every screen: Pilot goes to Today, Back goes up one level,
 // and Escape goes back too.
 
-import { effect, lifecycle, untracked, View } from "nsh";
+import { cleanup, computed, effect, lifecycle, untracked, View } from "nsh";
 import { FullArtifact } from "./ArtifactShelf";
 import { ArtifactsScreen } from "./ArtifactsScreen";
-import { type ArtifactSource, artifactsOpen } from "./artifactReads";
+import type { ArtifactSource } from "./artifactReads";
 import { ChangesScreen } from "./ChangesScreen";
 import { ChatScreen } from "./ChatScreen";
 import { AppHeader } from "./Chrome";
 import type { Changes } from "./changeFeed";
-import { changesRoute } from "./changesView";
 import { chatRoute } from "./chatView";
 import { DeliveryScreen } from "./DeliveryScreen";
 import type { Day } from "./day";
 import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
 import { FeedbackScreen } from "./FeedbackScreen";
-import { feedbackOpen } from "./feedbackView";
 import { LinearScreen } from "./LinearScreen";
-import { linearOpen } from "./linearView";
 import { MissionScreen } from "./MissionScreen";
 import { NewScreen } from "./NewScreen";
+import { animatePlanningList, type Shown, shown } from "./nav";
 import { PlanScreen } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { planRoute } from "./planView";
-import { settingsOpen } from "./preferencesView";
 import { RitualScreen } from "./RitualScreen";
 import type { Rituals } from "./ritualFeed";
-import { ritualEntry, ritualRoute } from "./ritualView";
+import { ritualEntry } from "./ritualView";
 import { SettingsScreen } from "./SettingsScreen";
 import { ThreadScreen } from "./ThreadScreen";
 import { TodayScreen } from "./TodayScreen";
@@ -36,7 +33,7 @@ import { threadRoute } from "./threadView";
 import { bindRestore, UpdateScreen } from "./UpdateScreen";
 import { Arrive } from "./ui";
 import type { Update } from "./updateFeed";
-import { updateEntry, updateOpen } from "./updateView";
+import { updateEntry } from "./updateView";
 import { route } from "./view";
 
 /** The planning screen the user opened, if any. */
@@ -75,6 +72,12 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 	updateEntry.set(props.update ?? null);
 	if (props.update) bindRestore(props.update, props.changes, props.day);
 	const rituals = props.rituals;
+	const at = computed(() => shown(props));
+	const plans = props.plans;
+	if (plans) {
+		// Own this subscription with the surface, before its next native commit.
+		cleanup(animatePlanningList(plans, () => untracked(at)));
+	}
 	ritualEntry.set(rituals);
 	// Coming back to the window reads the saved progress again, with a fresh
 	// clock sample, so a new day or time zone shows. It writes nothing.
@@ -95,11 +98,19 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 			<AppHeader day={props.day} plans={props.plans} changes={props.changes} />
 			<View class="min-h-0 flex-1">
 				<If
-					when={props.update && updateOpen()}
+					when={at() === "update"}
 					else={
 						<If
-							when={ritualRoute()}
-							else={<Screens day={props.day} rituals={rituals} plans={props.plans} changes={props.changes} />}
+							when={at() === "ritual"}
+							else={
+								<Screens
+									at={at()}
+									day={props.day}
+									rituals={rituals}
+									plans={props.plans}
+									changes={props.changes}
+								/>
+							}
 						>
 							<Arrive class="flex-1">
 								<RitualScreen day={props.day} rituals={rituals} />
@@ -118,18 +129,24 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 	);
 }
 
-function Screens(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
+function Screens(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
 	return (
 		<If
-			when={props.day.chat && chatRoute()}
+			when={props.at === "chat"}
 			else={
 				<If
-					when={props.day.preferences && settingsOpen()}
+					when={props.at === "settings"}
 					else={
 						<If
-							when={props.day.feedback && feedbackOpen()}
+							when={props.at === "feedback"}
 							else={
-								<Results day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />
+								<Results
+									at={props.at}
+									day={props.day}
+									rituals={props.rituals}
+									plans={props.plans}
+									changes={props.changes}
+								/>
 							}
 						>
 							<Arrive class="flex-1">
@@ -155,18 +172,24 @@ function Screens(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: C
 	);
 }
 
-function Results(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
+function Results(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
 	return (
 		<If
-			when={props.day.delivery && deliveryRoute()}
+			when={props.at === "delivery"}
 			else={
 				<If
-					when={props.day.linear && linearOpen()}
+					when={props.at === "linear"}
 					else={
 						<If
-							when={props.day.artifacts && artifactsOpen()}
+							when={props.at === "artifacts"}
 							else={
-								<Places day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />
+								<Places
+									at={props.at}
+									day={props.day}
+									rituals={props.rituals}
+									plans={props.plans}
+									changes={props.changes}
+								/>
 							}
 						>
 							<Arrive class="flex-1">
@@ -192,16 +215,16 @@ function Results(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: C
 	);
 }
 
-function Places(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
+function Places(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
 	return (
 		<If
-			when={props.changes && changesRoute()}
+			when={["change", "changes"].includes(props.at)}
 			else={
 				<If
-					when={props.plans && planRoute()}
+					when={["new", "plan"].includes(props.at)}
 					else={
 						<If
-							when={route()}
+							when={["mission", "thread"].includes(props.at)}
 							else={
 								<Arrive class="flex-1">
 									<TodayScreen day={props.day} rituals={props.rituals} plans={props.plans} />
@@ -211,7 +234,7 @@ function Places(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Ch
 							<Each of={route() ? [route() as string] : []} key={(id) => id}>
 								{(id) => (
 									<If
-										when={props.day.threads && threadRoute()?.missionId === id()}
+										when={props.at === "thread"}
 										else={
 											<Arrive class="flex-1">
 												<MissionScreen day={props.day} plans={props.plans} missionId={id()} />

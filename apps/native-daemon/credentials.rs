@@ -1,4 +1,5 @@
 //! Shared native app capability-file contract. Never registered in a script VM.
+//! Compiled by Desktop model_scope_access and Day host::transport through path modules.
 use std::{
     io::Read,
     os::unix::fs::{MetadataExt, OpenOptionsExt},

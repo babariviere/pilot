@@ -22,7 +22,7 @@ export function validateArtifact(input: ArtifactWrite): ValidatedWrite {
 	return validateWrite(input).write;
 }
 
-function validateWrite(input: ArtifactWrite): { write: ValidatedWrite; dataJSON?: string } {
+function validateWrite(input: ArtifactWrite): { write: ValidatedWrite; dataJSON?: string; nsh?: ArtifactNsh } {
 	if (!input || typeof input !== "object") throw new Error("Expected an artifact document");
 	const write = { ...input };
 	if (typeof write.title !== "string" || !write.title.trim() || write.title.length > 160)
@@ -37,8 +37,8 @@ function validateWrite(input: ArtifactWrite): { write: ValidatedWrite; dataJSON?
 		);
 	if (write.kind === "image") validateImageSource(write.source);
 	if (write.kind === "shader") validateShaderSource(write.source);
-	if (write.kind === "nsh") nshSource(write.source, write.entry ?? "");
-	else if (write.entry !== undefined) throw new Error("Only NSH artifacts take entry");
+	const nsh = write.kind === "nsh" ? nshSource(write.source, write.entry ?? "") : undefined;
+	if (write.kind !== "nsh" && write.entry !== undefined) throw new Error("Only NSH artifacts take entry");
 	const dataJSON = write.kind === "visual" ? validateVisualWrite(write.source, write.data) : undefined;
 	if (write.kind !== "visual" && write.data !== undefined) throw new Error("Only visual artifacts take data");
 	if (write.libraries !== undefined && !Array.isArray(write.libraries))
@@ -48,7 +48,7 @@ function validateWrite(input: ArtifactWrite): { write: ValidatedWrite; dataJSON?
 		throw new Error(
 			`${write.kind === "image" ? "Image" : write.kind === "visual" ? "Visual" : "Shader"} artifacts do not use libraries`,
 		);
-	return { write: { ...write, title: write.title.trim(), libraries }, dataJSON };
+	return { write: { ...write, title: write.title.trim(), libraries }, dataJSON, nsh };
 }
 
 export const ARTIFACT_CSP =
@@ -68,11 +68,10 @@ export async function prepareArtifactWrite(
 	input: ArtifactWrite,
 	options: { signal?: AbortSignal; id?: string } = {},
 ): Promise<{ write: ValidatedWrite; prepared: PreparedArtifact }> {
-	const { write, dataJSON } = validateWrite(input);
+	const { write, dataJSON, nsh } = validateWrite(input);
 	options.signal?.throwIfAborted();
 	// Saving source is independent of compilation/execution. Never synthesize HTML from authored TSX.
-	if (write.kind === "nsh")
-		return { write, prepared: { html: "", libraries: [], nsh: nshSource(write.source, write.entry ?? "") } };
+	if (write.kind === "nsh") return { write, prepared: { html: "", libraries: [], nsh } };
 	// Keep existing shader checks; this does not enable shader rendering in Next.
 	if (write.kind === "shader") await assertShaderCompiles(write.source, options.signal);
 	const visual =

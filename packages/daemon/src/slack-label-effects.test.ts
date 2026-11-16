@@ -96,7 +96,14 @@ test("edits keep a label's close, the user's own status replaces it, and only la
 		const confirmed = disk.patch(id("2.000001"), { slack: { status: "dismissed" } });
 		assert.equal(confirmed.slack?.closedByLabel, undefined);
 		assert.equal(confirmed.slack?.overrides.status, "dismissed");
-		assert.deepEqual(disk.patch(id("2.000001"), { slack: { status: "dismissed" } }), confirmed, "idempotent");
+		const corrections = disk.corrections("p");
+		const repeated = disk.patch(id("2.000001"), { slack: { status: "dismissed" } });
+		assert.deepEqual(
+			{ ...repeated, revision: undefined },
+			{ ...confirmed, revision: undefined },
+			"reconfirming a user status preserves every item field except the revision fence",
+		);
+		assert.deepEqual(disk.corrections("p"), corrections, "reconfirmation is not a new correction");
 		disk.patch(id("3.000001"), { dismissed: true });
 		assert.equal(disk.require(id("3.000001")).slack?.closedByLabel, undefined, "dismissed: true confirms too");
 		assert.equal(disk.require(id("3.000001")).slack?.overrides.status, "dismissed");
@@ -188,13 +195,13 @@ test("label effects migrate from hideFromInbox, survive a restart and reconcile 
 	);
 	let projects = new ProjectStore(home);
 	await projects.load();
-	assert.deepEqual(projects.require("p").tracking?.slackLabels, [
+	const migratedLabels = [
 		{ name: "Product", description: "Invented team", effect: "hide" },
 		{ name: "Ops", description: "", effect: "none" },
-	]);
-	const migrated = await readFile(join(home, "projects.json"), "utf8");
-	assert.match(migrated, /"effect": "hide"/);
-	assert.doesNotMatch(migrated, /hideFromInbox/);
+	];
+	assert.deepEqual(projects.require("p").tracking?.slackLabels, migratedLabels);
+	const migrated = JSON.parse(await readFile(join(home, "projects.json"), "utf8"));
+	assert.deepEqual(migrated[0].tracking.slackLabels, migratedLabels);
 
 	const path = join(home, "tracked.sqlite");
 	const mcp = {

@@ -14,9 +14,9 @@ import { EventLoopWatchdog, threadCpuMs } from "../event-loop-watchdog.ts";
 import { LIFECYCLE_FILE } from "../lifecycle-diagnostics.ts";
 import type { ModelCatalog } from "../models.ts";
 import { ProjectStore } from "../projects.ts";
-import { createDaemonServer } from "../server.ts";
 import { SessionManager, type SessionWorker } from "../sessions.ts";
 import type { TerminalManager } from "../terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./daemon-server.ts";
 
 export async function startupResponsiveness(
 	count: number,
@@ -68,13 +68,13 @@ export async function startupResponsiveness(
 			return worker;
 		},
 	});
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		{} as ModelCatalog,
-		{} as TerminalManager,
-	);
+		models: {} as ModelCatalog,
+		terminals: {} as TerminalManager,
+	});
 	const agent = new Agent({ keepAlive: true, maxSockets: 1 });
 	const histogram = monitorEventLoopDelay({ resolution: 5 });
 	const watchdog = new EventLoopWatchdog({ intervalMs: 5, thresholdMs: 250, log: () => {} });

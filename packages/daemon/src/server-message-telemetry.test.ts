@@ -16,9 +16,9 @@ import {
 } from "@pilot/telemetry";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("message API continues the reviewed traceparent and never needs content attributes", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-message-trace-"));
@@ -54,13 +54,13 @@ test("message API continues the reviewed traceparent and never needs content att
 		continued = trace;
 		received.push({ message: _message, requestId: _requestId });
 	};
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

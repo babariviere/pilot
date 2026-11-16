@@ -227,7 +227,7 @@ test("ordinary and forced waiting reads have no hourly cap and keep recheck limi
 	const f = await fixture(t);
 	await f.items.patch(f.item.id, { slack: { status: "waiting" } });
 	const clock = Date.now() + 3_600_000;
-	for (let i = 0; i < 100; i++) assert.equal(await f.items.reserveSlackRead(clock), true);
+
 	const watch = createSlackWaitingWatcher(
 		f.items,
 		async () => false,
@@ -239,6 +239,6 @@ test("ordinary and forced waiting reads have no hourly cap and keep recheck limi
 		f.calls.map(({ tool }) => tool),
 		["profile", "thread"],
 	);
-	assert.equal(await f.items.reserveSlackRead(clock), true);
+
 	assert.equal((await f.items.reserveSlackWaiting(f.project.id, clock, true)).reads.length, 0);
 });

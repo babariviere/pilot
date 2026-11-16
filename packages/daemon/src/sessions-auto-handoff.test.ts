@@ -7,6 +7,7 @@ import type { KernelCommand, KernelSpec } from "@pilot/kernel";
 import { ChatSettingsService } from "./chat-settings.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 test("automation settings never configure worker handoff", { timeout: 10_000 }, async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-handoff-ipc-"));
@@ -14,36 +15,43 @@ test("automation settings never configure worker handoff", { timeout: 10_000 }, 
 	const specs: KernelSpec[] = [];
 	const commands: KernelCommand[][] = [];
 	let finishStartup!: () => void;
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		title: async () => undefined,
-		worker(spec, packet, exit) {
-			specs.push(spec);
-			const sent: KernelCommand[] = [];
-			commands.push(sent);
-			let ready!: () => void;
-			const worker = {
-				state: "starting" as const,
-				busy: false,
-				ready: new Promise<void>((resolve) => {
-					ready = resolve;
-				}),
-				send(command: KernelCommand) {
-					sent.push(command);
-				},
-				async request(command: Extract<KernelCommand, { requestId: string }>) {
-					sent.push(command);
-				},
-				async close() {
-					exit(this, 0);
-				},
-			};
-			finishStartup = () => {
-				packet({ type: "ready", working: false, model: "faux/faux-1", usage: {} });
-				ready();
-			};
-			return worker;
+	const sessions = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker(spec, packet, exit) {
+				specs.push(spec);
+				const sent: KernelCommand[] = [];
+				commands.push(sent);
+				let ready!: () => void;
+				const worker = {
+					state: "starting" as const,
+					busy: false,
+					ready: new Promise<void>((resolve) => {
+						ready = resolve;
+					}),
+					send(command: KernelCommand) {
+						sent.push(command);
+					},
+					async request(command: Extract<KernelCommand, { requestId: string }>) {
+						sent.push(command);
+					},
+					async close() {
+						exit(this, 0);
+					},
+				};
+				finishStartup = () => {
+					packet({ type: "ready", working: false, model: "faux/faux-1", usage: {} });
+					ready();
+				};
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	t.after(async () => {
 		finishStartup?.();
 		await sessions.shutdown();

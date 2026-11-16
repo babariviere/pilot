@@ -30,9 +30,10 @@ import { OperationExpired, OperationJournal, payloadHash } from "./operation-jou
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const host = { hostId: "daemon", daemonId: "synthetic", lineageId: "synthetic-lineage" };
 const model: ModelOption = {
@@ -124,7 +125,7 @@ async function fixture(t: TestContext, withConfigurationWorker = false) {
 				},
 			},
 			{},
-			{ diagnosticHost: host },
+			offlineSessionOptions({ diagnosticHost: host }),
 		);
 		service = new MissionService(missions, sessions, projects);
 		await sessions.load();
@@ -840,16 +841,16 @@ for (const fence of ["Stop", "revoke", "home", "project", "backlog", "disable"] 
 test("native HTTP contract gates only enable, passive reads/status never provision or read history", async (t) => {
 	const f = await fixture(t);
 	const terminals = new TerminalManager();
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		f.models,
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: f.models,
 		terminals,
-		{ store: f.missions, service: f.service },
-	];
-	args[8] = f.schedules;
-	args[12] = {
+		missions: { store: f.missions, service: f.service },
+	};
+	args.schedules = f.schedules;
+	args.hello = {
 		...host,
 		daemonVersion: "synthetic",
 		protocolVersion: 1,
@@ -864,12 +865,12 @@ test("native HTTP contract gates only enable, passive reads/status never provisi
 			independentExecution: true,
 		},
 	};
-	args[17] = {
+	args.nativeAuthority = {
 		authenticate: async (token: unknown) => {
 			if (token !== "native-confirmed") throw new Conflict("Native confirmation required");
 		},
-	} as NonNullable<(typeof args)[17]>;
-	const server = createDaemonServer(...args);
+	};
+	const server = createDaemonServer(args);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

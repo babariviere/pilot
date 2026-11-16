@@ -8,6 +8,7 @@ import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import { ServiceUnavailable } from "./errors.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 async function until(check: () => boolean | Promise<boolean>) {
 	const deadline = Date.now() + 3_000;
@@ -20,25 +21,32 @@ async function until(check: () => boolean | Promise<boolean>) {
 async function updateSleepFixture(t: TestContext) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-update-sleep-"));
 	const workers: Array<SessionWorker & { commands: KernelCommand[] }> = [];
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		title: async () => undefined,
-		worker: (_spec, report) => {
-			const worker: SessionWorker & { commands: KernelCommand[] } = {
-				ready: Promise.resolve(),
-				state: "idle",
-				busy: false,
-				commands: [],
-				send(command) {
-					this.commands.push(command);
-					if (command.type === "update.pause") report({ type: "update.paused", id: command.id });
-				},
-				request: async () => {},
-				close: async () => {},
-			};
-			workers.push(worker);
-			return worker;
+	const sessions = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: (_spec, report) => {
+				const worker: SessionWorker & { commands: KernelCommand[] } = {
+					ready: Promise.resolve(),
+					state: "idle",
+					busy: false,
+					commands: [],
+					send(command) {
+						this.commands.push(command);
+						if (command.type === "update.pause") report({ type: "update.paused", id: command.id });
+					},
+					request: async () => {},
+					close: async () => {},
+				};
+				workers.push(worker);
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	t.after(async () => {
 		await sessions.shutdown();
 		await rm(home, { recursive: true, force: true });
@@ -300,13 +308,20 @@ test("update pauses working chats at the tool barrier, not their final answer, a
 		request: async () => {},
 		close: async () => {},
 	};
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		title: async () => undefined,
-		worker: (_spec, onPacket) => {
-			report = onPacket;
-			return worker;
+	const sessions = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: (_spec, onPacket) => {
+				report = onPacket;
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	t.after(async () => {
 		await sessions.shutdown();
 		await rm(home, { recursive: true, force: true });
@@ -385,22 +400,29 @@ test("update recovery reopens an idle parent for unfinished child work and consu
 	);
 	const opened: string[] = [];
 	const sent: KernelCommand[] = [];
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		title: async () => undefined,
-		worker: (spec) => {
-			opened.push(spec.sessionId);
-			return {
-				ready: Promise.resolve(),
-				state: "idle",
-				busy: false,
-				send: (c) => {
-					sent.push(c);
-				},
-				request: async () => {},
-				close: async () => {},
-			};
+	const sessions = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: (spec) => {
+				opened.push(spec.sessionId);
+				return {
+					ready: Promise.resolve(),
+					state: "idle",
+					busy: false,
+					send: (c) => {
+						sent.push(c);
+					},
+					request: async () => {},
+					close: async () => {},
+				};
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	t.after(async () => {
 		await sessions.shutdown();
 		await rm(home, { recursive: true, force: true });

@@ -13,9 +13,9 @@ import { ModelCatalog } from "./models.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { isRetiredDevboxOperation, RetiredDevboxes } from "./retired-devboxes.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 const host = { hostId: "local", daemonId: "mac", lineageId: "local-history" };
 const target = { hostId: "box", daemonId: "linux", lineageId: "remote-history" };
@@ -117,14 +117,14 @@ test("local server works without admitting remote sharing or Control transports"
 	await journal.reserve(op);
 	const receiptFile = join(home, "operations", `${payloadHash(op.operationId)}.json`);
 	const before = await readFile(receiptFile);
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	];
-	args[12] = {
+	};
+	args.hello = {
 		daemonId: host.daemonId,
 		lineageId: host.lineageId,
 		daemonVersion: "test",
@@ -140,7 +140,7 @@ test("local server works without admitting remote sharing or Control transports"
 			independentExecution: true,
 		},
 	};
-	const server = createDaemonServer(...args);
+	const server = createDaemonServer(args);
 	try {
 		server.listen(0, "127.0.0.1");
 		await once(server, "listening");

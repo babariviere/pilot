@@ -17,6 +17,7 @@ import { durableJSON } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const source = "a".repeat(40),
 	oldSource = "b".repeat(40);
@@ -163,29 +164,36 @@ test("real session worker resumes only after terminal persistence, never after w
 	});
 	const writes: string[] = [];
 	const commands: KernelCommand[] = [];
-	const sessions = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
-		title: async () => undefined,
-		worker: (_spec, report) => {
-			const worker: SessionWorker = {
-				ready: Promise.resolve(),
-				state: "idle",
-				busy: false,
-				send(command) {
-					commands.push(command);
-					if (command.type === "update.pause") report({ type: "update.paused", id: command.id });
-					if (command.type === "update.resume") {
-						assert.equal(writes.at(-1), "cancelled", "terminal checkpoint precedes tool resumption");
-						thread.postMessage(command);
-					}
-				},
-				request: async () => {},
-				close: async () => {},
-				jobs: async () => [],
-				hasChildren: async () => false,
-			};
-			return worker;
+	const sessions = new SessionManager(
+		f.home,
+		new ProjectStore(f.home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: (_spec, report) => {
+				const worker: SessionWorker = {
+					ready: Promise.resolve(),
+					state: "idle",
+					busy: false,
+					send(command) {
+						commands.push(command);
+						if (command.type === "update.pause") report({ type: "update.paused", id: command.id });
+						if (command.type === "update.resume") {
+							assert.equal(writes.at(-1), "cancelled", "terminal checkpoint precedes tool resumption");
+							thread.postMessage(command);
+						}
+					},
+					request: async () => {},
+					close: async () => {},
+					jobs: async () => [],
+					hasChildren: async () => false,
+				};
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	f.beforeRemove(() => sessions.shutdown());
 	let failTerminal = true;
 	const create = () => {

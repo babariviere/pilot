@@ -8,16 +8,16 @@
  *     [--writer-batch-mb 64]
  * Saturating the disk (for example --writer-mbps 2000 --writer-batch-mb 256) writes gigabytes; keep runs short.
  */
-import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { type ChildProcess, spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { operations, threadCpuMs } from "../../packages/daemon/src/event-loop-watchdog.ts";
 import { MissionStore } from "../../packages/daemon/src/missions.ts";
 import type { SessionSummary } from "../../packages/protocol/src/index.ts";
+import { loadBaseline } from "./baseline.ts";
 
 const { values } = parseArgs({
 	options: {
@@ -73,19 +73,16 @@ function summary(values: number[]) {
 }
 
 type Store = typeof MissionStore;
+let cleanupBaseline: (() => Promise<void>) | undefined;
 
 /** A commit's missions.ts, importing the current sibling modules. */
 async function baselineStore(commit: string): Promise<Store> {
-	if (!/^[a-f\d]{6,40}$/.test(commit)) throw new Error("Pass a baseline commit hash");
-	const root = fileURLToPath(new URL("../../", import.meta.url));
-	const source = execFileSync("git", ["show", `${commit}:packages/daemon/src/missions.ts`], {
-		cwd: root,
-		encoding: "utf8",
-		maxBuffer: 16 * 1024 * 1024,
-	}).replaceAll('from "./', `from "${join(root, "packages/daemon/src")}/`);
-	const path = join(home, "baseline-missions.ts");
-	await writeFile(path, source);
-	return ((await import(pathToFileURL(path).href)) as { MissionStore: Store }).MissionStore;
+	const loaded = await loadBaseline<{ MissionStore: Store }>(
+		commit,
+		new URL("../../packages/daemon/src/missions.ts", import.meta.url),
+	);
+	cleanupBaseline = loaded.cleanup;
+	return loaded.module.MissionStore;
 }
 
 async function scenario(disk: string, variant: string, Store: Store, writers: number) {
@@ -186,5 +183,6 @@ try {
 	] as const)
 		for (const [name, Store] of variants) await scenario(disk, name, Store, writers);
 } finally {
+	await cleanupBaseline?.();
 	await rm(home, { recursive: true, force: true });
 }

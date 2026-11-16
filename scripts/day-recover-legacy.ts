@@ -12,6 +12,7 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { inspectRuntime, type RuntimeBuild } from "../packages/daemon/src/runtime-owner.ts";
 import { digest, nativeAction, type Selection, verifyApp } from "./day-install.ts";
+import { writeNewDurableFile } from "./installation-records.ts";
 
 const legacySource = "bf005fd7d6ee1d0c1c5feabd102a9a6296b6d0dd";
 const legacyServerHash = "3e21e0e96ca8816cf8c2dc9f763d8674e21fb3c29339844e15194e006871f809";
@@ -58,21 +59,6 @@ async function privateBytes(path: string) {
 	}
 }
 const privateJSON = async (path: string) => JSON.parse(await privateBytes(path));
-async function durableNew(path: string, bytes: string) {
-	const f = await open(path, "wx", 0o600);
-	try {
-		await f.writeFile(bytes);
-		await f.sync();
-	} finally {
-		await f.close();
-	}
-	const dir = await open(resolve(path, ".."), "r");
-	try {
-		await dir.sync();
-	} finally {
-		await dir.close();
-	}
-}
 async function exists(path: string) {
 	try {
 		await lstat(path);
@@ -114,16 +100,16 @@ export async function recoverOnce(
 		};
 	}
 	const evidence = await host.prepare();
-	await durableNew(entry, JSON.stringify(evidence)); // Exclusive before any shutdown; repeats only observe.
+	await writeNewDurableFile(entry, JSON.stringify(evidence)); // Exclusive before any shutdown; repeats only observe.
 	await host.stop();
 	await host.stopped();
-	await durableNew(join(directory, "legacy-recovery-stopped.json"), JSON.stringify({ evidence }));
+	await writeNewDurableFile(join(directory, "legacy-recovery-stopped.json"), JSON.stringify({ evidence }));
 	await host.replace();
-	await durableNew(join(directory, "legacy-recovery-starting.json"), JSON.stringify({ evidence }));
+	await writeNewDurableFile(join(directory, "legacy-recovery-starting.json"), JSON.stringify({ evidence }));
 	await host.start(); // Exactly once. No retry, automatic rollback, resume or retirement.
 	const successor = await host.verify();
 	const result = { state: "successor-verified", evidence, successor, originalHandoff: "not-completed" };
-	await durableNew(join(directory, "legacy-recovery-complete.json"), JSON.stringify(result));
+	await writeNewDurableFile(join(directory, "legacy-recovery-complete.json"), JSON.stringify(result));
 	return result;
 }
 
@@ -212,8 +198,8 @@ async function recovery(s: Selection, inspectOnly: boolean) {
 			const saved = await privateBytes(s.savedState);
 			const savedHash = await digest(s.savedState);
 			await unchanged();
-			await durableNew(join(s.installDirectory, "legacy-recovery-original.plist"), originalBytes);
-			await durableNew(join(s.installDirectory, "legacy-recovery-saved-state.json"), saved);
+			await writeNewDurableFile(join(s.installDirectory, "legacy-recovery-original.plist"), originalBytes);
+			await writeNewDurableFile(join(s.installDirectory, "legacy-recovery-saved-state.json"), saved);
 			return {
 				operationId: s.operationId,
 				payloadHash: record.operation.payloadHash,
@@ -273,7 +259,7 @@ async function recovery(s: Selection, inspectOnly: boolean) {
 					.filter((p) => !p.endsWith("/Contents/Resources/runtime/node/bin")),
 			].join(":");
 			const staged = join(s.installDirectory, "legacy-recovery-next.plist");
-			await durableNew(staged, JSON.stringify(next));
+			await writeNewDurableFile(staged, JSON.stringify(next));
 			run("/usr/bin/plutil", ["-convert", "xml1", staged]);
 			const f = await open(staged, "r");
 			try {

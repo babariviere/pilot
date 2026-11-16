@@ -9,6 +9,7 @@ import type { SessionPullRequest } from "@pilot/protocol";
 import type { PullRequestProblems } from "./github.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 import { fixture, git, jj } from "./testing/shared-workspace.ts";
 import { type Runner, run } from "./workspaces.ts";
 
@@ -107,6 +108,7 @@ async function setup(conflict = false, baseBranch = "fix/base") {
 			},
 		},
 		{ runner },
+		offlineSessionOptions(),
 	);
 	const meta = {
 		id,

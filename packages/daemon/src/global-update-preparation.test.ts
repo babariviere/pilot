@@ -12,6 +12,7 @@ import { canonicalJSON, OperationJournal, payloadHash } from "./operation-journa
 import { ProjectStore } from "./projects.ts";
 import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
 import { SessionManager, Worker } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const host = { hostId: "local", daemonId: "daemon", lineageId: "lineage" };
 const draft = "  unsent 👩🏽‍💻\n漢字 preedit  ";
@@ -38,23 +39,30 @@ async function fixture(t: TestContext) {
 	const modes = ["healthy", "unresponsive", "malformed", "errored"];
 	const projects = new ProjectStore(home);
 	let starts = 0;
-	const sessions = new SessionManager(home, projects, undefined, {
-		title: async () => undefined,
-		worker: (spec, receive, exit) => {
-			starts++;
-			const child = fork(
-				new URL("./testing/update-pause-worker.ts", import.meta.url),
-				[modes.shift() ?? "healthy"],
-				{
-					execArgv: [],
-					stdio: ["ignore", "ignore", "ignore", "ipc"],
-					env: { PATH: process.env.PATH },
-				},
-			);
-			children.push(child);
-			return new Worker(spec, receive, exit, undefined, { child });
+	const sessions = new SessionManager(
+		home,
+		projects,
+		undefined,
+		{
+			title: async () => undefined,
+			worker: (spec, receive, exit) => {
+				starts++;
+				const child = fork(
+					new URL("./testing/update-pause-worker.ts", import.meta.url),
+					[modes.shift() ?? "healthy"],
+					{
+						execArgv: [],
+						stdio: ["ignore", "ignore", "ignore", "ipc"],
+						env: { PATH: process.env.PATH },
+					},
+				);
+				children.push(child);
+				return new Worker(spec, receive, exit, undefined, { child });
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	const journal = new OperationJournal(join(home, "operations"), host);
 	const managers = [sessions];
 	const resources = new RuntimeResources([sessions]);
@@ -189,13 +197,20 @@ test("normal update recovery reconciles failed persisted bookkeeping without res
 		before.set(chat.id, meta);
 	}
 	let starts = 0;
-	const cold = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
-		title: async () => undefined,
-		worker: () => {
-			starts++;
-			throw new Error("failed work must not start during update recovery");
+	const cold = new SessionManager(
+		f.home,
+		new ProjectStore(f.home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: () => {
+				starts++;
+				throw new Error("failed work must not start during update recovery");
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	f.managers.push(cold);
 	const independent = new RuntimeAdmission();
 	const releaseJob = independent.begin({ kind: "job", id: "independent-owned-process" });
@@ -258,13 +273,20 @@ test("normal update recovery reconciles failed persisted bookkeeping without res
 		meta.initializing = true;
 		await writeFile(path, JSON.stringify(meta));
 	}
-	const recovered = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
-		title: async () => undefined,
-		worker: () => {
-			starts++;
-			throw new Error("cold update recovery must not restart failed work");
+	const recovered = new SessionManager(
+		f.home,
+		new ProjectStore(f.home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: () => {
+				starts++;
+				throw new Error("cold update recovery must not restart failed work");
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	f.managers.push(recovered);
 	const reopened = new GlobalUpdatePreparation(
 		new OperationJournal(join(f.home, "operations"), host),
@@ -515,13 +537,20 @@ test("normal update quarantines stale persisted lifecycle bookkeeping without re
 		prior.set(chat.id, meta);
 	}
 	let starts = 0;
-	const cold = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
-		title: async () => undefined,
-		worker: () => {
-			starts++;
-			throw new Error("stale database bookkeeping is not a fresh execution");
+	const cold = new SessionManager(
+		f.home,
+		new ProjectStore(f.home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: () => {
+				starts++;
+				throw new Error("stale database bookkeeping is not a fresh execution");
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	f.managers.push(cold);
 	const independent = new RuntimeAdmission();
 	const job = independent.begin({ kind: "job", id: "actual-owned-job" });
@@ -561,13 +590,20 @@ test("normal update quarantines stale persisted lifecycle bookkeeping without re
 	const inconsistent = JSON.parse(await readFile(inconsistentPath, "utf8"));
 	delete inconsistent.lifecycleCheckpoint;
 	await writeFile(inconsistentPath, JSON.stringify(inconsistent));
-	const again = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
-		title: async () => undefined,
-		worker: () => {
-			starts++;
-			throw new Error("persisted lifecycle recovery must not restart after reopen");
+	const again = new SessionManager(
+		f.home,
+		new ProjectStore(f.home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: () => {
+				starts++;
+				throw new Error("persisted lifecycle recovery must not restart after reopen");
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	f.managers.push(again);
 	const retained = new GlobalUpdatePreparation(
 		new OperationJournal(join(f.home, "operations"), host),
@@ -625,12 +661,19 @@ test("normal recovery never relabels current-operation, mismatched-identity or m
 		};
 		await writeFile(path, JSON.stringify(meta));
 	}
-	const cold = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
-		title: async () => undefined,
-		worker: () => {
-			throw new Error("lookup/recovery must not create an executor");
+	const cold = new SessionManager(
+		f.home,
+		new ProjectStore(f.home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: () => {
+				throw new Error("lookup/recovery must not create an executor");
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	f.managers.push(cold);
 	const resources = new RuntimeResources([cold]);
 	const hold = resources.freezeAdmissions();
@@ -709,13 +752,20 @@ for (const damage of ["truncated", "identity"]) {
 		const damaged = damage === "truncated" ? '{"id":' : JSON.stringify({ ...JSON.parse(original), id: randomUUID() });
 		await writeFile(path, damaged);
 		let starts = 0;
-		const cold = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
-			title: async () => undefined,
-			worker: () => {
-				starts++;
-				throw new Error("damaged storage must not open a model");
+		const cold = new SessionManager(
+			f.home,
+			new ProjectStore(f.home),
+			undefined,
+			{
+				title: async () => undefined,
+				worker: () => {
+					starts++;
+					throw new Error("damaged storage must not open a model");
+				},
 			},
-		});
+			{},
+			offlineSessionOptions(),
+		);
 		f.managers.push(cold);
 		const resources = new RuntimeResources([cold]);
 		const hold = resources.freezeAdmissions();
@@ -834,13 +884,20 @@ test("Force provenance survives a cold session owner and never replays canceled 
 	);
 	await f.sessions.shutdown();
 	let starts = 0;
-	const cold = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
-		title: async () => undefined,
-		worker: () => {
-			starts++;
-			throw new Error("Force-canceled work must not replay on cold release");
+	const cold = new SessionManager(
+		f.home,
+		new ProjectStore(f.home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker: () => {
+				starts++;
+				throw new Error("Force-canceled work must not replay on cold release");
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	f.managers.push(cold);
 	const reopened = new GlobalUpdatePreparation(
 		new OperationJournal(join(f.home, "operations"), host),
@@ -914,13 +971,20 @@ for (const damage of ["truncated", "identity"]) {
 		const damaged = damage === "truncated" ? '{"id":' : JSON.stringify({ ...JSON.parse(original), id: randomUUID() });
 		await writeFile(path, damaged);
 		let starts = 0;
-		const cold = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
-			title: async () => undefined,
-			worker: () => {
-				starts++;
-				throw new Error("damaged storage must not open a model");
+		const cold = new SessionManager(
+			f.home,
+			new ProjectStore(f.home),
+			undefined,
+			{
+				title: async () => undefined,
+				worker: () => {
+					starts++;
+					throw new Error("damaged storage must not open a model");
+				},
 			},
-		});
+			{},
+			offlineSessionOptions(),
+		);
 		f.managers.push(cold);
 		const resources = new RuntimeResources([cold]);
 		const hold = resources.freezeAdmissions();

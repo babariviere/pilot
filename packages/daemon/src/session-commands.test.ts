@@ -12,9 +12,10 @@ import type { SessionCommand, SessionState } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { CommandRejected, SessionManager, type SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 type Command = Extract<KernelCommand, { requestId: string }>;
 
@@ -48,16 +49,23 @@ async function fixture(t: TestContext, meta: Record<string, unknown> = {}) {
 	);
 	const projects = new ProjectStore(home);
 	const workers: FakeWorker[] = [];
-	const sessions = new SessionManager(home, projects, undefined, {
-		worker: (_spec, onPacket: (packet: KernelPacket) => void) => {
-			const worker = new FakeWorker();
-			workers.push(worker);
-			queueMicrotask(() =>
-				onPacket({ type: "ready", model: "test/model", working: false, usage: {}, commands: listed }),
-			);
-			return worker;
+	const sessions = new SessionManager(
+		home,
+		projects,
+		undefined,
+		{
+			worker: (_spec, onPacket: (packet: KernelPacket) => void) => {
+				const worker = new FakeWorker();
+				workers.push(worker);
+				queueMicrotask(() =>
+					onPacket({ type: "ready", model: "test/model", working: false, usage: {}, commands: listed }),
+				);
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	await sessions.load();
 	t.after(async () => {
 		await sessions.shutdown();
@@ -99,13 +107,13 @@ test("compact forwards trimmed instructions, omits blank ones, and maps busy to 
 test("HTTP routes list commands and validate compaction instructions", async (t) => {
 	const f = await fixture(t);
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		new ModelCatalog("/unused"),
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog("/unused"),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));

@@ -8,9 +8,9 @@ import { test } from "node:test";
 import { MachineInformationReader, onlineCpuCount, osLabel } from "./machine.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 function fixture() {
 	const reads: [string, number][] = [];
@@ -136,13 +136,13 @@ test("machine endpoint is GET-only, no-store and protected by existing loopback 
 	const projects = new ProjectStore(home),
 		sessions = new SessionManager(home, projects),
 		terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));

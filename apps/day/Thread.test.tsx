@@ -2,7 +2,13 @@
 // provider or storage. Headless: not native appearance, focus, scrolling or IME.
 import { expect, open, test } from "nsh/test";
 
-const desktop = { platform: "macos", width: 1100, height: 2600 } as const;
+// Seeded rows reach 09:18 today. New replies must follow them even when the host is past midnight.
+const desktop = {
+	platform: "macos",
+	width: 1100,
+	height: 2600,
+	clock: { time: new Date(2026, 10, 16, 12) },
+} as const;
 
 async function mission() {
 	const app = await open("./ThreadFixture.tsx", desktop);

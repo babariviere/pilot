@@ -28,7 +28,7 @@ import { ANTHROPIC_AUTH_PATH, CHILD_PROFILE_PATH, installBundledAnthropicAuth } 
 import { credentialEnvironment } from "./credential-client.ts";
 import { groupAbsent } from "./job-groups.ts";
 import { NativeAdapter } from "./native-adapter.ts";
-import { startTodoBridge } from "./todo-bridge.ts";
+import { startParentBridge } from "./parent-bridge.ts";
 import { createTodoTool } from "./todo-tool.ts";
 import { applyTodo, type TodoRecord } from "./todos.ts";
 
@@ -773,7 +773,7 @@ test("real Build subagent inherits PR delivery, required auth and safeguards wit
 	const usageCaptured = new Promise<void>((resolve) => {
 		usageComplete = resolve;
 	});
-	const bridge = await startTodoBridge(
+	const bridge = await startParentBridge(
 		async (args, actor) => applyTodo(todos, args, actor),
 		async (limit) => {
 			assert.equal(limit.provider, "openai");

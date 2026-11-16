@@ -17,9 +17,9 @@ import {
 import { ModelCatalog } from "./models.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("durable sends continue only the executing HTTP attempt into admission", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-durable-trace-"));
@@ -79,15 +79,15 @@ test("durable sends continue only the executing HTTP attempt into admission", as
 			independentExecution: true,
 		},
 	};
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-	];
-	args[12] = hello;
-	const server = createDaemonServer(...args);
+	};
+	args.hello = hello;
+	const server = createDaemonServer(args);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

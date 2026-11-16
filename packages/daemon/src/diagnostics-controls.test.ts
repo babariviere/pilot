@@ -11,9 +11,9 @@ import { GitHubSetupService } from "./github-setup.ts";
 import { ModelCatalog } from "./models.ts";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
-import { createDaemonServer } from "./server.ts";
 import { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 const privacy = {
 	localDiagnostics: false,
@@ -209,33 +209,25 @@ test("HTTP native capability and pre-journal endpoint validation keep secrets ou
 	const capability = JSON.parse(await readFile(join(f.home, "github-app-capability"), "utf8")).token;
 	const models = new ModelCatalog(f.home);
 	t.mock.method(models, "listTaskModels", async () => ({ models: [] }));
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
 		models,
-		new TerminalManager(),
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		f.hello,
-		undefined,
-		false,
-		undefined,
+		terminals: new TerminalManager(),
+		hello: f.hello,
+		legacyAdmissionFrozen: false,
 		telemetry,
-		native,
-	);
+		githubSetup: native,
+		nativeAuthority: native.nativeAuthority,
+	});
 	await server.runtimeReady;
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {
 		server.closeAllConnections();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
-		await server.closePlanning();
+		await server.closeServices();
 	});
 	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
 	assert.notEqual((await fetch(`${root}/diagnostics-controls`)).status, 200);

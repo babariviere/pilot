@@ -11,6 +11,7 @@ import type {
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { INSIGHTS_INITIAL_DEFAULTS, resolveInsightsInitialModel } from "./insights-defaults.ts";
 import { InsightsEnable, type InsightsEnableDependencies } from "./insights-enable.ts";
+import { InsightsJournal } from "./insights-journal.ts";
 import { canonicalJSON, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
 import { RecurrenceCalendar } from "./schedule-recurrence.ts";
 
@@ -131,7 +132,7 @@ export class InsightsReplacement {
 		}
 	}
 	private async references(projectId: string, missionId: string, oldId: string, ownId?: string) {
-		return this.deps.journal.replacementReferences(projectId, missionId, oldId, ownId);
+		return new InsightsJournal(this.deps.journal).replacementReferences(projectId, missionId, oldId, ownId);
 	}
 	private async revalidate(
 		p: InsightsReplacementPayload,

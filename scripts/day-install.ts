@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { canonicalJSON, payloadHash } from "../packages/daemon/src/operation-journal.ts";
 import { inspectRuntime, type RuntimeBuild } from "../packages/daemon/src/runtime-owner.ts";
+import { writeNewDurableFile } from "./installation-records.ts";
 
 export interface Selection {
 	app: string;
@@ -489,22 +490,6 @@ export function nativeAction(s: Selection, action: NativeAction, app: string): N
 	}
 }
 
-async function durableNew(path: string, value: unknown) {
-	const f = await open(path, "wx", 0o600);
-	try {
-		await f.writeFile(JSON.stringify(value));
-		await f.sync();
-	} finally {
-		await f.close();
-	}
-	const parent = await open(dirname(path), "r");
-	try {
-		await parent.sync();
-	} finally {
-		await parent.close();
-	}
-}
-
 export async function install(s: Selection, verify = verifyApp, native = nativeAction) {
 	const app = installedApp(s);
 	const entered = join(s.installDirectory, "handoff-entered.json");
@@ -517,7 +502,7 @@ export async function install(s: Selection, verify = verifyApp, native = nativeA
 	const ready = native(s, "preflight", s.app);
 	requireThat(ready.state === "ready" && ready.changed === false, "Native handoff preflight was not ready.");
 	await stageApp(s, verify);
-	await durableNew(entered, s); // Persist before possible service effects. Never recreate on retry.
+	await writeNewDurableFile(entered, JSON.stringify(s)); // Persist before possible service effects. Never recreate on retry.
 	const result = native(s, "apply", app);
 	requireThat(
 		result.state === "complete" &&
@@ -525,7 +510,7 @@ export async function install(s: Selection, verify = verifyApp, native = nativeA
 			result.releaseReceipt?.state === "accepted",
 		"Successor/release not complete. Keep old app/runtimes and inspect the original operation.",
 	);
-	await durableNew(join(s.installDirectory, "handoff-complete.json"), result);
+	await writeNewDurableFile(join(s.installDirectory, "handoff-complete.json"), JSON.stringify(result));
 	return result;
 }
 

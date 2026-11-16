@@ -10,9 +10,9 @@ import { WebSocket } from "ws";
 import { type McpProbeResult, McpStatusService } from "./mcp-status.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("MCP API reports status, rechecks, signs in and pushes changes over the control socket", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-mcp-api-"));
@@ -31,20 +31,14 @@ test("MCP API reports status, rechecks, signs in and pushes changes over the con
 			await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
 		},
 	});
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		mcp,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

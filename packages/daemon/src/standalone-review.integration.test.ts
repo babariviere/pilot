@@ -10,9 +10,9 @@ import { Worker } from "node:worker_threads";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
-import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { fixture, jj } from "./testing/session-workspace.ts";
 
 async function serve(
@@ -22,14 +22,14 @@ async function serve(
 	missions?: { store: MissionStore; service: MissionService },
 ) {
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
 		sessions,
-		f.projects,
-		new ModelCatalog("/unused"),
+		projects: f.projects,
+		models: new ModelCatalog("/unused"),
 		terminals,
 		missions,
-	);
+	});
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 	t.after(async () => {
 		await new Promise<void>((r) => server.close(() => r()));

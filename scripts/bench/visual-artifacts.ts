@@ -46,25 +46,23 @@ const sessionId = "visual-bench";
 const revisions: unknown[] = [];
 for (let index = 0; index < 10; index++) {
 	const data = chart(index);
-	{
-		const kind = "visual";
-		const id = `${kind}-${index + 1}`;
-		const write = { title: data.title, kind: "visual" as const, source: visual, data: data as never };
-		const prepared = await prepareArtifact(write, { id });
-		revisions.push({
-			id,
-			sessionId,
-			title: data.title,
-			kind,
-			revision: 1,
-			createdAt: 1,
-			updatedAt: 1,
-			source: write.source,
-			html: prepared.html,
-			libraries: prepared.libraries,
-			...(kind === "visual" ? { data, visual: prepared.visual } : {}),
-		});
-	}
+	const id = `visual-${index + 1}`;
+	const write = { title: data.title, kind: "visual" as const, source: visual, data: data as never };
+	const prepared = await prepareArtifact(write, { id });
+	revisions.push({
+		id,
+		sessionId,
+		title: data.title,
+		kind: "visual",
+		revision: 1,
+		createdAt: 1,
+		updatedAt: 1,
+		source: write.source,
+		html: prepared.html,
+		libraries: prepared.libraries,
+		data,
+		visual: prepared.visual,
+	});
 }
 await writeFile(output, JSON.stringify({ revisions, libraries: {} }));
 console.log(`wrote ${revisions.length} native revisions to ${output}`);

@@ -6,7 +6,7 @@
 // copy was saved, says when it is not complete and never claims to show
 // the team's issues or other cycles.
 // A close or an update keeps the page, its project, the open issue and the
-// scroll offset (updateView.ts). The restored page reads again, as opening
+// scroll offset (windowState.ts). The restored page reads again, as opening
 // it does, and shows nothing when the read is for another project.
 import { effect, keymap, Scroll, type ScrollRef, signal, Text, View, type ViewRef } from "nsh";
 import type { MissionRow } from "pilot-day/native";

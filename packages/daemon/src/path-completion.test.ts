@@ -10,9 +10,9 @@ import type { DaemonHello, SessionPathCandidates } from "@pilot/protocol";
 import { ModelCatalog } from "./models.ts";
 import { completionPrefix, PathCompletionReader } from "./path-completion.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("path candidates are bounded literal direct children, never links or expanded roots", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-path-"));
@@ -115,21 +115,14 @@ test("path candidate GET pins daemon/cwd and repeats passive admission without s
 			independentExecution: true,
 		},
 	};
-	const server = createDaemonServer(
-		{ home: root, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: root, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(root),
+		models: new ModelCatalog(root),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		hello,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((r) => server.close(() => r()));

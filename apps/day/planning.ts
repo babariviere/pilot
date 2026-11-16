@@ -1,16 +1,8 @@
-// The only path between the planning screens and Rust: a typed read model
-// mirrored in one signal, and typed intents on the feed. Like Today's feed,
-// it has no transport, and nsh.json denies network, sockets, files and
-// processes.
+// Planning's data mirror. Navigation and animation belong to the window.
 import { type Signal, signal } from "nsh";
 import type { Planning } from "pilot-day/native";
-import { changesRoute } from "./changesView";
 import type { ChatMirror } from "./chatFeed";
 import type { PlanningFeed } from "./feeds";
-import { planRoute } from "./planView";
-import { ritualRoute } from "./ritualView";
-import { glide } from "./ui";
-import { route } from "./view";
 
 /** Planning's read model as Rust last published it, and the feed to change it. */
 export type Plans = {
@@ -27,13 +19,7 @@ export type Plans = {
 /** Mirrors `feed`'s planning read, mock or connected. Closing stops listening and frees the feed. */
 export function mirrorPlanning(feed: PlanningFeed, chats: ChatMirror): Plans {
 	const planning = signal(feed.snapshot());
-	const stop = feed.onChange((next) => {
-		// On Today, missions that arrive in or leave the list, or change stage,
-		// glide to their places. Saves and typing do not move anything, and an
-		// open interview, mission, Changes or ritual never glides because of the list.
-		if (todayShown() && shape(next) !== shape(planning())) glide();
-		planning.set(next);
-	});
+	const stop = feed.onChange((next) => planning.set(next));
 	return {
 		feed,
 		planning,
@@ -47,11 +33,6 @@ export function mirrorPlanning(feed: PlanningFeed, chats: ChatMirror): Plans {
 }
 
 /** Whether the list can be read, and which missions it lists at which stage: what a glide follows. */
-function shape(p: Planning): string {
+export function planningListShape(p: Planning): string {
 	return [p.availability, ...p.plans.map((row) => `${row.missionId}:${row.stage}`)].join(",");
-}
-
-/** Whether Today is the screen shown. */
-function todayShown(): boolean {
-	return planRoute() === null && route() === null && !changesRoute() && !ritualRoute();
 }

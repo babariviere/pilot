@@ -122,15 +122,7 @@ jobs:
           node --test apps/macos/scripts/tests/*.test.mjs
       - name: Verify packaged dependency updates
         if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'renovate/')
-        run: |
-          set -euo pipefail
-          stage="$(mktemp -d "$RUNNER_TEMP/renovate-runtime.XXXXXX")"
-          trap 'rm -rf "$stage"' EXIT
-          apps/macos/scripts/bundle-runtime.sh "$stage/runtime"
-          ditto -c -k --keepParent "$stage/runtime" "$stage/runtime.zip"
-          mkdir "$stage/relocated"
-          ditto -x -k "$stage/runtime.zip" "$stage/relocated"
-          apps/macos/scripts/check-runtime.sh "$stage/relocated/runtime"
+        run: bash scripts/check-packaged-dependencies.sh
 
   # Shared updater and power helper tests, without the GPUI workspace.
   rust:

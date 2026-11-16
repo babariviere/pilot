@@ -11,6 +11,7 @@ import type {
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { INSIGHTS_INITIAL_DEFAULTS } from "./insights-defaults.ts";
+import { InsightsJournal } from "./insights-journal.ts";
 import { legacyInsightsWriterLease } from "./insights-legacy-lease.ts";
 import { initialInsightsSettings, validateInsightsSettings } from "./insights-settings.ts";
 import type { InsightsTransitionStore } from "./insights-transition-store.ts";
@@ -102,7 +103,11 @@ export class InsightsTransition {
 		const identity = this.deps.sessions.insightsLegacyQuiescence(s.reportSessionId, s.projectId, s.missionId);
 		this.deps.sessions.assertOnlyTransferredLegacy(s);
 		if (!identity.model) throw new Conflict("legacy_effective_model_unavailable");
-		const captured = await this.deps.journal.legacyTransitionCapture(s.projectId, s.missionId, s.reportSessionId);
+		const captured = await new InsightsJournal(this.deps.journal).legacyTransitionCapture(
+			s.projectId,
+			s.missionId,
+			s.reportSessionId,
+		);
 		if (
 			captured.references.overflow ||
 			!captured.references.qualified ||
@@ -395,7 +400,7 @@ export class InsightsTransition {
 			!/^[0-9a-f]{64}$/u.test(record.payload.executorProof.digest)
 		)
 			throw new Conflict("legacy_settings_projection_unqualified");
-		const journal = await this.deps.journal.transferredLegacyGuard(record.envelopes, [
+		const journal = await new InsightsJournal(this.deps.journal).transferredLegacyGuard(record.envelopes, [
 			record.payload.legacy.reportSessionId,
 		]);
 		const acknowledged = record.payload.rules.map(

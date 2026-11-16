@@ -1,7 +1,7 @@
 /** Shared saved-round validation. No permission, mission or continuation effects. */
 import { createHash } from "node:crypto";
 import type { InterviewAnswer, InterviewQuestion } from "@pilot/protocol";
-import { planningJSON as canonicalJSON } from "./planning-worker.ts";
+import { canonicalJSON } from "./canonical-json.ts";
 export class InterviewInvalid extends Error {}
 export const interviewDigest = (value: unknown): string =>
 	createHash("sha256").update(canonicalJSON(value)).digest("hex");

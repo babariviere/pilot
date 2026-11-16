@@ -90,6 +90,63 @@ export function drop<T>(store: Signal<Record<string, T>>, key: string) {
 	});
 }
 
+type SavedPlanningDraft = Pick<import("pilot-day/native").SavedView, "goal" | "chat" | "chatChosen">;
+
+/** Keeps New's exact words and the user's explicit project choice. */
+export function capturePlanningDraft(): SavedPlanningDraft {
+	return { goal: goalDraft(), chat: chatChoice(), chatChosen: chatChoice() !== null && chatPick() !== null };
+}
+
+/** Restores a place without opening it or starting planning. */
+export function restorePlanningPlace(view: Pick<import("pilot-day/native").SavedView, "place" | "id">) {
+	planRoute.set(
+		view.place === "new" ? { kind: "new" } : view.place === "plan" ? { kind: "plan", missionId: view.id } : null,
+	);
+}
+
+/** A restored choice must be selected again; it is never a new chat intent. */
+export function restorePlanningDraft(view: SavedPlanningDraft) {
+	goalDraft.set(view.goal);
+	replacesDraft.set(null);
+	requestDraft.set(null);
+	const chat = view.chat;
+	chatPick.set(
+		chat && view.chatChosen === true
+			? { projectId: chat.projectId, mode: chat.mode === "ask" ? "ask" : "build" }
+			: null,
+	);
+	chatChoice.set(null);
+	restoredDraft.set(chat?.draftId ?? null);
+}
+
+/** How many answer drafts remain after their save queue completes. */
+export function pendingAnswers(): number {
+	return Object.keys(answerDrafts()).length + Object.keys(answerPicks()).length;
+}
+
+export function resetPlanningView() {
+	answerDrafts.set({});
+	answerPicks.set({});
+	answerMessages.set({});
+	planMessages.set({});
+	submitting.set({});
+	fogOpen.set({});
+	roundOpen.set({});
+	planRoute.set(null);
+	goalDraft.set("");
+	replacesDraft.set(null);
+	requestDraft.set(null);
+	confirmingStart.set(false);
+	newMessage.set("");
+	newBusy.set(false);
+	chatPick.set(null);
+	chatChoice.set(null);
+	chatSelecting.set(false);
+	chatNote.set("");
+	projectsOpen.set(false);
+	restoredDraft.set(null);
+}
+
 /** Opens New. */
 export function openNew() {
 	closeMission();

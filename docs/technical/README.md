@@ -21,6 +21,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Dependency updates](renovate.md)
 - [TypeScript dependency audit, 2026-10-29](typescript-dependency-audit.md)
 - [Codebase cleanup decisions](untangle-codebase.md)
+- [November 2026 refactor decisions](untangle-2026-11.md)
 - [Durable operations](durable-operations.md)
 - [Native diagnostics controls](native-diagnostics-controls.md)
 - [Decision help and human-action contracts (host seam)](decision-assistance.md)

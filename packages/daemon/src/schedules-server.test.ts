@@ -12,9 +12,9 @@ import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
 test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider", async (t) => {
@@ -62,17 +62,14 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 	const schedules = new ScheduleService(store, { sessions, projects, trackedItems });
 	await schedules.load();
 	schedules.start();
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		{} as ModelCatalog,
-		{ isRunning: () => false } as unknown as TerminalManager,
-		undefined,
-		undefined,
-		undefined,
+		models: {} as ModelCatalog,
+		terminals: { isRunning: () => false } as unknown as TerminalManager,
 		schedules,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const port = (server.address() as AddressInfo).port;

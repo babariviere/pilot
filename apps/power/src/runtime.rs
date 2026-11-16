@@ -1,5 +1,9 @@
 //! Event loop for the existing pipe protocol. Blocking operations run on a separate worker.
-use crate::{guardian::GuardianLease, protocol, support::LEASE};
+use crate::{
+    guardian::GuardianLease,
+    protocol::{self, Command, CommandFrame},
+    support::LEASE,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
@@ -161,41 +165,29 @@ impl<P: Operations, W: Write> Runtime<P, W> {
         }
     }
     pub fn command(&mut self, value: Value, now: Duration) {
-        let Some(action) = value["action"].as_str() else {
-            self.shutdown();
-            return;
-        };
-        if action == "heartbeat" {
-            self.lease.heartbeat(now);
-            self.ops.heartbeat();
-            return;
-        }
-        let Some(id) = value["id"].as_i64() else {
-            self.shutdown();
-            return;
-        };
-        match action {
-            "allowSleep" => {
-                let ok = if let Some(generation) = value["generation"].as_u64() {
-                    self.ops.allow_sleep(generation);
-                    true
-                } else {
-                    false
-                };
-                protocol::reply(&mut self.output, id, ok);
+        let (id, command) = match protocol::decode_command(&value) {
+            CommandFrame::Heartbeat => {
+                self.lease.heartbeat(now);
+                self.ops.heartbeat();
+                return;
             }
-            "authorize" => self.ops.authorize(id),
-            "activity" => {
-                if let (Some(awake), Some(closed)) =
-                    (value["awake"].as_bool(), value["closedLid"].as_bool())
-                {
-                    self.ops.activity(id, awake, closed);
-                } else {
-                    protocol::reply(&mut self.output, id, false);
-                }
+            CommandFrame::Request { id, command } => (id, command),
+            CommandFrame::MissingAction { .. } | CommandFrame::MissingId => {
+                self.shutdown();
+                return;
             }
-            "sleep" => self.request_sleep(id, 6, now),
-            _ => protocol::reply(&mut self.output, id, false),
+        };
+        match command {
+            Command::AllowSleep { generation } => {
+                self.ops.allow_sleep(generation);
+                protocol::reply(&mut self.output, id, true);
+            }
+            Command::Authorize => self.ops.authorize(id),
+            Command::Activity { awake, closed_lid } => {
+                self.ops.activity(id, awake, closed_lid);
+            }
+            Command::Sleep => self.request_sleep(id, 6, now),
+            Command::Invalid => protocol::reply(&mut self.output, id, false),
         }
     }
     fn report(&mut self, now: Duration) {

@@ -10,9 +10,9 @@ import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("schedule GET list/detail are passive even after a pending deadline becomes overdue", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-schedule-passive-"));
@@ -40,6 +40,7 @@ test("schedule GET list/detail are passive even after a pending deadline becomes
 		markArmed = resolve;
 	});
 	const calls: string[] = [];
+	let reading = false;
 	const forbidden = (name: string): never => {
 		calls.push(name);
 		assert.fail(`passive GET must not invoke ${name}`);
@@ -51,7 +52,7 @@ test("schedule GET list/detail are passive even after a pending deadline becomes
 		},
 		setWorkspaceProcessGuard() {},
 		list: () => [],
-		get: () => forbidden("session validation"),
+		get: () => (reading ? forbidden("session validation") : undefined),
 		onChange: () => () => {},
 		onArtifactsChanged: () => () => {},
 		send: async () => forbidden("send"),
@@ -83,17 +84,14 @@ test("schedule GET list/detail are passive even after a pending deadline becomes
 	});
 	const projects = new ProjectStore(home);
 	await projects.load();
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		{} as ModelCatalog,
-		{ isRunning: () => false } as unknown as TerminalManager,
-		undefined,
-		undefined,
-		undefined,
+		models: {} as ModelCatalog,
+		terminals: { isRunning: () => false } as unknown as TerminalManager,
 		schedules,
-	);
+	});
 	t.after(async () => {
 		server.closeAllConnections();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -103,6 +101,7 @@ test("schedule GET list/detail are passive even after a pending deadline becomes
 	});
 	schedules.start();
 	await armed;
+	reading = true;
 	now = 300; // Advance time without delivering the scheduler-owned timer callback.
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");

@@ -10,9 +10,9 @@ import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 test("hook writes require enabled feature and native authority, reject stale and invalid edits", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-hook-api-"));
@@ -36,32 +36,18 @@ test("hook writes require enabled feature and native authority, reject stale and
 		coordinatorIsolation: false,
 		independentExecution: true,
 	});
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		hello,
-		undefined,
-		false,
-		undefined,
-		undefined,
-		native,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		settings,
-	);
+		legacyAdmissionFrozen: false,
+		githubSetup: native,
+		nativeAuthority: native.nativeAuthority,
+		chatSettings: settings,
+	});
 	t.after(async () => {
 		await sessions.shutdown();
 		await terminals.shutdown();

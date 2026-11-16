@@ -11,9 +11,9 @@ import type { ProbeDeps } from "./environment-probes.ts";
 import { EnvironmentStateStore } from "./environment-state.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { run } from "./workspaces.ts";
 
 const host = { daemonId: "daemon-1", platform: "darwin", arch: "arm64" };
@@ -53,29 +53,14 @@ test("environment routes stay off unless the service is enabled", async (t) => {
 	const terminals = new TerminalManager();
 	const environment = new EnvironmentService(projects, { home, host });
 	const servers = [undefined, environment].map((service) =>
-		createDaemonServer(
-			{ home, host: "127.0.0.1", port: 0 },
+		createDaemonServer({
+			config: { home, host: "127.0.0.1", port: 0 },
 			sessions,
 			projects,
-			new ModelCatalog(home),
+			models: new ModelCatalog(home),
 			terminals,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			service,
-		),
+			environment: service,
+		}),
 	);
 	t.after(async () => {
 		await environment.close();

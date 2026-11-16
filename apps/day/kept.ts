@@ -37,6 +37,25 @@ export function keepScroll(key: string) {
 	};
 }
 
+type SavedPosition = Pick<import("pilot-day/native").SavedView, "y" | "input" | "start" | "end">;
+
+export function capturePosition(key: string): SavedPosition {
+	const field = lastField(key);
+	return {
+		y: key === "today" ? 0 : scrollOf(key),
+		input: field?.key ?? "",
+		start: field?.start ?? 0,
+		end: field?.end ?? 0,
+	};
+}
+
+/** Restore only geometry and selection, after every feature's place is known. */
+export function restorePosition(key: string, view: SavedPosition, todayY: number) {
+	if (key === "today") todayScrollTo.set(todayY);
+	else restoreScroll(key, view.y ?? 0);
+	restoreField(view.input ? { key: view.input, place: key, start: view.start ?? 0, end: view.end ?? 0 } : null);
+}
+
 /** The kept offset of screen `key`, or 0 when another screen scrolled last. */
 export function scrollOf(key: string): number {
 	return shown.key === key ? Math.max(0, shown.y) : 0;

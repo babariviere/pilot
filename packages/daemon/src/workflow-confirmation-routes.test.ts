@@ -13,9 +13,9 @@ import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 const host = { hostId: "app", daemonId: "host", lineageId: "lineage" };
 async function fixture(t: TestContext) {
@@ -54,17 +54,18 @@ async function fixture(t: TestContext) {
 			independentExecution: true,
 		},
 	};
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		{ store, service: {} as MissionService },
-	];
-	args[12] = hello;
-	args[17] = native;
-	const server = createDaemonServer(...args);
+		missions: { store, service: {} as MissionService },
+	};
+	args.hello = hello;
+	args.githubSetup = native;
+	args.nativeAuthority = args.githubSetup?.nativeAuthority;
+	const server = createDaemonServer(args);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;

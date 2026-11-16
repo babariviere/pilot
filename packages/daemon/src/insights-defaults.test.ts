@@ -16,9 +16,9 @@ import {
 import { admitInsightsOperation, INSIGHTS_DISCLOSURE, INSIGHTS_SETUP_MESSAGE } from "./insights-native.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 const option = (id: string, name = "Terra 6.1"): ModelOption => ({ id, provider: id.split("/")[0]!, name });
 
@@ -106,7 +106,13 @@ test("passive defaults GET reads only the selected project's model metadata and 
 	t.mock.method(sessions, "insightsHostAdmission", forbidden);
 	t.mock.method(sessions, "diagnosticContext", forbidden);
 	t.mock.method(models, "generateTitle", forbidden);
-	const server = createDaemonServer({ home, host: "127.0.0.1", port: 0 }, sessions, projects, models, terminals);
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		models,
+		terminals,
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(async () => {

@@ -20,7 +20,7 @@ import { ScriptedThreads, type ThreadsDemoNext } from "./threadDemo";
 import { mirrorThreads } from "./threadFeed";
 import { openThread } from "./threadView";
 import { Action } from "./ui";
-import { captureView, restoreView, startFresh } from "./updateView";
+import { captureView, restoreView, startFresh } from "./windowState";
 
 const threads = new ScriptedThreads();
 const day = { ...openDay(), threads: mirrorThreads(threads), delivery: mirrorDelivery(new ScriptedDelivery()) };

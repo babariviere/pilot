@@ -8,10 +8,11 @@ import { test } from "node:test";
 import type { Inbox, ProjectDashboardCounts } from "@pilot/protocol";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
 import { SourceRegistry } from "./sources.ts";
 import type { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { sessionObservers } from "./testing/session-observers.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 import { type TrackedInput, TrackedItemDisk } from "./tracked-items-disk.ts";
 
@@ -118,24 +119,19 @@ test("GET /api/inbox and the sidebar counts follow sources, scope and hidden lab
 		},
 	});
 	const sessions = {
+		...sessionObservers(),
 		list: () => [],
 		get: () => undefined,
-		onChange: () => () => {},
-		onArtifactsChanged: () => () => {},
 		setWorkspaceProcessGuard() {},
 	} as unknown as SessionManager;
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		{} as ModelCatalog,
-		{ isRunning: () => false } as unknown as TerminalManager,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
+		models: {} as ModelCatalog,
+		terminals: { isRunning: () => false } as unknown as TerminalManager,
 		tracking,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;

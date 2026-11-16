@@ -69,7 +69,7 @@ export interface ArtifactToolOptions {
 	captureNsh?: (sourcePath: string, signal?: AbortSignal) => Promise<{ source: string; entry: string }>;
 }
 
-/** Agents write only these kinds. The store still accepts others so old revisions keep their format. */
+/** Agents write these kinds. The store also writes visuals/shaders for compatibility and fixtures. */
 const WRITE_KINDS: readonly string[] = ["image", "nsh"];
 
 function checkSource(write: ArtifactWrite): void {
@@ -189,11 +189,11 @@ Get the current source before updating, and pass its revision as expectedRevisio
 						nsh: Type.Optional(
 							Type.Object({
 								api: Type.Literal(1),
-								runtime: Type.Literal("nsh 0.5.0"),
+								runtime: Type.String(),
 								entry: Type.String(),
 								sourceSha256: Type.String(),
 								sourceBytes: Type.Integer(),
-								rendering: Type.Literal("unsupported"),
+								rendering: Type.Optional(Type.Literal("unsupported")),
 							}),
 						),
 					}),

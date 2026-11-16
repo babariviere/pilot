@@ -14,6 +14,7 @@ import type {
 } from "@pilot/protocol";
 import type { IPty } from "node-pty";
 import type { CredentialBroker } from "./credential-broker.ts";
+import { SetupError } from "./setup-error.ts";
 import {
 	SETUP_INPUT_BYTES,
 	SETUP_METHODS,
@@ -24,13 +25,6 @@ import {
 } from "./setup-provider.ts";
 import { loadPty } from "./terminals.ts";
 
-export class SetupError extends Error {
-	readonly status: number;
-	constructor(status: number, message: string) {
-		super(message);
-		this.status = status;
-	}
-}
 type Run = {
 	state: SetupRun;
 	process: IPty;

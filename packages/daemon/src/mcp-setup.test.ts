@@ -85,17 +85,8 @@ test("MCP setup rechecks target edits and replacements after preparing bytes, wi
 	assert.deepEqual(await readdir(directory), ["mcp.json"]);
 });
 
-type SdkConfig = {
-	addMcpServerConfig(path: string, name: string, config: { url: string }): boolean;
-	updateMcpServerConfig(path: string, name: string, patch: { enabled: boolean }): void;
-	removeMcpServerConfig(path: string, name: string): boolean;
-};
-const sdk = import.meta.resolve("@earendil-works/pi-coding-agent");
-const configEditors: SdkConfig[] = [
-	await import(new URL("./extensions/mcp/config.js", sdk).href),
-	// The published CLI has its own compiled copy. Test its actual public editing functions too.
-	await import(new URL("./bundle/chunks/chunk-MMDXLZVS.js", sdk).href),
-];
+const { loadSdkMcpEditor } = await import("../../kernel/src/sdk-mcp-editors.ts");
+const configEditors = [await loadSdkMcpEditor("extension"), await loadSdkMcpEditor("cli")];
 
 test("Pilot MCP writes preserve untouched numeric literals without rounding or null conversion", async (t) => {
 	const { directory, store } = await fixture(t);

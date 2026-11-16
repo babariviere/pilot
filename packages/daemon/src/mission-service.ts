@@ -192,6 +192,11 @@ function taskModelChoice(
 }
 
 export class MissionService {
+	private readonly subscriptions: (() => void)[] = [];
+	dispose(): void {
+		for (const stop of this.subscriptions.splice(0)) stop();
+		this.contexts.clear();
+	}
 	/** Host-only integration. Missing qualified policy remains blocked, never a permissive legacy fallback. */
 	setContinuationPolicySource(source: ContinuationPolicySource): void {
 		this.continuations.setPolicySource(source);
@@ -275,22 +280,24 @@ export class MissionService {
 			lookup: (record) => sessions.lookupMissionStart(record.targetId, record.operationId),
 		});
 		const continuationActivity = new Map<string, string>();
-		sessions.onChange((session) => {
-			if (!session.missionId && !sessions.missionWorkMission(session.id)) return;
-			const key = JSON.stringify([
-				session.state,
-				session.working,
-				session.outcomeAt,
-				session.inputGeneration,
-				session.archivedAt,
-				session.sleepPaused,
-				session.offlinePaused,
-				session.runningJobs?.map((job) => [job.id, job.state]),
-			]);
-			if (continuationActivity.get(session.id) === key) return;
-			continuationActivity.set(session.id, key);
-			this.continuations.schedule();
-		});
+		this.subscriptions.push(
+			sessions.onChange((session) => {
+				if (!session.missionId && !sessions.missionWorkMission(session.id)) return;
+				const key = JSON.stringify([
+					session.state,
+					session.working,
+					session.outcomeAt,
+					session.inputGeneration,
+					session.archivedAt,
+					session.sleepPaused,
+					session.offlinePaused,
+					session.runningJobs?.map((job) => [job.id, job.state]),
+				]);
+				if (continuationActivity.get(session.id) === key) return;
+				continuationActivity.set(session.id, key);
+				this.continuations.schedule();
+			}),
+		);
 		this.reports = new MissionReports(store);
 		sessions.setMissionBridge({
 			continuationInputAllowed: (sessionId, operationId) => this.continuations.inputAllowed(sessionId, operationId),
@@ -469,28 +476,32 @@ export class MissionService {
 				if (projectId) sessions.requestMainRefresh(projectId);
 			},
 		});
-		store.onMembershipChange((sessionId) => {
-			const context = this.context(sessionId);
-			this.contexts.set(sessionId, JSON.stringify(context ?? null));
-			sessions.missionChanged(sessionId, context);
-		});
-		store.onChange((missionId, passive, preferenceOnly, readModelOnly) => {
-			if (preferenceOnly || readModelOnly) return;
-			operations.time("missions.context.publish", () => {
-				if (!store.get(missionId)) return;
-				if (!passive) {
-					sessions.refreshMissionPullRequests();
-					sessions.requestMainRefresh(store.require(missionId).projectId);
-				}
-				for (const sessionId of store.members(missionId)) {
-					const context = this.context(sessionId);
-					const key = JSON.stringify(context ?? null);
-					if (this.contexts.get(sessionId) === key) continue;
-					this.contexts.set(sessionId, key);
-					sessions.missionChanged(sessionId, context, passive);
-				}
-			});
-		});
+		this.subscriptions.push(
+			store.onMembershipChange((sessionId) => {
+				const context = this.context(sessionId);
+				this.contexts.set(sessionId, JSON.stringify(context ?? null));
+				sessions.missionChanged(sessionId, context);
+			}),
+		);
+		this.subscriptions.push(
+			store.onChange((missionId, passive, preferenceOnly, readModelOnly) => {
+				if (preferenceOnly || readModelOnly) return;
+				operations.time("missions.context.publish", () => {
+					if (!store.get(missionId)) return;
+					if (!passive) {
+						sessions.refreshMissionPullRequests();
+						sessions.requestMainRefresh(store.require(missionId).projectId);
+					}
+					for (const sessionId of store.members(missionId)) {
+						const context = this.context(sessionId);
+						const key = JSON.stringify(context ?? null);
+						if (this.contexts.get(sessionId) === key) continue;
+						this.contexts.set(sessionId, key);
+						sessions.missionChanged(sessionId, context, passive);
+					}
+				});
+			}),
+		);
 	}
 
 	/** Synchronous admission/commit excludes a previously admitted chat-archive write. */
@@ -1306,9 +1317,7 @@ export class MissionService {
 		const decisionRoutes: NonNullable<MissionContext["decisionRoutes"]> = Object.fromEntries(
 			detail.decisions.map((decision) => [
 				decision.id,
-				decision.audience === "all" ||
-				pins.has(decision.id) ||
-				(decision.audience === "coordinator" && sees)
+				decision.audience === "all" || pins.has(decision.id) || (decision.audience === "coordinator" && sees)
 					? "relevant"
 					: associated &&
 							decision.audience === "reference" &&

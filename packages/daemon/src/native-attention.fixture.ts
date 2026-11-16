@@ -14,8 +14,8 @@ import type {
 	NativeAttentionRequest,
 	SessionSummary,
 } from "@pilot/protocol";
-import { attentionDigest } from "./attention-store.ts";
 import type { ReadOnlyAttentionExecutor } from "./attention-executor.ts";
+import { attentionDigest } from "./attention-store.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
 import { MissionControls } from "./mission-controls.ts";
@@ -26,9 +26,9 @@ import { ModelCatalog } from "./models.ts";
 import { NativeAttention } from "./native-attention.ts";
 import { OperationJournal } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 export async function nativeAttentionFixture() {
 	const home = await mkdtemp(join(tmpdir(), "native-attention-"));
@@ -107,13 +107,13 @@ export async function nativeAttentionFixture() {
 		native = new GitHubSetupService(home, { ...host, hostId: "local" }, { userHome: home, env: {} });
 		await native.status();
 		capability = JSON.parse(await readFile(join(home, "github-app-capability"), "utf8")).token;
-		const args: Parameters<typeof createDaemonServer> = [
-			{ home, host: "127.0.0.1", port: 0 },
+		const args: Parameters<typeof createDaemonServer>[0] = {
+			config: { home, host: "127.0.0.1", port: 0 },
 			sessions,
 			projects,
-			new ModelCatalog(home),
+			models: new ModelCatalog(home),
 			terminals,
-			{
+			missions: {
 				store,
 				service: {
 					reports: new MissionReports(store),
@@ -127,11 +127,12 @@ export async function nativeAttentionFixture() {
 					}),
 				} as MissionService,
 			},
-		];
-		args[12] = hello;
-		args[17] = native;
-		args[25] = executor;
-		server = createDaemonServer(...args);
+		};
+		args.hello = hello;
+		args.githubSetup = native;
+		args.nativeAuthority = args.githubSetup?.nativeAuthority;
+		args.attentionExecutor = executor;
+		server = createDaemonServer(args);
 		await server.runtimeReady;
 		server.listen(0, "127.0.0.1");
 		await once(server, "listening");
@@ -140,7 +141,7 @@ export async function nativeAttentionFixture() {
 	const stop = async () => {
 		server.closeAllConnections();
 		await new Promise<void>((r) => server.close(() => r()));
-		await server.closePlanning();
+		await server.closeServices();
 		await native.close();
 		await store.durable();
 	};

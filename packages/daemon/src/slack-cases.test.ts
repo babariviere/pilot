@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { performance } from "node:perf_hooks";
+import { test } from "node:test";
 import { CASE_LIMIT, parseCases } from "./slack-cases.ts";
-import { TrackedItemDisk } from "./tracked-items-disk.ts";
 import type { TrackedItemStore } from "./tracked-items.ts";
+import { TrackedItemDisk } from "./tracked-items-disk.ts";
 import { TriageGroomer } from "./triage-grooming.ts";
 
 const DAY = 86_400_000,
@@ -36,7 +36,8 @@ function assign(disk: TrackedItemDisk) {
 	return disk.cases.list("p", now).cases[0]!;
 }
 
-test("stable common cases aggregate bounded summaries and user overrides, filter items and retain names", () => {
+test("stable common cases aggregate bounded summaries and user overrides, filter items and retain names", (t) => {
+	t.mock.method(Date, "now", () => now);
 	const disk = new TrackedItemDisk(":memory:");
 	try {
 		disk.commit("p", "slack", [bug("a"), bug("b", 20, "critical"), bug("c", 35)]);
@@ -75,7 +76,7 @@ test("stable common cases aggregate bounded summaries and user overrides, filter
 		const items = disk.list({ projectId: "p", caseId: first.id }).items;
 		disk.patch(items[0]!.id, { slack: { severity: "low", label: null } });
 		assert.equal(disk.cases.list("p", now).cases[0]!.severityMix.low, 1);
-		assert.ok(disk.preview("p", "slack").commonCases?.length);
+		assert.deepEqual(disk.preview("p", "slack").commonCases, disk.cases.list("p", now).cases);
 		assert.throws(() => disk.cases.edit("other", first.id, { action: "rename", name: "Wrong project" }, now));
 	} finally {
 		disk.close();

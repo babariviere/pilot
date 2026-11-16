@@ -24,11 +24,11 @@ import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { NotFound, SessionManager } from "./sessions.ts";
 import { SourceRegistry } from "./sources.ts";
 import { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
 test("mission diagnostics page persisted Linear failures independently of tasks without remote work", async (t) => {
@@ -39,14 +39,14 @@ test("mission diagnostics page persisted Linear failures independently of tasks 
 	const store = new MissionStore(":memory:");
 	const service = new MissionService(store, sessions, projects);
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-		{ store, service },
-	);
+		missions: { store, service },
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await sessions.shutdown();
@@ -142,20 +142,20 @@ test("refresh-health native reads are qualified, protected and never trigger a r
 	});
 	const sessions = new SessionManager(home, projects, undefined, {}, {}, { diagnosticHost: host });
 	const terminals = new TerminalManager();
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	];
-	args[9] = tracking;
-	args[17] = {
+	};
+	args.tracking = tracking;
+	args.nativeAuthority = {
 		authenticate: async (value: unknown) => {
 			if (value !== "native-fixture") throw new Conflict("Native only");
 		},
-	} as unknown as NonNullable<(typeof args)[17]>;
-	const server = createDaemonServer(...args);
+	};
+	const server = createDaemonServer(args);
 	t.after(async () => {
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		await tracking.stop();
@@ -210,20 +210,20 @@ test("native local feature aggregate delivery and diagnostic reads work with exp
 		daemonVersion: "1.0.0",
 	} as DaemonHello);
 	const terminals = new TerminalManager();
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	];
-	args[16] = telemetry;
-	args[17] = {
+	};
+	args.telemetry = telemetry;
+	args.nativeAuthority = {
 		authenticate: async (value: unknown) => {
 			if (value !== "native-fixture") throw new Conflict("Native only");
 		},
-	} as unknown as NonNullable<(typeof args)[17]>;
-	const server = createDaemonServer(...args);
+	};
+	const server = createDaemonServer(args);
 	t.after(async () => {
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		terminals.shutdown();
@@ -306,17 +306,18 @@ test("project database settings require native authority and fence revisions wit
 		{ hostId: "fixture", daemonId: "fixture", lineageId: "fixture" },
 		{ userHome: home, env: {} },
 	);
-	await assert.rejects(native.authenticate("")); // Await local capability creation, without running a host probe.
+	await assert.rejects(native.nativeAuthority.authenticate("")); // Await local capability creation, without running a host probe.
 	const capability = JSON.parse(readFileSync(join(home, "github-app-capability"), "utf8")).token;
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-	];
-	args[17] = native;
-	const server = createDaemonServer(...args);
+	};
+	args.githubSetup = native;
+	args.nativeAuthority = args.githubSetup?.nativeAuthority;
+	const server = createDaemonServer(args);
 	t.after(async () => {
 		await sessions.shutdown();
 		await terminals.shutdown();
@@ -379,19 +380,19 @@ test("app-wide diagnostic native endpoints require protected capability and reje
 		},
 	);
 	const terminals = new TerminalManager();
-	const args: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	];
-	args[17] = {
+	};
+	args.nativeAuthority = {
 		authenticate: async (token: unknown) => {
 			if (token !== "native-fixture") throw new Conflict("Native capability required");
 		},
-	} as unknown as NonNullable<(typeof args)[17]>;
-	const server = createDaemonServer(...args);
+	};
+	const server = createDaemonServer(args);
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -434,13 +435,13 @@ test("jobs GET returns the session's read-only running list and routes missing s
 		return id === "idle" ? [] : (jobs as Awaited<ReturnType<SessionManager["jobs"]>>);
 	});
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: "/unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -555,21 +556,14 @@ test("diagnostics GET requires the pinned host identity and remains read-only", 
 		}),
 	);
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: "/unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		hello,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -647,27 +641,20 @@ test("dedicated diagnostics and repair operations admit only their matching chat
 		},
 	};
 	const terminals = new TerminalManager();
-	const serverArgs: Parameters<typeof createDaemonServer> = [
-		{ home, host: "127.0.0.1", port: 0 },
+	const serverArgs: Parameters<typeof createDaemonServer>[0] = {
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		hello,
-	];
-	serverArgs[17] = {
+	};
+	serverArgs.nativeAuthority = {
 		authenticate: async (value: unknown) => {
 			if (value !== "native-fixture") throw new Conflict("Native only");
 		},
-	} as unknown as NonNullable<(typeof serverArgs)[17]>;
-	const server = createDaemonServer(...serverArgs);
+	};
+	const server = createDaemonServer(serverArgs);
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -761,13 +748,13 @@ test("jobs stop POST stops one running job and routes missing jobs", async (t) =
 		if (jobId !== "tests/1") throw new NotFound("This job is no longer running");
 	});
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: "/unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -810,13 +797,13 @@ test("retry-startup POST returns the recovered session and preserves route guard
 		return summary;
 	});
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: "/unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -850,13 +837,13 @@ test("held routes send once or discard all and per row, and reject invalid IDs",
 		calls.push(args);
 	});
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: "/unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -912,13 +899,13 @@ test("PR binding routes use the user actor, return summaries and validate reques
 		return summary;
 	});
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: "/unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -1002,20 +989,25 @@ test("repository invalidation ignores title and quota updates, but preserves wor
 		updatedAt: 2,
 	};
 	t.mock.method(sessions, "list", () => [initial]);
-	let updated!: Parameters<SessionManager["onChange"]>[0];
-	t.mock.method(sessions, "onChange", (listener: typeof updated) => {
-		updated = listener;
-		return () => {};
+	const listeners = new Set<Parameters<SessionManager["onChange"]>[0]>();
+	t.mock.method(sessions, "onChange", (listener: Parameters<SessionManager["onChange"]>[0]) => {
+		listeners.add(listener);
+		return () => {
+			listeners.delete(listener);
+		};
 	});
+	const updated = (session: SessionSummary) => {
+		for (const listener of listeners) listener(session);
+	};
 	const invalidated: string[] = [];
 	t.mock.method(RepositoryChanges.prototype, "invalidate", (cwd: string) => invalidated.push(cwd));
-	const server = createDaemonServer(
-		{ home: "/unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
-		new TerminalManager(),
-	);
+		models: new ModelCatalog("/unused"),
+		terminals: new TerminalManager(),
+	});
 	t.after(() => server.close());
 	updated({ ...initial, title: "generated" });
 	updated({ ...initial, usage: { subscription: { fetchedAt: 3, windows: [] } } });
@@ -1040,13 +1032,13 @@ test("project GitHub GET returns a browser URL and preserves route guards", asyn
 	const project = await projects.create({ path: root });
 	const sessions = new SessionManager(root, projects);
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: root, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: root, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(root),
+		models: new ModelCatalog(root),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -1105,13 +1097,13 @@ test("project branches GET returns live origin heads/default, sensible empty lis
 	const noOrigin = await projects.create({ path: root });
 	const sessions = new SessionManager(root, projects);
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: root, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: root, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(root),
+		models: new ModelCatalog(root),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -1168,11 +1160,16 @@ test("changes summary GET returns only metadata and counts and preserves route g
 	writeFileSync(join(root, "untracked.txt"), "new\n");
 	const projects = new ProjectStore(root);
 	const sessions = new SessionManager(root, projects);
-	let updated!: Parameters<SessionManager["onChange"]>[0];
-	t.mock.method(sessions, "onChange", (listener: typeof updated) => {
-		updated = listener;
-		return () => {};
+	const listeners = new Set<Parameters<SessionManager["onChange"]>[0]>();
+	t.mock.method(sessions, "onChange", (listener: Parameters<SessionManager["onChange"]>[0]) => {
+		listeners.add(listener);
+		return () => {
+			listeners.delete(listener);
+		};
 	});
+	const updated = (session: SessionSummary) => {
+		for (const listener of listeners) listener(session);
+	};
 	const originalChangeBase = sessions.changeBase.bind(sessions);
 	let preparing = false;
 	const changeBase = t.mock.method(sessions, "changeBase", (id: string) => {
@@ -1181,13 +1178,13 @@ test("changes summary GET returns only metadata and counts and preserves route g
 		return { cwd: root, base };
 	});
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home: root, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: root, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(root),
+		models: new ModelCatalog(root),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
@@ -1268,13 +1265,13 @@ test("chat sockets stream one session each, isolate overload and resume only the
 		};
 	});
 	t.mock.method(sessions, "artifacts", async () => []);
-	const server = createDaemonServer(
-		{ home: "/unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
-		new TerminalManager(),
-	);
+		models: new ModelCatalog("/unused"),
+		terminals: new TerminalManager(),
+	});
 	const sockets: WebSocket[] = [];
 	t.after(async () => {
 		for (const socket of sockets) socket.terminate();
@@ -1404,13 +1401,13 @@ test("terminal and subagent sockets stream one target each and accept only their
 			unwatched++;
 		};
 	});
-	const server = createDaemonServer(
-		{ home: "/unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	);
+	});
 	const sockets: WebSocket[] = [];
 	t.after(async () => {
 		for (const socket of sockets) socket.terminate();
@@ -1507,13 +1504,13 @@ test("queued message PATCH forwards the message ID and content and reports stale
 	const edit = t.mock.method(sessions, "editQueuedMessage", async () => {
 		if (stale) throw new Error("Message is no longer queued. Your edit has not been sent.");
 	});
-	const server = createDaemonServer(
-		{ home: "/tmp/pilot-server-test-unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/tmp/pilot-server-test-unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/tmp/pilot-server-test-unused"),
+		models: new ModelCatalog("/tmp/pilot-server-test-unused"),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
@@ -1561,13 +1558,13 @@ test("prepare uses the origin-protected route and paused admissions return HTTP 
 	// Isolated ephemeral HTTP server. No stores are loaded, workers forked, or terminals started.
 	const projects = new ProjectStore("/unused");
 	const sessions = new SessionManager("/unused", projects);
-	const server = createDaemonServer(
-		{ home: "/unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
-		new TerminalManager(),
-	);
+		models: new ModelCatalog("/unused"),
+		terminals: new TerminalManager(),
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
@@ -1613,13 +1610,13 @@ test("queued message DELETE forwards only the ID, reports stale removal, and rej
 		if (stale) throw new Error("Message is no longer queued. It has not been removed.");
 	});
 	const send = t.mock.method(sessions, "send", async () => assert.fail("removal must never submit input"));
-	const server = createDaemonServer(
-		{ home: "/unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/unused"),
+		models: new ModelCatalog("/unused"),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
@@ -1661,13 +1658,13 @@ test("history route validates its cursor and limit and forwards the page request
 	const sessions = new SessionManager("/tmp/pilot-server-test-unused", projects);
 	const terminals = new TerminalManager();
 	const history = t.mock.method(sessions, "history", async () => ({ entries: [], more: false }));
-	const server = createDaemonServer(
-		{ home: "/tmp/pilot-server-test-unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/tmp/pilot-server-test-unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/tmp/pilot-server-test-unused"),
+		models: new ModelCatalog("/tmp/pilot-server-test-unused"),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
@@ -1690,9 +1687,18 @@ test("history route validates its cursor and limit and forwards the page request
 	}
 	assert.equal(history.mock.callCount(), 2);
 	const captured = { conversationId: 3, tail: 100, head: { id: 80, start: 12 } };
-	assert.equal((await fetch(`${base}?before=42&limit=24&view=${encodeURIComponent(JSON.stringify(captured))}`)).status, 200);
+	assert.equal(
+		(await fetch(`${base}?before=42&limit=24&view=${encodeURIComponent(JSON.stringify(captured))}`)).status,
+		200,
+	);
 	assert.deepEqual(history.mock.calls[2]?.arguments, ["session-1", 42, 24, captured]);
-	for (const view of [null, {}, { conversationId: 3, tail: -1 }, { ...captured, head: null }, { ...captured, head: { id: 1, start: 2 } }]) {
+	for (const view of [
+		null,
+		{},
+		{ conversationId: 3, tail: -1 },
+		{ ...captured, head: null },
+		{ ...captured, head: { id: 1, start: 2 } },
+	]) {
 		assert.equal((await fetch(`${base}?before=42&view=${encodeURIComponent(JSON.stringify(view))}`)).status, 400);
 	}
 });
@@ -1710,13 +1716,13 @@ test("subagent routes decode names, validate bodies and forward transcript, mess
 				: { signature: "8/full/1:2", transcript: { name, full: true, events: [] } },
 	);
 	const command = t.mock.method(sessions, "subagentCommand", async () => {});
-	const server = createDaemonServer(
-		{ home: "/tmp/pilot-server-test-unused", host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home: "/tmp/pilot-server-test-unused", host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog("/tmp/pilot-server-test-unused"),
+		models: new ModelCatalog("/tmp/pilot-server-test-unused"),
 		terminals,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
@@ -1796,21 +1802,14 @@ test("guarded queue routes pin home, forward exact precondition and return opera
 			independentExecution: true,
 		},
 	};
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		hello,
-	);
+	});
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((r) => server.close(() => r()));

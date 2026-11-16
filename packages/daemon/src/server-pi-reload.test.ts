@@ -9,24 +9,32 @@ import { test } from "node:test";
 import { WebSocket } from "ws";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 test("reload API observes passively, validates intent and pushes status without opening chats", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-pi-reload-"));
 	const projects = new ProjectStore(home);
-	const sessions = new SessionManager(home, projects, undefined, {
-		worker: () => assert.fail("must not open a worker"),
-	});
+	const sessions = new SessionManager(
+		home,
+		projects,
+		undefined,
+		{
+			worker: () => assert.fail("must not open a worker"),
+		},
+		{},
+		offlineSessionOptions(),
+	);
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
-		{ home, host: "127.0.0.1", port: 0 },
+	const server = createDaemonServer({
+		config: { home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
-		new ModelCatalog(home),
+		models: new ModelCatalog(home),
 		terminals,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

@@ -21,7 +21,7 @@ export async function publishedPlanningFixture(
 ) {
 	const f = await nativePlanningFixture({ native: options.native ?? false });
 	t.after(() => f.close());
-	await f.closePlanning();
+	await f.closeServices();
 	await f.plan({
 		purpose: "plan-map",
 		expectedRevision: 0,

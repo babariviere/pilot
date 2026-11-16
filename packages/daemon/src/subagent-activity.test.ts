@@ -9,6 +9,7 @@ import type { KernelCommand, KernelPacket, KernelSubagent } from "@pilot/kernel"
 import type { SessionSummary } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const completion = { outcome: "done" as const, outcomeAt: 42 };
 const child: KernelSubagent = {
@@ -90,7 +91,7 @@ async function fixture(t: TestContext) {
 				},
 			},
 			{},
-			{ kernelRestartBackoffMs: 0 },
+			offlineSessionOptions({ kernelRestartBackoffMs: 0 }),
 		);
 		managers.push(sessions);
 		await sessions.load();

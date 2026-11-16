@@ -7,7 +7,6 @@ import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { createSession, LiveDoc, UserEntry } from "@earendil-works/pi-durable";
@@ -15,6 +14,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { collectChangeSummary } from "../../packages/daemon/src/changes.ts";
 import { subprocesses } from "../../packages/daemon/src/subprocess.ts";
 import { untrackedStats } from "../../packages/daemon/src/untracked-stats.ts";
+import { loadBaseline } from "./baseline.ts";
 
 const { assignJson } = await import(
 	new URL("./harness/json.js", import.meta.resolve("@earendil-works/pi-durable")).href
@@ -24,6 +24,7 @@ process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 process.env.GIT_OPTIONAL_LOCKS = "0";
 const git = (...args: string[]) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], { cwd: home });
+let cleanupBaseline: (() => Promise<void>) | undefined;
 
 try {
 	git("init", "--quiet");
@@ -33,17 +34,12 @@ try {
 	const variants = [{ name: "current", collect: collectChangeSummary }];
 	const baseline = process.argv[2];
 	if (baseline) {
-		if (!/^[a-f\d]{6,40}$/.test(baseline)) throw new Error("Baseline must be a commit hash");
-		const root = fileURLToPath(new URL("../../", import.meta.url));
-		const source = execFileSync("git", ["show", `${baseline}:packages/daemon/src/changes.ts`], {
-			cwd: root,
-			encoding: "utf8",
-		});
-		// The original module's relative imports still refer to its helpers in this checkout.
-		const patched = source.replaceAll('from "./', `from "${join(root, "packages/daemon/src")}/`);
-		const path = join(home, "baseline.ts");
-		await writeFile(path, patched);
-		const { collectChangeSummary: collect } = await import(pathToFileURL(path).href);
+		const loaded = await loadBaseline<{ collectChangeSummary: typeof collectChangeSummary }>(
+			baseline,
+			new URL("../../packages/daemon/src/changes.ts", import.meta.url),
+		);
+		cleanupBaseline = loaded.cleanup;
+		const { collectChangeSummary: collect } = loaded.module;
 		variants.unshift({ name: `baseline-${baseline}`, collect });
 	}
 	const run = subprocesses.run.bind(subprocesses);
@@ -52,9 +48,9 @@ try {
 		commands++;
 		return run(...args);
 	};
-	// Keep the dynamically loaded module and its SQLite fixtures out of untracked input.
+	// Keep SQLite fixtures out of untracked input.
 	git("config", "core.excludesFile", "/dev/null");
-	await writeFile(join(home, ".git/info/exclude"), "baseline.ts\n*.sqlite*\n");
+	await writeFile(join(home, ".git/info/exclude"), "*.sqlite*\n");
 	for (const count of [0, 100, 1000]) {
 		for (let i = 0; i < count; i++) await writeFile(join(home, `new-${i}.txt`), "new line\n".repeat(10));
 		for (const variant of variants) {
@@ -138,6 +134,7 @@ try {
 		}
 	}
 } finally {
+	await cleanupBaseline?.();
 	await subprocesses.close();
 	await untrackedStats.close();
 	await rm(home, { recursive: true, force: true });

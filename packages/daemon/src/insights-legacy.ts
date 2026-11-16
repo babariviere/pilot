@@ -2,6 +2,7 @@
 import { resolve } from "node:path";
 import type { InsightsLegacySelector, OperationHost } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
+import { InsightsJournal } from "./insights-journal.ts";
 import type { InsightsWorkspaceDb } from "./insights-workspace-store.ts";
 import { canonicalJSON, type OperationJournal, payloadHash } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
@@ -93,11 +94,19 @@ export class InsightsLegacy {
 				throw new Conflict("legacy_projection_authority_changed");
 		};
 		const pin = this.deps.records.pin(s, kind, cursor);
-		const references = await this.deps.journal.replacementReferences(s.projectId, s.missionId, s.reportSessionId);
+		const references = await new InsightsJournal(this.deps.journal).replacementReferences(
+			s.projectId,
+			s.missionId,
+			s.reportSessionId,
+		);
 		guard();
 		pin.revalidate();
 		const rows = await pin.read();
-		const latest = await this.deps.journal.replacementReferences(s.projectId, s.missionId, s.reportSessionId);
+		const latest = await new InsightsJournal(this.deps.journal).replacementReferences(
+			s.projectId,
+			s.missionId,
+			s.reportSessionId,
+		);
 		guard();
 		pin.revalidate();
 		if (!same(references, latest)) throw new Conflict("legacy_operations_changed_during_read");

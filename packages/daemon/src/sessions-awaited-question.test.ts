@@ -8,6 +8,7 @@ import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import type { SessionState } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 async function until(check: () => boolean) {
 	const end = Date.now() + 3000;
@@ -21,33 +22,40 @@ test("a question the live run awaits is live attention only while that run works
 	const home = await mkdtemp(join(tmpdir(), "pilot-sessions-awaited-question-"));
 	const commands: KernelCommand[] = [];
 	let publish!: (packet: KernelPacket) => void;
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		title: async () => undefined,
-		worker(_spec, packet, exit) {
-			publish = packet;
-			const worker = {
-				state: "idle" as SessionState,
-				busy: false,
-				ready: Promise.resolve(),
-				send(command: KernelCommand) {
-					commands.push(command);
-				},
-				async request(command: Extract<KernelCommand, { requestId: string }>) {
-					commands.push(command);
-					if (command.type === "input") {
-						this.state = "working";
-						this.busy = true;
-						packet({ type: "working", working: true });
-					}
-				},
-				async close() {
-					exit(this, 0);
-				},
-			};
-			queueMicrotask(() => packet({ type: "ready", working: false, model: "faux/faux-1", usage: {} }));
-			return worker;
+	const sessions = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{
+			title: async () => undefined,
+			worker(_spec, packet, exit) {
+				publish = packet;
+				const worker = {
+					state: "idle" as SessionState,
+					busy: false,
+					ready: Promise.resolve(),
+					send(command: KernelCommand) {
+						commands.push(command);
+					},
+					async request(command: Extract<KernelCommand, { requestId: string }>) {
+						commands.push(command);
+						if (command.type === "input") {
+							this.state = "working";
+							this.busy = true;
+							packet({ type: "working", working: true });
+						}
+					},
+					async close() {
+						exit(this, 0);
+					},
+				};
+				queueMicrotask(() => packet({ type: "ready", working: false, model: "faux/faux-1", usage: {} }));
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	t.after(async () => {
 		await sessions.shutdown();
 		await rm(home, { recursive: true, force: true });

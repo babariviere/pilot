@@ -12,9 +12,10 @@ import type { SessionAttempt, SessionState, SessionSummary } from "@pilot/protoc
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
 import { CommandRejected, SessionManager, type SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 type Command = Extract<KernelCommand, { requestId: string }>;
 const first = "provider/first";
@@ -84,23 +85,30 @@ async function fixture(t: TestContext) {
 	);
 	const projects = new ProjectStore(home);
 	const workers: FakeWorker[] = [];
-	const sessions = new SessionManager(home, projects, undefined, {
-		worker: (spec, onPacket) => {
-			const worker = new FakeWorker(onPacket);
-			workers.push(worker);
-			queueMicrotask(() =>
-				onPacket({
-					type: "ready",
-					model: spec.recoveryModel?.model ?? spec.model ?? first,
-					...(spec.recoveryModel?.thinking ? { thinking: spec.recoveryModel.thinking } : {}),
-					working: false,
-					usage: worker.usage,
-					...(workers.length > 1 ? { attempts: rebuiltAttempts } : {}),
-				}),
-			);
-			return worker;
+	const sessions = new SessionManager(
+		home,
+		projects,
+		undefined,
+		{
+			worker: (spec, onPacket) => {
+				const worker = new FakeWorker(onPacket);
+				workers.push(worker);
+				queueMicrotask(() =>
+					onPacket({
+						type: "ready",
+						model: spec.recoveryModel?.model ?? spec.model ?? first,
+						...(spec.recoveryModel?.thinking ? { thinking: spec.recoveryModel.thinking } : {}),
+						working: false,
+						usage: worker.usage,
+						...(workers.length > 1 ? { attempts: rebuiltAttempts } : {}),
+					}),
+				);
+				return worker;
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	await sessions.load();
 	const models = new ModelCatalog("/unused");
 	const list = t.mock.method(models, "list", async () => ({
@@ -280,13 +288,13 @@ test("unavailable choices never open a worker; durable busy rejections become co
 
 test("model HTTP route returns SessionSummary and validates payload, availability, state and origin", async (t) => {
 	const f = await fixture(t);
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		f.models,
-		new TerminalManager(),
-	);
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: f.models,
+		terminals: new TerminalManager(),
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
@@ -404,11 +412,18 @@ test("passive failed model persists across restart without worker, work, attempt
 	assert.equal(f.sessions["changingModels"].size, 0);
 	await assert.rejects(f.sessions.changeModel(f.id, second, f.models), Conflict);
 	await assert.rejects(f.sessions.saveFailedModel(f.id, source, { model: second }, f.models), Conflict);
-	const loaded = new SessionManager(f.home, f.projects, undefined, {
-		worker: () => {
-			throw new Error("must not reopen");
+	const loaded = new SessionManager(
+		f.home,
+		f.projects,
+		undefined,
+		{
+			worker: () => {
+				throw new Error("must not reopen");
+			},
 		},
-	});
+		{},
+		offlineSessionOptions(),
+	);
 	await loaded.load();
 	assert.deepEqual(loaded.get(f.id)?.nextAttemptModel, { model: second });
 	assert.equal(loaded.get(f.id)?.outcomeReason, "Original failure");
@@ -540,21 +555,14 @@ test("passive failed model HTTP has exact home/source/operation ACK and preserve
 			independentExecution: true,
 		},
 	};
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		f.models,
-		new TerminalManager(),
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: f.models,
+		terminals: new TerminalManager(),
 		hello,
-	);
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(() => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))));
@@ -652,13 +660,13 @@ test("a failed automatic handoff retries as one quiet explicit input and applies
 test("retry-handoff HTTP validates the operation and refuses ineligible chats with 409", async (t) => {
 	const f = await fixture(t);
 	const meta = failed(f, false);
-	const server = createDaemonServer(
-		{ home: f.home, host: "127.0.0.1", port: 0 },
-		f.sessions,
-		f.projects,
-		f.models,
-		new TerminalManager(),
-	);
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: f.models,
+		terminals: new TerminalManager(),
+	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(() => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))));

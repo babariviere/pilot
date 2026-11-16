@@ -14,7 +14,8 @@ import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
-import { SetupError } from "./setup.ts";
+import { SetupError } from "./setup-error.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 
 before(() => installCredentialBrokerHooks());
@@ -132,9 +133,16 @@ test("failed work offers capped choices from its own copy and saves only that ch
 			working: false,
 		}),
 	);
-	const sessions = new SessionManager(home, projects, undefined, {
-		worker: () => assert.fail("Choosing must not start work"),
-	});
+	const sessions = new SessionManager(
+		home,
+		projects,
+		undefined,
+		{
+			worker: () => assert.fail("Choosing must not start work"),
+		},
+		{},
+		offlineSessionOptions(),
+	);
 	await sessions.load();
 	t.after(async () => {
 		await sessions.shutdown();

@@ -13,11 +13,11 @@ import { mirrorPlanning } from "./planning";
 import { ScriptedScope } from "./scopeDemo";
 import { mirrorScope, todayProject } from "./todayScope";
 import { Action } from "./ui";
-import { captureView, restoreView, startFresh } from "./updateView";
+import { captureView, restoreView, startFresh } from "./windowState";
 
 const feed = new TodayFeed("decisions");
 const scope = new ScriptedScope(() => feed.snapshot());
-const day = mirrorDay(feed, undefined, undefined, undefined, mirrorScope(scope));
+const day = mirrorDay(feed, { scope: mirrorScope(scope) });
 const chats = new ScriptedChats();
 const plans = mirrorPlanning(new PlanFeed(), mirrorChats(chats));
 // How often the scope view changed: an unchanged read must not change it.

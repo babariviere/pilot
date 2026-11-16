@@ -269,7 +269,7 @@ try {
 				coordinatorSessionId: owner,
 				expectedRevision: 0,
 			});
-		if (command.action === "drain") await f.server.closePlanning();
+		if (command.action === "drain") await f.server.closeServices();
 		if (command.action === "restart") {
 			for (const socket of sockets) socket.close();
 			await f.restart();

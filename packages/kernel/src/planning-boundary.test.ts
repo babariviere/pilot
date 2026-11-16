@@ -3,6 +3,7 @@ import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness, LiveDoc, MemoryStorage } from "@earendil-works/pi-durable";
+import { canonicalJSON } from "./canonical-json.ts";
 import { admitWithHeld, holdOnStop } from "./held-inputs.ts";
 import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { admitPlanningInput, holdPlanning, PlanningWorkerDoc } from "./planning-boundary.ts";
@@ -11,7 +12,6 @@ import {
 	type PlanningInput,
 	type PlanningRound,
 	type PlanningWorkerBinding,
-	planningJSON,
 } from "./planning-worker.ts";
 
 async function fixture(t: TestContext) {
@@ -119,7 +119,7 @@ for (const purpose of ["plan-revisit", "thread-send"])
 
 test("planning hold is durable and independent from Stop and ordinary input", async (t) => {
 	const f = await fixture(t);
-	assert.equal((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))?.hold, planningJSON(f.hold));
+	assert.equal((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))?.hold, canonicalJSON(f.hold));
 	await assert.rejects(
 		admitWithHeld(
 			f.harness,
@@ -137,7 +137,7 @@ test("planning hold is durable and independent from Stop and ordinary input", as
 		admitPlanningInput(f.harness, f.conversation, f.input, async () => {}, context),
 		/held or busy/,
 	);
-	assert.equal((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))?.hold, planningJSON(f.hold));
+	assert.equal((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))?.hold, canonicalJSON(f.hold));
 });
 
 for (const hold of ["stopped", "paused", "questionPending"] as const) {
@@ -221,6 +221,6 @@ test("changed round and final asynchronous admission denial roll back every nati
 		/Owner changed/,
 	);
 	assert.equal(await f.storage.submissionByRequest(f.conversation.id, "continue", context), undefined);
-	assert.equal((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))?.hold, planningJSON(f.hold));
+	assert.equal((await f.harness.snapshot(PlanningWorkerDoc, f.conversation.id, context))?.hold, canonicalJSON(f.hold));
 	assert.equal((await f.harness.snapshot(LiveDoc, f.conversation.id, context))?.run, undefined);
 });

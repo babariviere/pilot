@@ -176,7 +176,7 @@ for (const change of ["Stop", "pause", "owner", "configuration"] as const) {
 		} else {
 			const final = await submit(f);
 			assert.equal(final.receipt.state, "accepted");
-			await f.server.closePlanning(); // Joins pending/refused continuation, no polling or unsafe retry.
+			await f.server.closeServices(); // Joins pending/refused continuation, no polling or unsafe retry.
 		}
 		assert.equal(await f.requestCount(), 1);
 		assert.equal(f.store.planningWorkers.get(f.missionId)!.phase, "held");
@@ -205,7 +205,7 @@ test("lost native admission ACK settles only from its exact durable receipt, nev
 	);
 	assert.equal(await f.requestCount(), 2);
 	const lookup = t.mock.method(f.sessions, "lookupPlanning", f.sessions.lookupPlanning.bind(f.sessions));
-	f.server.recoverOperations();
+	f.server.services.recoverOperations();
 	await f.changed(() => f.store.planningWorkers.get(f.missionId)?.phase === "active");
 	assert.ok(lookup.mock.callCount() >= 1);
 	assert.equal(await f.requestCount(), 2);
@@ -400,12 +400,12 @@ test("entered admission without a native receipt stays Unknown across restart an
 	await answerAll(f);
 	const final = await submit(f);
 	assert.equal(final.receipt.state, "accepted");
-	await f.server.closePlanning();
+	await f.server.closeServices();
 	assert.equal(f.store.planningWorkers.get(f.missionId)!.phase, "continuing");
 	await f.restart();
 	assert.equal((await f.post(final.op)).state, "accepted");
-	f.server.recoverOperations();
-	await f.server.closePlanning();
+	f.server.services.recoverOperations();
+	await f.server.closeServices();
 	assert.equal(f.store.planningWorkers.get(f.missionId)!.phase, "continuing");
 	assert.equal(await f.requestCount(), 1);
 	assert.equal(f.specs.length, 1, "No writer is opened to replay an uncertain admission");
@@ -565,15 +565,15 @@ test("Stop between complete submission and native admission cannot be cleared by
 	assert.equal(f.store.interviews.latest(f.missionId)!.submission!.operationId, final.op.operationId);
 	await f.sessions.stop(f.binding.ownerSessionId);
 	release();
-	await f.server.closePlanning();
+	await f.server.closeServices();
 	assert.equal(f.store.planningWorkers.get(f.missionId)!.phase, "continuing");
 	assert.deepEqual(f.store.planningWorkers.get(f.missionId)!.hold, round);
 	assert.equal(await f.requestCount(), 1);
 	assert.equal(continuationAttempts, 1);
 	await f.restart();
 	assert.equal((await f.post(final.op)).state, "accepted", "Historic submission receipt grants no new admission");
-	f.server.recoverOperations();
-	await f.server.closePlanning();
+	f.server.services.recoverOperations();
+	await f.server.closeServices();
 	assert.equal(await f.requestCount(), 1);
 	assert.equal(f.specs.length, 1);
 	assert.deepEqual(f.store.planningWorkers.get(f.missionId)!.hold, round);

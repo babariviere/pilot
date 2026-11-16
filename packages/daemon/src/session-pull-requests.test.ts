@@ -11,6 +11,7 @@ import { ProjectStore } from "./projects.ts";
 import type { PullRequestOptions } from "./pull-requests.ts";
 import { SessionManager } from "./sessions.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 import type { Runner } from "./workspaces.ts";
 
 type Meta = Parameters<SessionManager["save"]>[0];
@@ -285,6 +286,7 @@ test("fourth-argument factories remain compatible: the agent's first branch writ
 				return JSON.stringify([{ ...candidate(), headRefName }]);
 			}),
 		},
+		offlineSessionOptions(),
 	);
 	try {
 		await manager.load();

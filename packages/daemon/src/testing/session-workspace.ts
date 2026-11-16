@@ -15,6 +15,7 @@ import { openSessionStorage } from "../../../kernel/src/storage.ts";
 import { ProjectStore } from "../projects.ts";
 import { type SessionFactories, SessionManager, type SessionManagerOptions, type SessionWorker } from "../sessions.ts";
 import { copyGitSeed } from "./git-seed.ts";
+import { offlineSessionOptions } from "./offline-session-options.ts";
 
 export const DAY = 86_400_000;
 const command = (cwd: string, file: string, args: string[]) =>
@@ -92,6 +93,7 @@ export async function fixture(t: TestContext, options: SessionManagerOptions = {
 	const home = join(root, "home");
 	const source = join(root, "source");
 	const managers: SessionManager[] = [];
+	const beforeRemoval: (() => void | Promise<void>)[] = [];
 	t.after(async () => {
 		try {
 			for (const manager of managers) {
@@ -99,7 +101,11 @@ export async function fixture(t: TestContext, options: SessionManagerOptions = {
 				await Promise.allSettled([...manager["starting"].values(), ...manager["saving"].values()]);
 			}
 		} finally {
-			await rm(root, { recursive: true, force: true });
+			try {
+				for (const close of beforeRemoval) await close();
+			} finally {
+				await rm(root, { recursive: true, force: true });
+			}
 		}
 	});
 	// Git establishes the fixture before it becomes a jj repository. All later mutations use jj.
@@ -136,7 +142,7 @@ export async function fixture(t: TestContext, options: SessionManagerOptions = {
 			undefined,
 			{ worker, title: async () => undefined }, // Deliberately DO NOT inject workspace: exercise default shared creation.
 			{ runner: async (file, args) => (file === "git" && args[0] === "branch" ? "" : "[]") },
-			{ idleParkMs: Number.POSITIVE_INFINITY, ...options, ...overrides },
+			offlineSessionOptions({ idleParkMs: Number.POSITIVE_INFINITY, ...options, ...overrides }),
 		);
 		managers.push(value);
 		await value.load();
@@ -172,6 +178,10 @@ export async function fixture(t: TestContext, options: SessionManagerOptions = {
 	};
 	return {
 		root,
+		/** Close dependent storage after all managers join, before deleting their shared home. */
+		beforeRemove(close: () => void | Promise<void>): void {
+			beforeRemoval.push(close);
+		},
 		home,
 		source,
 		projects,

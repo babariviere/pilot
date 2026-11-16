@@ -37,6 +37,15 @@ measurement or a rebuilt release package. The installed app predates these accou
 Node binary, not its daemon sources or data. Full package installs, relocated runtime checks and CI remain remote
 verification; capture/daemon/native overhead needs separate evidence. Ambient host load was not controlled.
 
+Current script behavior (November 2026): the probe invokes `process.execPath`
+in place instead of copying an executable without its shared-library closure.
+Metadata now says `nodeExecution: invoking-executable-in-place`; executable,
+source and generator hashes, runtime versions, staged source layout and isolated
+child environments remain. This does not test Node distribution relocation.
+The copied shipped Node 24 method above describes these archived October runs;
+their raw evidence and results are unchanged. Use the same shipped Node when
+comparing new measurements with those results.
+
 Variants:
 
 | Name | Worker execution |
