@@ -48,6 +48,8 @@ export interface PilotContext {
 	ghStack?: boolean;
 	workspace?: WorkspaceContext;
 	ask?: AskContext;
+	/** A standalone chat started from Slack, Linear or a schedule. It declares `chat_report`. */
+	job?: "slack" | "linear" | "schedule";
 	/** Project delivery policy, read when the worker starts. Omitted means PR delivery for private clones. */
 	requirePullRequest?: boolean;
 	/** Pilot removed files from this workspace while the chat was archived. */

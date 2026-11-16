@@ -304,6 +304,7 @@ export type KernelCommand =
 	| { type: "liveUpdate.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
+	| { type: "chatReport.result"; callId: string; result?: JsonValue; error?: string }
 	| {
 			type: "diagnostics.context.result";
 			callId: string;
@@ -451,6 +452,8 @@ export type KernelPacket =
 	| { type: "database.call"; callId: string; action: DatabaseAction; args: Record<string, JsonValue> }
 	/** A `slack_status` tool call, answered by `slack.result`. Applies only to Slack messages linked to this chat. */
 	| { type: "slack.call"; callId: string; args: Record<string, JsonValue> }
+	/** A `chat_report` tool call, answered by `chatReport.result`. Only job chats (`pilot.job`) declare the tool. */
+	| { type: "chatReport.call"; callId: string; args: Record<string, JsonValue> }
 	/** Content-free diagnostic read. Caller identity is derived from this supervised worker. */
 	| { type: "diagnostics.call"; callId: string; sessionId?: string; limit?: number }
 	| { type: "diagnostics.context.call"; callId: string; request: import("@pilot/protocol").DiagnosticContextRequest }

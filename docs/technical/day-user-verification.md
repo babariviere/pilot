@@ -58,11 +58,17 @@ typed read model. Important fields:
   `pendingOperationId` blocks further assessment while an entered outcome is
   uncertain. Do not display success from the domain row alone.
 * `title` (standalone chats) is the chat's own title, so a result keeps its name after a restart.
-* `finalReply` (standalone chats that said they are done) is the chat's last reply, word for word,
-  up to `FINAL_REPLY_CHARS` (16,000) characters, with `shortened` when cut. A standalone chat
-  has no report tool, so its answer is often only this reply. Day shows it in the report block
-  as "Its last message": the chat's words, not a saved report or Pilot's check. It is read only
-  for a single result, never for discovery pages.
+* `chatReport` (job chats) is the report the chat saved with its `chat_report` tool: answer,
+  how it knows, limits, next step and links. Only standalone chats started from a Slack or Linear
+  intake Start or a schedule are job chats (`job` in the chat's metadata, set at creation). They
+  declare the tool; other chats don't. Each call replaces `sessions/<id>/chat-report.json`.
+  The page shows the report only when the latest run saved it (after the last user message, and
+  not after the outcome). Limits and their reasons are in `packages/daemon/src/chat-report.ts`.
+  A report never changes `deliveryId`: it is written during the run that sets the outcome.
+* `finalReply` (standalone chats that said they are done, with no current report) is the chat's
+  last reply, word for word, up to `FINAL_REPLY_CHARS` (16,000) characters, with `shortened` when
+  cut. Day shows it in the report block as "Its last message": the chat's words, not a saved
+  report or Pilot's check. Both are read only for a single result, never for discovery pages.
 
 Reads cross durability barriers and recheck live scope after receipt I/O.
 They never mark a result checked, subscribe/start a worker, or reconcile by

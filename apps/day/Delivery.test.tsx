@@ -243,6 +243,20 @@ test("a finished chat with no report shows its last message, word for word", asy
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
 });
 
+test("a job chat's report shows its answer, proof, limits, next step and links instead of its last message", async () => {
+	const app = await ready();
+	await pressCheck(app, "id:check-chat.mock-project.phishing-check");
+	await app.waitFor("id:delivery-chat-report");
+	expect(app.shows("It is a true positive. The password was typed on the look-alike page at 09:14.")).toBe(true);
+	expect(app.shows("How it knows")).toBe(true);
+	expect(app.shows("I did not check other users' logs.")).toBe(true);
+	expect(app.shows("Next step for you")).toBe(true);
+	expect(app.shows("Event 4821 · https://example.com/events/4821")).toBe(true);
+	expect(app.shows("Its last message")).toBe(false);
+	expect(app.shows("The chat says it is done.")).toBe(false);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
 test("rapid presses while an answer is on its way send once", async () => {
 	const app = await ready();
 	await app.press(DOCS_ROW);

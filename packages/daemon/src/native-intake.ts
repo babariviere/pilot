@@ -165,6 +165,9 @@ export class NativeIntake {
 			p.sessionId!,
 			op.operationId,
 			guard,
+			undefined,
+			undefined,
+			item.kind === "slack" ? "slack" : "linear",
 		);
 		// Keep the existing confirmed-start link and best-effort Linear/Slack effects unchanged.
 		await this.deps.tracking.patch(item.id, { start: true, sessionId: session.id }, op.operationId);

@@ -41,8 +41,8 @@ export type * from "./model-scope.ts";
 export type * from "./native-attention.ts";
 export type * from "./native-review.ts";
 export type * from "./pi-reload.ts";
-export type * from "./planning-inventory.ts";
 export type * from "./planning-activity.ts";
+export type * from "./planning-inventory.ts";
 export type * from "./refresh-health.ts";
 export type * from "./review-requests.ts";
 
@@ -2277,6 +2277,7 @@ export type {
 	SavedArtifactContent,
 } from "./delivered-artifact.ts";
 export type {
+	ChatReport,
 	DeliveredWork,
 	DeliveredWorkList,
 	UserVerification,

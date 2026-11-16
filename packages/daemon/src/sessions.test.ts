@@ -7000,6 +7000,62 @@ test("slack_status: only chats attached to a Slack triage message declare it, an
 	assert.deepEqual(linked(otherWorker), []);
 });
 
+test("chat_report: only job chats declare it; a call saves the report the result page reads", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const job = await sessions.spawn(
+		{ projectId: f.project.id, workspace: "direct", message: "Work on this Slack request" },
+		false,
+		undefined,
+		undefined,
+		"slack",
+	);
+	await sessions["starting"].get(job.id);
+	const worker = f.workers.at(-1)!;
+	assert.equal(worker.spec.pilot?.job, "slack");
+	const plain = await sessions.spawn({ projectId: f.project.id, workspace: "direct", message: "Start" });
+	await sessions["starting"].get(plain.id);
+	const plainWorker = f.workers.at(-1)!;
+	assert.equal(plainWorker.spec.pilot?.job, undefined);
+
+	const result = (w: (typeof f.workers)[number], callId: string) =>
+		w.sent.find((command) => command.type === "chatReport.result" && command.callId === callId) as
+			| { result?: { saved: boolean }; error?: string }
+			| undefined;
+	sessions["onPacket"](sessions["metas"].get(job.id)!, worker, {
+		type: "chatReport.call",
+		callId: "r1",
+		args: { answer: "It is a true positive.", nextStep: "Reply in the thread." },
+	});
+	await until(() => !!result(worker, "r1"));
+	assert.equal(result(worker, "r1")?.result?.saved, true);
+	const saved = await sessions.chatReport(job.id);
+	assert.equal(saved?.answer, "It is a true positive.");
+	assert.equal(saved?.nextStep, "Reply in the thread.");
+
+	sessions["onPacket"](sessions["metas"].get(job.id)!, worker, {
+		type: "chatReport.call",
+		callId: "r2",
+		args: { answer: "x".repeat(8_001) },
+	});
+	await until(() => !!result(worker, "r2"));
+	assert.match(result(worker, "r2")?.error ?? "", /answer has 8,001 characters; the limit is 8,000/);
+	assert.equal(
+		(await sessions.chatReport(job.id))?.answer,
+		"It is a true positive.",
+		"a refused call keeps the report",
+	);
+
+	sessions["onPacket"](sessions["metas"].get(plain.id)!, plainWorker, {
+		type: "chatReport.call",
+		callId: "r3",
+		args: { answer: "Forged" },
+	});
+	await until(() => !!result(plainWorker, "r3"));
+	assert.match(result(plainWorker, "r3")?.error ?? "", /only for chats started from Slack, Linear or a schedule/);
+	assert.equal(await sessions.chatReport(plain.id), undefined);
+});
+
 test("native Insights status and host leases stay passive and fail closed", async (t) => {
 	const f = await insightsFixture(t);
 	const { sessions, id } = f;

@@ -158,6 +158,18 @@ export function demoResults(): DeliveredWork[] {
 				shortened: false,
 			},
 		}),
+		result({ kind: "chat", projectId: PROJECT, sessionId: "phishing-check" }, "4", {
+			outcome: { outcomeAt: 2 },
+			title: "Is the phishing password entry a true positive?",
+			chatReport: {
+				answer: "It is a true positive. The password was typed on the look-alike page at 09:14.",
+				howItKnows: "The browser extension's event log shows the entry and the page's address.",
+				limits: "I did not check other users' logs.",
+				nextStep: "Reply in the Slack thread with the event ID as proof.",
+				links: [{ url: "https://example.com/events/4821", title: "Event 4821" }],
+				at: 1,
+			},
+		}),
 	];
 }
 
@@ -166,6 +178,7 @@ export const DEMO_TITLES: Record<string, string> = {
 	"task/mock-project/native/native-4": "#4 History slice",
 	"task/mock-project/native/native-2": "#2 Chat view",
 	"chat/mock-project/explain-exports": "Explain CSV exports in the guide",
+	"chat/mock-project/phishing-check": "Is the phishing password entry a true positive?",
 };
 
 const hex = (c: string, n = 40) => c.repeat(n);

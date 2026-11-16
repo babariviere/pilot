@@ -23,6 +23,8 @@ export const ASK_TOOL_NAMES = [
 	"mission",
 	"ask_user",
 	"web",
+	// Declared only in job chats; it saves a report, never a file.
+	"chat_report",
 	...EXPLORATION_TOOL_NAMES,
 ];
 const readOnlyAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };

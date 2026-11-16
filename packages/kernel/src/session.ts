@@ -55,6 +55,7 @@ import {
 import { reconcileCompletion } from "./attention.ts";
 import { autoCompactionThreshold, shouldAutoCompact } from "./auto-compaction.ts";
 import { chatEvents, compactionEvents } from "./chat-events.ts";
+import { createChatReportTool } from "./chat-report-tool.ts";
 import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
 import { createDiagnosticContextTool, type DiagnosticContextCall } from "./diagnostic-context-tool.ts";
 import { createDiagnosticHistoryTool, type DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
@@ -213,6 +214,8 @@ export interface KernelSessionHooks {
 	callDatabase?: DatabaseCall;
 	/** Executes a `slack_status` tool call in pilotd. The tool is declared only while the chat has a Slack message. */
 	callSlackStatus?: SlackStatusCall;
+	/** Executes a `chat_report` tool call in pilotd. Declared only for job chats (`pilot.job`). */
+	callChatReport?: import("./chat-report-tool.ts").ChatReportCall;
 	/** Reads bounded host-local diagnostics through pilotd without touching target workers or transcripts. */
 	callDiagnostics?: DiagnosticsCall;
 	callDiagnosticContext?: DiagnosticContextCall;
@@ -782,6 +785,7 @@ export class KernelSession {
 					questionTool,
 					...(!spec.pilot?.ask ? [createTodoTool(callTodo, () => spec.sessionId)] : []),
 					...(!spec.pilot?.ask && hooks.callSlackStatus ? [createSlackStatusTool(hooks.callSlackStatus)] : []),
+					...(spec.pilot?.job && hooks.callChatReport ? [createChatReportTool(hooks.callChatReport)] : []),
 				],
 				...(spec.role
 					? {}

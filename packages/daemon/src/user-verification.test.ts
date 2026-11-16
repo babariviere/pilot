@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { type TestContext, test } from "node:test";
 import type {
+	ChatReport,
 	DeliveredWork,
 	DurableOperation,
 	SessionSummary,
@@ -73,8 +74,12 @@ async function fixture(t: TestContext) {
 	const sends: Array<{ id: string; message: string; operationId: string }> = [];
 	let send: "ok" | "lost" | "race" = "ok";
 	let lastReply: string | undefined;
+	let report: ChatReport | undefined;
 	const sessions = {
 		get: (id: string) => (id === chat.id ? structuredClone(chat) : undefined),
+		async chatReport(id: string) {
+			return id === chat.id ? structuredClone(report) : undefined;
+		},
 		async lastAssistantReply(id: string, limit: number) {
 			return id === chat.id ? lastReply?.slice(0, limit) : undefined;
 		},
@@ -132,6 +137,9 @@ async function fixture(t: TestContext) {
 		},
 		get service() {
 			return service;
+		},
+		setReport: (value: ChatReport | undefined) => {
+			report = value;
 		},
 		setReply: (text: string | undefined) => {
 			lastReply = text;
@@ -402,6 +410,20 @@ test("standalone outcomes are exact, scoped and separate from task status and ag
 	const long = (await f.service.read(subject)).finalReply!;
 	assert.equal(long.text.length, FINAL_REPLY_CHARS);
 	assert.equal(long.shortened, true);
+	// A job chat's report from its latest run replaces the last reply. A report from an earlier run does not count.
+	f.setChat({ lastUserMessageAt: 35 });
+	f.setReport({ answer: "Old answer", at: 20 });
+	assert.equal((await f.service.read(subject)).chatReport, undefined);
+	f.setReport({ answer: "It is a true positive.", nextStep: "Reply in the thread.", at: 38 });
+	const reported = await f.service.read(subject);
+	assert.deepEqual(reported.chatReport, {
+		answer: "It is a true positive.",
+		nextStep: "Reply in the thread.",
+		at: 38,
+	});
+	assert.equal(reported.finalReply, undefined);
+	assert.equal(reported.deliveryId, page.deliveryId, "a report never changes which result this is");
+	f.setReport(undefined);
 	assert.equal((await f.run(operation(page))).state, "accepted");
 	f.setChat({ outcomeAt: 50 });
 	assert.equal((await f.service.read(subject)).verificationCurrent, false);

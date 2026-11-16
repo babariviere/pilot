@@ -86,6 +86,7 @@ import { compareAIUsageBudget } from "./ai-usage-budget.ts";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { validateAutomationItems } from "./automation-definitions.ts";
 import { type ActionResult, ActionRunner, actionOutput } from "./automation-runner.ts";
+import { type ChatJob, parseChatReport, readChatReport, saveChatReport } from "./chat-report.ts";
 import { chatTitleContext, TITLE_OPENING_LIMIT } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
@@ -459,6 +460,8 @@ export interface SessionFactories {
 }
 
 interface SessionMeta extends OutcomeMeta {
+	/** Set at creation for standalone chats started from Slack, Linear or a schedule. Declares chat_report. */
+	job?: ChatJob;
 	/** Creation-only planning profile. Never synthesized from mission membership. */
 	planning?: import("@pilot/kernel").PlanningWorkerBinding;
 	/** Persisted authority ceiling, independent of prompts, model and worker lifetime. */
@@ -7888,10 +7891,27 @@ ${run.excerpt}`,
 		coordinator = false,
 		taskId?: string | string[],
 		missionAdmission?: MissionSpawnAdmission,
+		job?: ChatJob,
 	): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		try {
-			return await this.spawnAdmitted(request, coordinator, taskId, undefined, missionAdmission);
+			return await this.spawnAdmitted(
+				request,
+				coordinator,
+				taskId,
+				undefined,
+				missionAdmission,
+				undefined,
+				undefined,
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				job,
+			);
 		} finally {
 			end();
 		}
@@ -7919,6 +7939,7 @@ ${run.excerpt}`,
 		guard?: () => void,
 		mission?: { taskIds: string[]; admission: MissionSpawnAdmission },
 		feedbackImages?: string[],
+		job?: ChatJob,
 	): Promise<SessionSummary> {
 		guard?.();
 		this.insightsBacklog?.replacements.assertNotRetired(targetId);
@@ -7965,6 +7986,7 @@ ${run.excerpt}`,
 					undefined,
 					mission ? guard : undefined,
 					feedbackImages,
+					job,
 				);
 			return this.repairProject.withBinding(request.diagnosticRepair.binding, async () => {
 				this.assertDiagnosticRepairAdmission(request);
@@ -9313,6 +9335,7 @@ ${run.excerpt}`,
 		publishedStart?: { permission?: ExecutionPermission },
 		dispatchGuard?: () => void,
 		feedbackImages?: string[],
+		job?: ChatJob,
 	): Promise<SessionSummary> {
 		if (admission) this.insightsBacklog?.replacements.assertNotRetired(admission.targetId);
 		if (deferInsightsInput && ((!insightsGrant && !ownerExecution) || request.role !== "insights"))
@@ -9541,6 +9564,8 @@ ${run.excerpt}`,
 				: {}),
 			id,
 			...(request.role ? { role: request.role } : {}),
+			// Only a standalone chat reports for itself; mission chats report through the mission.
+			...(job && !request.missionId && !request.role && !coordinator ? { job } : {}),
 			...(insightsGrant ? { insightsGrant, insightsSetupPending: true as const } : {}),
 			...(ownerExecution ? { insightsOwner: structuredClone(ownerExecution) } : {}),
 			...(request.diagnosticScope === "app" ? { diagnosticScope: "app" as const } : {}),
@@ -11173,6 +11198,12 @@ ${run.excerpt}`,
 		);
 	}
 
+	/** The report a job chat saved with chat_report, if any. Read only for one result page. */
+	async chatReport(id: string): Promise<import("@pilot/protocol").ChatReport | undefined> {
+		const meta = this.metas.get(id);
+		return meta?.job ? readChatReport(this.dir(id)) : undefined;
+	}
+
 	/** Read a bounded reply excerpt in paged storage reads, without waking or subscribing to a worker. */
 	async lastAssistantReply(id: string, limit: number): Promise<string | undefined> {
 		let before = Number.MAX_SAFE_INTEGER;
@@ -12654,6 +12685,7 @@ ${run.excerpt}`,
 						...(diagnosticTarget ? { diagnosticTarget } : {}),
 						...(meta.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true } : {}),
 						...(meta.ask ? { ask: meta.ask } : {}),
+						...(meta.job ? { job: meta.job } : {}),
 						...(meta.workspace ? { workspace: meta.workspace } : {}),
 						...(meta.coordinatorView
 							? {
@@ -13603,6 +13635,23 @@ ${run.excerpt}`,
 			void call.then(
 				(result) => reply({ result }),
 				(error: unknown) => reply({ error: formatFailure(error, "Tool db") }),
+			);
+			return;
+		}
+		if (packet.type === "chatReport.call") {
+			const reply = (result: { result?: unknown; error?: string }) => {
+				if (this.workers.get(meta.id) === worker)
+					worker.send({ type: "chatReport.result", callId: packet.callId, ...(result as { result?: never }) });
+			};
+			const call = (async () => {
+				if (!meta.job) throw new Error("chat_report is only for chats started from Slack, Linear or a schedule");
+				const report = parseChatReport(packet.args, Date.now());
+				await saveChatReport(this.dir(meta.id), report);
+				return { saved: true, at: report.at };
+			})();
+			void call.then(
+				(result) => reply({ result }),
+				(error: unknown) => reply({ error: formatFailure(error, "Tool chat_report") }),
 			);
 			return;
 		}

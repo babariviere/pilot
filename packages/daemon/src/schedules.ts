@@ -52,7 +52,13 @@ const clock: ScheduleClock = {
 	},
 };
 export interface ScheduleDispatch {
-	spawn(request: SpawnRequest): Promise<{ id: string }>;
+	spawn(
+		request: SpawnRequest,
+		coordinator?: boolean,
+		taskId?: undefined,
+		missionAdmission?: undefined,
+		job?: import("./chat-report.ts").ChatJob,
+	): Promise<{ id: string }>;
 	send(id: string, message: string, mode: "followUp", requestId: string): Promise<void>;
 	get(id: string): { projectId?: string; working?: boolean; missionId?: string } | undefined;
 	insightsStatus?(id: string): InsightsStatus | undefined;
@@ -440,11 +446,17 @@ export class ScheduleService {
 				if (claimed.target.kind === "chat") {
 					const date = new Date(calendar.day(due)).toISOString().slice(0, 10);
 					run.sessionId = (
-						await this.deps.sessions.spawn({
-							...claimed.target.spawn,
-							title: `${claimed.title} · ${date}`,
-							message: prefix + claimed.target.spawn.message,
-						})
+						await this.deps.sessions.spawn(
+							{
+								...claimed.target.spawn,
+								title: `${claimed.title} · ${date}`,
+								message: prefix + claimed.target.spawn.message,
+							},
+							false,
+							undefined,
+							undefined,
+							"schedule",
+						)
 					).id;
 					run.outcome = "started";
 				} else {
@@ -586,7 +598,8 @@ export class ScheduleService {
 				// Recheck the local ticket's project binding before admission.
 				await this.validateTrackedItem(claimed.target.trackedItemId, claimed.projectId);
 				if (this.missionHeld(claimed)) throw new Conflict("Mission dispatch paused before admission");
-				sessionId = (await this.deps.sessions.spawn(claimed.target.spawn)).id;
+				sessionId = (await this.deps.sessions.spawn(claimed.target.spawn, false, undefined, undefined, "schedule"))
+					.id;
 				if (claimed.target.trackedItemId)
 					await this.deps.trackedItems!.patch(claimed.target.trackedItemId, { sessionId, start: true });
 			} else {

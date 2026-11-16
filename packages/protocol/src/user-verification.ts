@@ -76,6 +76,8 @@ export interface DeliveredWork {
 	 * not a saved report or Pilot's check. `shortened` when the reply was longer than Pilot keeps here.
 	 */
 	finalReply?: { text: string; shortened: boolean };
+	/** The report a job chat (started from Slack, Linear or a schedule) saved with `chat_report` in its latest run. */
+	chatReport?: ChatReport;
 	pullRequests: MissionResource[];
 	artifacts: MissionArtifactLink[];
 	production: "not_tracked";
@@ -101,4 +103,15 @@ export interface DeliveredWorkList {
 	more: boolean;
 	currentness: "live" | "stale";
 	items: Array<{ subject: VerificationSubject; title: string; snapshot: DeliveredWork; sourceSequence: number }>;
+}
+
+/** A job chat's own report of its answer. The agent's words, not Pilot's check. */
+export interface ChatReport {
+	answer: string;
+	howItKnows?: string;
+	limits?: string;
+	nextStep?: string;
+	links?: Array<{ url: string; title?: string }>;
+	/** When the chat saved it, epoch milliseconds. */
+	at: number;
 }

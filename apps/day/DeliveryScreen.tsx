@@ -148,10 +148,24 @@ function Report(props: { work: DeliveredWork }) {
 				<Said label="It says" text={w().submission?.claim ?? ""} />
 				<Said label="Limits" text={w().submission?.limitations ?? ""} />
 			</If>
-			<If when={w().outcome}>
+			<If when={w().outcome && (!w().chatReport || w().outcome?.reason)}>
 				<Said label="It says" text={w().outcome?.reason || "The chat says it is done."} />
 			</If>
-			<If when={w().outcome && w().finalReply}>
+			<If when={w().outcome && w().chatReport}>
+				<View testID="delivery-chat-report" class="gap-3">
+					<Said label="Answer" text={w().chatReport?.answer ?? ""} />
+					<Said label="How it knows" text={w().chatReport?.howItKnows ?? ""} />
+					<Said label="Limits" text={w().chatReport?.limits ?? ""} />
+					<Said label="Next step for you" text={w().chatReport?.nextStep ?? ""} />
+					<Said
+						label="Links"
+						text={(w().chatReport?.links ?? [])
+							.map((l) => (l.title ? `${l.title} · ${l.url}` : l.url))
+							.join("\n")}
+					/>
+				</View>
+			</If>
+			<If when={w().outcome && !w().chatReport && w().finalReply}>
 				<View testID="delivery-final-reply" class="gap-0.5">
 					<Text class="text-xs text-faint">Its last message</Text>
 					<Text class="text-sm leading-relaxed text-foreground">{w().finalReply?.text ?? ""}</Text>

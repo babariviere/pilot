@@ -62,6 +62,15 @@ export interface DeliveredWork {
 	outcome?: { outcomeAt: number; reason?: string };
 	/** A finished standalone chat's last reply, word for word; `shortened` when Pilot cut it. Its words, not a report. */
 	finalReply?: { text: string; shortened: boolean };
+	/** A job chat's own report from its latest run. Its words, not Pilot's check. */
+	chatReport?: {
+		answer: string;
+		howItKnows?: string;
+		limits?: string;
+		nextStep?: string;
+		links?: Array<{ url: string; title?: string }>;
+		at: number;
+	};
 	pullRequests: Array<{
 		id: string;
 		url: string;

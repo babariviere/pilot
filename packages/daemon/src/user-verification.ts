@@ -23,7 +23,7 @@ interface Dependencies {
 	store: MissionStore;
 	journal: OperationJournal;
 	projects: Pick<ProjectStore, "require">;
-	sessions: Pick<SessionManager, "get" | "sendDurable" | "lastAssistantReply">;
+	sessions: Pick<SessionManager, "get" | "sendDurable" | "lastAssistantReply" | "chatReport">;
 }
 
 /** User assessment is independent of agent completion, review, task status and production. */
@@ -205,15 +205,19 @@ export class UserVerifications {
 			outer?.state === "accepted" &&
 			outer.payloadHash === domain.payloadHash &&
 			canonicalJSON(outer.result) === canonicalJSON(current.verification);
-		// A finished chat's answer is its last reply: shown when it saved no report, read only for this one result.
+		// A finished job chat's report counts only when its latest run saved it. Without one, its answer is its last
+		// reply. Both are read only for this one result, never for discovery pages.
+		const chatId = current.subject.kind === "chat" && current.outcome ? current.subject.sessionId : undefined;
+		const saved = chatId ? await this.deps.sessions.chatReport(chatId).catch(() => undefined) : undefined;
+		const askedAt = chatId ? (this.deps.sessions.get(chatId)?.lastUserMessageAt ?? 0) : 0;
+		const chatReport = saved && saved.at >= askedAt && saved.at <= current.outcome!.outcomeAt ? saved : undefined;
 		const reply =
-			current.subject.kind === "chat" && current.outcome
-				? await this.deps.sessions
-						.lastAssistantReply(current.subject.sessionId, FINAL_REPLY_CHARS + 1)
-						.catch(() => undefined)
+			chatId && !chatReport
+				? await this.deps.sessions.lastAssistantReply(chatId, FINAL_REPLY_CHARS + 1).catch(() => undefined)
 				: undefined;
 		return {
 			...current,
+			...(chatReport ? { chatReport } : {}),
 			...(reply?.trim()
 				? {
 						finalReply: {

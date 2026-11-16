@@ -247,6 +247,8 @@ export function runKernelWorker(): void {
 		callDaemon<JsonValue>((callId) => ({ type: "liveUpdate.propose", callId, operationId, args }));
 	const callSlackStatus: SlackStatusCall = (args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "slack.call", callId, args }));
+	const callChatReport: import("./chat-report-tool.ts").ChatReportCall = (args) =>
+		callDaemon<JsonValue>((callId) => ({ type: "chatReport.call", callId, args }));
 	const callDiagnostics: DiagnosticsCall = (sessionId, limit) =>
 		callDaemon((callId) => ({
 			type: "diagnostics.call",
@@ -480,6 +482,7 @@ export function runKernelWorker(): void {
 			command.type === "liveUpdate.result" ||
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
+			command.type === "chatReport.result" ||
 			command.type === "diagnostics.result" ||
 			command.type === "diagnostics.context.result" ||
 			command.type === "diagnostics.history.result" ||
@@ -614,6 +617,7 @@ export function runKernelWorker(): void {
 					callLiveUpdateProposal,
 					callDatabase,
 					callSlackStatus,
+					callChatReport,
 					callDiagnostics,
 					callDiagnosticHistory,
 					callDiagnosticContext,
