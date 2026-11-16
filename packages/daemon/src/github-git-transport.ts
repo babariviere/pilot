@@ -6,8 +6,14 @@ import type { GitHubSetupService } from "./github-setup.ts";
 /** Only new daemon children. Never rewrite SSH/Git configuration or override explicit Git transports. */
 export async function installGitHubTransport(setup: GitHubSetupService, env: NodeJS.ProcessEnv = process.env) {
 	const state = await setup.status();
-	if (!state.keyId || !state.publicKey || env.GIT_SSH || env.GIT_SSH_COMMAND) return;
+	if (state.sshIdentity === "existing" || !state.keyId || !state.publicKey || env.GIT_SSH || env.GIT_SSH_COMMAND)
+		return;
 	await installGitHubKeyTransport(setup.home, setup.keyPath, env);
+}
+
+/** Release only our own child-transport override, never a user's explicit transport. */
+export function clearGitHubKeyTransport(home: string, env: NodeJS.ProcessEnv) {
+	if (env.GIT_SSH === join(home, "github-setup", "git-ssh")) delete env.GIT_SSH;
 }
 
 /** Used while recovering host state, before the setup service's readiness promise is resolved. */

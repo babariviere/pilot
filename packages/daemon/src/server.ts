@@ -113,6 +113,7 @@ import {
 	NativeMissionPlanning,
 	PlanningInventoryCapacity,
 } from "./native-mission-planning.ts";
+import { NativeProjects, PROJECT_ACTION } from "./native-projects.ts";
 import { canonicalJSON, durableJSON, OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import { PathCompletionReader } from "./path-completion.ts";
@@ -826,6 +827,10 @@ export function createDaemonServer(
 			? new NativeIntake({ journal, tracking, projects, sessions, missions: missions?.store })
 			: undefined;
 	const nativeChat = journal ? new NativeChat({ journal, projects, sessions }) : undefined;
+	const nativeProjects =
+		journal && githubSetup && githubImport
+			? new NativeProjects({ journal, projects, setup: githubSetup, imports: githubImport })
+			: undefined;
 	const userVerifications =
 		journal && missions ? new UserVerifications({ journal, store: missions.store, projects, sessions }) : undefined;
 	const feedbackWork =
@@ -963,6 +968,10 @@ export function createDaemonServer(
 			return missionThreads.admit(op, false);
 		}
 		if (op.kind === "project-preferences-update") throw new Error("Preference outcome is unknown; Check only");
+		if (op.kind === PROJECT_ACTION) {
+			if (!nativeProjects) throw new Error("Project setup outcome is unknown; Check only");
+			return nativeProjects.recover(op);
+		}
 		if (op.kind === "user-feedback") throw new Error("Feedback outcome is unknown; Check only");
 		if (op.kind === FEEDBACK_WORK) {
 			// Only an answer settles, by exact accepted-input lookup; nothing is sent again.
@@ -1710,6 +1719,31 @@ export function createDaemonServer(
 					end();
 				}
 			}
+			if (operation?.kind === PROJECT_ACTION) {
+				if (!githubSetup || !nativeProjects) throw new ServiceUnavailable("Native projects unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				if (parts[2] === "receipt") {
+					const saved = await journal.lookup(operation);
+					if (saved?.state !== "pending") return json(res, 200, saved ?? { state: "unknown" });
+					const end = mutations.begin({ kind: "operation", id: operation.operationId });
+					try {
+						return json(res, 200, await journal.execute(operation, (op) => nativeProjects.recover(op)));
+					} finally {
+						end();
+					}
+				}
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					return json(
+						res,
+						200,
+						await journal.execute(operation, (op, entry) => nativeProjects.admit(op, entry.firstEntry)),
+					);
+				} finally {
+					end();
+				}
+			}
 			if (operation?.kind === "native-chat-create") {
 				res.setHeader("cache-control", "no-store");
 				if (!githubSetup || !nativeChat) throw new ServiceUnavailable("Native chat creation unavailable");
@@ -2265,6 +2299,19 @@ export function createDaemonServer(
 				}
 			}
 			throw new HttpError(404, "Unknown tracking operation");
+		}
+		if (parts[1] === "native-projects" && parts.length === 3) {
+			if (!githubSetup || !nativeProjects) throw new ServiceUnavailable("Native projects unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			res.setHeader("cache-control", "no-store");
+			if (parts[2] === "setup" && req.method === "GET") return json(res, 200, await nativeProjects.read());
+			if (parts[2] === "preview" && req.method === "POST") {
+				const body = await readJson<{ path: string }>(req);
+				if (typeof body.path !== "string" || !body.path || body.path.length > 4096 || body.path.includes("\0"))
+					throw new HttpError(400, "Choose a local folder");
+				return json(res, 200, await nativeProjects.preview(body.path));
+			}
+			throw new HttpError(404, "Not found");
 		}
 		if (parts[1] === "native-projects" && parts.length === 2) {
 			res.setHeader("cache-control", "no-store");

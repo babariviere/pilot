@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { GitHubImportService } from "./github-import.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
 import { MissionControls } from "./mission-controls.ts";
@@ -18,7 +19,9 @@ import { SourceRegistry } from "./sources.ts";
 import { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
-export async function nativeIntakeFixture(options: { tracking?: boolean; nativeAuth?: boolean } = {}) {
+export async function nativeIntakeFixture(
+	options: { tracking?: boolean; nativeAuth?: boolean; projectSetup?: boolean } = {},
+) {
 	const home = await mkdtemp(join(tmpdir(), "native-intake-http-"));
 	const projects = new ProjectStore(home);
 	await projects.load();
@@ -92,6 +95,8 @@ export async function nativeIntakeFixture(options: { tracking?: boolean; nativeA
 	args[9] = options.tracking === false ? undefined : tracking;
 	args[12] = hello;
 	args[17] = options.nativeAuth === false ? undefined : native;
+	const imports = options.projectSetup ? new GitHubImportService(native, projects) : undefined;
+	args[18] = imports;
 	const server = createDaemonServer(...args);
 	await server.runtimeReady;
 	server.listen(0, "127.0.0.1");
@@ -120,6 +125,7 @@ export async function nativeIntakeFixture(options: { tracking?: boolean; nativeA
 			await sessions.shutdown();
 			terminals.shutdown();
 			await native.close();
+			await imports?.close();
 			await items.close();
 			store.close();
 			await rm(home, { recursive: true, force: true });

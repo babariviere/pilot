@@ -53,6 +53,17 @@ export function ChatScreen(props: { day: Day; sessionId: string }) {
 						Read only. Reading it sends nothing and changes nothing.
 					</Text>
 					<If when={state()}>
+						<If when={chat()?.sourcePath}>
+							<View selectable class="gap-1">
+								<Text class="text-xs text-muted-foreground">{chat()?.sourceLabel ?? "Working copy"}</Text>
+								<Text testID="chat-source-path" class="text-xs text-faint">
+									{chat()?.sourcePath ?? ""}
+								</Text>
+								<Text class="text-xs text-faint">
+									Use this location in your terminal. Local files may change while work runs.
+								</Text>
+							</View>
+						</If>
 						<View testID="chat-state" class="flex-row items-start gap-2.5">
 							<View class="pt-1.5">
 								<Mark kind={state()?.mark ?? "still"} />

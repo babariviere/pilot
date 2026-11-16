@@ -39,6 +39,11 @@ fn view() -> SavedView {
         linear: "project/ln-219".into(),
         today_project: "project".into(),
         settings: true,
+        project_setup: vec![
+            "/Users/test/source".into(),
+            "https://github.com/test/repo".into(),
+            "~/src/repo".into(),
+        ],
         preferences: vec![
             "project\n3".into(),
             "p-small\nKeep PRs small 🐦".into(),
@@ -54,7 +59,10 @@ fn view() -> SavedView {
         feedback_images: String::new(),
         feedback_project: "pilot".into(),
         feedback_later: vec!["f1/op1/done".into(), "f2/op2/42".into()],
-        question_help: vec!["note\ni1\nq1\n1\nToo technical.".into(), "ask\ni1/q1\n\n0\nWhat is NSH?".into()],
+        question_help: vec![
+            "note\ni1\nq1\n1\nToo technical.".into(),
+            "ask\ni1/q1\n\n0\nWhat is NSH?".into(),
+        ],
         feedback_answers: vec!["triage-1/42\n1,2\n  Exact answer 👩🏽‍💻\nsecond line ".into()],
     }
 }

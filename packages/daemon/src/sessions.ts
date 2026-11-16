@@ -177,6 +177,7 @@ import {
 	type OutcomeMeta,
 } from "./session-outcomes.ts";
 import { SharedWorkspaceStore, type WorkspaceRecovery } from "./shared-workspaces.ts";
+import { sourceRemote } from "./source-copy.ts";
 import { SubagentWatches, type SubagentWatchListener, type SubagentWatchStarter } from "./subagent-watches.ts";
 import {
 	recordSubscriptionLimit,
@@ -619,12 +620,12 @@ interface SessionMeta extends OutcomeMeta {
 			initializing: boolean;
 			/** Explicit Stop/model recovery advances this fence; missing checkpoints do not. */
 			inputGeneration?: number;
-			preparing?: { source: string; baseBranch?: string };
+			preparing?: { source: string; baseBranch?: string; jj?: boolean };
 			lifecycleCheckpoints?: import("./lifecycle-checkpoint.ts").LifecycleCheckpoint[];
 		};
 	};
 	/** Durable clone recipe, including the selected plain origin branch across restarts. */
-	preparing?: { source: string; baseBranch?: string };
+	preparing?: { source: string; baseBranch?: string; jj?: boolean };
 	pending?: PendingCommand[];
 	/** A stopped, unopened workspace has no conversation history to load yet. */
 	cancelled?: boolean;
@@ -6004,8 +6005,7 @@ ${run.excerpt}`,
 					if (!head) throw new Error("The current main head is unavailable");
 					const repository = this.mainRepositories.get(meta.projectId)!;
 					const source = meta.workspace?.source ?? this.projects.require(meta.projectId).path;
-					const upstream =
-						meta.workspace?.upstream ?? (await run("git", ["remote", "get-url", "origin"], source)).trim();
+					const upstream = meta.workspace?.upstream ?? (await sourceRemote(source)) ?? "";
 					const path = await this.mainViews.update(meta.projectId, repository, head, upstream);
 					const scratch = join(this.dir(id), "scratch");
 					await mkdir(scratch, { recursive: true, mode: 0o700 });
@@ -6029,9 +6029,10 @@ ${run.excerpt}`,
 					if (!meta.workspace && meta.projectId) {
 						const source = this.projects.require(meta.projectId).path;
 						const destination = join(this.dir(id), "workspace");
-						const created = existsSync(join(source, ".jj"))
-							? await this.sharedWorkspaces.create(source, destination)
-							: await createWorkspace(source, destination);
+						const created =
+							this.projects.require(meta.projectId!).sourceCopy === "jj" || existsSync(join(source, ".jj"))
+								? await this.sharedWorkspaces.create(source, destination)
+								: await createWorkspace(source, destination);
 						meta.workspace = { source, ...created };
 						meta.cwd = destination;
 						delete meta.workspaceOriginId;
@@ -6056,13 +6057,20 @@ ${run.excerpt}`,
 
 	/** The project's read-only main view at the current fetched main head, for daemon-started readers. */
 	private async currentMainView(projectId: string): Promise<string> {
-		if (!this.mainHeads.has(projectId)) await this.refreshProjectMain(projectId);
+		if (!this.mainHeads.has(projectId) || this.projects.require(projectId).sourceCopy === "jj")
+			await this.refreshProjectMain(projectId);
+		if (!this.mainHeads.has(projectId) && this.projects.require(projectId).sourceCopy === "jj") {
+			const upstream = await sourceRemote(this.projects.require(projectId).path);
+			if (!upstream) throw new Conflict("Project remote changed. Check the source copy first.");
+			const fetched = await this.mainViews.fetch(projectId, upstream);
+			this.mainHeads.set(projectId, fetched.head);
+			this.mainRepositories.set(projectId, fetched.repository);
+		}
 		const head = this.mainHeads.get(projectId);
 		const repository = this.mainRepositories.get(projectId);
 		if (!head || !repository) throw new Conflict("The project's main view is unavailable");
-		const upstream = (
-			await run("git", ["remote", "get-url", "origin"], this.projects.require(projectId).path)
-		).trim();
+		const upstream = await sourceRemote(this.projects.require(projectId).path);
+		if (!upstream) throw new Conflict("Project remote is unavailable");
 		return await this.mainViews.update(projectId, repository, head, upstream);
 	}
 
@@ -6076,8 +6084,7 @@ ${run.excerpt}`,
 		);
 		if (!members.length) return;
 		const source = members[0]!.workspace?.source ?? this.projects.require(event.projectId).path;
-		const upstream =
-			members[0]!.workspace?.upstream ?? (await run("git", ["remote", "get-url", "origin"], source)).trim();
+		const upstream = members[0]!.workspace?.upstream ?? (await sourceRemote(source)) ?? "";
 		try {
 			await this.mainViews.update(event.projectId, event.repository, event.head, upstream);
 		} catch (error) {
@@ -6117,7 +6124,12 @@ ${run.excerpt}`,
 				)
 					continue;
 				const membership = this.missions?.membership(meta.id);
-				if (shared ? !membership?.active && !membership?.coordinator : !membership?.coordinator) continue;
+				const nativeStandalone = !membership && this.projects.get(meta.projectId)?.sourceCopy === "jj";
+				if (
+					!nativeStandalone &&
+					(shared ? !membership?.active && !membership?.coordinator : !membership?.coordinator)
+				)
+					continue;
 				let group: string | undefined;
 				try {
 					if (meta.workspace?.upstream) group = githubRepository(meta.workspace.upstream).identity;
@@ -6193,7 +6205,9 @@ ${run.excerpt}`,
 			(meta) =>
 				meta.projectId === projectId &&
 				meta.archivedAt === undefined &&
-				(this.missions?.membership(meta.id)?.active || this.isMissionCoordinator(meta.id)),
+				(this.missions?.membership(meta.id)?.active ||
+					this.isMissionCoordinator(meta.id) ||
+					(!this.missions?.membership(meta.id) && this.projects.get(projectId)?.sourceCopy === "jj")),
 		);
 		if (!candidates.length || this.closing) return;
 		const workspace = candidates.find((meta) => meta.workspace?.shared)?.workspace;
@@ -6203,10 +6217,13 @@ ${run.excerpt}`,
 			repository = workspace.shared.repository;
 			target = await this.sharedWorkspaces.fetchMain(workspace.shared, workspace.source);
 		} else {
-			if (!candidates.some((meta) => this.isMissionCoordinator(meta.id))) return;
-			const upstream = (
-				await run("git", ["remote", "get-url", "origin"], this.projects.require(projectId).path)
-			).trim();
+			if (
+				!candidates.some((meta) => this.isMissionCoordinator(meta.id)) &&
+				this.projects.get(projectId)?.sourceCopy !== "jj"
+			)
+				return;
+			const upstream = await sourceRemote(this.projects.require(projectId).path);
+			if (!upstream) throw new Conflict("Project remote is unavailable");
 			({ repository, head: target } = await this.mainViews.fetch(projectId, upstream));
 		}
 		if (this.closing || this.mainHeads.get(projectId) === target) return;
@@ -6234,13 +6251,17 @@ ${run.excerpt}`,
 		if (previous) return previous;
 		const meta = this.require(id);
 		const workspace = meta.workspace;
-		const membership = this.missions?.membership(id);
+		const eligible = () => {
+			const membership = this.missions?.membership(id);
+			return membership
+				? membership.active && !membership.coordinator
+				: this.projects.get(meta.projectId ?? "")?.sourceCopy === "jj";
+		};
 		if (
 			!meta.projectId ||
 			!workspace?.shared ||
 			(workspace.baseBranch && workspace.baseBranch !== "main") ||
-			!membership?.active ||
-			membership.coordinator ||
+			!eligible() ||
 			this.workspaceMaintenance.has(id)
 		)
 			return;
@@ -6267,7 +6288,7 @@ ${run.excerpt}`,
 			meta.workspace !== workspace ||
 			(workspace.baseBranch && workspace.baseBranch !== "main") ||
 			meta.prBindingOperation !== bindingOperation ||
-			!this.missions?.membership(id)?.active ||
+			!eligible() ||
 			this.isMissionCoordinator(id) ||
 			hasActivePullRequest(meta) ||
 			(meta.boundPullRequests ?? []).some(
@@ -9456,6 +9477,18 @@ ${run.excerpt}`,
 			projectId = missionProject;
 		}
 		const project = projectId ? this.projects.require(projectId) : undefined;
+		if (project?.sourceCopy) {
+			if (request.cwd !== undefined)
+				throw new Conflict("Local projects use the source copy selected during setup, not a cwd override");
+			const current = await this.projects.previewLocal(project.path);
+			if (current.copy !== project.sourceCopy)
+				throw new Conflict("Project remote changed. Review its source copy before starting work.");
+			if (
+				request.workspace !== undefined &&
+				request.workspace !== (project.sourceCopy === "jj" ? "clone" : "direct")
+			)
+				throw new Conflict("This project uses the source copy selected during local setup");
+		}
 		if (request.workspace !== undefined && (mode === "ask" || !project || request.cwd !== undefined))
 			throw new Error("workspace override requires a Build project without a cwd override");
 		const direct = (request.workspace ?? project?.workspace) === "direct";
@@ -9478,7 +9511,10 @@ ${run.excerpt}`,
 		if (!directory) throw new Error("projectId or cwd is required");
 		if (this.closing) throw new Error("pilotd is shutting down");
 		let cwd = await requireDirectory(directory);
-		if (missionAdmission?.mainView) {
+		if (
+			(missionAdmission?.mainView && project?.sourceCopy !== "folder") ||
+			(mode === "ask" && project?.sourceCopy === "jj" && request.baseBranch === undefined)
+		) {
 			if (mode !== "ask" || !project || request.baseBranch !== undefined || request.cwd !== undefined)
 				throw new Conflict("A main view reader requires an Ask project chat");
 			cwd = await this.currentMainView(project.id);
@@ -9532,9 +9568,10 @@ ${run.excerpt}`,
 		let preparing: SessionMeta["preparing"];
 		let ask: AskContext | undefined;
 		if (mode === "ask") {
-			ask = missionAdmission?.mainView
-				? { source: cwd, sourceOnly: true }
-				: { source: cwd, ...(feedbackImages?.length ? { feedbackImages } : {}) };
+			ask =
+				missionAdmission?.mainView || project?.sourceCopy === "jj"
+					? { source: cwd, sourceOnly: true }
+					: { source: cwd, ...(feedbackImages?.length ? { feedbackImages } : {}) };
 			if (request.baseBranch !== undefined) {
 				ask = { ...ask, branch: request.baseBranch, gitDir: join(this.dir(id), "ask.git") };
 				preparing = { source: cwd, baseBranch: request.baseBranch };
@@ -9542,6 +9579,7 @@ ${run.excerpt}`,
 		} else if (project && !request.cwd?.trim() && !direct) {
 			preparing = {
 				source: project.path,
+				...(project.sourceCopy === "jj" ? { jj: true } : {}),
 				...(request.baseBranch !== undefined ? { baseBranch: request.baseBranch } : {}),
 			};
 			cwd = join(this.dir(id), "workspace");
@@ -12230,7 +12268,7 @@ ${run.excerpt}`,
 						if (meta.cwd !== join(this.dir(id), "workspace"))
 							throw new Error("Invalid session workspace destination");
 						// Unregister linked jj/Git workspaces before removing an interrupted preparation.
-						if (!this.factories.workspace && existsSync(join(plan.source, ".jj")))
+						if (!this.factories.workspace && (plan.jj === true || existsSync(join(plan.source, ".jj"))))
 							await this.sharedWorkspaces.discardPartial(meta.cwd, plan.source);
 						else await rm(meta.cwd, { recursive: true, force: true });
 						if (this.closing || this.sleepPause) return;
@@ -12242,7 +12280,7 @@ ${run.excerpt}`,
 									this.shutdownSignal.signal,
 									plan.baseBranch,
 								)
-							: existsSync(join(plan.source, ".jj"))
+							: plan.jj === true || existsSync(join(plan.source, ".jj"))
 								? this.sharedWorkspaces.create(
 										plan.source,
 										meta.cwd,

@@ -25,6 +25,7 @@ pub(crate) mod plan_sources;
 mod planning;
 mod planning_chat;
 pub(crate) mod preferences;
+pub(crate) mod projects;
 pub mod ritual;
 mod session_chat;
 pub(crate) mod threads;
@@ -890,6 +891,7 @@ fn publish_planning(shared: &Shared, record: &planning::PlanningRecord) {
         record.operation["kind"].as_str(),
         Some(
             "native-chat-create"
+                | "native-project-action"
                 | "user-verification"
                 | "project-preferences-update"
                 | "user-feedback"

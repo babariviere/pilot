@@ -75,6 +75,7 @@ import {
 	savedPreferences,
 	settingsOpen,
 } from "./preferencesView";
+import { restoreProjectSetup, savedProjectSetup } from "./projectSetup";
 import { restoreQuestionHelp, savedQuestionHelp } from "./QuestionHelp";
 import { type RitualRoute, ritualRoute, startStep } from "./ritualView";
 import { forgetThreads, restoreThreads, savedThread, savedThreadDrafts, threadRoute } from "./threadView";
@@ -219,6 +220,7 @@ export function captureView(today?: Today): SavedView {
 		// project and revision. Restoring them sends and saves nothing.
 		settings: settingsOpen(),
 		preferences: savedPreferences(),
+		projectSetup: savedProjectSetup(),
 		// The thread on screen and unsent thread words, by mission and thread.
 		// Restoring them sends nothing and never moves words to another thread.
 		thread: savedThread(),
@@ -430,6 +432,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	focusIssue.set(null);
 	if (linear && view.linear) restoreLinear(view.linear);
 	restorePreferences(view.preferences ?? []);
+	restoreProjectSetup(view.projectSetup ?? []);
 	settingsOpen.set(settings && view.settings === true);
 	// Unsent feedback always comes back as unsent words with their own origin.
 	// The page shows again only in a window that has it.

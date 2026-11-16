@@ -237,6 +237,15 @@ async fn run(
     }
     if matches!(
         call.command,
+        Command::ProjectSetupRead
+            | Command::ProjectPreview { .. }
+            | Command::ProjectAction(_)
+            | Command::ProjectCheck(_)
+    ) {
+        return super::projects::handle(root, journal, shared, &call.command, &call.gate).await;
+    }
+    if matches!(
+        call.command,
         Command::Projects | Command::ChatSelect(_) | Command::ChatCreate(_) | Command::ChatCheck(_)
     ) {
         return super::new_chat::handle(t, journal, shared, epoch, &call.command, &call.gate).await;
@@ -409,6 +418,10 @@ async fn run(
         | Command::DeliveryCheck(_) => {
             unreachable!("handled delivery command")
         }
+        Command::ProjectSetupRead
+        | Command::ProjectPreview { .. }
+        | Command::ProjectAction(_)
+        | Command::ProjectCheck(_) => unreachable!("handled project setup"),
         Command::Projects
         | Command::ChatSelect(_)
         | Command::ChatCreate(_)

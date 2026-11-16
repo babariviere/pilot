@@ -321,6 +321,25 @@ fn inventory_is_one_exact_passive_method_with_no_selection_or_write_arguments() 
 }
 
 #[test]
+fn project_setup_methods_refuse_forged_identity_effect_and_preview_arguments() {
+    let f = Fixture::new();
+    let result = f.run(
+        r#"return await Promise.all([
+      call('day.projects.setup',{projectId:'forged'}),
+      call('day.projects.preview',{path:'/a',url:'https://github.com/a/b'}),
+      call('day.projects.action',{action:'authorize',token:'forged'}),
+      call('day.projects.action',{action:'delete'}),
+      call('day.projects.check',{operationId:'../other'})]);"#,
+        Fixture::caps(),
+    );
+    for reply in result.as_array().unwrap() {
+        assert_eq!(reply["error"], "invalid", "{result}");
+    }
+    assert_eq!(std::fs::read_to_string(f.path.join("journal")).unwrap(), "");
+    assert_eq!(f.run("try { await call('day.projects.action',{action:'authorize'}); return 'unexpected'; } catch(e) { return e.code; }",json!({})),json!("ERR_ACCESS_DENIED"));
+}
+
+#[test]
 fn inventory_snapshot_requires_exact_empty_args_and_its_own_capability() {
     let f = Fixture::new();
     let result = f.run(r#"return await Promise.all([

@@ -32,6 +32,8 @@ export function importRepository(input: unknown): { name: string; url: string; s
 const running = (op: Stored) => ["queued", "cloning", "registering"].includes(op.phase);
 export class GitHubImportService extends RuntimeAdmission {
 	private readonly records = new Map<string, Stored>();
+	/** Only snapshots whose journal write finished, for lookup-only native receipt recovery. */
+	private readonly accepted = new Map<string, Stored>();
 	private readonly children = new Map<string, AbortController>();
 	private readonly ready: Promise<void>;
 	private writes = Promise.resolve();
@@ -56,6 +58,7 @@ export class GitHubImportService extends RuntimeAdmission {
 			if (!Array.isArray(records) || records.length > 128)
 				bad("GitHub import journal needs attention. No operation was replayed.");
 			for (const op of records) {
+				this.accepted.set(op.id, structuredClone(op));
 				if (running(op)) {
 					op.phase = "interrupted";
 					op.problem =
@@ -69,9 +72,21 @@ export class GitHubImportService extends RuntimeAdmission {
 	}
 	private persist() {
 		const records = structuredClone([...this.records.values()]);
-		const next = this.writes.then(() => durableJSON(this.file, records));
+		const next = this.writes.then(async () => {
+			await durableJSON(this.file, records);
+			for (const op of records) this.accepted.set(op.id, op);
+		});
 		this.writes = next.catch(() => {});
 		return next;
+	}
+	/** Evidence of this exact start's durable admission, not clone completion. Never launches anything. */
+	async acceptedStart(id: string): Promise<GitHubImportOperation | undefined> {
+		await this.ready;
+		await this.writes;
+		const op = this.accepted.get(id);
+		if (!op) return undefined;
+		const { device: _, inode: __, existing: ___, cloned: ____, ...result } = op;
+		return structuredClone(result);
 	}
 	async list(): Promise<GitHubImportOperation[]> {
 		await this.ready;
@@ -272,6 +287,7 @@ export class GitHubImportService extends RuntimeAdmission {
 					GIT_CONFIG_NOSYSTEM: "1",
 					GIT_TERMINAL_PROMPT: "0",
 					GIT_SSH_COMMAND: this.setup.sshCommand,
+					...this.setup.sshAgentEnvironment,
 					GIT_LFS_SKIP_SMUDGE: "1",
 				},
 				timeoutMs: network ? 120_000 : 15_000,
@@ -326,9 +342,7 @@ export class GitHubImportService extends RuntimeAdmission {
 				const status = await this.setup.act({ id: randomUUID(), action: "verify" });
 				if (signal.aborted) throw new Error("cancelled");
 				if (!status.apiReady || !status.sshReady)
-					bad(
-						"Connect GitHub on this host first. Both independent CLI/API and dedicated SSH identity must be verified.",
-					);
+					bad("Connect GitHub on this host first. Both CLI/API and the chosen SSH identity must be verified.");
 				const repo = importRepository(op.url);
 				// Live per-repository permission/access probe, not a promise based on global login.
 				await this.setup.gh(["api", `repos/${repo.name}`]);
@@ -402,9 +416,10 @@ export class GitHubImportService extends RuntimeAdmission {
 			if (signal.aborted) throw new Error("cancelled");
 			op.phase = "registering";
 			await this.persist();
+			const source = await this.projects.previewLocal(op.destination);
 			const project =
 				this.projects.list().find((p) => p.path === op.destination) ??
-				(await this.projects.create({ path: op.destination }));
+				(await this.projects.createLocal(source.path, source.digest));
 			op.projectId = project.id;
 			op.phase = "done";
 			delete op.problem;

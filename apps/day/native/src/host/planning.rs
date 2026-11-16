@@ -69,6 +69,7 @@ impl PlanningRecord {
                         | "intake-triage"
                         | "intake-start"
                         | "native-chat-create"
+                        | "native-project-action"
                         | "user-verification"
                         | "project-preferences-update"
                         | "user-feedback"
@@ -97,6 +98,9 @@ impl PlanningRecord {
         }
         if matches!(o["kind"].as_str(), Some("intake-triage" | "intake-start")) {
             super::intake::validate_record(&self.source, o)?;
+        }
+        if o["kind"] == "native-project-action" {
+            super::projects::validate_record(o)?;
         }
         if o["kind"] == "native-chat-create" {
             super::new_chat::validate_record(o)?;
@@ -183,6 +187,7 @@ fn record_pinned(
                     | "intake-triage"
                     | "intake-start"
                     | "native-chat-create"
+                    | "native-project-action"
                     | "user-verification"
                     | "project-preferences-update"
                     | "user-feedback"
@@ -206,6 +211,7 @@ fn record_pinned(
                     | "intake-triage"
                     | "intake-start"
                     | "native-chat-create"
+                    | "native-project-action"
                     | "user-verification"
                     | "project-preferences-update"
                     | "user-feedback"

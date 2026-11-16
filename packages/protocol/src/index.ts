@@ -735,6 +735,10 @@ export interface SubagentMessageRequest {
 
 /** A named working directory. Sessions and triggers belong to projects. */
 export interface Project {
+	/** Native local registration receipt. Host-owned, not an editable setting. */
+	registration?: { operationId: string; payloadHash: string };
+	/** Native local setup policy. Host-owned; absent on legacy projects. */
+	sourceCopy?: "jj" | "folder";
 	id: string;
 	name: string;
 	/** Absolute, existing directory. */

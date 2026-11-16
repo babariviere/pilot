@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { GitHubSetupAction, GitHubSetupStatus, OperationHost } from "@pilot/protocol";
-import { installGitHubKeyTransport } from "./github-git-transport.ts";
+import { clearGitHubKeyTransport, installGitHubKeyTransport } from "./github-git-transport.ts";
 import { durableJSON } from "./operation-journal.ts";
 import { RuntimeAdmission } from "./runtime-admission.ts";
 import { SetupError } from "./setup.ts";
@@ -108,7 +108,7 @@ export class GitHubSetupService extends RuntimeAdmission {
 		const file = join(this.home, "github-app-capability");
 		await writeFile(`${file}.tmp`, JSON.stringify({ ...identity, token: this.capability }), { mode: 0o600 });
 		await rename(`${file}.tmp`, file);
-		if (this.state.keyId && this.state.publicKey)
+		if (this.state.sshIdentity !== "existing" && this.state.keyId && this.state.publicKey)
 			await installGitHubKeyTransport(this.home, this.keyPath, this.transportEnvironment);
 	}
 	async authenticate(token: unknown): Promise<void> {
@@ -142,7 +142,9 @@ export class GitHubSetupService extends RuntimeAdmission {
 		if (
 			!request ||
 			!UUID.test(request.id) ||
-			!["authorize", "prepare_key", "approve_key", "verify", "cancel", "revoke_key"].includes(request.action) ||
+			!["authorize", "prepare_key", "approve_key", "verify", "verify_existing", "cancel", "revoke_key"].includes(
+				request.action,
+			) ||
 			Object.keys(request).some((k) => !["id", "action", "account", "fingerprint"].includes(k))
 		)
 			throw new SetupError(400, "Invalid GitHub setup action.");
@@ -205,6 +207,12 @@ export class GitHubSetupService extends RuntimeAdmission {
 				await this.checkAPI();
 				await this.prepareKey();
 				this.state.phase = "key_ready";
+			} else if (
+				request.action === "verify_existing" ||
+				(request.action === "verify" && this.state.sshIdentity === "existing")
+			) {
+				await this.checkAPI();
+				await this.verifyExistingSSH();
 			} else if (request.action === "verify") {
 				await this.checkAPI();
 				await this.readKey();
@@ -417,7 +425,64 @@ export class GitHubSetupService extends RuntimeAdmission {
 		return join(this.directory, "ssh", "id_ed25519");
 	}
 	get sshCommand() {
+		if (this.state.sshIdentity === "existing")
+			return "ssh -o ForwardAgent=no -o BatchMode=yes -o StrictHostKeyChecking=yes";
 		return `ssh -i ${quote(this.keyPath)} -o IdentitiesOnly=yes -o IdentityAgent=none -o ForwardAgent=no -o BatchMode=yes -o StrictHostKeyChecking=yes`;
+	}
+	get sshAgentEnvironment(): NodeJS.ProcessEnv {
+		return this.state.sshIdentity === "existing" && this.transportEnvironment.SSH_AUTH_SOCK
+			? { SSH_AUTH_SOCK: this.transportEnvironment.SSH_AUTH_SOCK }
+			: {};
+	}
+	private async verifyExistingSSH() {
+		const response = await this.command(
+			"ssh",
+			[
+				"-T",
+				"-o",
+				"ForwardAgent=no",
+				"-o",
+				"BatchMode=yes",
+				"-o",
+				"StrictHostKeyChecking=yes",
+				"-o",
+				"ConnectTimeout=10",
+				"git@github.com",
+			],
+			{
+				cwd: this.userHome,
+				env: {
+					...this.environment,
+					...(this.transportEnvironment.SSH_AUTH_SOCK
+						? { SSH_AUTH_SOCK: this.transportEnvironment.SSH_AUTH_SOCK }
+						: {}),
+				},
+				timeoutMs: 15_000,
+				maxBytes: 4096,
+				maxStderrBytes: 4096,
+				overflow: "fail",
+				detached: process.platform !== "win32",
+			},
+		);
+		const match =
+			/^Hi ([A-Za-z0-9-]+)! You've successfully authenticated, but GitHub does not provide shell access\./m.exec(
+				response.stderr,
+			);
+		if (
+			response.code !== 1 ||
+			response.aborted ||
+			response.timedOut ||
+			response.overflowed ||
+			match?.[1]?.toLowerCase() !== this.state.account?.toLowerCase()
+		)
+			fail(
+				"Existing SSH access was not verified for this GitHub account. Check SSH configuration and host trust outside Pilot, or choose a dedicated key.",
+			);
+		this.state.sshIdentity = "existing";
+		clearGitHubKeyTransport(this.home, this.transportEnvironment);
+		this.state.sshReady = true;
+		this.state.phase = "ready";
+		delete this.state.problem;
 	}
 	private async prepareKey() {
 		const directory = join(this.directory, "ssh");
@@ -526,6 +591,7 @@ export class GitHubSetupService extends RuntimeAdmission {
 				"GitHub SSH identity was not verified for this account. Check normal host-key trust and authorize the dedicated key for organization SSO. No host check was bypassed.",
 			);
 		this.state.sshReady = true;
+		this.state.sshIdentity = "dedicated";
 		await installGitHubKeyTransport(this.home, this.keyPath, this.transportEnvironment);
 		this.state.phase = "ready";
 		delete this.state.problem;

@@ -1,6 +1,6 @@
 /** Projects: named working directories that sessions (and later, triggers) belong to. */
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type {
 	Automation,
@@ -25,7 +25,9 @@ import {
 	validateProjectEnvironmentOverride,
 } from "./environment-profile.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
+import { durableJSON } from "./operation-journal.ts";
 import { projectOriginIdentity } from "./project-origin.ts";
+import { localSource } from "./source-copy.ts";
 import { listRemoteBranches, type Runner, run } from "./workspaces.ts";
 
 export function expandHome(path: string): string {
@@ -215,18 +217,46 @@ export class ProjectStore {
 		}
 	}
 
-	async create(request: ProjectRequest): Promise<Project> {
+	async previewLocal(path: string) {
+		return localSource(expandHome(path), this.runner);
+	}
+
+	/** Register exactly the folder and source policy the user previewed. */
+	async createLocal(path: string, digest: string, registration?: Project["registration"]): Promise<Project> {
+		const source = await this.previewLocal(path);
+		if (source.digest !== digest) throw new Conflict("Source changed. Preview the folder again.");
+		return this.create(
+			{ path: source.path, ...(source.copy === "folder" ? { workspace: "direct" } : {}) },
+			source.copy,
+			registration,
+		);
+	}
+
+	async registration(operationId: string, payloadHash: string): Promise<Project | undefined> {
+		await this.saving;
+		return this.projects.find(
+			(p) => p.registration?.operationId === operationId && p.registration.payloadHash === payloadHash,
+		);
+	}
+
+	async create(
+		request: ProjectRequest,
+		sourceCopy?: Project["sourceCopy"],
+		registration?: Project["registration"],
+	): Promise<Project> {
 		if (Object.hasOwn(request, "automations")) throw new Error("Use the native automations endpoint to edit hooks");
 		validatePullRequestSetting(request);
 		const tracking = request.tracking === undefined ? undefined : validateTrackingConfig(request.tracking);
 		if (typeof request.path !== "string" || !request.path.trim()) throw new Error("path is required");
 		const path = await requireDirectory(request.path);
-		if (this.projects.some((project) => project.path === path)) throw new Error(`A project already uses ${path}`);
+		if (this.projects.some((project) => project.path === path)) throw new Conflict(`A project already uses ${path}`);
 		const project: Project = {
 			id: randomUUID(),
 			name: request.name?.trim() || basename(path),
 			path,
 			createdAt: Date.now(),
+			...(sourceCopy ? { sourceCopy } : {}),
+			...(registration ? { registration } : {}),
 			...(tracking ? { tracking, trackingGeneration: randomUUID() } : {}),
 			...(request.model?.trim() ? { model: request.model.trim() } : {}),
 			...(request.workspace === "direct" ? { workspace: "direct" } : {}),
@@ -243,6 +273,13 @@ export class ProjectStore {
 		const tracking = request.tracking === undefined ? undefined : validateTrackingConfig(request.tracking);
 		const project = this.require(id);
 		const next: Project = { ...project };
+		if (
+			project.sourceCopy &&
+			((request.path !== undefined && request.path !== project.path) ||
+				(request.workspace !== undefined &&
+					request.workspace !== (project.sourceCopy === "jj" ? "clone" : "direct")))
+		)
+			throw new Conflict("Local source policy changed. Add and preview the new source instead.");
 		if (tracking) {
 			next.tracking = tracking;
 			if (JSON.stringify(tracking) !== JSON.stringify(project.tracking)) next.trackingGeneration = randomUUID();
@@ -383,14 +420,8 @@ export class ProjectStore {
 					result = { ...result, [field]: this.invalid[field].get(project.id) };
 			return result;
 		});
-		const snapshot = `${JSON.stringify(stored, null, "\t")}\n`;
-		this.saving = this.saving
-			.catch(() => undefined)
-			.then(async () => {
-				const temp = `${this.file}.${randomUUID()}.tmp`;
-				await writeFile(temp, snapshot, { mode: 0o600 });
-				await rename(temp, this.file);
-			});
+		const snapshot = structuredClone(stored);
+		this.saving = this.saving.catch(() => undefined).then(() => durableJSON(this.file, snapshot));
 		const projects = this.list();
 		for (const listener of this.listeners) listener(projects);
 		return this.saving;

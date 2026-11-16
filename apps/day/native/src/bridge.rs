@@ -19,6 +19,10 @@ pub const MAX_RESPONSE: usize = 16 * 1024 * 1024;
 /// The complete native method allowlist. No prefix or generic request method.
 pub const METHODS: &[&str] = &[
     "day.projects.read",
+    "day.projects.setup",
+    "day.projects.preview",
+    "day.projects.action",
+    "day.projects.check",
     "day.chat.select",
     "day.chat.create",
     "day.chat.check",
@@ -210,6 +214,14 @@ struct Envelope {
 pub(crate) enum Command {
     TodayScope(crate::host::today_scope::Request),
     Projects,
+    ProjectSetupRead,
+    ProjectPreview {
+        path: Option<String>,
+        url: Option<String>,
+        destination: Option<String>,
+    },
+    ProjectAction(crate::host::projects::Intent),
+    ProjectCheck(String),
     ChatSelect(crate::host::new_chat::Select),
     ChatCreate(crate::host::new_chat::Create),
     ChatCheck(String),
@@ -458,6 +470,50 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             } else {
                 C::ChatClose(r.session_id)
             }
+        }
+        "day.projects.setup" => {
+            if args != json!({}) {
+                return Err(Error::Invalid);
+            }
+            C::ProjectSetupRead
+        }
+        "day.projects.preview" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Preview {
+                path: Option<String>,
+                url: Option<String>,
+                destination: Option<String>,
+            }
+            let r: Preview = exact(args)?;
+            if r.path.is_some() == r.url.is_some()
+                || [&r.path, &r.url, &r.destination].iter().any(|s| {
+                    s.as_ref()
+                        .is_some_and(|s| s.is_empty() || s.len() > 4096 || s.contains('\0'))
+                })
+            {
+                return Err(Error::Invalid);
+            }
+            C::ProjectPreview {
+                path: r.path,
+                url: r.url,
+                destination: r.destination,
+            }
+        }
+        "day.projects.action" => {
+            let r: crate::host::projects::Intent = exact(args)?;
+            r.validate()?;
+            C::ProjectAction(r)
+        }
+        "day.projects.check" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Lookup {
+                operation_id: String,
+            }
+            let r: Lookup = exact(args)?;
+            mission(&r.operation_id)?;
+            C::ProjectCheck(r.operation_id)
         }
         "day.intake.read" => {
             if args != json!({}) {

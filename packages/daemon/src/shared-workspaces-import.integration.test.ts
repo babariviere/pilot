@@ -6,6 +6,28 @@ import type { SharedWorkspaceStore } from "./shared-workspaces.ts";
 import { fixture, git, jj } from "./testing/shared-workspace.ts";
 import { type Runner, run } from "./workspaces.ts";
 
+test("Git-only sources get private jj copies without initializing jj or copying dirty files in the user's checkout", async () => {
+	const f = fixture();
+	try {
+		rmSync(join(f.source, ".jj"), { recursive: true });
+		const remote = join(f.root, "remote.git");
+		git(f.root, "init", "--quiet", "--bare", "-b", "main", remote);
+		git(f.source, "remote", "add", "upstream", remote);
+		git(f.source, "push", "--quiet", "upstream", "HEAD:main");
+		writeFileSync(join(f.source, "a.txt"), "user's dirty edit\n");
+		const config = readFileSync(join(f.source, ".git/config"), "utf8");
+		const w = await f.store.create(f.source, f.path());
+		assert.equal(w.jj, true);
+		assert.ok(w.shared);
+		assert.equal(readFileSync(join(w.path, "a.txt"), "utf8"), "base\n");
+		assert.equal(readFileSync(join(f.source, "a.txt"), "utf8"), "user's dirty edit\n");
+		assert.equal(readFileSync(join(f.source, ".git/config"), "utf8"), config);
+		assert.equal(existsSync(join(f.source, ".jj")), false);
+	} finally {
+		f.close();
+	}
+});
+
 test("selected origin branches fetch fresh tips, default offline bases fall back, and explicit offline selections fail", async () => {
 	const f = fixture();
 	try {

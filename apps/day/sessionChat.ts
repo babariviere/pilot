@@ -16,6 +16,8 @@ export type SessionChat = {
 	sessionId: string;
 	/** Its title, or "" before a good read. */
 	title: string;
+	sourcePath?: string;
+	sourceLabel?: string;
 	state: SessionChatState;
 	/** The chat's own reason for its state, such as why it failed. */
 	stateReason: string;
@@ -53,6 +55,8 @@ function chatOf(x: unknown, sessionId: string): SessionChat | null {
 	return {
 		sessionId,
 		title: typeof c.title === "string" ? c.title : "",
+		sourcePath: typeof c.sourcePath === "string" ? c.sourcePath : "",
+		sourceLabel: typeof c.sourceLabel === "string" ? c.sourceLabel : "",
 		state: (c.state ?? "unknown") as SessionChatState,
 		stateReason: typeof c.stateReason === "string" ? c.stateReason : "",
 		rows: c.rows,

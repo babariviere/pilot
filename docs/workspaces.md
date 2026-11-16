@@ -2,6 +2,38 @@
 
 ## Keep edits separate
 
+### Add a local project in Day
+
+Open Settings, then Local projects. Enter the folder path and preview it before
+choosing Add project. A Git remote selects private jj coding copies, including
+for Git-only repositories. Ask reads a separate read-only main copy. Pilot does
+not initialize jj in your source folder or copy its uncommitted edits.
+Without a Git remote, coding uses your folder directly and reads see its changing
+local edits. Existing projects keep their previous settings; adding a project
+does not migrate them. A changed remote policy needs a new source review.
+
+Import repository previews a GitHub URL and local destination. GitHub access and
+SSH setup can check an existing CLI login and normal SSH identity without
+replacing credentials or editing Git/SSH configuration. Browser sign-in is
+explicit. An optional dedicated key needs approval for the displayed account
+and fingerprint. Host-key checking remains enabled.
+
+Read again shows import progress and interrupted imports. Resume uses the saved
+operation and checks the existing checkout before continuing. It does not create
+another clone. An existing checkout needs explicit confirmation; mismatched
+destinations and partial files are kept, not overwritten or deleted. If an action's
+receipt is missing, Check action reads only its saved receipt. It never sends the
+action again. An unresolved receipt can require service-side investigation.
+
+The chat shows its actual source or working-copy path for your own terminal.
+Day has no embedded terminal. Configured setup hooks still run at the existing
+new/restored private-copy boundary, subject to their approvals and Automations
+being enabled. Existing idle-refresh guards preserve active and unpublished work.
+Settings lists configured hooks; this section does not edit commands or grant
+new tool access. Unsent folder/import fields survive a saved close or update.
+
+### Existing project settings
+
 Build normally uses an isolated workspace. jj projects have separate working copies
 but **share history and bookmarks**. Git-only projects use private clones.
 Direct-checkout mode edits your own checkout instead; choose it deliberately.

@@ -356,6 +356,28 @@ impl Transport {
         Ok(v)
     }
 
+    /// Read-only preview at a fixed native project endpoint. Never used for effects.
+    pub(super) async fn project_preview(&self, path: &str, value: Value) -> Result<Value, Error> {
+        if !matches!(
+            path,
+            "/api/native-projects/preview" | "/api/github-import/preview"
+        ) {
+            return Err(Error::Invalid);
+        }
+        let response = self
+            .client
+            .post(self.url(path))
+            .header("x-pilot-github-capability", self.local()?)
+            .header("content-type", "application/json")
+            .body(serde_json::to_vec(&value).map_err(|_| Error::Invalid)?)
+            .send()
+            .await
+            .map_err(|_| Error::Offline)?;
+        let v = body(response).await?;
+        self.local()?;
+        Ok(v)
+    }
+
     pub async fn planning_operation(
         &self,
         operation: &Value,

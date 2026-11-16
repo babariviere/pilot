@@ -12,6 +12,7 @@ import { Button, Collapsible, Input } from "nsh/base";
 import type { Day } from "./day";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
+import { ProjectsSection } from "./ProjectsSection";
 import {
 	type HistoryPage,
 	MAX_ENTRIES,
@@ -550,6 +551,7 @@ export function SettingsScreen(props: { day: Day }) {
 					Settings
 				</Text>
 				<Preferences mirror={mirror} />
+				<ProjectsSection />
 				<History mirror={mirror} />
 				<Text class="border-t border-border pt-5 text-xs text-faint">
 					Preferences are what you chose. Pilot's approvals, Stop and spending limits still apply.

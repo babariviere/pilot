@@ -30,6 +30,8 @@ pub(crate) struct ChatState {
     /// The project row this chat reads through, once a global window found it.
     pub project: Option<Value>,
     pub title: String,
+    pub source_path: String,
+    pub source_label: String,
     /// "unknown" before a good read, then "working", "question", "done",
     /// "failed", "stopped" or "idle".
     pub state: &'static str,
@@ -56,7 +58,7 @@ impl ChatState {
         let chat = crate::plan_activity::chat(&rows);
         json!({"sessionId":self.session,"title":self.title,"state":self.state,
             "stateReason":self.state_reason,"rows":chat.rows,"more":chat.more,
-            "reading":chat.reading,"reason":chat.reason})
+            "reading":chat.reading,"reason":chat.reason,"sourcePath":self.source_path,"sourceLabel":self.source_label})
     }
 }
 
@@ -338,6 +340,19 @@ async fn read_chat(
                     merge(&mut state.pages, &read.page, older);
                     state.project = read.project.clone();
                     state.title = one_line(&read.session["title"], LINE_CHARS).unwrap_or_default();
+                    state.source_path = read.session["cwd"]
+                        .as_str()
+                        .filter(|s| s.len() <= 4096)
+                        .unwrap_or_default()
+                        .into();
+                    state.source_label = if read.session["mode"] == "ask" {
+                        "Read source"
+                    } else if read.session["workspace"] == "clone" {
+                        "Private coding copy"
+                    } else {
+                        "Your folder"
+                    }
+                    .into();
                     (state.state, state.state_reason) = status(&read.session);
                     state.reason.clear();
                 }

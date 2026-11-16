@@ -4,11 +4,59 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
-import { installGitHubTransport } from "./github-git-transport.ts";
+import { clearGitHubKeyTransport, installGitHubTransport } from "./github-git-transport.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { type ProcessResult, subprocesses } from "./subprocess.ts";
 
 const identity = { hostId: "box", daemonId: "daemon", lineageId: "lineage" };
+
+test("explicit existing SSH verification keeps configuration, uses the normal identity and never uploads a key", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "existing-ssh-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await mkdir(join(root, "user"));
+	await mkdir(join(root, "user", ".ssh"));
+	const sshConfig = join(root, "user", ".ssh", "config");
+	await writeFile(sshConfig, "existing user settings");
+	let probes = 0;
+	const setup = new GitHubSetupService(join(root, "data"), identity, {
+		userHome: join(root, "user"),
+		env: { PATH: process.env.PATH, SSH_AUTH_SOCK: "own-agent" },
+		command: async (file, args, options) => {
+			if (file === "gh" && args.join(" ") === "api user") return result('{"login":"octocat"}');
+			assert.equal(file, "ssh");
+			assert.ok(!args.includes("-i"));
+			assert.ok(args.includes("StrictHostKeyChecking=yes"));
+			assert.ok(args.includes("ForwardAgent=no"));
+			assert.equal(options.env?.SSH_AUTH_SOCK, "own-agent");
+			probes++;
+			return result(
+				"",
+				1,
+				"Hi octocat! You've successfully authenticated, but GitHub does not provide shell access.",
+			);
+		},
+	});
+	const r = await setup.act({ id: randomUUID(), action: "verify_existing" });
+	assert.equal(r.sshReady, true);
+	assert.equal(r.sshIdentity, "existing");
+	assert.equal(r.publicKey, undefined);
+	assert.ok(!setup.sshCommand.includes("-i"));
+	await setup.act({ id: randomUUID(), action: "verify" });
+	assert.equal(probes, 2);
+	assert.equal(await readFile(sshConfig, "utf8"), "existing user settings");
+	await setup.close();
+});
+
+test("switching SSH identity releases only Pilot's own child transport override", () => {
+	const home = "/owned/profile";
+	const own = { GIT_SSH: join(home, "github-setup", "git-ssh"), GIT_SSH_COMMAND: "explicit-command" };
+	clearGitHubKeyTransport(home, own);
+	assert.equal(own.GIT_SSH, undefined);
+	assert.equal(own.GIT_SSH_COMMAND, "explicit-command");
+	const user = { GIT_SSH: "/user/ssh", GIT_SSH_COMMAND: "explicit-command" };
+	clearGitHubKeyTransport(home, user);
+	assert.equal(user.GIT_SSH, "/user/ssh");
+});
 const result = (stdout = "", code = 0, stderr = ""): ProcessResult => ({
 	code,
 	signal: null,

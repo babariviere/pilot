@@ -340,6 +340,9 @@ pub struct SavedView {
     /// with their own project.
     #[prop(default)]
     pub preferences: Vec<String>,
+    /// Unsent local folder, repository URL and destination. Restore sends nothing.
+    #[prop(default)]
+    pub project_setup: Vec<String>,
     /// The thread on screen over its mission, as "<mission>/<thread>", or
     /// empty. Showing it again only reads.
     #[prop(default)]
@@ -393,6 +396,7 @@ impl SavedView {
             .chain(&self.notes)
             .chain(&self.reminders)
             .chain(&self.preferences)
+            .chain(&self.project_setup)
             .chain(&self.threads)
             .chain(&self.feedback_answers)
             .chain(&self.feedback_later)
@@ -426,6 +430,7 @@ impl SavedView {
             + self.notes.len()
             + self.reminders.len()
             + self.preferences.len()
+            + self.project_setup.len()
             + self.threads.len()
             + self.feedback_answers.len()
             + self.feedback_later.len()

@@ -1,4 +1,5 @@
 /** Daemon-owned, independent jj repositories with disposable colocated child workspaces. */
+
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import {
@@ -24,6 +25,7 @@ import { type JjCaptureScope, JjOwnershipStore, jjRepositoryIdentity } from "./j
 import { workerScope } from "./jj-ownership-contract.ts";
 import { mergedPullRequestHead } from "./pr-auto-rebase.ts";
 import { workspaceBookmarks, workspaceChangeIds } from "./pull-requests.ts";
+import { sourceRemote } from "./source-copy.ts";
 import { authenticationHint, gitPromptlessEnvironment, toolTrustEnvironment } from "./workspace-environment.ts";
 import {
 	copyLocalConfigs,
@@ -651,7 +653,7 @@ export class SharedWorkspaceStore {
 		runner: Runner,
 		requireFetch = false,
 	) {
-		const sourceUpstream = await this.optional("git", ["remote", "get-url", "origin"], source, runner);
+		const sourceUpstream = await sourceRemote(source, runner);
 		const upstream = sourceUpstream ? await remoteUrl(source, sourceUpstream) : undefined;
 		if (requireFetch && baseBranch === undefined) baseBranch = "main";
 		if (baseBranch !== undefined && !upstream && !requireFetch)
@@ -839,7 +841,6 @@ export class SharedWorkspaceStore {
 		if (scope !== undefined) workerScope(scope);
 		source = await canonical(source);
 		destination = await canonical(destination);
-		if (!(await stat(join(source, ".jj")))) throw new Error("Shared workspaces require a jj source project");
 		await this.version(source);
 		signal?.throwIfAborted();
 		const runner: Runner = (file, args, cwd, timeout) => {
