@@ -98,6 +98,14 @@ const RESEARCH_CHATS = 2;
 const RESEARCH_RETRY_MS = 60_000;
 /** A start Pilot could not make by rule (no worker slot, paused, held) waits this long before the next try. Same as research. */
 const EXECUTION_RETRY_MS = RESEARCH_RETRY_MS;
+/** The planning kernel's refusal before it takes an input: nothing was added to the planner's history. */
+const REFUSED_BEFORE_ADMISSION = /Planning admission is held or busy/;
+/** A thread message the planner could not take now; it was saved to wait for it. */
+export class DiscussionQueued extends Error {
+	constructor() {
+		super("Thread message saved to wait for the planning agent");
+	}
+}
 /** Added to a task Pilot starts by rule, so its worker does not wait for a coordinator that does not exist. */
 const RULE_START_NOTE =
 	"Pilot started this task because its dependencies are done: the user checked their results. You can rely on them. No coordinator runs this mission: ask the user with `ask_user` when you need a decision.";
@@ -1382,6 +1390,28 @@ export class PlanningWorkers {
 		}
 	}
 
+	/**
+	 * A thread message the planner refused before taking it (busy or held): the discussion turn ends, and the
+	 * message waits to go with the next planning input. Only a refusal counts; a missing receipt stays Unknown.
+	 */
+	private async waitRefusedMessage(op: DurableOperation): Promise<void> {
+		const request = JSON.parse(op.payload) as { topicId: string; text: string };
+		const state = this.deps.store.planningWorkers.get(op.targetId)!;
+		this.deps.store.planningWorkers.change(op.targetId, state.revision, (s) => {
+			if (canonicalJSON(s.discussion?.operation) === canonicalJSON(op)) {
+				delete s.discussion;
+				if (s.phase === "discussing") s.phase = "active";
+			}
+		});
+		this.queueMessage(op.targetId, {
+			operationId: op.operationId,
+			topicId: request.topicId,
+			title: this.deps.store.threads.get(op.targetId, request.topicId).title,
+			text: request.text,
+		});
+		await this.deps.store.durable();
+		console.log(`pilotd: planning ${op.targetId} thread message waits for the planning agent (${op.operationId})`);
+	}
 	/** Same qualified unheld planning boundary as Revisit, with a distinct discussion purpose. */
 	discuss(op: DurableOperation, guard: () => void): Promise<unknown> {
 		const work = this.planningTurnEntered(op, true, guard);
@@ -1458,7 +1488,17 @@ export class PlanningWorkers {
 		try {
 			await this.deps.store.durable();
 			guard();
-			const receipt = await this.admitInput(state, op, guard);
+			let receipt: Awaited<ReturnType<PlanningWorkers["admitInput"]>>;
+			try {
+				receipt = await this.admitInput(state, op, guard);
+			} catch (error) {
+				// The planner refused before taking it: the message waits for it instead of becoming Unknown.
+				if (discussion && REFUSED_BEFORE_ADMISSION.test(String(error))) {
+					await this.waitRefusedMessage(op);
+					throw new DiscussionQueued();
+				}
+				throw error;
+			}
 			guard();
 			this.deps.store.planningWorkers.change(op.targetId, state.revision, (s) => {
 				if (discussion) s.discussion!.admitted = true;

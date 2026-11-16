@@ -188,6 +188,27 @@ for (const change of ["held", "Stop", "pause", "busy"] as const) {
 	});
 }
 
+test("a message the planning agent refuses before taking it waits for it instead of becoming Unknown", async (t) => {
+	const f = await fixture(t);
+	f.admission.mock.mockImplementation(async () => {
+		throw new Error("Command planning.input: Planning admission is held or busy");
+	});
+	const view = await f.threads.read(f.project.id, f.missionId);
+	assert.equal(view.discussion.available, true, "Pilot thought it could send");
+	const op = await f.request({ purpose: "thread-send", text: "See working agents on Today" });
+	const receipt = await f.execute(op);
+	assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+	assert.equal((receipt.result as { queued?: boolean }).queued, true);
+	assert.deepEqual(
+		(await f.threads.read(f.project.id, f.missionId)).waiting?.map((m) => m.text),
+		["See working agents on Today"],
+	);
+	const state = f.store.planningWorkers.get(f.missionId)!;
+	assert.equal(state.phase, "active");
+	assert.equal(state.discussion, undefined);
+	assert.deepEqual((await f.threads.lookup(op))?.result, receipt.result, "a lost ACK reads the same");
+});
+
 test("waiting messages go to the planning agent in one turn once it is idle, then stop waiting", async (t) => {
 	const f = await fixture(t);
 	f.coordinator = { ...f.coordinator!, working: true };

@@ -11,7 +11,7 @@ import { interviewExact, interviewId } from "./mission-interview-contract.ts";
 import { revisionText } from "./mission-revisions.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
-import type { PlanningWorkers } from "./planning-workers.ts";
+import { DiscussionQueued, type PlanningWorkers } from "./planning-workers.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
 
@@ -171,7 +171,12 @@ export class MissionThreads {
 				if (!workers) throw new Error("Topic admission lookup unavailable");
 				// A message saved to wait has no admission of its own: it goes with a later planning input.
 				if (workers.queuedMessage(op.targetId, op.operationId)) return { topic: result, queued: true };
-				return { topic: result, admission: await workers.recover(op) };
+				try {
+					return { topic: result, admission: await workers.recover(op) };
+				} catch (error) {
+					if (error instanceof DiscussionQueued) return { topic: result, queued: true };
+					throw error;
+				}
 			}
 			return { topic: result };
 		}
@@ -282,7 +287,12 @@ export class MissionThreads {
 			await store.durable();
 			return { topic: result, queued: true };
 		}
-		const admission = await workers!.discuss(op, () => check(source));
-		return { topic: result, admission };
+		try {
+			const admission = await workers!.discuss(op, () => check(source));
+			return { topic: result, admission };
+		} catch (error) {
+			if (error instanceof DiscussionQueued) return { topic: result, queued: true };
+			throw error;
+		}
 	}
 }
