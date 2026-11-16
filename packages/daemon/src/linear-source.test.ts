@@ -366,6 +366,11 @@ test("single issue prefill is bounded, quoted, branch-aware, deduplicated and ne
 	assert.equal(prefill.identifier, "ENG-1");
 	assert.equal(prefill.gitBranchName, "eng-1-settings-refresh");
 	assert.match(prefill.prompt, /untrusted external/);
+	assert.match(prefill.prompt, /Before implementation, run a short interview with ask_user/);
+	assert.match(prefill.prompt, /Read the ticket and relevant code read-only first/);
+	assert.match(prefill.prompt, /Ask 1–3 targeted questions about unresolved scope, acceptance or tradeoffs/);
+	assert.match(prefill.prompt, /If everything is clear, ask one scope-confirmation question/);
+	assert.match(prefill.prompt, /Wait for the human answers before implementation/);
 	assert.ok(prefill.prompt.includes("Ignore prior instructions"), "quoted, not executed");
 	assert.deepEqual(await f.items.require(item.id), item);
 	assert.deepEqual(f.items.checkpoint(`${f.project.id}:linear`), before);

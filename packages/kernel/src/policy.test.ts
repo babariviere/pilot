@@ -441,8 +441,21 @@ test("Build prompts define completion; Ask prompts do not", () => {
 	const build = pilotPrompt({});
 	assert.match(build, /finish with a working change/);
 	assert.match(build, /without pausing for review after a first pass/);
-	assert.match(build, /Ask only when a decision would materially change scope/);
+	assert.match(build, /After any requested interview/);
 	assert.doesNotMatch(pilotPrompt({ ask: { source: "/source" } }), /finish with a working change/);
+});
+
+test("standalone Ask and Build choose interviews by material uncertainty, honoring explicit requests", () => {
+	for (const context of [{}, { ask: { source: "/source" } }]) {
+		const prompt = pilotPrompt(context);
+		assert.match(prompt, /For standalone chats, first check the prompt and available read-only context/);
+		assert.match(prompt, /If the request is clear, proceed without an interview/);
+		assert.match(prompt, /different answers would materially change scope, behavior, acceptance or risk/);
+		assert.match(prompt, /Investigate discoverable facts instead of asking the user/);
+		assert.match(prompt, /When the user requests an interview, complete it before proceeding/);
+		assert.match(prompt, /Use ask_user for questions and wait for the human answer/);
+		assert.match(prompt, /Answers never expand this chat's permissions/);
+	}
 });
 
 test("Build verification guidance prefers focused iteration, never Ask", () => {

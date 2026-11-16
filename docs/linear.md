@@ -8,6 +8,16 @@ Start a chat for a focused change or a mission for broader work. Size suggestion
 such as **Quick fix** and **Needs planning** help choose; they never start work on
 their own, and you can correct them.
 
+Chats started from a Linear ticket explicitly request a short interview before
+implementation. The agent reads the ticket and relevant code first, then asks
+1–3 targeted questions about scope, acceptance or tradeoffs. A clear ticket needs
+only one scope-confirmation question. The agent waits for your answers before
+implementation. Direct prompts leave the interview choice to the agent: clear
+requests proceed, while material uncertainty prompts questions.
+
+This is agent guidance through the existing `ask_user` tool, not a new enforced
+start gate. Answers do not change the chat's permissions or mission approvals.
+
 Starting work can move an eligible issue to the team's configured **In progress**
 state. A missing or invalid mapping leaves Linear unchanged and reports an error
 without blocking local work. Review each team's state mappings in project settings.
