@@ -5,6 +5,66 @@ use nsh_core::NodeId;
 use pilot_day_native::model::FreshnessState;
 
 #[test]
+fn a_global_offline_window_settles_instead_of_refreshing_its_own_failures() {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+
+    let dir = std::env::temp_dir().join(format!("day-offline-{}", uuid::Uuid::new_v4()));
+    std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+    std::fs::write(dir.join("daemon-id"), "daemon").unwrap();
+    std::fs::write(dir.join("storage-lineage"), "lineage").unwrap();
+    let mut credential = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(dir.join("github-app-capability"))
+        .unwrap();
+    write!(
+        credential,
+        "{}",
+        json!({"daemonId":"daemon","lineageId":"lineage","token":"a".repeat(64)})
+    )
+    .unwrap();
+    drop(credential);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let host = NativeHost::open(
+        Source {
+            profile: dir.clone(),
+            port,
+            home: Home {
+                daemon_id: "daemon".into(),
+                lineage_id: "lineage".into(),
+            },
+            project: None,
+        },
+        dir.join("journal"),
+    )
+    .unwrap();
+    let bridge = Bridge::new(DayRoot::new(host.clone()));
+    let entry = entry();
+    let mut app = open(&entry, &bridge);
+    let result = (|| {
+        app.wait_for_within("Pilot could not reach its service.", Duration::from_secs(3))?;
+        let revision = host.snapshot().revision;
+        app.wait(Duration::from_millis(200))?;
+        assert_eq!(
+            host.snapshot().revision,
+            revision,
+            "an unchanged failure must settle"
+        );
+        assert!(!contains(&app, "Reading your projects"));
+        assert!(!contains(&app, "Nothing needs you"));
+        assert!(!contains(&app, "Mock data"));
+        Ok::<_, Box<dyn std::error::Error>>(())
+    })();
+    close(app, bridge);
+    std::fs::remove_dir_all(entry.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    result.unwrap();
+}
+
+#[test]
 fn unknown_empty_attention_is_not_a_fresh_headline_or_an_all_clear_footer() {
     let entry = entry();
     let root = FakeRoot::new();

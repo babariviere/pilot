@@ -1184,20 +1184,29 @@ fn fail(shared: &Shared, error: Error) {
     {
         s.epoch = None;
     }
-    shared.change(|desk| {
-        desk.lose_read(
-            match error {
-                Error::Offline => FreshnessState::Offline,
-                Error::Stale => FreshnessState::Stale,
-                _ => FreshnessState::Unavailable,
-            },
-            if error == Error::Stale {
-                "Read changed. Refresh before acting."
-            } else {
-                "Daemon read is unavailable. Saved operations are never resent."
-            },
-        )
-    });
+    let state = match error {
+        Error::Offline => FreshnessState::Offline,
+        Error::Stale => FreshnessState::Stale,
+        _ => FreshnessState::Unavailable,
+    };
+    let reason = if error == Error::Stale {
+        "Read changed. Refresh before acting."
+    } else {
+        "Daemon read is unavailable. Saved operations are never resent."
+    };
+    let freshness = shared
+        .desk
+        .lock()
+        .expect("native Desk poisoned")
+        .today()
+        .freshness
+        .clone();
+    // A failure notice makes the window read its scope again. Repeating the
+    // same notice would turn that failed read into an endless refresh loop.
+    // The authority fence above still advances for every failed read.
+    if freshness.state != state || freshness.reason != reason {
+        shared.change(|desk| desk.lose_read(state, reason));
+    }
 }
 
 async fn run(
