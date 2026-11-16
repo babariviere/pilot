@@ -24,9 +24,15 @@ Failed native previews keep readable source and **Retry preview**. **Inspect sou
 first, and each mission's overview shows its linked artifacts by task. Cards
 show the kind, title and revision; opening one shows its preview, image or source.
 Search loaded outputs by title, kind or linked task. Compare a previous version
-in the gallery, or choose Before and After from a result's pinned outputs.
-**Export source…** and **Export image…** save the displayed bytes through the
-system Save dialog. Suggested filenames include the saved title and version.
+in the gallery, or use **Compare outputs** beside a result's Outputs heading to
+choose Before and After from its pinned outputs. Before and After are tabs over
+one pane, After first; switching reads nothing again.
+Each viewer's header has a share icon and a full-window icon for the pane shown.
+Share offers **Export image…** for a saved image and **Export source…** for code,
+saving the displayed bytes through the system Save dialog; there is no picture of
+an NSH preview. Suggested filenames include the saved title and version. The full
+window shows the same pin and side without reading again, and closes when that
+pin stops being current. Escape closes an open menu first, then the full window.
 Legacy code exports as text, not executable HTML. Captured previews cannot use
 the app's exporter or service access. Images above the saved-reader's 1 MiB
 container limit stay unavailable, never shortened; unusually large raster dimensions

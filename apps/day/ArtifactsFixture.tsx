@@ -2,7 +2,7 @@
 // storage. A scripted artifact source with the connected rules: rows name an
 // exact revision, one press reads that revision once, and a refusal shows
 // nothing earlier. The project page and one mission's section share rows.
-import { mount, Scroll, signal, Text, View } from "nsh";
+import { keymap, mount, Scroll, signal, Text, View } from "nsh";
 import { createShelf, FullArtifact, MissionArtifacts } from "./ArtifactShelf";
 import { ArtifactsScreen } from "./ArtifactsScreen";
 import { type ArtifactRow, type ArtifactSource, type ListResult, type ReadResult, readRefused } from "./artifactReads";
@@ -20,6 +20,8 @@ const SOURCES: Record<string, string> = {
 	[`${HTML}@3`]: "<p>Before page</p>",
 	[`${IMAGE}@1`]: PIXEL,
 };
+/** A title saved with an older revision, since renamed: each revision shows its own. */
+const TITLES: Record<string, string> = { [`${HTML}@3`]: "Old report page" };
 const project: ArtifactRow[] = [
 	{ sessionId: "chat-a", artifactId: NSH, title: "Timeline", kind: "nsh", revision: 2, updatedAt: 3 },
 	{ sessionId: "chat-b", artifactId: HTML, title: "Report page", kind: "html", revision: 4, updatedAt: 2 },
@@ -51,7 +53,7 @@ const source: ArtifactSource = {
 			artifact: {
 				version: 1,
 				reference: { sourceSessionId: row.sessionId, artifactId: row.artifactId, revision: row.revision ?? 0 },
-				metadata: { title: row.title, kind: row.kind },
+				metadata: { title: TITLES[`${row.artifactId}@${row.revision}`] ?? row.title, kind: row.kind },
 				rendering: "unsupported",
 				content: {
 					state: row.kind === "image" ? "image" : "text",
@@ -65,46 +67,49 @@ const source: ArtifactSource = {
 };
 
 const shelf = createShelf();
-mount(() => (
-	<View class="flex-1 bg-background">
-		<View class="flex-1">
-			<If
-				when={page() === "mission"}
-				else={
-					<Each of={[opened()]} key={(n) => String(n)}>
-						{() => <ArtifactsScreen source={source} />}
-					</Each>
-				}
-			>
-				<Scroll class="flex-1">
-					<View class="w-full max-w-2xl self-center px-6 py-6">
-						<MissionArtifacts source={source} shelf={shelf} missionId="m1" />
-					</View>
-				</Scroll>
-			</If>
-			<FullArtifact />
-		</View>
-		<View class="gap-1 border-t border-border px-6 py-3">
-			<Text testID="reads">{`Reads: [${reads().join(" ")}]`}</Text>
-			<View class="flex-row flex-wrap gap-1">
-				<Action label="Mission page" onPress={() => page.set("mission")} />
-				<Action label="Refuse reads" onPress={() => (script.refuseReads = true)} />
-				<Action label="Allow reads" onPress={() => (script.refuseReads = false)} />
-				<Action
-					label="Reopen refused"
-					onPress={() => {
-						script.refuseList = true;
-						opened.update((n) => n + 1);
-					}}
-				/>
-				<Action
-					label="Reopen empty"
-					onPress={() => {
-						script.empty = true;
-						opened.update((n) => n + 1);
-					}}
-				/>
+/** Reopens the page as if the project changed under it. */
+function reopenEmpty() {
+	script.empty = true;
+	opened.update((n) => n + 1);
+}
+mount(() => {
+	// The full window is a dialog over every control here, so tests reach the page by key.
+	keymap.bind("mod+shift+e", reopenEmpty, { when: "always" });
+	return (
+		<View class="flex-1 bg-background">
+			<View class="flex-1">
+				<If
+					when={page() === "mission"}
+					else={
+						<Each of={[opened()]} key={(n) => String(n)}>
+							{() => <ArtifactsScreen source={source} />}
+						</Each>
+					}
+				>
+					<Scroll class="flex-1">
+						<View class="w-full max-w-2xl self-center px-6 py-6">
+							<MissionArtifacts source={source} shelf={shelf} missionId="m1" />
+						</View>
+					</Scroll>
+				</If>
+				<FullArtifact />
+			</View>
+			<View class="gap-1 border-t border-border px-6 py-3">
+				<Text testID="reads">{`Reads: [${reads().join(" ")}]`}</Text>
+				<View class="flex-row flex-wrap gap-1">
+					<Action label="Mission page" onPress={() => page.set("mission")} />
+					<Action label="Refuse reads" onPress={() => (script.refuseReads = true)} />
+					<Action label="Allow reads" onPress={() => (script.refuseReads = false)} />
+					<Action
+						label="Reopen refused"
+						onPress={() => {
+							script.refuseList = true;
+							opened.update((n) => n + 1);
+						}}
+					/>
+					<Action label="Reopen empty" onPress={reopenEmpty} />
+				</View>
 			</View>
 		</View>
-	</View>
-));
+	);
+});

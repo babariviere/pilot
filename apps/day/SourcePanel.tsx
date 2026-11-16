@@ -1,13 +1,14 @@
-// One shown saved source: its title, kind and revision, then the saved text
-// exactly as stored, or why it is not shown. Raster images draw; code never runs here.
+// One shown saved revision's content only: the saved text exactly as stored, a
+// saved raster image, or why it is not shown. Its viewer's header names it and
+// offers Share. Raster images draw; code never runs here.
 import { signal, Text, View } from "nsh";
-import { ArtifactExport } from "./ArtifactExport";
 import type { Shown } from "./artifactReads";
-import { excerpt, kindName, sizeOf, unavailableLine } from "./deliveryView";
+import { excerpt, sizeOf, unavailableLine } from "./deliveryView";
 import { SavedImage } from "./SavedImage";
 import { Action } from "./ui";
 
-export function SourcePanel(props: { inspection: Shown }) {
+/** `fill`: takes the height it is given, so a saved image grows into it (the full window). */
+export function SourcePanel(props: { inspection: Shown; fill?: boolean }) {
 	const all = signal(false);
 	const i = () => props.inspection;
 	const saved = () => i().artifact;
@@ -24,15 +25,10 @@ export function SourcePanel(props: { inspection: Shown }) {
 		return c?.state === "unavailable" ? unavailableLine(i().kind, c.reason) : "";
 	};
 	return (
-		<View testID="artifact-source" selectable class="gap-2 rounded-xl bg-muted px-4 py-3">
-			<If when={saved()?.content.state !== "image"}>
-				<Text class="text-xs text-faint">{`Source · ${kindName(i().kind)} · revision ${i().pin.revision}`}</Text>
-			</If>
-			<If when={saved() && saved()?.content.state !== "image"}>
-				<Text role="header" class="text-sm font-medium text-foreground">
-					{saved()?.metadata.title || i().title || "Artifact"}
-				</Text>
-			</If>
+		<View
+			testID="artifact-source"
+			class={`gap-2 rounded-xl bg-muted px-4 py-3 ${props.fill ? "min-h-0 flex-1" : ""}`}
+		>
 			<If when={i().state === "reading"}>
 				<Text class="text-sm text-muted-foreground">Reading the saved source…</Text>
 			</If>
@@ -42,9 +38,12 @@ export function SourcePanel(props: { inspection: Shown }) {
 				</Text>
 			</If>
 			<If when={text()}>
-				<Text testID="artifact-source-text" class="font-mono text-xs leading-relaxed text-foreground">
-					{text()?.text ?? ""}
-				</Text>
+				{/* Only the saved text is selectable, so a double click never lands on a control. */}
+				<View selectable>
+					<Text testID="artifact-source-text" class="font-mono text-xs leading-relaxed text-foreground">
+						{text()?.text ?? ""}
+					</Text>
+				</View>
 				<If when={text()?.note}>
 					<View class="flex-row items-center gap-3">
 						<Text class="flex-1 text-xs text-faint">{text()?.note ?? ""}</Text>
@@ -52,10 +51,9 @@ export function SourcePanel(props: { inspection: Shown }) {
 					</View>
 				</If>
 				<Text class="text-xs text-faint">{`Saved copy, ${sizeOf(bytes())}.`}</Text>
-				<ArtifactExport artifact={saved()!} />
 			</If>
 			<If when={saved()?.content.state === "image"}>
-				<SavedImage inspection={i()} />
+				<SavedImage inspection={i()} fill={props.fill} />
 			</If>
 			<If when={unavailable()}>
 				<Text testID="artifact-source-unavailable" class="text-sm text-muted-foreground">

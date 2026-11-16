@@ -1,10 +1,12 @@
 import { Image, signal, Text, View } from "nsh";
-import { ArtifactExport } from "./ArtifactExport";
 import type { Shown } from "./artifactReads";
 import { Action } from "./ui";
 
-/** Only validated inline raster bytes reach Image. No file or network URL. */
-export function SavedImage(props: { inspection: Shown }) {
+/**
+ * Only validated inline raster bytes reach Image. No file or network URL. Its viewer's header names and shares it.
+ * `fill`: the image takes the height it is given rather than a fixed one, as in the full window.
+ */
+export function SavedImage(props: { inspection: Shown; fill?: boolean }) {
 	const failed = signal(false);
 	const attempt = signal(0);
 	const saved = () => props.inspection.artifact;
@@ -13,15 +15,21 @@ export function SavedImage(props: { inspection: Shown }) {
 		return c?.state === "image" ? c.source : "";
 	};
 	return (
-		<View testID="artifact-image" class="gap-2">
-			<Text class="text-xs text-faint">{`${props.inspection.title} · Image · revision ${props.inspection.pin.revision}`}</Text>
+		<View testID="artifact-image" class={props.fill ? "min-h-0 flex-1 gap-2" : "gap-2"}>
 			<If when={source()}>
 				<Each of={[attempt()]} key={String}>
-					{() => <Image src={source()} class="h-96 w-full object-contain" onError={() => failed.set(true)} />}
+					{() => (
+						<Image
+							testID="artifact-image-view"
+							src={source()}
+							class={props.fill ? "min-h-0 w-full flex-1 object-contain" : "h-96 w-full object-contain"}
+							onError={() => failed.set(true)}
+						/>
+					)}
 				</Each>
 				<If when={failed()}>
 					<Text role="alert" class="text-sm text-muted-foreground">
-						This saved image could not be drawn. You can still export its original bytes.
+						This saved image could not be drawn. Share can still export its original bytes.
 					</Text>
 					<Action
 						label="Retry image"
@@ -31,7 +39,6 @@ export function SavedImage(props: { inspection: Shown }) {
 						}}
 					/>
 				</If>
-				<ArtifactExport artifact={saved()!} />
 			</If>
 		</View>
 	);

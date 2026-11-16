@@ -30,6 +30,7 @@ import plus from "./icons/plus.svg";
 import refresh from "./icons/refresh.svg";
 import rename from "./icons/rename.svg";
 import settings from "./icons/settings.svg";
+import share from "./icons/share.svg";
 import sun from "./icons/sun.svg";
 import update from "./icons/update.svg";
 
@@ -84,6 +85,7 @@ const ICONS = {
 	refresh,
 	rename,
 	settings,
+	share,
 	sun,
 	update,
 } as const;

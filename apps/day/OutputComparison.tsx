@@ -1,16 +1,31 @@
+// Before and After for a delivered result: two of the saved outputs pinned to
+// the result shown, chosen by the user. No inferred pairing. Tabs switch one
+// pane of a fixed height, After first; each side reads its pin once and
+// switching reads nothing. A changed result, pin or freshness starts over, and
+// a full window opened from here closes with it. Looking records nothing.
 import { cleanup, effect, keymap, signal, Text, View } from "nsh";
+import { savedTitle } from "./ArtifactExport";
+import { ArtifactBody, ArtifactTools, closeFullFor, InFullNote, inFull, openFull, paneLine } from "./ArtifactViewer";
 import type { Shown } from "./artifactReads";
 import { artifactSelection } from "./deliveryArtifact";
 import type { ArtifactLink, DeliveredWork, DeliverySource } from "./deliveryFeed";
-import { SourcePanel } from "./SourcePanel";
-import { Action, Picker } from "./ui";
+import { Picker, TabItem, TabRow } from "./ui";
 
-/** Compare only outputs pinned to this displayed result. No inferred before/after pairing. */
-export function OutputComparison(props: { work: DeliveredWork; source: DeliverySource; fresh: boolean }) {
-	const opened = signal(false);
+type Side = "Before" | "After";
+
+/** Shows while open; `onClose` closes it (Escape too). `resultKey` names the result's page. */
+export function OutputComparison(props: {
+	work: DeliveredWork;
+	source: DeliverySource;
+	fresh: boolean;
+	resultKey: string;
+	onClose: () => void;
+}) {
+	const side = signal<Side>("After");
 	const selected = signal<Record<string, string>>({});
 	const shown = signal<Record<string, Shown>>({});
 	let generation = 0;
+	const fullId = `outputs:${props.resultKey}`;
 	const id = (a: ArtifactLink) => `${a.sessionId}/${a.artifactId}/${a.revision}`;
 	const links = () => props.work.artifacts.filter((a) => artifactSelection(props.work, a));
 	const reset = () => {
@@ -25,24 +40,21 @@ export function OutputComparison(props: { work: DeliveredWork; source: DeliveryS
 		lastResult = key;
 		reset();
 	});
-	effect(() => {
-		if (!opened()) return;
-		cleanup(
-			keymap.bind(
-				"escape",
-				() => {
-					reset();
-					opened.set(false);
-				},
-				{ when: "always" },
-			),
-		);
-	});
-	const choose = async (side: string, value: string) => {
+	cleanup(() => closeFullFor(fullId));
+	// It owns Escape first while open; the full window, when open, is newer and goes first.
+	keymap.bind(
+		"escape",
+		() => {
+			reset();
+			props.onClose();
+		},
+		{ when: "always" },
+	);
+	const choose = async (s: Side, value: string) => {
 		const link = links().find((a) => id(a) === value);
 		if (!link || !props.fresh) return;
 		const run = generation;
-		selected.update((all) => ({ ...all, [side]: value }));
+		selected.update((all) => ({ ...all, [s]: value }));
 		const reading: Shown = {
 			title: link.title,
 			kind: link.kind,
@@ -51,57 +63,93 @@ export function OutputComparison(props: { work: DeliveredWork; source: DeliveryS
 			artifact: null,
 			message: "",
 		};
-		shown.update((all) => ({ ...all, [side]: reading }));
+		shown.update((all) => ({ ...all, [s]: reading }));
 		const result = await props.source.inspect(props.work, link);
-		if (generation !== run || selected()[side] !== value || !props.fresh) return;
+		// Only this read's answer: not after a reset, another choice, or a later read of the same value.
+		if (generation !== run || selected()[s] !== value || shown()[s] !== reading || !props.fresh) return;
 		shown.update((all) => ({
 			...all,
-			[side]:
+			[s]:
 				result.status === "shown"
 					? { ...reading, state: "shown", artifact: result.artifact }
 					: { ...reading, state: "refused", message: result.message },
 		}));
 	};
+	const current = () => shown()[side()] ?? null;
+	const full = (back: () => void) => {
+		const s = side();
+		const value = selected()[s];
+		const pane = shown()[s];
+		const run = generation;
+		if (!pane || !value) return;
+		openFull({
+			shown: pane,
+			id: fullId,
+			side: s,
+			// The same side, value and read, on a result still fresh. A reset clears both signals.
+			live: () =>
+				side() === s && shown()[s] === pane && selected()[s] === value && generation === run && props.fresh,
+			back,
+		});
+	};
 	return (
-		<If when={links().length > 1 && props.fresh}>
-			<View class="gap-2">
-				<Action
-					label={opened() ? "Close comparison" : "Compare outputs"}
-					testID="outputs-compare"
-					onPress={() => {
-						reset();
-						opened.set(!opened());
-					}}
-				/>
-				<If when={opened()}>
-					<Text class="text-xs text-faint">
-						Choose which saved outputs are Before and After. Looking records nothing.
-					</Text>
-					<Each of={["Before", "After"]} key={String}>
-						{(side) => (
-							<View class="gap-2">
-								<Text role="header" class="text-sm font-medium text-foreground">
-									{side()}
-								</Text>
-								<Picker
-									label={side()}
-									testID={`outputs-${side().toLowerCase()}`}
-									placeholder="Choose output"
-									items={links().map((a) => ({
-										value: id(a),
-										title: `${a.title || "Artifact"} · revision ${a.revision}`,
-									}))}
-									value={selected()[side()] ?? null}
-									onChange={(value) => void choose(side(), value)}
-								/>
-								<If when={shown()[side()]}>
-									<SourcePanel inspection={shown()[side()]} />
-								</If>
-							</View>
-						)}
-					</Each>
+		<View testID="outputs-comparison" class="gap-2 rounded-xl border border-border p-3">
+			{/* The tabs keep their own width; when the row is narrow, the icons wrap below them, never under them. */}
+			<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
+				<View class="flex-row">
+					<TabRow>
+						<TabItem
+							label="Before"
+							selected={side() === "Before"}
+							testID="outputs-tab-before"
+							onPress={() => side.set("Before")}
+						/>
+						<TabItem
+							label="After"
+							selected={side() === "After"}
+							testID="outputs-tab-after"
+							onPress={() => side.set("After")}
+						/>
+					</TabRow>
+				</View>
+				<If when={current()}>
+					<View class="ml-auto">
+						<ArtifactTools shown={current() as Shown} testID="outputs" onFull={full} />
+					</View>
 				</If>
 			</View>
-		</If>
+			<View class="flex-row">
+				<Picker
+					label={`${side()} output`}
+					testID={`outputs-${side().toLowerCase()}`}
+					placeholder={`Choose the ${side()} output`}
+					items={links().map((a) => ({
+						value: id(a),
+						title: `${a.title || "Artifact"} · revision ${a.revision}`,
+					}))}
+					value={selected()[side()] ?? null}
+					onChange={(value) => void choose(side(), value)}
+				/>
+			</View>
+			<If
+				when={current()}
+				else={<Text class="text-sm text-muted-foreground">{`Choose which saved output is ${side()}.`}</Text>}
+			>
+				<View class="flex-row flex-wrap items-baseline gap-x-2">
+					<Text testID="outputs-title" class="text-sm font-medium text-foreground">
+						{savedTitle(current() as Shown)}
+					</Text>
+					<Text class="text-xs text-faint">{paneLine(current() as Shown)}</Text>
+				</View>
+				<If when={!inFull(fullId)} else={<InFullNote />}>
+					<Each of={[side()]} key={String}>
+						{() => <ArtifactBody shown={current() as Shown} bounded />}
+					</Each>
+				</If>
+			</If>
+			<Text class="text-xs text-faint">
+				Before and After are saved outputs of this result. Looking records nothing.
+			</Text>
+		</View>
 	);
 }

@@ -46,10 +46,6 @@ export function ArtifactPreview(props: { inspection: Shown; fill?: boolean }) {
 	const present = () => saved()?.content.state === "text";
 	return (
 		<View testID="artifact-preview" class={`gap-2 rounded-xl bg-muted px-4 py-3 ${props.fill ? "flex-1" : ""}`}>
-			<Text class="text-xs text-faint">{`Preview · revision ${props.inspection.pin.revision}`}</Text>
-			<Text role="header" class="text-sm font-medium text-foreground">
-				{props.inspection.title || "Artifact"}
-			</Text>
 			<If when={props.inspection.state === "reading" || (present() && inView() && state().state === "loading")}>
 				<Text class="text-sm text-muted-foreground">Opening the saved preview…</Text>
 			</If>

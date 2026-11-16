@@ -34,6 +34,36 @@ test("the prototype in the full window, captured", async () => {
 	await app.screenshot("output/artifact-full-light.png");
 });
 
+// Run with `--filter 'artifact fullscreen'`. Only a real platform shows this: the headless Tab order walks every
+// shown view from the root, so it cannot tell a dialog's focus scope from the page under it.
+test("artifact fullscreen keeps keyboard inside its dialog", async () => {
+	const app = await open("./ArtifactsFixture.tsx", { platform: "macos", width: 1100, height: 850 });
+	const reads = () => app.texts().find((t) => t.startsWith("Reads:")) ?? "";
+	const HTML = "1b2c3d4e-0000-4000-8000-000000000002";
+	await app.waitFor("Timeline");
+	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
+	await app.waitFor("<p>Saved page</p>");
+	await app.press("id:artifact-viewer-full");
+	await app.waitFor("id:artifact-full");
+	// The exit icon starts with the focus; Return closes, and Return on the restored opener opens it again.
+	await app.keyboard.press("enter");
+	await app.waitUntil(() => !app.shows("id:artifact-full"));
+	await app.keyboard.press("enter");
+	await app.waitFor("id:artifact-full");
+	// Tab and Return stay in the dialog: nothing underneath closes, compares or reads.
+	for (let n = 0; n < 4; n++) await app.keyboard.press("tab");
+	await app.keyboard.press("enter");
+	if (app.shows("Export source…")) {
+		await app.keyboard.press("escape");
+		await app.waitUntil(() => !app.shows("Export source…"));
+	}
+	if (app.shows("id:artifact-full")) await app.keyboard.press("escape");
+	await app.waitUntil(() => !app.shows("id:artifact-full"));
+	expect(app.shows("id:artifact-viewer")).toBe(true);
+	expect(app.shows("id:artifact-tab-before")).toBe(false);
+	expect(reads()).toBe(`Reads: [${HTML}@4]`);
+});
+
 test("Unstick with the repair agent's proposed note, captured", async () => {
 	const app = await open("./UnstickFixture.tsx", { platform: "macos", width: 900, height: 900 });
 	await app.press("id:unstick");

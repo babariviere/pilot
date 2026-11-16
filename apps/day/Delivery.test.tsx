@@ -403,10 +403,13 @@ test("Inspect source reads one exact pin once, as plain text that never runs, an
 	// An image shows its title and kind only. Each output keeps its own view.
 	await app.press(`id:output-source-${IMAGE}`);
 	await app.waitFor("This service does not provide this image's saved bytes here. Its title and version are kept.");
-	expect(app.texts().includes("Source · Image · revision 1")).toBe(true);
+	expect(app.texts().includes("Image · revision 1")).toBe(true);
+	// Unavailable bytes offer nothing to share or enlarge.
+	expect(app.shows(`id:output-${IMAGE}-share`)).toBe(false);
+	expect(app.shows(`id:output-${IMAGE}-full`)).toBe(false);
 	expect(showsSource(app, HTML_SOURCE)).toBe(true);
 	await app.press(`id:output-source-${IMAGE}`);
-	expect(app.texts().includes("Source · Image · revision 1")).toBe(false);
+	expect(app.texts().includes("Image · revision 1")).toBe(false);
 	await app.press(`id:output-source-${HTML}`);
 	expect(app.shows("id:artifact-source")).toBe(false);
 	// Escape hides a shown source first, then leaves the page.
@@ -564,22 +567,96 @@ test("only the exact inert answer for the pin asked is shown", () => {
 	).toEqual({ state: "unavailable", reason: "oversize" });
 });
 
-test("comparison names both saved pins, sends nothing and closes before the result", async () => {
+test("comparison switches one pane between both saved pins, sends nothing and closes before the result", async () => {
 	const app = await ready();
 	await openCsv(app);
 	await pressCheck(app, "id:outputs-compare");
-	await pressCheck(app, "label:Before");
-	await app.press("Scroll check page · revision 3");
-	await app.waitFor("Source · HTML · revision 3");
-	await pressCheck(app, "label:After");
+	// After is the side shown first.
+	await app.waitFor("id:outputs-comparison");
+	expect(app.texts().includes("Choose which saved output is After.")).toBe(true);
+	expect(app.count("id:artifact-pane")).toBe(0);
+	await pressCheck(app, "label:After output");
 	await app.press("Load timing · revision 2");
 	await app.waitFor("Source · Visual · revision 2");
-	expect(showsSource(app, HTML_SOURCE)).toBe(true);
 	expect(showsSource(app, VISUAL_SOURCE)).toBe(true);
+	// The pane's header names the chosen output by its saved title.
+	expect(app.shows("id:outputs-title")).toBe(true);
+	// One pane of a fixed height, whichever side shows.
+	expect(app.count("id:artifact-pane")).toBe(1);
+	await pressCheck(app, "id:outputs-tab-before");
+	expect(showsSource(app, VISUAL_SOURCE)).toBe(false);
+	expect(app.texts().includes("Choose which saved output is Before.")).toBe(true);
+	await pressCheck(app, "label:Before output");
+	await app.press("Scroll check page · revision 3");
+	await app.waitFor("Source · HTML · revision 3");
+	expect(showsSource(app, HTML_SOURCE)).toBe(true);
+	expect(showsSource(app, VISUAL_SOURCE)).toBe(false);
+	expect(app.count("id:artifact-pane")).toBe(1);
+	// Switching back shows the After pin read before, without reading it again.
+	await pressCheck(app, "id:outputs-tab-after");
+	await app.waitFor("Source · Visual · revision 2");
+	expect(showsSource(app, HTML_SOURCE)).toBe(false);
+	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1 ${VISUAL}@2 ${HTML}@3]`);
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
 	await app.keyboard.press("escape");
-	expect(app.shows("id:outputs-before")).toBe(false);
+	expect(app.shows("id:outputs-comparison")).toBe(false);
 	expect(app.shows("id:delivery")).toBe(true);
+});
+
+test("an output's header shares its source and opens the full window, which a newer result closes", async () => {
+	const app = await ready();
+	await openCsv(app);
+	await app.press(`id:output-source-${HTML}`);
+	await app.waitFor("id:artifact-source-text");
+	// Share offers the saved source of the pin shown, never an image of it.
+	await pressCheck(app, `id:output-${HTML}-share`);
+	await app.waitFor("Export source…");
+	expect(app.shows("Export image…")).toBe(false);
+	expect(app.texts().includes("Scroll check page · revision 3")).toBe(true);
+	await app.keyboard.press("escape");
+	await app.waitUntil(() => !app.shows("Export source…"));
+	await pressCheck(app, `id:output-${HTML}-full`);
+	await app.waitFor("id:artifact-full");
+	expect(app.texts().includes("Scroll check page · HTML · revision 3")).toBe(true);
+	// One copy: the row gives its pane to the full window, and nothing is read again.
+	expect(app.texts().filter((t) => t === HTML_SOURCE).length).toBe(1);
+	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1 ${HTML}@3]`);
+	// Escape comes back to the row as it was.
+	await app.keyboard.press("escape");
+	expect(app.shows("id:artifact-full")).toBe(false);
+	expect(showsSource(app, HTML_SOURCE)).toBe(true);
+	await pressCheck(app, `id:output-${HTML}-full`);
+	await app.waitFor("id:artifact-full");
+	// A newer result replaces the pin under it: the copy goes at once (by key: the dialog covers the fixture).
+	await app.keyboard.press("mod+shift+n");
+	await app.waitUntil(() => !app.shows("id:artifact-full"));
+	expect(showsSource(app, HTML_SOURCE)).toBe(false);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
+test("a comparison's full window shows the chosen side and closes when the result is lost", async () => {
+	const app = await ready();
+	await openCsv(app);
+	await pressCheck(app, "id:outputs-compare");
+	await pressCheck(app, "label:After output");
+	await app.press("Load timing · revision 2");
+	await app.waitFor("Source · Visual · revision 2");
+	await pressCheck(app, "id:outputs-full");
+	await app.waitFor("id:artifact-full");
+	expect(app.texts().includes("Load timing · Visual · revision 2")).toBe(true);
+	expect(app.texts().includes("After · Source · Visual · revision 2")).toBe(true);
+	expect(app.texts().filter((t) => t === VISUAL_SOURCE).length).toBe(1);
+	// The full window owns Escape first; the comparison stays open on After.
+	await app.keyboard.press("escape");
+	expect(app.shows("id:artifact-full")).toBe(false);
+	expect(app.shows("id:outputs-comparison")).toBe(true);
+	expect(showsSource(app, VISUAL_SOURCE)).toBe(true);
+	await pressCheck(app, "id:outputs-full");
+	await app.waitFor("id:artifact-full");
+	await app.keyboard.press("mod+shift+l");
+	await app.waitUntil(() => !app.shows("id:artifact-full"));
+	expect(showsSource(app, VISUAL_SOURCE)).toBe(false);
+	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1 ${VISUAL}@2]`);
 });
 
 test("NSH artifacts read as inert saved source, never as a preview", () => {

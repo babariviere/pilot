@@ -10,11 +10,12 @@
 // An artifact's pinned revision shows its saved source as plain text on a
 // press of Inspect source, read once. NSH opens in the app's isolated native
 // preview: the primary useful output opens when the page opens.
-// Each output keeps its own view; previews pause out of view. A newer
-// result or lost read hides them; looking records nothing.
-import { effect, keymap, Scroll, signal, Text, untracked, View, type ViewRef } from "nsh";
+// Each output keeps its own view; previews pause out of view. Its row offers
+// Share and the full window for what it shows. A newer result or lost read
+// hides them and closes a full window opened from them; looking records nothing.
+import { cleanup, effect, keymap, Scroll, signal, Text, untracked, View, type ViewRef } from "nsh";
 import { Checkbox, Input } from "nsh/base";
-import { ArtifactPreview } from "./ArtifactPreview";
+import { ArtifactBody, ArtifactTools, closeFullFor, InFullNote, inFull, openFull, paneLine } from "./ArtifactViewer";
 import { artifactPreviewsAvailable } from "./bridge";
 import type { Day } from "./day";
 import { artifactSelection } from "./deliveryArtifact";
@@ -76,7 +77,6 @@ import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
 import { OutputComparison } from "./OutputComparison";
 import { pageScroll, scrolled } from "./onScreen";
-import { SourcePanel } from "./SourcePanel";
 import { Action, Mark, PAGE_COLUMN, RowLink, SectionTitle } from "./ui";
 import { setFor } from "./view";
 
@@ -210,7 +210,10 @@ function shortName(r: OutputLink): string {
 	return prName(r).split(" · ")[0];
 }
 
-/** One artifact the agent linked: its title, kind and pinned revision, and Inspect source when it has a pin. */
+/**
+ * One artifact the agent linked: its title, kind and pinned revision, and Inspect source when it has a pin.
+ * What it shows can go to the full window, as a copy that closes once the row's read is no longer current.
+ */
 function ArtifactOutput(props: {
 	mirror: DeliveryMirror;
 	place: DeliveryPlace;
@@ -224,12 +227,27 @@ function ArtifactOutput(props: {
 	const mine = () => (props.fresh ? inspectionOf(key(), props.work, props.link) : null);
 	const reading = () => mine()?.state === "reading";
 	const name = () => props.link.title || "the artifact";
+	const fullId = `output:${props.place.key}|${props.link.sessionId}/${props.link.artifactId}`;
+	cleanup(() => closeFullFor(fullId));
+	const full = (back: () => void) => {
+		const shown = mine();
+		if (shown?.state !== "shown") return;
+		const key = props.place.key;
+		const work = props.work;
+		const link = props.link;
+		openFull({
+			shown,
+			id: fullId,
+			live: () => inspectionOf(key, work, link)?.generation === shown.generation,
+			back,
+		});
+	};
 	let sourceAnchor: ViewRef | undefined;
 	let previewAnchor: ViewRef | undefined;
 	return (
 		<View class="gap-2 border-t border-border py-2.5">
-			<View class="flex-row items-center gap-3">
-				<Text class="flex-1 text-sm text-foreground">{props.link.title || "Artifact"}</Text>
+			<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
+				<Text class="min-w-0 flex-1 text-sm text-foreground">{props.link.title || "Artifact"}</Text>
 				<Text class="text-xs text-muted-foreground">{artifactLine(props.link)}</Text>
 				<If
 					when={pinned()}
@@ -277,13 +295,19 @@ function ArtifactOutput(props: {
 							}}
 						/>
 					</If>
+					<If when={mine()}>
+						<ArtifactTools
+							shown={mine() as Inspection}
+							testID={`output-${props.link.artifactId}`}
+							onFull={full}
+						/>
+					</If>
 				</If>
 			</View>
 			<If when={mine()}>
-				<If when={mine()?.preview} else={<SourcePanel inspection={mine() as Inspection} />}>
-					<If when={props.link.kind === "image"} else={<ArtifactPreview inspection={mine() as Inspection} />}>
-						<SourcePanel inspection={mine() as Inspection} />
-					</If>
+				<Text class="text-xs text-faint">{paneLine(mine() as Inspection)}</Text>
+				<If when={!inFull(fullId)} else={<InFullNote />}>
+					<ArtifactBody shown={mine() as Inspection} />
 				</If>
 			</If>
 		</View>
@@ -309,6 +333,10 @@ function Outputs(props: {
 	const web = () => props.mirror.view().webLinks;
 	const opening = (r: OutputLink) => props.mirror.view().opening.includes(`${key()}#${r.id}`);
 	const say = (m: string) => setFor(outputMessages, key(), m);
+	// Compare outputs sits by the heading and opens Before and After under it.
+	const comparing = signal(false);
+	const comparable = () => props.fresh && w().artifacts.filter((a) => artifactSelection(w(), a)).length > 1;
+	let compareButton: ViewRef | undefined;
 	const open = (r: OutputLink) => {
 		say("");
 		void props.mirror.source.open(w(), r).then((result) => {
@@ -319,8 +347,31 @@ function Outputs(props: {
 	return (
 		<View testID="delivery-outputs" class="gap-1">
 			<View class="pb-1">
-				<SectionTitle title="Outputs" count={count()} />
+				<SectionTitle title="Outputs" count={count()}>
+					<If when={comparable()}>
+						<Action
+							label={comparing() ? "Close comparison" : "Compare outputs"}
+							testID="outputs-compare"
+							anchor={(node) => {
+								compareButton = node;
+							}}
+							onPress={() => comparing.set(!comparing())}
+						/>
+					</If>
+				</SectionTitle>
 			</View>
+			<If when={comparing() && comparable()}>
+				<OutputComparison
+					work={w()}
+					source={props.mirror.source}
+					fresh={props.fresh}
+					resultKey={key()}
+					onClose={() => {
+						comparing.set(false);
+						compareButton?.focus();
+					}}
+				/>
+			</If>
 			<If when={count() === 0}>
 				<Text class="text-sm text-muted-foreground">The agent linked no outputs to this result.</Text>
 			</If>
@@ -368,7 +419,6 @@ function Outputs(props: {
 					/>
 				)}
 			</Each>
-			<OutputComparison work={w()} source={props.mirror.source} fresh={props.fresh} />
 			<If when={commit()}>
 				<View class="flex-row items-baseline gap-3 border-t border-border py-2.5">
 					<Text class="flex-1 text-sm text-foreground">{`Commit ${commit()?.slice(0, 12) ?? ""}`}</Text>

@@ -3,17 +3,21 @@
 // project's Artifacts page lists newest first. Each page reads its list once
 // when it opens and starts no preview: opening a card reads that revision
 // once and shows it below its row, in the app's isolated preview for NSH or
-// as plain text otherwise. One artifact shows at a time on a page.
+// as plain text otherwise. One artifact shows at a time on a page, and one
+// pane at a time in it: comparing a previous version switches Before and
+// After in the same place.
 // Nothing here is saved, sent or counted as anyone's check.
-import { cleanup, effect, keymap, type Signal, signal, Text, View, type ViewRef } from "nsh";
+import { cleanup, effect, type Signal, signal, Text, View, type ViewRef } from "nsh";
 import { Button } from "nsh/base";
-import { ArtifactPreview } from "./ArtifactPreview";
+import { savedTitle } from "./ArtifactExport";
+import { ArtifactBody, ArtifactTools, closeFullFor, InFullNote, inFull, openFull, paneLine } from "./ArtifactViewer";
 import type { ArtifactList, ArtifactRow, ArtifactSource, Shown } from "./artifactReads";
 import { artifactPreviewsAvailable } from "./bridge";
 import { kindName } from "./deliveryView";
 import { glide } from "./motion";
-import { SourcePanel } from "./SourcePanel";
-import { Action, Field, Mark, SectionTitle } from "./ui";
+import { Action, Field, Mark, SectionTitle, TabItem, TabRow } from "./ui";
+
+export { FullArtifact } from "./ArtifactViewer";
 
 /** The artifact open on a page, by its card's key. */
 type Opened = Shown & { key: string; generation: number; row: ArtifactRow };
@@ -130,10 +134,16 @@ function Card(props: { source: ArtifactSource; shelf: Shelf; row: ArtifactRow; i
 	);
 }
 
-/** The open artifact, under its row: its preview or saved source, and Close. */
+/**
+ * The open artifact, under its row: its preview or saved source, and Close.
+ * Compare previous version reads the revision before once; Before and After
+ * tabs then switch the one pane, After first. The full window shows the pane
+ * on screen and comes back to the same side.
+ */
 function Viewer(props: { shelf: Shelf; source: ArtifactSource }) {
 	const now = () => props.shelf.open() as Opened;
 	const before = signal<Shown | null>(null);
+	const side = signal<"before" | "after">("after");
 	let comparison = 0;
 	let openedGeneration = -1;
 	effect(() => {
@@ -142,7 +152,11 @@ function Viewer(props: { shelf: Shelf; source: ArtifactSource }) {
 		openedGeneration = generation;
 		comparison++;
 		before.set(null);
+		side.set("after");
 	});
+	// Every viewer, also a round's pinned prototype, closes its full window as it goes.
+	const shelf = props.shelf;
+	cleanup(() => closeFullFor(shelf));
 	const compare = async () => {
 		const current = now();
 		if (current.pin.revision <= 1) return;
@@ -168,56 +182,93 @@ function Viewer(props: { shelf: Shelf; source: ArtifactSource }) {
 		glide();
 		props.shelf.open.set({ ...now(), preview: !now().preview });
 	};
+	const stopComparing = () => {
+		comparison++;
+		before.set(null);
+		side.set("after");
+	};
+	// The one pane: the side chosen, in the viewer's preview or source mode.
+	const pane = (): Shown => {
+		const b = before();
+		return side() === "before" && b ? { ...b, preview: now().preview } : now();
+	};
+	const full = (back: () => void) => {
+		const generation = now().generation;
+		const chosen = side();
+		const older = before();
+		// The same artifact, side and Before read as when it opened, not an equal-looking copy.
+		openFull({
+			shown: pane(),
+			id: shelf,
+			side: older ? (chosen === "before" ? "Before" : "After") : undefined,
+			live: () => shelf.open()?.generation === generation && side() === chosen && before() === older,
+			back,
+		});
+	};
 	return (
 		<View testID="artifact-viewer" class="gap-2 pt-1">
-			<View class="flex-row items-center justify-end gap-1">
-				<If when={now().state === "refused"}>
-					<Action
-						label="Retry read"
-						testID="artifact-viewer-retry"
-						onPress={() => void openRow(props.shelf, props.source, now().row)}
-					/>
+			{/* The tabs keep their own width; when the row is narrow, the commands wrap below them, never under them. */}
+			<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
+				<If when={before()}>
+					<View class="flex-row">
+						<TabRow>
+							<TabItem
+								label={`Before · revision ${before()?.pin.revision ?? ""}`}
+								selected={side() === "before"}
+								testID="artifact-tab-before"
+								onPress={() => side.set("before")}
+							/>
+							<TabItem
+								label={`After · revision ${now().pin.revision}`}
+								selected={side() === "after"}
+								testID="artifact-tab-after"
+								onPress={() => side.set("after")}
+							/>
+						</TabRow>
+					</View>
 				</If>
-				<If when={now().state === "shown" && now().pin.revision > 1}>
-					<Action
-						label={before() ? "Close comparison" : "Compare previous version"}
-						testID="artifact-compare"
-						onPress={() => {
-							if (before()) {
-								comparison++;
-								before.set(null);
-							} else void compare();
-						}}
-					/>
-				</If>
-				<If when={now().kind === "nsh" && artifactPreviewsAvailable() && now().state === "shown"}>
-					<Action
-						label={now().preview ? "Inspect source" : "Show preview"}
-						testID="artifact-viewer-toggle"
-						onPress={toggle}
-					/>
-				</If>
-				<If when={now().state === "shown"}>
-					<Action
-						label="Full window"
-						icon="fullscreen"
-						testID="artifact-viewer-full"
-						onPress={() => openFull(props.shelf)}
-					/>
-				</If>
-				<Action label="Close" testID="artifact-viewer-close" onPress={() => props.shelf.hideLast()} />
+				<View class="ml-auto flex-row flex-wrap items-center justify-end gap-1">
+					<If when={now().state === "refused"}>
+						<Action
+							label="Retry read"
+							testID="artifact-viewer-retry"
+							onPress={() => void openRow(props.shelf, props.source, now().row)}
+						/>
+					</If>
+					<If when={now().state === "shown" && now().pin.revision > 1}>
+						<Action
+							label={before() ? "Close comparison" : "Compare previous version"}
+							testID="artifact-compare"
+							onPress={() => {
+								if (before()) stopComparing();
+								else void compare();
+							}}
+						/>
+					</If>
+					<If when={now().kind === "nsh" && artifactPreviewsAvailable() && now().state === "shown"}>
+						<Action
+							label={now().preview ? "Inspect source" : "Show preview"}
+							testID="artifact-viewer-toggle"
+							onPress={toggle}
+						/>
+					</If>
+					<ArtifactTools shown={pane()} testID="artifact-viewer" onFull={full} />
+					<Action label="Close" testID="artifact-viewer-close" onPress={() => props.shelf.hideLast()} />
+				</View>
 			</View>
-			<If when={before()}>
-				<Text role="header" class="text-sm font-medium text-foreground">
-					Before
+			{/* The pane's own saved title: an older revision keeps the name it was saved with. */}
+			<View class="flex-row flex-wrap items-baseline gap-x-2">
+				<Text testID="artifact-viewer-title" class="text-sm font-medium text-foreground">
+					{savedTitle(pane())}
 				</Text>
-				<SourcePanel inspection={before()!} />
-				<Text role="header" class="text-sm font-medium text-foreground">
-					After
-				</Text>
-			</If>
-			<If when={now().preview} else={<SourcePanel inspection={now()} />}>
-				<ArtifactPreview inspection={now()} />
+				<Text class="text-xs text-faint">{paneLine(pane())}</Text>
+			</View>
+			<If when={!inFull(props.shelf)} else={<InFullNote />}>
+				{/* A new artifact or side starts its own pane; a preview there starts again from its saved revision. */}
+				<Each of={[`${props.shelf.open()?.generation ?? ""}/${side()}`]} key={String}>
+					{/* Comparing, Before and After share one pane of a fixed height. */}
+					{() => <ArtifactBody shown={pane()} bounded={!!before()} />}
+				</Each>
 			</If>
 		</View>
 	);
@@ -288,7 +339,7 @@ export function ArtifactShelf(props: {
 	cleanup(() => {
 		props.shelf.open.set(null);
 		props.shelf.anchors.clear();
-		if (fullView()?.shelf === props.shelf) fullView.set(null);
+		closeFullFor(props.shelf);
 	});
 	void props.source.list(props.missionId).then((r) => {
 		listing.set(r.ok ? { status: "shown", list: r.list } : { status: "refused", message: r.message });
@@ -353,76 +404,6 @@ export function ArtifactShelf(props: {
 				<Text class="pt-1 text-xs text-faint">Showing the 100 newest. Older ones stay with their chats.</Text>
 			</If>
 		</View>
-	);
-}
-
-/** The artifact open in the full window, over the page, and the shelf it came from. */
-const fullView = signal<{ shown: Opened; shelf: Shelf } | null>(null);
-
-/** Shows the open artifact in the full window. The card's own viewer closes, so one preview runs. */
-function openFull(shelf: Shelf) {
-	const now = shelf.open();
-	if (now?.state !== "shown") return;
-	glide();
-	fullView.set({ shown: now, shelf });
-	shelf.open.set(null);
-}
-
-function closeFull() {
-	const now = fullView();
-	if (!now) return;
-	glide();
-	fullView.set(null);
-	now.shelf.anchors.get(now.shown.key)?.focus();
-}
-
-/**
- * The open artifact in the whole window, over the page, which stays as it was underneath.
- * Its preview or saved source, like the card's viewer. Escape or Close comes back to the card.
- * The window has one; it shows only while an artifact is opened there.
- */
-export function FullArtifact() {
-	const toggle = () => {
-		const now = fullView();
-		if (!now) return;
-		glide();
-		fullView.set({ ...now, shown: { ...now.shown, preview: !now.shown.preview } });
-	};
-	effect(() => {
-		if (!fullView()) return;
-		cleanup(keymap.bind("escape", closeFull, { when: "always" }));
-	});
-	return (
-		<If when={fullView()}>
-			{(v) => (
-				<View testID="artifact-full" class="absolute inset-0 bg-background">
-					<View class="flex-row items-center gap-4 border-b border-border px-6 py-2.5">
-						<Text role="header" class="flex-1 truncate text-sm font-semibold text-foreground">
-							{`${v().shown.title || "Artifact"} · ${kindName(v().shown.kind)} · revision ${v().shown.pin.revision}`}
-						</Text>
-						<If when={v().shown.kind === "nsh" && artifactPreviewsAvailable()}>
-							<Action
-								label={v().shown.preview ? "Inspect source" : "Show preview"}
-								testID="artifact-full-toggle"
-								onPress={toggle}
-							/>
-						</If>
-						<Action
-							label="Close full window (Esc)"
-							icon="fullscreenExit"
-							iconOnly
-							testID="artifact-full-close"
-							onPress={closeFull}
-						/>
-					</View>
-					<View class="min-h-0 flex-1 p-4">
-						<If when={v().shown.preview} else={<SourcePanel inspection={v().shown} />}>
-							<ArtifactPreview inspection={v().shown} fill />
-						</If>
-					</View>
-				</View>
-			)}
-		</If>
 	);
 }
 
