@@ -626,7 +626,8 @@ async function fixture(
 		provider: "pilot-model-b",
 		models: [
 			{ id: "three", reasoning: true, contextWindow: 128_000 },
-			{ id: "small", contextWindow: 16_000, maxTokens: 2048 },
+			// Smaller than the source model, with at least 1K left after the current tool declarations.
+			{ id: "small", contextWindow: 18_000, maxTokens: 2048 },
 		],
 	});
 	runtime.registerNativeProvider(a.provider);

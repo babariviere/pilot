@@ -1,33 +1,26 @@
-// Standalone attention round. Native projects saved JSON and resolves exact
-// options/digests on Submit. This view only edits and presents draft answers.
-import { cleanup, effect, signal, Text, View, type ViewRef } from "nsh";
-import { Input, Radio, RadioGroup } from "nsh/base";
-import type { Decision } from "pilot-day/native";
+// Standalone adapter for the same saved-round form missions use. Local JSON
+// keeps drafts only; native code resolves exact options and digests on Submit.
+import { cleanup, computed, effect, signal, Text, View, type ViewRef } from "nsh";
+import type { Decision, Interview, Question, QuestionSection } from "pilot-day/native";
 import { checkDecision, laterDecision, needsCheck, saveDecisionDraft } from "./commands";
 import type { Day } from "./day";
-import { Action, Mark } from "./ui";
+import { type InterviewRead, InterviewRenderer, type InterviewSource } from "./InterviewRenderer";
+import { Action, HelpChip } from "./ui";
 import { anchors, focusFront, messages, replies, setFor } from "./view";
 
-// Same plain section labels as the mission interview's InterviewDoc.
-const SECTION_WORDS: Record<string, string> = {
-	outcome: "What it should achieve",
-	"non-goals": "What to leave out",
-	constraints: "Limits",
-	acceptance: "How you will know",
-	authority: "What Pilot may do",
+const SECTIONS: Record<string, QuestionSection> = {
+	outcome: "outcome",
+	"non-goals": "nonGoals",
+	constraints: "constraints",
+	acceptance: "acceptance",
+	authority: "authority",
 };
 
-/** No answer, including a custom answer, is chosen merely by opening a round. */
-export function customAnswerSelected(
-	answer: { selectedOptionId: string | null; text: string },
-	explicit = false,
-): boolean {
-	return answer.selectedOptionId === null && (explicit || answer.text.trim() !== "");
-}
-
-export function InterviewCard(props: { day: Day; decision: Decision; later: boolean }) {
+export function InterviewCard(props: { day: Day; decision: Decision; later: boolean; keyboardActive: boolean }) {
 	const d = () => props.decision;
 	const id = d().id;
+	// Entry plus round identity scopes the form's kept navigation and fields.
+	const interviewId = `attention/${id}/${d().interviewRoundId}`;
 	const answers = signal(
 		d().interviewQuestions.map((q) => ({
 			questionId: q.id,
@@ -35,14 +28,13 @@ export function InterviewCard(props: { day: Day; decision: Decision; later: bool
 			text: q.text,
 		})),
 	);
-	const review = signal(needsCheck(d()));
-	const customChoices = signal<Record<string, boolean>>({});
 	const sending = signal(false);
-	const idle = () => d().delivery === "idle" && !sending();
-	const complete = () =>
-		answers().length > 0 && answers().every((a) => a.selectedOptionId !== null || a.text.trim() !== "");
+	const submitted = signal(false);
+	const draftMessage = signal("");
+	const contextOpen = signal<Record<string, boolean>>({});
+	const composing = new Set<string>();
+	const idle = () => d().delivery === "idle" && !sending() && !submitted();
 	const serialized = () => JSON.stringify({ roundId: d().interviewRoundId, answers: answers() });
-	const answer = (id: string) => answers().find((a) => a.questionId === id)!;
 	const primary = signal<ViewRef | null>(null);
 	anchors.set(id, () => primary() ?? undefined);
 	effect(() => {
@@ -57,14 +49,19 @@ export function InterviewCard(props: { day: Day; decision: Decision; later: bool
 		props.day.feed.flushDrafts();
 	});
 
-	function edit(questionId: string, patch: { selectedOptionId?: string | null; text?: string }) {
-		if (!idle() || review()) return;
-		answers.set(answers().map((a) => (a.questionId === questionId ? { ...a, ...patch } : a)));
+	function save(questionId: string) {
+		if (!idle() || composing.has(questionId)) return;
 		setFor(replies, id, serialized());
-		saveDecisionDraft(props.day, d());
+		const outcome = saveDecisionDraft(props.day, d());
+		draftMessage.set(outcome.status === "accepted" ? "" : outcome.message);
+	}
+	function edit(questionId: string, patch: { selectedOptionId?: string | null; text?: string }) {
+		if (!idle()) return;
+		answers.set(answers().map((a) => (a.questionId === questionId ? { ...a, ...patch } : a)));
+		save(questionId);
 	}
 	async function submit() {
-		if (!idle() || !review() || !complete()) return;
+		if (!idle() || composing.size || answers().some((a) => a.selectedOptionId === null && !a.text.trim())) return;
 		const text = serialized();
 		sending.set(true);
 		try {
@@ -77,164 +74,148 @@ export function InterviewCard(props: { day: Day; decision: Decision; later: bool
 				text,
 			});
 			setFor(messages, id, outcome.message);
-			if (outcome.status === "accepted") focusFront.set(true);
+			if (outcome.status === "accepted") {
+				submitted.set(true);
+				focusFront.set(true);
+			}
 		} finally {
 			sending.set(false);
 		}
 	}
-	return (
-		<View testID="interview-card" class="gap-4 rounded-2xl border border-border-strong bg-card px-6 py-6">
-			<Text role="header" class="text-xl font-semibold leading-snug text-card-foreground">
-				Questions before proceeding
-			</Text>
-			<View class="flex-row items-center gap-1.5">
-				<Mark kind={needsCheck(d()) ? "unknown" : "needs"} />
-				<Text class="text-xs text-muted-foreground">{d().missionTitle}</Text>
-			</View>
-			<Text class="text-sm text-muted-foreground">
-				Answer every question, then review the full round. Drafts do not continue the chat.
-			</Text>
-			<Each of={d().interviewQuestions} key={(q) => q.id}>
-				{(q) => (
-					<View testID={`interview-question-${q().id}`} class="gap-2 border-t border-border pt-4">
-						<Text class="text-xs text-muted-foreground">{SECTION_WORDS[q().section] ?? q().section}</Text>
-						<Text class="text-sm font-medium text-card-foreground">{q().prompt}</Text>
-						<If when={q().context}>
-							<Text class="text-sm text-muted-foreground">{q().context}</Text>
-						</If>
-						<If
-							when={!review()}
-							else={
-								<View class="gap-1">
-									<Text testID={`interview-review-${q().id}`} class="text-sm text-foreground">
-										{q().options.find((o) => o.id === answer(q().id).selectedOptionId)?.meaning ??
-											"Your own answer"}
-									</Text>
-									<If when={answer(q().id).text}>
-										<Text class="text-sm text-foreground">{answer(q().id).text}</Text>
-									</If>
-								</View>
-							}
-						>
-							<RadioGroup class="gap-1">
-								<Each of={q().options} key={(o) => o.id}>
-									{(o) => (
-										<Radio
-											testID={`interview-option-${q().id}-${o().id}`}
-											checked={answer(q().id).selectedOptionId === o().id}
-											disabled={!idle()}
-											onChange={() => {
-												if (!idle() || review()) return;
-												customChoices.set({ ...customChoices(), [q().id]: false });
-												edit(q().id, { selectedOptionId: o().id });
-											}}
-											class="group flex-row gap-3 rounded-xl px-3 py-2.5 checked:bg-selection hover:bg-accent checked:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
-										>
-											<View class="mt-0.5 size-4 items-center justify-center rounded-full border border-input group-checked:border-primary">
-												<View class="size-2 rounded-full group-checked:bg-primary" />
-											</View>
-											<View class="min-w-0 flex-1 gap-0.5">
-												<Text class="text-sm text-card-foreground">{o().meaning}</Text>
-												<If when={q().recommendedOptionId === o().id}>
-													<Text class="text-xs text-muted-foreground">Recommended</Text>
-												</If>
-											</View>
-										</Radio>
-									)}
-								</Each>
-								<Radio
-									testID={`interview-custom-${q().id}`}
-									checked={customAnswerSelected(answer(q().id), customChoices()[q().id])}
-									disabled={!idle()}
-									onChange={() => {
-										if (!idle() || review()) return;
-										customChoices.set({ ...customChoices(), [q().id]: true });
-										edit(q().id, { selectedOptionId: null });
-									}}
-									class="group flex-row gap-3 rounded-xl px-3 py-2.5 checked:bg-selection hover:bg-accent checked:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
-								>
-									<View class="mt-0.5 size-4 items-center justify-center rounded-full border border-input group-checked:border-primary">
-										<View class="size-2 rounded-full group-checked:bg-primary" />
-									</View>
-									<Text class="text-sm text-card-foreground">Answer in my own words</Text>
-								</Radio>
-							</RadioGroup>
-							<Input
-								testID={`interview-text-${q().id}`}
-								multiline
-								value={answer(q().id).text}
-								disabled={!idle()}
-								onChange={({ value }) => edit(q().id, { text: value })}
-								onBlur={() => props.day.feed.flushDrafts()}
-								placeholder="Your answer, or extra detail"
-								class="min-h-8 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary"
-							/>
-						</If>
-					</View>
-				)}
-			</Each>
-			<If when={d().draft.unsaved}>
-				<Text role="alert" class="text-sm text-needs-ink">
-					Pilot could not save this draft. Copy your answers before closing.
-				</Text>
-			</If>
-			<If when={messages()[id]}>
-				<Text role="alert" class="text-sm text-needs-ink">
-					{messages()[id] ?? ""}
-				</Text>
-			</If>
-			<If when={d().delivery === "sending" || sending()}>
-				<Text class="text-sm text-muted-foreground">Sending your answers…</Text>
-			</If>
-			<If when={needsCheck(d())}>
-				<Text class="text-sm text-muted-foreground">
-					Submission not confirmed. Check only reads its receipt; it never sends again.
-				</Text>
-			</If>
-			<View class="flex-row flex-wrap items-center gap-2">
-				<If
-					when={needsCheck(d())}
-					else={
-						<If
-							when={review()}
-							else={
-								<Action
-									primary
-									testID="interview-review"
-									label="Review answers"
-									anchor={(node) => {
-										primary.set(node);
-									}}
-									disabled={!idle() || !complete()}
-									onPress={() => review.set(true)}
-								/>
-							}
-						>
-							<Action
-								primary
-								testID="interview-submit"
-								label="Submit"
-								anchor={(node) => {
-									primary.set(node);
-								}}
-								disabled={!idle() || !complete()}
-								onPress={() => void submit()}
-							/>
-							<Action label="Edit answers" disabled={!idle()} onPress={() => review.set(false)} />
-						</If>
+	const read = computed<InterviewRead>(() => {
+		const local = new Map(answers().map((a) => [a.questionId, a]));
+		const questions: Question[] = d().interviewQuestions.map((q) => {
+			const a = local.get(q.id)!;
+			return {
+				id: q.id,
+				section: SECTIONS[q.section] ?? "outcome",
+				prompt: q.prompt,
+				context: q.context,
+				choices: q.options.map((o) => ({ ...o, recommended: q.recommendedOptionId === o.id })),
+				chosen: a.selectedOptionId,
+				text: a.text,
+				state: a.selectedOptionId !== null || a.text.trim() ? "answered" : "open",
+				// Presentation only. The attention bridge fills the authoritative digest.
+				digest: "",
+				asks: [],
+				earlier: "",
+				new: false,
+				saving: "idle",
+			};
+		});
+		const interview: Interview = {
+			id: interviewId,
+			questions,
+			answered: questions.filter((q) => q.state === "answered").length,
+			submit:
+				sending() || d().delivery === "sending"
+					? "submitting"
+					: d().delivery === "checking"
+						? "checking"
+						: needsCheck(d())
+							? "unknown"
+							: submitted()
+								? "submitted"
+								: "open",
+			current: true,
+			accepting: true,
+			unconfirmed: needsCheck(d()),
+			// These native Interview fields are not rendered for standalone rounds.
+			kind: "mission",
+			topic: "",
+			round: 1,
+			revision: d().revision,
+			questionSet: 1,
+			proposal: "",
+			room: 0,
+		};
+		return {
+			interview,
+			// The immutable shown question stays answerable during unrelated activity.
+			// Native checks its exact entry and scope when Submit is pressed.
+			fresh: true,
+			keyboardActive: props.keyboardActive,
+			busy: sending(),
+			message: draftMessage() || messages()[id] || "",
+			routeKey: "today",
+			heading: "Questions before proceeding",
+			submitLabel: "Submit answers",
+			submissionHint: "Submitting sends every answer at once and resumes the chat within its current permissions.",
+			roundHint: d().draft.unsaved
+				? "Pilot could not save this draft. Copy your answers before closing."
+				: "Drafts do not continue the chat. Only Submit answers sends the full round.",
+			answers: Object.fromEntries(
+				questions.map((q) => [
+					q.id,
+					{
+						choice: q.chosen ?? (q.text.trim() ? null : undefined),
+						text: q.text,
+						unsaved: d().draft.unsaved || draftMessage() !== "",
+						message: draftMessage(),
+					},
+				]),
+			),
+		};
+	});
+	const toggleContext = (questionId: string) =>
+		contextOpen.set({ ...contextOpen(), [questionId]: !contextOpen()[questionId] });
+	const source: InterviewSource = {
+		read,
+		dispatch(command) {
+			switch (command.kind) {
+				case "choose":
+					edit(command.questionId, { selectedOptionId: command.choice || null });
+					break;
+				case "edit":
+					edit(command.questionId, { text: command.text });
+					break;
+				case "compose":
+					if (command.active) composing.add(command.questionId);
+					else {
+						composing.delete(command.questionId);
+						save(command.questionId);
 					}
-				>
-					<Action
-						primary
-						label="Check again"
-						disabled={d().delivery === "checking"}
-						onPress={() => void checkDecision(props.day, d())}
+					break;
+				case "save":
+					save(command.questionId);
+					props.day.feed.flushDrafts();
+					break;
+				case "submit":
+					void submit();
+					break;
+				case "check":
+					void checkDecision(props.day, d());
+					break;
+				case "help":
+					if (command.help === "context") toggleContext(command.questionId);
+					break;
+			}
+		},
+		helpKeys: { context: "m" },
+		questionHelp: (q) => (
+			<If when={q.context}>
+				<View class="flex-row flex-wrap gap-1.5">
+					<HelpChip
+						label="More context"
+						shortcut="M"
+						pressed={contextOpen()[q.id] === true}
+						onChange={() => toggleContext(q.id)}
 					/>
+				</View>
+				<If when={contextOpen()[q.id]}>
+					<Text testID={`context-${q.id}`} class="text-sm text-muted-foreground">
+						{q.context}
+					</Text>
 				</If>
-				<If when={props.later}>
-					<Action label="Later" disabled={!idle()} onPress={() => laterDecision(props.day, d())} />
-				</If>
-			</View>
+			</If>
+		),
+	};
+	return (
+		<View testID="interview-card" class="gap-4">
+			<InterviewRenderer source={source} anchor={(node) => primary.set(node)} />
+			<If when={props.later}>
+				<Action label="Later" disabled={!idle()} onPress={() => laterDecision(props.day, d())} />
+			</If>
 		</View>
 	);
 }

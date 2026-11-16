@@ -435,6 +435,7 @@ text(await tools.artifact({action:'list'}));
 			"codemode",
 			"find",
 			"grep",
+			"interview",
 			"ls",
 			"read",
 			"web",

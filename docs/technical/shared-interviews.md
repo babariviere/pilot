@@ -68,3 +68,28 @@ A synthetic in-memory check measured the extra question-gate snapshot over 500
 reads: p95 0.0032 ms empty and 0.0019 ms with 5,000 4-KiB entries plus streaming
 writes. This isolates the added document read, not end-to-end SQLite or provider
 latency. Real large-session responsiveness remains a separate acceptance check.
+
+The shared interview declaration adds about 592 estimated toolbox tokens in the
+model-rebuild fixture. Its smaller destination uses 18K rather than 16K so the
+scenario still has the required 1K transcript budget after tool declarations.
+Production admission still refuses a model whose remaining budget is too small.
+
+## One interview UI
+
+`apps/day/InterviewRenderer.tsx` is the shared presentation module. It keeps the
+mission form's one-question navigation, number keys, free text, See all questions,
+review page and explicit Submit. It knows no mission transport or standalone
+attention transport.
+
+Its interface is a reactive `read()` plus `dispatch(command)`. The read contains
+the current interview, displayed answers, save/submit state, scoped identity and
+continuation wording. Commands describe user actions; adapters own persistence
+and exact submission checks. Optional help and round-notes slots keep those
+mission capabilities outside the shared implementation.
+
+`InterviewDoc.tsx` adapts mission planning and keeps its existing draft saves,
+proposal/revisit checks, help and planning-only continuation. `InterviewCard.tsx`
+adapts standalone native attention drafts, exact structured submission and receipt
+lookup. It is a wrapper around the same renderer, not another question layout.
+Navigation and kept fields use scope, round and question identity. Standalone
+shortcuts belong only to the active attention card.

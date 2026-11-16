@@ -2,9 +2,11 @@
 // typing, before an intent carries it to Rust. Keyed by interview and
 // question, so it survives reordering, new rounds and hot updates.
 import { type Signal, signal } from "nsh";
-import type { ChatChoice, Interview, Question } from "pilot-day/native";
+import type { ChatChoice } from "pilot-day/native";
 import type { ChatMode } from "./chatFeed";
 import { closeMission } from "./view";
+
+export { answerKey, atQuestion, focusAsk, focusField, put, seeAll, writing } from "./interviewView";
 
 /** New, or one mission's planning, or null for Today and missions. */
 export type PlanRoute = { kind: "new" } | { kind: "plan"; missionId: string } | null;
@@ -69,16 +71,6 @@ export const mapOpen = signal<Record<string, boolean>>({});
 export const settledOpen = signal<Record<string, boolean>>({});
 /** Whether an earlier round's answers are open, by mission and round. */
 export const roundOpen = signal<Record<string, boolean>>({});
-/** The question each interview shows, or "review" for its answers page, by interview. */
-export const atQuestion = signal<Record<string, string>>({});
-/** Set to an answer key whose first choice should take the keyboard focus once. */
-export const focusAsk = signal<string | null>(null);
-/** Set to an answer key whose text field should take the keyboard focus once. */
-export const focusField = signal<string | null>(null);
-/** Whether the user opened a question's text field, by answer key. */
-export const writing = signal<Record<string, boolean>>({});
-/** Whether an interview shows all its questions at once, by interview. One at a time is the default. */
-export const seeAll = signal<Record<string, boolean>>({});
 /** The revision whose confirmation the user opened, exactly as shown, by mission. */
 export const revisionShown = signal<Record<string, { revisionId: string; digest: string }>>({});
 /** Whether a Revisit intent waits for its answer, by mission. */
@@ -87,16 +79,6 @@ export const revisitBusy = signal<Record<string, boolean>>({});
 export const revisitMessages = signal<Record<string, string>>({});
 /** Whether a part of the Revisit is open, by mission and part. */
 export const revisitOpen = signal<Record<string, boolean>>({});
-
-/** The key of one answer: its interview and question. */
-export function answerKey(interview: Interview, question: Question): string {
-	return `${interview.id}/${question.id}`;
-}
-
-/** Sets one key's value in a keyed store. */
-export function put<T>(store: Signal<Record<string, T>>, key: string, value: T) {
-	store.update((all) => ({ ...all, [key]: value }));
-}
 
 /** Removes one key from a keyed store. */
 export function drop<T>(store: Signal<Record<string, T>>, key: string) {

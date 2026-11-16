@@ -415,7 +415,8 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	focused.set(view.focused || null);
 	const shown: Record<string, string> = {};
 	for (const entry of view.questions) {
-		const at = entry.indexOf("/");
+		// Scope and round identities can contain slashes; question IDs cannot.
+		const at = entry.lastIndexOf("/");
 		if (at > 0) shown[entry.slice(0, at)] = entry.slice(at + 1);
 	}
 	atQuestion.set(shown);

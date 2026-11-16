@@ -1,5 +1,5 @@
 // Mock data only. No account, daemon or real continuation.
-import { mount, Scroll, signal, Text, View } from "nsh";
+import { effect, mount, Scroll, signal, Text, View } from "nsh";
 import type { Decision, DraftIntent, ReplyIntent } from "pilot-day/native";
 import { DecisionCard } from "./DecisionCard";
 import { openDay } from "./mockFeeds";
@@ -36,7 +36,10 @@ const original: Decision = {
 	delivery: "idle",
 };
 const decision = signal(original);
+const snapshot = day.today();
+effect(() => day.today.set({ ...snapshot, decisions: [decision()] }));
 const visible = signal(true);
+const second = signal(false);
 const saved = signal("");
 const saves = signal(0);
 const sends = signal(0);
@@ -82,7 +85,30 @@ mount(() => (
 			<If when={visible()}>
 				<DecisionCard day={day} decision={decision()} index={0} count={1} later={false} />
 			</If>
+			<If when={second()}>
+				<View testID="secondary-round">
+					<DecisionCard
+						day={day}
+						index={1}
+						count={2}
+						later={false}
+						decision={{
+							...original,
+							id: "second-round",
+							interviewRoundId: "second-round",
+							interviewQuestions: original.interviewQuestions.map((q) => ({ ...q, id: `other-${q.id}` })),
+						}}
+					/>
+				</View>
+			</If>
 			<View class="flex-row gap-2">
+				<Action label="Show second round" onPress={() => second.set(true)} />
+				<Action
+					label="Stale global read"
+					onPress={() =>
+						day.today.set({ ...day.today(), attention: { ...day.today().attention, state: "stale" } })
+					}
+				/>
 				<Action
 					label="Large round"
 					onPress={() =>

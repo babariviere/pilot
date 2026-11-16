@@ -322,7 +322,7 @@ function bindTriage(day: Day, shown: () => boolean) {
 	const guarded: Record<string, () => void> = {};
 	for (const [key, run] of Object.entries(keys)) {
 		guarded[key] = () => {
-			if (shown()) run();
+			if (shown() && (!decision()?.interviewRoundId || key === "l")) run();
 		};
 	}
 	keymap.bind(guarded);

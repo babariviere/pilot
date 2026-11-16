@@ -36,6 +36,7 @@ import {
 	drafts,
 	focusFront,
 	focusInput,
+	front,
 	helpOpen,
 	messages,
 	pickChanged,
@@ -530,7 +531,7 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 		<Each of={[props.decision]} key={(d) => `${d.id}:${d.interviewRoundId ?? "ordinary"}`}>
 			{(d) => (
 				<If when={d().interviewRoundId} else={<OrdinaryDecisionCard {...props} decision={d()} />}>
-					<InterviewCard {...props} decision={d()} />
+					<InterviewCard {...props} decision={d()} keyboardActive={front(props.day.today())?.id === d().id} />
 				</If>
 			)}
 		</Each>

@@ -12,9 +12,11 @@ test("standalone interview mock in light and dark", async () => {
 		await app.waitFor("id:interview-card");
 		await app.wait(300);
 		await app.screenshot(`output/interview-round-${colorScheme}.png`);
-		await app.press("id:interview-option-outcome-drafts");
-		await app.type("id:interview-text-authority", "I approve after reviewing the changes.");
-		await app.press("id:interview-review");
+		await app.press("id:choice-outcome-drafts");
+		await app.press("id:next");
+		await app.press("id:own-authority");
+		await app.type("id:answer-authority", "I approve after reviewing the changes.");
+		await app.keyboard.press("mod+enter");
 		await app.wait(300);
 		await app.screenshot(`output/interview-review-${colorScheme}.png`);
 	}
