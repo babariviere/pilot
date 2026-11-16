@@ -2,7 +2,7 @@
 use super::*;
 use pilot_day_native::plan::{PlanAvailability, Planning};
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::{Shutdown, TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
@@ -17,6 +17,10 @@ struct State {
     inventory_status: u16,
     requests: usize,
     websocket: Option<TcpStream>,
+    feedback_receipts: Vec<Value>,
+    feedback_posts: usize,
+    feedback_lookups: usize,
+    lose_feedback_reply: bool,
 }
 struct InventoryFixture {
     f: Fixture,
@@ -42,6 +46,10 @@ impl InventoryFixture {
             inventory_status: 200,
             requests: 0,
             websocket: None,
+            feedback_receipts: vec![],
+            feedback_posts: 0,
+            feedback_lookups: 0,
+            lose_feedback_reply: false,
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let data = state.clone();
@@ -62,11 +70,8 @@ impl InventoryFixture {
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut request = String::new();
                 reader.read_line(&mut request).unwrap();
-                assert!(
-                    request.starts_with("GET "),
-                    "snapshot must not write: {request}"
-                );
                 let mut key = String::new();
+                let mut length = 0;
                 loop {
                     let mut header = String::new();
                     reader.read_line(&mut header).unwrap();
@@ -79,9 +84,50 @@ impl InventoryFixture {
                     {
                         key = value.trim().to_owned();
                     }
+                    if let Some((name, value)) = header.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
                 }
+                let mut bytes = vec![0; length];
+                reader.read_exact(&mut bytes).unwrap();
                 let mut state = data.lock().unwrap();
                 state.requests += 1;
+                if request.starts_with("POST /api/operations ")
+                    || request.starts_with("POST /api/operations/receipt ")
+                {
+                    let op: Value = serde_json::from_slice(&bytes).unwrap();
+                    let lookup = request.starts_with("POST /api/operations/receipt ");
+                    let body = if lookup {
+                        state.feedback_lookups += 1;
+                        state.feedback_receipts.iter().find(|r| r["operationId"] == op["operationId"]).unwrap().clone()
+                    } else {
+                        state.feedback_posts += 1;
+                        let p: Value = serde_json::from_str(op["payload"].as_str().unwrap()).unwrap();
+                        assert_eq!(p["purpose"], "user-feedback");
+                        let mut item = json!({"id":op["targetId"],"operationId":op["operationId"],"text":p["text"],"origin":null,"recordedAt":1});
+                        if let Some(images) = p.get("attachments") { item["attachments"] = images.clone(); }
+                        let receipt = json!({"operationId":op["operationId"],"payloadHash":op["payloadHash"],"destination":op["destination"],"targetId":op["targetId"],"state":"accepted","result":item});
+                        state.feedback_receipts.push(receipt.clone());
+                        item["sequence"] = json!(state.feedback_posts);
+                        item["work"] = json!([]);
+                        state.feedback["items"].as_array_mut().unwrap().insert(0, item);
+                        if state.lose_feedback_reply {
+                            state.lose_feedback_reply = false;
+                            stream.shutdown(Shutdown::Both).unwrap();
+                            continue;
+                        }
+                        receipt
+                    }.to_string();
+                    write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",body.len()).unwrap();
+                    stream.flush().unwrap();
+                    continue;
+                }
+                assert!(
+                    request.starts_with("GET "),
+                    "snapshot must not write: {request}"
+                );
                 let status = if request
                     .starts_with("GET /api/projects/synthetic-project/planning-inventory ")
                 {
@@ -163,6 +209,86 @@ impl InventoryFixture {
             Fixture::caps(),
         )
     }
+}
+
+#[test]
+fn unknown_feedback_holds_only_its_payload_and_images_and_check_never_resends() {
+    let mut fixture = InventoryFixture::new();
+    fixture.state.lock().unwrap().lose_feedback_reply = true;
+    let image = json!({"uploadId":"00000000-0000-4000-8000-000000000001","sha256":"a".repeat(64),"bytes":70});
+    let intent = json!({"text":"First report 日本語","origin":null,"attachments":[image.clone()]});
+    let first = fixture.f.run(
+        &format!("return await call('day.feedback.send', {intent});"),
+        Fixture::caps(),
+    );
+    let outcome = &first["value"]["outcome"];
+    assert_eq!(outcome["state"], "unknown");
+    let id = outcome["operationId"].as_str().unwrap();
+    assert_eq!(
+        first["value"]["operations"][0]["attachments"],
+        json!([image.clone()])
+    );
+    let removal = fixture.f.run(
+        "return await call('day.feedback.image', {uploadId:'00000000-0000-4000-8000-000000000001'});",
+        Fixture::caps(),
+    );
+    assert_eq!(
+        removal["error"], "unknown",
+        "an uncertain owner protects its upload without DELETE"
+    );
+    for blocked in [
+        intent,
+        json!({"text":"Changed report","origin":null,"attachments":[image]}),
+    ] {
+        let reply = fixture.f.run(
+            &format!("return await call('day.feedback.send', {blocked});"),
+            Fixture::caps(),
+        );
+        assert_eq!(reply["error"], "unknown");
+    }
+    let other = fixture.f.run(
+        "return await call('day.feedback.send', {text:'Independent report',origin:null});",
+        Fixture::caps(),
+    );
+    assert_eq!(other["value"]["outcome"]["state"], "accepted");
+    assert_eq!(other["value"]["operations"].as_array().unwrap().len(), 1);
+    assert_eq!(fixture.f.bridge.close().recv_blocking().unwrap(), Ok(()));
+    fixture.f.host = NativeHost::open(
+        Source {
+            profile: fixture.f.path.join("missing-profile"),
+            port: fixture.port,
+            home: Home {
+                daemon_id: "synthetic-daemon".into(),
+                lineage_id: "synthetic-lineage".into(),
+            },
+            project: Some(pilot_day_native::host::Project {
+                project_id: "synthetic-project".into(),
+                project_path: fixture.f.path.display().to_string(),
+            }),
+        },
+        fixture.f.path.join("journal"),
+    )
+    .unwrap();
+    fixture.f.bridge = Bridge::new(DayRoot::new(fixture.f.host.clone()));
+    let _ = fixture.f.host.read_planning_inventory().recv_blocking();
+    fixture.wait(|p| p.availability == PlanAvailability::Live);
+    let restored = fixture
+        .f
+        .run("return await call('day.feedback.read');", Fixture::caps());
+    assert_eq!(restored["value"]["operations"][0]["operationId"], id);
+    let checked = fixture.f.run(
+        &format!("return await call('day.feedback.check', {{operationId:'{id}'}});"),
+        Fixture::caps(),
+    );
+    assert_eq!(checked["value"]["outcome"]["state"], "accepted");
+    assert_eq!(
+        checked["value"]["outcome"]["receipt"]["result"]["text"],
+        "First report 日本語"
+    );
+    assert_eq!(checked["value"]["operations"], json!([]));
+    let state = fixture.state.lock().unwrap();
+    assert_eq!(state.feedback_posts, 2);
+    assert_eq!(state.feedback_lookups, 1);
 }
 
 #[test]

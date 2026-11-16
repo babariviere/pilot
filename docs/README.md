@@ -60,6 +60,11 @@ Paste a screenshot into the feedback field with Cmd+V/Ctrl+V, or use the + icon
 (up to four PNGs, 8 MiB each). Text paste works as usual.
 Pilot keeps the images with your feedback so its triage agent can read them after a restart.
 An upload failure keeps the image for Retry upload. Sending feedback still happens only with Send.
+Saved feedback lists open items before resolved history. Search filters the loaded history;
+Show earlier reads older items. A missing save reply holds only that item and its images.
+Check reads its receipt without sending again. Write another leaves it there while you send
+unrelated feedback. Put-aside drafts survive reopening; Resume draft swaps rather than
+overwrites your current words. Checking an earlier item never clears a different draft.
 Open the triage chat or Open the fix chat shows that chat read only: your messages, Pilot's replies,
 one line per tool step and whether it works, finished or failed. A chat started from New, and a
 mission's coordinator, task and working chats on its overview, open the same way. Reading a chat sends

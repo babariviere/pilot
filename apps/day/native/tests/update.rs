@@ -60,6 +60,7 @@ fn view() -> SavedView {
         feedback_open: true,
         feedback: "mission/export\n  Exact feedback 日本語\nsecond line ".into(),
         feedback_images: String::new(),
+        feedback_drafts: vec![],
         feedback_project: "pilot".into(),
         feedback_later: vec!["f1/op1/done".into(), "f2/op2/42".into()],
         question_help: vec![
@@ -84,6 +85,28 @@ fn deferred_feedback_round_trips_and_old_windows_default_to_none() {
         let mut invalid = view();
         invalid.feedback_later = vec![key.into()];
         assert!(!invalid.feedback_valid(), "{key}");
+    }
+}
+
+#[test]
+fn kept_feedback_drafts_round_trip_without_bytes_or_paths_and_old_windows_default_empty() {
+    let mut view = view();
+    let draft = serde_json::json!({"text":"  Exact edited words 日本語\nsecond line ","origin":{"kind":"mission","missionId":"export"},"attachments":[{"uploadId":"00000000-0000-4000-8000-000000000001","sha256":"a".repeat(64),"bytes":70}]}).to_string();
+    view.feedback_drafts = vec![draft.clone()];
+    assert!(view.feedback_valid());
+    assert!(view.text_bytes() >= draft.len());
+    let mut json = serde_json::to_value(&view).unwrap();
+    let restored: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert_eq!(restored.feedback_drafts, vec![draft]);
+    json.as_object_mut().unwrap().remove("feedbackDrafts");
+    let old: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert!(old.feedback_drafts.is_empty());
+    for bad in [
+        r#"{"text":"draft","origin":null,"path":"/tmp/image.png"}"#,
+        r#"{"text":"draft","origin":null,"attachments":[{"data":"png"}]}"#,
+    ] {
+        view.feedback_drafts = vec![bad.into()];
+        assert!(!view.feedback_valid());
     }
 }
 

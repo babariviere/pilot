@@ -40,7 +40,7 @@ export const MAX_ANSWER_LENGTH = 8000;
 export type FeedbackItem = UserFeedback & { sequence: number; work: UserFeedbackWorkView[] };
 
 /** One Send whose result Pilot does not know. Only Check settles it. */
-export type FeedbackOp = { operationId: string; state: "unknown" | "checking"; text: string };
+export type FeedbackOp = SendIntent & { operationId: string; state: "unknown" | "checking" };
 
 /** One step whose result Pilot does not know, on one saved item. Only Check settles it. */
 export type FeedbackStepOp = { operationId: string; state: "unknown" | "checking"; feedbackId: string; step: string };
@@ -69,7 +69,7 @@ export type FeedbackView = {
 	more: boolean;
 	/** Sends whose result is not known. */
 	unsettled: FeedbackOp[];
-	/** Steps whose result is not known. While one is, no other step is sent. */
+	/** Steps whose result is not known. Only that item's other steps wait. */
 	unsettledSteps: FeedbackStepOp[];
 	/** The projects agents can work in, or null before a read or when none could be read. */
 	projects: FeedbackProject[] | null;
@@ -87,6 +87,16 @@ export type SendIntent = {
 	origin: UserFeedbackOriginRef | null;
 	attachments?: UserFeedback["attachments"];
 };
+
+/** Keep a possible duplicate, or an image it may own, behind its own receipt check. */
+export function sameFeedback(a: SendIntent, b: SendIntent): boolean {
+	const origin = (o: UserFeedbackOriginRef | null) =>
+		!o ? "" : o.kind === "mission" ? `mission/${o.missionId}` : `chat/${o.sessionId}`;
+	return (
+		(a.text === b.text && origin(a.origin) === origin(b.origin)) ||
+		(a.attachments ?? []).some((image) => b.attachments?.some((other) => other.uploadId === image.uploadId))
+	);
+}
 
 /** What a Send or a Check did, for the user. */
 export type SendResult = {
@@ -310,7 +320,7 @@ export function pageOf(x: unknown): Page | null {
 	return { items, more: p.more, before, older: p.older === true };
 }
 
-type Summary = { operationId: string; text: string; feedbackId: string | null; step: string | null };
+type Summary = SendIntent & { operationId: string; feedbackId: string | null; step: string | null };
 
 function summariesOf(x: unknown): Summary[] | null {
 	if (!Array.isArray(x)) return null;
@@ -321,6 +331,8 @@ function summariesOf(x: unknown): Summary[] | null {
 		out.push({
 			operationId: raw.operationId,
 			text: typeof raw.text === "string" ? raw.text : "",
+			origin: (raw.origin ?? null) as UserFeedbackOriginRef | null,
+			attachments: raw.attachments as UserFeedback["attachments"],
 			feedbackId: step ? (raw.feedbackId as string) : null,
 			step: step ? (raw.step as string) : null,
 		});
@@ -445,6 +457,8 @@ export class ConnectedFeedback implements FeedbackSource {
 					operationId: o.operationId,
 					state: this.#checking.has(o.operationId) ? "checking" : "unknown",
 					text: o.text,
+					origin: o.origin,
+					attachments: o.attachments,
 				})),
 			unsettledSteps: this.#ops
 				.filter((o) => o.step !== null)
@@ -541,7 +555,7 @@ export class ConnectedFeedback implements FeedbackSource {
 
 	async send(intent: SendIntent): Promise<SendResult> {
 		if (this.#sending) return refusedSend("busy");
-		if (this.#ops.some((o) => o.step === null)) {
+		if (this.#ops.some((o) => o.step === null && sameFeedback(o, intent))) {
 			return {
 				status: "unknown",
 				message: "Earlier feedback is not confirmed. Check it first; nothing was sent.",
@@ -553,7 +567,7 @@ export class ConnectedFeedback implements FeedbackSource {
 		this.#publish();
 		let r: Reply<unknown>;
 		try {
-			r = await this.#call("day.feedback.send", { text: intent.text, origin: intent.origin });
+			r = await this.#call("day.feedback.send", intent);
 		} finally {
 			this.#sending = false;
 		}
@@ -606,7 +620,7 @@ export class ConnectedFeedback implements FeedbackSource {
 
 	async step(intent: StepIntent): Promise<StepResult> {
 		if (this.#stepping) return refusedStep("busy");
-		if (this.#ops.some((o) => o.step !== null)) return refusedStep("unknown");
+		if (this.#ops.some((o) => o.step !== null && o.feedbackId === intent.feedbackId)) return refusedStep("unknown");
 		this.#stepping = intent.feedbackId;
 		this.#publish();
 		let r: Reply<unknown>;

@@ -32,6 +32,7 @@ import {
 	feedbackDraft,
 	feedbackImageBusy,
 	feedbackImagePending,
+	feedbackKeptDrafts,
 	feedbackLater,
 	feedbackOpen,
 	feedbackProject,
@@ -236,6 +237,7 @@ export function captureView(today?: Today): SavedView {
 		feedbackOpen: feedbackOpen(),
 		feedback: savedFeedback(),
 		feedbackImages: JSON.stringify(feedbackDraft().attachments ?? []),
+		feedbackDrafts: feedbackKeptDrafts().map((d) => JSON.stringify(d)),
 		// The project the user chose for triage, and unsent answers to a
 		// triage's question by chat and question. Restoring starts and sends nothing.
 		feedbackProject: feedbackProject() ?? "",
@@ -453,6 +455,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	restoreFeedback(view.feedback ?? "");
 	const images = view.feedbackImages;
 	if (images) feedbackDraft.update((d) => ({ ...d, attachments: JSON.parse(images) }));
+	feedbackKeptDrafts.set((view.feedbackDrafts ?? []).map((d) => JSON.parse(d)));
 	feedbackOpen.set(view.feedbackOpen === true);
 	feedbackProject.set(view.feedbackProject || null);
 	restoreAnswers(view.feedbackAnswers ?? []);

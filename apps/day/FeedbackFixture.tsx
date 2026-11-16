@@ -26,6 +26,7 @@ import {
 	type UserFeedbackProposal,
 	type UserFeedbackWorkView,
 } from "./feedbackFeed";
+import { openFeedbackWith } from "./feedbackView";
 import { MockDayScreen, openDay } from "./mockFeeds";
 import { goalDraft } from "./planView";
 import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessionChat";
@@ -41,6 +42,7 @@ const PROJECTS = [{ projectId: "pilot", name: "Pilot code", contextDigest: DIGES
 class ScriptedFeedback implements FeedbackSource {
 	next = signal<Next>("accept");
 	nextStep = signal<Next>("accept");
+	rejectCheck = signal(false);
 	unreadable = signal(false);
 	sends = signal(0);
 	checks = signal(0);
@@ -63,9 +65,7 @@ class ScriptedFeedback implements FeedbackSource {
 			reason: this.#failed ? "Pilot could not reach its service." : "",
 			items: this.#failed ? [] : items,
 			more: !this.#failed && this.#shown < this.#saved.length,
-			unsettled: this.#lost
-				? [{ operationId: this.#lost.operationId, state: "unknown", text: this.#lost.intent.text }]
-				: [],
+			unsettled: this.#lost ? [{ ...this.#lost.intent, operationId: this.#lost.operationId, state: "unknown" }] : [],
 			unsettledSteps: this.#lostStep
 				? [
 						{
@@ -141,6 +141,16 @@ class ScriptedFeedback implements FeedbackSource {
 		const lost = this.#lost;
 		if (!lost || lost.operationId !== operationId) return refusedSend("unknown");
 		this.#lost = null;
+		if (this.rejectCheck()) {
+			this.rejectCheck.set(false);
+			this.#publish();
+			return {
+				status: "rejected",
+				message: "The service rejected this feedback. Your text stays.",
+				operationId,
+				saved: null,
+			};
+		}
 		const saved = this.#save(lost.intent, operationId);
 		this.#publish();
 		return { status: "accepted", message: "Saved. Thank you.", operationId, saved };
@@ -356,6 +366,11 @@ mount(() => (
 			</Each>
 			<Action label="Unreadable" onPress={() => feedback.unreadable.set(true)} />
 			<Action label="Many saved" onPress={() => feedback.manySaved()} />
+			<Action label="Check rejects" onPress={() => feedback.rejectCheck.set(true)} />
+			<Action
+				label="Suggested feedback"
+				onPress={() => openFeedbackWith({ kind: "mission", missionId: "search" }, "Suggested report")}
+			/>
 			<Text testID="steps">{`Steps: [${feedback.steps().join(",")}]`}</Text>
 			<Each of={NEXT} key={(n) => n}>
 				{(n) => <Action label={`Next step ${n()}`} onPress={() => feedback.nextStep.set(n())} />}

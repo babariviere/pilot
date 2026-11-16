@@ -4,6 +4,21 @@ import { expect, open, test } from "nsh/test";
 
 const desktop = { platform: "macos", width: 1100, height: 1600 } as const;
 
+test("suggested words use their origin only in an empty draft", async () => {
+	const app = await open("./FeedbackFixture.tsx", desktop);
+	await app.press("Suggested feedback");
+	await app.waitFor("id:feedback-text");
+	expect(app.value("id:feedback-text")).toBe("Suggested report");
+	expect(app.shows("“Faster search”")).toBe(true);
+	await app.press("id:feedback-general");
+	await app.type("id:feedback-text", "My existing draft");
+	await app.press("Suggested feedback");
+	await app.waitFor("id:feedback-offer");
+	expect(app.value("id:feedback-text")).toBe("Suggested reportMy existing draft");
+	expect(app.shows("Your unsent feedback is about Pilot in general.")).toBe(true);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
 test("native paste keeps image bytes on a disconnected host and leaves text paste intact", async () => {
 	const app = await open("./FeedbackFixture.tsx", {
 		...desktop,
@@ -117,6 +132,43 @@ test("uploaded previews can be removed without changing the feedback words", asy
 	expect(calls[2]).toEqual({ uploadId });
 });
 
+test("removing an image from a rejected active draft does not delete a kept draft's upload", async () => {
+	let deletes = 0;
+	const image = { uploadId: "00000000-0000-4000-8000-000000000003", sha256: "a".repeat(64), bytes: 70 };
+	const app = await open("./FeedbackFixture.tsx", {
+		...desktop,
+		host: { params: { day: { version: 1, window: "fixture" } } },
+		modules: {
+			nsh: {
+				"host.call": (_name: string, envelope: { args: { uploadId?: string; data?: string } }) => {
+					const args = envelope.args;
+					if (args.uploadId && !args.data) deletes++;
+					return {
+						version: 1,
+						value: !args.uploadId ? { uploadId: image.uploadId } : args.data ? { image } : { removed: true },
+					};
+				},
+			},
+		},
+	});
+	await app.press("id:feedback-open");
+	await app.type("id:feedback-text", "Keep this screenshot");
+	await app.paste("id:feedback-text", { files: ["../macos/Resources/LegacyApp/HomeSky.png"] });
+	await app.waitFor("Image 1 attached");
+	await app.press("Next unknown");
+	await app.press("id:feedback-send");
+	await app.waitFor("id:feedback-unknown");
+	await app.press("Check rejects");
+	await app.press("id:feedback-check");
+	await app.waitFor("id:feedback-resume");
+	await app.press("label:Remove image 1");
+	expect(deletes).toBe(0);
+	await app.press("Save and reopen");
+	await app.press("id:feedback-resume");
+	expect(app.shows("Image 1 attached")).toBe(true);
+	expect(app.value("id:feedback-text")).toBe("Keep this screenshot");
+});
+
 async function feedback() {
 	const app = await open("./FeedbackFixture.tsx", desktop);
 	await app.press("id:feedback-open");
@@ -126,6 +178,80 @@ async function feedback() {
 
 const counts = (app: { texts(): string[] }) => app.texts().find((t) => t.startsWith("Sends:"));
 const steps = (app: { texts(): string[] }) => app.texts().find((t) => t.startsWith("Steps:"));
+
+test("an uncertain item can be checked after another Send without clearing a new draft", async () => {
+	const app = await feedback();
+	await app.press("Next unknown");
+	await app.type("id:feedback-text", "First report");
+	await app.press("id:feedback-send");
+	await app.waitFor("id:feedback-unknown");
+	await app.press("id:feedback-another");
+	await sendWords(app, "Independent report");
+	await app.type("id:feedback-text", "Third draft");
+	await app.press("id:feedback-check");
+	await app.waitFor("Your feedback was saved.");
+	expect(app.value("id:feedback-text")).toBe("Third draft");
+	expect(counts(app)).toBe("Sends: 2 · Checks: 1");
+});
+
+test("a rejected earlier save keeps its own draft across reopening and Resume swaps newer words safely", async () => {
+	const app = await feedback();
+	await app.type("id:feedback-text", "Report whose reply is lost");
+	await app.press("Next unknown");
+	await app.press("id:feedback-send");
+	await app.waitFor("id:feedback-unknown");
+	await app.press("id:feedback-another");
+	await app.type("id:feedback-text", "Unrelated newer draft");
+	await app.press("Check rejects");
+	await app.press("id:feedback-check");
+	await app.waitUntil(() => !app.shows("id:feedback-unknown"));
+	expect(app.value("id:feedback-text")).toBe("Unrelated newer draft");
+	await app.press("Save and reopen");
+	await app.waitFor("id:feedback-resume");
+	await app.press("id:feedback-resume");
+	expect(app.value("id:feedback-text")).toBe("Report whose reply is lost");
+	expect(app.shows("Unrelated newer draft")).toBe(true);
+	expect(app.enabled("id:feedback-send")).toBe(true);
+	expect(counts(app)).toBe("Sends: 1 · Checks: 1");
+});
+
+test("history lists open items first and keeps its search while navigating", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "Older open report");
+	await sendWords(app, "Newer resolved report");
+	await app.press("Triage fix");
+	await app.press("id:feedback-resolve-f2");
+	await app.waitFor("id:feedback-resolved-f2");
+	const words = app.texts();
+	expect(words.indexOf("Older open report") < words.indexOf("Newer resolved report")).toBe(true);
+	await app.type("id:feedback-search", "Newer resolved");
+	expect(app.shows("Older open report")).toBe(false);
+	expect(app.shows("Newer resolved report")).toBe(true);
+	await app.keyboard.press("escape");
+	await app.press("id:feedback-open");
+	await app.waitFor("id:feedback-search");
+	expect(app.value("id:feedback-search")).toBe("Newer resolved");
+	expect(app.shows("Older open report")).toBe(false);
+	expect(counts(app)).toBe("Sends: 2 · Checks: 0");
+});
+
+test("an image-only draft keeps its mission when reopened from the header", async () => {
+	const app = await open("./FeedbackFixture.tsx", {
+		...desktop,
+		host: { params: { day: { version: 1, window: "fixture" } } },
+	});
+	await app.press("id:mission-search");
+	await app.press("id:mission-feedback");
+	await app.paste("id:feedback-text", { files: ["../macos/Resources/LegacyApp/HomeSky.png"] });
+	await app.waitFor("id:feedback-image-retry");
+	await app.keyboard.press("escape");
+	await app.press("id:feedback-open");
+	await app.waitFor("id:feedback-offer");
+	expect(app.shows("“Faster search”")).toBe(true);
+	expect(app.shows("Image not attached")).toBe(true);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
 
 test("long Today feedback keeps details, Later and Bring back usable across window widths", async () => {
 	const words =
@@ -250,7 +376,7 @@ test("a refused Send keeps the words; a lost one stays Unknown until Check reads
 	await app.waitFor("id:feedback-unknown");
 	expect(app.value("id:feedback-text")).toBe("Search is slow");
 	expect(app.enabled("id:feedback-send")).toBe(false);
-	expect(app.shows("Check your earlier feedback first. Your text stays.")).toBe(true);
+	expect(app.shows("Check this feedback first, or write another item. Your text stays.")).toBe(true);
 	await app.press("id:feedback-check");
 	await app.waitFor("Your feedback was saved.");
 	expect(app.shows("id:feedback-unknown")).toBe(false);

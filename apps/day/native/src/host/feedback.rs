@@ -69,6 +69,13 @@ fn valid_origin(o: &Value) -> bool {
         })
 }
 
+/// A kept UI draft may be unfinished, but never holds image bytes or filesystem paths.
+pub(crate) fn valid_draft(v: &Value) -> bool {
+    serde_json::from_value::<Intent>(v.clone()).is_ok_and(|draft| {
+        valid_origin(&draft.origin) && draft.attachments.as_ref().is_none_or(valid_images)
+    })
+}
+
 /// One piece of feedback as the user wrote it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -431,6 +438,22 @@ fn is_step(r: &planning::PlanningRecord) -> bool {
     r.operation["kind"] == WORK_KIND
 }
 
+/// A possible duplicate or an image whose ownership is still uncertain stays held.
+fn same_feedback(p: &Value, intent: &Intent) -> bool {
+    (p["text"] == intent.text && p["origin"] == intent.origin)
+        || p["attachments"].as_array().is_some_and(|images| {
+            intent
+                .attachments
+                .as_ref()
+                .and_then(Value::as_array)
+                .is_some_and(|other| {
+                    images
+                        .iter()
+                        .any(|a| other.iter().any(|b| a["uploadId"] == b["uploadId"]))
+                })
+        })
+}
+
 /// Sends and steps whose result is not known yet. Settled ones show in the saved list.
 fn unsettled(t: &Transport, journal: &Journal) -> Vec<Value> {
     journal
@@ -442,7 +465,7 @@ fn unsettled(t: &Transport, journal: &Journal) -> Vec<Value> {
             if is_step(r) {
                 json!({"operationId":r.id(),"state":"unknown","step":p["action"],"feedbackId":p["feedbackId"]})
             } else {
-                json!({"operationId":r.id(),"state":"unknown","text":p["text"]})
+                json!({"operationId":r.id(),"state":"unknown","text":p["text"],"origin":p["origin"],"attachments":p["attachments"]})
             }
         })
         .collect()
@@ -529,6 +552,22 @@ pub(super) async fn handle(
     match command {
         Command::FeedbackImage(image) => {
             check()?;
+            if image.data.is_none()
+                && image.upload_id.as_ref().is_some_and(|id| {
+                    journal.planning.values().any(|r| {
+                        r.source == t.source
+                            && is_feedback(r)
+                            && r.pending()
+                            && payload(&r.operation).is_ok_and(|p| {
+                                p["attachments"].as_array().is_some_and(|images| {
+                                    images.iter().any(|a| a["uploadId"] == *id)
+                                })
+                            })
+                    })
+                })
+            {
+                return Err(Error::Unknown);
+            }
             t.profile_gate().await?;
             check()?;
             return upload(t, image).await;
@@ -539,12 +578,13 @@ pub(super) async fn handle(
         }
         Command::FeedbackSend(intent) => {
             intent.validate()?;
-            // An earlier Send whose result is unknown is checked first, never sent again beside a copy.
-            if journal
-                .planning
-                .values()
-                .any(|r| r.source == t.source && is_feedback(r) && r.pending())
-            {
+            // Hold only this possible duplicate, not unrelated feedback.
+            if journal.planning.values().any(|r| {
+                r.source == t.source
+                    && is_feedback(r)
+                    && r.pending()
+                    && payload(&r.operation).is_ok_and(|p| same_feedback(&p, intent))
+            }) {
                 return Err(Error::Unknown);
             }
             // A service that cannot list feedback cannot be sent any.
@@ -560,12 +600,13 @@ pub(super) async fn handle(
         }
         Command::FeedbackStep(step) => {
             step.validate()?;
-            // An earlier step whose result is unknown is checked first, never sent again beside a copy.
-            if journal
-                .planning
-                .values()
-                .any(|r| r.source == t.source && is_step(r) && r.pending())
-            {
+            // Uncertain work holds its item, not unrelated feedback.
+            if journal.planning.values().any(|r| {
+                r.source == t.source
+                    && is_step(r)
+                    && r.pending()
+                    && payload(&r.operation).is_ok_and(|p| p["feedbackId"] == step.feedback_id)
+            }) {
                 return Err(Error::Unknown);
             }
             read(t, None).await?;

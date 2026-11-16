@@ -370,7 +370,7 @@ export function FeedbackRow(props: { day: Day; mirror: FeedbackMirror; item: Fee
 	const v = (): FeedbackView => props.mirror.view();
 	const steps = () => stepsOf(props.item);
 	const unknown = () => v().unsettledSteps.find((o) => o.feedbackId === props.item.id) ?? null;
-	const busy = () => v().stepping !== null || v().unsettledSteps.length > 0;
+	const busy = () => v().stepping !== null || unknown() !== null;
 	const chosen = () => v().projects?.find((p) => p.projectId === feedbackProject()) ?? null;
 	const triage = () => steps().triage;
 	const proposal = () => (triage() && chatState(triage()!) === "done" ? proposalOf(triage()) : null);

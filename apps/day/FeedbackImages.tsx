@@ -3,7 +3,13 @@
 import { Image, type JSX, type PasteEvent, Picker, signal, Text, View } from "nsh";
 import type { StagedAttachmentRef } from "../../packages/protocol/src/transfers.ts";
 import { call, windowId } from "./bridge";
-import { feedbackDraft, feedbackImageBusy, feedbackMessage, feedbackPendingImage as pending } from "./feedbackView";
+import {
+	feedbackDraft,
+	feedbackImageBusy,
+	feedbackKeptDrafts,
+	feedbackMessage,
+	feedbackPendingImage as pending,
+} from "./feedbackView";
 import { Action } from "./ui";
 
 const MAX_IMAGE = 8 * 1024 * 1024;
@@ -19,9 +25,16 @@ export function clearFeedbackImagePreviews() {
 
 export function FeedbackImages(props: {
 	disabled: boolean;
+	protectedUploads?: string[];
 	children: (onPaste: (event: PasteEvent) => void) => JSX.Element;
 }) {
 	const discard = (id: string | null) => {
+		if (
+			id &&
+			(props.protectedUploads?.includes(id) ||
+				feedbackKeptDrafts().some((d) => d.attachments?.some((a) => a.uploadId === id)))
+		)
+			return;
 		const window = windowId();
 		if (window && id) void call(window, "day.feedback.image", { uploadId: id });
 	};

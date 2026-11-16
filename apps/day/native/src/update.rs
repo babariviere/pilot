@@ -372,6 +372,9 @@ pub struct SavedView {
     /// Uploaded immutable image references for the unsent feedback, as JSON.
     #[prop(default)]
     pub feedback_images: String,
+    /// Feedback drafts put aside while another item is written. JSON text and image references only.
+    #[prop(default)]
+    pub feedback_drafts: Vec<String>,
     /// The project the user chose for feedback triage, by project ID, or
     /// empty for none. The user's own choice: nothing picks one for them,
     /// and showing it again starts nothing.
@@ -408,6 +411,7 @@ impl SavedView {
             .chain(&self.project_setup)
             .chain(&self.threads)
             .chain(&self.feedback_answers)
+            .chain(&self.feedback_drafts)
             .chain(&self.feedback_later)
             .chain(&self.question_help)
             .map(String::len)
@@ -445,6 +449,7 @@ impl SavedView {
             + self.project_setup.len()
             + self.threads.len()
             + self.feedback_answers.len()
+            + self.feedback_drafts.len()
             + self.feedback_later.len()
             + self.question_help.len()
     }
@@ -533,6 +538,13 @@ impl SavedView {
     /// by a valid ID before its text; `feedback_project` is empty or a valid
     /// ID; and each unsent answer names a triage chat, a question and picks.
     pub fn feedback_valid(&self) -> bool {
+        if self.feedback_drafts.iter().any(|draft| {
+            serde_json::from_str::<serde_json::Value>(draft)
+                .ok()
+                .is_none_or(|v| !crate::host::feedback::valid_draft(&v))
+        }) {
+            return false;
+        }
         let id = |s: &str| crate::host::valid_id(s);
         let number = |s: &str| {
             !s.is_empty() && s.len() <= 16 && s.bytes().all(|b| b.is_ascii_digit()) && s != "0"

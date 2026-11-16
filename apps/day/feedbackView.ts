@@ -16,6 +16,9 @@ export const feedbackOpen = signal(false);
 /** Attention keys deferred in this window, saved across close and update. */
 export const feedbackLater = signal<string[]>([]);
 
+/** Window-local history search, kept while navigating elsewhere. */
+export const feedbackSearch = signal("");
+
 /** Unsent feedback, exactly as typed, and the origin the user kept. */
 export type FeedbackDraft = {
 	text: string;
@@ -27,6 +30,37 @@ const EMPTY: FeedbackDraft = { text: "", origin: null };
 
 /** The window's unsent feedback. Kept across pages, close and update. */
 export const feedbackDraft = signal<FeedbackDraft>(EMPTY);
+
+/** Drafts put aside to write another item. Saved with this window, never submitted on restore. */
+export const feedbackKeptDrafts = signal<FeedbackDraft[]>([]);
+
+export function feedbackDraftKey(d: FeedbackDraft): string {
+	return JSON.stringify({
+		text: d.text,
+		origin: originKey(d.origin),
+		attachments: (d.attachments ?? []).map((a) => [a.uploadId, a.sha256, a.bytes]),
+	});
+}
+
+export function keepFeedbackDraft(d: FeedbackDraft) {
+	if (d.text === "" && !d.attachments?.length) return;
+	feedbackKeptDrafts.update((all) =>
+		all.some((other) => feedbackDraftKey(other) === feedbackDraftKey(d)) ? all : [...all, d],
+	);
+}
+
+export function forgetKeptFeedback(d: FeedbackDraft) {
+	feedbackKeptDrafts.update((all) => all.filter((other) => feedbackDraftKey(other) !== feedbackDraftKey(d)));
+}
+
+/** Swap rather than overwrite the current draft. Image bytes in an unfinished import must finish first. */
+export function resumeFeedbackDraft(d: FeedbackDraft) {
+	if (feedbackImageBusy() || feedbackImagePending()) return;
+	keepFeedbackDraft(feedbackDraft());
+	forgetKeptFeedback(d);
+	feedbackDraft.set(d);
+	feedbackMessage.set("");
+}
 
 /** Unfinished image imports block close rather than silently losing their bytes. */
 export const feedbackImageBusy = signal(false);
@@ -103,15 +137,16 @@ export function originFrom(key: string): UserFeedbackOriginRef | null | undefine
  */
 export function openFeedbackWith(from: UserFeedbackOriginRef | null, text: string) {
 	const d = feedbackDraft();
-	if (d.text.trim() === "" && !d.attachments?.length) feedbackDraft.set({ ...d, text });
 	openFeedback(from);
+	if (d.text === "" && !d.attachments?.length && !feedbackImagePending() && !feedbackImageBusy())
+		feedbackDraft.set({ ...feedbackDraft(), text });
 }
 
 export function openFeedback(from: UserFeedbackOriginRef | null) {
 	glide();
 	feedbackMessage.set("");
 	const d = feedbackDraft();
-	if (d.text.trim() === "" && !d.attachments?.length) {
+	if (d.text === "" && !d.attachments?.length && !feedbackImagePending() && !feedbackImageBusy()) {
 		feedbackDraft.set({ ...d, origin: from });
 		feedbackOffer.set(null);
 	} else {
@@ -168,12 +203,14 @@ export function forgetFeedback() {
 	feedbackImageBusy.set(false);
 	feedbackOpen.set(false);
 	feedbackDraft.set(EMPTY);
+	feedbackKeptDrafts.set([]);
 	feedbackOffer.set(null);
 	feedbackMessage.set("");
 	feedbackProject.set(null);
 	answerDrafts.set({});
 	stepMessages.set({});
 	feedbackLater.set([]);
+	feedbackSearch.set("");
 }
 
 /** A local date such as "9 Nov", or "" when it cannot be read. */

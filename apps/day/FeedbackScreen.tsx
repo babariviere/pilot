@@ -17,19 +17,27 @@ import {
 	type FeedbackMirror,
 	type FeedbackView,
 	MAX_FEEDBACK_BYTES,
+	sameFeedback,
 	type UserFeedbackOriginRef,
 	utf8Bytes,
 } from "./feedbackFeed";
+import { stepsOf } from "./feedbackSteps";
 import {
 	closeFeedback,
 	dayOf,
 	feedbackDraft,
+	feedbackDraftKey,
 	feedbackImageBusy,
 	feedbackImagePending,
+	feedbackKeptDrafts,
 	feedbackMessage,
 	feedbackOffer,
 	feedbackProject,
+	feedbackSearch,
+	forgetKeptFeedback,
+	keepFeedbackDraft,
 	originKey,
+	resumeFeedbackDraft,
 	setStepMessage,
 } from "./feedbackView";
 import { keepField, keepScroll } from "./kept";
@@ -121,7 +129,8 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 	/** Why Send cannot send the draft now, or "". */
 	const blocker = () => {
 		if (d().text.trim() === "") return "";
-		if (v().unsettled.length > 0) return "Check your earlier feedback first. Your text stays.";
+		if (v().unsettled.some((o) => sameFeedback(o, d())))
+			return "Check this feedback first, or write another item. Your text stays.";
 		if (feedbackImageBusy() || feedbackImagePending())
 			return "Finish attaching your image, or remove it before sending.";
 		if (tooLong()) return `Too long. Keep it under ${MAX_FEEDBACK_BYTES} bytes.`;
@@ -140,12 +149,14 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 	const send = async () => {
 		const draft = feedbackDraft();
 		if (!canSend()) return;
+		const project = v().projects?.find((p) => p.projectId === feedbackProject());
 		feedbackMessage.set("");
 		const r = await props.mirror.source.send({
 			text: draft.text,
 			origin: draft.origin,
 			...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
 		});
+		if (r.status === "accepted") forgetKeptFeedback(draft);
 		// Only an accepted receipt clears the words, and only the words that were sent.
 		if (r.status === "accepted" && feedbackDraft() === draft) {
 			glide();
@@ -155,7 +166,6 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 		// An Unknown Send shows as its own note, with Check.
 		feedbackMessage.set(r.status === "unknown" && v().unsettled.length > 0 ? "" : r.message);
 		// The user chose a project for agents: the saved feedback's triage starts there, once.
-		const project = v().projects?.find((p) => p.projectId === feedbackProject());
 		if (r.status === "accepted" && r.saved && project) {
 			const t = await props.mirror.source.step({
 				action: "triage",
@@ -168,15 +178,15 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 		}
 	};
 	const check = async (operationId: string) => {
+		const original = v().unsettled.find((o) => o.operationId === operationId);
+		// Capture before I/O: a rejected or lost Check must not strand these words,
+		// even if the user navigates or edits the active draft while it runs.
+		if (original)
+			keepFeedbackDraft({ text: original.text, origin: original.origin, attachments: original.attachments ?? [] });
 		feedbackMessage.set("");
 		const r = await props.mirror.source.check(operationId);
-		if (
-			r.status === "accepted" &&
-			r.saved &&
-			feedbackDraft().text === r.saved.text &&
-			originKey(feedbackDraft().origin) === originKey(r.saved.origin) &&
-			JSON.stringify(feedbackDraft().attachments ?? []) === JSON.stringify(r.saved.attachments ?? [])
-		) {
+		if (r.status === "accepted" && r.saved) forgetKeptFeedback(r.saved);
+		if (r.status === "accepted" && r.saved && feedbackDraftKey(feedbackDraft()) === feedbackDraftKey(r.saved)) {
 			glide();
 			feedbackDraft.set({ text: "", origin: feedbackDraft().origin });
 			clearFeedbackImagePreviews();
@@ -233,7 +243,10 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 					</Note>
 				)}
 			</Each>
-			<FeedbackImages disabled={v().sending || v().unsettled.length > 0}>
+			<FeedbackImages
+				disabled={v().sending || v().unsettled.some((o) => sameFeedback(o, d()))}
+				protectedUploads={v().unsettled.flatMap((o) => (o.attachments ?? []).map((a) => a.uploadId))}
+			>
 				{(onPaste) => (
 					<Input
 						testID="feedback-text"
@@ -262,8 +275,8 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 				{(o) => (
 					<Note
 						testID="feedback-unknown"
-						text="Pilot does not know if your last feedback was saved."
-						detail="It will not send it again. Check only reads its result. Your text stays here."
+						text={o().text}
+						detail="Save not confirmed. Check only reads this item's result. Other feedback can still be sent."
 					>
 						<View class="flex-row">
 							<Action
@@ -272,7 +285,38 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 								disabled={o().state === "checking"}
 								onPress={() => void check(o().operationId)}
 							/>
+							<If when={sameFeedback(o(), d())}>
+								<Action
+									label="Write another"
+									testID="feedback-another"
+									disabled={v().sending || feedbackImageBusy() || feedbackImagePending()}
+									onPress={() => {
+										keepFeedbackDraft(d());
+										feedbackDraft.set({ text: "", origin: d().origin });
+										clearFeedbackImagePreviews();
+									}}
+								/>
+							</If>
 						</View>
+					</Note>
+				)}
+			</Each>
+			<Each of={feedbackKeptDrafts()} key={feedbackDraftKey}>
+				{(kept) => (
+					<Note
+						testID="feedback-kept"
+						text={kept().text}
+						detail="Kept draft. Resume keeps your current words too. Images already saved with another item must be attached again."
+					>
+						<Action
+							label="Resume draft"
+							testID="feedback-resume"
+							disabled={v().sending || feedbackImageBusy() || feedbackImagePending()}
+							onPress={() => {
+								resumeFeedbackDraft(kept());
+								clearFeedbackImagePreviews();
+							}}
+						/>
 					</Note>
 				)}
 			</Each>
@@ -298,6 +342,12 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 /** Saved feedback, newest first, with each item's steps. Reading it changes nothing. */
 function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 	const v = (): FeedbackView => props.mirror.view();
+	const items = () => {
+		const query = feedbackSearch().trim().toLocaleLowerCase();
+		return v()
+			.items.filter((i) => `${i.text}\n${i.origin?.title ?? ""}`.toLocaleLowerCase().includes(query))
+			.sort((a, b) => Number(stepsOf(a).resolved) - Number(stepsOf(b).resolved));
+	};
 	const loading = signal(false);
 	const more = async () => {
 		loading.set(true);
@@ -313,6 +363,19 @@ function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 					only you mark feedback resolved.
 				</Text>
 			</View>
+			<Input
+				testID="feedback-search"
+				value={feedbackSearch()}
+				accessibilityLabel="Search feedback history"
+				placeholder="Search feedback history"
+				onChange={({ value }) => feedbackSearch.set(value)}
+				class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
+			/>
+			<Text class="text-xs text-faint">
+				{v().more
+					? "Open items first. Search covers loaded feedback; Show earlier searches older items."
+					: "Open items first, then resolved history."}
+			</Text>
 			<If when={v().reason}>
 				<Note
 					testID="feedback-off"
@@ -329,7 +392,12 @@ function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 				</Text>
 			</If>
 			<View>
-				<Each of={v().items} key={(i) => i.id}>
+				<If when={v().availability === "live" && v().items.length > 0 && items().length === 0}>
+					<Text testID="feedback-no-matches" class="text-sm text-muted-foreground">
+						No matches in loaded feedback. Change your search or read earlier items.
+					</Text>
+				</If>
+				<Each of={items()} key={(i) => i.id}>
 					{(i) => <FeedbackRow day={props.day} mirror={props.mirror} item={i()} when={savedLine(i())} />}
 				</Each>
 			</View>
