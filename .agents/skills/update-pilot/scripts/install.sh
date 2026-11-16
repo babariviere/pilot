@@ -38,7 +38,12 @@ launchctl bootstrap "gui/$(id -u)" "$PLIST"
 for _ in $(seq 1 120); do curl -s -m2 "$API/api/hello" >/dev/null && break; sleep 0.5; done
 pid=$(pgrep -f "$APP/Contents/Resources/runtime/packages/daemon/src/main.ts")
 cat >"$RECORD/normal-update-complete.json" <<EOF
-{"state":"ready","build":"$BUILD","previousBuild":"$previous","runtime":"$APP/Contents/Resources/runtime","pid":$pid,"previousApp":"$RECORD/retained/Pilot.app","time":"$(date -u +%FT%TZ)","policy":"Normal GUI quit, no working session. launchctl bootout, swap app, launchctl bootstrap. No handoff, rollback, or cleanup."}
+{"state":"ready","build":"$BUILD","previousBuild":"$previous","runtime":"$APP/Contents/Resources/runtime","pid":$pid,"previousApp":"$RECORD/retained/Pilot.app","time":"$(date -u +%FT%TZ)","policy":"Normal GUI quit, no working session. launchctl bootout, swap app, launchctl bootstrap. No handoff or rollback. Removes its build folder and older install records."}
 EOF
 open "$APP"
+# The app now lives in ~/Applications: drop its build, and keep only this install's rollback copy.
+rm -rf "${ROOT:?}/$BUILD"
+for record in "$HOME"/Applications/Pilot-install-*; do
+	[[ "$record" == "$RECORD" ]] || rm -rf "$record"
+done
 echo "INSTALLED $BUILD (previous $previous, daemon pid $pid)"

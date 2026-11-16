@@ -51,6 +51,8 @@ idle and retry; ask the user before you stop a chat. Quitting the GUI may print 
 the script still checks that the GUI quit. Done when it prints `INSTALLED <build>` and the GUI is open again.
 
 The previous app is kept in `~/Applications/Pilot-install-<build>/retained/Pilot.app` for a manual rollback.
+Only the latest install keeps one: each install removes older install records and its own build folder.
+A build first removes builds at or below the installed one, and a failed or stopped build removes its folder.
 
 ## 5. Wake idle planners
 

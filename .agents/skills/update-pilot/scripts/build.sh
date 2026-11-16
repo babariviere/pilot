@@ -47,6 +47,19 @@ export PILOT_UPDATER_BUILD="$BUILD"
 
 echo "SOURCE $SOURCE BUILD $BUILD"
 work="$ROOT/$BUILD"
+# A build is about 1 GB here. Builds at or below the installed one are spent: remove them first.
+installed=$(defaults read "$APP/Contents/Info.plist" CFBundleVersion 2>/dev/null || true)
+if [[ -n "$installed" ]]; then
+	for dir in "$ROOT"/*; do
+		old=$(basename "$dir")
+		[[ -d "$dir" && "$old" =~ ^[0-9]{8}\.[0-9]+$ && "$old" != "$BUILD" ]] || continue
+		if [[ "$(printf '%s\n%s\n' "$old" "$installed" | sort -V | tail -1)" == "$installed" ]]; then rm -rf "${dir:?}"; fi
+	done
+fi
+# A failed or stopped build leaves nothing behind.
+built=0
+trap '[[ $built == 1 ]] || rm -rf "${work:?}"' EXIT
+trap 'exit 143' TERM INT
 mkdir -p "$work"
 [[ -d "$work/runtime" ]] || python3 apps/desktop/scripts/bundle_runtime.py runtime --source "$SOURCE" --output "$work/runtime"
 [[ -d "$work/native" ]] || python3 apps/desktop/scripts/bundle_runtime.py native --gui day --source "$SOURCE" --output "$work/native"
@@ -59,4 +72,5 @@ python3 apps/desktop/scripts/bundle_runtime.py bundle --production \
 	--gui-resources "$work/inputs/nsh" --output "$work/app/Pilot.app"
 python3 apps/desktop/scripts/bundle_runtime.py verify "$work/app/Pilot.app"
 codesign --verify --deep --strict '-R=identifier "com.babariviere.pilot-next"' "$work/app/Pilot.app"
+built=1
 echo "BUILT $BUILD $work/app/Pilot.app"
