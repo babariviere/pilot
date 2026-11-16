@@ -344,6 +344,17 @@ test("a press opens the exact pull request once, records nothing and never retri
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
 });
 
+test("consecutive PR clicks open the exact link without selecting the action", async () => {
+	const app = await ready();
+	await openCsv(app);
+	await app.press("id:output-open-pr-431");
+	await app.waitFor(`Opened: [${PR}]`);
+	await app.press("id:output-open-pr-431");
+	await app.waitFor(`Opened: [${PR} ${PR}]`);
+	expect(app.texts().includes("Not checked yet.")).toBe(true);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
 test("a window that cannot open links shows them as text", async () => {
 	const app = await ready();
 	await app.press("No browser");

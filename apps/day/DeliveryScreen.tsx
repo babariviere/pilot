@@ -322,9 +322,10 @@ function Outputs(props: {
 			<If when={count() === 0}>
 				<Text class="text-sm text-muted-foreground">The agent linked no outputs to this result.</Text>
 			</If>
+			{/* Keep text selection outside the button so native repeated clicks still open it. */}
 			<Each of={w().pullRequests} key={(r) => r.id}>
 				{(r) => (
-					<View selectable class="gap-0.5 border-t border-border py-2.5">
+					<View class="gap-0.5 border-t border-border py-2.5">
 						<If
 							when={web() && webLink(r())}
 							else={
@@ -344,7 +345,9 @@ function Outputs(props: {
 								<Text class="w-16 text-right text-xs text-faint">{opening(r()) ? "Opening…" : "Open ↗"}</Text>
 							</RowLink>
 						</If>
-						<Text class="text-xs text-faint">{linkUrl(r())}</Text>
+						<View selectable>
+							<Text class="text-xs text-faint">{linkUrl(r())}</Text>
+						</View>
 						<If when={r().kind === "github.pr"}>
 							<Text class="text-xs text-faint">{prObservation(r())}</Text>
 						</If>
