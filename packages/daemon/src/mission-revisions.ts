@@ -26,6 +26,18 @@ interface Port {
 export const revisionDigest = (value: unknown): string =>
 	createHash("sha256").update(canonicalJSON(value)).digest("hex");
 
+/** A revision that only adds tasks changes nothing a working chat uses: no Pause, and task progress does not stale it. */
+export function addsOnly(delta: MissionRevisionDelta): boolean {
+	return (
+		!!delta.newTasks?.length &&
+		delta.goal === undefined &&
+		delta.markdown === undefined &&
+		!delta.tasks?.length &&
+		!delta.decisions?.length &&
+		!delta.corrections?.length
+	);
+}
+
 export function revisionText(value: unknown, limit: number): string {
 	if (typeof value !== "string" || !value.trim() || Array.from(value).length > limit)
 		throw new Error(`Revision text must contain 1 to ${limit} characters`);
@@ -81,7 +93,21 @@ export class MissionRevisions {
 		);
 		if (!row) return null;
 		const proposal = JSON.parse(String(row.record)) as MissionRevisionProposal;
-		return { proposal, current: proposal.source === this.source(id) };
+		return { proposal, current: this.applies(id, proposal) };
+	}
+	/**
+	 * Whether a proposal still applies to the mission as it is now. Any change stales a proposal that edits the mission.
+	 * A proposal that only adds tasks needs only its dependencies, so task progress since does not stale it.
+	 */
+	private applies(id: string, proposal: MissionRevisionProposal): boolean {
+		if (proposal.source === this.source(id)) return true;
+		if (!addsOnly(proposal.delta)) return false;
+		try {
+			this.port.validate(id, proposal.delta);
+			return true;
+		} catch {
+			return false;
+		}
 	}
 	/** Explicit user re-preview after Pause. Never alters/reconfirms the original or admits a turn. */
 	async repreview(
@@ -188,8 +214,7 @@ export class MissionRevisions {
 					throw new Conflict("Revision already confirmed differently");
 				return proposal; // Historical receipt, never renewed authority or replay.
 			}
-			if (proposal.source !== this.source(id))
-				throw new Conflict("Mission revision source changed; review a new proposal");
+			if (!this.applies(id, proposal)) throw new Conflict("Mission revision source changed; review a new proposal");
 			this.port.validate(id, proposal.delta);
 			this.port.apply(id, proposal, input.humanSource);
 			proposal.confirmation = { by: "user", at: Date.now(), humanSource: input.humanSource };

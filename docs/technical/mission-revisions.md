@@ -80,6 +80,9 @@ tasks listed earlier. A dropped task, or one the same revision drops, cannot be 
 
 ### Planned missions
 
+A proposal that only adds tasks (`addsOnly`) stays current while other tasks make progress: it needs only its
+dependencies, which confirmation checks again. Any other proposal goes stale when the mission source changes.
+
 In a mission with a published native plan, a confirmed revision becomes the published agreement
 (`MissionStore.republish`): the publication takes the current brief revision and latest
 submission, each open published task gets its `definition` (`publishedDefinition`: title, body,

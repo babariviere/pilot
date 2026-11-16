@@ -290,6 +290,42 @@ test("a revision adds new tasks in order, with dependencies on existing and earl
 	);
 });
 
+test("task progress does not stale a revision that only adds tasks; a dropped dependency does", async (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const { id } = store.create({
+		projectId: "p",
+		title: "M",
+		planningVersion: 1,
+		tasks: [{ title: "A" }, { title: "B" }],
+	});
+	const adds = await proposal(store, id, {
+		newTasks: [{ key: "next", title: "Next", body: "Outcome: next.", dependsOn: ["1"] }],
+	});
+	store.updateTask(id, "1", { status: "in_progress" });
+	store.updateTask(id, "2", { status: "done" });
+	assert.notEqual(adds.source, store.revisions.source(id), "the mission changed since the proposal");
+	assert.equal(store.revisions.pending(id)?.current, true);
+	const edit = await proposal(store, id, { goal: "New goal" });
+	store.updateTask(id, "1", { body: "Changed" });
+	assert.equal(store.revisions.pending(id)?.current, false, "a proposal that edits the mission still stales");
+	await assert.rejects(
+		store.revisions.confirm(id, edit.id, { digest: edit.digest, humanSource: "user:answer" }),
+		/source changed/,
+	);
+	const later = await proposal(store, id, { newTasks: [{ key: "x", title: "X", body: "B", dependsOn: ["1"] }] });
+	store.updateTask(id, "1", { status: "dropped" });
+	assert.equal(store.revisions.pending(id)?.current, false);
+	await assert.rejects(
+		store.revisions.confirm(id, later.id, { digest: later.digest, humanSource: "user:answer" }),
+		/source changed/,
+	);
+	await store.revisions.confirm(id, adds.id, { digest: adds.digest, humanSource: "user:answer" }).then(
+		() => assert.fail("an older proposal than the latest still applies only while its dependency is open"),
+		(error: Error) => assert.match(error.message, /source changed/),
+	);
+});
+
 test("durable reopen keeps proposal identity, replacement chains, provenance and lookup-only receipts", async (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "mission-revision-"));
 	let store = new MissionStore(join(dir, "missions.sqlite"));
