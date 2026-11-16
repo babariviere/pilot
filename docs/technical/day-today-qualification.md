@@ -84,8 +84,38 @@ The regression in `native/tests/support/today_refresh.rs` uses the real
 capability and no listening service. Before the fix it reproduced the exact
 loading text. After the fix it shows “Pilot could not reach its service.”,
 settles without new Today revisions, and shows neither mock work nor an
-all-clear. This is headless behavioral evidence. A newly sealed candidate's
-native unavailable-state recheck remains separate.
+all-clear. This is headless behavioral evidence, not the native result below.
+
+## Fixed native candidate and checks
+
+The existing connected-candidate producer built immutable source
+`096d2e3bf0dbb7871f617afda8fba7041c46aefc`, assembled it in a private TMPDIR
+directory and verified its code seal, compiled identity and exact NSH resource
+closure. It reused the installed public trust configuration, not a new key.
+The receipt says `connected-native-candidate`, `bundled_daemon: false` and
+`installable_update: false`. It was not installed or offered as an update.
+
+The user checked two separate native windows of that exact candidate:
+
+- Closed port 4318: **“Yes, clear service error, no loading loop”** and
+  **“I see \"Pilot could not reach its service.\" and below \"Read again\"
+  but as a link.”** The secondary action's presentation is unchanged.
+- Real service on 4319: **“Yes, real Today and native input work”**, after
+  the unsent New draft and Command+K/Escape check was requested again.
+
+Executed checks:
+
+- Red/green production-host offline regression.
+- Complete `connected` integration suite: 25 passed.
+- Native library suite: 153 passed.
+- Scoped rustfmt and documentation Biome checks passed. Biome reports an
+  existing 2.6.5 schema versus 2.6.7 CLI warning. Native builds retain existing
+  dead-code and large-unwind linker warnings.
+- Exact-source candidate prepare, assemble and verify passed using the
+  installed NSH 0.5.0 CLI and the existing shared MBX cache.
+
+Independent review of the shared failure-notification change was requested
+from the coordinator and is still pending. These checks do not waive it.
 
 ## Ownership before any future removal
 
@@ -100,5 +130,4 @@ native unavailable-state recheck remains separate.
 
 No directory or legacy path was removed. Complete Mac daily-use acceptance,
 signed update/recovery qualification, IME, accessibility and physical Linux
-qualification remain outside this Today slice. The installed app is unchanged;
-the discovered fix needs a separately built candidate before native rechecking.
+qualification remain outside this Today slice. The installed app is unchanged.
