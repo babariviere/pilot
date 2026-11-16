@@ -241,6 +241,8 @@ that did not reach the planner is sent again when the reason clears (the plannin
 resumes, the daemon restarts). If the map changed, it waits: Unstick shows it as stuck, and **Continue planning** sends
 it against the current map. The saved hold stays exactly as the planning agent keeps it. A new question set
 drops saved answers to questions no longer asked; the submitted round keeps them.
+Each stall and each push the user gives (Continue, Unstick's fix, the repair agent) is appended to the
+[unstick log](planning-unstick-log.md), with which part of the round's fingerprint changed.
 
 The map itself has no question count limit: settled questions stay for good. A `plan-map` save lists only open
 questions, and the daemon keeps settled ones; the planner's read shows them under `settled`, one short entry

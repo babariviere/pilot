@@ -19,7 +19,12 @@ export interface PlanningWorkerState {
 	phase: "setup" | "active" | "holding" | "held" | "continuing" | "revisiting" | "discussing";
 	hold: PlanningRound | null;
 	/** `round`: the held round's fingerprint basis (see authority(binding, true)); older records lack it. */
-	pendingHold: { operationId: string; authority: string; round?: string } | null;
+	pendingHold: { operationId: string; authority: string; round?: string; roundParts?: Record<string, string> } | null;
+	/**
+	 * Each part of the held round's fingerprint, hashed on its own, so a round that stalls says which part changed
+	 * (see roundChanges). Kept beside the hold: the kernel holds the round exactly. Older holds lack it.
+	 */
+	holdParts?: { operationId: string; parts: Record<string, string> };
 	continuation: { operation: DurableOperation; entered: boolean } | null;
 	/** Entered Start is lookup-only across restart, even when no kernel receipt can be found. */
 	start?: { operation: DurableOperation; sessionId: string; taskId: string; admitted: boolean };

@@ -440,6 +440,9 @@ export class NativeMissionPlanning {
 		if (!humanKinds.includes(op.kind))
 			throw new OperationRejected("Native planning adapter unavailable for this purpose");
 		const authority = this.authority(op.targetId);
+		// Unstick's "drop earlier answers" fix is an answer save made while Unstick offers it.
+		const dropping =
+			op.kind === "interview-save" && this.deps.workers?.unstickView(op.targetId).fix === "drop-earlier-answers";
 		const check = () => {
 			this.envelope(op);
 			const worker = this.deps.store.planningWorkers.get(op.targetId);
@@ -462,6 +465,8 @@ export class NativeMissionPlanning {
 			throw new Error("Unknown saved planning operation; lookup only", { cause });
 		}
 		if (op.kind === "interview-submit") this.deps.workers?.submitted(op.targetId, op.operationId);
+		if (dropping)
+			this.deps.workers?.recordUnstick(op.targetId, "drop-earlier-answers", { operationId: op.operationId });
 		return result;
 	}
 	private revisionView(missionId: string) {

@@ -65,6 +65,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Mission Unstick: repair agent (plan)](mission-unstick-repair.md)
 - [Mission prototypes: prototype chats (plan)](mission-prototypes.md)
 - [Planning limits: what each protects and why](planning-limits.md)
+- [Planning unstick log: every stall and push, to fix their causes](planning-unstick-log.md)
 - [Mission Pause/Resume and versioned agent reports](mission-controls-reports.md)
 - [Mission results and failure visibility audit](day-results-visibility.md)
 - [Proposed mission interview and approval contract](mission-interview-approval.md)

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { test } from "node:test";
 import type { PlanningInput } from "@pilot/kernel";
 import { interviewDigest } from "./mission-interview-contract.ts";
@@ -286,6 +288,11 @@ test("a submitted round that never reached the planner shows as stuck, and Conti
 		review: null,
 		publication: null,
 	}));
+	// Unstick names what changed before the user even submits.
+	assert.ok(
+		(await f.read(f.missionId)).unstick.checks.includes("Changed since this round was asked: plan"),
+		JSON.stringify((await f.read(f.missionId)).unstick),
+	);
 	assert.equal((await submit(f)).receipt.state, "accepted");
 	let view = await f.read(f.missionId);
 	for (let i = 0; i < 50 && view.unstick?.state !== "stuck"; i++) view = await f.read(f.missionId);
@@ -309,6 +316,25 @@ test("a submitted round that never reached the planner shows as stuck, and Conti
 	assert.equal(await f.requestCount(), 2, f.logs());
 	assert.equal((await f.post(op)).state, "accepted", "the same Continue is not sent twice");
 	assert.equal(await f.requestCount(), 2);
+	// The unstick log keeps the stall, with what changed, and the user's Continue, for fixing the cause later.
+	const entries = async () =>
+		(await readFile(join(f.home, "diagnostics", "unstick.jsonl"), "utf8").catch(() => ""))
+			.split("\n")
+			.filter(Boolean)
+			.map((l) => JSON.parse(l));
+	let log = await entries();
+	for (let i = 0; i < 50 && log.length < 2; i++) {
+		await new Promise((r) => setTimeout(r, 20));
+		log = await entries();
+	}
+	assert.deepEqual(
+		log.map((e) => e.action),
+		["stalled", "continue-submitted-round"],
+	);
+	assert.deepEqual(log[0].stall.changes, ["plan"]);
+	assert.match(log[0].stall.reason, /Submitted planning round changed \(plan\)/);
+	assert.equal(log[1].unstick.state, "stuck");
+	assert.equal(log[1].missionId, f.missionId);
 });
 
 test("daemon restart preserves drafts and the round hold, with no historical auto-send", {

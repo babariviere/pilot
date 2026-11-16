@@ -1,7 +1,7 @@
 /** Trusted planning worker lifecycle. No existing chat adoption or generic send fallback. */
 
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
 	assertPlanningBinding,
 	PLANNING_PROFILE,
@@ -26,6 +26,7 @@ import {
 import { taskMessage } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
+import { UnstickLog } from "./planning-unstick-log.ts";
 import type {
 	MissionFix,
 	PlanningRepair,
@@ -63,6 +64,9 @@ interface Dependencies {
 	knowledge?: KnowledgeService;
 }
 const hash = (value: unknown) => payloadHash(canonicalJSON(value));
+/** Each part of a fingerprint, hashed on its own, so a changed fingerprint can say which part changed. */
+const digests = (parts: Record<string, unknown>): Record<string, string> =>
+	Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, hash(v)]));
 /**
  * The planner's read of the map: settled questions as one short entry each, not their full text and
  * sources, so the read stays small however long the mission runs. A save keeps them without resending.
@@ -235,8 +239,12 @@ export function researchSynopsis(report: string): string {
 }
 /** The map, mission or its controls changed after the round was saved: only the user's Continue sends it. */
 class RoundChanged extends Conflict {
-	constructor() {
-		super("Submitted planning round changed; Continue planning sends it against the current map");
+	readonly changes: string[] | null;
+	constructor(changes: string[] | null) {
+		super(
+			`Submitted planning round changed (${changes?.length ? changes.join(", ") : "what changed was not kept"}); Continue planning sends it against the current map`,
+		);
+		this.changes = changes;
 	}
 }
 export class PlanningWorkers {
@@ -255,6 +263,12 @@ export class PlanningWorkers {
 	private readonly prototypeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	/** Submitted rounds Pilot is sending by itself, or stopped trying because the map changed. */
 	private readonly resumeTried = new Set<string>();
+	/** The last time a submitted round was not sent, by mission, for the unstick log. Kept until it is sent. */
+	private readonly stalls = new Map<
+		string,
+		{ at: string; operationId: string; reason: string; changes: string[] | null }
+	>();
+	private readonly unstickLog: UnstickLog;
 	private readonly recentOperations = new Map<
 		string,
 		{ kind: string; state: string; reason: string | null; operationId: string; at: string }[]
@@ -264,6 +278,7 @@ export class PlanningWorkers {
 	private research?: { dirty: Set<string>; running?: Promise<void>; off: () => void; retryAt: Map<string, number> };
 	constructor(deps: Dependencies) {
 		this.deps = deps;
+		this.unstickLog = new UnstickLog(join(deps.home, "diagnostics", "unstick.jsonl"));
 		this.detach = deps.sessions.setPlanningBridge({
 			assert: (b) => {
 				this.scope(b);
@@ -400,6 +415,10 @@ export class PlanningWorkers {
 	 * repair), artifacts they link (prototypes), and pause and resume. They change nothing the user answered;
 	 * pause is checked at send time. */
 	private authority(binding: PlanningWorkerBinding, round = false): string {
+		return hash(this.authorityParts(binding, round));
+	}
+	/** What authority() hashes, part by part. */
+	private authorityParts(binding: PlanningWorkerBinding, round = false): Record<string, unknown> {
 		this.scope(binding);
 		this.deps.sessions.assertPlanningOpen(binding.ownerSessionId);
 		const { store, sessions } = this.deps,
@@ -413,7 +432,7 @@ export class PlanningWorkers {
 		} = store.allocationContextFence(binding.missionId);
 		const context = round ? rest : { ...rest, memberEventId, artifactEventId };
 		if (control.held) throw new Conflict("Mission planning is paused");
-		return hash({
+		return {
 			binding,
 			project: this.deps.projects.require(binding.projectId),
 			session: sessions.planningIdentity(binding.ownerSessionId),
@@ -427,7 +446,7 @@ export class PlanningWorkers {
 			context,
 			// A held round keeps only Stop: pause is checked when it is sent, so Resume sends it.
 			controls: round ? { stopGeneration: control.stopGeneration } : control,
-		});
+		};
 	}
 	/**
 	 * What the user answered against: the mission, its controls and the map. Pilot's bookkeeping (the map's
@@ -435,16 +454,56 @@ export class PlanningWorkers {
 	 * waits without changing any question.
 	 */
 	private roundContext(state: PlanningWorkerState, authority: string): string {
+		return hash({ authority, ...this.mapParts(state) });
+	}
+	/** The map part of a round's fingerprint: the plan without Pilot's bookkeeping, and the brief for a revisit. */
+	private mapParts(state: PlanningWorkerState): Record<string, unknown> {
 		const missionId = state.binding.missionId;
 		const plan = this.deps.store.plans.get(missionId);
-		return hash({
-			authority,
+		return {
 			plan: plan
 				? { ...plan, revision: 0, questions: plan.questions.map(({ claimedBy: _claim, ...q }) => q) }
 				: null,
 			...(this.deps.store.interviews.latest(missionId)?.kind === "revisit"
 				? { briefRevision: this.deps.store.brief(missionId)?.revision }
 				: {}),
+		};
+	}
+	/**
+	 * The parts of a held round's fingerprint that changed since it was asked, by name (`plan`, `session`,
+	 * `owner`…), so a stalled round says why. Null when they are unknown: the round was held before Pilot kept
+	 * its parts, or planning is paused.
+	 */
+	private roundChanges(state: PlanningWorkerState): string[] | null {
+		const kept = state.holdParts;
+		if (!state.hold || kept?.operationId !== state.hold.operationId) return null;
+		let now: Record<string, string>;
+		try {
+			now = digests({ ...this.authorityParts(state.binding, true), ...this.mapParts(state) });
+		} catch {
+			return null;
+		}
+		return [...new Set([...Object.keys(kept.parts), ...Object.keys(now)])]
+			.filter((k) => kept.parts[k] !== now[k])
+			.sort();
+	}
+	/** Appends one entry to the unstick log (see UnstickLog), with the mission's planning state now. */
+	recordUnstick(missionId: string, action: string, detail: Record<string, unknown> = {}): void {
+		const state = this.deps.store.planningWorkers.get(missionId);
+		let unstick: ReturnType<PlanningWorkers["unstickView"]> | null = null;
+		try {
+			unstick = this.unstickView(missionId);
+		} catch {
+			/* The record still says what the user did. */
+		}
+		this.unstickLog.record({
+			missionId,
+			mission: this.deps.store.get(missionId)?.title ?? null,
+			action,
+			phase: state?.phase ?? null,
+			unstick,
+			stall: this.stalls.get(missionId) ?? null,
+			...detail,
 		});
 	}
 	private input(state: PlanningWorkerState, op: DurableOperation): PlanningInput {
@@ -666,6 +725,18 @@ export class PlanningWorkers {
 			throw new OperationRejected(String(e));
 		}
 		await this.deps.journal.checkpoint(op, { stage: "continue-entered", payloadHash: op.payloadHash });
+		const purpose = JSON.parse(op.payload);
+		this.recordUnstick(
+			op.targetId,
+			feedback
+				? "continue-with-feedback"
+				: Object.hasOwn(purpose, "note")
+					? "continue-with-repair-note"
+					: pin.resumeRound
+						? "continue-submitted-round"
+						: "continue",
+			{ operationId: op.operationId },
+		);
 		if (hash(this.continuePin(op.targetId, feedback)) !== hash(pin)) throw new Conflict("Planning changed");
 		let state = this.deps.store.planningWorkers.get(op.targetId)!;
 		if (pin.resumeRound) {
@@ -791,6 +862,18 @@ export class PlanningWorkers {
 					"stuck",
 					"Some saved answers belong to an earlier wording of their question, so new answers cannot be saved.",
 					"drop-earlier-answers",
+				);
+		}
+		if (state.phase === "held") {
+			let stale = false;
+			try {
+				stale = this.roundContext(state, this.authority(state.binding, true)) !== state.hold?.contextDigest;
+			} catch {
+				/* Paused or moved: said above. */
+			}
+			if (stale)
+				checks.push(
+					`Changed since this round was asked: ${this.roundChanges(state)?.join(", ") || "not known (asked before Pilot kept what it checks)"}`,
 				);
 		}
 		if (state.phase === "held" && open) return result("waiting", "Pilot waits for your answers to this round.");
@@ -993,6 +1076,7 @@ export class PlanningWorkers {
 			s.repair = { operationId: op.operationId, state: "starting", sessionId: null, basis, startedAt: Date.now() };
 		});
 		trace(`pilotd: planning ${op.targetId} repair agent requested (${op.operationId})`);
+		this.recordUnstick(op.targetId, "repair-agent", { operationId: op.operationId });
 		await this.deps.store.durable();
 		this.scheduleResearch(op.targetId);
 		return { repairId: op.operationId };
@@ -1011,6 +1095,12 @@ export class PlanningWorkers {
 			this.deps.store.planningWorkers.change(missionId, now.revision, (s) => {
 				if (s.repair?.operationId === repair.operationId) s.repair = { ...s.repair, ...change };
 			});
+			if (change.proposal || change.state === "failed")
+				this.recordUnstick(missionId, "repair-agent-answer", {
+					operationId: repair.operationId,
+					proposal: change.proposal ?? null,
+					reason: change.reason ?? null,
+				});
 		};
 		if (repair.state === "looking" && repair.sessionId) {
 			const chat = this.deps.sessions.get(repair.sessionId);
@@ -1907,7 +1997,12 @@ export class PlanningWorkers {
 		state = this.deps.store.planningWorkers.change(binding.missionId, state.revision, (s) => {
 			if (opensRound) {
 				s.phase = "holding";
-				s.pendingHold = { operationId: op.operationId, authority, round: this.authority(binding, true) };
+				s.pendingHold = {
+					operationId: op.operationId,
+					authority,
+					round: this.authority(binding, true),
+					roundParts: digests(this.authorityParts(binding, true)),
+				};
 				s.continuation = null;
 			}
 		});
@@ -2027,6 +2122,10 @@ export class PlanningWorkers {
 		const held = this.deps.store.planningWorkers.change(op.targetId, state.revision, (s) => {
 			s.phase = "held";
 			s.hold = round;
+			const asked = state.pendingHold?.roundParts;
+			if (asked)
+				s.holdParts = { operationId: round.operationId, parts: { ...asked, ...digests(this.mapParts(state)) } };
+			else delete s.holdParts;
 			s.pendingHold = null;
 		});
 		await this.deps.store.durable();
@@ -2072,11 +2171,24 @@ export class PlanningWorkers {
 		this.continuing.add(binding.missionId);
 		try {
 			const sent = await this.continueSubmitted(state, op, binding, confirmed);
+			this.stalls.delete(binding.missionId);
 			trace(
 				`pilotd: planning ${binding.missionId} submitted round ${sent === "accepted" ? "sent to the planner" : `not confirmed (${sent})`} (${op.operationId})`,
 			);
 		} catch (e) {
 			console.warn(`pilotd: planning ${binding.missionId} submitted round not sent: ${e}`);
+			const reason = e instanceof Error ? e.message : String(e);
+			const seen = this.stalls.get(binding.missionId);
+			if (!confirmed && (seen?.operationId !== op.operationId || seen.reason !== reason)) {
+				const changes = e instanceof RoundChanged ? e.changes : null;
+				this.stalls.set(binding.missionId, {
+					at: new Date().toISOString(),
+					operationId: op.operationId,
+					reason,
+					changes,
+				});
+				this.recordUnstick(binding.missionId, "stalled", { operationId: op.operationId });
+			}
 			throw e;
 		} finally {
 			this.continuing.delete(binding.missionId);
@@ -2098,7 +2210,8 @@ export class PlanningWorkers {
 				throw new Conflict("Submitted planning round or controls changed");
 			// The user's explicit Continue confirms the round against the map as it is now.
 			const round = this.authority(binding, true);
-			if (!confirmed && this.roundContext(state, round) !== state.hold.contextDigest) throw new RoundChanged();
+			if (!confirmed && this.roundContext(state, round) !== state.hold.contextDigest)
+				throw new RoundChanged(this.roundChanges(state));
 		};
 		guard();
 		await this.deps.sessions.planningIdle(binding.ownerSessionId, guard, this.closing.signal);
