@@ -180,6 +180,7 @@ export class McpStatusService {
 	}
 
 	signIn(server: string, again = false): McpSignInState {
+		if (this.stopped) throw new SignInUnavailable("Connection sign-in is stopped");
 		const current = this.servers.get(server);
 		if (!current) throw new NotFound(`Unknown MCP server: ${server}`);
 		if (!this.canLogin || !current.canSignIn) throw new SignInUnavailable(`${server} does not use browser sign-in`);

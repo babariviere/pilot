@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { DurableOperation, InterviewQuestion, SessionSummary } from "@pilot/protocol";
 import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
+import type { McpStatusService } from "./mcp-status.ts";
 import { MissionControls } from "./mission-controls.ts";
 import { MissionInterviews } from "./mission-interviews.ts";
 import { MissionPlans } from "./mission-plans.ts";
@@ -23,7 +24,9 @@ import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 import { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
-export async function nativePlanningFixture(options: { native?: boolean } = {}) {
+export async function nativePlanningFixture(
+	options: { native?: boolean; mcp?: McpStatusService; connections?: boolean } = {},
+) {
 	const home = await mkdtemp(join(tmpdir(), "native-planning-"));
 	const projects = new ProjectStore(home);
 	await projects.load();
@@ -105,7 +108,7 @@ export async function nativePlanningFixture(options: { native?: boolean } = {}) 
 		await native.status();
 		capability = JSON.parse(await readFile(join(home, "github-app-capability"), "utf8")).token;
 		const args: Parameters<typeof createDaemonServer> = [
-			{ home, host: "127.0.0.1", port: 0 },
+			{ home, host: "127.0.0.1", port: 0, ...(options.connections ? { agentDir: home } : {}) },
 			sessions,
 			projects,
 			new ModelCatalog(home),
@@ -127,6 +130,7 @@ export async function nativePlanningFixture(options: { native?: boolean } = {}) 
 			},
 		];
 		args[12] = hello;
+		args[11] = options.mcp;
 		if (options.native !== false) args[17] = native;
 		server = createDaemonServer(...args);
 		await server.runtimeReady;

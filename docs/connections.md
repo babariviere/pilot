@@ -32,6 +32,19 @@ and running chats are not changed. Unavailable models and advanced patterns are 
 
 ## MCP
 
+In Day, **Settings → Tool connections** shows saved setup and the last service
+check. **Check connection** runs a fresh check. **Read again** only reads the
+cached report. The service checks at startup and when Pi's MCP configuration or
+authentication changes, not on each Settings visit.
+
+**Add connection…** adds an HTTPS service or an already installed command. It
+does not replace existing entries. Unsupported and advanced entries remain in
+`mcp.json`, including their headers, arguments and other external settings. Edit
+those entries with Pi. Pilot never displays their secret values or installs commands.
+Browser sign-in and cancellation name the connection and current attempt. An
+uncertain setup or sign-in action stays Unknown; **Check status** reads its
+receipt without sending it again.
+
 Open **Settings → Connections** (or **MCP connections**) for Local's reported MCP
 server status. Use the available explicit check or sign-in action when required.
 Refresh reads the daemon's report; stale or unavailable status is not a live health check.

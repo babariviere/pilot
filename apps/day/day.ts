@@ -4,6 +4,7 @@
 import { type Signal, signal } from "nsh";
 import type { Today } from "pilot-day/native";
 import type { ArtifactSource } from "./artifactReads";
+import type { ConnectionControls } from "./connectionControls";
 import type { DeliveryMirror } from "./deliveryFeed";
 import type { FeedbackMirror } from "./feedbackFeed";
 import type { DayFeed } from "./feeds";
@@ -20,6 +21,7 @@ import type { ScopeMirror } from "./todayScope";
 export type Day = {
 	/** Native AI settings; absent from mock worlds unless explicitly supplied. */
 	models?: ModelControls;
+	connections?: ConnectionControls;
 	/** Sends intents. Never written to from TSX state. */
 	feed: DayFeed;
 	/** A mirror of Rust's read model. Only the feed's listener sets it. */

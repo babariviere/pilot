@@ -346,6 +346,9 @@ pub struct SavedView {
     /// Unsaved model configuration only. Never a sign-in code or challenge.
     #[prop(default)]
     pub model_settings: String,
+    /// Unsent connection setup, never authentication responses. Restore sends nothing.
+    #[prop(default)]
+    pub connection_settings: String,
     /// The thread on screen over its mission, as "<mission>/<thread>", or
     /// empty. Showing it again only reads.
     #[prop(default)]
@@ -419,6 +422,7 @@ impl SavedView {
             + self.linear.len()
             + self.today_project.len()
             + self.model_settings.len()
+            + self.connection_settings.len()
             + self.thread.len()
             + self.feedback.len()
             + self.feedback_images.len()

@@ -12,6 +12,7 @@ import type { Changes } from "./changeFeed";
 import { changeMessages, changesRoute, changeTabs, detailsOpen, listMessage } from "./changesView";
 import { closeChat } from "./chatView";
 import { saveActionDraft, saveDecisionDraft } from "./commands";
+import { restoreConnectionDraft, savedConnectionDraft } from "./connectionDraft";
 import type { Day } from "./day";
 import { subjectOf } from "./deliveryFeed";
 import {
@@ -224,6 +225,7 @@ export function captureView(today?: Today): SavedView {
 		preferences: savedPreferences(),
 		projectSetup: savedProjectSetup(),
 		modelSettings: savedModelDraft(),
+		connectionSettings: savedConnectionDraft(),
 		// The thread on screen and unsent thread words, by mission and thread.
 		// Restoring them sends nothing and never moves words to another thread.
 		thread: savedThread(),
@@ -440,6 +442,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	restorePreferences(view.preferences ?? []);
 	restoreProjectSetup(view.projectSetup ?? []);
 	restoreModelDraft(view.modelSettings ?? "");
+	restoreConnectionDraft(view.connectionSettings ?? "");
 	settingsOpen.set(settings && view.settings === true);
 	// Unsent feedback always comes back as unsent words with their own origin.
 	// The page shows again only in a window that has it.

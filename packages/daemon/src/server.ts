@@ -72,6 +72,7 @@ import { RepositoryChanges } from "./changes.ts";
 import { type ChatSettingsService, InvalidChatSettings } from "./chat-settings.ts";
 import { ChatStreams } from "./chat-streams.ts";
 import type { DaemonConfig } from "./config.ts";
+import { CONNECTION_CONTROLS, ConnectionControls } from "./connection-controls.ts";
 import { DatabaseSettingsError } from "./databases.ts";
 import { DeliveredArtifacts } from "./delivered-artifact.ts";
 import { awaitDiagnosticRead, diagnosticContextResponse } from "./diagnostic-context.ts";
@@ -964,8 +965,10 @@ export function createDaemonServer(
 					journal,
 				})
 			: undefined;
+	const connectionControls = new ConnectionControls(mcpSetup, mcp, _config.mcpSetupReadOnly);
 	const modelControls = new ModelControls(models, projects, setup, sessions, _config.modelScopeReadOnly);
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
+		if (op.kind === CONNECTION_CONTROLS) throw new Error("Connection outcome unknown; lookup only");
 		if (op.kind === MODEL_CONTROLS) throw new Error("Model settings outcome unknown; lookup only");
 		if (isThreadOperation(op.kind)) {
 			if (!missionThreads) throw new Error("Topic lookup unavailable");
@@ -1256,6 +1259,17 @@ export function createDaemonServer(
 			throw new SetupError(404, "Unknown GitHub import operation.");
 		}
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "connection-controls") {
+			res.setHeader("cache-control", "no-store");
+			if (!githubSetup) throw new ServiceUnavailable("Native connections unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (parts.length === 2 && req.method === "GET") return json(res, 200, await connectionControls.read());
+			if (parts.length === 3 && parts[2] === "check" && req.method === "POST") {
+				if (!mcp) throw new ServiceUnavailable("Connection checks unavailable");
+				return json(res, 200, mcp.check());
+			}
+			throw new HttpError(404, "Not found");
+		}
 		if (parts[1] === "model-controls") {
 			res.setHeader("cache-control", "no-store");
 			if (!githubSetup) throw new ServiceUnavailable("Native model settings unavailable");
@@ -1669,6 +1683,26 @@ export function createDaemonServer(
 						res,
 						200,
 						await journal.execute(operation, (op, entry) => planningWorkers.enroll(op, entry.firstEntry)),
+					);
+				} finally {
+					end();
+				}
+			}
+			if (operation?.kind === CONNECTION_CONTROLS) {
+				res.setHeader("cache-control", "no-store");
+				if (!githubSetup) throw new ServiceUnavailable("Native connections unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				const saved = await journal.lookup(operation);
+				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					return json(
+						res,
+						200,
+						await journal.execute(operation, (op, entry) =>
+							connectionControls.admit(op, journal, entry.firstEntry),
+						),
 					);
 				} finally {
 					end();

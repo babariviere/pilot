@@ -39,6 +39,7 @@ fn view() -> SavedView {
         linear: "project/ln-219".into(),
         today_project: "project".into(),
         model_settings: String::new(),
+        connection_settings: String::new(),
         settings: true,
         project_setup: vec![
             "/Users/test/source".into(),
@@ -96,6 +97,19 @@ fn unsaved_model_configuration_round_trips_without_becoming_an_action() {
     json.as_object_mut().unwrap().remove("modelSettings");
     let old: SavedView = nsh_core::element::from_json(&json).unwrap();
     assert!(old.model_settings.is_empty());
+}
+
+#[test]
+fn connection_setup_draft_round_trips_and_older_windows_still_open() {
+    let mut original = view();
+    original.connection_settings = r#"{"name":"example","kind":"url","target":"https://example.test/mcp","binding":"earlier"}"#.into();
+    let mut json = serde_json::to_value(&original).unwrap();
+    let restored: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert_eq!(restored.connection_settings, original.connection_settings);
+    assert!(restored.text_bytes() >= restored.connection_settings.len());
+    json.as_object_mut().unwrap().remove("connectionSettings");
+    let old: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert!(old.connection_settings.is_empty());
 }
 
 #[test]

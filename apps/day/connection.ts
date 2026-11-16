@@ -9,6 +9,7 @@ import { ConnectedArtifacts } from "./artifactReads";
 import { ConnectedPlans, ConnectedRituals, ConnectedToday, call, type Refusal, windowId } from "./bridge";
 import { ConnectedChats, mirrorChats } from "./chatFeed";
 import { connectedUpdates } from "./connectedUpdates";
+import { connectedConnectionControls } from "./connectionControls";
 import { type Day, mirrorDay } from "./day";
 import { errorText, logEvent, setLogSink } from "./dayLog";
 import { ConnectedDelivery, deliveryKey, mirrorDelivery, type VerificationSubject } from "./deliveryFeed";
@@ -21,6 +22,7 @@ import { flushAll } from "./planCommands";
 import { mirrorPlanning, type Plans } from "./planning";
 import { answerDrafts, answerPicks } from "./planView";
 import { ConnectedPreferences, mirrorPreferences } from "./preferencesFeed";
+import { settingsOpen } from "./preferencesView";
 import { mirrorRituals, type Rituals, rootRecap } from "./ritualFeed";
 import { ConnectedSessionChat, mirrorSessionChat } from "./sessionChat";
 import { ConnectedThreads, mirrorThreads } from "./threadFeed";
@@ -140,6 +142,7 @@ function refresh() {
 		ritualFeed?.sync(),
 		feedbackFeed?.read(true),
 		open.state === "open" ? open.day.chat?.source.refresh() : undefined,
+		open.state === "open" && settingsOpen() ? open.day.connections?.read() : undefined,
 	]).catch((error: unknown) => {
 		console.error("Pilot could not read this window again:", error);
 	});
@@ -295,6 +298,7 @@ async function connect() {
 	);
 	// New's projects are read when New opens; reading sends nothing.
 	day.models = connectedModelControls(window);
+	day.connections = connectedConnectionControls(window);
 	const plans = mirrorPlanning(planFeed, mirrorChats(new ConnectedChats(window)));
 	const rituals = mirrorRituals(ritualFeed, rootRecap);
 	const update = await connectedUpdates(window);

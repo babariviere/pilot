@@ -270,6 +270,16 @@ async fn run(
     }
     if matches!(
         call.command,
+        Command::ConnectionsRead
+            | Command::ConnectionsWrite(_)
+            | Command::ConnectionsCheck(_)
+            | Command::ConnectionsProbe
+    ) {
+        return super::connection_controls::handle(t, journal, shared, &call.command, &call.gate)
+            .await;
+    }
+    if matches!(
+        call.command,
         Command::ModelsRead
             | Command::ModelsRecovery(_)
             | Command::ModelsWrite(_)
@@ -661,6 +671,10 @@ async fn run(
             value = json!({"generation":generation});
             None
         }
+        Command::ConnectionsRead
+        | Command::ConnectionsWrite(_)
+        | Command::ConnectionsCheck(_)
+        | Command::ConnectionsProbe => unreachable!("handled connection command"),
         Command::UpdateRead
         | Command::UpdatePrepare(_)
         | Command::UpdateConfirm(_)

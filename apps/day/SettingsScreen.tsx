@@ -9,6 +9,7 @@
 // its result. Leaving, closing or updating keeps the draft (updateView.ts).
 import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, untracked, View } from "nsh";
 import { Button, Collapsible, Input } from "nsh/base";
+import { ConnectionSettings } from "./ConnectionSettings";
 import type { Day } from "./day";
 import { keepField, keepScroll } from "./kept";
 import { ModelSettingsSection } from "./ModelSettings";
@@ -552,6 +553,7 @@ export function SettingsScreen(props: { day: Day }) {
 					Settings
 				</Text>
 				<If when={props.day.models}>{(controls) => <ModelSettingsSection controls={controls()} />}</If>
+				<If when={props.day.connections}>{(controls) => <ConnectionSettings controls={controls()} />}</If>
 				<Preferences mirror={mirror} />
 				<ProjectsSection />
 				<History mirror={mirror} />

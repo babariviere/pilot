@@ -33,6 +33,10 @@ pub const METHODS: &[&str] = &[
     "day.linear.read",
     "day.preferences.read",
     "day.models.read",
+    "day.connections.read",
+    "day.connections.write",
+    "day.connections.check",
+    "day.connections.probe",
     "day.models.write",
     "day.models.check",
     "day.models.signIn",
@@ -243,6 +247,10 @@ pub(crate) enum Command {
     LinearRead,
     PreferencesRead,
     ModelsRead,
+    ConnectionsRead,
+    ConnectionsWrite(crate::host::connection_controls::Intent),
+    ConnectionsCheck(String),
+    ConnectionsProbe,
     ModelsRecovery(String),
     ModelsWrite(crate::host::model_controls::Intent),
     ModelsCheck(String),
@@ -548,6 +556,31 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 return Err(Error::Invalid);
             }
             C::ModelsRead
+        }
+        "day.connections.read" | "day.connections.probe" => {
+            if args != json!({}) {
+                return Err(Error::Invalid);
+            }
+            if name == "day.connections.read" {
+                C::ConnectionsRead
+            } else {
+                C::ConnectionsProbe
+            }
+        }
+        "day.connections.write" => {
+            let r: crate::host::connection_controls::Intent = exact(args)?;
+            r.validate()?;
+            C::ConnectionsWrite(r)
+        }
+        "day.connections.check" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Lookup {
+                operation_id: String,
+            }
+            let r: Lookup = exact(args)?;
+            mission(&r.operation_id)?;
+            C::ConnectionsCheck(r.operation_id)
         }
         "day.models.write" => {
             let r: crate::host::model_controls::Intent = exact(args)?;
@@ -1052,6 +1085,7 @@ impl Command {
                     | Self::LinearRead
                     | Self::PreferencesRead
                     | Self::ModelsRead
+                    | Self::ConnectionsRead
                     | Self::ModelsRecovery(_)
                     | Self::PreferencesHistory(_)
                     | Self::FeedbackRead(_)

@@ -5,6 +5,7 @@ pub(crate) mod artifacts;
 pub mod attention;
 mod bridge;
 mod changes;
+pub(crate) mod connection_controls;
 pub(crate) mod delivery;
 pub(crate) mod delivery_artifact;
 pub(crate) mod delivery_work;
@@ -2185,7 +2186,7 @@ async fn watch_once(
                 // Frequent while agents work. Read again without marking the
                 // shown read stale first: that repainted the window each time.
                 // The channel holds one wakeup, so bursts cost one read.
-                Some("session" | "sessions" | "dashboard") => {
+                Some("session" | "sessions" | "dashboard" | "mcp") => {
                     shared.full_refresh.store(true, Ordering::SeqCst);
                     let _ = invalidated.try_send(());
                 }
