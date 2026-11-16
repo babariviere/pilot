@@ -1,6 +1,6 @@
 /** Release-time only. Keep accounting's isolated worker free of the per-isolate TS parser. */
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -10,21 +10,66 @@ const modules = ["usage-history-worker", "usage-history-disk", "usage-history-va
 const sourceEntry = 'new URL("./usage-history-worker.ts", import.meta.url)';
 const generatedEntry = 'new URL("./usage-history-worker.mjs", import.meta.url)';
 
-export async function generatedModules(directory) {
+export async function generatedModules(directory, names = modules) {
 	const outputs = new Map();
-	for (const name of modules) {
+	for (const name of names) {
 		let code = stripTypeScriptTypes(await readFile(join(directory, `${name}.ts`), "utf8"));
 		// Fail packaging if this deliberately closed leaf graph gains another runtime dependency.
 		// Match import/export clauses, not ordinary query field strings such as ["from", "to"].
 		for (const [, dependency] of code.matchAll(
 			/\b(?:import|export)\s*(?:\(\s*|[^;"']*?\bfrom\s*)?["']([^"']+)["']/g,
 		)) {
-			assert.ok(dependency.startsWith("node:") || modules.some((module) => dependency === `./${module}.ts`));
+			assert.ok(dependency.startsWith("node:") || names.some((module) => dependency === `./${module}.ts`));
 		}
-		for (const module of modules) code = code.replaceAll(`./${module}.ts`, `./${module}.mjs`);
+		for (const module of names) code = code.replaceAll(`./${module}.ts`, `./${module}.mjs`);
 		outputs.set(`${name}.mjs`, code);
 	}
 	return outputs;
+}
+
+const fundingModules = ["funding-worker", "funding-disk", "funding-errors"];
+const fundingSource = 'new URL("./funding-worker.ts", import.meta.url)';
+const fundingGenerated = 'new URL("./funding-worker.mjs", import.meta.url)';
+export async function buildFundingWorker(directory) {
+	const file = join(directory, "funding.ts"),
+		source = await readFile(file, "utf8");
+	assert.equal(
+		source.split(fundingSource).length + source.split(fundingGenerated).length,
+		3,
+		"Expected one funding worker entry",
+	);
+	for (const [name, code] of await generatedModules(directory, fundingModules))
+		await writeFile(join(directory, name), code);
+	await writeFile(file, source.replace(fundingSource, fundingGenerated));
+}
+export async function checkFundingWorker(directory) {
+	const source = await readFile(join(directory, "funding.ts"), "utf8");
+	assert.ok(
+		source.includes(fundingGenerated) && !source.includes(fundingSource),
+		"Generated funding worker is not selected",
+	);
+	for (const [name, code] of await generatedModules(directory, fundingModules))
+		assert.equal(await readFile(join(directory, name), "utf8"), code, `Stale generated funding module: ${name}`);
+	const { Funding } = await import(pathToFileURL(join(directory, "funding.ts")));
+	const home = await mkdtemp(join(tmpdir(), "funding-runtime-smoke-")),
+		funding = new Funding(join(home, "funding.sqlite"));
+	try {
+		const owner = { kind: "quick_fix", id: "runtime-smoke" };
+		await funding.open(owner, 1000);
+		await funding.reserve(owner, "one", {
+			provider: "fixture",
+			model: "fixture",
+			inputTokens: 10,
+			outputTokens: 10,
+			rate: { input: 1000000, output: 1000000, cacheRead: 1000000, cacheWrite: 1000000 },
+		});
+		assert.equal((await funding.read()).accounts[0].uncertainMicros, 30);
+		await funding.settle(owner, "one", { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 });
+		assert.equal((await funding.read()).accounts[0].spentMicros, 2);
+	} finally {
+		await funding.close();
+		await rm(home, { recursive: true, force: true });
+	}
 }
 
 export async function buildUsageWorker(directory) {
@@ -91,4 +136,21 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 	);
 	if (action === "build") await buildUsageWorker(resolve(directory));
 	else await checkUsageWorker(resolve(directory));
+	// Historical isolated usage benchmarks stage only the usage leaf. Current full runtimes
+	// include funding.ts and must generate and verify both leaves through this same build step.
+	if (
+		await access(join(directory, "funding.ts")).then(
+			() => true,
+			() => false,
+		)
+	) {
+		if (action === "build") await buildFundingWorker(resolve(directory));
+		else await checkFundingWorker(resolve(directory));
+	} else {
+		const daemon = await readFile(join(directory, "daemon.ts"), "utf8").catch((error) => {
+			if (error.code === "ENOENT") return "";
+			throw error;
+		});
+		assert.ok(!daemon.includes('"./funding.ts"'), "Current runtime is missing its funding source");
+	}
 }

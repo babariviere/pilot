@@ -1,5 +1,6 @@
 // Presentation mirror only. Rust chooses the host/project, journals effects and owns eligibility.
 import { signal } from "nsh";
+import type { FundingOwner, FundingView } from "../../packages/protocol/src/funding";
 import { call } from "./bridge";
 
 export type ModelChoice = {
@@ -25,6 +26,17 @@ export type ModelDefaults = {
 };
 export type SignInRun = { id: string; provider: string; state: string; reauthenticationRequired: boolean };
 export type ModelSettings = {
+	funding?: FundingView;
+	backgroundSubscription?: {
+		windows: { provider: "anthropic" | "openai"; label: string; usedPercent: number }[];
+		force?: ("anthropic" | "openai")[];
+	};
+	fundedWork?: {
+		id: string;
+		title: string;
+		owner: FundingOwner;
+		subscription: { forced?: boolean; windows: { label: string; usedPercent: number }[] } | null;
+	}[];
 	version: number;
 	binding: string;
 	defaults: ModelDefaults;
@@ -52,7 +64,18 @@ export type SignInView = {
 	run: SignInRun;
 	challenge: { id: string; type: string; url: string; userCode?: string } | null;
 };
-export type ModelAction = "scope" | "defaults" | "project-model" | "failed-model" | "sign-in" | "cancel" | "logout";
+export type ModelAction =
+	| "scope"
+	| "defaults"
+	| "project-model"
+	| "failed-model"
+	| "sign-in"
+	| "cancel"
+	| "logout"
+	| "funding-settings"
+	| "fund-work"
+	| "continue-anyway"
+	| "background-continue";
 export interface ModelControls {
 	settings: () => ModelSettings | null;
 	busy: () => boolean;

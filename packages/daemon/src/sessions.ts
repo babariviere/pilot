@@ -512,6 +512,10 @@ interface SessionMeta extends OutcomeMeta {
 	/** Durable known limits and window-scoped user exemptions, shared with child admission gates. */
 	subscriptionPolicy?: SubscriptionPolicy;
 	continuationOf?: string;
+	/** The logical standalone allowance survives a transfer to another chat. */
+	fundingId?: string;
+	fundingMissionId?: string;
+	fundingRequired?: true;
 	continuedTo?: string;
 	/** A committed handoff is rolled forward before this chat may start. */
 	continuationPending?: boolean;
@@ -6943,6 +6947,43 @@ ${run.excerpt}`,
 		const meta = this.metas.get(id);
 		return meta && this.summary(meta);
 	}
+	/** Host-only allowance owner. Helpers inherit their parent's credential capability. */
+	funding?: import("./funding.ts").Funding;
+	backgroundSubscription?: import("./background-subscription.ts").BackgroundSubscription;
+	fundingOwner(id: string): import("../../protocol/src/funding.ts").FundingOwner {
+		const meta = this.require(id);
+		if (meta.archivedAt) throw new Conflict("Archived work cannot spend");
+		const member = this.missions?.membership(id);
+		if (meta.planning || meta.fundingMissionId || member?.active)
+			return {
+				kind: "mission",
+				id: meta.planning?.missionId ?? meta.fundingMissionId ?? member!.missionId,
+				projectId: meta.projectId,
+			};
+		return { kind: "quick_fix", id: meta.fundingId ?? id, projectId: meta.projectId };
+	}
+	/** Native-created work is metered; old desktop work keeps its existing controls until migration. */
+	fundingRequired(id: string): boolean {
+		const meta = this.require(id),
+			member = this.missions?.membership(id);
+		return (
+			!!meta.fundingRequired ||
+			!!(
+				member?.active &&
+				[...this.metas.values()].some((m) => m.planning?.missionId === member.missionId && m.fundingRequired)
+			)
+		);
+	}
+	/** Recheck live admission after budget I/O, not merely display ownership. */
+	fundingRequestOwner(id: string): import("../../protocol/src/funding.ts").FundingOwner {
+		const meta = this.require(id);
+		this.assertNotContinued(meta);
+		const member = this.missions?.membership(id);
+		const pinnedMission = meta.planning?.missionId ?? meta.fundingMissionId;
+		if (pinnedMission && (!member?.active || member.missionId !== pinnedMission))
+			throw new Conflict("Planning membership changed");
+		return this.fundingOwner(id);
+	}
 	executionEvidence(id: string): import("@pilot/kernel").ExecutionEvidence | undefined {
 		return this.metas.get(id)?.executionEvidence;
 	}
@@ -7387,6 +7428,9 @@ ${run.excerpt}`,
 	}
 
 	private async applyContinuation(source: SessionMeta, target: SessionMeta): Promise<void> {
+		target.fundingId = source.fundingId ?? source.id;
+		if (source.fundingMissionId) target.fundingMissionId = source.fundingMissionId;
+		if (source.fundingRequired) target.fundingRequired = true;
 		if (source.planning || target.planning)
 			throw new Conflict("Planning profile cannot transfer to an ordinary chat");
 		if (source.role === "insights" || source.insightsGrant || target.role === "insights" || target.insightsGrant)
@@ -7965,6 +8009,7 @@ ${run.excerpt}`,
 		mission?: { taskIds: string[]; admission: MissionSpawnAdmission },
 		feedbackImages?: string[],
 		job?: ChatJob,
+		fundingRequired = false,
 	): Promise<SessionSummary> {
 		guard?.();
 		this.insightsBacklog?.replacements.assertNotRetired(targetId);
@@ -8000,7 +8045,7 @@ ${run.excerpt}`,
 					request,
 					false,
 					mission?.taskIds,
-					{ targetId, operationId },
+					{ targetId, operationId, fundingRequired },
 					mission?.admission,
 					undefined,
 					undefined,
@@ -9349,7 +9394,7 @@ ${run.excerpt}`,
 		request: SpawnRequest,
 		coordinator: boolean,
 		taskId?: string | string[],
-		admission?: { targetId: string; operationId: string },
+		admission?: { targetId: string; operationId: string; fundingRequired?: boolean },
 		missionAdmission?: MissionSpawnAdmission,
 		insightsGrant?: InsightsGrant,
 		flowAdmission?: { rootId: string; flow?: FlowState },
@@ -9622,6 +9667,11 @@ ${run.excerpt}`,
 				? { repairDiagnostics: this.assertDiagnosticRepairAdmission(request) }
 				: {}),
 			...(admission ? { createOperationId: admission.operationId } : {}),
+			...(admission?.fundingRequired || (planning && this.funding) ? { fundingRequired: true as const } : {}),
+			...(request.missionId &&
+			[...this.metas.values()].some((m) => m.planning?.missionId === request.missionId && m.fundingRequired)
+				? { fundingRequired: true as const, fundingMissionId: request.missionId }
+				: {}),
 			...(admission && request.missionId ? { createMissionId: request.missionId } : {}),
 			mode,
 			...(ask ? { ask } : {}),
@@ -12616,7 +12666,11 @@ ${run.excerpt}`,
 		const createWorker =
 			this.factories.worker ??
 			(async (spec, onPacket, onExit) => {
-				spec.credentials = this.credentials?.grant();
+				spec.credentials = this.credentials?.grant(
+					false,
+					undefined,
+					this.fundingRequired(spec.sessionId) ? spec.sessionId : undefined,
+				);
 				const view = spec.pilot?.coordinatorView;
 				try {
 					if (view && process.platform === "linux")

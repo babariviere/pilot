@@ -7,6 +7,8 @@ export interface CredentialEndpoint {
 	token: string;
 	/** Canonical same-host agent directory whose discovery this capability can read. */
 	catalogAgentDir?: string;
+	/** Requests from this capability must reserve against their host-owned funding scope. */
+	metered?: true;
 }
 export type CredentialNamespace = "pi" | "mcp";
 export type CredentialOperation =
@@ -18,7 +20,9 @@ export type CredentialOperation =
 	| "begin"
 	| "commit"
 	| "delete"
-	| "catalog";
+	| "catalog"
+	| "funding-reserve"
+	| "funding-settle";
 /** Metadata only. Configured does not prove provider acceptance or include ambient/config auth. */
 export interface CredentialStatus {
 	state: "missing" | "configured" | "reauthentication_required";
@@ -35,8 +39,14 @@ export interface CredentialRequest {
 export class CredentialBrokerError extends Error {
 	readonly code: string;
 	constructor(code: string) {
-		const safe = ["invalid", "unauthorized", "uncertain", "stale", "busy"].includes(code) ? code : "unavailable";
-		super(`Credential broker ${safe}. Sign in again if a refresh outcome is uncertain.`);
+		const safe = ["invalid", "unauthorized", "uncertain", "stale", "busy", "funding"].includes(code)
+			? code
+			: "unavailable";
+		super(
+			safe === "funding"
+				? "Allowance hold. Check funding, catalog prices and request bounds in Settings."
+				: `Credential broker ${safe}. Sign in again if a refresh outcome is uncertain.`,
+		);
 		this.code = safe;
 	}
 }

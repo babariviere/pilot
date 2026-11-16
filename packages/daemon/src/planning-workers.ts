@@ -44,6 +44,7 @@ import { trace } from "./trace.ts";
 import type { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
 export interface PlanningEnrollment {
+	allowanceMicros?: number;
 	purpose: "planning-enroll";
 	projectId: string;
 	ownerSessionId: string;
@@ -1574,6 +1575,12 @@ export class PlanningWorkers {
 			];
 			if (request && typeof request === "object" && Object.hasOwn(request, "replaces")) keys.push("replaces");
 			if (request && typeof request === "object" && Object.hasOwn(request, "request")) keys.push("request");
+			if (request && Object.hasOwn(request, "allowanceMicros")) keys.push("allowanceMicros");
+			if (
+				this.deps.sessions.funding &&
+				(!Number.isSafeInteger(request.allowanceMicros) || request.allowanceMicros! < 0)
+			)
+				throw new Conflict("Choose a mission allowance before planning");
 			interviewExact(request, keys);
 			interviewId(op.targetId);
 			interviewId(request.projectId);
@@ -1670,6 +1677,11 @@ export class PlanningWorkers {
 			)
 				throw new Conflict("Planning setup changed");
 		};
+		if (this.deps.sessions.funding)
+			await this.deps.sessions.funding.open(
+				{ kind: "mission", id: state.binding.missionId, projectId: request.projectId },
+				request.allowanceMicros!,
+			);
 		await this.deps.sessions.createPlanningWorker(state.binding, request.title, request.model, setupGuard);
 		setupGuard();
 		const active = this.deps.store.planningWorkers.change(state.binding.missionId, state.revision, (s) => {

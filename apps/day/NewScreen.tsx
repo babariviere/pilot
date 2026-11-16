@@ -19,7 +19,9 @@ import {
 import type { ChatMode } from "./chatFeed";
 import { openChat } from "./chatView";
 import type { Day } from "./day";
+import { fundingAmount } from "./FundingSettings";
 import { keepField, keepScroll } from "./kept";
+import { newFundingDraft } from "./modelSettingsDraft";
 import { glide } from "./motion";
 import { stageMark, stageWord } from "./PlanScreen";
 import { checkCreation, dismissCreation, planMission } from "./planCommands";
@@ -39,7 +41,7 @@ import {
 	replacesDraft,
 	requestDraft,
 } from "./planView";
-import { Action, Mark, PAGE_COLUMN, Picker, RadioRow, RowLink, SectionTitle } from "./ui";
+import { Action, Field, Mark, PAGE_COLUMN, Picker, RadioRow, RowLink, SectionTitle } from "./ui";
 
 const MODES: { mode: ChatMode; label: string }[] = [
 	{ mode: "build", label: modeWords("build") },
@@ -112,6 +114,7 @@ function ConfirmStart(props: { plans: Plans }) {
 	const chats = props.plans.chats;
 	const view = () => chats.view();
 	const choice = () => chatChoice();
+	const allowance = () => newFundingDraft()?.quickFix ?? "";
 	const mode = () => chatPick()?.mode ?? "build";
 	const where = () => {
 		const c = choice();
@@ -147,6 +150,24 @@ function ConfirmStart(props: { plans: Plans }) {
 			<Text testID="chat-setup" class="text-xs text-muted-foreground">
 				{where()}
 			</Text>
+			<If when={choice()?.fundingRequired}>
+				<Field
+					label="Quick-fix allowance (USD catalog value)"
+					testID="chat-allowance"
+					value={allowance()}
+					placeholder="Choose an amount"
+					onChange={(text) => {
+						const d = newFundingDraft();
+						if (d) newFundingDraft.set({ ...d, quickFix: text });
+						const c = choice();
+						if (c) chatChoice.set({ ...c, allowanceMicros: fundingAmount(text) ?? null });
+					}}
+				/>
+				<Text class="text-xs text-faint">
+					This allowance follows the work through retries and handoffs. Reviews also keep their own limits.
+					Increase it only by explicit approval.
+				</Text>
+			</If>
 			<Text class="text-xs text-faint">
 				It is not a mission: Pilot asks no questions first, and the chat works on its own.
 			</Text>
@@ -154,7 +175,7 @@ function ConfirmStart(props: { plans: Plans }) {
 				<Action
 					primary
 					label={newBusy() ? "Starting…" : "Start chat"}
-					disabled={newBusy() || !ready()}
+					disabled={newBusy() || !ready() || (!!choice()?.fundingRequired && fundingAmount(allowance()) == null)}
 					onPress={() => void startNewChat(chats)}
 				/>
 				<Action label="Cancel" disabled={newBusy()} onPress={() => confirmingStart.set(false)} />
@@ -197,6 +218,29 @@ function Unconfirmed(props: { plans: Plans }) {
 /** The New screen. */
 export function NewScreen(props: { plans: Plans; day?: Day }) {
 	const planning = () => props.plans.planning();
+	effect(() => {
+		const c = chatChoice(),
+			setup = planning().setup;
+		untracked(() => {
+			if (!c) return;
+			const d = newFundingDraft();
+			if (!d || d.project !== c.projectId)
+				newFundingDraft.set({
+					project: c.projectId,
+					quickFix: c.allowanceMicros == null ? "" : String(c.allowanceMicros / 1_000_000),
+					mission: setup.allowanceRequired
+						? setup.allowanceMicros == null
+							? ""
+							: String(setup.allowanceMicros / 1_000_000)
+						: null,
+				});
+			else if (d.mission === null && setup.allowanceRequired)
+				newFundingDraft.set({
+					...d,
+					mission: setup.allowanceMicros == null ? "" : String(setup.allowanceMicros / 1_000_000),
+				});
+		});
+	});
 	const chats = props.plans.chats;
 	const chatView = () => chats.view();
 	const off = () => !planning().canCreate;
@@ -361,6 +405,22 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 							</Text>
 						</If>
 						<If when={canPlan()}>
+							<If when={planning().setup.allowanceRequired}>
+								<Field
+									label="Mission allowance (USD catalog value)"
+									testID="mission-allowance"
+									placeholder="Choose an amount before planning"
+									value={newFundingDraft()?.mission ?? ""}
+									onChange={(text) => {
+										const d = newFundingDraft();
+										if (d) newFundingDraft.set({ ...d, mission: text });
+									}}
+								/>
+								<Text class="text-xs text-faint">
+									One lifetime allowance includes planning, research, helpers, reviews and retries. Nothing is
+									free because it uses a subscription.
+								</Text>
+							</If>
 							<Text class="text-xs text-faint">
 								{planning().canCreate ? `${planning().setup.access} · ${planning().setup.model}` : ""}
 							</Text>

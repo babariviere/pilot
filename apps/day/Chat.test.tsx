@@ -31,6 +31,26 @@ async function choose(app: Awaited<ReturnType<typeof ready>>, name: string) {
 	await app.press(`text:${name}`);
 }
 
+test("a visible quick-fix amount survives passive reselect and is the amount sent", async () => {
+	const app = await ready();
+	await app.press("Require allowance");
+	await choose(app, "pilot");
+	await app.type("id:goal", "Keep my chosen amount");
+	await app.press("role:button[Start as one chat]");
+	await app.waitFor("pilot · Default model · medium thinking");
+	await app.clear("id:chat-allowance");
+	await app.type("id:chat-allowance", "2.50");
+	await app.keyboard.press("escape");
+	// Opening the choice again reads the project default (5), but must keep the
+	// amount already displayed and saved for these words in this project.
+	await app.press("role:button[Start as one chat]");
+	await app.waitFor("pilot · Default model · medium thinking");
+	expect(app.value("id:chat-allowance")).toBe("2.50");
+	await app.press("role:button[Start chat]");
+	await app.waitFor("Allowances: 2500000");
+	expect(counts(app)).toContain("Sends: 1");
+});
+
 test("New starts with no project: both starts wait for the user's choice, and choosing sends nothing", async () => {
 	const app = await ready();
 	expect(counts(app)).toContain(COUNTS(0, 0, 0));

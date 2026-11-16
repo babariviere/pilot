@@ -66,6 +66,12 @@ pub enum PlanAvailability {
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Setup {
+    /// Catalog-value default shown before planning. No default means the user must choose.
+    #[prop(default)]
+    pub allowance_micros: Option<u64>,
+    /// The connected service enforces mission funding.
+    #[prop(default)]
+    pub allowance_required: bool,
     /// The project, as the user knows it.
     pub project: String,
     /// The model a new chat would use.
@@ -1235,6 +1241,9 @@ pub struct RevisionRef {
 #[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct NewIntent {
+    /// Explicit lifetime mission allowance; never a provider bill.
+    #[prop(default)]
+    pub allowance_micros: Option<u64>,
     /// What the user wants, exactly as written.
     pub goal: String,
     /// The setup's digest the screen showed.

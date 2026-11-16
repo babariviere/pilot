@@ -21,6 +21,16 @@ Work resumes after reset or a fresh reading below the threshold.
 the override clears or the provider rejects work. It does not add quota or bypass
 provider enforcement. **Pause at limit** restores the guard early.
 
+## Native allowances
+
+In Day, Settings → AI → Allowances shows catalog-value funding, including
+uncertain charges. Configure project defaults for new missions and quick fixes,
+and a daily background allowance. New work shows its amount before starting.
+Mission funding lasts for the whole mission; quick-fix funding follows handoffs.
+Reviews also keep their own limits. Explicit increases do not clear other holds.
+Missing request bounds or prices stop affected requests before they are sent.
+Legacy desktop chats keep their existing controls until migration.
+
 ## Long conversations
 
 Open **Context…** in the chat header for reported context and direct/child accounting.

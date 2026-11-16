@@ -165,7 +165,15 @@ export function credentialClient(): CredentialClient | undefined {
 		if (process.env.PILOT_REQUIRE_CREDENTIAL_BROKER === "1") throw authError();
 		return undefined;
 	}
-	if (!clients.has(token)) clients.set(token, new CredentialClient({ socket, token }));
+	if (!clients.has(token))
+		clients.set(
+			token,
+			new CredentialClient({
+				socket,
+				token,
+				...(process.env.PILOT_FUNDING_REQUIRED === "1" ? { metered: true as const } : {}),
+			}),
+		);
 	return clients.get(token)!;
 }
 export function credentialEnvironment(endpoint?: CredentialEndpoint): NodeJS.ProcessEnv {
@@ -174,5 +182,6 @@ export function credentialEnvironment(endpoint?: CredentialEndpoint): NodeJS.Pro
 		PILOT_CREDENTIAL_TOKEN: endpoint?.token,
 		PILOT_REQUIRE_CREDENTIAL_BROKER: endpoint ? "1" : undefined,
 		PILOT_SHARED_CATALOG_DIR: endpoint?.catalogAgentDir,
+		PILOT_FUNDING_REQUIRED: endpoint?.metered ? "1" : undefined,
 	};
 }

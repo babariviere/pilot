@@ -452,6 +452,7 @@ fn new_names_the_setup_shown_and_small_asks_start_directly() {
     let mut desk = PlanDesk::new(PlanScenario::Fresh);
     let setup = desk.planning().setup.digest.clone();
     let stale = NewIntent {
+        allowance_micros: None,
         goal: "Fix the flaky test".into(),
         setup: "old".into(),
         replaces: None,
@@ -462,6 +463,7 @@ fn new_names_the_setup_shown_and_small_asks_start_directly() {
         OutcomeStatus::Stale
     );
     let blank = NewIntent {
+        allowance_micros: None,
         goal: "  ".into(),
         setup: setup.clone(),
         replaces: None,
@@ -472,6 +474,7 @@ fn new_names_the_setup_shown_and_small_asks_start_directly() {
         OutcomeStatus::Rejected
     );
     let ask = NewIntent {
+        allowance_micros: None,
         goal: "Fix the flaky test".into(),
         setup: setup.clone(),
         replaces: None,
@@ -482,6 +485,7 @@ fn new_names_the_setup_shown_and_small_asks_start_directly() {
     assert!(desk.planning().plans.is_empty());
     assert_eq!(desk.planning().started[0].text, "Fix the flaky test");
     let goal = NewIntent {
+        allowance_micros: None,
         goal: "Let people export a chat".into(),
         setup,
         replaces: None,
@@ -501,6 +505,7 @@ fn unavailable_planning_sends_nothing() {
     assert_eq!(desk.planning().availability, PlanAvailability::Unavailable);
     let setup = desk.planning().setup.digest.clone();
     let goal = NewIntent {
+        allowance_micros: None,
         goal: "Anything".into(),
         setup,
         replaces: None,

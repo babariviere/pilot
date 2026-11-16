@@ -5,12 +5,15 @@
 // happens; the screens show what it publishes.
 import type { Interview, PlanPage, Question } from "pilot-day/native";
 import { dropChoice } from "./chatCommands";
+import { fundingAmount } from "./FundingSettings";
+import { newFundingDraft } from "./modelSettingsDraft";
 import type { Plans } from "./planning";
 import {
 	answerDrafts,
 	answerKey,
 	answerMessages,
 	answerPicks,
+	chatChoice,
 	drop,
 	goalDraft,
 	newBusy,
@@ -340,7 +343,21 @@ export async function planMission(plans: Plans) {
 	const from = requestDraft();
 	const request = from ? { itemId: from.itemId, revision: from.revision } : null;
 	try {
-		const outcome = await plans.feed.plan({ goal, setup: plans.planning().setup.digest, replaces, request });
+		const setup = plans.planning().setup;
+		const chosen = newFundingDraft();
+		const amount =
+			chosen?.mission == null || chosen.project !== chatChoice()?.projectId ? null : fundingAmount(chosen.mission);
+		if (setup.allowanceRequired && amount == null) {
+			newMessage.set("Choose a mission allowance before planning.");
+			return;
+		}
+		const outcome = await plans.feed.plan({
+			goal,
+			setup: setup.digest,
+			replaces,
+			request,
+			allowanceMicros: amount ?? null,
+		});
 		if (outcome.status === "accepted" && outcome.missionId) {
 			if (goalDraft() === goal) {
 				goalDraft.set("");

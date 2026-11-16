@@ -22,6 +22,14 @@ pub struct ChatChoice {
     pub model: String,
     /// Model thinking level selected by that policy.
     pub thinking: String,
+    /// Catalog-value lifetime allowance explicitly shown at creation, in micro-US dollars.
+    #[prop(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowance_micros: Option<u64>,
+    /// This service requires a chosen allowance even when its project has no default.
+    #[prop(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub funding_required: Option<bool>,
 }
 impl ChatChoice {
     pub(crate) fn validate(&self) -> bool {
@@ -35,6 +43,9 @@ impl ChatChoice {
             && !self.model.is_empty()
             && self.model.len() <= 256
             && self.thinking.len() <= 128
+            && self
+                .allowance_micros
+                .is_none_or(|n| n <= 9_007_199_254_740_991)
     }
     pub(crate) fn text_bytes(&self) -> usize {
         self.draft_id.len()

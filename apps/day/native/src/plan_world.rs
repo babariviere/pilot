@@ -45,6 +45,8 @@ fn strings(items: &[&str]) -> Vec<String> {
 /// The setup every mock world shows on New.
 pub fn setup() -> Setup {
     Setup {
+        allowance_micros: None,
+        allowance_required: false,
         project: s("pilot"),
         model: s("Default model"),
         access: s("Build: edits files in its own workspace"),

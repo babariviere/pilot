@@ -17,6 +17,31 @@ pub(crate) struct Intent {
 impl Intent {
     pub(crate) fn validate(&self) -> Result<(), Error> {
         let valid = match self.action.as_str() {
+            "funding-settings" => self.value.as_object().is_some_and(|o| {
+                o.len() == 3
+                    && [
+                        "missionDefaultMicros",
+                        "quickFixDefaultMicros",
+                        "dailyMicros",
+                    ]
+                    .iter()
+                    .all(|k| {
+                        o.get(*k).is_some_and(|v| {
+                            v.is_null() || v.as_u64().is_some_and(|n| n <= 9_007_199_254_740_991)
+                        })
+                    })
+            }),
+            "fund-work" => {
+                self.value.as_object().is_some_and(|o| o.len() == 2)
+                    && self.value["sessionId"]
+                        .as_str()
+                        .is_some_and(super::valid_id)
+                    && self.value["amountMicros"]
+                        .as_u64()
+                        .is_some_and(|n| n <= 9_007_199_254_740_991)
+            }
+            "continue-anyway" => self.value.as_str().is_some_and(super::valid_id),
+            "background-continue" => matches!(self.value.as_str(), Some("anthropic" | "openai")),
             "scope" => {
                 // Same 256-pattern/256-byte contract as daemon model-scope; limits one native request's parsing.
                 self.value.is_null()
@@ -176,9 +201,17 @@ pub(super) fn exact_result(op: &Value, receipt: &Value) -> Result<(), Error> {
                     Some("cancelled" | "failed" | "done")
                 )
         }
-        Some("scope" | "defaults" | "project-model" | "failed-model" | "logout") => {
-            result["saved"] == true
-        }
+        Some(
+            "scope"
+            | "defaults"
+            | "project-model"
+            | "failed-model"
+            | "logout"
+            | "funding-settings"
+            | "fund-work"
+            | "continue-anyway"
+            | "background-continue",
+        ) => result["saved"] == true,
         _ => false,
     };
     if valid { Ok(()) } else { Err(Error::Unknown) }
@@ -361,6 +394,47 @@ pub(super) async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn allowance_actions_require_integer_micros_and_exact_results() {
+        for action in [
+            "fund-work",
+            "funding-settings",
+            "continue-anyway",
+            "background-continue",
+        ] {
+            let value = match action {
+                "fund-work" => json!({"sessionId":"chat","amountMicros":2000000}),
+                "funding-settings" => {
+                    json!({"dailyMicros":2000000,"missionDefaultMicros":null,"quickFixDefaultMicros":0})
+                }
+                "background-continue" => json!("anthropic"),
+                _ => json!("chat"),
+            };
+            let intent = Intent {
+                binding: "a".repeat(64),
+                action: action.into(),
+                value,
+            };
+            assert_eq!(intent.validate(), Ok(()));
+            let op = json!({"payload":serde_json::to_string(&intent).unwrap()});
+            assert_eq!(
+                exact_result(&op, &json!({"result":{"action":action,"saved":true}})),
+                Ok(())
+            );
+            assert_eq!(
+                exact_result(&op, &json!({"result":{"action":"other","saved":true}})),
+                Err(Error::Unknown)
+            );
+        }
+        for amount in [json!(-1), json!(1.5), json!("2")] {
+            let intent = Intent {
+                binding: "a".repeat(64),
+                action: "fund-work".into(),
+                value: json!({"sessionId":"chat","amountMicros":amount}),
+            };
+            assert_eq!(intent.validate(), Err(Error::Invalid));
+        }
+    }
     #[test]
     fn secret_answers_cannot_be_durable_settings_actions() {
         let binding = "a".repeat(64);

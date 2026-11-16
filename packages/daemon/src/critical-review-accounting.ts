@@ -446,8 +446,17 @@ export class ReviewAccountingDisk {
 /** App-side trusted adapter must authenticate owner/scope before calling these host primitives. */
 export class ReviewAccounting {
 	private readonly store: CriticalReviewStore;
-	constructor(store: CriticalReviewStore) {
+	private readonly fundedCalls = new Map<string, string>();
+	private readonly funding?: {
+		reserve(request: ReviewCallRequest): Promise<void>;
+		settle(
+			callId: string,
+			usage?: { inputTokens: number; generatedTokens: number; durationMs: number },
+		): Promise<void>;
+	};
+	constructor(store: CriticalReviewStore, funding?: ReviewAccounting["funding"]) {
 		this.store = store;
+		this.funding = funding;
 	}
 	onPrivateInvalidation(listener: () => void): () => void {
 		return this.store.onPrivateInvalidation(listener);
@@ -461,19 +470,46 @@ export class ReviewAccounting {
 	admit(runId: string, approvalId: string, effort: CriticalReviewEffort, gates: ReviewProviderGates): Promise<void> {
 		return this.store.rpc("admit", { runId, approvalId, effort, gates });
 	}
-	reserve(request: ReviewCallRequest): Promise<CriticalReviewReservation> {
-		return this.store.rpc("reserve", { request });
+	async reserve(request: ReviewCallRequest): Promise<CriticalReviewReservation> {
+		const reservation = await this.store.rpc<CriticalReviewReservation>("reserve", { request });
+		// Both ceilings reserve before send. Failure leaves conservative reservations, never a refill.
+		try {
+			await this.funding?.reserve(request);
+		} catch (error) {
+			await this.store.rpc("settle", { callId: request.callId });
+			throw error;
+		}
+		if (this.funding) this.fundedCalls.set(request.callId, request.runId);
+		return reservation;
 	}
 	send(callId: string, gates: ReviewProviderGates): Promise<void> {
+		if (this.funding && !this.fundedCalls.has(callId))
+			return Promise.reject(new Error("Funding reservation unavailable; required review stays waiting"));
 		return this.store.rpc("send", { callId, gates });
 	}
-	settle(callId: string, usage?: { inputTokens: number; generatedTokens: number; durationMs: number }): Promise<void> {
-		return this.store.rpc("settle", { callId, usage });
+	async settle(
+		callId: string,
+		usage?: { inputTokens: number; generatedTokens: number; durationMs: number },
+	): Promise<void> {
+		try {
+			await this.store.rpc("settle", { callId, usage });
+			await this.funding?.settle(callId, usage);
+		} finally {
+			this.fundedCalls.delete(callId);
+		}
 	}
-	finish(runId: string): Promise<void> {
-		return this.store.rpc("finishRun", { runId });
+	async finish(runId: string): Promise<void> {
+		try {
+			await this.store.rpc("finishRun", { runId });
+		} finally {
+			for (const [call, run] of this.fundedCalls) if (run === runId) this.fundedCalls.delete(call);
+		}
 	}
-	recover(): Promise<void> {
-		return this.store.rpc("recoverAccounting");
+	async recover(): Promise<void> {
+		try {
+			await this.store.rpc("recoverAccounting");
+		} finally {
+			this.fundedCalls.clear();
+		}
 	}
 }

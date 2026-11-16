@@ -40,6 +40,7 @@ mount(() => (
 					{`Selects: ${chats.counts().selects} · Sends: ${chats.counts().sends} · Checks: ${chats.counts().checks} · Chats: ${chats.counts().chats}`}
 				</Text>
 				<Text testID="started">{`Started: ${chats.counts().chats >= 0 ? startedLine() : ""}`}</Text>
+				<Text>{`Allowances: ${chats.counts().chats >= 0 ? [...chats.started.values()].map((c) => c.allowanceMicros).join(",") : ""}`}</Text>
 				<View class="flex-row flex-wrap gap-1">
 					<Action
 						label="Profile-only window"
@@ -49,6 +50,7 @@ mount(() => (
 						}}
 					/>
 					<Action label="Lose next answer" onPress={() => (chats.script.loseNext = true)} />
+					<Action label="Require allowance" onPress={() => (chats.script.fundingDefault = 5_000_000)} />
 					<Action label="Hold selections" onPress={() => (chats.script.holdSelects = true)} />
 					<Action
 						label="Release newer selection"

@@ -33,6 +33,30 @@ const gate = () => {
 	return { promise, resolve };
 };
 
+test("a funded member keeps its scope after retirement and cannot spend through a replacement membership", async (t) => {
+	const f = await fixture(t);
+	const meta = f.sessions["metas"].get(f.id)!;
+	meta.fundingRequired = true;
+	meta.fundingMissionId = "funded";
+	let missionId = "funded",
+		active = true;
+	f.sessions.setMissionBridge({
+		spawnProject: () => "p",
+		joinSpawn() {},
+		membership: () => ({ missionId, active }),
+		context: () => undefined,
+		call: async () => undefined,
+	});
+	assert.equal(f.sessions.fundingRequestOwner(f.id).id, "funded");
+	active = false;
+	assert.equal(f.sessions.fundingRequired(f.id), true);
+	assert.equal(f.sessions.fundingOwner(f.id).id, "funded");
+	assert.throws(() => f.sessions.fundingRequestOwner(f.id), /membership changed/);
+	active = true;
+	missionId = "replacement";
+	assert.throws(() => f.sessions.fundingRequestOwner(f.id), /membership changed/);
+});
+
 class FakeWorker implements SessionWorker {
 	readonly ready = Promise.resolve();
 	state: SessionState = "idle";
@@ -299,6 +323,7 @@ test("cross-provider continuation creates only a fresh handoff and fences all ol
 	await f.sessions["starting"].get(changed.id);
 	assert.notEqual(changed.id, f.id);
 	assert.equal(changed.continuationOf, f.id);
+	assert.equal(f.sessions.fundingOwner(changed.id).id, f.id, "the handoff keeps the logical quick-fix allowance");
 	assert.equal(changed.cwd, cwd, "never relocate a jj/Git workspace");
 	assert.equal(f.sessions.get(f.id)?.continuedTo, changed.id);
 	assert.equal(source.closed, true);

@@ -49,17 +49,38 @@ export function workerTriage(
 		const observe = await usage?.begin("triage", attribution);
 		return new Promise<string>((resolve, reject) => {
 			signal.throwIfAborted();
-			const worker = createWorker({ agentDir, cwd, prompt, schema, captureUsage: !!observe });
+			const capability = usage?.credentialScope?.(attribution);
+			let worker: ReturnType<typeof createWorker>;
+			try {
+				worker = createWorker({
+					agentDir,
+					cwd,
+					prompt,
+					schema,
+					captureUsage: !!observe,
+					...(capability ? { credentials: capability.endpoint } : {}),
+				});
+			} catch (error) {
+				capability?.release();
+				throw error;
+			}
 			let settled = false;
 			const finish = (error?: Error, text?: string) => {
 				if (settled) return;
 				settled = true;
 				clearTimeout(timer);
 				signal.removeEventListener("abort", abort);
-				void Promise.resolve(worker.terminate()).then(() => {
-					if (error) reject(error);
-					else resolve(text!);
-				}, reject);
+				void Promise.resolve(worker.terminate()).then(
+					() => {
+						capability?.release();
+						if (error) reject(error);
+						else resolve(text!);
+					},
+					(error) => {
+						capability?.release();
+						reject(error);
+					},
+				);
 			};
 			const abort = () => finish(new Error("Triage cancelled"));
 			const timer = setTimeout(() => finish(new Error("Triage timed out")), 90_000);

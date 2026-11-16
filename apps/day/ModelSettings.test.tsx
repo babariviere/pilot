@@ -2,6 +2,22 @@ import { expect, open, test } from "nsh/test";
 
 const desktop = { platform: "macos", width: 1100, height: 1800 } as const;
 
+test("allowances show uncertain catalog value, preserve drafts, and never resend an unknown approval", async () => {
+	const app = await open("./ModelSettingsFixture.tsx", desktop);
+	expect(app.texts().some((t) => t.includes("$0.30 uncertain") && t.includes("$0.50 left"))).toBe(true);
+	expect(app.texts().some((t) => t.includes("Improve the parser") && t.includes("$7.00 left"))).toBe(true);
+	await app.press("id:funding-edit");
+	await app.clear("id:funding-daily");
+	await app.type("id:funding-daily", "2.50");
+	await app.press("Save and restore draft");
+	expect(app.value("id:funding-daily")).toBe("2.50");
+	await app.press("Next unknown");
+	await app.press("id:funding-save");
+	expect(app.enabled("id:funding-save")).toBe(false);
+	await app.press("id:models-check");
+	expect(app.shows("Sends: 1, checks: 1")).toBe(true);
+});
+
 test("AI settings show effective action-specific thinking and the actual reference ceiling without writes", async () => {
 	const app = await open("./ModelSettingsFixture.tsx", desktop);
 	await app.waitFor("id:models-effective-task");

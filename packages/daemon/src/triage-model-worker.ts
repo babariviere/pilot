@@ -1,8 +1,10 @@
 import { parentPort, workerData } from "node:worker_threads";
+import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import { observedBackgroundRuntime } from "./background-usage.ts";
 import { ModelCatalog } from "./models.ts";
 
 try {
+	if (workerData.credentials) Object.assign(process.env, credentialEnvironment(workerData.credentials));
 	const catalog = new ModelCatalog(workerData.agentDir);
 	if (workerData.captureUsage)
 		catalog.setBackgroundUsage({

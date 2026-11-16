@@ -8,6 +8,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
+import { BackgroundSubscription } from "./background-subscription.ts";
 import { BackgroundUsage } from "./background-usage.ts";
 import { ChatSettingsService } from "./chat-settings.ts";
 import { loadConfig } from "./config.ts";
@@ -18,6 +19,9 @@ import { EnvironmentService } from "./environment.ts";
 import { EnvironmentStateStore } from "./environment-state.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
+import { Funding } from "./funding.ts";
+import { fundingBackground } from "./funding-background.ts";
+import { fundingRequests } from "./funding-requests.ts";
 import { GitHubImportService } from "./github-import.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
@@ -86,6 +90,7 @@ const tracking = new SourceRegistry(projects, trackedItems, sourceMcp, undefined
 tracking.setDiagnosticsEnabled(telemetry.settings().localDiagnostics);
 
 const usageHistory = new UsageHistoryStore(config.home);
+const funding = new Funding(join(config.home, "funding.sqlite"));
 const backgroundUsage = new BackgroundUsage(config.home, usageHistory);
 tracking.triage = new TriageGroomer(
 	projects,
@@ -157,6 +162,31 @@ const sessions = new SessionManager(
 	},
 );
 let appliedTelemetry = telemetry.settings();
+sessions.funding = funding;
+const backgroundSubscription = new BackgroundSubscription(config.home, () => sessions.subscriptionUsageSnapshot());
+sessions.backgroundSubscription = backgroundSubscription;
+backgroundUsage.funding = fundingBackground(
+	funding,
+	credentials.catalog,
+	(p) => backgroundSubscription.assert(p),
+	(limit) => backgroundSubscription.limit(limit),
+);
+const sessionFunding = fundingRequests(funding, credentials.catalog, (id) => sessions.fundingRequestOwner(id));
+credentials.fundingRequest = async (binding, request) => {
+	if (typeof binding === "string") return sessionFunding(binding, request);
+	const p = request.value as { provider?: string } | undefined;
+	if (request.op === "funding-reserve" && p?.provider) await backgroundSubscription.assert(p.provider);
+	const value = await fundingRequests(funding, credentials.catalog, () => binding, "triage")("background", request);
+	if (request.op === "funding-reserve" && p?.provider) await backgroundSubscription.assert(p.provider);
+	return value;
+};
+backgroundUsage.credentialScope = (attribution) => {
+	const owner = attribution?.mission
+		? { kind: "mission" as const, id: attribution.mission.missionId, projectId: attribution.projectId }
+		: { kind: "background" as const, id: "daily", projectId: attribution?.projectId };
+	const endpoint = credentials.grant(false, undefined, owner);
+	return { endpoint, release: () => credentials.revoke(endpoint) };
+};
 sessions.configureTelemetry(telemetry.kernelSettings(), appliedTelemetry.aiUsageBudget);
 telemetry.onChange((settings) => {
 	const exportChanged =
@@ -497,6 +527,8 @@ async function stop(): Promise<void> {
 			await credentials.close();
 			stopSlackCompletions();
 			await Promise.all(completionWrites);
+			await funding.close();
+			await backgroundSubscription.close();
 			await trackedItems.close();
 			await power?.stop();
 			await untrackedStats.close();

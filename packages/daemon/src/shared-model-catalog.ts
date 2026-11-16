@@ -83,6 +83,12 @@ export class SharedCatalogService {
 			? `${JSON.stringify({ ok: true, value: { unchanged: true } })}\n`
 			: frame;
 	}
+	/** Host pricing for a physical request, never supplied by a worker. */
+	async fundingModel(provider: string, id: string) {
+		await this.read();
+		const runtime = await this.runtime;
+		return runtime?.getAllModels(provider).find((m) => m.id === id && (!m.type || m.type === "chat"));
+	}
 
 	private async load(options: CatalogOptions, policy: string): Promise<string> {
 		for (let attempt = 0; attempt < 3; attempt++) {

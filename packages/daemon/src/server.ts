@@ -2567,7 +2567,11 @@ export function createDaemonServer(
 			if (req.method !== "GET") throw new HttpError(405, "Planning profile is read-only");
 			if (!githubSetup || !planningWorkers) throw new ServiceUnavailable("Trusted planning profile unavailable");
 			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
-			return json(res, 200, planningWorkers.profile(parts[2]!));
+			const funding = await sessions.funding?.read(parts[2]!);
+			return json(res, 200, {
+				...planningWorkers.profile(parts[2]!),
+				...(funding ? { allowanceMicros: funding.missionDefaultMicros } : {}),
+			});
 		}
 		if (parts[1] === "projects" && parts.length === 6 && parts[3] === "missions" && parts[5] === "planning") {
 			res.setHeader("cache-control", "no-store");

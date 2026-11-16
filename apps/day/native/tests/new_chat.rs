@@ -31,7 +31,7 @@ fn capture(f: &Fixture, b: &Bridge, c: &Value) {
         "day.flush.ack",
         json!({"generation":generation,"view":{
         "place":"new","id":"","update":false,"goal":"  Exact words 👩🏽‍💻\nkept  ",
-        "chat":c,"focused":"","questions":[]}}),
+        "chat":c,"chatChosen":true,"focused":"","questions":[]}}),
     );
     assert!(result["value"].is_object(), "{result}");
 }

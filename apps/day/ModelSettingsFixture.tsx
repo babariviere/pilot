@@ -24,6 +24,41 @@ const plain = {
 	modelChangeThinking: "off",
 };
 const initial: ModelSettings = {
+	funding: {
+		revision: 1,
+		missionDefaultMicros: 20_000_000,
+		quickFixDefaultMicros: 5_000_000,
+		dailyMicros: 1_000_000,
+		resetAt: "2026-11-17T00:00:00.000Z",
+		background: {
+			kind: "background",
+			id: "day",
+			limitMicros: 1_000_000,
+			spentMicros: 200_000,
+			uncertainMicros: 300_000,
+			remainingMicros: 500_000,
+		},
+		accounts: [
+			{
+				kind: "mission",
+				id: "sample-mission",
+				projectId: "sample",
+				limitMicros: 10_000_000,
+				spentMicros: 2_000_000,
+				uncertainMicros: 1_000_000,
+				remainingMicros: 7_000_000,
+			},
+		],
+		accountCount: 1,
+	},
+	fundedWork: [
+		{
+			id: "chat",
+			title: "Improve the parser",
+			owner: { kind: "mission", id: "sample-mission", projectId: "sample" },
+			subscription: { windows: [{ label: "Week", usedPercent: 99 }] },
+		},
+	],
 	version: 1,
 	binding: "a".repeat(64),
 	defaults: {
@@ -89,6 +124,8 @@ const controls: ModelControls = {
 			});
 		if (action === "cancel" || action === "logout") settings.set({ ...initial, runs: [] });
 		if (action === "defaults") settings.set({ ...initial, defaults: value as ModelSettings["defaults"] });
+		if (action === "funding-settings")
+			settings.set({ ...settings()!, funding: { ...settings()!.funding!, ...(value as object) } });
 		message.set("Saved.");
 		return true;
 	},

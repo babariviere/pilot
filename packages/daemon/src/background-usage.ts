@@ -138,6 +138,15 @@ export function observedBackgroundRuntime(
  * A crash before response persistence leaves an explicitly unknown partial request. Recovery never infers again.
  */
 export class BackgroundUsage implements BackgroundCapture {
+	credentialScope?: (owner?: BackgroundAttribution) => {
+		endpoint: import("@pilot/kernel/credential-rpc").CredentialEndpoint;
+		release(): void;
+	};
+	funding?: (
+		runtime: CompletionRuntime,
+		purpose: UsageObservation["purpose"],
+		owner?: BackgroundAttribution,
+	) => CompletionRuntime;
 	private readonly directory: string;
 	private readonly rows = new Map<string, UsageObservation | undefined>();
 	private generation?: string;
@@ -355,6 +364,7 @@ export class BackgroundUsage implements BackgroundCapture {
 		purpose: UsageObservation["purpose"],
 		owner?: BackgroundAttribution,
 	): CompletionRuntime {
+		runtime = this.funding?.(runtime, purpose, owner) ?? runtime;
 		return {
 			completeSimple: async (...args: Arguments) => {
 				const observe = await this.begin(purpose, owner).catch(() => undefined);

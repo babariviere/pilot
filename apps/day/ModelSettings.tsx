@@ -1,6 +1,7 @@
 // AI settings use the page's existing reading column, quiet rows and native controls.
 // Sign-in challenges and answers are ephemeral, never part of saved drafts or messages.
 import { effect, signal, Text, untracked, View } from "nsh";
+import { FundingSettings } from "./FundingSettings";
 import type { ModelControls, ModelRecovery, ModelSettings, SignInView } from "./modelControls";
 import {
 	modelDraft as draft,
@@ -180,6 +181,7 @@ export function ModelSettingsSection(props: { controls: ModelControls }) {
 					</View>
 				)}
 			</Each>
+			<FundingSettings controls={c} />
 			<If when={s()}>
 				{(read) => (
 					<View class="gap-4">

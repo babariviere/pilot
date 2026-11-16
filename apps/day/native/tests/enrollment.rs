@@ -119,6 +119,7 @@ fn ready(host: &NativeHost) {
 fn intent(host: &NativeHost) -> NewIntent {
     reply(host.prepare_planning()).unwrap();
     NewIntent {
+        allowance_micros: None,
         setup: host.planning_setup().unwrap().digest,
         goal: "  Clarify this exact goal\n💬  ".into(),
         replaces: None,
@@ -503,6 +504,7 @@ fn FeedProbe(props: FeedProbeProps) -> impl IntoElement {
         assert!(!shown.can_start);
         assert!(!shown.start_reason.is_empty());
         let new = NewIntent {
+            allowance_micros: None,
             goal: "Exact feed goal".into(),
             setup: shown.setup.digest,
             replaces: None,

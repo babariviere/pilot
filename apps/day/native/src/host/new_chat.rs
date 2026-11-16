@@ -198,17 +198,18 @@ pub(super) async fn handle(
             {
                 return Err(Error::Unknown);
             }
-            if shared
+            let mut compared_choice = choice.clone();
+            let selected = shared
                 .chat_choice
                 .lock()
                 .expect("native chat choice poisoned")
-                .as_ref()
-                != Some(choice)
-            {
+                .clone();
+            compared_choice.allowance_micros = selected.as_ref().and_then(|c| c.allowance_micros);
+            if selected.as_ref() != Some(&compared_choice) {
                 return Err(Error::Stale);
             }
             inventory(t).await?;
-            let v = profile(
+            let mut v = profile(
                 t,
                 &Select {
                     project_id: choice.project_id.clone(),
@@ -222,6 +223,13 @@ pub(super) async fn handle(
                 .as_object_mut()
                 .ok_or(Error::Invalid)?
                 .remove("draftId");
+            expected
+                .as_object_mut()
+                .ok_or(Error::Invalid)?
+                .remove("allowanceMicros");
+            v.as_object_mut()
+                .ok_or(Error::Invalid)?
+                .remove("allowanceMicros");
             if v != expected {
                 return Err(Error::Stale);
             }

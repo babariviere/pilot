@@ -128,6 +128,7 @@ export default pi => {
 		join(agent, "settings.json"),
 		JSON.stringify({
 			enabledModels: ["faux/faux-1"],
+			pilotTaskPriceLimit: 100,
 			extensions: [extension],
 			defaultProvider: "faux",
 			defaultModel: "faux-1",

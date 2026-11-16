@@ -32,6 +32,8 @@ export type ChatScript = {
 	holdSelects: boolean;
 	/** The service is unreachable: reads and sends are refused. */
 	offline: boolean;
+	/** Explicit allowance fixture. Undefined keeps the older, unmetered service. */
+	fundingDefault?: number | null;
 };
 
 export class ScriptedChats implements ChatSource {
@@ -41,7 +43,10 @@ export class ScriptedChats implements ChatSource {
 	/** Calls that reached the script. */
 	readonly counts = signal({ reads: 0, selects: 0, sends: 0, checks: 0, chats: 0 });
 	/** What each sent chat started with, by draft. */
-	readonly started = new Map<string, { projectId: string; mode: string; message: string }>();
+	readonly started = new Map<
+		string,
+		{ projectId: string; mode: string; message: string; allowanceMicros?: number | null }
+	>();
 	#unavailable: () => string;
 	#read = false;
 	#latest: ChatChoice | null = null;
@@ -139,6 +144,9 @@ export class ScriptedChats implements ChatSource {
 			mode: pick.mode,
 			model: "Default model",
 			thinking: "medium",
+			...(this.script.fundingDefault !== undefined
+				? { fundingRequired: true, allowanceMicros: this.script.fundingDefault }
+				: {}),
 		};
 		this.#latest = choice;
 		return chatResult("accepted", "", { choice });
@@ -161,7 +169,13 @@ export class ScriptedChats implements ChatSource {
 		if (this.#unavailable() || this.script.offline)
 			return chatResult("rejected", "Pilot could not reach its service. Nothing was sent; your words stay.");
 		const project = this.projects.find((p) => p.projectId === choice.projectId);
-		if (!this.#latest || !same(this.#latest, choice) || !project || project.contextDigest !== choice.contextDigest) {
+		const selected = choice.fundingRequired ? { ...choice, allowanceMicros: this.#latest?.allowanceMicros } : choice;
+		if (
+			!this.#latest ||
+			!same(this.#latest, selected) ||
+			!project ||
+			project.contextDigest !== choice.contextDigest
+		) {
 			return chatResult(
 				"stale",
 				"This project or its setup changed since Pilot read it. Nothing was sent; your words stay.",
@@ -179,7 +193,12 @@ export class ScriptedChats implements ChatSource {
 			reason: "",
 		};
 		this.#saved.push({ op, choice: { ...choice }, message });
-		this.started.set(choice.draftId, { projectId: choice.projectId, mode: choice.mode, message });
+		this.started.set(choice.draftId, {
+			projectId: choice.projectId,
+			mode: choice.mode,
+			message,
+			allowanceMicros: choice.allowanceMicros,
+		});
 		this.#count("sends");
 		this.#count("chats");
 		this.#creating = false;

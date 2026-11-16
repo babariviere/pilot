@@ -6,6 +6,8 @@
 // New never chooses a project for the user: not the window's own, not
 // Today's, not the last one used. A started chat uses its choice up.
 import type { ChatMirror, ChatMode, ChatView } from "./chatFeed";
+import { fundingAmount } from "./FundingSettings";
+import { newFundingDraft } from "./modelSettingsDraft";
 import { glide } from "./motion";
 import {
 	chatChoice,
@@ -68,6 +70,7 @@ export async function chooseChat(chats: ChatMirror, pick: { projectId: string; m
 
 /** Forgets New's project choice: the next words need a project of their own. Sends nothing. */
 export function dropChoice() {
+	newFundingDraft.set(null);
 	++selection;
 	chatPick.set(null);
 	chatChoice.set(null);
@@ -98,8 +101,17 @@ export async function prepareChat(chats: ChatMirror) {
 
 /** Starts one chat with exactly the goal, in the project and access shown. Sent once. */
 export async function startNewChat(chats: ChatMirror) {
-	const choice = chatChoice();
+	let choice = chatChoice();
 	if (newBusy() || !choice || chatSelecting()) return;
+	if (choice.fundingRequired) {
+		const draft = newFundingDraft(),
+			amount = draft?.project === choice.projectId ? fundingAmount(draft.quickFix) : null;
+		if (amount == null) {
+			newMessage.set("Choose a quick-fix allowance before starting.");
+			return;
+		}
+		choice = { ...choice, allowanceMicros: amount };
+	}
 	newBusy.set(true);
 	newMessage.set("");
 	const goal = goalDraft();

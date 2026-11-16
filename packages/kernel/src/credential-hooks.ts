@@ -8,6 +8,7 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { credentialClient } from "./credential-client.ts";
+import { installFundingRuntime } from "./funding-runtime.ts";
 import { ownModelCatalog } from "./model-catalog-owner.ts";
 import { readonlyModelsStore } from "./readonly-models-store.ts";
 import { readonlySettings } from "./readonly-settings.ts";
@@ -62,6 +63,20 @@ export function installCredentialBrokerHooks(options: { descendants?: boolean } 
 			});
 			if (shared) useSharedModelCatalog(runtime, client);
 			ownModelCatalog(runtime);
+			if (client?.endpoint.metered)
+				installFundingRuntime(runtime, {
+					reserve: async (id, model, outputTokens) => {
+						await client.request({
+							op: "funding-reserve",
+							namespace: "pi",
+							key: id,
+							value: { provider: model.provider, model: model.id, api: model.api, outputTokens },
+						});
+					},
+					settle: async (id, usage) => {
+						await client.request({ op: "funding-settle", namespace: "pi", key: id, value: usage });
+					},
+				});
 			if (shared && options.refreshOnCreate !== false) {
 				const timed =
 					options.allowModelNetwork === true && options.modelRefreshTimeoutMs !== undefined

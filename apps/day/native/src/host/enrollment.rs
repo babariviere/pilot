@@ -9,6 +9,8 @@ use sha2::{Digest, Sha256};
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct PlanningEnrollment {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    allowance_micros: Option<u64>,
     purpose: Purpose,
     project_id: String,
     owner_session_id: String,
@@ -60,6 +62,8 @@ pub(super) fn validate_record(
         || r.goal.len() > 12000
         || r.model.trim().is_empty()
         || r.model.len() > 256
+        || r.allowance_micros
+            .is_some_and(|n| n > 9_007_199_254_740_991)
         || r.replaces.as_deref().is_some_and(|id| !super::valid_id(id))
         || r.request
             .as_ref()
@@ -122,6 +126,8 @@ impl Prepared {
         .map_err(|_| Error::Invalid)?;
         Ok(Self {
             setup: Setup {
+                allowance_micros: profile["allowanceMicros"].as_u64(),
+                allowance_required: profile.get("allowanceMicros").is_some(),
                 project: "Selected project".into(),
                 model: model.into(),
                 access: "Planning only".into(),
@@ -143,6 +149,12 @@ impl Prepared {
     ) -> Result<planning::PlanningRecord, Error> {
         if intent.setup != self.setup.digest {
             return Err(Error::Stale);
+        }
+        let allowance = intent.allowance_micros;
+        if self.setup.allowance_required && allowance.is_none()
+            || allowance.is_some_and(|n| n > 9_007_199_254_740_991)
+        {
+            return Err(Error::Invalid);
         }
         if intent.goal.trim().is_empty()
             || intent.goal.len() > 12000
@@ -178,6 +190,7 @@ impl Prepared {
             &self.enrollment,
             &self.setup.digest,
             serde_json::to_value(PlanningEnrollment {
+                allowance_micros: allowance,
                 purpose: Purpose::Enroll,
                 project_id: self.profile["projectId"]
                     .as_str()
@@ -361,6 +374,7 @@ pub(super) async fn send(
             serde_json::from_str(record.operation["payload"].as_str().ok_or(Error::Storage)?)
                 .map_err(|_| Error::Storage)?;
         if request["goal"] != intent.goal
+            || request["allowanceMicros"].as_u64() != intent.allowance_micros
             || request["replaces"].as_str() != intent.replaces.as_deref()
             || request["request"]["itemId"].as_str()
                 != intent.request.as_ref().map(|q| q.item_id.as_str())
@@ -476,6 +490,7 @@ mod tests {
             "profile":{"version":1,"id":"native-mission-planning","source":"skills","commit":"a".repeat(40)}});
         let prepared = Prepared::new(&source, "faux/faux-1", profile).unwrap();
         let intent = |replaces: Option<&str>| NewIntent {
+            allowance_micros: None,
             goal: "Re-plan the docs".into(),
             setup: prepared.setup.digest.clone(),
             replaces: replaces.map(Into::into),

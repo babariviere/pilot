@@ -13,6 +13,8 @@ export interface Selection {
 	mode: "ask" | "build";
 	model: string;
 	thinking: string;
+	allowanceMicros?: number | null;
+	fundingRequired?: true;
 }
 interface Intent extends Selection {
 	purpose: "native-chat-create";
@@ -22,7 +24,7 @@ interface Intent extends Selection {
 interface Dependencies {
 	journal: OperationJournal;
 	projects: Pick<ProjectStore, "list" | "require">;
-	sessions: Pick<SessionManager, "spawnDurable" | "selectTaskModel">;
+	sessions: Pick<SessionManager, "spawnDurable" | "selectTaskModel" | "funding">;
 }
 export class NativeChat {
 	private readonly deps: Dependencies;
@@ -51,7 +53,13 @@ export class NativeChat {
 		const model = await this.deps.sessions.selectTaskModel(p.path, p.model);
 		if (canonicalJSON(before) !== canonicalJSON(this.project(projectId)))
 			throw new OperationRejected("Project changed; select it again");
-		return { ...before, mode, ...model };
+		const funding = await this.deps.sessions.funding?.read(projectId);
+		return {
+			...before,
+			mode,
+			...model,
+			...(funding ? { allowanceMicros: funding.quickFixDefaultMicros, fundingRequired: true as const } : {}),
+		};
 	}
 	private request(op: DurableOperation): Intent {
 		let p: Intent;
@@ -81,6 +89,10 @@ export class NativeChat {
 			p.model.length > 256 ||
 			typeof p.thinking !== "string" ||
 			p.thinking.length > 128 ||
+			(p.allowanceMicros !== undefined &&
+				p.allowanceMicros !== null &&
+				(!Number.isSafeInteger(p.allowanceMicros) || p.allowanceMicros < 0)) ||
+			(p.fundingRequired !== undefined && p.fundingRequired !== true) ||
 			typeof p.message !== "string" ||
 			!p.message.trim() ||
 			Buffer.byteLength(p.message) > 12000 ||
@@ -97,6 +109,8 @@ export class NativeChat {
 						"mode",
 						"model",
 						"thinking",
+						"allowanceMicros",
+						"fundingRequired",
 						"message",
 					].includes(k),
 			)
@@ -135,7 +149,7 @@ export class NativeChat {
 		return check;
 	}
 	/** Creates one qualified chat. Once admission enters, failures remain Unknown: never re-enter it. */
-	spawn(
+	async spawn(
 		p: Selection,
 		draftId: string,
 		operationId: string,
@@ -144,6 +158,13 @@ export class NativeChat {
 		title?: string,
 		images?: string[],
 	) {
+		const funding = this.deps.sessions.funding;
+		if (funding) {
+			if (p.allowanceMicros == null) throw new OperationRejected("Choose an allowance before starting this work");
+			check();
+			await funding.open({ kind: "quick_fix", id: draftId, projectId: p.projectId }, p.allowanceMicros);
+			check();
+		}
 		return this.deps.sessions.spawnDurable(
 			{
 				projectId: p.projectId,
@@ -164,6 +185,8 @@ export class NativeChat {
 			},
 			undefined,
 			images,
+			undefined,
+			!!funding,
 		);
 	}
 	async createPinned(p: Selection, draftId: string, operationId: string, message: string) {

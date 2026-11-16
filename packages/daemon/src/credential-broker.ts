@@ -13,13 +13,21 @@ import {
 	type CredentialStatus,
 } from "@pilot/kernel/credential-rpc";
 import lockfile from "proper-lockfile";
+import type { FundingOwner } from "../../protocol/src/funding.ts";
 import { SharedCatalogService } from "./shared-model-catalog.ts";
 
 type ObjectValue = Record<string, unknown>;
 type Fence = { generation: number; fingerprint: string; pending?: string; revoked?: boolean; revoking?: boolean };
 type Journal = Record<string, Fence>;
 type Scope = { namespace: CredentialNamespace; key: string };
-type Actor = { admin: boolean; scope?: Scope; sockets: Set<Socket>; revoked?: boolean; loginGeneration?: number };
+type Actor = {
+	admin: boolean;
+	scope?: Scope;
+	sockets: Set<Socket>;
+	revoked?: boolean;
+	loginGeneration?: number;
+	fundingSession?: string | FundingOwner;
+};
 type Held = {
 	namespace: CredentialNamespace;
 	key: string;
@@ -141,6 +149,7 @@ async function atomic(path: string, value: unknown): Promise<void> {
 }
 
 export class CredentialBroker {
+	fundingRequest?: (sessionId: string | FundingOwner, request: CredentialRequest) => Promise<unknown>;
 	private server?: Server;
 	private root?: string;
 	private socket?: string;
@@ -194,13 +203,18 @@ export class CredentialBroker {
 		});
 		await chmod(this.socket, 0o600);
 	}
-	grant(admin = false, scope?: Scope): CredentialEndpoint {
+	grant(admin = false, scope?: Scope, fundingSession?: string | FundingOwner): CredentialEndpoint {
 		if (scope && !validKey(scope.namespace, scope.key)) throw new Rejected("invalid");
 		if (!this.socket) throw new Error("Credential broker unavailable");
 		if (this.actors.size >= 4096) throw new Error("Credential broker capacity reached");
 		const token = randomBytes(32).toString("hex");
-		this.actors.set(token, { admin, ...(scope ? { scope: { ...scope } } : {}), sockets: new Set() });
-		return { socket: this.socket, token, ...(!scope ? { catalogAgentDir: this.agentDir } : {}) };
+		this.actors.set(token, { admin, ...(scope ? { scope: { ...scope } } : {}), sockets: new Set(), fundingSession });
+		return {
+			socket: this.socket,
+			token,
+			...(!scope ? { catalogAgentDir: this.agentDir } : {}),
+			...(fundingSession ? { metered: true as const } : {}),
+		};
 	}
 	revoke(endpoint: CredentialEndpoint): void {
 		const actor = this.actors.get(endpoint.token);
@@ -499,6 +513,15 @@ export class CredentialBroker {
 						!["pi", "mcp"].includes(req.namespace)
 					)
 						throw new Rejected("invalid");
+					if (req.op === "funding-reserve" || req.op === "funding-settle") {
+						if (!actor.fundingSession || !this.fundingRequest || held || actor.scope || req.namespace !== "pi")
+							throw new Rejected("unauthorized");
+						try {
+							return send(await this.fundingRequest(actor.fundingSession, req));
+						} catch {
+							throw new Rejected("funding");
+						}
+					}
 					if (req.op === "catalog" && req.namespace === "pi" && !held && !actor.scope) {
 						if (
 							(req.key !== undefined && (typeof req.key !== "string" || !/^[a-f0-9-]{36}$/.test(req.key))) ||

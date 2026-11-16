@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import type { DurableOperation, SetupStartRequest } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
+import { FundingRefused } from "./funding-errors.ts";
 import { type ModelDefaults, ModelDefaultsRefused } from "./model-controls-store.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
 import type { ModelCatalog } from "./models.ts";
@@ -60,6 +61,21 @@ export class ModelControls {
 		const failed = projectId
 			? (this.sessions?.list({ projectId }).filter((s) => s.failedModelSource && !s.archivedAt) ?? [])
 			: [];
+		const funding = await this.sessions?.funding?.read(projectId);
+		const backgroundSubscription = await this.sessions?.backgroundSubscription?.read();
+		const fundedWork =
+			projectId && this.sessions?.funding
+				? this.sessions
+						.list({ projectId })
+						.filter((s) => !s.archivedAt && this.sessions!.fundingRequired(s.id))
+						.slice(0, 100)
+						.map((s) => ({
+							id: s.id,
+							title: s.title,
+							owner: this.sessions!.fundingOwner(s.id),
+							subscription: s.subscriptionPause ?? null,
+						}))
+				: [];
 		if ((await this.models.configurationHash(cwd ?? "~")) !== configuration)
 			throw new Error("Model configuration changed during read");
 		if (project) {
@@ -80,9 +96,15 @@ export class ModelControls {
 			path: project?.path ?? null,
 			projectModel: project?.model ?? null,
 			workflowGeneration: project?.workflowGeneration ?? null,
+			fundingRevision: funding?.revision,
+			backgroundSubscription,
+			fundedWork: fundedWork.map((w) => ({ id: w.id, owner: w.owner, subscription: w.subscription })),
 		};
 		return {
 			version: 1,
+			funding,
+			backgroundSubscription,
+			fundedWork,
 			...defaults,
 			scope,
 			available,
@@ -140,6 +162,52 @@ export class ModelControls {
 			throw new OperationRejected("Model settings changed. Read again before saving.");
 		try {
 			switch (p.action) {
+				case "background-continue": {
+					if (!this.sessions?.backgroundSubscription || !["anthropic", "openai"].includes(p.value as string))
+						throw new OperationRejected("Invalid background subscription hold");
+					await this.sessions.backgroundSubscription.continueAnyway(
+						p.value as "anthropic" | "openai",
+						read.backgroundSubscription!,
+					);
+					break;
+				}
+				case "funding-settings": {
+					if (!this.sessions?.funding || !read.funding) throw new OperationRejected("Funding unavailable");
+					await this.sessions.funding.configure(
+						read.project?.id,
+						read.funding.revision,
+						p.value as Pick<
+							typeof read.funding,
+							"missionDefaultMicros" | "quickFixDefaultMicros" | "dailyMicros"
+						>,
+					);
+					break;
+				}
+				case "fund-work": {
+					const v = p.value as { sessionId: string; amountMicros: number };
+					if (
+						!this.sessions?.funding ||
+						!read.funding ||
+						!read.project ||
+						!read.fundedWork.some((w) => w.id === v?.sessionId)
+					)
+						throw new OperationRejected("Work changed");
+					const owner = this.sessions.fundingOwner(v.sessionId);
+					if (owner.projectId !== read.project.id) throw new OperationRejected("Project changed");
+					await this.sessions.funding.fund(owner, read.funding.revision, v.amountMicros);
+					break;
+				}
+				case "continue-anyway": {
+					if (
+						!this.sessions ||
+						typeof p.value !== "string" ||
+						!read.project ||
+						!read.fundedWork.some((w) => w.id === p.value && w.subscription)
+					)
+						throw new OperationRejected("Subscription hold changed");
+					await this.sessions.forceSubscription(p.value, true);
+					break;
+				}
 				case "scope":
 					if (this.readOnly) throw new OperationRejected("Model scope is read only");
 					try {
@@ -235,6 +303,7 @@ export class ModelControls {
 			if (error instanceof OperationRejected) throw error;
 			if (
 				error instanceof ModelDefaultsRefused ||
+				error instanceof FundingRefused ||
 				error instanceof ModelScopeConflictError ||
 				(error instanceof ModelScopeSettingsError && !error.mayHaveWritten) ||
 				(error instanceof SetupError && error.status === 404) ||

@@ -132,6 +132,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Tool-call diagnostics](tool-call-diagnostics.md)
 - [Source refresh health for diagnostics](refresh-health.md)
 - [AI usage and cost accounting](ai-usage-accounting.md)
+- [Request funding and allowances](funding.md)
 - [Separate background inference](background-inference-accounting.md)
 - [Local usage history, version 1](usage-history-contract.md)
 - [Usage-store allocation verification](usage-history-performance.md)
