@@ -1724,9 +1724,14 @@ export class PlanningWorkers {
 			const missionId = this.deps.store.missionOf(session.id) ?? this.repairChats.get(session.id);
 			if (missionId && this.deps.store.planningWorkers.get(missionId)) this.scheduleResearch(missionId);
 		});
+		// Tasks Pilot could not start while work was paused for sleep start once it ends. Test doubles may not have it.
+		const offResume = this.deps.sessions.onPowerResume?.(() => {
+			for (const id of this.deps.store.planningWorkers.missionIds()) this.scheduleResearch(id);
+		});
 		research.off = () => {
 			offStore();
 			offSessions();
+			offResume?.();
 		};
 		for (const id of this.deps.store.planningWorkers.missionIds()) {
 			const repair = this.deps.store.planningWorkers.get(id)?.repair;

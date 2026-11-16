@@ -2121,6 +2121,11 @@ export function createDaemonServer(
 			if (req.method === "PATCH") return json(res, 200, await power.configure(await readJson(req)));
 			throw new HttpError(405, "Method not allowed");
 		}
+		if (parts[1] === "power" && parts[2] === "resume" && parts.length === 3) {
+			if (!power) throw new ServiceUnavailable("Energy management is unavailable");
+			if (req.method === "POST") return json(res, 200, await power.resume());
+			throw new HttpError(405, "Method not allowed");
+		}
 		if (parts[1] === "mcp" && parts[2] === "setup" && parts.length === 3) {
 			res.setHeader("cache-control", "no-store");
 			if (!githubSetup) return json(res, 503, { error: "mcp_setup_unavailable" });

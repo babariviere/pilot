@@ -9,11 +9,12 @@ import { openPowerHelper, type PowerHelper, type PowerHelperFactory, type PowerS
 export const POWER_IDLE_GRACE_MS = 60_000;
 
 export interface PowerSessions {
-	readonly powerPause: { since: number; wakeToken?: string } | undefined;
+	/** `sleep`: Pilot paused for a sleep the system announced, not for a closed lid or a lost monitor. */
+	readonly powerPause: { since: number; wakeToken?: string; sleep?: true } | undefined;
 	readonly sleepPrepared: Promise<void>;
 	list(): SessionSummary[];
 	onChange(listener: (session: SessionSummary) => void): () => void;
-	pauseForSleep(wakeToken?: string): Promise<void>;
+	pauseForSleep(wakeToken?: string, sleep?: boolean): Promise<void>;
 	resumeAfterSleep(): Promise<void>;
 }
 
@@ -35,7 +36,8 @@ export function laterWake(
 		state.online &&
 		(state.lidClosed !== true || (allowClosedLid && closedLidAllowed(state))) &&
 		pause.wakeToken !== undefined &&
-		state.wakeToken !== pause.wakeToken
+		// A later wake, or a sleep that never came: the system is fully awake with the wake it had at the pause.
+		(state.wakeToken !== pause.wakeToken || pause.sleep === true)
 	);
 }
 
@@ -208,7 +210,7 @@ export class PowerService {
 		) {
 			// Durable latch and kernel close must finish BEFORE clearing the system-wide override.
 			try {
-				const pausing = this.sessions.pauseForSleep(state.wakeToken);
+				const pausing = this.sessions.pauseForSleep(state.wakeToken, state.sleeping);
 				// Observe teardown failure even while waiting for the earlier preparation/acknowledgement phase.
 				void pausing.catch(() => {});
 				if (state.sleeping) {
@@ -263,10 +265,17 @@ export class PowerService {
 			keepingAwake: this.keepingAwake,
 			closedLidActive: this.state?.closedLidActive ?? false,
 			paused: !!this.sessions.powerPause,
+			...(this.sessions.powerPause ? { pausedSince: this.sessions.powerPause.since } : {}),
 			connectedToPower: this.state?.connectedToPower ?? false,
 			wifiConnected: this.state?.wifiConnected ?? false,
 			...(this.error ? { error: this.error } : {}),
 		};
+	}
+	/** The user's Resume: ends Pilot's sleep pause now, as a later wake would. Nothing to do when work is not paused. */
+	async resume(): Promise<PowerStatus> {
+		if (this.sessions.powerPause) await this.sessions.resumeAfterSleep();
+		this.publish();
+		return this.status();
 	}
 	onChange(listener: () => void): () => void {
 		this.listeners.add(listener);

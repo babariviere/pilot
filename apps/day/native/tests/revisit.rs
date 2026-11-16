@@ -202,7 +202,8 @@ fn confirming_applies_exactly_the_revision_shown_and_keeps_history() {
     let r = page.revisit.unwrap();
     assert_eq!(r.stage, RevisitStage::Confirmed);
     assert!(r.revision.is_none());
-    assert_eq!((r.open_tasks, r.finished_tasks, r.decisions), (4, 3, 3));
+    // The revision also added a task: four open tasks became five.
+    assert_eq!((r.open_tasks, r.finished_tasks, r.decisions), (5, 3, 3));
     assert!(r.plan.contains("macOS Focus"));
     let line = &r.history[0];
     assert!(line.earlier_plan.contains("22:00"));

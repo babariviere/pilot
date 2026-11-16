@@ -40,6 +40,8 @@ pub const METHODS: &[&str] = &[
     "day.connections.write",
     "day.connections.check",
     "day.connections.probe",
+    "day.power.read",
+    "day.power.resume",
     "day.models.write",
     "day.models.check",
     "day.models.signIn",
@@ -260,6 +262,10 @@ pub(crate) enum Command {
     ConnectionsWrite(crate::host::connection_controls::Intent),
     ConnectionsCheck(String),
     ConnectionsProbe,
+    /// Whether Pilot paused work for sleep, from the root's last power frame.
+    PowerRead,
+    /// The user's Resume of work Pilot paused for sleep.
+    PowerResume,
     ModelsRecovery(String),
     ModelsWrite(crate::host::model_controls::Intent),
     ModelsCheck(String),
@@ -581,6 +587,16 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 C::ConnectionsRead
             } else {
                 C::ConnectionsProbe
+            }
+        }
+        "day.power.read" | "day.power.resume" => {
+            if args != json!({}) {
+                return Err(Error::Invalid);
+            }
+            if name == "day.power.read" {
+                C::PowerRead
+            } else {
+                C::PowerResume
             }
         }
         "day.connections.write" => {
@@ -1135,6 +1151,7 @@ impl Command {
                     | Self::KnowledgeRead(_)
                     | Self::ModelsRead
                     | Self::ConnectionsRead
+                    | Self::PowerRead
                     | Self::ModelsRecovery(_)
                     | Self::PreferencesHistory(_)
                     | Self::FeedbackRead(_)

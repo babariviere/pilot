@@ -37,6 +37,12 @@ closed-lid work must be enabled and both AC power and Wi-Fi must be present. Rec
 Wi-Fi while the lid is still closed, display wake, dark wake, screen unlock and daemon restart on
 the same wake do not count. A later wake observed after a daemon restart does count. On a desktop,
 an absent lid is treated as open. Archived chats and stopped/idle chats do not automatically restart.
+One exception: when macOS announced a sleep that never came (an app such as Music kept the Mac awake),
+the pause is marked `sleep` and ends once the Mac is fully awake, online and its lid rules allow it, on
+the same wake. A closed-lid or lost-monitor pause still waits for a later wake.
+While work is paused, Pilot Day's header says so and offers **Resume work** (`POST /api/power/resume`),
+which ends the pause as a wake would. When the pause ends, Pilot also checks each planned mission
+again, so ready tasks start without waiting for another mission change.
 New messages submitted during a pause are saved for wake. History remains readable without starting
 a kernel. Stop remains available during a pause: it saves cancellation without reopening a kernel or
 resuming other chats. At the next eligible wake, cancellation drains before recovered model requests

@@ -101,6 +101,17 @@ test("a ready task Pilot cannot start shows why on the planning page", async (t)
 		(await f.workers.startView(f.missionId)).reason,
 		"Work started. Pilot could not start the next ready task: Planning owner was stopped or reconfigured; Start unavailable It tries again on the next change.",
 	);
+	// The end of a sleep pause is such a change, even when no chat changes with it.
+	const admitted: string[] = [];
+	t.mock.method(f.sessions, "planningIdentity", () => ({ inputGeneration: 0, permission: { level: "build" } }));
+	t.mock.method(f.sessions, "admitPublishedTask", async (_r: unknown, identity: { taskId: string }) => {
+		admitted.push(identity.taskId);
+		throw new Error("Waiting for a worker slot");
+	});
+	await f.sessions.pauseForSleep("100:1", true);
+	await f.sessions.resumeAfterSleep();
+	await f.workers.settleResearch();
+	assert.equal(admitted.length, 1);
 });
 
 test("a merged PR that owns a planned task finishes it, and Pilot starts what it unblocks", async (t) => {

@@ -10,6 +10,8 @@ export interface PowerStatus {
 	keepingAwake: boolean;
 	closedLidActive: boolean;
 	paused: boolean;
+	/** When Pilot paused work for sleep (epoch ms), while it is paused. */
+	pausedSince?: number;
 	connectedToPower: boolean;
 	wifiConnected: boolean;
 	error?: string;

@@ -102,6 +102,7 @@ pub(super) fn cached(
             | Command::Log { .. }
             | Command::ChatSnapshot(_)
             | Command::ChatClose(_)
+            | Command::PowerRead
     ) {
         return None;
     }
@@ -113,6 +114,13 @@ pub(super) fn cached(
             Command::PlanSnapshot(id) => planning(host, id)?,
             Command::PlanChatSnapshot(id) => plan_chat(host, id)?,
             Command::ChatSnapshot(id) => session_chat(host, id),
+            Command::PowerRead => host
+                .0
+                .shared
+                .power
+                .lock()
+                .expect("native power poisoned")
+                .clone(),
             // Local only: the chat is no longer read or kept.
             Command::ChatClose(id) => {
                 host.close_session_chat(id);
@@ -267,6 +275,11 @@ async fn run(
             | Command::PreferencesHistory(_)
     ) {
         return super::preferences::handle(t, journal, shared, &call.command, &call.gate).await;
+    }
+    if matches!(call.command, Command::PowerResume) {
+        call.command
+            .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
+        return super::power::resume(t, shared).await;
     }
     if matches!(
         call.command,
@@ -720,6 +733,7 @@ async fn run(
         | Command::ConnectionsWrite(_)
         | Command::ConnectionsCheck(_)
         | Command::ConnectionsProbe => unreachable!("handled connection command"),
+        Command::PowerRead | Command::PowerResume => unreachable!("handled power command"),
         Command::UpdateRead
         | Command::UpdatePrepare(_)
         | Command::UpdateConfirm(_)

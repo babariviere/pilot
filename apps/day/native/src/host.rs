@@ -27,6 +27,7 @@ pub mod official_update;
 pub(crate) mod plan_sources;
 mod planning;
 mod planning_chat;
+mod power;
 pub(crate) mod preferences;
 pub(crate) mod projects;
 pub mod ritual;
@@ -170,6 +171,8 @@ struct Shared {
     /// Set once a screen asks for attention. Later authoritative refreshes
     /// read it again; a WS frame never supplies its content.
     attention_wanted: AtomicBool,
+    /// Pilot's pause for sleep, from the service's latest power frame: `{paused, since}`.
+    power: Mutex<serde_json::Value>,
 }
 impl Shared {
     fn change<R>(&self, f: impl FnOnce(&mut Desk) -> R) -> R {
@@ -487,6 +490,7 @@ impl NativeHost {
             attention_drafts: Mutex::new(std::collections::BTreeMap::new()),
             url_opener,
             attention_wanted: AtomicBool::new(false),
+            power: Mutex::new(power::view(&serde_json::Value::Null)),
         });
         let (requests, rx) = async_channel::bounded(16);
         let owner_source = source.clone();
@@ -2187,6 +2191,8 @@ async fn watch_once(
                 // Frequent while agents work. Read again without marking the
                 // shown read stale first: that repainted the window each time.
                 // The channel holds one wakeup, so bursts cost one read.
+                // Pilot paused work for sleep, or resumed it.
+                Some("power") => power::observe(shared, &v["power"]),
                 Some("session" | "sessions" | "dashboard" | "mcp") => {
                     shared.full_refresh.store(true, Ordering::SeqCst);
                     let _ = invalidated.try_send(());

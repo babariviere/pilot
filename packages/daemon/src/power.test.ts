@@ -118,9 +118,9 @@ class Sessions implements PowerSessions {
 			this.listeners.delete(listener);
 		};
 	}
-	async pauseForSleep(wakeToken?: string) {
+	async pauseForSleep(wakeToken?: string, sleep?: boolean) {
 		this.pauses++;
-		this.powerPause ??= { since: Date.now(), wakeToken };
+		this.powerPause ??= { since: Date.now(), wakeToken, ...(sleep ? { sleep: true as const } : {}) };
 		await this.pauseWait;
 	}
 	async resumeAfterSleep() {
@@ -206,6 +206,33 @@ test("closed-lid policy requires power AND Wi-Fi, and rejects unknown/dark state
 	])
 		assert.equal(laterWake({ since: 1, wakeToken: "99:1" }, { ...sample, ...patch }), false);
 	assert.equal(laterWake({ since: 1 }, sample), false);
+	// A sleep the system announced but never made (an app kept it awake): fully awake on the same wake resumes.
+	assert.equal(laterWake({ since: 1, wakeToken: "100:1", sleep: true }, sample), true);
+	assert.equal(laterWake({ since: 1, wakeToken: "100:1", sleep: true }, { ...sample, sleeping: true }), false);
+	assert.equal(laterWake({ since: 1, wakeToken: "100:1", sleep: true }, { ...sample, fullWake: false }), false);
+	assert.equal(laterWake({ since: 1, wakeToken: "100:1", sleep: true }, { ...sample, lidClosed: true }), false);
+});
+
+test("a sleep that never comes resumes once the system is fully awake, and the user can resume", async (t) => {
+	const f = await fixture(t);
+	await f.emit({ sleeping: true, fullWake: false });
+	assert.equal(f.sessions.pauses, 1);
+	assert.equal(f.sessions.powerPause?.sleep, true);
+	assert.equal(typeof f.service.status().pausedSince, "number");
+	await f.emit({});
+	assert.equal(f.sessions.resumes, 1, "same wake, but the announced sleep never happened");
+	assert.equal(f.service.status().paused, false);
+	assert.equal(f.service.status().pausedSince, undefined);
+	// A closed-lid pause still waits for a real wake; the user's Resume ends it.
+	await f.emit({ lidClosed: true, connectedToPower: false });
+	assert.equal(f.sessions.pauses, 2);
+	assert.equal(f.sessions.powerPause?.sleep, undefined);
+	await f.emit({ lidClosed: false });
+	assert.equal(f.sessions.resumes, 1);
+	assert.equal((await f.service.resume()).paused, false);
+	assert.equal(f.sessions.resumes, 2);
+	assert.equal((await f.service.resume()).paused, false);
+	assert.equal(f.sessions.resumes, 2, "nothing to resume");
 });
 
 test("working agents hold an idle-system assertion; only sustained idle releases it", async (t) => {

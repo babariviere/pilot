@@ -12,6 +12,7 @@ import type { IntakeMirror } from "./intakeFeed";
 import type { LinearMirror } from "./linearFeed";
 import type { ModelControls } from "./modelControls";
 import { glide } from "./motion";
+import type { PowerControls } from "./power";
 import type { PreferencesMirror } from "./preferencesFeed";
 import type { SessionChatMirror } from "./sessionChat";
 import type { ThreadsMirror } from "./threadFeed";
@@ -71,6 +72,8 @@ export type Day = {
 	 * window offers no way into such chats.
 	 */
 	chat?: SessionChatMirror;
+	/** Pilot's pause for sleep and its Resume. Without it the header never shows the pause. */
+	power?: PowerControls;
 	/** Stops listening and frees the feed. */
 	close: () => void;
 };

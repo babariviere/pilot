@@ -2418,7 +2418,8 @@ export class SessionManager {
 	private readonly kernelRestarts = new Map<string, ReturnType<typeof setTimeout>>();
 	private readonly retiring = new WeakSet<SessionWorker>();
 
-	private sleepPause?: { since: number; wakeToken?: string };
+	private sleepPause?: { since: number; wakeToken?: string; sleep?: true };
+	private readonly powerResumeListeners = new Set<() => void>();
 	private sleepTransition?: Promise<void>;
 	private sleepPreparing?: Promise<void>;
 	private sleepResuming?: Promise<void>;
@@ -12004,12 +12005,16 @@ ${run.excerpt}`,
 	}
 
 	/** Close kernels without aborting durable tasks. Block admissions synchronously before the first write. */
-	pauseForSleep(wakeToken?: string): Promise<void> {
+	pauseForSleep(wakeToken?: string, sleep?: boolean): Promise<void> {
 		this.sleepRevision++;
 		for (const task of this.postRunTasks.values()) task.controller.abort();
 		for (const setup of this.workspaceSetups.values()) setup.controller.abort();
 		for (const waiters of this.workspaceSetupWaiters.values()) for (const wake of waiters) wake();
-		const latch = { since: Date.now(), ...(wakeToken ? { wakeToken } : {}) };
+		const latch = {
+			since: Date.now(),
+			...(wakeToken ? { wakeToken } : {}),
+			...(sleep ? { sleep: true as const } : {}),
+		};
 		if (this.sleepResuming) this.sleepPause = latch;
 		else this.sleepPause ??= latch;
 		if (this.sleepTransition) return this.sleepTransition;
@@ -12082,6 +12087,11 @@ ${run.excerpt}`,
 	}
 
 	/** Called only after a later full wake with connectivity, or an explicit policy disable. */
+	/** Called once each time Pilot's sleep pause ends, so work that waited for it can start. */
+	onPowerResume(listener: () => void): () => void {
+		this.powerResumeListeners.add(listener);
+		return () => this.powerResumeListeners.delete(listener);
+	}
 	resumeAfterSleep(): Promise<void> {
 		if (this.sleepResuming) return this.sleepResuming;
 		const revision = this.sleepRevision;
@@ -12097,6 +12107,7 @@ ${run.excerpt}`,
 				return;
 			}
 			this.sleepPause = undefined;
+			for (const listener of this.powerResumeListeners) listener();
 			this.actionRunner?.resumeAfterSleep();
 			this.resumeFlows();
 			for (const meta of this.metas.values()) {
@@ -12144,7 +12155,7 @@ ${run.excerpt}`,
 	}
 
 	private async savePowerPause(
-		value: { since: number; wakeToken?: string } | null = this.sleepPause ?? null,
+		value: { since: number; wakeToken?: string; sleep?: true } | null = this.sleepPause ?? null,
 	): Promise<void> {
 		const file = join(this.home, "power-pause.json");
 		const temp = `${file}.${randomUUID()}.tmp`;

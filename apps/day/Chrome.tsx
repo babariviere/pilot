@@ -21,6 +21,7 @@ import {
 	shown,
 } from "./nav";
 import { Palette } from "./Palette";
+import { PowerPause } from "./PowerPause";
 import type { Plans } from "./planning";
 import { updateLabel } from "./UpdateScreen";
 import { Action, Icon } from "./ui";
@@ -110,6 +111,9 @@ export function AppHeader(props: { day: Day; plans?: Plans; changes?: Changes })
 				)}
 			</Each>
 			<View class="flex-1" />
+			<If when={props.day.power?.view().paused}>
+				<PowerPause power={props.day.power!} narrow={narrow()} />
+			</If>
 			<If when={update()}>
 				<Action label={update()} icon="update" testID="update-open" onPress={showUpdate} />
 			</If>

@@ -457,6 +457,21 @@ impl Transport {
         exact(v, id, command)
     }
 
+    /// The user's Resume after a pause for sleep. Every failure is Unknown; resuming again changes nothing.
+    pub(super) async fn power_resume(&self) -> Result<Value, Error> {
+        let r = self
+            .client
+            .post(self.url("/api/power/resume"))
+            .header("x-pilot-github-capability", self.local()?)
+            .send()
+            .await
+            .map_err(|_| Error::Unknown)?;
+        if !r.status().is_success() {
+            return Err(Error::Unknown);
+        }
+        body(r).await.map_err(|_| Error::Unknown)
+    }
+
     /// Stop re-planning `mission`: one POST naming the new mission shown.
     /// A refusal (the link changed) is Stale; any other failure is Unknown.
     pub async fn stop_replanning(&self, mission: &str, successor: &str) -> Result<(), Error> {

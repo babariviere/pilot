@@ -17,6 +17,8 @@ lid is not a reliable screen-lock action in this mode; lock the Mac explicitly.
 Sleep pauses retain pending work for a later full wake with connectivity. Interrupted
 native commands and jobs are reported as interrupted, not automatically replayed.
 Reconnecting Wi-Fi while the lid stays closed is not itself a qualifying wake.
+If the Mac was about to sleep but stayed awake, work resumes on its own. While work
+is paused, Pilot Day's header shows **Work paused for sleep** with **Resume work**.
 
 ## Lost connectivity
 
