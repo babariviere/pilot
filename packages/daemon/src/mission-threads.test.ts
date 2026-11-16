@@ -5,6 +5,7 @@ import { type ConversationId, type EntryId, MemoryStorage } from "@earendil-work
 import type { PlanningInput } from "@pilot/kernel";
 import type { EntryRecord } from "@pilot/protocol";
 import type { MissionThreadReference, MissionThreadWrite } from "../../protocol/src/mission-thread.ts";
+import { PlanningInputNotSent } from "./errors.ts";
 import { MissionThreads } from "./mission-threads.ts";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 import { payloadHash } from "./operation-journal.ts";
@@ -295,7 +296,7 @@ test("lost send ACK and restart use only original kernel receipt, never a second
 	await assert.rejects(threads.lookup(changed), /different|changed|identity|payload/i);
 });
 
-test("late source change after durable topic intent prevents dispatch, and lookup never retries", async (t) => {
+test("a mission change while Pilot saves a thread message does not stop it; a closed thread does", async (t) => {
 	const f = await fixture(t);
 	const op = await f.request({ purpose: "thread-send", text: "Clarify limits" });
 	const durable = f.store.durable.bind(f.store);
@@ -303,10 +304,39 @@ test("late source change after durable topic intent prevents dispatch, and looku
 		await durable();
 		f.store.update(f.missionId, { goal: "Changed during flush" });
 	});
-	assert.equal((await f.execute(op)).state, "pending");
-	assert.equal(f.store.threads.get(f.missionId, f.topicId).inputs.length, 1, "intent is not admission proof");
-	assert.equal((await f.threads.lookup(op))?.state, "pending");
-	assert.equal(f.inputs.length, 0);
+	assert.equal((await f.execute(op)).state, "accepted");
+	assert.equal(f.inputs.length, 1, "task or mission progress is not a reason to refuse a chat message");
+
+	const closed = await f.request({ purpose: "thread-send", text: "And the archive size?" });
+	const get = f.store.threads.get.bind(f.store.threads);
+	let saved = false;
+	t.mock.method(f.store, "durable", async () => {
+		await durable();
+		saved = true;
+	});
+	t.mock.method(f.store.threads, "get", (missionId: string, id: string) => {
+		const topic = get(missionId, id);
+		return saved ? { ...topic, disposition: "discarded" as const } : topic;
+	});
+	assert.equal((await f.execute(closed)).state, "pending");
+	assert.equal((await f.threads.lookup(closed))?.state, "pending");
+	assert.equal(f.inputs.length, 1);
+});
+
+test("a thread message Pilot refuses before sending it waits for the planning agent", async (t) => {
+	const f = await fixture(t);
+	f.admission.mock.mockImplementation(async () => {
+		throw new PlanningInputNotSent(new Error("Planning admission is held or unavailable"));
+	});
+	const op = await f.request({ purpose: "thread-send", text: "Fork the coordinator for a thread?" });
+	const receipt = await f.execute(op);
+	assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+	assert.equal((receipt.result as { queued?: boolean }).queued, true);
+	assert.deepEqual(
+		(await f.threads.read(f.project.id, f.missionId)).waiting?.map((m) => m.text),
+		["Fork the coordinator for a thread?"],
+	);
+	assert.equal(f.store.planningWorkers.get(f.missionId)!.phase, "active");
 });
 
 for (const change of ["source", "Stop", "permission"] as const)
@@ -321,6 +351,10 @@ for (const change of ["source", "Stop", "permission"] as const)
 					inputGeneration: 0,
 					permission: { level: "none" },
 				}));
+			if (change === "source") {
+				guard(); // A mission change alone does not refuse a thread message.
+				t.mock.method(f.sessions, "planningIdentity", () => ({ inputGeneration: 1 }));
+			}
 			guard();
 			throw new Error("Must not reach a provider");
 		});

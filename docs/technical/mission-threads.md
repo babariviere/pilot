@@ -54,6 +54,9 @@ Metadata writes and input intents are durable before ACK or dispatch. Source fen
 canonical mission revisions, task/decision/owner/membership events, controls, project/session
 identity and topic revisions. The final asynchronous admission guard checks these again inside
 the kernel input transaction. Concurrent source changes refuse or remain Unknown after entry.
+A `thread-send` checks the full source only when it is validated. After that, while Pilot saves it and the
+planner takes it, only the active mission, its project and planning owner, and the open topic count: task
+progress or mission activity in the meantime does not refuse a chat message.
 
 `thread-send` has a distinct trusted planning/discussion purpose. It reuses qualified Revisit
 admission only for an existing **published, idle, active, unheld, unstopped enrolled planning
@@ -85,6 +88,8 @@ Pilot delivers them with the first planning input that can carry them, at most o
 Each message is marked with the input that carries it (`carriedBy`) before that input is admitted,
 so a restart reads the same content and never sends it twice. A refused Continue puts its messages
 back to waiting. The agent reads them as discussion, never as approval, Start or agreement changes.
+A message the planner never took also waits: Pilot refused it before sending (`PlanningInputNotSent`),
+or the planner refused it as busy or held, while its topic is still open with the same owner.
 At most 20 messages wait per mission (`WAITING_MESSAGES`); past it, Send is refused with the limit
 named and the words stay. Unstick's checks count waiting messages. Editing or withdrawing a waiting
 message is not built yet.

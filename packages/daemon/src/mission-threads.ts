@@ -274,9 +274,25 @@ export class MissionThreads {
 			return next;
 		});
 		const source = this.source(op.targetId);
+		// A thread message is checked more narrowly than the source: task progress while Pilot saves it or the planner
+		// takes it must not refuse it. Only the active mission, its project and planning owner, and this open thread count.
+		const owner = () => {
+			const s = this.scope(op.targetId);
+			return `${s.project.id}/${s.owner}`;
+		};
+		const scope = owner();
+		const fence = () => {
+			this.envelope(op);
+			const now = store.threads.get(op.targetId, result.id);
+			if (owner() !== scope || now.disposition !== "open" || now.ownerSessionId !== result.ownerSessionId)
+				throw new Conflict("The thread or its planning owner changed");
+		};
 		await store.durable();
-		check(source);
-		if (request.purpose !== "thread-send") return { topic: result };
+		if (request.purpose !== "thread-send") {
+			check(source);
+			return { topic: result };
+		}
+		fence();
 		if (queue) {
 			workers!.queueMessage(op.targetId, {
 				operationId: op.operationId,
@@ -288,7 +304,7 @@ export class MissionThreads {
 			return { topic: result, queued: true };
 		}
 		try {
-			const admission = await workers!.discuss(op, () => check(source));
+			const admission = await workers!.discuss(op, fence);
 			return { topic: result, admission };
 		} catch (error) {
 			if (error instanceof DiscussionQueued) return { topic: result, queued: true };

@@ -11,7 +11,7 @@ import {
 	type PlanningWorkerRequest,
 } from "@pilot/kernel";
 import type { DurableOperation, MissionPlan, MissionTask, OperationReceipt, PlanQuestion } from "@pilot/protocol";
-import { Conflict } from "./errors.ts";
+import { Conflict, PlanningInputNotSent } from "./errors.ts";
 import { interviewDigest, interviewExact, interviewId, interviewText } from "./mission-interview-contract.ts";
 import { MissionInterviews } from "./mission-interviews.ts";
 import { PLAN_STATE_LIMIT, publishedDefinition, sliceTaskBody } from "./mission-plan-store.ts";
@@ -1411,8 +1411,9 @@ export class PlanningWorkers {
 	}
 
 	/**
-	 * A thread message the planner refused before taking it (busy or held): the discussion turn ends, and the
-	 * message waits to go with the next planning input. Only a refusal counts; a missing receipt stays Unknown.
+	 * A thread message the planner never took (Pilot refused it before sending, or the planner refused it as busy or
+	 * held): the discussion turn ends, and the message waits to go with the next planning input. Only such a refusal
+	 * counts; a missing receipt stays Unknown.
 	 */
 	private async waitRefusedMessage(op: DurableOperation): Promise<void> {
 		const request = JSON.parse(op.payload) as { topicId: string; text: string };
@@ -1478,7 +1479,10 @@ export class PlanningWorkers {
 			payloadHash: op.payloadHash,
 		});
 		discussionGuard?.();
-		if (hash(this.revisitPin(op.targetId)) !== hash(pin)) throw new Conflict("Revisit context changed");
+		// A thread message is a chat message, not a proposal: task progress in the meantime does not change it.
+		const unchanged = (now: typeof pin) =>
+			discussion ? now.authority === pin.authority && now.revision === pin.revision : hash(now) === hash(pin);
+		if (!unchanged(this.revisitPin(op.targetId))) throw new Conflict("Revisit context changed");
 		const prior = this.deps.store.planningWorkers.get(op.targetId)!;
 		this.deps.store.planningWorkers.retain(
 			op.targetId,
@@ -1500,20 +1504,25 @@ export class PlanningWorkers {
 			if (
 				this.closing.signal.aborted ||
 				this.authority(state.binding) !== pin.authority ||
-				this.deps.store.revisions.source(op.targetId) !== pin.source ||
+				(!discussion && this.deps.store.revisions.source(op.targetId) !== pin.source) ||
 				this.scope(state.binding).revision !== state.revision
 			)
 				throw new Conflict("Revisit admission changed");
 		};
 		try {
 			await this.deps.store.durable();
-			guard();
 			let receipt: Awaited<ReturnType<PlanningWorkers["admitInput"]>>;
 			try {
+				try {
+					guard();
+				} catch (error) {
+					throw new PlanningInputNotSent(error);
+				}
 				receipt = await this.admitInput(state, op, guard);
 			} catch (error) {
 				// The planner refused before taking it: the message waits for it instead of becoming Unknown.
-				if (discussion && REFUSED_BEFORE_ADMISSION.test(String(error))) {
+				if (discussion && (error instanceof PlanningInputNotSent || REFUSED_BEFORE_ADMISSION.test(String(error)))) {
+					discussionGuard!(); // A closed thread or a new planning owner: the message does not wait.
 					await this.waitRefusedMessage(op);
 					throw new DiscussionQueued();
 				}
