@@ -67,6 +67,7 @@ export class MissionThreads {
 		await this.deps.store.durable();
 		this.scope(id, projectId);
 		const discussion = this.deps.workers?.revisitView(id);
+		const waits = !discussion?.available && !!this.deps.workers?.canQueueMessage(id);
 		return {
 			version: 1,
 			missionId: id,
@@ -76,7 +77,14 @@ export class MissionThreads {
 			discussion: {
 				available: discussion?.available ?? false,
 				reason: discussion?.reason ?? "Trusted planning discussion unavailable",
+				waits,
 			},
+			waiting: (this.deps.workers?.waitingMessages(id) ?? []).map(({ operationId, topicId, text, at }) => ({
+				operationId,
+				topicId,
+				text,
+				at,
+			})),
 		};
 	}
 	private historyOwner(id: string, topic: MissionThread) {
@@ -161,12 +169,15 @@ export class MissionThreads {
 			if (!result) throw new Error("Unknown topic effect; no replay");
 			if (op.kind === "thread-send") {
 				if (!workers) throw new Error("Topic admission lookup unavailable");
+				// A message saved to wait has no admission of its own: it goes with a later planning input.
+				if (workers.queuedMessage(op.targetId, op.operationId)) return { topic: result, queued: true };
 				return { topic: result, admission: await workers.recover(op) };
 			}
 			return { topic: result };
 		}
 		let request: MissionThreadWrite;
 		let topic: MissionThread | undefined;
+		let queue = false;
 		try {
 			this.envelope(op);
 			request = JSON.parse(op.payload);
@@ -207,12 +218,15 @@ export class MissionThreads {
 				if (request.purpose === "thread-send") {
 					if (typeof request.text !== "string" || !request.text.trim() || Buffer.byteLength(request.text) > 32000)
 						throw new Error("Topic input must contain 1 to 32000 bytes");
+					// Sent now when the planning agent can take it; otherwise saved to wait for it.
+					queue = !workers?.revisitView(op.targetId).available;
 					if (
 						topic.disposition !== "open" ||
 						topic.ownerSessionId !== this.scope(op.targetId).owner ||
-						!workers?.revisitView(op.targetId).available
+						(queue && !workers?.canQueueMessage(op.targetId))
 					)
-						throw new Conflict("Topic needs an open, active unheld trusted planning owner");
+						throw new Conflict("Topic needs an open thread and a planning owner");
+					if (queue) workers!.assertMessageRoom(op.targetId);
 				}
 			}
 		} catch (e) {
@@ -258,6 +272,16 @@ export class MissionThreads {
 		await store.durable();
 		check(source);
 		if (request.purpose !== "thread-send") return { topic: result };
+		if (queue) {
+			workers!.queueMessage(op.targetId, {
+				operationId: op.operationId,
+				topicId: result.id,
+				title: result.title,
+				text: request.text,
+			});
+			await store.durable();
+			return { topic: result, queued: true };
+		}
 		const admission = await workers!.discuss(op, () => check(source));
 		return { topic: result, admission };
 	}

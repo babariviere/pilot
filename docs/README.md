@@ -26,9 +26,11 @@ A push with no saved result stays Unknown. It is Pilot's record, not the agent's
 For published native plans, Revisit mission requests planning only. Review new questions and
 the exact proposed changes, then pause and request a fresh preview before confirming. Earlier
 answers and finished work stay kept. Revisit never starts work or changes permissions.
-A mission's overview lists threads with its coordinator, one subject each. A thread shows the
-coordinator's whole conversation and marks the messages it sent or linked. Send reaches only an
-active, unheld planning coordinator; Later and Discard keep the history. Talking never starts work.
+A mission's overview lists threads with its coordinator, one subject each. Start one by writing its
+first message; its first sentence becomes the title. A thread shows the coordinator's whole
+conversation and marks the messages it sent or linked. When the coordinator cannot take a message
+(it works, or a round waits for your answers), Send saves it to wait: it goes with your next answers,
+or as soon as the coordinator is free. Later and Discard keep the history. Talking never starts work.
 Feedback (in the header, or Send feedback on a mission) saves your words about Pilot, with the
 mission when you keep it. Choose the project with Pilot's code and a read-only agent triages what you
 send: it groups duplicates, may ask you a question and proposes a small fix, a mission or no change.

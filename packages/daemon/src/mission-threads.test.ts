@@ -8,6 +8,7 @@ import type { MissionThreadReference, MissionThreadWrite } from "../../protocol/
 import { MissionThreads } from "./mission-threads.ts";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 import { payloadHash } from "./operation-journal.ts";
+import { WAITING_MESSAGES } from "./planning-workers.ts";
 import { publishedPlanningFixture } from "./published-planning.fixture.ts";
 
 type ThreadInput = {
@@ -140,10 +141,24 @@ test("discussion uses exact saved input and distinct qualified purpose, never Bu
 	assert.equal(f.store.planningWorkers.get(f.missionId)?.start, undefined);
 });
 
-for (const change of ["held", "Stop", "pause", "access", "owner", "revision", "busy", "disposition"] as const) {
+for (const change of ["owner", "revision", "disposition"] as const) {
 	test(`discussion refuses ${change} without clearing a hold or dispatching`, async (t) => {
 		const f = await fixture(t);
 		const op = await f.request({ purpose: "thread-send", text: "Clarify limits" });
+		if (change === "owner") f.store.update(f.missionId, { coordinatorSessionId: null });
+		if (change === "revision") f.store.update(f.missionId, { goal: "Different scope" });
+		if (change === "disposition")
+			await f.execute(await f.request({ purpose: "thread-disposition", disposition: "later" }));
+		assert.equal((await f.execute(op)).state, "rejected");
+		assert.equal(f.inputs.length, 0);
+		assert.equal(f.store.threads.get(f.missionId, f.topicId).inputs.length, 0);
+		assert.equal(f.workers.waitingMessages(f.missionId).length, 0);
+	});
+}
+
+for (const change of ["held", "Stop", "pause", "busy"] as const) {
+	test(`a message the planning agent cannot take now (${change}) waits for it, sending nothing yet`, async (t) => {
+		const f = await fixture(t);
 		if (change === "held") {
 			const state = f.store.planningWorkers.get(f.missionId)!;
 			f.store.planningWorkers.change(f.missionId, state.revision, (s) => {
@@ -151,20 +166,60 @@ for (const change of ["held", "Stop", "pause", "access", "owner", "revision", "b
 			});
 		}
 		if (change === "Stop") t.mock.method(f.sessions, "planningIdentity", () => ({ inputGeneration: 1 }));
-		if (change === "pause" || change === "access")
+		if (change === "pause")
 			t.mock.method(f.sessions, "assertPlanningOpen", () => {
 				throw new Error(change);
 			});
-		if (change === "owner") f.store.update(f.missionId, { coordinatorSessionId: null });
-		if (change === "revision") f.store.update(f.missionId, { goal: "Different scope" });
 		if (change === "busy") f.coordinator = { ...f.coordinator!, working: true };
-		if (change === "disposition")
-			await f.execute(await f.request({ purpose: "thread-disposition", disposition: "later" }));
-		assert.equal((await f.execute(op)).state, "rejected");
-		assert.equal(f.inputs.length, 0);
-		assert.equal(f.store.threads.get(f.missionId, f.topicId).inputs.length, 0);
+		const view = await f.threads.read(f.project.id, f.missionId);
+		// Day reads the threads again after a change, then sends against what it shows.
+		const op = await f.request({ purpose: "thread-send", text: "Clarify limits" });
+		assert.equal(view.discussion.available, false);
+		assert.equal(view.discussion.waits, true);
+		const receipt = await f.execute(op);
+		assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+		assert.equal((receipt.result as { queued?: boolean }).queued, true);
+		assert.equal(f.inputs.length, 0, "nothing reaches the agent yet");
+		assert.deepEqual(
+			(await f.threads.read(f.project.id, f.missionId)).waiting?.map((m) => m.text),
+			["Clarify limits"],
+		);
+		assert.deepEqual((await f.threads.lookup(op))?.result, receipt.result, "a lost ACK reads the same");
 	});
 }
+
+test("waiting messages go to the planning agent in one turn once it is idle, then stop waiting", async (t) => {
+	const f = await fixture(t);
+	f.coordinator = { ...f.coordinator!, working: true };
+	for (const text of ["First thought", "Second thought"])
+		assert.equal((await f.execute(await f.request({ purpose: "thread-send", text }))).state, "accepted");
+	assert.equal(f.inputs.length, 0);
+	f.coordinator = { ...f.coordinator!, working: false };
+	await (f.workers as unknown as { deliverMessages(id: string): Promise<void> }).deliverMessages(f.missionId);
+	assert.equal(f.inputs.length, 1, "one turn for both");
+	const input = f.inputs[0]!;
+	assert.equal(input.operation.kind, "plan-thread-messages");
+	assert.match(input.content, /discussion, not execution/);
+	assert.match(input.content, /"First thought"[\s\S]*"Second thought"/);
+	assert.match(input.content, /Importer limits/);
+	assert.equal(f.workers.waitingMessages(f.missionId).length, 0);
+	assert.equal((await f.threads.read(f.project.id, f.missionId)).waiting?.length, 0);
+	await (f.workers as unknown as { deliverMessages(id: string): Promise<void> }).deliverMessages(f.missionId);
+	assert.equal(f.inputs.length, 1, "never sent twice");
+});
+
+test("past the waiting limit, Send is refused with the limit named", async (t) => {
+	const f = await fixture(t);
+	f.coordinator = { ...f.coordinator!, working: true };
+	for (let i = 0; i < WAITING_MESSAGES; i++)
+		assert.equal(
+			(await f.execute(await f.request({ purpose: "thread-send", text: `Message ${i}` }))).state,
+			"accepted",
+		);
+	const refused = await f.execute(await f.request({ purpose: "thread-send", text: "One more" }));
+	assert.equal(refused.state, "rejected");
+	assert.match(refused.reason ?? "", /20 messages already wait for the coordinator \(the limit is 20\)/);
+});
 
 test("lost send ACK and restart use only original kernel receipt, never a second admission", async (t) => {
 	const f = await fixture(t, true);

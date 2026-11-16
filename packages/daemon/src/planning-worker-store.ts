@@ -46,6 +46,27 @@ export interface PlanningWorkerState {
 	asks?: Record<string, QuestionAsk>;
 	/** Unstick's repair agent: one read-only Diagnostics chat that reads the planner's chat and proposes one fix. */
 	repair?: PlanningRepair;
+	/**
+	 * Thread messages the planning agent could not take when the user sent them, in the order sent. Each goes with
+	 * the next planning input that can carry it: the user's submit or Continue, or one turn of its own once the
+	 * agent is idle and no round waits (threadDelivery).
+	 */
+	threadQueue?: WaitingThreadMessage[];
+	/** The planning input Pilot made to deliver waiting thread messages, kept until it is admitted. */
+	threadDelivery?: DurableOperation;
+}
+/** One thread message waiting for the planning agent. */
+export interface WaitingThreadMessage {
+	/** The user's thread-send operation. */
+	operationId: string;
+	topicId: string;
+	title: string;
+	text: string;
+	at: number;
+	/** The planning input that carries it, once Pilot chose one. */
+	carriedBy?: string;
+	/** That input was admitted: the agent has it. Kept a while so that input's content stays the same on recovery. */
+	delivered?: boolean;
 }
 export interface PlanningRepair {
 	operationId: string;

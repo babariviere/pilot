@@ -7,7 +7,7 @@
 // cannot take one, the page says why and nothing is sent. A sent message is
 // not the coordinator's answer. A lost answer stays Unknown: Check only
 // reads it, and the words stay until the service accepted them.
-import { effect, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
+import { cleanup, effect, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
 import { Input } from "nsh/base";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
@@ -18,14 +18,15 @@ import {
 	type HistoryEntry,
 	historyKey,
 	MAX_TEXT_BYTES,
-	MAX_TITLE,
 	type MissionThreads,
 	type ThreadOp,
 	type ThreadReference,
 	type ThreadsMirror,
 	type ThreadWrite,
 	type Topic,
+	titleOf,
 	utf8Bytes,
+	type WaitingMessage,
 	type WriteResult,
 } from "./threadFeed";
 import {
@@ -159,32 +160,61 @@ function Unreadable(props: { mirror: ThreadsMirror; missionId: string; m: Missio
 	);
 }
 
-/** Naming a new thread. Starting it sends nothing to the coordinator. */
+/**
+ * A new thread starts with its first message: one field and Send. The thread's title is the message's first
+ * sentence (titleOf). Pilot starts the thread, then sends the message in it. When the coordinator cannot take a
+ * message, or the send does not go through, the thread opens with the words kept in its reply box.
+ */
 function NewThread(props: { mirror: ThreadsMirror; missionId: string; m: MissionThreads }) {
 	const key = () => draftKey(props.missionId, "");
-	const title = () => threadDrafts()[key()] ?? "";
+	const text = () => threadDrafts()[key()] ?? "";
 	const open = () => naming()[props.missionId] === true;
-	const field = keepField(`thread-title-${props.missionId}`, () => `mission/${props.missionId}`, title);
-	const tooLong = () => [...title().trim()].length > MAX_TITLE;
+	const field = keepField(`thread-title-${props.missionId}`, () => `mission/${props.missionId}`, text);
+	const tooLong = () => utf8Bytes(text()) > MAX_TEXT_BYTES;
 	const blocked = () =>
-		props.m.availability !== "live" || props.m.writing || props.m.ops.some(unsettled) || !title().trim() || tooLong();
+		props.m.availability !== "live" || props.m.writing || props.m.ops.some(unsettled) || !text().trim() || tooLong();
 	const start = async () => {
 		if (blocked()) return;
+		const words = text();
 		const r = await send(
 			props.mirror,
 			props.missionId,
 			key(),
-			{ purpose: "thread-create", title: title().trim() },
-			key(),
+			{ purpose: "thread-create", title: titleOf(words) },
+			null,
 		);
-		if (r?.status === "accepted" && r.topicId) {
-			naming.update((all) => ({ ...all, [props.missionId]: false }));
-			setMessage(key(), "");
-			// Back from the thread comes to this page where it was.
-			restoreScroll(`mission/${props.missionId}`, scrollOf(`mission/${props.missionId}`));
-			openThread(props.missionId, r.topicId);
+		if (r?.status !== "accepted" || !r.topicId) return;
+		const topicId = r.topicId;
+		// The words move to the new thread's reply box, so they stay if the send does not go through.
+		const reply = draftKey(props.missionId, topicId);
+		setDraft(reply, words);
+		clearDraft(key());
+		setMessage(key(), "");
+		naming.update((all) => ({ ...all, [props.missionId]: false }));
+		// Back from the thread comes to this page where it was.
+		restoreScroll(`mission/${props.missionId}`, scrollOf(`mission/${props.missionId}`));
+		openThread(props.missionId, topicId);
+		let m = props.mirror.mission(props.missionId);
+		if (!m.snapshot?.topics.some((t) => t.id === topicId)) {
+			await props.mirror.source.read(props.missionId);
+			m = props.mirror.mission(props.missionId);
 		}
+		// The thread's page says why when the coordinator cannot take a message and none can wait; nothing is sent then.
+		if (!m.snapshot?.discussion?.available && !m.snapshot?.discussion?.waits) return;
+		const sent = await send(
+			props.mirror,
+			props.missionId,
+			reply,
+			{ purpose: "thread-send", topicId, text: words },
+			reply,
+		);
+		if (sent?.status === "accepted") void props.mirror.source.history(props.missionId, topicId);
 	};
+	// Not while an input method composes here: see the Escape binding in ThreadScreen.
+	effect(() => {
+		if (!open()) return;
+		cleanup(keymap.bind("mod+enter", () => void start(), { when: "always" }));
+	});
 	return (
 		<If
 			when={open()}
@@ -195,7 +225,7 @@ function NewThread(props: { mirror: ThreadsMirror; missionId: string; m: Mission
 						icon="plus"
 						testID="thread-new"
 						disabled={props.m.availability !== "live"}
-						accessibilityLabel="Start a new thread with the coordinator. Starting it sends nothing."
+						accessibilityLabel="Start a new thread with the coordinator by writing its first message."
 						onPress={() => {
 							glide();
 							naming.update((all) => ({ ...all, [props.missionId]: true }));
@@ -209,23 +239,29 @@ function NewThread(props: { mirror: ThreadsMirror; missionId: string; m: Mission
 					testID="thread-title"
 					ref={field.ref}
 					autoFocus
-					value={title()}
-					accessibilityLabel="What the new thread is about"
-					placeholder="One subject, such as: which file types are in scope?"
+					multiline
+					value={text()}
+					accessibilityLabel="Your first message to the coordinator. Its first sentence becomes the thread's title."
+					placeholder="What do you want to talk about? The first sentence becomes the thread's title."
 					onChange={({ value }) => setDraft(key(), value)}
 					onFocus={field.focus}
 					onSelectionChange={field.select}
-					onSubmit={() => void start()}
-					class="min-h-9 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
+					class="min-h-20 rounded-xl border border-input bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary"
 				/>
 				<If when={tooLong()}>
-					<Text class="text-xs text-needs-ink">{`Too long. Keep it under ${MAX_TITLE} characters.`}</Text>
+					<Text class="text-xs text-needs-ink">{`Too long. Keep it under ${MAX_TEXT_BYTES} bytes.`}</Text>
+				</If>
+				<If when={text().trim()}>
+					<Text testID="thread-new-title" class="text-xs text-muted-foreground">
+						{`Title: ${titleOf(text())}`}
+					</Text>
 				</If>
 				<View class="flex-row flex-wrap items-center gap-2">
 					<Action
 						primary
-						label={props.m.writing ? "Starting…" : "Start thread"}
+						label={props.m.writing ? "Sending…" : "Send"}
 						testID="thread-start"
+						shortcut="⌘↩"
 						disabled={blocked()}
 						onPress={() => void start()}
 					/>
@@ -633,6 +669,33 @@ function Conversation(props: { mirror: ThreadsMirror; missionId: string; topic: 
 	);
 }
 
+/** Messages saved to wait for the coordinator, with their words. They go with the next answers, or once it is free. */
+function WaitingMessages(props: { messages: WaitingMessage[] }) {
+	return (
+		<If when={props.messages.length > 0}>
+			<View testID="thread-waiting" class="gap-2 rounded-xl bg-muted px-4 py-3">
+				<Text class="text-xs text-muted-foreground">
+					{props.messages.length === 1
+						? "Waiting for the coordinator. It goes with your next answers, or as soon as the coordinator is free."
+						: `${props.messages.length} messages wait for the coordinator. They go with your next answers, or as soon as the coordinator is free.`}
+				</Text>
+				<Each of={props.messages} key={(w) => w.operationId}>
+					{(w) => (
+						<View class="flex-row items-start gap-2.5">
+							<View class="pt-1.5">
+								<Mark kind="still" />
+							</View>
+							<View selectable class="flex-1">
+								<Text class="text-sm text-foreground">{w().text}</Text>
+							</View>
+						</View>
+					)}
+				</Each>
+			</View>
+		</If>
+	);
+}
+
 /** The reply box. Only Send sends, once; the words stay until the service accepted them. */
 function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topic; m: MissionThreads }) {
 	const key = () => draftKey(props.missionId, props.topic.id);
@@ -644,11 +707,13 @@ function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 	);
 	const tooLong = () => utf8Bytes(text()) > MAX_TEXT_BYTES;
 	const pending = () => props.m.ops.some(unsettled);
-	const discussion = () => props.m.snapshot?.discussion ?? { available: false, reason: "" };
+	const discussion = () => props.m.snapshot?.discussion ?? { available: false, reason: "", waits: false };
+	// It cannot take a message now, but Send saves one to wait for it.
+	const waits = () => !discussion().available && discussion().waits;
 	const why = () => {
 		if (props.m.availability !== "live") return "Read this mission's threads again before you send.";
 		if (pending()) return "An earlier action on this mission is not confirmed. Check it before you send another.";
-		if (!discussion().available)
+		if (!discussion().available && !discussion().waits)
 			return `The coordinator cannot take a message now. It needs an active, unheld planning coordinator${discussion().reason ? ` (${discussion().reason})` : ""}. Your words stay; nothing is sent.`;
 		return "";
 	};
@@ -693,6 +758,13 @@ function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 			/>
 			<If when={tooLong()}>
 				<Text class="text-xs text-needs-ink">{`Too long. Keep it under ${MAX_TEXT_BYTES} bytes.`}</Text>
+			</If>
+			{/* Said once: the waiting list says it when a message already waits. */}
+			<If when={waits() && !why() && !(props.m.snapshot?.waiting ?? []).some((w) => w.topicId === props.topic.id)}>
+				<Text testID="thread-will-wait" class="text-xs text-muted-foreground">
+					The coordinator cannot take a message right now. Send saves it: it goes with your next answers, or as
+					soon as the coordinator is free.
+				</Text>
 			</If>
 			<View class="flex-row flex-wrap items-center gap-2">
 				<Action
@@ -918,6 +990,7 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 									ops={m().ops.filter(unsettled)}
 									testID="thread-unknown"
 								/>
+								<WaitingMessages messages={(m().snapshot?.waiting ?? []).filter((w) => w.topicId === t().id)} />
 								<If when={t().disposition === "open"}>
 									<Composer mirror={mirror} missionId={props.missionId} topic={t()} m={m()} />
 								</If>

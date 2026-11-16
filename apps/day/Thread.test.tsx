@@ -76,15 +76,19 @@ test("a lost answer stays Unknown with the words kept; Check only reads and noth
 	expect(app.shows("Sent in this thread")).toBe(true);
 });
 
-test("a held coordinator or a changed mission refuses honestly and keeps the words", async () => {
+test("a held coordinator saves the message to wait and shows it there, sending nothing yet", async () => {
 	const app = await thread();
 	await app.type("id:thread-reply", "Keep me");
 	await app.press("Hold");
 	await app.press("id:threads-read-again");
-	await app.waitFor("id:thread-cannot-send");
-	expect(app.enabled("id:thread-send")).toBe(false);
-	expect(app.value("id:thread-reply")).toBe("Keep me");
-	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
+	await app.waitFor("id:thread-will-wait");
+	await app.press("id:thread-send");
+	await app.waitFor("id:thread-waiting");
+	expect(app.shows("Keep me")).toBe(true);
+	expect(app.value("id:thread-reply")).toBe("");
+	expect(app.shows("Saved. It waits for the coordinator.")).toBe(true);
+	expect(app.shows("id:thread-will-wait")).toBe(false);
+	expect(counts(app)).toBe("Writes: 1 · Sends: 0 · Checks: 0");
 });
 
 test("a thread missing from the last read shows why the next read failed, with Read again, and keeps that read", async () => {
@@ -171,14 +175,39 @@ test("unsent words and their thread come back after Back, and after a close or u
 	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
 });
 
-test("a new thread starts with an explicit title and sends nothing to the coordinator", async () => {
+test("a new thread starts with its first message: its first sentence is the title, and the message is sent in it", async () => {
 	const app = await mission();
+	await app.press("id:thread-new");
+	await app.type("id:thread-title", "Do we keep PDF support? Customers still upload them every week.");
+	await app.waitFor("Title: Do we keep PDF support?");
+	await app.press("id:thread-start");
+	await app.waitFor("id:thread-reply");
+	await app.waitUntil(() => !!counts(app)?.includes("Sends: 1"));
+	expect(app.shows("Do we keep PDF support?")).toBe(true);
+	expect(app.shows("Do we keep PDF support? Customers still upload them every week.")).toBe(true);
+	expect(app.value("id:thread-reply")).toBe("");
+	expect(counts(app)).toBe("Writes: 2 · Sends: 1 · Checks: 0");
+});
+
+test("when the coordinator cannot take a message, the new thread opens with its first message waiting", async () => {
+	const app = await mission();
+	await app.press("Hold");
 	await app.press("id:thread-new");
 	await app.type("id:thread-title", "Do we keep PDF support?");
 	await app.press("id:thread-start");
-	await app.waitFor("id:thread-reply");
-	expect(app.shows("Do we keep PDF support?")).toBe(true);
-	expect(counts(app)).toBe("Writes: 1 · Sends: 0 · Checks: 0");
+	await app.waitFor("id:thread-waiting");
+	expect(app.value("id:thread-reply")).toBe("");
+	expect(counts(app)).toBe("Writes: 2 · Sends: 0 · Checks: 0");
+});
+
+test("a long first message gets a short title cut at a word", async () => {
+	const app = await mission();
+	await app.press("id:thread-new");
+	await app.type(
+		"id:thread-title",
+		"We should rework a bit the plan detail page because right now the expedition map is not that useful even if it is cool",
+	);
+	await app.waitFor("Title: We should rework a bit the plan detail page because right now the expedition…");
 });
 
 test("unreadable threads are not shown as none", async () => {

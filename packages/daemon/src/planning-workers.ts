@@ -33,6 +33,7 @@ import type {
 	PlanningResearch,
 	PlanningWorkerState,
 	QuestionAsk,
+	WaitingThreadMessage,
 } from "./planning-worker-store.ts";
 import type { KnowledgeService } from "./project-knowledge.ts";
 import type { ProjectStore } from "./projects.ts";
@@ -64,6 +65,12 @@ interface Dependencies {
 	knowledge?: KnowledgeService;
 }
 const hash = (value: unknown) => payloadHash(canonicalJSON(value));
+/**
+ * Thread messages one mission keeps waiting for its planning agent. It protects the agent from a flood of messages
+ * in one turn and keeps the waiting list short enough to read. A person writes far fewer while one round waits.
+ * Past it, Send is refused with the limit named, and the words stay in the reply box.
+ */
+export const WAITING_MESSAGES = 20;
 /** Each part of a fingerprint, hashed on its own, so a changed fingerprint can say which part changed. */
 const digests = (parts: Record<string, unknown>): Record<string, string> =>
 	Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, hash(v)]));
@@ -506,8 +513,136 @@ export class PlanningWorkers {
 			...detail,
 		});
 	}
+	/** Whether a thread message can wait for this mission's planning agent: planning is set up. */
+	canQueueMessage(missionId: string): boolean {
+		const state = this.deps.store.planningWorkers.get(missionId);
+		return !!state && state.phase !== "setup";
+	}
+	/** Refuses a new waiting message past WAITING_MESSAGES, naming the limit. */
+	assertMessageRoom(missionId: string): void {
+		if (this.waitingMessages(missionId).length >= WAITING_MESSAGES)
+			throw new Conflict(
+				`${WAITING_MESSAGES} messages already wait for the coordinator (the limit is ${WAITING_MESSAGES}). Send this one once some went`,
+			);
+	}
+	/** Saves a thread message to wait for the planning agent. The same operation is saved once. */
+	queueMessage(missionId: string, message: Omit<WaitingThreadMessage, "at">): void {
+		const state = this.deps.store.planningWorkers.get(missionId);
+		if (!state) throw new Conflict("Planning is not set up");
+		if (state.threadQueue?.some((m) => m.operationId === message.operationId)) return;
+		this.deps.store.planningWorkers.change(missionId, state.revision, (s) => {
+			s.threadQueue = [...(s.threadQueue ?? []), { ...message, at: Date.now() }];
+		});
+		trace(`pilotd: planning ${missionId} thread message waits for the planning agent (${message.operationId})`);
+		this.scheduleResearch(missionId);
+	}
+	/** Whether this thread-send operation was saved to wait (it may have been delivered since). */
+	queuedMessage(missionId: string, operationId: string): boolean {
+		return !!this.deps.store.planningWorkers.get(missionId)?.threadQueue?.some((m) => m.operationId === operationId);
+	}
+	/** Thread messages not yet with the planning agent, in the order sent. */
+	waitingMessages(missionId: string): WaitingThreadMessage[] {
+		return (this.deps.store.planningWorkers.get(missionId)?.threadQueue ?? []).filter((m) => !m.delivered);
+	}
+	/** Gives every waiting message no input carries yet to input `operationId`. Returns the new state. */
+	private carryMessages(state: PlanningWorkerState, operationId: string): PlanningWorkerState {
+		if (!state.threadQueue?.some((m) => !m.carriedBy)) return state;
+		return this.deps.store.planningWorkers.change(state.binding.missionId, state.revision, (s) => {
+			for (const m of s.threadQueue ?? []) if (!m.carriedBy) m.carriedBy = operationId;
+		});
+	}
+	/** Input `operationId` reached the agent (delivered) or was refused before it entered (back to waiting). */
+	private settleMessages(missionId: string, operationId: string, delivered: boolean): void {
+		const state = this.deps.store.planningWorkers.get(missionId);
+		if (!state?.threadQueue?.some((m) => m.carriedBy === operationId && !m.delivered)) return;
+		this.deps.store.planningWorkers.change(missionId, state.revision, (s) => {
+			for (const m of s.threadQueue ?? [])
+				if (m.carriedBy === operationId) {
+					if (delivered) m.delivered = true;
+					else delete m.carriedBy;
+				}
+			// Delivered messages are kept only so their input reads the same on recovery: the latest few are enough.
+			const done = (s.threadQueue ?? []).filter((m) => m.delivered);
+			const drop = new Set(done.slice(0, Math.max(0, done.length - WAITING_MESSAGES)).map((m) => m.operationId));
+			s.threadQueue = (s.threadQueue ?? []).filter((m) => !drop.has(m.operationId));
+		});
+		if (delivered) trace(`pilotd: planning ${missionId} waiting thread messages delivered with ${operationId}`);
+	}
+	/** The thread messages input `operationId` carries, as text for the planning agent. Empty when none. */
+	private messagesContent(missionId: string, operationId: string): string {
+		const carried = (this.deps.store.planningWorkers.get(missionId)?.threadQueue ?? []).filter(
+			(m) => m.carriedBy === operationId,
+		);
+		if (!carried.length) return "";
+		return [
+			"\n\nThe user also wrote in mission threads while you could not take messages. Each message is discussion, not execution, Start, agreement acceptance or approval. Answer each in your reply, by thread; change the plan only through planning records, and do not start work.",
+			...carried.map(
+				(m) =>
+					`Thread ${JSON.stringify(m.title)} (${m.topicId}), message ${m.operationId}: ${JSON.stringify(m.text)}`,
+			),
+		].join("\n");
+	}
+	/**
+	 * Delivers waiting thread messages in one planning turn of their own, once the agent is idle and no round waits.
+	 * A waiting round carries them with the user's submit or Continue instead.
+	 */
+	private async deliverMessages(missionId: string): Promise<void> {
+		let state = this.deps.store.planningWorkers.get(missionId);
+		if (!state || (!state.threadDelivery && !state.threadQueue?.some((m) => !m.carriedBy))) return;
+		const owner = this.deps.sessions.get(state.binding.ownerSessionId);
+		if (
+			state.phase !== "active" ||
+			state.hold ||
+			state.pendingHold ||
+			!owner ||
+			owner.working ||
+			(owner.state !== "idle" && owner.state !== "parked") ||
+			this.admissions.has(missionId) ||
+			this.turnAdmissions.has(missionId)
+		)
+			return;
+		let operation = state.threadDelivery;
+		if (!operation) {
+			const operationIds = state.threadQueue!.filter((m) => !m.carriedBy).map((m) => m.operationId);
+			const payload = canonicalJSON({ purpose: "plan-thread-messages", operationIds });
+			const saved: DurableOperation = {
+				schemaVersion: 1,
+				operationId: randomUUID(),
+				producerId: state.binding.enrollmentId,
+				sequence: state.revision,
+				origin: state.binding.host,
+				destination: state.binding.host,
+				targetId: missionId,
+				kind: "plan-thread-messages",
+				payload,
+				payloadHash: payloadHash(payload),
+			};
+			state = this.carryMessages(state, saved.operationId);
+			state = this.deps.store.planningWorkers.change(missionId, state.revision, (s) => {
+				s.threadDelivery = saved;
+			});
+			await this.deps.store.durable();
+			operation = saved;
+		}
+		const binding = state.binding;
+		try {
+			if (!(await this.deps.sessions.lookupPlanning(this.input(state, operation))))
+				await this.admitInput(state, operation, () => {
+					this.authority(binding);
+				});
+		} catch (error) {
+			// Busy or held after all: the same input is tried again on the next change, never twice.
+			console.warn(`pilotd: planning ${missionId} waiting thread messages not delivered yet: ${error}`);
+			return;
+		}
+		this.settleMessages(missionId, operation.operationId, true);
+		const now = this.deps.store.planningWorkers.get(missionId)!;
+		this.deps.store.planningWorkers.change(missionId, now.revision, (s) => {
+			delete s.threadDelivery;
+		});
+		await this.deps.store.durable();
+	}
 	private input(state: PlanningWorkerState, op: DurableOperation): PlanningInput {
-		const submitted = this.deps.store.interviews.latest(state.binding.missionId)?.submission;
 		return {
 			binding: state.binding,
 			operation: op,
@@ -517,23 +652,33 @@ export class PlanningWorkers {
 					: op.kind === "plan-continue" && state.feedback?.operationId === op.operationId
 						? state.feedback.hold
 						: null,
-			content:
-				op.kind === "thread-send"
-					? this.discussionContent(op)
-					: op.kind === "plan-revisit"
-						? "The user explicitly requested a planning-only Revisit. Read mission_plan for current agreement, active decisions, tasks and settled answers. Use the trusted upstream skills. Keep settled answers; ask only genuinely new gaps in one saved kind=revisit round. Save an inert revision with action revision when ready. Never publish a creation plan, change agreement, approve or start execution."
-						: op.kind === "plan-continue" && JSON.parse(op.payload).feedback !== undefined
-							? `The user sent feedback on the current interview instead of answering it. Redo the round with it: reword, split, merge, drop or add questions as asked, and save the whole list again with the action you used for this round. Keep a question's id when its meaning stays, so its saved answer stays. The feedback answers no question and approves nothing. Planning only: no build work or worker starts.\nFeedback: ${JSON.stringify(JSON.parse(op.payload).feedback)}`
-							: op.kind === "plan-continue" && JSON.parse(op.payload).note !== undefined
-								? `Pilot's repair agent looked at why planning stopped, and the user approved this note. Act on it, then continue planning: read mission_plan, and judge only by Pilot's answers. The note answers no question and approves nothing. Planning only: no build work or worker starts.\nNote: ${JSON.stringify(JSON.parse(op.payload).note)}`
-								: op.kind === "plan-continue"
-									? `The user asked you to continue planning. Read mission_plan for the current map and answers. Link human answers that settle map questions and save a new round only for real new human questions. Pilot starts read-only research chats for ready research questions and prototype chats for ready prototype questions, and sends you their results. ${this.modelHint(state.binding.missionId)}${this.refusalHint(state.binding.missionId)} Planning only: no build work or worker starts.`
-									: op.kind === "plan-research-result"
-										? this.researchContent(state, op)
-										: op.kind === "interview-continue"
-											? `Continue planning from this exact submitted interview. Answers are not build permission. Use the trusted native planning skills and records only.\n${canonicalJSON(submitted)}`
-											: `Plan this requested outcome using the trusted upstream skills. Read mission_plan, then publish the complete first saved round with action questions. Do not ask inside ask_user or start implementation.\n${state.goal}`,
+			content: this.inputContent(state, op),
 		};
+	}
+	/** What the planning agent reads for input `op`, with any waiting thread messages it carries. */
+	private inputContent(state: PlanningWorkerState, op: DurableOperation): string {
+		const submitted = this.deps.store.interviews.latest(state.binding.missionId)?.submission;
+		const messages = this.messagesContent(state.binding.missionId, op.operationId);
+		if (op.kind === "plan-thread-messages")
+			return `The user wrote in mission threads while you could not take messages. Read current mission records; use Wayfinder only if needed. Do not change the agreement or start work.${messages}`;
+		return (
+			(op.kind === "thread-send"
+				? this.discussionContent(op)
+				: op.kind === "plan-revisit"
+					? "The user explicitly requested a planning-only Revisit. Read mission_plan for current agreement, active decisions, tasks and settled answers. Use the trusted upstream skills. Keep settled answers; ask only genuinely new gaps in one saved kind=revisit round. Save an inert revision with action revision when ready. Never publish a creation plan, change agreement, approve or start execution."
+					: op.kind === "plan-continue" && JSON.parse(op.payload).feedback !== undefined
+						? `The user sent feedback on the current interview instead of answering it. Redo the round with it: reword, split, merge, drop or add questions as asked, and save the whole list again with the action you used for this round. Keep a question's id when its meaning stays, so its saved answer stays. The feedback answers no question and approves nothing. Planning only: no build work or worker starts.\nFeedback: ${JSON.stringify(JSON.parse(op.payload).feedback)}`
+						: op.kind === "plan-continue" && JSON.parse(op.payload).note !== undefined
+							? `Pilot's repair agent looked at why planning stopped, and the user approved this note. Act on it, then continue planning: read mission_plan, and judge only by Pilot's answers. The note answers no question and approves nothing. Planning only: no build work or worker starts.\nNote: ${JSON.stringify(JSON.parse(op.payload).note)}`
+							: op.kind === "plan-continue"
+								? `The user asked you to continue planning. Read mission_plan for the current map and answers. Link human answers that settle map questions and save a new round only for real new human questions. Pilot starts read-only research chats for ready research questions and prototype chats for ready prototype questions, and sends you their results. ${this.modelHint(state.binding.missionId)}${this.refusalHint(state.binding.missionId)} Planning only: no build work or worker starts.`
+								: op.kind === "plan-research-result"
+									? this.researchContent(state, op)
+									: op.kind === "interview-continue"
+										? `Continue planning from this exact submitted interview. Answers are not build permission. Use the trusted native planning skills and records only.\n${canonicalJSON(submitted)}`
+										: `Plan this requested outcome using the trusted upstream skills. Read mission_plan, then publish the complete first saved round with action questions. Do not ask inside ask_user or start implementation.\n${state.goal}`) +
+			messages
+		);
 	}
 	/** For Continue planning: ready prototype questions that wait for the planner to choose their model. */
 	private modelHint(missionId: string): string {
@@ -762,6 +907,8 @@ export class PlanningWorkers {
 				s.phase = "continuing";
 			});
 		}
+		// Waiting thread messages go with the user's Continue.
+		state = this.carryMessages(state, op.operationId);
 		let release!: () => void;
 		const turn = new Promise<void>((r) => {
 			release = r;
@@ -782,9 +929,11 @@ export class PlanningWorkers {
 			try {
 				result = await this.admitInput(state, op, guard);
 			} catch (e) {
+				this.settleMessages(op.targetId, op.operationId, false);
 				if (pin.round) await this.feedbackSettled(op, "held");
 				throw e;
 			}
+			this.settleMessages(op.targetId, op.operationId, true);
 			if (pin.round) await this.feedbackSettled(op, "active");
 			return result;
 		} finally {
@@ -844,6 +993,8 @@ export class PlanningWorkers {
 		const findings = research.filter((r) => r.state === "reporting").length;
 		checks.push(`Chats working for it: ${chats}`);
 		if (findings) checks.push(`Research findings not yet read: ${findings}`);
+		const messages = this.waitingMessages(missionId).length;
+		if (messages) checks.push(`Thread messages waiting for the planning agent: ${messages}`);
 		if (!owner) return result("stuck", "Pilot's planning agent is gone. Report it with Feedback.");
 		if (!idle || this.admissions.has(missionId) || this.turnAdmissions.has(missionId))
 			return result("moving", "Pilot's planning agent is working.");
@@ -1530,6 +1681,7 @@ export class PlanningWorkers {
 		this.resumeStalled(missionId);
 		await this.reconcileAsks(missionId);
 		await this.reconcileRepair(missionId);
+		await this.deliverMessages(missionId);
 		state = this.deps.store.planningWorkers.get(missionId)!;
 		const plan = this.deps.store.plans.get(missionId);
 		if (!plan || plan.publication) return;
@@ -2227,12 +2379,15 @@ export class PlanningWorkers {
 			this.deps.store.planningWorkers.change(binding.missionId, latest.revision, (s) => {
 				s.continuation!.entered = true;
 				s.phase = "continuing";
+				// Thread messages that waited for this round go with the answers.
+				for (const m of s.threadQueue ?? []) if (!m.carriedBy) m.carriedBy = op.operationId;
 			});
 			await this.deps.store.durable();
 			guard();
 			const service = this.services(binding, guard).interviews;
 			const receipt = await this.deps.journal.execute(op, (o, entry) => service.admit(o, entry.firstEntry));
 			if (receipt.state === "accepted") {
+				this.settleMessages(binding.missionId, op.operationId, true);
 				const current = this.scope(binding);
 				this.deps.store.planningWorkers.change(binding.missionId, current.revision, (s) => {
 					s.phase = "active";

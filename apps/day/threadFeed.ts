@@ -43,11 +43,19 @@ export type ThreadsSnapshot = {
 	missionId: string;
 	/** Opaque: the exact read a write names. */
 	source: string;
-	/** Whether the coordinator can take a message now. A preview, never a reservation. */
-	discussion: { available: boolean; reason: string };
+	/**
+	 * Whether the coordinator can take a message now (`available`), or a message is saved to wait for it and goes with
+	 * the next answers, or as soon as it is free (`waits`). A preview, never a reservation.
+	 */
+	discussion: { available: boolean; reason: string; waits: boolean };
+	/** Messages saved to wait for the coordinator, in the order sent. */
+	waiting: WaitingMessage[];
 	topics: Topic[];
 	catalog: Catalog;
 };
+
+/** A thread message saved to wait for the coordinator. */
+export type WaitingMessage = { operationId: string; topicId: string; text: string };
 
 export type Purpose = "thread-create" | "thread-disposition" | "thread-reference" | "thread-send";
 
@@ -60,6 +68,8 @@ export type ThreadOp = {
 	text: string | null;
 	state: "unknown" | "checking" | "accepted" | "rejected" | "not-sent";
 	reason: string;
+	/** An accepted message that waits for the coordinator instead of reaching it now. */
+	queued?: boolean;
 };
 
 /** One mission's threads as the screens show them. */
@@ -141,8 +151,27 @@ export interface ThreadsSource {
 	dispose(): void;
 }
 
-export const MAX_TITLE = 200;
 export const MAX_TEXT_BYTES = 32_000;
+
+/** A title's length when Pilot makes it from a message: one line in a thread list. */
+export const MESSAGE_TITLE = 80;
+
+/**
+ * A new thread's title, from its first message: the first sentence (up to . ? ! or a line break), on one line, cut
+ * at a word before MESSAGE_TITLE characters with "…".
+ */
+export function titleOf(message: string): string {
+	const text = message.trim();
+	const end = text.search(/[.?!](\s|$)|\n/);
+	let first = (end >= 0 ? text.slice(0, text[end] === "\n" ? end : end + 1) : text).replace(/\s+/g, " ").trim();
+	const chars = [...first];
+	if (chars.length > MESSAGE_TITLE) {
+		const cut = chars.slice(0, MESSAGE_TITLE - 1).join("");
+		const space = cut.lastIndexOf(" ");
+		first = `${(space > MESSAGE_TITLE / 2 ? cut.slice(0, space) : cut).replace(/[\s,;:]+$/, "")}…`;
+	}
+	return first;
+}
 
 export function historyKey(missionId: string, topicId: string): string {
 	return `${missionId}/${topicId}`;
@@ -217,6 +246,9 @@ export function refusedWrite(refusal: Refusal): WriteResult {
 }
 
 /** The words for an accepted write. A sent message is not an answer. */
+/** An accepted message that waits for the coordinator. */
+export const QUEUED_WORDS = "Saved. It waits for the coordinator.";
+
 export function acceptedWords(purpose: Purpose, write?: ThreadWrite): string {
 	switch (purpose) {
 		case "thread-create":
@@ -298,7 +330,7 @@ export function snapshotOf(x: unknown, missionId: string): ThreadsSnapshot | nul
 	const s = x as Record<string, unknown> | null;
 	if (!s || typeof s !== "object" || s.version !== 1 || s.missionId !== missionId) return null;
 	if (typeof s.source !== "string" || !Array.isArray(s.topics)) return null;
-	const d = s.discussion as { available?: unknown; reason?: unknown } | null;
+	const d = s.discussion as { available?: unknown; reason?: unknown; waits?: unknown } | null;
 	if (!d || typeof d.available !== "boolean") return null;
 	const topics: Topic[] = [];
 	for (const raw of s.topics) {
@@ -309,7 +341,14 @@ export function snapshotOf(x: unknown, missionId: string): ThreadsSnapshot | nul
 	return {
 		missionId,
 		source: s.source,
-		discussion: { available: d.available, reason: str(d.reason) },
+		discussion: { available: d.available, reason: str(d.reason), waits: d.waits === true },
+		waiting: Array.isArray(s.waiting)
+			? (s.waiting as Record<string, unknown>[]).flatMap((m) =>
+					m && typeof m.operationId === "string" && typeof m.topicId === "string" && typeof m.text === "string"
+						? [{ operationId: m.operationId, topicId: m.topicId, text: m.text }]
+						: [],
+				)
+			: [],
 		topics,
 		catalog: catalogOf(s.catalog),
 	};
@@ -330,6 +369,7 @@ function opsOf(x: unknown): ThreadOp[] | null {
 			text: typeof raw.text === "string" ? raw.text : null,
 			state: s === "accepted" || s === "rejected" || s === "not-sent" ? s : "unknown",
 			reason: str(raw.reason),
+			...(raw.queued === true ? { queued: true } : {}),
 		});
 	}
 	return out;
@@ -365,6 +405,7 @@ export function outcomeOf(x: unknown, write?: ThreadWrite): WriteResult {
 	});
 	switch (o?.state) {
 		case "accepted":
+			if (o?.queued === true) return r("accepted", QUEUED_WORDS);
 			return r("accepted", purpose ? acceptedWords(purpose, write) : "Done.");
 		case "refused":
 			return r("refused", str(o?.reason) || "Pilot did not send this. Nothing was sent.");

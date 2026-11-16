@@ -11,6 +11,7 @@ import {
 	type HistoryEntry,
 	historyKey,
 	type MissionThreads,
+	QUEUED_WORDS,
 	refusedWrite,
 	type ThreadOp,
 	type ThreadsSnapshot,
@@ -21,6 +22,7 @@ import {
 	type TopicHistory,
 	threadsReason,
 	UNKNOWN_WRITE,
+	type WaitingMessage,
 	type WriteResult,
 } from "./threadFeed";
 
@@ -36,6 +38,7 @@ type Mission = {
 	ops: ThreadOp[];
 	shown: boolean;
 	writing: boolean;
+	waiting: WaitingMessage[];
 };
 
 function seed(id: string): Mission {
@@ -61,6 +64,7 @@ function seed(id: string): Mission {
 		revision: 1,
 		shown: false,
 		writing: false,
+		waiting: [],
 		ops: [],
 		topics: [
 			{
@@ -131,8 +135,9 @@ export class ScriptedThreads implements ThreadsSource {
 			missionId: id,
 			source: this.#source(m),
 			discussion: this.held()
-				? { available: false, reason: "Planning admission is held or busy" }
-				: { available: true, reason: "" },
+				? { available: false, reason: "Planning admission is held or busy", waits: true }
+				: { available: true, reason: "", waits: false },
+			waiting: [...m.waiting],
 			topics: m.topics.map((t) => ({ ...t, references: [...t.references], inputs: [...t.inputs] })),
 			catalog: {
 				known: true,
@@ -301,7 +306,28 @@ export class ScriptedThreads implements ThreadsSource {
 		if (source !== this.#source(m)) return refusedWrite("stale");
 		const topic = "topicId" in write ? m.topics.find((t) => t.id === write.topicId) : undefined;
 		if ("topicId" in write && !topic) return refusedWrite("stale");
-		if (write.purpose === "thread-send" && (this.held() || topic?.disposition !== "open")) {
+		if (write.purpose === "thread-send" && topic?.disposition === "open" && this.held()) {
+			// The coordinator cannot take it now: saved to wait, as the service does.
+			this.writes.update((n) => n + 1);
+			minted += 1;
+			const operationId = `demo-op-${minted}`;
+			m.revision += 1;
+			topic.revision += 1;
+			topic.inputs.push(operationId);
+			m.waiting.push({ operationId, topicId: topic.id, text: write.text });
+			m.ops.push({
+				operationId,
+				purpose: write.purpose,
+				topicId: topic.id,
+				text: write.text,
+				state: "accepted",
+				reason: "",
+				queued: true,
+			});
+			this.#publish();
+			return { status: "accepted", message: QUEUED_WORDS, operationId, topicId: topic.id };
+		}
+		if (write.purpose === "thread-send" && topic?.disposition !== "open") {
 			return {
 				status: "refused",
 				message:

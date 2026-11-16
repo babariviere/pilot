@@ -64,6 +64,27 @@ agreement acceptance, new approval or permission grant. Held/paused/stopped plan
 neither the host nor kernel clears a hold for discussion. A fresh input generation after Stop
 cannot use this first-version admission path.
 
+## Messages that wait
+
+When the planning agent cannot take a message now (it works, a round waits for answers, planning
+is paused or stopped, or the plan is not published yet), `thread-send` saves it to wait instead of
+refusing it: `discussion.waits` is true in the read, and the accepted result is
+`{ topic, queued: true }` with no admission. The topic input is saved as usual, and
+`PlanningWorkerState.threadQueue` keeps the words in the order sent. The read lists them as `waiting`.
+
+Pilot delivers them with the first planning input that can carry them, at most once:
+
+- the user's submitted answers (`interview-continue`) or Continue planning (`plan-continue`) carry
+  every message waiting when they enter, so a waiting round is never released by a message;
+- once the agent is idle and no round waits, one `plan-thread-messages` turn carries them all.
+
+Each message is marked with the input that carries it (`carriedBy`) before that input is admitted,
+so a restart reads the same content and never sends it twice. A refused Continue puts its messages
+back to waiting. The agent reads them as discussion, never as approval, Start or agreement changes.
+At most 20 messages wait per mission (`WAITING_MESSAGES`); past it, Send is refused with the limit
+named and the words stay. Unstick's checks count waiting messages. Editing or withdrawing a waiting
+message is not built yet.
+
 ## Unknown and client drafts
 
 Accepted send results include the saved topic and exact planning admission ID. A saved
@@ -82,7 +103,8 @@ acceptance are not established by these backend checks.
 ## Day
 
 A mission's overview lists its threads (open, then Later; discarded on request) and starts a new
-one from an explicit title. A thread's page shows its links, the original coordinator conversation
+one from its first message: the first sentence becomes the title (`titleOf`, at most 80
+characters), then Day sends the message in the new thread. A thread's page shows its links, the original coordinator conversation
 and a reply box. Only entries the topic names are marked as its own: messages it sent (by exact
 operation ID in `pilot.planning-input` entries) and history references. Other entries stay
 labelled as the coordinator's conversation. Tool results fold into one quiet line.
@@ -95,8 +117,8 @@ The native root (`apps/day/native/src/host/threads.rs`) adds four exact methods:
   Long entries show their first 8000 bytes and say so.
 - `day.threads.write {missionId, source, purpose, topicId?, title|disposition|reference|text}`
   names the exact `source` the window showed. The root reads again and refuses a changed source
-  (Stale). A send to a topic that is not open, or while `discussion.available` is false, is
-  refused before anything is saved. The root chooses the operation ID and a new topic's ID,
+  (Stale). A send to a topic that is not open, or while neither `discussion.available` nor
+  `discussion.waits` is true, is refused before anything is saved. The root chooses the operation ID and a new topic's ID,
   journals the envelope, then sends it once.
 - `day.threads.check {operationId}` only looks up that saved envelope's receipt.
 

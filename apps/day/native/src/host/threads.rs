@@ -54,7 +54,9 @@ pub(super) fn valid_reference(r: &Value) -> bool {
         Some("history") => {
             o.len() == 3
                 && r["sessionId"].as_str().is_some_and(valid_id)
-                && r["entryId"].as_u64().is_some_and(|n| (1..MAX_ENTRY_ID).contains(&n))
+                && r["entryId"]
+                    .as_u64()
+                    .is_some_and(|n| (1..MAX_ENTRY_ID).contains(&n))
         }
         _ => false,
     }
@@ -80,7 +82,9 @@ impl HistoryRequest {
     pub(crate) fn validate(&self) -> Result<(), Error> {
         if !valid_id(&self.mission_id)
             || !valid_id(&self.topic_id)
-            || self.before.is_some_and(|b| !(2..=MAX_ENTRY_ID).contains(&b))
+            || self
+                .before
+                .is_some_and(|b| !(2..=MAX_ENTRY_ID).contains(&b))
         {
             return Err(Error::Invalid);
         }
@@ -219,9 +223,12 @@ pub(super) fn exact_result(op: &Value, r: &Value) -> Result<(), Error> {
             .as_array()
             .is_some_and(|refs| refs.contains(&p["reference"])),
         Some("thread-send") => {
-            topic["inputs"].as_array().is_some_and(|inputs| {
-                inputs.iter().any(|i| i["operationId"] == id)
-            }) && r["result"]["admission"]["admissionId"] == op["operationId"]
+            // Sent now (its admission) or saved to wait for the planning agent (queued).
+            topic["inputs"]
+                .as_array()
+                .is_some_and(|inputs| inputs.iter().any(|i| i["operationId"] == id))
+                && (r["result"]["admission"]["admissionId"] == op["operationId"]
+                    || r["result"]["queued"] == true)
         }
         _ => false,
     };
@@ -253,6 +260,7 @@ fn summary(r: &planning::PlanningRecord) -> Value {
     json!({"operationId":r.id(),"purpose":kind,"topicId":p["topicId"],
         "text":if kind == "thread-send" {p["text"].clone()} else {Value::Null},
         "state":state(r),
+        "queued":r.receipt.as_ref().is_some_and(|r| r["result"]["queued"] == true),
         "reason":r.receipt.as_ref().map_or(Value::Null, |r| r["reason"].clone())})
 }
 
@@ -323,6 +331,16 @@ fn valid_view(v: &Value, mission: &str, project: &str) -> bool {
         && v["source"].as_str().is_some_and(is_source)
         && v["discussion"]["available"].is_boolean()
         && v["discussion"]["reason"].is_string()
+        && (v["discussion"]["waits"].is_null() || v["discussion"]["waits"].is_boolean())
+        && (v["waiting"].is_null()
+            || v["waiting"].as_array().is_some_and(|w| {
+                w.len() <= 100
+                    && w.iter().all(|m| {
+                        m["operationId"].as_str().is_some_and(valid_id)
+                            && m["topicId"].as_str().is_some_and(valid_id)
+                            && m["text"].is_string()
+                    })
+            }))
         && v["topics"].as_array().is_some_and(|topics| {
             topics.len() <= 100
                 && topics.iter().all(|t| {
@@ -358,8 +376,10 @@ fn catalog(detail: &Value, mission: &str) -> Value {
         .map(|d| {
             d.iter()
                 .filter(|d| d["id"].as_str().is_some_and(valid_id))
-                .map(|d| json!({"id":d["id"],"number":d["number"],"text":d["text"],
-                    "withdrawn":d["withdrawn"].is_object() || d["replacement"].is_object()}))
+                .map(|d| {
+                    json!({"id":d["id"],"number":d["number"],"text":d["text"],
+                    "withdrawn":d["withdrawn"].is_object() || d["replacement"].is_object()})
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -370,7 +390,11 @@ fn catalog(detail: &Value, mission: &str) -> Value {
 pub(super) async fn read(t: &Transport, mission: &str) -> Result<Value, Error> {
     capability(t).await?;
     let project = &t.source.project()?.project_id;
-    let view = get(t, &format!("/api/projects/{project}/missions/{mission}/threads")).await?;
+    let view = get(
+        t,
+        &format!("/api/projects/{project}/missions/{mission}/threads"),
+    )
+    .await?;
     if !valid_view(&view, mission, project) {
         return Err(Error::Invalid);
     }
@@ -386,10 +410,14 @@ pub(super) async fn read(t: &Transport, mission: &str) -> Result<Value, Error> {
         );
     // A changed project/path or native identity during the read cannot publish it.
     t.gate(false).await?;
-    Ok(json!({"version":1,"missionId":mission,"projectId":project,"source":view["source"],
-        "discussion":view["discussion"],
+    Ok(
+        json!({"version":1,"missionId":mission,"projectId":project,"source":view["source"],
+        "discussion":{"available":view["discussion"]["available"],"reason":view["discussion"]["reason"],
+            "waits":view["discussion"]["waits"] == true},
+        "waiting":view["waiting"].as_array().map(|w| w.iter().map(|m| json!({"operationId":m["operationId"],"topicId":m["topicId"],"text":m["text"]})).collect::<Vec<_>>()).unwrap_or_default(),
         "topics":view["topics"].as_array().map(|t| t.iter().map(topic).collect::<Vec<_>>()).unwrap_or_default(),
-        "catalog":names}))
+        "catalog":names}),
+    )
 }
 
 fn texts(content: &Value, kind: &str) -> String {
@@ -480,8 +508,10 @@ fn entry(e: &Value, topic: &Value, owner: &str) -> Option<Value> {
             .is_some_and(|i| i.iter().any(|i| i["operationId"] == op))
     });
     let (text, shortened) = shorten(text);
-    Some(json!({"id":id,"kind":kind,"role":role,"text":text,"shortened":shortened,
-        "referenced":referenced,"input":input,"sentIn":sent["topicId"]}))
+    Some(
+        json!({"id":id,"kind":kind,"role":role,"text":text,"shortened":shortened,
+        "referenced":referenced,"input":input,"sentIn":sent["topicId"]}),
+    )
 }
 
 /// One page of the topic's original coordinator history, oldest first.
@@ -490,10 +520,7 @@ pub(super) async fn history(t: &Transport, r: &HistoryRequest) -> Result<Value, 
     r.validate()?;
     capability(t).await?;
     let project = &t.source.project()?.project_id;
-    let before = r
-        .before
-        .map(|b| format!("&before={b}"))
-        .unwrap_or_default();
+    let before = r.before.map(|b| format!("&before={b}")).unwrap_or_default();
     let v = get(
         t,
         &format!(
@@ -520,10 +547,12 @@ pub(super) async fn history(t: &Transport, r: &HistoryRequest) -> Result<Value, 
     entries.sort_by_key(|e| e["id"].as_u64());
     let oldest = entries.first().and_then(|e| e["id"].as_u64());
     t.gate(false).await?;
-    Ok(json!({"version":1,"missionId":r.mission_id,"topicId":r.topic_id,"sessionId":owner,
+    Ok(
+        json!({"version":1,"missionId":r.mission_id,"topicId":r.topic_id,"sessionId":owner,
         "scope":"coordinator-history","topic":self::topic(topic),"entries":entries,
         "more":v["history"]["more"] == true && oldest.is_some_and(|o| o > 1),
-        "nextBefore":oldest}))
+        "nextBefore":oldest}),
+    )
 }
 
 /// Why a write was not sent, for the window. Nothing was saved or sent.
@@ -547,7 +576,9 @@ fn qualify(intent: &Intent, current: &Value) -> Result<Option<&'static str>, Err
         return Err(Error::Stale);
     };
     Ok(match intent.purpose.as_str() {
-        "thread-disposition" if shown["disposition"] == intent.disposition.as_deref().unwrap_or("") => {
+        "thread-disposition"
+            if shown["disposition"] == intent.disposition.as_deref().unwrap_or("") =>
+        {
             Some("The thread is already like that. Nothing was sent.")
         }
         "thread-reference"
@@ -562,14 +593,21 @@ fn qualify(intent: &Intent, current: &Value) -> Result<Option<&'static str>, Err
                 r["kind"] == "history" && r["sessionId"] != shown["ownerSessionId"]
             }) =>
         {
-            Some("Only the coordinator conversation this thread started in can be linked. Nothing was sent.")
+            Some(
+                "Only the coordinator conversation this thread started in can be linked. Nothing was sent.",
+            )
         }
         "thread-send" if shown["disposition"] != "open" => {
             Some("Reopen this thread to write in it. Nothing was sent.")
         }
-        "thread-send" if current["discussion"]["available"] != true => Some(
-            "The coordinator cannot take a message now: it needs an active, unheld planning coordinator. Nothing was sent.",
-        ),
+        "thread-send"
+            if current["discussion"]["available"] != true
+                && current["discussion"]["waits"] != true =>
+        {
+            Some(
+                "The coordinator cannot take a message now: it needs an active planning coordinator. Nothing was sent.",
+            )
+        }
         _ => None,
     })
 }
@@ -592,7 +630,9 @@ pub(super) async fn handle(
             }
             let snapshot = read(t, mission).await?;
             check()?;
-            Ok(json!({"snapshot":snapshot,"operations":summaries(t,journal,mission),"outcome":null}))
+            Ok(
+                json!({"snapshot":snapshot,"operations":summaries(t,journal,mission),"outcome":null}),
+            )
         }
         Command::ThreadsHistory(request) => {
             let snapshot = history(t, request).await?;
@@ -614,7 +654,9 @@ pub(super) async fn handle(
             let current = read(t, &mission).await?;
             check()?;
             if let Some(reason) = qualify(intent, &current)? {
-                return Ok(json!({"snapshot":current,"operations":summaries(t,journal,&mission),"outcome":refused(reason)}));
+                return Ok(
+                    json!({"snapshot":current,"operations":summaries(t,journal,&mission),"outcome":refused(reason)}),
+                );
             }
             let topic = intent
                 .topic_id
@@ -648,7 +690,9 @@ pub(super) async fn handle(
             }
             // A failed or raced refresh cannot erase the exact acknowledgement.
             let snapshot = read(t, &mission).await.ok().filter(|_| check().is_ok());
-            Ok(json!({"snapshot":snapshot,"operations":summaries(t,journal,&mission),"outcome":outcome}))
+            Ok(
+                json!({"snapshot":snapshot,"operations":summaries(t,journal,&mission),"outcome":outcome}),
+            )
         }
         Command::ThreadsCheck(id) => {
             let mut record = journal
@@ -668,7 +712,9 @@ pub(super) async fn handle(
             }
             let mission = record.mission().to_owned();
             let snapshot = read(t, &mission).await.ok().filter(|_| check().is_ok());
-            Ok(json!({"snapshot":snapshot,"operations":summaries(t,journal,&mission),"outcome":summary(&record)}))
+            Ok(
+                json!({"snapshot":snapshot,"operations":summaries(t,journal,&mission),"outcome":summary(&record)}),
+            )
         }
         _ => Err(Error::Invalid),
     }
@@ -735,7 +781,10 @@ mod tests {
     fn the_payload_is_exact_and_keeps_message_bytes() {
         let i = intent(json!({"missionId":"m","source":SOURCE,"purpose":"thread-send","topicId":"t","text":"  a\n🙂 "})).unwrap();
         let r = i.request("t");
-        assert_eq!(r, json!({"purpose":"thread-send","source":SOURCE,"topicId":"t","text":"  a\n🙂 "}));
+        assert_eq!(
+            r,
+            json!({"purpose":"thread-send","source":SOURCE,"topicId":"t","text":"  a\n🙂 "})
+        );
         let op = json!({"kind":"thread-send","bindingId":SOURCE,"bindingGeneration":1,"payload":r.to_string()});
         assert_eq!(validate_record(&op), Ok(()));
         let mut other = op.clone();
@@ -746,7 +795,8 @@ mod tests {
     #[test]
     fn only_the_exact_effect_settles_a_write() {
         let p = json!({"purpose":"thread-send","source":SOURCE,"topicId":"t","text":"x"});
-        let op = json!({"operationId":"op","kind":"thread-send","targetId":"m","payload":p.to_string()});
+        let op =
+            json!({"operationId":"op","kind":"thread-send","targetId":"m","payload":p.to_string()});
         let ok = json!({"result":{"topic":{"id":"t","missionId":"m","inputs":[{"operationId":"op","sessionId":"s"}]},
             "admission":{"admissionId":"op"}}});
         assert_eq!(exact_result(&op, &ok), Ok(()));
@@ -758,12 +808,20 @@ mod tests {
         ] {
             let mut changed = ok.clone();
             *changed.pointer_mut(pointer).unwrap() = value;
-            assert_eq!(exact_result(&op, &changed), Err(Error::Unknown), "{pointer}");
+            assert_eq!(
+                exact_result(&op, &changed),
+                Err(Error::Unknown),
+                "{pointer}"
+            );
         }
         // A saved intent without admission is not delivery proof.
         let mut intent_only = ok.clone();
         intent_only["result"]["admission"] = Value::Null;
         assert_eq!(exact_result(&op, &intent_only), Err(Error::Unknown));
+        // A message saved to wait is proven by its saved input and the queued mark.
+        let mut queued = intent_only.clone();
+        queued["result"]["queued"] = json!(true);
+        assert_eq!(exact_result(&op, &queued), Ok(()));
         let d = json!({"purpose":"thread-disposition","source":SOURCE,"topicId":"t","disposition":"later"});
         let op = json!({"operationId":"d","kind":"thread-disposition","targetId":"m","payload":d.to_string()});
         let later = json!({"result":{"topic":{"id":"t","missionId":"m","disposition":"later"}}});
@@ -781,7 +839,14 @@ mod tests {
     fn sends_need_the_shown_source_an_open_topic_and_an_available_coordinator() {
         let send = intent(json!({"missionId":"m","source":SOURCE,"purpose":"thread-send","topicId":"t","text":"x"})).unwrap();
         assert_eq!(qualify(&send, &view(true, "open")), Ok(None));
-        assert!(qualify(&send, &view(false, "open")).unwrap().is_some(), "held/busy/stopped refuse");
+        assert!(
+            qualify(&send, &view(false, "open")).unwrap().is_some(),
+            "held/busy/stopped refuse"
+        );
+        // Saved to wait for the planning agent when it cannot take it now.
+        let mut waits = view(false, "open");
+        waits["discussion"]["waits"] = json!(true);
+        assert_eq!(qualify(&send, &waits), Ok(None));
         assert!(qualify(&send, &view(true, "later")).unwrap().is_some());
         let mut changed = view(true, "open");
         changed["source"] = json!("b".repeat(64));
@@ -792,8 +857,11 @@ mod tests {
         // Later and Discard stay available while discussion is not.
         let later = intent(json!({"missionId":"m","source":SOURCE,"purpose":"thread-disposition","topicId":"t","disposition":"later"})).unwrap();
         assert_eq!(qualify(&later, &view(false, "open")), Ok(None));
-        let other = intent(json!({"missionId":"m","source":SOURCE,"purpose":"thread-reference","topicId":"t",
-            "reference":{"kind":"history","sessionId":"other","entryId":3}})).unwrap();
+        let other = intent(
+            json!({"missionId":"m","source":SOURCE,"purpose":"thread-reference","topicId":"t",
+            "reference":{"kind":"history","sessionId":"other","entryId":3}}),
+        )
+        .unwrap();
         assert!(qualify(&other, &view(true, "open")).unwrap().is_some());
     }
 
@@ -812,9 +880,15 @@ mod tests {
         let reply = json!({"id":6,"kind":"pi.assistant","model":[{"role":"assistant",
             "content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"Answer"}]}]});
         let e = entry(&reply, &topic, "s").unwrap();
-        assert_eq!((e["role"].as_str(), e["text"].as_str()), (Some("coordinator"), Some("Answer")));
+        assert_eq!(
+            (e["role"].as_str(), e["text"].as_str()),
+            (Some("coordinator"), Some("Answer"))
+        );
         // Following output is not silently attributed to the topic.
-        assert_eq!((e["input"].as_bool(), e["referenced"].as_bool()), (Some(false), Some(false)));
+        assert_eq!(
+            (e["input"].as_bool(), e["referenced"].as_bool()),
+            (Some(false), Some(false))
+        );
         let old = json!({"id":4,"kind":"pi.user","model":[{"role":"user","content":"Earlier"}]});
         assert_eq!(entry(&old, &topic, "s").unwrap()["referenced"], true);
         let tool = json!({"id":7,"kind":"pi.tool-result"});

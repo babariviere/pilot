@@ -32,7 +32,13 @@ export interface MissionThreadsView {
 	/** Use as operation.bindingId and payload.source, bindingGeneration=1. */
 	source: string;
 	topics: MissionThread[];
-	discussion: { available: boolean; reason: string };
+	/**
+	 * `available`: a message goes to the planning agent now. `waits`: it cannot now, but a message is saved and goes
+	 * with the next planning input that can carry it (the user's submit or Continue, or a turn once it is idle).
+	 */
+	discussion: { available: boolean; reason: string; waits?: boolean };
+	/** Thread messages saved to wait for the planning agent, in the order sent. */
+	waiting?: { operationId: string; topicId: string; text: string; at: number }[];
 }
 export interface MissionThreadHistory {
 	topic: MissionThread;

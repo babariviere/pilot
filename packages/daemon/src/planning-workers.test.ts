@@ -337,6 +337,37 @@ test("a submitted round that never reached the planner shows as stuck, and Conti
 	assert.equal(log[1].missionId, f.missionId);
 });
 
+test("a thread message that waited while a round was open goes to the planning agent with the submitted answers", {
+	timeout: 60000,
+}, async (t) => {
+	const f = await heldFixture(t);
+	await answerAll(f);
+	// Saved to wait while the round waited (MissionThreads does this when the agent cannot take a message).
+	const state = f.store.planningWorkers.get(f.missionId)!;
+	f.store.planningWorkers.change(f.missionId, state.revision, (s) => {
+		s.threadQueue = [
+			{ operationId: "waiting-message", topicId: "topic", title: "Plan page", text: "Focus on what is next", at: 1 },
+		];
+	});
+	assert.equal((await submit(f)).receipt.state, "accepted");
+	await f.changed(
+		() =>
+			f.store.planningWorkers.get(f.missionId)?.phase === "active" &&
+			f.sessions.get(f.binding.ownerSessionId)?.state === "idle",
+	);
+	assert.equal(await f.requestCount(), 2, f.logs());
+	const queued = f.store.planningWorkers.get(f.missionId)!.threadQueue!;
+	assert.equal(queued[0]!.delivered, true, "delivered with the answers");
+	assert.match(queued[0]!.carriedBy!, /^planning-/);
+	const history = await f.sessions.history(f.binding.ownerSessionId, Number.MAX_SAFE_INTEGER, 100);
+	const input = history.entries
+		.filter((e) => e.kind === "pilot.planning-input")
+		.map((e) => JSON.stringify(e.model))
+		.find((m) => m.includes("Continue planning from this exact submitted interview"));
+	assert.match(input ?? "", /Focus on what is next/);
+	assert.match(input ?? "", /discussion, not execution/);
+});
+
 test("daemon restart preserves drafts and the round hold, with no historical auto-send", {
 	timeout: 60000,
 }, async (t) => {
