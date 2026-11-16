@@ -734,6 +734,65 @@ test("a settled question's changed citation never blocks other map edits, and it
 	assert.equal(rewrite.receipt.state, "rejected");
 });
 
+test("an approved plan publishes even when a settled question's Knowledge link changed since", async (t) => {
+	const f = await fixture(t);
+	const write = (id: string | undefined, revision: number) =>
+		f.store.knowledge.write("project", id, {
+			operationId: randomUUID(),
+			requestHash: "hash",
+			expectedRevision: revision,
+			kind: "investigation",
+			title: "Facts",
+			synopsis: "Primary sources",
+			body: revision ? "Observed evidence, restored in full" : "Observed evidence",
+			sources: [],
+			author: { type: "user" },
+			...(revision ? { reason: "Restore" } : {}),
+		});
+	const k = write(undefined, 0);
+	f.store.knowledge.setLink(f.missionId, k.entry.id, 0, { linked: true }, { type: "user" });
+	const old = { kind: "knowledge" as const, id: k.entry.id, revision: 1, linkRevision: 1 };
+	const fact = { ...question("fact"), kind: "research" as const, sources: [old] };
+	await f.map([fact]);
+	const resolution = { kind: "knowledge", id: k.entry.id, digest: digest(old) };
+	assert.equal((await f.write({ purpose: "plan-resolve", questionId: "fact", resolution })).receipt.state, "accepted");
+	// The planner pins the link later: its revision moves, and the settled citation keeps the old one.
+	f.store.knowledge.setLink(f.missionId, k.entry.id, 1, { linked: true, pinnedRevision: 1 }, { type: "user" });
+	assert.equal((await f.write({ purpose: "plan-propose", spec: spec(), slices: slices() })).receipt.state, "accepted");
+	assert.equal((await f.write({ purpose: "plan-review" })).receipt.state, "accepted");
+	assert.equal((await f.answer(true, "approve")).state, "accepted");
+	const published = await f.write({ purpose: "plan-publish" });
+	assert.equal(published.receipt.state, "accepted", published.receipt.reason ?? "publication rejected");
+	assert.ok(f.store.tasks(f.missionId).length > 0);
+});
+
+test("a Knowledge source the map cannot cite names itself and why", async (t) => {
+	const f = await fixture(t);
+	// Saved in the project, but never linked to this mission.
+	const k = f.store.knowledge.write("project", undefined, {
+		operationId: randomUUID(),
+		requestHash: "hash",
+		expectedRevision: 0,
+		kind: "investigation",
+		title: "Facts",
+		synopsis: "Primary sources",
+		body: "Observed evidence",
+		sources: [],
+		author: { type: "user" },
+	});
+	const missing = { kind: "knowledge" as const, id: k.entry.id, revision: 1, linkRevision: 0 };
+	const refused = await f.write({
+		purpose: "plan-map",
+		expectedRevision: f.plan?.revision ?? 0,
+		destination: "Somewhere",
+		sources: [missing],
+		questions: [],
+		fog: [],
+	});
+	assert.equal(refused.receipt.state, "rejected");
+	assert.match(refused.receipt.reason ?? "", new RegExp(`Knowledge ${missing.id} revision 1: .*not linked`));
+});
+
 test("settled questions stay without being sent again, and the map has no question count limit", async (t) => {
 	const f = await fixture(t);
 	const k = f.store.knowledge.write("project", undefined, {

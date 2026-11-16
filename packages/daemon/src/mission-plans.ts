@@ -307,15 +307,21 @@ export class MissionPlanReader {
 				exact(s, ["kind", "id", "revision", "linkRevision"]);
 				const link = store.knowledge.link(missionId, s.id);
 				const entry = store.knowledge.detail(store.require(missionId).projectId, s.id, s.revision);
-				if (
-					!Number.isSafeInteger(s.revision) ||
-					s.revision < 1 ||
-					!entry ||
-					!link.linked ||
-					link.linkRevision !== s.linkRevision ||
-					(link.pinnedRevision !== undefined && link.pinnedRevision !== s.revision)
-				)
-					throw new Conflict("Linked Knowledge revision unavailable");
+				// Says which source and why, so the planner can fix its sources itself.
+				const why =
+					!Number.isSafeInteger(s.revision) || s.revision < 1 || !entry
+						? "no such revision"
+						: !link.linked
+							? "not linked to this mission"
+							: link.linkRevision !== s.linkRevision
+								? `the link changed (linkRevision ${s.linkRevision}, now ${link.linkRevision}); cite it again`
+								: link.pinnedRevision !== undefined && link.pinnedRevision !== s.revision
+									? `the link is pinned to revision ${link.pinnedRevision}`
+									: "";
+				if (why)
+					throw new Conflict(
+						`Linked Knowledge revision unavailable: Knowledge ${s.id} revision ${s.revision}: ${why}`,
+					);
 			} else throw new Conflict("Unsupported planning source");
 		}
 	}
@@ -488,9 +494,13 @@ export class MissionPlans extends MissionPlanReader {
 				for (const q of Array.isArray(request.questions) ? request.questions : []) {
 					const p = (q as PlanQuestion).prototype;
 					if (typeof p?.model !== "string") continue;
-					await this.checkModel(p.model, typeof p.thinking === "string" ? p.thinking : undefined).catch((e: unknown) => {
-						throw new Conflict(`Prototype "${(q as PlanQuestion).id}": ${e instanceof Error ? e.message : String(e)}`);
-					});
+					await this.checkModel(p.model, typeof p.thinking === "string" ? p.thinking : undefined).catch(
+						(e: unknown) => {
+							throw new Conflict(
+								`Prototype "${(q as PlanQuestion).id}": ${e instanceof Error ? e.message : String(e)}`,
+							);
+						},
+					);
 				}
 			const pin = this.context(op.targetId);
 			const check = () => {
@@ -677,7 +687,7 @@ export class MissionPlans extends MissionPlanReader {
 						questionId,
 						questionSetRevision: updated.fence.questionSetRevision,
 					};
-				} else this.publish(plan);
+				} else this.publish(plan, kept);
 				if (!["plan-review", "plan-publish"].includes(request.purpose)) {
 					plan.review = null;
 					plan.publication = null;
@@ -806,9 +816,10 @@ export class MissionPlans extends MissionPlanReader {
 			recommendedOptionId: q.recommendedOptionId,
 		};
 	}
-	private publish(plan: MissionPlan): void {
+	/** `kept`: as in validate. A settled question's changed citation shows on the map; it never blocks publishing. */
+	private publish(plan: MissionPlan, kept: ReadonlySet<string>): void {
 		const { store } = this.deps;
-		this.validate(plan);
+		this.validate(plan, kept);
 		const review = plan.review,
 			i = this.context(plan.missionId).interview,
 			submission = i.submission;
