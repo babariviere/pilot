@@ -127,6 +127,25 @@ Change the prototype paragraph in `packages/kernel/src/mission-planning-skills.t
 Remove "This profile cannot create/execute previews" and keep the rules that a prototype is not acceptance or
 permission to build.
 
+## Screen work
+
+Planning and work both show you a design before anyone builds a screen.
+
+- **Planning.** Each `opus-ui` slice that adds or changes a screen gets a UI prototype question that you settle
+  before publication. The planner names it in the slice's `prototypes` list (`PlanSlice.prototypes`). One
+  question can cover several slices of one screen. The planner skips it only when your answers already fix that
+  screen's layout.
+- **Validation.** `prototypes` lists only UI prototype questions of the map that you settled from an interview
+  answer and that have a saved `plan-prototype-result`. A refusal names the slice and the question. The list has
+  at most 8 IDs: one per screen a slice changes, more than any real slice needs.
+- **Publication.** The task body ends with "Chosen prototypes", naming each artifact pin and the interview with your
+  answers. Pilot also links the artifact to the task. Start compares the same body (`sliceTaskBody`), and a slice
+  without `prototypes` keeps its old body, so tasks published earlier keep their Start authority.
+- **Work.** A worker in a mission you coordinate builds to match the chosen prototypes. With none (an older plan,
+  a skipped prototype, or a task a revision added), it first publishes an NSH mockup in its chat, asks you with
+  `ask_user`, and builds only after you agree.
+
+
 ## Pilot Day
 
 - **Map and chart:** set `prototypes.available` from the daemon, and remove the "not available yet" line.

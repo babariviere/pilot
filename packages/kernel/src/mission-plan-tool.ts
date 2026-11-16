@@ -110,6 +110,12 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 			storyIds: Type.Array(key),
 			dependsOn: Type.Array(key),
 			owners: Type.Array(Type.Union([Type.Literal("opus-ui"), Type.Literal("sol-backend")])),
+			prototypes: Type.Optional(
+				Type.Array(key, {
+					description:
+						"UI prototype questions the user settled for this slice. Its task then tells the worker to build what the user chose. Omit when none.",
+				}),
+			),
 		},
 		{ additionalProperties: false },
 	);

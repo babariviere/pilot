@@ -5,6 +5,7 @@ import type {
 	MissionPlan,
 	PlanPrototypeResult,
 	PlanQuestion,
+	PlanSlice,
 	PlanSource,
 	PlanWrite,
 } from "@pilot/protocol";
@@ -17,6 +18,7 @@ import {
 	validateQuestions,
 } from "./mission-interview-contract.ts";
 import { planMap } from "./mission-plan-map.ts";
+import { sliceTaskBody } from "./mission-plan-store.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected } from "./operation-journal.ts";
 
@@ -438,7 +440,16 @@ export class MissionPlans extends MissionPlanReader {
 			strings(s.testing);
 			strings(s.exclusions);
 			for (const slice of list(plan.slices)) {
-				exact(slice, ["id", "title", "outcome", "acceptance", "storyIds", "dependsOn", "owners"]);
+				exact(slice, [
+					"id",
+					"title",
+					"outcome",
+					"acceptance",
+					"storyIds",
+					"dependsOn",
+					"owners",
+					...(Object.hasOwn(slice, "prototypes") ? ["prototypes"] : []),
+				]);
 				text(slice.title, 200);
 				text(slice.outcome, 2000);
 				strings(slice.acceptance);
@@ -451,6 +462,7 @@ export class MissionPlans extends MissionPlanReader {
 					slice.storyIds.some((key) => !s.stories.some((story) => story.id === key))
 				)
 					throw new Conflict("Verifiable slices need story traceability and explicit ownership");
+				if (slice.prototypes !== undefined) this.slicePrototypes(plan, slice);
 			}
 			if (!plan.slices.length) throw new Conflict("Vertical slices required");
 			graph(plan.slices);
@@ -816,6 +828,25 @@ export class MissionPlans extends MissionPlanReader {
 			recommendedOptionId: q.recommendedOptionId,
 		};
 	}
+	/**
+	 * A slice names only UI prototype questions the user already settled with a made prototype, so its task can
+	 * point the worker at the chosen artifact and answers.
+	 */
+	private slicePrototypes(plan: MissionPlan, slice: PlanSlice): void {
+		const ids = list(slice.prototypes!, 8, `slice "${slice.id}" prototypes (at most 8: one per screen it changes)`);
+		if (!ids.length || new Set(ids).size !== ids.length)
+			throw new Conflict(`Slice "${slice.id}" prototypes must be omitted or list distinct question ids`);
+		for (const id of ids) {
+			const q = plan.questions.find((q) => q.id === id);
+			if (q?.kind !== "prototype" || q.prototype?.experimentType !== "ui")
+				throw new Conflict(`Slice "${slice.id}" prototypes: "${id}" is not a UI prototype question of this map`);
+			if (q.resolution?.kind !== "interview" || !q.prototypeResult)
+				throw new Conflict(
+					`Slice "${slice.id}" prototypes: "${id}" has no prototype the user chose yet. Settle it from the user's answer first`,
+				);
+		}
+	}
+
 	/** `kept`: as in validate. A settled question's changed citation shows on the map; it never blocks publishing. */
 	private publish(plan: MissionPlan, kept: ReadonlySet<string>): void {
 		const { store } = this.deps;
@@ -848,12 +879,29 @@ export class MissionPlans extends MissionPlanReader {
 				plan.missionId,
 				{
 					title: slice.title,
-					body: `${slice.outcome}\n\nSpec revision: ${brief.revision}\nStories: ${slice.storyIds.join(", ")}\nOwnership: ${slice.owners.join(", ")}\n\nAcceptance:\n${slice.acceptance.map((s) => `- ${s}`).join("\n")}`,
+					body: sliceTaskBody(plan, slice, brief.revision),
 					dependsOn: slice.dependsOn.map((key) => ids.get(key)!),
 					status: "todo",
 				},
 				{ sessionId: plan.ownerSessionId },
 			);
+			for (const id of slice.prototypes ?? []) {
+				const q = plan.questions.find((q) => q.id === id)!;
+				const a = q.prototypeResult!.artifact;
+				// The prototype chat linked it to the mission when it finished; this pins it on the task too.
+				store.linkArtifact(
+					plan.missionId,
+					{
+						sessionId: a.sessionId,
+						artifactId: a.artifactId,
+						title: q.title,
+						kind: "nsh",
+						revision: a.revision,
+						taskId: task.id,
+					},
+					{ sessionId: plan.ownerSessionId },
+				);
+			}
 			ids.set(slice.id, task.id);
 		}
 		plan.publication = {

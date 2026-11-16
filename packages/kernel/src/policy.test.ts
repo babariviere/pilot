@@ -1123,3 +1123,15 @@ test("workspace setup notes distinguish running and failed without command outpu
 		/Workspace setup did not/,
 	);
 });
+
+test("workers on a user-coordinated mission show screen work before building it", () => {
+	assert.match(missionPrompt(mission), /Screen work: the user sees a design before you build it/);
+	assert.match(missionPrompt(mission), /If your task lists chosen prototypes, build to match them/);
+	for (const other of [
+		{ ...mission, coordinator: "self" as const },
+		{ ...mission, coordinator: "other" as const },
+		{ ...mission, role: "explorer" as const },
+		{ ...mission, role: "reviewer" as const },
+	])
+		assert.doesNotMatch(missionPrompt(other), /Screen work/);
+});

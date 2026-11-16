@@ -14,7 +14,7 @@ import type { DurableOperation, MissionPlan, MissionTask, OperationReceipt, Plan
 import { Conflict } from "./errors.ts";
 import { interviewDigest, interviewExact, interviewId, interviewText } from "./mission-interview-contract.ts";
 import { MissionInterviews } from "./mission-interviews.ts";
-import { PLAN_STATE_LIMIT, publishedDefinition } from "./mission-plan-store.ts";
+import { PLAN_STATE_LIMIT, publishedDefinition, sliceTaskBody } from "./mission-plan-store.ts";
 import {
 	isPlanOperation,
 	LINKED_KNOWLEDGE,
@@ -2700,7 +2700,7 @@ export class PlanningWorkers {
 		const slice = pin.plan.slices.find((s) =>
 			pin.plan.publication!.tasks.some((p) => p.sliceId === s.id && p.taskId === task.id),
 		)!;
-		const body = `${slice.outcome}\n\nSpec revision: ${pin.plan.publication!.briefRevision}\nStories: ${slice.storyIds.join(", ")}\nOwnership: ${slice.owners.join(", ")}\n\nAcceptance:\n${slice.acceptance.map((s) => `- ${s}`).join("\n")}`;
+		const body = sliceTaskBody(pin.plan, slice, pin.plan.publication!.briefRevision);
 		const dependencies = slice.dependsOn.map(
 			(id) => pin.plan.publication!.tasks.find((p) => p.sliceId === id)!.taskId,
 		);

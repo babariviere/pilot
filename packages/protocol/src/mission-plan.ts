@@ -68,6 +68,11 @@ export interface PlanSlice {
 	dependsOn: string[];
 	/** Mixed slices keep substantive UI and backend ownership explicit. */
 	owners: ("opus-ui" | "sol-backend")[];
+	/**
+	 * UI prototype questions the user settled for this slice. Its task names them, so the worker builds what the
+	 * user chose. Omitted: no chosen prototype, and a worker on screen work shows a mockup before building.
+	 */
+	prototypes?: string[];
 }
 export interface MissionPlan {
 	version: 1;

@@ -30,6 +30,8 @@ After your first Start work, marking a task's result done finishes the task, and
 tasks that are ready, within the worker limit, Pause and Stop. A merged pull request of a task finishes it too.
 To add work to a published plan, ask in a thread or Revisit: the planner proposes new tasks, and they
 join the plan only when you confirm that revision. Adding tasks alone needs no Pause; they start like the others.
+Each screen task gets a prototype you choose during planning, and its worker builds what you chose. A screen task
+without one starts with a mockup in its chat, and the worker builds only after you agree.
 On a mission page, a done task folds its report until Show report, and each task links its own chat.
 A request in New (a Linear issue or a Slack message) can also become a mission: Plan a mission… opens New
 with its title and link. Your Plan takes it out of New and links it to the mission, without changing

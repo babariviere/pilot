@@ -878,6 +878,55 @@ test("spec and slice publication requires exact review and produces traced nativ
 	await assert.rejects(f.confirmations().prepare(f.missionId, "workflow-approve"), /complete interview agreement/);
 });
 
+test("a slice names only settled UI prototypes, and its task points the worker at the chosen one", async (t) => {
+	const f = await fixture(t);
+	const ui = prototype();
+	ui.prototype!.experimentType = "ui";
+	await f.map([ui, prototype("logic")]);
+	const withPrototypes = (ids: string[]) => slices().map((s) => (s.id === "save" ? { ...s, prototypes: ids } : s));
+	const propose = (ids: string[]) => f.write({ purpose: "plan-propose", spec: spec(), slices: withPrototypes(ids) });
+	const early = await propose(["experiment"]);
+	assert.equal(early.receipt.state, "rejected");
+	assert.match(early.receipt.reason!, /"experiment" has no prototype the user chose yet/);
+	const result = f.prototypeResult();
+	assert.equal(
+		(await f.write({ purpose: "plan-prototype-result", questionId: "experiment", result })).receipt.state,
+		"accepted",
+	);
+	assert.equal((await f.write(ask("experiment", ["prototype-feedback"]))).receipt.state, "accepted");
+	assert.equal((await f.answer(true, "yes", "Variant B")).state, "accepted");
+	const submission = f.store.interviews.latest(f.missionId)!.submission!;
+	const resolution = { kind: "interview", id: submission.operationId, digest: submission.digest };
+	assert.equal(
+		(await f.write({ purpose: "plan-resolve", questionId: "experiment", resolution })).receipt.state,
+		"accepted",
+	);
+	const logic = await propose(["logic"]);
+	assert.match(logic.receipt.reason!, /"logic" is not a UI prototype question/);
+	assert.match((await propose(["experiment", "experiment"])).receipt.reason!, /distinct question ids/);
+	await f.map([], []);
+	assert.equal((await propose(["experiment"])).receipt.state, "accepted");
+	assert.equal((await f.write({ purpose: "plan-review" })).receipt.state, "accepted");
+	assert.equal((await f.answer(true, "approve")).state, "accepted");
+	const publication = await f.write({ purpose: "plan-publish" });
+	assert.equal(publication.receipt.state, "accepted", publication.receipt.reason ?? "publication rejected");
+	const [save, resume] = f.store.tasks(f.missionId);
+	assert.match(save!.body!, /Chosen prototypes\. Build what the user chose/);
+	assert.match(
+		save!.body!,
+		new RegExp(`artifact prototype-preview revision 1; the user's answers: interview ${submission.operationId}`),
+	);
+	assert.doesNotMatch(resume!.body!, /Chosen prototypes/);
+	const links = f.store.detail(f.missionId, false).artifacts.filter((a) => a.artifactId === "prototype-preview");
+	assert.deepEqual(
+		links.map((a) => [a.taskId ?? null, a.revision]).sort(),
+		[
+			[save!.id, 1],
+			[null, 1],
+		].sort(),
+	);
+});
+
 test("changed spec invalidates saved review, rejects broken traceability and does not invent answers", async (t) => {
 	const f = await fixture(t);
 	await f.proposal();

@@ -1,7 +1,23 @@
 import type { SQLInputValue } from "node:sqlite";
-import type { DurableOperation, MissionPlan, MissionTask } from "@pilot/protocol";
+import type { DurableOperation, MissionPlan, MissionTask, PlanSlice } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
+
+/**
+ * The body of the task a published slice becomes. Publication writes it and Start compares against it, so both
+ * use this one function. Chosen prototypes are listed only when the slice names some: older tasks keep their body.
+ */
+export function sliceTaskBody(plan: MissionPlan, slice: PlanSlice, briefRevision: number): string {
+	const body = `${slice.outcome}\n\nSpec revision: ${briefRevision}\nStories: ${slice.storyIds.join(", ")}\nOwnership: ${slice.owners.join(", ")}\n\nAcceptance:\n${slice.acceptance.map((s) => `- ${s}`).join("\n")}`;
+	const chosen = (slice.prototypes ?? []).map((id) => {
+		const q = plan.questions.find((q) => q.id === id)!;
+		const a = q.prototypeResult!.artifact;
+		return `- ${JSON.stringify(q.title)}: artifact ${a.artifactId} revision ${a.revision}; the user's answers: interview ${q.resolution!.id}`;
+	});
+	return chosen.length
+		? `${body}\n\nChosen prototypes. Build what the user chose: read each with the artifact tool's get, and their answers with mission answers.\n${chosen.join("\n")}`
+		: body;
+}
 
 /** What Start compares for a task a confirmed revision published: any later change outside a revision shows. */
 export function publishedDefinition(

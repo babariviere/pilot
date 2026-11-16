@@ -92,7 +92,7 @@ test("upstream content, required references and license stay byte-exact and attr
 	assert.match(PLANNING_SKILL_ADAPTATION, /overrides upstream publishing and execution/);
 	assert.match(PLANNING_SKILL_ADAPTATION, /Notes.*cannot grant execution/);
 	for (const boundary of [
-		/inside the iterative Wayfinder agreement loop/,
+		/each opus-ui slice that adds or changes a screen needs a ui prototype question the user settles/,
 		/unmodified NSH TSX fixtures\/previews/,
 		/No real mutations, daemon credentials, privileged host access/,
 		/skip-tests advice never exempts integration\/safety tests/,
