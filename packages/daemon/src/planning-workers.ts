@@ -214,7 +214,7 @@ function prototypeMessage(
 			: "",
 		'Read the bundled pilot-artifacts skill and its NSH guide first. mission({action:"map"}) shows the planning map. Use source tools to match the real app: its layout, words and density.',
 		p.experimentType === "ui"
-			? "Make several clearly different variants of the same screen, inside a realistic copy of the screen around it, switchable from a small bar. The user flips between them and picks one or combines parts."
+			? "Make several clearly different variants of the same screen, inside a realistic copy of the screen around it, switchable from a small bar. The user flips between them and picks one or combines parts. Start from the skill's nsh/examples/prototype.tsx and switch with its Choices helper."
 			: "Make the logic visible: the states, the events between them and a few scenarios the user can step through, with controls to drive them.",
 		"Publish exactly one NSH artifact with the artifact tool, with every variant in it. Use mock data that looks real and keep state in memory. No live data, credentials, network or real actions. To fix it, update the same artifact; do not create others.",
 		"End with a short report in Markdown: what each variant shows, what the user should compare, and what stays open. Do not decide for the user.",

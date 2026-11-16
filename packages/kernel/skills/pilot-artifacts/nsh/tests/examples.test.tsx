@@ -42,6 +42,23 @@ test("the mockup changes only its own local state", async () => {
 	}
 });
 
+test("the prototype switches variant and situation and starts each case over", async () => {
+	const app = await open("./entries/prototype.tsx", SIZE);
+	await app.waitFor("A: one banner above the list. The list stays as it was.");
+	await app.press("role:button[B · Inline row]");
+	await app.waitFor("B: the failed row opens in place with what happened.");
+	expect(app.shows("A: one banner above the list. The list stays as it was.")).toBe(false);
+	await app.press("role:button[3 · Works when pressed]");
+	await app.press("role:button[Try again]");
+	await app.waitFor("Synced at 09:14. 4 files are up to date.");
+	// Another situation starts its case over.
+	await app.press("role:button[2 · Failed again]");
+	await app.waitFor("Third failure since 08:50. The server is down for maintenance until 10:00.");
+	expect(app.shows("role:button[Try again]")).toBe(true);
+	expect(app.requests()).toEqual([]);
+	expect(app.storage()).toEqual({});
+});
+
 test("a reopened mockup starts fresh", async () => {
 	const first = await open("./entries/mockup.tsx", SIZE);
 	await first.press("role:button[Cards]");

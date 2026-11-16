@@ -6,6 +6,7 @@ import { mountArtifact } from "pilot-artifact/ui";
 import Charts from "./examples/charts";
 import Flow from "./examples/flow";
 import Mockup from "./examples/mockup";
+import Prototype from "./examples/prototype";
 import Sequence from "./examples/sequence";
 import Summary from "./examples/summary";
 
@@ -13,6 +14,7 @@ const EXAMPLES = [
 	{ name: "Summary", view: Summary },
 	{ name: "Charts", view: Charts },
 	{ name: "Mockup", view: Mockup },
+	{ name: "Prototype", view: Prototype },
 	{ name: "Flow", view: Flow },
 	{ name: "Sequence", view: Sequence },
 ];

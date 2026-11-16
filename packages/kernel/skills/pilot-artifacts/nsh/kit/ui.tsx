@@ -2,6 +2,7 @@
 // comparison table. They draw with the theme's semantic tokens only, so an
 // artifact follows the app's light and dark appearance.
 import { type Component, computed, ErrorBoundary, fontScale, type JSX, mount, Scroll, Text, View } from "nsh";
+import { Button } from "nsh/base";
 import { attempt, type Laid, list, Problem, record, text } from "./check";
 
 /** Text grows with the reader's text size up to this factor; diagram boxes grow with it. */
@@ -103,6 +104,53 @@ export function Card(props: { title?: string; children?: JSX.Element; class?: st
 				</Text>
 			</If>
 			{props.children}
+		</View>
+	);
+}
+
+/** One option of a choice: its id and the words on it. */
+export interface ChoiceOption<T extends string> {
+	id: T;
+	label: string;
+}
+
+/**
+ * A labelled row of options with one chosen, to switch variants, situations or settings in a mockup. The chosen
+ * option is filled and has no hover style; the others show one. Use it instead of a hand-made chip: on macOS a
+ * `hover:` style covers a `selected:` one while the pointer stays on the option, so the chosen one looks empty.
+ */
+export function Choices<T extends string>(props: {
+	label: string;
+	options: readonly ChoiceOption<T>[];
+	value: T;
+	onChange: (id: T) => void;
+}) {
+	return (
+		<View class="flex-row flex-wrap items-center gap-1" role="radiogroup" accessibilityLabel={props.label}>
+			<Text class="w-24 text-xs text-muted-foreground">{props.label}</Text>
+			<Each of={props.options} key={(o) => o.id}>
+				{(o) => (
+					<Button
+						selected={props.value === o().id}
+						onPress={() => props.onChange(o().id)}
+						class={
+							props.value === o().id
+								? "rounded-md bg-primary px-2.5 py-1"
+								: "rounded-md px-2.5 py-1 hover:bg-accent"
+						}
+					>
+						<Text
+							class={
+								props.value === o().id
+									? "text-xs font-medium text-primary-foreground"
+									: "text-xs text-foreground"
+							}
+						>
+							{o().label}
+						</Text>
+					</Button>
+				)}
+			</Each>
 		</View>
 	);
 }

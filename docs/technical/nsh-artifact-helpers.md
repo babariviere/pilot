@@ -13,7 +13,8 @@ path, and existing artifacts keep their readers and exact revisions.
   `text.ts`, `check.ts`); views are `ui.tsx`, `charts.tsx` and `diagrams.tsx`. It imports only `nsh` and
   `nsh/base`, and makes no host, storage, clipboard, file or network call.
 - `examples/`: one complete artifact per common need (summary/table, charts/timeline, interactive mockup,
-  flow, sequence). [references/nsh.md](../../packages/kernel/skills/pilot-artifacts/references/nsh.md) is the
+  prototype with variants and situations, flow, sequence). Prototype chats start from `prototype.tsx`.
+  [references/nsh.md](../../packages/kernel/skills/pilot-artifacts/references/nsh.md) is the
   agent guide; `SKILL.md` routes to it only when the tool accepts `kind: "nsh"`.
 - `tests/`: layout checks and headless example checks. `tests/entries/` hold the entry shape below.
 - `App.tsx`: a gallery for people reviewing the helpers with `nsh run`. Pilot never loads it.
@@ -51,6 +52,9 @@ the runtime work and must qualify them; nothing here grants them.
   carry a spoken summary, and charts write every value as text.
 - Wide diagrams scroll sideways. Colors come from semantic theme tokens, so light and dark both follow
   the host theme. The mockup example skips its layout animation with reduced motion.
+- `Choices` switches between options. The chosen one is filled and has no hover style. A hand-made chip with
+  both `hover:` and `selected:` lost its selected background under the pointer on macOS, which made the
+  chosen variant look empty in the first planning prototype.
 
 ## Checks
 

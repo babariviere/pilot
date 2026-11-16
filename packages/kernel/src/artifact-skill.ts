@@ -13,6 +13,7 @@ export const ARTIFACT_NSH_FILES = [
 	"examples/summary.tsx",
 	"examples/charts.tsx",
 	"examples/mockup.tsx",
+	"examples/prototype.tsx",
 	"examples/flow.tsx",
 	"examples/sequence.tsx",
 	"kit/index.ts",

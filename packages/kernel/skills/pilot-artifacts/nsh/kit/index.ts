@@ -22,6 +22,8 @@ export {
 } from "./sequence";
 export {
 	Card,
+	type ChoiceOption,
+	Choices,
 	type ComparisonRow,
 	type ComparisonSpec,
 	ComparisonTable,

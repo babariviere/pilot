@@ -62,6 +62,7 @@ part of it. Fix the data and publish again. The exact types are in [nsh/kit/inde
 | --- | --- | --- |
 | `Page`, `Section`, `Card` | `title`, children | |
 | `Stat` | `label`, `value`, optional `note` | |
+| `Choices` | `label`, `options: [{ id, label }]`, `value`, `onChange` | |
 | `ComparisonTable` | `spec: { columns, rows: [{ label, cells }], recommended? }` | 6 columns, 40 rows |
 | `BarChart` | `spec: { bars: [{ label, value }], unit? }`, values from 0 | 50 bars |
 | `TrendChart` | `spec: { points: [{ label, value }], unit? }`, `height?` | 2–400 points |
@@ -82,6 +83,10 @@ part of it. Fix the data and publish again. The exact types are in [nsh/kit/inde
 - Fixed-size views are artboards: a phone (390 x 844), a tablet or a desktop window. Put alternatives side by side in
   a wrapping row (`flex-row flex-wrap`), and switch screen, width or theme from local state.
 - Use mock data that looks real: names, dates and counts the product would show.
+- Switch variants, situations and settings with `Choices`. Do not make your own chips: on macOS a `hover:` style
+  covers a `selected:` one while the pointer stays on it, so the chosen option looks empty.
+- A prototype starts from [nsh/examples/prototype.tsx](../nsh/examples/prototype.tsx): variants of one screen inside
+  a realistic copy of the screen around it, tried in a few situations. It draws only the shown variant.
 - Images, photos and other assets do not load inside NSH. Publish an image artifact beside the mockup instead.
 
 ## Examples
@@ -91,5 +96,6 @@ Copy one and change its data. Each is a complete artifact file.
 - Summary cards and a comparison table: [nsh/examples/summary.tsx](../nsh/examples/summary.tsx)
 - Bar chart, trend and timeline: [nsh/examples/charts.tsx](../nsh/examples/charts.tsx)
 - Interactive mockup with local state: [nsh/examples/mockup.tsx](../nsh/examples/mockup.tsx)
+- Prototype with variants and situations: [nsh/examples/prototype.tsx](../nsh/examples/prototype.tsx)
 - Architecture or process flow: [nsh/examples/flow.tsx](../nsh/examples/flow.tsx)
 - Sequence diagram: [nsh/examples/sequence.tsx](../nsh/examples/sequence.tsx)
