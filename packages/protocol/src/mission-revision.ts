@@ -25,7 +25,14 @@ export interface MissionRevisionDelta {
 	 * New tasks, in order. dependsOn names existing tasks (ID or number) or the key of a new task listed earlier.
 	 * In a planned mission they join the published plan, so Start and starts by rule cover them.
 	 */
-	newTasks?: Array<{ key: string; title: string; body: string; dependsOn?: string[] }>;
+	newTasks?: Array<{
+		key: string;
+		title: string;
+		body: string;
+		dependsOn?: string[];
+		/** The mockup the user chose in a thread chat. Confirming links it to the task, so its worker builds to match. */
+		prototype?: { sessionId: string; artifactId: string; revision: number };
+	}>;
 }
 
 export interface MissionRevisionProposal {
@@ -39,6 +46,8 @@ export interface MissionRevisionProposal {
 	summary: string;
 	delta: MissionRevisionDelta;
 	createdAt: number;
+	/** The thread whose handoff this proposal answers. Each thread keeps its own pending proposal. */
+	topicId?: string;
 	/** A trusted user requested a new full preview of these exact saved delta bytes. */
 	repreviewOf?: { id: string; digest: string };
 	confirmation?: { by: "user"; at: number; humanSource: string };

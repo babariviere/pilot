@@ -769,9 +769,16 @@ export class MissionStore {
 		all: (sql, ...params) => this.all(sql, ...params),
 		run: (sql, ...params) => this.run(sql, ...params),
 		transaction: (work) => this.transaction(work, true),
+		changed: (id) => this.changed(id),
 	});
 	readonly revisions = new MissionRevisions({
 		one: (sql, ...params) => this.one(sql, ...params),
+		all: (sql, ...params) => this.all(sql, ...params),
+		assertTopic: (id, topicId) => {
+			const topic = this.threads.get(id, topicId);
+			if (topic.disposition !== "open" || !topic.handoff)
+				throw new Conflict("A revision for a thread needs that thread open, with a handoff from its chat");
+		},
 		run: (sql, ...params) => this.run(sql, ...params),
 		transaction: (work) => this.transaction(work),
 		durable: () => this.durable(),
@@ -3254,7 +3261,22 @@ export class MissionStore {
 		);
 		const keys = new Set<string>();
 		for (const add of delta.newTasks ?? []) {
-			strictPlanningFields(add, ["key", "title", "body", "dependsOn"]);
+			strictPlanningFields(add, ["key", "title", "body", "dependsOn", "prototype"]);
+			if (add.prototype !== undefined) {
+				const pin = add.prototype as Record<string, unknown>;
+				strictPlanningFields(pin, ["sessionId", "artifactId", "revision"]);
+				if (
+					typeof pin.sessionId !== "string" ||
+					this.missionOf(pin.sessionId) !== id ||
+					typeof pin.artifactId !== "string" ||
+					!pin.artifactId ||
+					!Number.isSafeInteger(pin.revision) ||
+					(pin.revision as number) < 1
+				)
+					throw new Error(
+						`New task ${add.key} prototype needs sessionId (a chat of this mission), artifactId and revision`,
+					);
+			}
 			if (typeof add.key !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(add.key))
 				throw new Error("A new task key is 1 to 64 letters, digits, - or _");
 			if (keys.has(add.key)) throw new Error(`Duplicate new task key ${add.key}`);
@@ -3354,14 +3376,32 @@ export class MissionStore {
 			const added = new Map<string, string>();
 			for (const add of delta.newTasks ?? []) {
 				const dependsOn = (add.dependsOn ?? []).map((ref) => added.get(ref) ?? this.resolveTask(id, ref).id);
+				const pin = add.prototype;
+				const body = pin
+					? `${add.body}\n\nChosen mockup: artifact ${pin.artifactId} revision ${pin.revision}, from the thread chat. Build to match it; read it with the artifact tool's get.`
+					: add.body;
 				const task = this.addTask(
 					id,
-					{ title: add.title, body: add.body, ...(dependsOn.length ? { dependsOn } : {}) },
+					{ title: add.title, body, ...(dependsOn.length ? { dependsOn } : {}) },
 					actor,
 				);
+				if (pin)
+					this.linkArtifact(
+						id,
+						{ ...pin, title: `Mockup: ${add.title}`.slice(0, 200), kind: "nsh", taskId: task.id },
+						actor,
+					);
 				added.set(add.key, task.id);
 			}
 			this.republish(id, proposal, added);
+			// The thread whose handoff this answers is done: it links the new tasks, and Pilot closes its chat.
+			if (proposal.topicId)
+				this.threads.amend(id, proposal.topicId, (topic) => {
+					topic.disposition = "resolved";
+					topic.resolvedBy = { proposalId: proposal.id, taskIds: [...added.values()] };
+					for (const taskId of added.values())
+						if (topic.references.length < 100) topic.references.push({ kind: "task", id: taskId });
+				});
 			this.event(
 				id,
 				"update",

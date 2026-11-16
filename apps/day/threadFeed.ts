@@ -16,7 +16,11 @@ export type ThreadReference =
 	| { kind: "task"; id: string }
 	| { kind: "decision"; id: string };
 
-export type Disposition = "open" | "later" | "discarded";
+/** `resolved`: a confirmed revision answered the thread's handoff. Pilot sets it; the user can reopen. */
+export type Disposition = "open" | "later" | "discarded" | "resolved";
+
+/** What a thread chat sent to the planner once the user agreed. It grants nothing. */
+export type Handoff = { id: string; summary: string; tasks: { key: string; title: string }[]; queued: boolean };
 
 /** One topic, as the service saved it. */
 export type Topic = {
@@ -29,6 +33,14 @@ export type Topic = {
 	references: ThreadReference[];
 	/** Operation IDs of messages sent in it: saved intents, not proof of an answer. */
 	inputs: string[];
+	/** The thread chat that discusses it, once started. */
+	chatSessionId: string | null;
+	/** The latest handoff to the planner. */
+	handoff: Handoff | null;
+	/** The tasks of the confirmed revision that resolved it. */
+	resolvedTaskIds: string[];
+	/** Its messages with the planner before it had a thread chat. */
+	earlier: { role: "you" | "coordinator"; text: string }[];
 };
 
 /** Names for references. Not a second task list. */
@@ -90,8 +102,8 @@ export type MissionThreads = {
 export type HistoryEntry = {
 	id: number;
 	kind: string;
-	/** "planning" is Pilot's own planning request; "activity" is tools and notes. */
-	role: "you" | "coordinator" | "planning" | "activity";
+	/** "planning" is Pilot's own planning request; "chat" is the thread chat; "activity" is tools and notes. */
+	role: "you" | "coordinator" | "chat" | "planning" | "activity";
 	text: string;
 	/** Pilot shows only the start of a long entry. */
 	shortened: boolean;
@@ -252,9 +264,9 @@ export const QUEUED_WORDS = "Saved. It waits for the coordinator.";
 export function acceptedWords(purpose: Purpose, write?: ThreadWrite): string {
 	switch (purpose) {
 		case "thread-create":
-			return "Thread started. Nothing was sent to the coordinator yet.";
+			return "Thread started. Nothing was sent yet.";
 		case "thread-send":
-			return "Sent. The coordinator has your message; its answer shows here when it writes one.";
+			return "Sent. The thread chat has your message; its answer shows here when it writes one.";
 		case "thread-reference":
 			return "Linked to this thread.";
 		case "thread-disposition": {
@@ -282,7 +294,13 @@ function referenceOf(x: unknown): ThreadReference | null {
 function topicOf(x: unknown): Topic | null {
 	const t = x as Record<string, unknown> | null;
 	if (!t || typeof t !== "object" || typeof t.id !== "string" || typeof t.title !== "string") return null;
-	if (t.disposition !== "open" && t.disposition !== "later" && t.disposition !== "discarded") return null;
+	if (
+		t.disposition !== "open" &&
+		t.disposition !== "later" &&
+		t.disposition !== "discarded" &&
+		t.disposition !== "resolved"
+	)
+		return null;
 	if (!Array.isArray(t.references) || !Array.isArray(t.inputs)) return null;
 	const references: ThreadReference[] = [];
 	for (const raw of t.references) {
@@ -298,6 +316,27 @@ function topicOf(x: unknown): Topic | null {
 		ownerSessionId: str(t.ownerSessionId),
 		references,
 		inputs: t.inputs.filter((i): i is string => typeof i === "string"),
+		chatSessionId: typeof t.chatSessionId === "string" ? t.chatSessionId : null,
+		handoff: handoffOf(t.handoff),
+		resolvedTaskIds: Array.isArray((t.resolvedBy as { taskIds?: unknown } | null)?.taskIds)
+			? ((t.resolvedBy as { taskIds: unknown[] }).taskIds.filter((i) => typeof i === "string") as string[])
+			: [],
+		earlier: Array.isArray(t.earlier)
+			? (t.earlier as Record<string, unknown>[])
+					.filter((e) => (e?.role === "you" || e?.role === "coordinator") && typeof e.text === "string")
+					.map((e) => ({ role: e.role as "you" | "coordinator", text: e.text as string }))
+			: [],
+	};
+}
+
+function handoffOf(x: unknown): Handoff | null {
+	const h = x as Record<string, unknown> | null;
+	if (!h || typeof h !== "object" || typeof h.id !== "string" || !Array.isArray(h.tasks)) return null;
+	return {
+		id: h.id,
+		summary: str(h.summary),
+		tasks: (h.tasks as Record<string, unknown>[]).map((task) => ({ key: str(task?.key), title: str(task?.title) })),
+		queued: typeof h.queuedAt === "number",
 	};
 }
 
@@ -378,7 +417,8 @@ function opsOf(x: unknown): ThreadOp[] | null {
 function entryOf(x: unknown): HistoryEntry | null {
 	const e = x as Record<string, unknown> | null;
 	if (!e || typeof e.id !== "number") return null;
-	const role = e.role === "you" || e.role === "coordinator" || e.role === "planning" ? e.role : "activity";
+	const role =
+		e.role === "you" || e.role === "coordinator" || e.role === "chat" || e.role === "planning" ? e.role : "activity";
 	return {
 		id: e.id,
 		kind: str(e.kind),

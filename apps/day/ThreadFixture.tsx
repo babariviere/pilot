@@ -40,6 +40,8 @@ mount(() => (
 			/>
 			<Action label="Open a gone thread" onPress={() => openThread("search", "search-gone")} />
 			<Action label="Changed elsewhere" onPress={() => threads.changeElsewhere("search")} />
+			<Action label="Hand off" onPress={() => threads.handOff("search")} />
+			<Action label="Resolve" onPress={() => threads.resolve("search")} />
 			<Action label="Coordinator replies" onPress={() => threads.reply("search", "PDFs can wait. I noted it.")} />
 			<Action
 				label="Save and reopen"

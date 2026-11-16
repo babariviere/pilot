@@ -19,6 +19,8 @@ interface Port {
 	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];
 	run(sql: string, ...params: SQLInputValue[]): void;
 	transaction<T>(work: () => T): T;
+	/** Tells mission listeners (planning reconcile, the app) that a topic changed. */
+	changed?(id: string): void;
 }
 /** Only topic metadata and immutable operation results. Original entries stay in session storage. */
 export class MissionThreadStore {
@@ -68,5 +70,29 @@ export class MissionThreadStore {
 			);
 			return topic;
 		});
+	}
+	/**
+	 * Pilot's own change to a topic (its thread chat, handoff, resolution or moved history), not a user operation:
+	 * no operation event, a new revision. Returns the saved topic.
+	 */
+	amend(id: string, topicId: string, change: (topic: MissionThread) => void): MissionThread {
+		const saved = this.port.transaction(() => {
+			const topic = this.get(id, topicId);
+			change(topic);
+			topic.revision++;
+			this.port.run(
+				"UPDATE mission_threads SET record=? WHERE mission_id=? AND id=?",
+				canonicalJSON(topic),
+				id,
+				topicId,
+			);
+			return topic;
+		});
+		this.port.changed?.(id);
+		return saved;
+	}
+	/** The open or later topic whose thread chat is `sessionId`, if any. */
+	ofChat(id: string, sessionId: string): MissionThread | undefined {
+		return this.list(id).find((t) => t.chat?.sessionId === sessionId);
 	}
 }

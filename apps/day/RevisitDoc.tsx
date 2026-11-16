@@ -319,6 +319,13 @@ function RevisionView(props: { plans: Plans; page: PlanPage; revisit: Revisit; r
 				<Text class="text-xs text-muted-foreground">
 					Pilot proposed this from your answers. Read it in full. Nothing has changed yet.
 				</Text>
+				<If when={r().waiting > 0}>
+					<Text testID="revision-waiting" class="text-xs text-muted-foreground">
+						{r().waiting === 1
+							? "1 more proposed revision waits after this one."
+							: `${r().waiting} more proposed revisions wait after this one.`}
+					</Text>
+				</If>
 			</View>
 			<TextPart missionId={id()} title="Goal" part="goal" change={r().goal} />
 			<TextPart missionId={id()} title="Agreement" part="plan" change={r().plan} />

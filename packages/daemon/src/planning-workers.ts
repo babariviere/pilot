@@ -11,7 +11,7 @@ import {
 	type PlanningWorkerRequest,
 } from "@pilot/kernel";
 import type { DurableOperation, MissionPlan, MissionTask, OperationReceipt, PlanQuestion } from "@pilot/protocol";
-import { Conflict, PlanningInputNotSent } from "./errors.ts";
+import { Conflict } from "./errors.ts";
 import { interviewDigest, interviewExact, interviewId, interviewText } from "./mission-interview-contract.ts";
 import { MissionInterviews } from "./mission-interviews.ts";
 import { PLAN_STATE_LIMIT, publishedDefinition, sliceTaskBody } from "./mission-plan-store.ts";
@@ -108,21 +108,13 @@ const EXECUTION_RETRY_MS = RESEARCH_RETRY_MS;
  * What a planner may do with a thread request. A revision proposal is inert: only the user's confirmation applies it.
  */
 const THREAD_CHANGES =
-	"Do not start work. If the plan is published and the user asks for new work or a change, you may save one revision proposal (mission_plan action revision; newTasks for new work). It changes nothing until the user confirms it in Revisit: say so in your reply.";
+	"Do not start work. If the plan is published and the user asks for new work or a change, you may save one revision proposal (mission_plan action revision; newTasks for new work). It changes nothing until the user confirms it in Revisit: say so in your reply. For a thread handoff, save one proposal per thread with its topicId, so it replaces no other thread's proposal.";
 /**
  * Whether the user asked the planner about the published plan: a Revisit, or a thread message it took. Only then may
  * it save a revision proposal, which still changes nothing until the user confirms it.
  */
 function userAsked(state: PlanningWorkerState): boolean {
 	return !!(state.revisit?.admitted || state.discussion?.admitted || state.threadQueue?.some((m) => m.delivered));
-}
-/** The planning kernel's refusal before it takes an input: nothing was added to the planner's history. */
-const REFUSED_BEFORE_ADMISSION = /Planning admission is held or busy/;
-/** A thread message the planner could not take now; it was saved to wait for it. */
-export class DiscussionQueued extends Error {
-	constructor() {
-		super("Thread message saved to wait for the planning agent");
-	}
 }
 /** Added to a task Pilot starts by rule, so its worker does not wait for a coordinator that does not exist. */
 const RULE_START_NOTE =
@@ -554,13 +546,6 @@ export class PlanningWorkers {
 		const state = this.deps.store.planningWorkers.get(missionId);
 		return !!state && state.phase !== "setup";
 	}
-	/** Refuses a new waiting message past WAITING_MESSAGES, naming the limit. */
-	assertMessageRoom(missionId: string): void {
-		if (this.waitingMessages(missionId).length >= WAITING_MESSAGES)
-			throw new Conflict(
-				`${WAITING_MESSAGES} messages already wait for the coordinator (the limit is ${WAITING_MESSAGES}). Send this one once some went`,
-			);
-	}
 	/** Saves a thread message to wait for the planning agent. The same operation is saved once. */
 	queueMessage(missionId: string, message: Omit<WaitingThreadMessage, "at">): void {
 		const state = this.deps.store.planningWorkers.get(missionId);
@@ -575,6 +560,57 @@ export class PlanningWorkers {
 	/** Whether this thread-send operation was saved to wait (it may have been delivered since). */
 	queuedMessage(missionId: string, operationId: string): boolean {
 		return !!this.deps.store.planningWorkers.get(missionId)?.threadQueue?.some((m) => m.operationId === operationId);
+	}
+	/**
+	 * Saves each new thread handoff to wait for the planning agent, once: the thread marks it queued, so a delivered
+	 * handoff that left the waiting list is never sent again.
+	 */
+	private queueHandoffs(missionId: string): void {
+		for (const topic of this.deps.store.threads.list(missionId)) {
+			const handoff = topic.handoff;
+			if (!handoff || handoff.queuedAt || topic.disposition !== "open") continue;
+			this.queueMessage(missionId, {
+				operationId: handoff.id,
+				topicId: topic.id,
+				title: topic.title,
+				text: canonicalJSON({ chatSessionId: handoff.sessionId, summary: handoff.summary, tasks: handoff.tasks }),
+				handoff: true,
+			});
+			this.deps.store.threads.amend(missionId, topic.id, (t) => {
+				if (t.handoff?.id === handoff.id) t.handoff.queuedAt = Date.now();
+			});
+			console.log(
+				`pilotd: planning ${missionId} thread ${topic.id} handoff ${handoff.id} waits for the planning agent`,
+			);
+		}
+	}
+	/** Archives the chats of resolved or discarded threads once they are idle. Their history stays readable. */
+	private async closeThreadChats(missionId: string): Promise<void> {
+		for (const topic of this.deps.store.threads.list(missionId)) {
+			if (topic.disposition !== "resolved" && topic.disposition !== "discarded") continue;
+			const chat = topic.chat?.sessionId ? this.deps.sessions.get(topic.chat.sessionId) : undefined;
+			if (!chat || chat.archivedAt || chat.working || (chat.state !== "idle" && chat.state !== "parked")) continue;
+			try {
+				await this.deps.sessions.archive(chat.id);
+				console.log(`pilotd: planning ${missionId} closed thread chat ${chat.id} (${topic.disposition})`);
+			} catch (error) {
+				console.warn(`pilotd: thread chat ${chat.id} not archived: ${error}`);
+			}
+		}
+	}
+	/**
+	 * Older thread messages that waited for the planning agent and no input carries yet: Pilot moves them to thread
+	 * chats. Removes and returns them; handoffs stay.
+	 */
+	takeWaitingMessages(missionId: string): WaitingThreadMessage[] {
+		const state = this.deps.store.planningWorkers.get(missionId);
+		const taken = (state?.threadQueue ?? []).filter((m) => !m.carriedBy && !m.handoff);
+		if (!taken.length) return [];
+		const ids = new Set(taken.map((m) => m.operationId));
+		this.deps.store.planningWorkers.change(missionId, state!.revision, (s) => {
+			s.threadQueue = (s.threadQueue ?? []).filter((m) => !ids.has(m.operationId));
+		});
+		return taken;
 	}
 	/** Thread messages not yet with the planning agent, in the order sent. */
 	waitingMessages(missionId: string): WaitingThreadMessage[] {
@@ -610,12 +646,24 @@ export class PlanningWorkers {
 			(m) => m.carriedBy === operationId,
 		);
 		if (!carried.length) return "";
+		const messages = carried.filter((m) => !m.handoff);
+		const handoffs = carried.filter((m) => m.handoff);
 		return [
-			"\n\nThe user also wrote in mission threads while you could not take messages. Each message is discussion, not execution, Start, agreement acceptance or approval. Answer each in your reply, by thread; change the plan only through planning records, and do not start work.",
-			...carried.map(
-				(m) =>
-					`Thread ${JSON.stringify(m.title)} (${m.topicId}), message ${m.operationId}: ${JSON.stringify(m.text)}`,
-			),
+			...(messages.length
+				? [
+						"\n\nThe user also wrote in mission threads while you could not take messages. Each message is discussion, not execution, Start, agreement acceptance or approval. Answer each in your reply, by thread; change the plan only through planning records, and do not start work.",
+						...messages.map(
+							(m) =>
+								`Thread ${JSON.stringify(m.title)} (${m.topicId}), message ${m.operationId}: ${JSON.stringify(m.text)}`,
+						),
+					]
+				: []),
+			...(handoffs.length
+				? [
+						"\n\nThread chats handed off work the user agreed to with them and asked to send to you. For each, save one revision proposal (mission_plan action revision) with that thread's topicId and newTasks from it: keep its outcomes and acceptance, and map dependsOn to existing tasks or earlier keys. Pass a task's mockup as newTasks[].prototype {sessionId: the handoff's chat, artifactId, revision}. Add nothing it did not ask for. A handoff is not approval: the proposal changes nothing until the user confirms it.",
+						...handoffs.map((m) => `Thread ${JSON.stringify(m.title)} (${m.topicId}), handoff: ${m.text}`),
+					]
+				: []),
 		].join("\n");
 	}
 	/**
@@ -696,7 +744,7 @@ export class PlanningWorkers {
 		const submitted = this.deps.store.interviews.latest(state.binding.missionId)?.submission;
 		const messages = this.messagesContent(state.binding.missionId, op.operationId);
 		if (op.kind === "plan-thread-messages")
-			return `The user wrote in mission threads while you could not take messages. Read current mission records; use Wayfinder only if needed. ${THREAD_CHANGES}${messages}`;
+			return `Mission threads have something for you. Read current mission records; use Wayfinder only if needed. ${THREAD_CHANGES}${messages}`;
 		return (
 			(op.kind === "thread-send"
 				? this.discussionContent(op)
@@ -1411,36 +1459,6 @@ export class PlanningWorkers {
 		}
 	}
 
-	/**
-	 * A thread message the planner never took (Pilot refused it before sending, or the planner refused it as busy or
-	 * held): the discussion turn ends, and the message waits to go with the next planning input. Only such a refusal
-	 * counts; a missing receipt stays Unknown.
-	 */
-	private async waitRefusedMessage(op: DurableOperation): Promise<void> {
-		const request = JSON.parse(op.payload) as { topicId: string; text: string };
-		const state = this.deps.store.planningWorkers.get(op.targetId)!;
-		this.deps.store.planningWorkers.change(op.targetId, state.revision, (s) => {
-			if (canonicalJSON(s.discussion?.operation) === canonicalJSON(op)) {
-				delete s.discussion;
-				if (s.phase === "discussing") s.phase = "active";
-			}
-		});
-		this.queueMessage(op.targetId, {
-			operationId: op.operationId,
-			topicId: request.topicId,
-			title: this.deps.store.threads.get(op.targetId, request.topicId).title,
-			text: request.text,
-		});
-		await this.deps.store.durable();
-		console.log(`pilotd: planning ${op.targetId} thread message waits for the planning agent (${op.operationId})`);
-	}
-	/** Same qualified unheld planning boundary as Revisit, with a distinct discussion purpose. */
-	discuss(op: DurableOperation, guard: () => void): Promise<unknown> {
-		const work = this.planningTurnEntered(op, true, guard);
-		this.tasks.add(work);
-		void work.finally(() => this.tasks.delete(work)).catch(() => {});
-		return work;
-	}
 	/** Only authenticated native user ingress enters. Recovery never re-admits a turn. */
 	revisit(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
 		if (this.closing.signal.aborted) return Promise.reject(new Error("Planning host is closing"));
@@ -1449,23 +1467,18 @@ export class PlanningWorkers {
 		void work.finally(() => this.tasks.delete(work)).catch(() => {});
 		return work;
 	}
-	private async planningTurnEntered(
-		op: DurableOperation,
-		firstEntry: boolean,
-		discussionGuard?: () => void,
-	): Promise<unknown> {
+	private async planningTurnEntered(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
 		if (!firstEntry) return this.recover(op);
-		const discussion = op.kind === "thread-send" && !!discussionGuard;
 		let pin: ReturnType<PlanningWorkers["revisitPin"]>;
 		try {
 			const request = JSON.parse(op.payload);
-			interviewExact(request, discussion ? ["purpose", "source", "topicId", "text"] : ["purpose", "source"]);
-			discussionGuard?.();
+			interviewExact(request, ["purpose", "source"]);
 			pin = this.revisitPin(op.targetId);
 			if (
-				(!discussion && op.kind !== "plan-revisit") ||
+				op.kind !== "plan-revisit" ||
 				request.purpose !== op.kind ||
-				(!discussion && (request.source !== pin.source || op.bindingId !== hash(pin))) ||
+				request.source !== pin.source ||
+				op.bindingId !== hash(pin) ||
 				op.bindingGeneration !== 1 ||
 				op.origin.hostId !== "local" ||
 				!sameHost(op.origin, this.deps.journal.destination) ||
@@ -1475,25 +1488,13 @@ export class PlanningWorkers {
 		} catch (e) {
 			throw new OperationRejected(String(e));
 		}
-		await this.deps.journal.checkpoint(op, {
-			stage: discussion ? "discussion-entered" : "revisit-entered",
-			payloadHash: op.payloadHash,
-		});
-		discussionGuard?.();
-		// A thread message is a chat message, not a proposal: task progress in the meantime does not change it.
-		const unchanged = (now: typeof pin) =>
-			discussion ? now.authority === pin.authority && now.revision === pin.revision : hash(now) === hash(pin);
-		if (!unchanged(this.revisitPin(op.targetId))) throw new Conflict("Revisit context changed");
+		await this.deps.journal.checkpoint(op, { stage: "revisit-entered", payloadHash: op.payloadHash });
+		if (hash(this.revisitPin(op.targetId)) !== hash(pin)) throw new Conflict("Revisit context changed");
 		const prior = this.deps.store.planningWorkers.get(op.targetId)!;
-		this.deps.store.planningWorkers.retain(
-			op.targetId,
-			`$${discussion ? "discussion" : "revisit"}:${op.operationId}`,
-			op,
-		);
+		this.deps.store.planningWorkers.retain(op.targetId, `$revisit:${op.operationId}`, op);
 		const state = this.deps.store.planningWorkers.change(op.targetId, prior.revision, (s) => {
-			if (discussion) s.discussion = { operation: op, admitted: false };
-			else s.revisit = { operation: op, admitted: false };
-			s.phase = discussion ? "discussing" : "revisiting";
+			s.revisit = { operation: op, admitted: false };
+			s.phase = "revisiting";
 		});
 		let release!: () => void;
 		const turn = new Promise<void>((r) => {
@@ -1501,38 +1502,21 @@ export class PlanningWorkers {
 		});
 		this.turnAdmissions.set(op.targetId, turn);
 		const guard = () => {
-			discussionGuard?.();
 			if (
 				this.closing.signal.aborted ||
 				this.authority(state.binding) !== pin.authority ||
-				(!discussion && this.deps.store.revisions.source(op.targetId) !== pin.source) ||
+				this.deps.store.revisions.source(op.targetId) !== pin.source ||
 				this.scope(state.binding).revision !== state.revision
 			)
 				throw new Conflict("Revisit admission changed");
 		};
 		try {
 			await this.deps.store.durable();
-			let receipt: Awaited<ReturnType<PlanningWorkers["admitInput"]>>;
-			try {
-				try {
-					guard();
-				} catch (error) {
-					throw new PlanningInputNotSent(error);
-				}
-				receipt = await this.admitInput(state, op, guard);
-			} catch (error) {
-				// The planner refused before taking it: the message waits for it instead of becoming Unknown.
-				if (discussion && (error instanceof PlanningInputNotSent || REFUSED_BEFORE_ADMISSION.test(String(error)))) {
-					discussionGuard!(); // A closed thread or a new planning owner: the message does not wait.
-					await this.waitRefusedMessage(op);
-					throw new DiscussionQueued();
-				}
-				throw error;
-			}
+			guard();
+			const receipt = await this.admitInput(state, op, guard);
 			guard();
 			this.deps.store.planningWorkers.change(op.targetId, state.revision, (s) => {
-				if (discussion) s.discussion!.admitted = true;
-				else s.revisit!.admitted = true;
+				s.revisit!.admitted = true;
 				s.phase = "active";
 			});
 			await this.deps.store.durable();
@@ -1784,6 +1768,8 @@ export class PlanningWorkers {
 		this.resumeStalled(missionId);
 		await this.reconcileAsks(missionId);
 		await this.reconcileRepair(missionId);
+		this.queueHandoffs(missionId);
+		await this.closeThreadChats(missionId);
 		await this.deliverMessages(missionId);
 		await this.linkRequest(missionId);
 		state = this.deps.store.planningWorkers.get(missionId)!;
@@ -2339,12 +2325,24 @@ export class PlanningWorkers {
 		}
 		const request: Extract<PlanningWorkerRequest, { action: "revision" }>["request"] = JSON.parse(op.payload);
 		try {
-			interviewExact(request, ["purpose", "source", "summary", "delta"]);
+			interviewExact(request, [
+				"purpose",
+				"source",
+				"summary",
+				"delta",
+				...(Object.hasOwn(request, "topicId") ? ["topicId"] : []),
+			]);
 			if (request.purpose !== "revision-propose") throw new Conflict("Inert revision required");
 			guard();
 			return await this.deps.store.revisions.propose(
 				op.targetId,
-				{ operationId: op.operationId, source: request.source, summary: request.summary, delta: request.delta },
+				{
+					operationId: op.operationId,
+					source: request.source,
+					summary: request.summary,
+					delta: request.delta,
+					...(request.topicId !== undefined ? { topicId: request.topicId } : {}),
+				},
 				{ sessionId: binding.ownerSessionId },
 			);
 		} catch (e) {

@@ -14,7 +14,10 @@ CREATE INDEX IF NOT EXISTS mission_revision_latest ON mission_revision_proposals
 
 interface Port {
 	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
+	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];
 	run(sql: string, ...params: SQLInputValue[]): void;
+	/** Refuses a proposal for a thread that is not open with a handoff. */
+	assertTopic(id: string, topicId: string): void;
 	transaction<T>(work: () => T): T;
 	durable(): Promise<void>;
 	source(id: string): unknown;
@@ -81,19 +84,25 @@ export class MissionRevisions {
 		const proposal = JSON.parse(String(row.record)) as MissionRevisionProposal;
 		return { id: proposal.id, summary: proposal.summary };
 	}
-	/** Latest proposal after the last confirmation. Stale proposals remain inspectable, not applicable. */
-	pending(id: string): { proposal: MissionRevisionProposal; current: boolean } | null {
-		const row = this.port.one(
-			`SELECT record FROM mission_revision_proposals WHERE mission_id=?
-			AND rowid > COALESCE((SELECT MAX(rowid) FROM mission_revision_proposals
-			WHERE mission_id=? AND json_extract(record,'$.confirmation.by')='user'),0)
-			ORDER BY rowid DESC LIMIT 1`,
+	/**
+	 * The proposal to review next. Each thread keeps its own latest proposal, and Revisit (no thread) keeps one; a newer
+	 * proposal replaces only the one of its own thread, and a confirmation ends only its own. One that still applies
+	 * comes first, then the oldest. `waiting` counts the others. Stale proposals remain inspectable, not applicable.
+	 */
+	pending(id: string): { proposal: MissionRevisionProposal; current: boolean; waiting: number } | null {
+		const latest = new Map<string, MissionRevisionProposal | undefined>();
+		for (const row of this.port.all(
+			"SELECT record FROM mission_revision_proposals WHERE mission_id=? ORDER BY rowid",
 			id,
-			id,
-		);
-		if (!row) return null;
-		const proposal = JSON.parse(String(row.record)) as MissionRevisionProposal;
-		return { proposal, current: this.applies(id, proposal) };
+		)) {
+			const proposal = JSON.parse(String(row.record)) as MissionRevisionProposal;
+			latest.set(proposal.topicId ?? "", proposal.confirmation ? undefined : proposal);
+		}
+		const open = [...latest.values()]
+			.filter((p): p is MissionRevisionProposal => !!p)
+			.map((proposal) => ({ proposal, current: this.applies(id, proposal) }));
+		const next = open.find((p) => p.current) ?? open[0];
+		return next ? { ...next, waiting: open.length - 1 } : null;
 	}
 	/**
 	 * Whether a proposal still applies to the mission as it is now. Any change stales a proposal that edits the mission.
@@ -125,21 +134,27 @@ export class MissionRevisions {
 		if (input.digest !== original.digest) throw new Conflict("Saved revision digest changed");
 		return this.save(
 			id,
-			{ operationId: input.operationId, source: input.source, summary: original.summary, delta: original.delta },
+			{
+				operationId: input.operationId,
+				source: input.source,
+				summary: original.summary,
+				delta: original.delta,
+				...(original.topicId ? { topicId: original.topicId } : {}),
+			},
 			{},
 			{ id: original.id, digest: original.digest },
 		);
 	}
 	async propose(
 		id: string,
-		input: { operationId: string; source: string; summary: string; delta: MissionRevisionDelta },
+		input: { operationId: string; source: string; summary: string; delta: MissionRevisionDelta; topicId?: string },
 		actor: { sessionId?: string },
 	): Promise<MissionRevisionProposal> {
 		return this.save(id, input, actor);
 	}
 	private async save(
 		id: string,
-		input: { operationId: string; source: string; summary: string; delta: MissionRevisionDelta },
+		input: { operationId: string; source: string; summary: string; delta: MissionRevisionDelta; topicId?: string },
 		actor: { sessionId?: string },
 		repreviewOf?: { id: string; digest: string },
 	): Promise<MissionRevisionProposal> {
@@ -147,11 +162,12 @@ export class MissionRevisions {
 		if (
 			!input ||
 			typeof input !== "object" ||
-			Object.keys(input).some((key) => !["operationId", "source", "summary", "delta"].includes(key))
+			Object.keys(input).some((key) => !["operationId", "source", "summary", "delta", "topicId"].includes(key))
 		)
 			throw new Error("Unknown revision request field");
 		revisionText(input.operationId, 128);
 		revisionText(input.summary, 1000);
+		if (input.topicId !== undefined) revisionText(input.topicId, 128);
 		if (Buffer.byteLength(JSON.stringify(input.delta) ?? "") > 64 * 1024) throw new Error("Revision exceeds 64 KiB");
 		const request = structuredClone({
 			...input,
@@ -173,6 +189,7 @@ export class MissionRevisions {
 			if (repreviewOf && this.get(id, repreviewOf.id).confirmation)
 				throw new Conflict("Confirmed revision is history, not a new proposal");
 			if (input.source !== this.source(id)) throw new Conflict("Mission revision source changed");
+			if (request.topicId !== undefined && !repreviewOf) this.port.assertTopic(id, request.topicId);
 			this.port.validate(id, request.delta);
 			const proposal: MissionRevisionProposal = {
 				version: 1,

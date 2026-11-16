@@ -33,7 +33,14 @@ export type PlanningWorkerRequest =
 	| {
 			action: "revision";
 			toolCallId: string;
-			request: { purpose: "revision-propose"; source: string; summary: string; delta: MissionRevisionDelta };
+			request: {
+				purpose: "revision-propose";
+				source: string;
+				summary: string;
+				delta: MissionRevisionDelta;
+				/** The thread whose handoff this answers. Each thread keeps its own pending proposal. */
+				topicId?: string;
+			};
 	  }
 	| {
 			action: "questions";

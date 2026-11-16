@@ -964,6 +964,8 @@ pub struct Revision {
     pub pause: PauseNeed,
     /// Where its confirmation is.
     pub confirm: ConfirmState,
+    /// Other proposals that wait after this one (each thread keeps its own).
+    pub waiting: u32,
 }
 
 /// One revision the user confirmed. Its earlier agreement stays readable

@@ -825,6 +825,8 @@ export function createDaemonServer(
 		journal && missions
 			? new MissionThreads({ store: missions.store, journal, projects, sessions, workers: planningWorkers })
 			: undefined;
+	// Thread messages that still wait for a planning agent go to their thread chats instead.
+	void missionThreads?.migrate().catch((error: unknown) => console.warn(`pilotd: thread migration failed: ${error}`));
 	const nativeIntake =
 		journal && tracking
 			? new NativeIntake({ journal, tracking, projects, sessions, missions: missions?.store })

@@ -90,7 +90,7 @@ import { mcpActivity } from "./mcp-activity.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
 import { DecisionInbox } from "./mission-decision-inbox.ts";
 import type { AcknowledgedDecision } from "./mission-decisions.ts";
-import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
+import { MISSION_TOOL, type MissionCall, missionToolFor, missionToolKind } from "./mission-tools.ts";
 import { continueModelInPlace } from "./model-continuation.ts";
 import { rebuildContext } from "./model-rebuild.ts";
 import { NativeAdapter } from "./native-adapter.ts";
@@ -506,8 +506,7 @@ export class KernelSession {
 					}
 				}
 			: undefined;
-		const missionTools =
-			callMission && !spec.role ? [createMissionTool(callMission, mission.current?.coordinator === "self")] : [];
+		const missionTools = callMission && !spec.role ? [missionToolFor(callMission, mission.current)] : [];
 		// Pending questions are transcript entries, so a restart or a codemode call shows them too.
 		let serializeQuestion = (work: () => Promise<void>) => work();
 		const publishQuestion: PublishQuestion = async (callId, question, signal) => {
@@ -1416,6 +1415,7 @@ export class KernelSession {
 			console.warn("pilot: could not replay message states", error),
 		);
 		const coordinatorChanged = (this.#mission.current?.coordinator === "self") !== (context?.coordinator === "self");
+		const toolChanged = missionToolKind(this.#mission.current) !== missionToolKind(context);
 		const previous = this.#mission.current;
 		const own = new Map(this.#ownDecisionAdditions);
 		const noticeWrite = this.recordDecisions(context, own);
@@ -1438,8 +1438,7 @@ export class KernelSession {
 		}
 		try {
 			if (!this.#ask) this.adapter.setToolActive("todo", context?.coordinator !== "self");
-			if (coordinatorChanged && this.callMission)
-				this.adapter.registerHostTool(createMissionTool(this.callMission, context?.coordinator === "self"));
+			if (toolChanged && this.callMission) this.adapter.registerHostTool(missionToolFor(this.callMission, context));
 			this.adapter.setToolActive(MISSION_TOOL, !!context);
 		} catch (error) {
 			// Without a registered tool (no host bridge) the prompt still reflects membership.

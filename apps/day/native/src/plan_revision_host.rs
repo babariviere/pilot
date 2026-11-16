@@ -76,6 +76,7 @@ pub fn view(read: &Value, ops: &[Value]) -> Revisit {
             digest: s(&p["digest"]),
             summary: s(&p["summary"]),
             current: r["pending"]["current"] == true,
+            waiting: r["pending"]["waiting"].as_u64().unwrap_or(0) as u32,
             goal: text(&r["mission"]["goal"], &d["goal"]),
             plan: text(&r["brief"]["markdown"], &d["markdown"]),
             tasks: tasks
@@ -275,6 +276,8 @@ mod tests {
             digest: "c".repeat(64),
         };
         assert!(confirm(&r, &intent).is_ok(), "adding tasks needs no Pause");
+        r["revision"]["pending"]["waiting"] = json!(2);
+        assert_eq!(view(&r, &[]).revision.expect("saved revision").waiting, 2);
     }
     #[test]
     fn complete_comparison_and_unknown_operation_block_new_intents() {

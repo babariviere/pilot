@@ -28,7 +28,7 @@ In a planned mission, a worker's delivery report reaches To check: you check it,
 asks its coordinator shows on that page. Answer with Send back or a thread.
 After your first Start work, marking a task's result done finishes the task, and Pilot starts the next
 tasks that are ready, within the worker limit, Pause and Stop. A merged pull request of a task finishes it too.
-To add work to a published plan, ask in a thread or Revisit: the planner proposes new tasks, and they
+To add work to a published plan, discuss it in a thread or use Revisit: the planner proposes new tasks, and they
 join the plan only when you confirm that revision. Adding tasks alone needs no Pause; they start like the others.
 Each screen task gets a prototype you choose during planning, and its worker builds what you chose. A screen task
 without one starts with a mockup in its chat, and the worker builds only after you agree.
@@ -41,11 +41,11 @@ it knows, its limits, your next step and links. A chat with no report shows its 
 For published native plans, Revisit mission requests planning only. Review new questions and
 the exact proposed changes, then pause and request a fresh preview before confirming. Earlier
 answers and finished work stay kept. Revisit never starts work or changes permissions.
-A mission's overview lists threads with its coordinator, one subject each. Start one by writing its
-first message; its first sentence becomes the title. A thread shows the coordinator's whole
-conversation and marks the messages it sent or linked. When the coordinator cannot take a message
-(it works, or a round waits for your answers), Send saves it to wait: it goes with your next answers,
-or as soon as the coordinator is free. Later and Discard keep the history. Talking never starts work.
+A mission's overview lists its threads, one subject each. Start one by writing its first message; its
+first sentence becomes the title. Each thread has its own read-only chat: it answers at once, reads the
+mission like the coordinator, asks one question at a time about work you suggest, and shows mockups for
+screen work. When you agree and say yes, it sends the work to the planner, which proposes a revision for
+that thread. Confirming it resolves the thread. Later and Discard keep the history. Talking never starts work.
 Feedback (in the header, or Send feedback on a mission) saves your words about Pilot, with the
 mission when you keep it. Choose the project with Pilot's code and a read-only agent triages what you
 send: it groups duplicates, may ask you a question and proposes a small fix, a mission or no change.

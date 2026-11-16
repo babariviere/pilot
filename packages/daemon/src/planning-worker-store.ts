@@ -78,6 +78,8 @@ export interface WaitingThreadMessage {
 	carriedBy?: string;
 	/** That input was admitted: the agent has it. Kept a while so that input's content stays the same on recovery. */
 	delivered?: boolean;
+	/** A thread chat's handoff (`operationId` is the handoff ID, `text` its content), not a user message. */
+	handoff?: true;
 }
 export interface PlanningRepair {
 	operationId: string;

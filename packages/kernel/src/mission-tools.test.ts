@@ -15,7 +15,7 @@ import {
 	validateToolArguments,
 } from "@earendil-works/pi-ai";
 import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { createMissionTool, MISSION_TOOL } from "./mission-tools.ts";
+import { createMissionTool, MISSION_TOOL, missionToolFor, missionToolKind, THREAD_ACTIONS } from "./mission-tools.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { MissionContext } from "./policy.ts";
 import { PosthorseDoc } from "./posthorse.ts";
@@ -1583,4 +1583,31 @@ test("propose is exposed only to the coordinator and forwards decision reference
 		{} as never,
 	);
 	assert.deepEqual(calls, [["propose", { decisionId: "D7", remove: true, reason: "Superseded" }]]);
+});
+
+test("a thread chat's mission tool reads and hands off, with no write actions", async () => {
+	const calls: unknown[] = [];
+	const tool = missionToolFor(
+		async (action, args) => {
+			calls.push([action, args]);
+			return {};
+		},
+		{ coordinator: "user", thread: { topicId: "t", title: "T" } },
+	);
+	assert.equal(missionToolKind({ coordinator: "user", thread: {} }), "thread");
+	assert.equal(missionToolKind({ coordinator: "self" }), "coordinator");
+	const args = {
+		action: "handoff",
+		summary: "Show agents",
+		handoffTasks: [{ key: "a", title: "A", outcome: "O", acceptance: ["x"] }],
+	};
+	validateToolArguments(tool, { type: "toolCall", id: "h", name: "mission", arguments: args });
+	await tool.execute("h", args as never, undefined, undefined, {} as never);
+	assert.deepEqual(calls, [["handoff", { summary: "Show agents", handoffTasks: args.handoffTasks }]]);
+	for (const action of ["update", "comment", "start", "revision-propose", "decide"])
+		assert.throws(
+			() => validateToolArguments(tool, { type: "toolCall", id: "w", name: "mission", arguments: { action } }),
+			action,
+		);
+	assert.deepEqual([...THREAD_ACTIONS].includes("status" as never), true);
 });

@@ -75,6 +75,10 @@ function seed(id: string): Mission {
 				ownerSessionId: "s-coordinator",
 				references: [{ kind: "task", id: "t-1" }],
 				inputs: ["op-seed"],
+				chatSessionId: null,
+				handoff: null,
+				resolvedTaskIds: [],
+				earlier: [],
 			},
 			{
 				id: later,
@@ -84,6 +88,10 @@ function seed(id: string): Mission {
 				ownerSessionId: "s-coordinator",
 				references: [],
 				inputs: [],
+				chatSessionId: null,
+				handoff: null,
+				resolvedTaskIds: [],
+				earlier: [],
 			},
 		],
 		entries: [
@@ -257,7 +265,39 @@ export class ScriptedThreads implements ThreadsSource {
 		this.#publish();
 	}
 
+	/** The scope thread's chat handed off agreed work to the planner, after messages with the planner before thread chats. */
+	handOff(missionId: string) {
+		const m = this.#mission(missionId);
+		const t = m.topics[0]!;
+		t.revision += 1;
+		t.chatSessionId = "s-thread-chat";
+		t.earlier = [
+			{ role: "you", text: "Which file types are in scope?" },
+			{ role: "coordinator", text: "CSV and JSON. PDFs later." },
+		];
+		t.handoff = {
+			id: "h-1",
+			summary: "Export CSV and JSON first; PDFs later.",
+			tasks: [{ key: "csv", title: "Export CSV and JSON" }],
+			queued: true,
+		};
+		m.revision += 1;
+		this.#publish();
+	}
+
+	/** The planner's revision for the scope thread was confirmed: it resolved the thread with task #1. */
+	resolve(missionId: string) {
+		const m = this.#mission(missionId);
+		const t = m.topics[0]!;
+		t.revision += 1;
+		t.disposition = "resolved";
+		t.resolvedTaskIds = ["t-1"];
+		m.revision += 1;
+		this.#publish();
+	}
+
 	/** The mission changed elsewhere, so a shown source is stale. */
+
 	changeElsewhere(missionId: string) {
 		this.#mission(missionId).revision += 1;
 	}
@@ -275,6 +315,10 @@ export class ScriptedThreads implements ThreadsSource {
 				ownerSessionId: "s-coordinator",
 				references: [],
 				inputs: [],
+				chatSessionId: null,
+				handoff: null,
+				resolvedTaskIds: [],
+				earlier: [],
 			});
 			return id;
 		}

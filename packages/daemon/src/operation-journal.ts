@@ -240,6 +240,17 @@ export class OperationJournal {
 			);
 		});
 	}
+	/** Saved operations of one kind for one target, in no particular order. Reads only. */
+	async operations(kind: string, targetId: string): Promise<DurableOperation[]> {
+		return this.serial(async () => {
+			await this.init();
+			return structuredClone(
+				[...this.records.values()]
+					.filter((r) => r.operation.kind === kind && r.operation.targetId === targetId)
+					.map((r) => r.operation),
+			);
+		});
+	}
 	/** Final synchronous admission fence, after an awaited journal read. Refuse any in-flight
 	 * journal I/O rather than missing a revocation that is not published in memory yet. */
 	assertNoPending(kinds: readonly string[], targetId: string): void {

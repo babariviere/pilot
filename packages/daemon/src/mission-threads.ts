@@ -1,5 +1,5 @@
 /** Authenticated user topics. No pre-mission conversations, copied transcripts or generic send. */
-import type { DurableOperation, OperationReceipt } from "@pilot/protocol";
+import type { DurableOperation, OperationReceipt, SessionHistoryPage } from "@pilot/protocol";
 import type {
 	MissionThread,
 	MissionThreadHistory,
@@ -11,7 +11,7 @@ import { interviewExact, interviewId } from "./mission-interview-contract.ts";
 import { revisionText } from "./mission-revisions.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
-import { DiscussionQueued, type PlanningWorkers } from "./planning-workers.ts";
+import type { PlanningWorkers } from "./planning-workers.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
 
@@ -52,12 +52,17 @@ export class MissionThreads {
 			throw new Conflict("Current same-project mission coordinator required");
 		return { mission, project, owner };
 	}
+	/**
+	 * What a thread write names: the active mission, its project and planning owner, and the topics. Task progress and
+	 * mission activity are left out, so they never refuse a thread message.
+	 */
 	private source(id: string): string {
 		const pin = this.scope(id);
 		return payloadHash(
 			canonicalJSON({
-				pin,
-				revision: this.deps.store.revisions.source(id),
+				mission: { id: pin.mission.id, status: pin.mission.status, projectId: pin.mission.projectId },
+				project: pin.project.id,
+				owner: pin.owner,
 				identity: this.deps.sessions.planningIdentity(pin.owner),
 				topics: this.deps.store.threads.list(id),
 			}),
@@ -66,19 +71,21 @@ export class MissionThreads {
 	async read(projectId: string, id: string): Promise<MissionThreadsView> {
 		await this.deps.store.durable();
 		this.scope(id, projectId);
-		const discussion = this.deps.workers?.revisitView(id);
-		const waits = !discussion?.available && !!this.deps.workers?.canQueueMessage(id);
 		return {
 			version: 1,
 			missionId: id,
 			projectId,
 			source: this.source(id),
 			topics: this.deps.store.threads.list(id),
-			discussion: {
-				available: discussion?.available ?? false,
-				reason: discussion?.reason ?? "Trusted planning discussion unavailable",
-				waits,
-			},
+			// A thread chat takes messages whenever the thread is open; the planning agent can be busy. It needs native
+			// planning, which takes its handoffs.
+			discussion: this.deps.workers?.canQueueMessage(id)
+				? { available: true, reason: "", waits: false }
+				: {
+						available: false,
+						reason: "This mission has no native planning to take what a thread agrees on",
+						waits: false,
+					},
 			waiting: (this.deps.workers?.waitingMessages(id) ?? []).map(({ operationId, topicId, text, at }) => ({
 				operationId,
 				topicId,
@@ -106,6 +113,15 @@ export class MissionThreads {
 		this.scope(id, projectId);
 		const source = this.source(id),
 			topic = this.deps.store.threads.get(id, topicId);
+		const chat = topic.chat?.sessionId;
+		if (chat) {
+			const session = this.deps.sessions.get(chat);
+			if (!session || session.projectId !== topic.projectId)
+				throw new Conflict("Thread chat history is inaccessible");
+			const history = await this.deps.sessions.history(chat, before, limit);
+			if (this.source(id) !== source) throw new Conflict("Topic history source changed");
+			return { topic, sessionId: chat, scope: "thread-chat", history };
+		}
 		this.historyOwner(id, topic);
 		const history = await this.deps.sessions.history(topic.ownerSessionId, before, limit);
 		this.historyOwner(id, topic);
@@ -168,21 +184,18 @@ export class MissionThreads {
 			const result = store.threads.lookup(op);
 			if (!result) throw new Error("Unknown topic effect; no replay");
 			if (op.kind === "thread-send") {
-				if (!workers) throw new Error("Topic admission lookup unavailable");
-				// A message saved to wait has no admission of its own: it goes with a later planning input.
-				if (workers.queuedMessage(op.targetId, op.operationId)) return { topic: result, queued: true };
-				try {
+				// Messages from before thread chats: waiting for, or taken by, the planning agent.
+				if (workers?.queuedMessage(op.targetId, op.operationId)) return { topic: result, queued: true };
+				const entered = (await this.deps.journal.lookup(op))?.result as { stage?: string } | undefined;
+				if (workers && entered?.stage === "discussion-entered") {
 					return { topic: result, admission: await workers.recover(op) };
-				} catch (error) {
-					if (error instanceof DiscussionQueued) return { topic: result, queued: true };
-					throw error;
 				}
+				return { topic: result, chat: await this.chatRecover(op, result) };
 			}
 			return { topic: result };
 		}
 		let request: MissionThreadWrite;
 		let topic: MissionThread | undefined;
-		let queue = false;
 		try {
 			this.envelope(op);
 			request = JSON.parse(op.payload);
@@ -223,15 +236,12 @@ export class MissionThreads {
 				if (request.purpose === "thread-send") {
 					if (typeof request.text !== "string" || !request.text.trim() || Buffer.byteLength(request.text) > 32000)
 						throw new Error("Topic input must contain 1 to 32000 bytes");
-					// Sent now when the planning agent can take it; otherwise saved to wait for it.
-					queue = !workers?.revisitView(op.targetId).available;
 					if (
 						topic.disposition !== "open" ||
 						topic.ownerSessionId !== this.scope(op.targetId).owner ||
-						(queue && !workers?.canQueueMessage(op.targetId))
+						!workers?.canQueueMessage(op.targetId)
 					)
-						throw new Conflict("Topic needs an open thread and a planning owner");
-					if (queue) workers!.assertMessageRoom(op.targetId);
+						throw new Conflict("Topic needs an open thread and native planning");
 				}
 			}
 		} catch (e) {
@@ -274,41 +284,152 @@ export class MissionThreads {
 			return next;
 		});
 		const source = this.source(op.targetId);
-		// A thread message is checked more narrowly than the source: task progress while Pilot saves it or the planner
-		// takes it must not refuse it. Only the active mission, its project and planning owner, and this open thread count.
-		const owner = () => {
-			const s = this.scope(op.targetId);
-			return `${s.project.id}/${s.owner}`;
-		};
-		const scope = owner();
-		const fence = () => {
-			this.envelope(op);
-			const now = store.threads.get(op.targetId, result.id);
-			if (owner() !== scope || now.disposition !== "open" || now.ownerSessionId !== result.ownerSessionId)
-				throw new Conflict("The thread or its planning owner changed");
-		};
 		await store.durable();
-		if (request.purpose !== "thread-send") {
-			check(source);
-			return { topic: result };
+		check(source);
+		if (request.purpose === "thread-disposition" && request.disposition === "discarded") await this.closeChat(result);
+		if (request.purpose !== "thread-send") return { topic: result };
+		return { topic: result, chat: await this.chatSend(op, result, request.text) };
+	}
+	/**
+	 * Sends a thread message to the thread's chat, starting the chat with it when the thread has none open. The chat's
+	 * start is saved before it starts, so a crash in between stays Unknown instead of starting a second chat.
+	 */
+	private async chatSend(op: DurableOperation, topic: MissionThread, text: string): Promise<{ sessionId: string }> {
+		const { store, sessions, projects } = this.deps;
+		const live = this.liveChat(topic);
+		if (live) {
+			await sessions.send(live, text, "followUp", op.operationId);
+			return { sessionId: live };
 		}
-		fence();
-		if (queue) {
-			workers!.queueMessage(op.targetId, {
-				operationId: op.operationId,
-				topicId: result.id,
-				title: result.title,
-				text: request.text,
-			});
+		const earlier =
+			topic.earlier === undefined && topic.inputs.some((i) => i.operationId !== op.operationId)
+				? await this.earlier(topic, op.operationId).catch((error: unknown) => {
+						console.warn(`pilotd: thread ${topic.id} earlier messages not read: ${error}`);
+						return undefined;
+					})
+				: undefined;
+		store.threads.amend(op.targetId, topic.id, (t) => {
+			t.chat = { operationId: op.operationId };
+			if (earlier && t.earlier === undefined) t.earlier = earlier;
+		});
+		await store.durable();
+		const scope = this.scope(op.targetId);
+		const selection = await sessions.selectTaskModel(projects.require(scope.project.id).path);
+		this.scope(op.targetId);
+		const chat = await sessions.spawn(
+			{
+				projectId: scope.project.id,
+				missionId: op.targetId,
+				mode: "ask",
+				title: `Thread: ${topic.title}`.slice(0, 200),
+				message: text,
+				...selection,
+			},
+			false,
+			undefined,
+			{ role: "explorer", actorSessionId: scope.owner, mainView: true },
+		);
+		store.threads.amend(op.targetId, topic.id, (t) => {
+			t.chat = { operationId: op.operationId, sessionId: chat.id };
+		});
+		await store.durable();
+		console.log(`pilotd: thread ${topic.id} of mission ${op.targetId} started thread chat ${chat.id}`);
+		return { sessionId: chat.id };
+	}
+	/**
+	 * Moves older threads to thread chats, once at startup and safe to repeat: messages that still wait for the planning
+	 * agent go to their thread's chat instead.
+	 */
+	async migrate(): Promise<void> {
+		const { store, workers } = this.deps;
+		if (!workers) return;
+		for (const missionId of store.planningWorkers.missionIds()) {
+			for (const message of workers.takeWaitingMessages(missionId)) {
+				try {
+					const topic = store.threads.get(missionId, message.topicId);
+					if (topic.disposition !== "open") continue;
+					const op = { operationId: message.operationId, targetId: missionId } as DurableOperation;
+					await this.chatSend(op, topic, message.text);
+					console.log(`pilotd: thread ${topic.id} message ${message.operationId} moved to its thread chat`);
+				} catch (error) {
+					console.warn(`pilotd: thread message ${message.operationId} not moved to a thread chat: ${error}`);
+				}
+			}
 			await store.durable();
-			return { topic: result, queued: true };
 		}
+	}
+	/**
+	 * The thread's messages with the planning agent from before thread chats: the user's sends and the agent's replies
+	 * that followed each. Read once, when its first thread chat starts, so the chat knows what was said.
+	 */
+	private async earlier(topic: MissionThread, skip: string): Promise<NonNullable<MissionThread["earlier"]>> {
+		const sent = new Map<string, string>();
+		for (const op of await this.deps.journal.operations("thread-send", topic.missionId)) {
+			const payload = JSON.parse(op.payload) as { topicId?: string; text?: string };
+			if (payload.topicId === topic.id && op.operationId !== skip && typeof payload.text === "string")
+				sent.set(op.operationId, payload.text);
+		}
+		if (!sent.size) return [];
+		const entries: SessionHistoryPage["entries"] = [];
+		for (let before = Number.MAX_SAFE_INTEGER; ; ) {
+			const page = await this.deps.sessions.history(topic.ownerSessionId, before, 100);
+			entries.unshift(...page.entries);
+			if (!page.more || !page.entries.length) break;
+			before = page.entries[0]!.id;
+		}
+		const out: NonNullable<MissionThread["earlier"]> = [];
+		let replying = false;
+		for (const entry of entries) {
+			const record = entry as unknown as Record<string, any>;
+			if (record.kind === "pilot.planning-input") {
+				const op = JSON.parse(String(record.data?.operation ?? "{}")) as { operationId?: string; payload?: string };
+				const carried =
+					op.operationId && sent.has(op.operationId)
+						? [op.operationId]
+						: ((JSON.parse(op.payload ?? "{}").operationIds as string[] | undefined) ?? []).filter((id) =>
+								sent.has(id),
+							);
+				for (const id of carried) out.push({ role: "you", text: sent.get(id)! });
+				replying = carried.length > 0;
+			} else if (record.kind === "pi.assistant" && replying) {
+				const text = (record.model ?? [])
+					.flatMap((m: { content?: Array<{ type: string; text?: string }> }) => m.content ?? [])
+					.filter((c: { type: string; text?: string }) => c.type === "text" && c.text)
+					.map((c: { text: string }) => c.text)
+					.join("\n")
+					.trim();
+				if (text) out.push({ role: "coordinator", text });
+			}
+		}
+		return out;
+	}
+	/** After a restart: the message reached the chat it names, or it sends again with the same request ID. */
+	private async chatRecover(op: DurableOperation, saved: MissionThread): Promise<{ sessionId: string }> {
+		const topic = this.deps.store.threads.get(op.targetId, saved.id);
+		if (topic.chat?.operationId === op.operationId) {
+			if (!topic.chat.sessionId) throw new Error("Unknown thread chat start; no replay");
+			return { sessionId: topic.chat.sessionId };
+		}
+		const live = this.liveChat(topic);
+		if (!live) throw new Error("Unknown thread message; its chat is closed");
+		// The chat takes one input per request ID, so sending again cannot repeat the message.
+		await this.deps.sessions.send(live, JSON.parse(op.payload).text, "followUp", op.operationId);
+		return { sessionId: live };
+	}
+	/** The thread's chat session when it exists and is not archived. */
+	private liveChat(topic: MissionThread): string | undefined {
+		const id = topic.chat?.sessionId;
+		const chat = id ? this.deps.sessions.get(id) : undefined;
+		return chat && !chat.archivedAt ? chat.id : undefined;
+	}
+	/** Archives the chat of a thread the user discarded or a revision resolved. Its history stays readable. */
+	async closeChat(topic: MissionThread): Promise<void> {
+		const live = this.liveChat(topic);
+		if (!live) return;
 		try {
-			const admission = await workers!.discuss(op, fence);
-			return { topic: result, admission };
+			await this.deps.sessions.archive(live);
 		} catch (error) {
-			if (error instanceof DiscussionQueued) return { topic: result, queued: true };
-			throw error;
+			console.warn(`pilotd: thread chat ${live} not archived: ${error}`);
 		}
 	}
 }

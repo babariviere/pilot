@@ -48,7 +48,7 @@ test("Send sends the exact words once; the service's acceptance is not the coord
 	const app = await thread();
 	await app.type("id:thread-reply", "  What about zip files? 日本語\n");
 	await app.press("id:thread-send");
-	await app.waitFor("Sent. The coordinator has your message; its answer shows here when it writes one.");
+	await app.waitFor("Sent. The thread chat has your message; its answer shows here when it writes one.");
 	expect(app.value("id:thread-reply")).toBe("");
 	expect(app.texts().some((t) => t.includes("What about zip files? 日本語"))).toBe(true);
 	expect(app.shows("PDFs can wait. I noted it.")).toBe(false);
@@ -273,5 +273,27 @@ test("a thread read that fails after an earlier one says what shows is from the 
 	expect(app.shows("Pilot could not reach its service. What shows is from Pilot's last read.")).toBe(true);
 	expect(app.shows("Do we need PDFs in the first version?")).toBe(true);
 	expect(app.value("id:thread-reply")).toBe("Keep me");
+	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
+});
+
+test("a thread chat's handoff shows what went to the planner; a confirmed revision resolves the thread", async () => {
+	const app = await mission();
+	await app.press("Hand off");
+	await app.press("id:thread-search-scope");
+	await app.waitFor("id:thread-handoff");
+	expect(app.shows("Sent to the planner")).toBe(true);
+	expect(app.shows("Export CSV and JSON first; PDFs later.")).toBe(true);
+	expect(app.shows("· Export CSV and JSON")).toBe(true);
+	expect(app.shows("Earlier with the planner · 2")).toBe(true);
+	expect(app.shows("Conversation")).toBe(true);
+	await app.press("Earlier with the planner · 2");
+	await app.waitFor("CSV and JSON. PDFs later.");
+	await app.press("Resolve");
+	await app.waitFor("id:thread-closed");
+	expect(
+		app.shows("A confirmed revision resolved this thread. It added #1 Read the exporter. Its history stays."),
+	).toBe(true);
+	expect(app.shows("id:thread-handoff")).toBe(false);
+	expect(app.shows("id:thread-reopen")).toBe(true);
 	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
 });

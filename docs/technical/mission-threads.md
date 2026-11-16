@@ -1,5 +1,8 @@
 # Focused mission discussions
 
+Thread messages now go to each thread's own chat, not the planning agent: see [thread chats](thread-chats.md).
+The planner sections below describe older messages, which Pilot moves to thread chats at startup.
+
 Backend API for the approved focused coordinator threads, and Day's native screen over it.
 There is no pre-mission thread, second transcript, new chat engine or task tracker.
 
@@ -7,7 +10,7 @@ There is no pre-mission thread, second transcript, new chat engine or task track
 
 `MissionStore.threads` saves small mission-owned topic records: stable ID, title, original
 coordinator session, native user operation attribution, revision, references, input intents and
-`open | later | discarded` disposition. Disposition changes are reversible. They do not archive,
+`open | later | discarded | resolved` disposition (Pilot sets `resolved`). Disposition changes are reversible. They do not archive,
 Stop, pause, decide, accept an agreement, approve or Start anything. Immutable operation results
 keep prior metadata and dispositions. Original history and referenced evidence are never removed.
 
@@ -50,13 +53,10 @@ At most 100 topics, 100 references per topic, 2048 metadata events per mission a
 bytes per send are supported. Existing journal, planning-call and kernel receipt capacities also
 apply. A full store refuses; nothing silently pages away or deletes evidence.
 
-Metadata writes and input intents are durable before ACK or dispatch. Source fences include
-canonical mission revisions, task/decision/owner/membership events, controls, project/session
-identity and topic revisions. The final asynchronous admission guard checks these again inside
-the kernel input transaction. Concurrent source changes refuse or remain Unknown after entry.
-A `thread-send` checks the full source only when it is validated. After that, while Pilot saves it and the
-planner takes it, only the active mission, its project and planning owner, and the open topic count: task
-progress or mission activity in the meantime does not refuse a chat message.
+Metadata writes and input intents are durable before ACK or dispatch. A write names the read's source and is
+checked again after it is saved; a changed source refuses it, or leaves it Unknown after entry.
+The thread `source` names only the active mission, its project and planning owner, the owner's planning
+identity and the topics. Task progress and mission activity are left out, so they never refuse a thread write.
 
 `thread-send` has a distinct trusted planning/discussion purpose. It reuses qualified Revisit
 admission only for an existing **published, idle, active, unheld, unstopped enrolled planning
@@ -88,8 +88,6 @@ Pilot delivers them with the first planning input that can carry them, at most o
 Each message is marked with the input that carries it (`carriedBy`) before that input is admitted,
 so a restart reads the same content and never sends it twice. A refused Continue puts its messages
 back to waiting. The agent reads them as discussion, never as approval, Start or agreement changes.
-A message the planner never took also waits: Pilot refused it before sending (`PlanningInputNotSent`),
-or the planner refused it as busy or held, while its topic is still open with the same owner.
 At most 20 messages wait per mission (`WAITING_MESSAGES`); past it, Send is refused with the limit
 named and the words stay. Unstick's checks count waiting messages. Editing or withdrawing a waiting
 message is not built yet.

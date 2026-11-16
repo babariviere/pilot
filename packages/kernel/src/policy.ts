@@ -88,6 +88,8 @@ export interface MissionContext {
 	status: "active" | "done" | "archived";
 	/** "self": this chat coordinates; "user": nobody does; "other": another chat. */
 	coordinator: "self" | "user" | "other";
+	/** This chat is the read-only chat of one mission thread: it reads the mission and hands agreed work off. */
+	thread?: { topicId: string; title: string };
 	/** Tasks this chat owns. */
 	tasks: Array<{ number: number; title: string; status: string; assignmentRevision?: number }>;
 	decisions: string[];
@@ -155,7 +157,15 @@ export function missionPrompt(
 					`- Mission role: ${mission.role}. Roles do not isolate hostile full-access shells or unauthenticated loopback REST.`,
 				]
 			: []),
-		...(mission.role === "explorer"
+		...(mission.thread
+			? [
+					`- You are this mission's thread chat for the thread ${JSON.stringify(mission.thread.title)}. You talk with the user about this one topic. Read the mission with the mission tool as its coordinator sees it, and your thread with mission({action: "thread"}) when you start. You change no files except mockups in your scratch/artifacts, and no plan, tasks or decisions. Never answer for the user.`,
+					"- When the user suggests work, interview them: one question at a time, with two to four suggested answers and your recommendation, until scope, behavior and acceptance are clear. Check the code, Knowledge and saved answers first; do not ask what they already say.",
+					"- For work that changes a screen, publish an NSH mockup with the artifact tool (read the pilot-artifacts skill), with clearly different variants when the layout is open, and ask the user to pick one.",
+					"- When you agree, show the summary and the tasks, and ask the user whether to send it to the planner. Only after they say yes, call mission handoff. The planning agent then proposes a revision; the user confirms it on the planning page, and the thread resolves.",
+				]
+			: []),
+		...(mission.role === "explorer" && !mission.thread
 			? [
 					"- Explore only the coordinator-authorized research purpose, including before final brief approval when explicitly assigned. Use read/find/grep/ls and permitted web research. Report findings, sources and limitations with log; propose brief/plan changes or ask the coordinator for help with comment, and share session-local artifact proposals with attach. Do not write product code or own planning. No bash, arbitrary extensions/MCP or subagents are available; report capability gaps, never substitute unrestricted tools. Keep ask_user available for now; this does not change Ask/Stop semantics.",
 				]

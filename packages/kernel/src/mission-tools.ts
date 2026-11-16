@@ -58,7 +58,8 @@ export const MISSION_ACTIONS = [
 	"requestReview",
 	"retireReview",
 ] as const;
-export type MissionAction = (typeof MISSION_ACTIONS)[number];
+/** Every action pilotd takes. A thread chat's own (thread, handoff) are only in its tool (THREAD_ACTIONS). */
+export type MissionAction = (typeof MISSION_ACTIONS)[number] | "thread" | "handoff";
 
 /** Sends one call to pilotd and resolves with its JSON result. */
 export type MissionCall = (action: MissionAction, args: Record<string, JsonValue>) => Promise<JsonValue>;
@@ -494,3 +495,98 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 		},
 	};
 }
+/** What a thread chat may do: read the mission as its coordinator does, read its thread, and hand off agreed work. */
+export const THREAD_ACTIONS = [
+	"get",
+	"status",
+	"tasks",
+	"task",
+	"brief",
+	"decisions",
+	"comments",
+	"activity",
+	"links",
+	"artifacts",
+	"map",
+	"answers",
+	"replaced",
+	"thread",
+	"handoff",
+] as const satisfies readonly MissionAction[];
+
+/** The mission tool of a thread chat: coordinator reads, its thread, and the handoff. It changes nothing else. */
+export function createThreadMissionTool(call: MissionCall): ToolDefinition {
+	const key = Type.String({ minLength: 1, maxLength: 128 });
+	return defineTool({
+		name: MISSION_TOOL,
+		label: "Mission",
+		description: `Read the mission this thread chat belongs to, as its coordinator sees it, and hand agreed work to the planning agent. You change nothing else.
+- get: goal, status, phases and tasks with progress, members and their states, needs-you, PRs in review and decision proposals. id: one full task with its reports.
+- status: members' states, outcomes and PRs; targetSessionId for one member with its last reply and pending question.
+- tasks: filter open (default), done or all, phase. task: id reads one task.
+- brief (optional revision), decisions (filter all for history), comments, activity (taskId, kind, since, cursor, limit), links and artifacts (taskId, filter), map, answers (id: an interview submission), replaced.
+- thread: this thread: title, state, its earlier messages with the planning agent, the latest handoff and what resolved it.
+- handoff: only after the user said yes to sending it. summary (what the user wants and what you agreed), handoffTasks [{key, title, outcome, acceptance[], dependsOn? (existing task numbers or earlier keys), prototype? {artifactId, revision} of a mockup the user chose}]. Pilot sends it to the planning agent, which proposes a revision for the user to confirm. A handoff grants nothing.`,
+		promptSnippet: "Read the shared mission and hand agreed work to the planning agent",
+		executionMode: "sequential",
+		annotations: { openWorldHint: false, destructiveHint: false },
+		parameters: Type.Object({
+			action: StringEnum(THREAD_ACTIONS),
+			id: Type.Optional(Type.Union([key, Type.Integer({ minimum: 1 })])),
+			revision: Type.Optional(Type.Integer({ minimum: 1 })),
+			filter: Type.Optional(StringEnum(["open", "done", "all"] as const)),
+			phase: Type.Optional(Type.String({ maxLength: 200 })),
+			taskId: Type.Optional(Type.Union([key, Type.Integer({ minimum: 1 })])),
+			targetSessionId: Type.Optional(key),
+			kind: Type.Optional(Type.String({ maxLength: 64 })),
+			since: Type.Optional(Type.Union([Type.String({ maxLength: 64 }), Type.Integer({ minimum: 0 })])),
+			cursor: Type.Optional(Type.String({ maxLength: 256 })),
+			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+			summary: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })),
+			handoffTasks: Type.Optional(
+				Type.Array(
+					Type.Object(
+						{
+							key: Type.String({ pattern: "^[A-Za-z0-9_-]{1,64}$" }),
+							title: Type.String({ minLength: 1, maxLength: 200 }),
+							outcome: Type.String({ minLength: 1, maxLength: 4000 }),
+							acceptance: Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), {
+								minItems: 1,
+								maxItems: 20,
+							}),
+							dependsOn: Type.Optional(Type.Array(Type.String({ maxLength: 128 }), { maxItems: 20 })),
+							prototype: Type.Optional(
+								Type.Object(
+									{ artifactId: key, revision: Type.Integer({ minimum: 1 }) },
+									{ additionalProperties: false },
+								),
+							),
+						},
+						{ additionalProperties: false },
+					),
+					{ minItems: 1, maxItems: 20 },
+				),
+			),
+		}),
+		outputSchema: Type.Record(Type.String(), Type.Unknown()),
+		async execute(_callId, params, signal): Promise<AgentToolResult<JsonValue>> {
+			signal?.throwIfAborted();
+			const { action, ...rest } = params;
+			const args = Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)) as Record<
+				string,
+				JsonValue
+			>;
+			const data = await call(action, args);
+			return { content: [{ type: "text", text: JSON.stringify(data) }], details: data, structuredContent: data };
+		},
+	});
+}
+
+/** The mission tool for this chat's place in the mission: thread chat, coordinator or member. */
+export function missionToolFor(call: MissionCall, context: { coordinator?: string; thread?: unknown } | undefined) {
+	return context?.thread ? createThreadMissionTool(call) : createMissionTool(call, context?.coordinator === "self");
+}
+
+/** Which mission tool a context needs; a change re-registers the tool. */
+export const missionToolKind = (context: { coordinator?: string; thread?: unknown } | undefined) =>
+	context?.thread ? "thread" : context?.coordinator === "self" ? "coordinator" : "member";

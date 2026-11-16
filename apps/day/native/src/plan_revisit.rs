@@ -249,6 +249,7 @@ impl RevisitDesk {
             digest: p.digest(),
             summary: p.summary.clone(),
             current: p.source == now.source,
+            waiting: 0,
             goal: Self::text(&now.goal, p.delta.goal.as_ref()),
             plan: Self::text(&now.plan, p.delta.plan.as_ref()),
             tasks,

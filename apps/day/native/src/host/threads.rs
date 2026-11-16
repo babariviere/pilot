@@ -311,7 +311,7 @@ fn valid_topic(v: &Value, mission: &str, project: &str) -> bool {
         && v["revision"].as_u64().is_some()
         && matches!(
             v["disposition"].as_str(),
-            Some("open" | "later" | "discarded")
+            Some("open" | "later" | "discarded" | "resolved")
         )
         && v["createdBy"]["kind"] == "user"
         && v["references"]
@@ -354,7 +354,8 @@ fn valid_view(v: &Value, mission: &str, project: &str) -> bool {
 fn topic(v: &Value) -> Value {
     json!({"id":v["id"],"title":v["title"],"revision":v["revision"],"disposition":v["disposition"],
         "ownerSessionId":v["ownerSessionId"],"references":v["references"],
-        "inputs":v["inputs"].as_array().map(|i| i.iter().map(|i| i["operationId"].clone()).collect::<Vec<_>>()).unwrap_or_default()})
+        "inputs":v["inputs"].as_array().map(|i| i.iter().map(|i| i["operationId"].clone()).collect::<Vec<_>>()).unwrap_or_default(),
+        "chatSessionId":v["chat"]["sessionId"],"handoff":v["handoff"],"resolvedBy":v["resolvedBy"],"earlier":v["earlier"]})
 }
 
 /// Task numbers and titles and decision texts, to name references. Not a second tracker.
@@ -461,7 +462,7 @@ fn shorten(text: String) -> (String, bool) {
 
 /// One original entry for display. Membership in the topic is only what the
 /// topic itself names: its references and its saved inputs' exact operations.
-fn entry(e: &Value, topic: &Value, owner: &str) -> Option<Value> {
+fn entry(e: &Value, topic: &Value, owner: &str, chat: bool) -> Option<Value> {
     let id = e["id"].as_u64()?;
     let kind = e["kind"].as_str().unwrap_or("");
     let referenced = topic["references"].as_array().is_some_and(|refs| {
@@ -497,7 +498,7 @@ fn entry(e: &Value, topic: &Value, owner: &str) -> Option<Value> {
         "pi.assistant" => {
             text = message_text(e, "assistant");
             if !text.is_empty() {
-                role = "coordinator";
+                role = if chat { "chat" } else { "coordinator" };
             }
         }
         _ => {}
@@ -530,8 +531,15 @@ pub(super) async fn history(t: &Transport, r: &HistoryRequest) -> Result<Value, 
     )
     .await?;
     let topic = &v["topic"];
-    let owner = topic["ownerSessionId"].as_str().unwrap_or("");
-    if v["scope"] != "coordinator-history"
+    // A thread with a thread chat reads that chat; an older one reads the coordinator's conversation.
+    let chat = v["scope"] == "thread-chat";
+    let owner = if chat {
+        topic["chat"]["sessionId"].as_str().unwrap_or("")
+    } else {
+        topic["ownerSessionId"].as_str().unwrap_or("")
+    };
+    if !(chat || v["scope"] == "coordinator-history")
+        || owner.is_empty()
         || topic["id"] != r.topic_id.as_str()
         || !valid_topic(topic, &r.mission_id, project)
         || v["sessionId"] != owner
@@ -542,14 +550,18 @@ pub(super) async fn history(t: &Transport, r: &HistoryRequest) -> Result<Value, 
     }
     let mut entries: Vec<Value> = v["history"]["entries"]
         .as_array()
-        .map(|e| e.iter().filter_map(|e| entry(e, topic, owner)).collect())
+        .map(|e| {
+            e.iter()
+                .filter_map(|e| entry(e, topic, owner, chat))
+                .collect()
+        })
         .unwrap_or_default();
     entries.sort_by_key(|e| e["id"].as_u64());
     let oldest = entries.first().and_then(|e| e["id"].as_u64());
     t.gate(false).await?;
     Ok(
         json!({"version":1,"missionId":r.mission_id,"topicId":r.topic_id,"sessionId":owner,
-        "scope":"coordinator-history","topic":self::topic(topic),"entries":entries,
+        "scope":v["scope"],"topic":self::topic(topic),"entries":entries,
         "more":v["history"]["more"] == true && oldest.is_some_and(|o| o > 1),
         "nextBefore":oldest}),
     )
@@ -873,13 +885,13 @@ mod tests {
             "payload":json!({"purpose":"thread-send","topicId":"t","text":"Exact 🙂"}).to_string()});
         let input = json!({"id":5,"kind":"pilot.planning-input","data":{"operation":sent.to_string()},
             "model":[{"role":"user","content":"Discuss this one mission topic … wrapper"}]});
-        let e = entry(&input, &topic, "s").unwrap();
+        let e = entry(&input, &topic, "s", false).unwrap();
         assert_eq!(e["role"], "you");
         assert_eq!(e["text"], "Exact 🙂");
         assert_eq!(e["input"], true);
         let reply = json!({"id":6,"kind":"pi.assistant","model":[{"role":"assistant",
             "content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"Answer"}]}]});
-        let e = entry(&reply, &topic, "s").unwrap();
+        let e = entry(&reply, &topic, "s", false).unwrap();
         assert_eq!(
             (e["role"].as_str(), e["text"].as_str()),
             (Some("coordinator"), Some("Answer"))
@@ -890,12 +902,39 @@ mod tests {
             (Some(false), Some(false))
         );
         let old = json!({"id":4,"kind":"pi.user","model":[{"role":"user","content":"Earlier"}]});
-        assert_eq!(entry(&old, &topic, "s").unwrap()["referenced"], true);
+        assert_eq!(entry(&old, &topic, "s", false).unwrap()["referenced"], true);
         let tool = json!({"id":7,"kind":"pi.tool-result"});
-        assert_eq!(entry(&tool, &topic, "s").unwrap()["role"], "activity");
+        assert_eq!(
+            entry(&tool, &topic, "s", false).unwrap()["role"],
+            "activity"
+        );
         let long = json!({"id":8,"kind":"pi.user","model":[{"role":"user","content":"é".repeat(ENTRY_TEXT)}]});
-        let e = entry(&long, &topic, "s").unwrap();
+        let e = entry(&long, &topic, "s", false).unwrap();
         assert_eq!(e["shortened"], true);
         assert!(e["text"].as_str().unwrap().len() <= ENTRY_TEXT);
+    }
+
+    #[test]
+    fn a_thread_chat_reply_is_the_chat_and_a_resolved_topic_is_valid() {
+        let named = json!({"id":"t","inputs":[],"references":[]});
+        let reply = json!({"id":2,"kind":"pi.assistant","model":[{"role":"assistant",
+            "content":[{"type":"text","text":"Which layout?"}]}]});
+        assert_eq!(entry(&reply, &named, "c", true).unwrap()["role"], "chat");
+        let user =
+            json!({"id":1,"kind":"pi.user","model":[{"role":"user","content":"Rework the page"}]});
+        assert_eq!(entry(&user, &named, "c", true).unwrap()["role"], "you");
+        let saved = json!({"version":1,"id":"t1","missionId":"m","projectId":"p","ownerSessionId":"o",
+            "title":"T","revision":3,"disposition":"resolved","createdBy":{"kind":"user"},
+            "references":[],"inputs":[],"chat":{"operationId":"op","sessionId":"c"},
+            "resolvedBy":{"proposalId":"r","taskIds":["k"]}});
+        assert!(valid_topic(&saved, "m", "p"));
+        let shown = topic(&saved);
+        assert_eq!(
+            (
+                shown["chatSessionId"].as_str(),
+                shown["resolvedBy"]["taskIds"][0].as_str()
+            ),
+            (Some("c"), Some("k"))
+        );
     }
 }

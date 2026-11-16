@@ -6,6 +6,7 @@ export { formatFailure, safeFailureText } from "./failure.ts";
 export { inputOrigin } from "./input-origin.ts";
 export { createMissionPlanTool, type NativePlanningPort } from "./mission-plan-tool.ts";
 export type { MissionAction } from "./mission-tools.ts";
+export { THREAD_ACTIONS } from "./mission-tools.ts";
 export type {
 	PlanningInput,
 	PlanningRound,

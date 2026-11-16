@@ -48,6 +48,7 @@ const STATUS: Record<Topic["disposition"], { word: string; mark: MarkKind }> = {
 	open: { word: "Open", mark: "still" },
 	later: { word: "Later", mark: "paused" },
 	discarded: { word: "Discarded", mark: "done" },
+	resolved: { word: "Resolved", mark: "done" },
 };
 
 const unsettled = (o: ThreadOp) => o.state === "unknown" || o.state === "checking";
@@ -225,7 +226,7 @@ function NewThread(props: { mirror: ThreadsMirror; missionId: string; m: Mission
 						icon="plus"
 						testID="thread-new"
 						disabled={props.m.availability !== "live"}
-						accessibilityLabel="Start a new thread with the coordinator by writing its first message."
+						accessibilityLabel="Start a new thread by writing its first message. A thread chat answers it."
 						onPress={() => {
 							glide();
 							naming.update((all) => ({ ...all, [props.missionId]: true }));
@@ -241,7 +242,7 @@ function NewThread(props: { mirror: ThreadsMirror; missionId: string; m: Mission
 					autoFocus
 					multiline
 					value={text()}
-					accessibilityLabel="Your first message to the coordinator. Its first sentence becomes the thread's title."
+					accessibilityLabel="Your first message. Its first sentence becomes the thread's title."
 					placeholder="What do you want to talk about? The first sentence becomes the thread's title."
 					onChange={({ value }) => setDraft(key(), value)}
 					onFocus={field.focus}
@@ -332,10 +333,10 @@ export function MissionThreadsSection(props: { day: Day; missionId: string }) {
 		return [
 			...all.filter((t) => t.disposition === "open"),
 			...all.filter((t) => t.disposition === "later"),
-			...(kept ? all.filter((t) => t.disposition === "discarded") : []),
+			...(kept ? all.filter((t) => t.disposition === "resolved" || t.disposition === "discarded") : []),
 		];
 	};
-	const discarded = () => topics().filter((t) => t.disposition === "discarded").length;
+	const discarded = () => topics().filter((t) => t.disposition === "resolved" || t.disposition === "discarded").length;
 	return (
 		<View testID="mission-threads" class="gap-2">
 			<SectionTitle title="Threads with the coordinator" count={topics().length} />
@@ -369,9 +370,7 @@ export function MissionThreadsSection(props: { day: Day; missionId: string }) {
 						<View class="flex-row border-t border-border pt-2">
 							<InlineAction
 								testID="threads-discarded"
-								label={
-									showDiscarded()[props.missionId] ? "Hide discarded threads" : `Show ${discarded()} discarded`
-								}
+								label={showDiscarded()[props.missionId] ? "Hide closed threads" : `Show ${discarded()} closed`}
 								onPress={() => {
 									glide();
 									showDiscarded.update((all) => ({ ...all, [props.missionId]: !all[props.missionId] }));
@@ -512,10 +511,71 @@ function Links(props: {
 	);
 }
 
+/** What resolved a thread: the tasks its confirmed revision added, by number when known. */
+function resolvedLine(topic: Topic, tasks: { id: string; number: number; title: string }[]): string {
+	const named = topic.resolvedTaskIds.map((id) => {
+		const task = tasks.find((x) => x.id === id);
+		return task ? `#${task.number} ${task.title}` : "a new task";
+	});
+	return named.length
+		? `A confirmed revision resolved this thread. It added ${named.join(", ")}. Its history stays.`
+		: "A confirmed revision resolved this thread. Its history stays.";
+}
+
+/** The thread's messages with the planner from before it had a thread chat. The thread chat read them too. */
+function Earlier(props: { topic: Topic }) {
+	const open = signal(false);
+	return (
+		<If when={props.topic.chatSessionId && props.topic.earlier.length > 0}>
+			<View testID="thread-before-chat" class="gap-2">
+				<InlineAction
+					label={open() ? "Hide earlier messages" : `Earlier with the planner · ${props.topic.earlier.length}`}
+					onPress={() => open.set(!open())}
+				/>
+				<If when={open()}>
+					<View class="gap-3">
+						<Each of={props.topic.earlier.map((e, i) => ({ ...e, i }))} key={(e) => String(e.i)}>
+							{(e) => (
+								<View class="gap-1">
+									<Text class="text-xs text-faint">{e().role === "you" ? "You" : "Planner"}</Text>
+									<Text class="text-sm leading-relaxed text-muted-foreground">{e().text}</Text>
+								</View>
+							)}
+						</Each>
+					</View>
+				</If>
+			</View>
+		</If>
+	);
+}
+
+/** What the thread chat sent to the planner. It grants nothing; the planner proposes a revision to confirm. */
+function HandoffNote(props: { topic: Topic }) {
+	const h = () => props.topic.handoff;
+	return (
+		<If when={props.topic.disposition === "open" && h()}>
+			<View testID="thread-handoff" class="gap-2 rounded-xl bg-muted px-4 py-3">
+				<Text class="text-sm font-medium text-foreground">
+					{h()?.queued ? "Sent to the planner" : "Waits to go to the planner"}
+				</Text>
+				<Text class="text-sm leading-relaxed text-muted-foreground">{h()?.summary ?? ""}</Text>
+				<Each of={h()?.tasks ?? []} key={(task) => task.key}>
+					{(task) => <Text class="text-sm text-foreground">· {task().title}</Text>}
+				</Each>
+				<Text class="text-xs text-muted-foreground">
+					The planner proposes a revision with these tasks. Confirm it on the mission's planning page; nothing
+					changes before.
+				</Text>
+			</View>
+		</If>
+	);
+}
+
 /** Who wrote an entry. */
 function who(e: HistoryEntry): string {
 	if (e.role === "you") return "You";
 	if (e.role === "coordinator") return "Coordinator";
+	if (e.role === "chat") return "Thread chat";
 	if (e.role === "planning") return "Pilot";
 	return "";
 }
@@ -613,9 +673,11 @@ function Conversation(props: { mirror: ThreadsMirror; missionId: string; topic: 
 	const h = () => props.mirror.state().histories[historyKey(props.missionId, props.topic.id)];
 	return (
 		<View testID="thread-history" class="gap-2">
-			<SectionTitle title="Coordinator conversation" />
+			<SectionTitle title={props.topic.chatSessionId ? "Conversation" : "Coordinator conversation"} />
 			<Text class="text-xs text-muted-foreground">
-				The coordinator's whole conversation, not only this thread. Messages this thread sent or linked are marked.
+				{props.topic.chatSessionId
+					? "This thread's own chat. It reads the mission, asks what it needs, and sends what you agree on to the planner when you say so."
+					: "The coordinator's whole conversation, not only this thread. Messages this thread sent or linked are marked."}
 			</Text>
 			<If when={h()?.more}>
 				<View class="flex-row">
@@ -641,7 +703,9 @@ function Conversation(props: { mirror: ThreadsMirror; missionId: string; topic: 
 				<Text class="text-sm text-muted-foreground">Reading the conversation…</Text>
 			</If>
 			<If when={h()?.availability === "live" && h()?.entries.length === 0 && !h()?.reading}>
-				<Text class="text-sm text-muted-foreground">The coordinator has no messages yet.</Text>
+				<Text class="text-sm text-muted-foreground">
+					{props.topic.chatSessionId ? "No messages yet." : "The coordinator has no messages yet."}
+				</Text>
 			</If>
 			<Each of={fold(h()?.entries ?? [])} key={(s) => (s.kind === "entry" ? `e${s.entry.id}` : `q${s.id}`)}>
 				{(s) => (
@@ -749,8 +813,8 @@ function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 				ref={field.ref}
 				multiline
 				value={text()}
-				accessibilityLabel="Your message to the coordinator"
-				placeholder="Write to the coordinator about this subject"
+				accessibilityLabel="Your message in this thread"
+				placeholder="Write about this subject"
 				onChange={({ value }) => setDraft(key(), value)}
 				onFocus={field.focus}
 				onSelectionChange={field.select}
@@ -773,7 +837,7 @@ function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 					shortcut="⌘↩"
 					testID="thread-send"
 					disabled={!canSend()}
-					accessibilityLabel="Send this message to the coordinator once. It does not start or approve work."
+					accessibilityLabel="Send this message once. The thread chat answers; it does not start or approve work."
 					onPress={() => void go()}
 				/>
 				<View class="flex-1" />
@@ -954,7 +1018,9 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 										<Text class="text-sm text-foreground">
 											{t().disposition === "later"
 												? "This thread is in Later. Its history stays."
-												: "This thread is discarded. Its history stays."}
+												: t().disposition === "resolved"
+													? resolvedLine(t(), m().snapshot?.catalog.tasks ?? [])
+													: "This thread is discarded. Its history stays."}
 										</Text>
 										<View class="flex-row">
 											<Action
@@ -983,7 +1049,9 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 									canWrite={canWrite()}
 									projectId={props.day.delivery?.view().projectId ?? ""}
 								/>
+								<Earlier topic={t()} />
 								<Conversation mirror={mirror} missionId={props.missionId} topic={t()} canLink={canWrite()} />
+								<HandoffNote topic={t()} />
 								<Unsettled
 									mirror={mirror}
 									missionId={props.missionId}

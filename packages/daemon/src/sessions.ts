@@ -101,7 +101,7 @@ import {
 import { DiagnosticLogReader, type DiagnosticLogReaderOptions } from "./diagnostic-logs.ts";
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { DiagnosticRepairProjectStore, diagnosticRepairTitle, repairHost } from "./diagnostic-repair-project.ts";
-import { Conflict, NotFound, PlanningInputNotSent, ServiceUnavailable } from "./errors.ts";
+import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import {
 	type FlowState,
@@ -1491,16 +1491,12 @@ export class SessionManager {
 			if (worker && this.workers.get(id) !== worker) throw new Conflict("Planning worker changed");
 		};
 		try {
-			try {
-				check();
-				await this.prepareCoordinatorRole(id);
-				check();
-				worker = await this.ensureWorker(id);
-				await worker.ready;
-				check();
-			} catch (error) {
-				throw new PlanningInputNotSent(error);
-			}
+			check();
+			await this.prepareCoordinatorRole(id);
+			check();
+			worker = await this.ensureWorker(id);
+			await worker.ready;
+			check();
 			this.planningGuards.set(input.operation.operationId, { worker, guard: check });
 			await worker.request({ type: "planning.input", requestId: input.operation.operationId, input });
 			return { admissionId: input.operation.operationId };

@@ -1,6 +1,6 @@
 /** Mission orchestration: validation against projects and sessions, agent tool calls and kernel contexts. */
 import { randomUUID, webcrypto } from "node:crypto";
-import type { MissionAction, MissionContext } from "@pilot/kernel";
+import { type MissionAction, type MissionContext, THREAD_ACTIONS } from "@pilot/kernel";
 import { validateMissionWrite } from "@pilot/kernel/mission-write";
 import type {
 	ArtifactRevision,
@@ -53,6 +53,7 @@ import {
 	unavailableReviewProducer,
 } from "./mission-review-contract.ts";
 import { parseTaskRefs } from "./mission-task-refs.ts";
+import { threadHandoff } from "./mission-thread-handoff.ts";
 import { MissionTicketReader } from "./mission-ticket-context.ts";
 import { splitTicket } from "./mission-ticket-work.ts";
 import { type MissionActivityQuery, type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
@@ -1278,6 +1279,9 @@ export class MissionService {
 		const detail = this.store.memberContext(sessionId);
 		if (!detail) return undefined;
 		const { mission } = detail;
+		// A thread chat reads the mission as its coordinator does.
+		const thread = this.store.threads.ofChat(mission.id, sessionId);
+		const sees = mission.coordinatorSessionId === sessionId || !!thread;
 		const pins = new Set(
 			detail.tasks
 				.filter((task) => task.sessionId === sessionId && isOpen(task))
@@ -1285,9 +1289,9 @@ export class MissionService {
 		);
 		const relevant = detail.decisions.filter(
 			(decision) =>
-				mission.coordinatorSessionId === sessionId ||
+				sees ||
 				decision.audience === "all" ||
-				(decision.audience === "coordinator" && mission.coordinatorSessionId === sessionId) ||
+				(decision.audience === "coordinator" && sees) ||
 				pins.has(decision.id),
 		);
 		const selected = relevant.filter((decision) => !decision.replacement && !decision.withdrawn);
@@ -1304,7 +1308,7 @@ export class MissionService {
 				decision.id,
 				decision.audience === "all" ||
 				pins.has(decision.id) ||
-				(decision.audience === "coordinator" && mission.coordinatorSessionId === sessionId)
+				(decision.audience === "coordinator" && sees)
 					? "relevant"
 					: associated &&
 							decision.audience === "reference" &&
@@ -1329,6 +1333,7 @@ export class MissionService {
 						relevantTaskCount: currentWork.count,
 					}
 				: {}),
+			...(thread ? { thread: { topicId: thread.id, title: thread.title } } : {}),
 			...(role ? { role } : {}),
 			...(mission.planningVersion !== undefined
 				? { planningVersion: mission.planningVersion, briefRevision: mission.briefRevision }
@@ -1885,6 +1890,18 @@ export class MissionService {
 		const missionId = this.store.missionOf(sessionId);
 		if (!missionId) throw new Error("This chat is not part of a mission. Ask the user to add it to one.");
 		const mission = this.store.require(missionId);
+		// A thread chat reads the mission as its coordinator does and hands agreed work off; it changes nothing else.
+		const thread = this.store.threads.ofChat(missionId, sessionId);
+		if (thread) {
+			const writes =
+				(action === "brief" && args.markdown !== undefined) ||
+				(action === "task" && Object.keys(args).some((key) => key !== "id"));
+			if (!(THREAD_ACTIONS as readonly string[]).includes(action) || writes)
+				throw new Conflict(
+					`A thread chat reads the mission and hands agreed work to the planning agent with handoff; it cannot use ${action}${writes ? " to change it" : ""}`,
+				);
+		} else if (action === "thread" || action === "handoff")
+			throw new Conflict(`Only a thread chat can use ${action}`);
 		if (
 			([
 				"complete",
@@ -1913,7 +1930,8 @@ export class MissionService {
 			].includes(action) ||
 				(action === "task" &&
 					(args.order !== undefined || args.model !== undefined || args.thinking !== undefined))) &&
-			mission.coordinatorSessionId !== sessionId
+			mission.coordinatorSessionId !== sessionId &&
+			!(thread && action === "status")
 		)
 			throw new Conflict(
 				`Only the mission coordinator can use ${action === "task" && args.order === undefined ? "task model or thinking" : action}`,
@@ -1931,6 +1949,39 @@ export class MissionService {
 				throw new Conflict("Mission revision reader changed");
 		};
 		switch (action) {
+			case "thread": {
+				const topic = this.store.threads.get(missionId, thread!.id);
+				return {
+					id: topic.id,
+					title: topic.title,
+					disposition: topic.disposition,
+					earlier: topic.earlier ?? [],
+					handoff: topic.handoff ?? null,
+					resolvedBy: topic.resolvedBy ?? null,
+				};
+			}
+			case "handoff": {
+				const topic = this.store.threads.get(missionId, thread!.id);
+				if (topic.disposition !== "open") throw new Conflict("Only an open thread can hand off");
+				const handoff = threadHandoff(args, sessionId);
+				const artifacts = handoff.tasks.flatMap((task) => (task.prototype ? [task.prototype] : []));
+				if (artifacts.length) {
+					const own = await this.sessions.artifacts(sessionId);
+					for (const pin of artifacts)
+						if (!own.some((a) => a.id === pin.artifactId && a.revision >= pin.revision))
+							throw new Conflict(
+								`Mockup ${pin.artifactId} revision ${pin.revision} is not one of this chat's artifacts`,
+							);
+				}
+				this.store.threads.amend(missionId, topic.id, (t) => {
+					t.handoff = handoff;
+				});
+				await this.store.durable();
+				return {
+					handoffId: handoff.id,
+					next: "Pilot sends this to the planning agent. It proposes a revision for this thread, and the user confirms it on the planning page.",
+				};
+			}
 			case "map": {
 				if (Object.keys(args).length) throw new Conflict("map takes no arguments");
 				const scope = () => {
@@ -2387,7 +2438,7 @@ export class MissionService {
 						artifacts: detail.artifacts.length,
 						decisions: detail.decisions.length,
 					},
-					...(mission.coordinatorSessionId === sessionId
+					...(mission.coordinatorSessionId === sessionId || thread
 						? {
 								continuation: {
 									occupiedWorkers: this.occupiedWorkers(missionId),

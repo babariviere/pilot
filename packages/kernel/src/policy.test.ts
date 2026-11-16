@@ -1135,3 +1135,12 @@ test("workers on a user-coordinated mission show screen work before building it"
 	])
 		assert.doesNotMatch(missionPrompt(other), /Screen work/);
 });
+
+test("a thread chat interviews, shows mockups and hands off only after the user says yes", () => {
+	const prompt = missionPrompt({ ...mission, role: "explorer", thread: { topicId: "t", title: "Today agents" } });
+	assert.match(prompt, /thread chat for the thread "Today agents"/);
+	assert.match(prompt, /one question at a time/);
+	assert.match(prompt, /publish an NSH mockup/);
+	assert.match(prompt, /Only after they say yes, call mission handoff/);
+	assert.doesNotMatch(prompt, /Explore only the coordinator-authorized research purpose/);
+});
