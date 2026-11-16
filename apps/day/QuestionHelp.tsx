@@ -3,12 +3,11 @@
 // together, with one note on the whole round, when the user sends them: Pilot then redoes
 // the round. Nothing here answers a question or approves anything.
 import { signal, Text, View } from "nsh";
-import { Input } from "nsh/base";
 import type { Interview, PlanPage, Question } from "pilot-day/native";
 import { errorText, logEvent } from "./dayLog";
 import type { Plans } from "./planning";
 import { put } from "./planView";
-import { Action, HelpChip } from "./ui";
+import { Action, Panel, TextField, ToggleChip } from "./ui";
 
 /** A note on one question: say it simpler, and the user's own words about it. */
 export type QuestionNote = { simpler: boolean; text: string };
@@ -145,28 +144,28 @@ export function QuestionHelp(props: {
 		<View testID={`help-${q().id}`} class="gap-3">
 			<View class="flex-row flex-wrap gap-1.5">
 				<If when={q().context}>
-					<HelpChip
+					<ToggleChip
 						label="More context"
 						shortcut={HELP_KEYS.context}
 						pressed={panel(key, "context")}
 						onChange={() => toggle(key, "context")}
 					/>
 				</If>
-				<HelpChip
+				<ToggleChip
 					label="Say it simpler"
 					shortcut={HELP_KEYS.simpler}
 					pressed={note().simpler}
 					onChange={(pressed) => setNote(props.interview.id, q().id, { simpler: pressed })}
 				/>
 				<If when={canAsk()}>
-					<HelpChip
+					<ToggleChip
 						label="Ask a question"
 						shortcut={HELP_KEYS.ask}
 						pressed={panel(key, "ask") || q().asks.length > 0}
 						onChange={() => toggle(key, "ask")}
 					/>
 				</If>
-				<HelpChip
+				<ToggleChip
 					label="Reword this"
 					shortcut={HELP_KEYS.reword}
 					pressed={panel(key, "reword") || note().text.trim() !== ""}
@@ -174,9 +173,9 @@ export function QuestionHelp(props: {
 				/>
 			</View>
 			<If when={panel(key, "context") && q().context}>
-				<View testID={`context-${q().id}`} class="rounded-xl bg-muted px-4 py-3">
+				<Panel testID={`context-${q().id}`}>
 					<Text class="text-sm leading-relaxed text-foreground">{q().context}</Text>
-				</View>
+				</Panel>
 			</If>
 			<If when={note().simpler}>
 				<Text testID={`simpler-${q().id}`} class="text-xs text-faint">
@@ -184,7 +183,7 @@ export function QuestionHelp(props: {
 				</Text>
 			</If>
 			<If when={canAsk() && (panel(key, "ask") || q().asks.length > 0)}>
-				<View testID={`ask-${q().id}`} class="gap-3 rounded-xl bg-muted px-4 py-3">
+				<Panel testID={`ask-${q().id}`} class="gap-3">
 					<Each of={q().asks} key={(a) => a.id}>
 						{(a) => (
 							<View class="gap-1">
@@ -202,7 +201,7 @@ export function QuestionHelp(props: {
 						)}
 					</Each>
 					<View class="flex-row items-center gap-2">
-						<Input
+						<TextField
 							testID={`ask-text-${q().id}`}
 							value={draft()}
 							onChange={({ value }) => put(askDrafts, key, value)}
@@ -210,7 +209,8 @@ export function QuestionHelp(props: {
 							submitBehavior="submit"
 							placeholder="What do you want to know?"
 							accessibilityLabel="Ask about this question"
-							class="min-h-8 flex-1 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary"
+							compact
+							class="flex-1"
 						/>
 						<Action
 							testID={`ask-send-${q().id}`}
@@ -225,22 +225,22 @@ export function QuestionHelp(props: {
 					<Text class="text-xs text-faint">
 						A separate chat answers from the mission's records. It answers nothing for you.
 					</Text>
-				</View>
+				</Panel>
 			</If>
 			<If when={panel(key, "reword")}>
-				<View class="gap-1.5 rounded-xl bg-muted px-4 py-3">
+				<Panel class="gap-1.5">
 					<Text class="text-sm text-foreground">What should change about this question?</Text>
-					<Input
+					<TextField
 						testID={`reword-${q().id}`}
 						multiline
 						value={note().text}
 						onChange={({ value }) => setNote(props.interview.id, q().id, { text: value })}
 						placeholder="For example: this mixes two things, or I don't know this term"
 						accessibilityLabel="Your note on this question"
-						class="min-h-8 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary"
+						compact
 					/>
 					<Text class="text-xs text-faint">Notes wait here. Send them together at the end of the round.</Text>
-				</View>
+				</Panel>
 			</If>
 		</View>
 	);
@@ -282,14 +282,14 @@ export function RoundNotes(props: { plans: Plans; page: PlanPage; interview: Int
 	return (
 		<View testID="round-notes" class="gap-2 border-t border-border pt-4">
 			<If when={writing() || round().trim()}>
-				<Input
+				<TextField
 					testID="round-note"
 					multiline
 					value={round()}
 					onChange={({ value }) => put(roundNotes, id(), value)}
 					placeholder="A note on the whole round, for example: too technical overall"
 					accessibilityLabel="Your note on the whole round"
-					class="min-h-8 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary"
+					compact
 				/>
 			</If>
 			<View class="flex-row flex-wrap items-center gap-2">

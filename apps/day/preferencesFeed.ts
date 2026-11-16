@@ -6,8 +6,8 @@
 // chose, never permission: nothing here starts work or grants an action.
 import { type Signal, signal } from "nsh";
 import { call, type Refusal, type Reply } from "./bridge";
-import { glide } from "./motion";
 import type { ProjectPreference, ProjectPreferences } from "./preferencesContract";
+import { glide } from "./ui";
 
 export type { ProjectPreference, ProjectPreferences };
 

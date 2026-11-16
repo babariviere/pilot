@@ -5,7 +5,7 @@
 import { signal } from "nsh";
 import type { MissionRow } from "pilot-day/native";
 import type { LinearCycleSummary, SavedLinearRead, TrackedItem } from "./linearRead";
-import { glide } from "./motion";
+import { glide } from "./ui";
 
 /** Whether the Linear page is open over Today. */
 export const linearOpen = signal(false);

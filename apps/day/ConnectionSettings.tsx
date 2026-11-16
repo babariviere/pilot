@@ -202,7 +202,7 @@ export function ConnectionSettings(props: { controls: ConnectionControls }) {
 								</If>
 								<View class="flex-row gap-2">
 									<Action
-										primary
+										variant="primary"
 										label="Add connection"
 										testID="connection-save"
 										disabled={disabled() || !name().trim() || !safeConnectionTarget(kind(), target().trim())}

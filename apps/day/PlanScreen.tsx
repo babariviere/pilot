@@ -3,7 +3,6 @@
 // from answers to work. Submitting, approving, publishing and starting work
 // are separate steps. Only the exact-plan confirmation starts one task.
 import { cleanup, computed, type JSX, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
-import { Collapsible } from "nsh/base";
 import type {
 	Exploration,
 	FogArea,
@@ -30,7 +29,18 @@ import { fogOpen, mapOpen, put, roundOpen, settledOpen } from "./planView";
 import { RevisitSection } from "./RevisitDoc";
 import { RoundPrototype } from "./RoundPrototype";
 import { Unstick } from "./Unstick";
-import { Action, Mark, type MarkKind, PAGE_COLUMN, SectionTitle } from "./ui";
+import {
+	Action,
+	Disclosure,
+	ExpandableRow,
+	Mark,
+	type MarkKind,
+	MarkLine,
+	Notice,
+	Page,
+	PageTitle,
+	SectionTitle,
+} from "./ui";
 
 /** The words beside a plan's mark. */
 export function stageWord(stage: PlanStage): string {
@@ -170,29 +180,24 @@ function MapItem(props: { plans: Plans; page: PlanPage; item: Exploration }) {
 	const key = () => `${props.page.missionId}/${e().id}`;
 	const open = () => mapOpen()[key()] === true;
 	return (
-		<Collapsible
+		<ExpandableRow
 			open={open()}
-			class="border-t border-border py-3"
+			testID={`explore-${e().id}`}
+			onToggle={() => put(mapOpen, key(), !open())}
+			class="py-3"
+			summaryClass="gap-1"
 			content={<ItemRecord plans={props.plans} page={props.page} item={e()} class="pl-4 pt-3" />}
 		>
-			<View
-				testID={`explore-${e().id}`}
-				role="button"
-				accessibilityState={{ expanded: open() }}
-				onPress={() => put(mapOpen, key(), !open())}
-				class="gap-1 rounded-md focus-visible:ring-2 focus-visible:ring-ring/40"
-			>
-				<View class="flex-row items-center gap-2">
-					<Mark kind={exploreMark(e())} />
-					<Text class="flex-1 text-sm font-medium text-foreground">{e().title}</Text>
-					<Text class="text-xs text-faint">{itemWord(e())}</Text>
-				</View>
-				<Text class="pl-4 text-xs text-foreground">{exploreLine(e())}</Text>
-				<Each of={e().changed} key={(c) => c}>
-					{(c) => <Text class="pl-4 text-xs text-needs-ink">{c()}</Text>}
-				</Each>
+			<View class="flex-row items-center gap-2">
+				<Mark kind={exploreMark(e())} />
+				<Text class="flex-1 text-sm font-medium text-foreground">{e().title}</Text>
+				<Text class="text-xs text-faint">{itemWord(e())}</Text>
 			</View>
-		</Collapsible>
+			<Text class="pl-4 text-xs text-foreground">{exploreLine(e())}</Text>
+			<Each of={e().changed} key={(c) => c}>
+				{(c) => <Text class="pl-4 text-xs text-needs-ink">{c()}</Text>}
+			</Each>
+		</ExpandableRow>
 	);
 }
 
@@ -233,22 +238,6 @@ function FogRow(props: { plans: Plans; page: PlanPage; fog: FogArea }) {
 		<View testID={`fog-${props.fog.id}`} class="gap-1 border-t border-border py-3">
 			<Text class="text-sm font-medium text-foreground">{props.fog.area}</Text>
 			<FogRecord plans={props.plans} page={props.page} fog={props.fog} />
-		</View>
-	);
-}
-
-/** A disclosure line that opens a quiet section, such as the fog of war. */
-function Disclosure(props: { testID: string; label: string; open: boolean; onToggle: () => void }) {
-	return (
-		<View
-			testID={props.testID}
-			role="button"
-			accessibilityState={{ expanded: props.open }}
-			onPress={props.onToggle}
-			class="flex-row items-baseline gap-2 rounded-md focus-visible:ring-2 focus-visible:ring-ring/40"
-		>
-			<Text class="text-sm text-muted-foreground">{props.open ? "▾" : "▸"}</Text>
-			<Text class="text-sm text-muted-foreground">{props.label}</Text>
 		</View>
 	);
 }
@@ -362,56 +351,44 @@ function MapView(props: {
 				<PlanStep page={props.page} />
 			</View>
 			<If when={settled().length > 0}>
-				<Collapsible
+				<Disclosure
+					testID="settled-toggle"
+					label={`Settled · ${settled().length}`}
 					open={done()}
-					class="gap-1"
-					content={
-						<View testID="map-settled" class="gap-0">
-							<Text class="pb-2 text-xs leading-relaxed text-muted-foreground">
-								Settled questions are not asked again. Open one to see what settled it.
-							</Text>
-							<Each of={settled()} key={(e) => e.id}>
-								{(e) => <MapItem plans={props.plans} page={props.page} item={e()} />}
-							</Each>
-						</View>
-					}
+					onToggle={() => put(settledOpen, id(), !done())}
 				>
-					<Disclosure
-						testID="settled-toggle"
-						label={`Settled · ${settled().length}`}
-						open={done()}
-						onToggle={() => put(settledOpen, id(), !done())}
-					/>
-				</Collapsible>
-			</If>
-			<Collapsible
-				open={fog()}
-				class="gap-1"
-				content={
-					<View class="gap-0">
+					<View testID="map-settled" class="gap-0">
 						<Text class="pb-2 text-xs leading-relaxed text-muted-foreground">
-							Areas Pilot does not understand well enough to ask precise questions about yet. Fog is not a
-							problem and blocks nothing.
+							Settled questions are not asked again. Open one to see what settled it.
 						</Text>
-						<Each of={active()} key={(f) => f.id}>
+						<Each of={settled()} key={(e) => e.id}>
+							{(e) => <MapItem plans={props.plans} page={props.page} item={e()} />}
+						</Each>
+					</View>
+				</Disclosure>
+			</If>
+			<Disclosure
+				testID="fog-toggle"
+				label={`Fog of war · ${active().length}`}
+				open={fog()}
+				onToggle={() => put(fogOpen, id(), !fog())}
+			>
+				<View class="gap-0">
+					<Text class="pb-2 text-xs leading-relaxed text-muted-foreground">
+						Areas Pilot does not understand well enough to ask precise questions about yet. Fog is not a problem
+						and blocks nothing.
+					</Text>
+					<Each of={active()} key={(f) => f.id}>
+						{(f) => <FogRow plans={props.plans} page={props.page} fog={f()} />}
+					</Each>
+					<If when={explored().length > 0}>
+						<Text class="pt-3 text-xs text-faint">Explored</Text>
+						<Each of={explored()} key={(f) => f.id}>
 							{(f) => <FogRow plans={props.plans} page={props.page} fog={f()} />}
 						</Each>
-						<If when={explored().length > 0}>
-							<Text class="pt-3 text-xs text-faint">Explored</Text>
-							<Each of={explored()} key={(f) => f.id}>
-								{(f) => <FogRow plans={props.plans} page={props.page} fog={f()} />}
-							</Each>
-						</If>
-					</View>
-				}
-			>
-				<Disclosure
-					testID="fog-toggle"
-					label={`Fog of war · ${active().length}`}
-					open={fog()}
-					onToggle={() => put(fogOpen, id(), !fog())}
-				/>
-			</Collapsible>
+					</If>
+				</View>
+			</Disclosure>
 			<If when={props.page.map}>
 				<Agreement info={props.page.map as MapInfo} onOpenTasks={props.onOpenTasks} />
 			</If>
@@ -430,14 +407,11 @@ function Steps(props: { steps: Step[] }) {
 			</View>
 			<Each of={props.steps} key={(s) => s.label}>
 				{(s) => (
-					<View class="flex-row gap-3 py-1.5">
-						<View class="pt-1.5">
-							<Mark kind={stepMark(s().state)} />
-						</View>
-						<View class="flex-1 gap-0.5">
+					<View class="py-1.5">
+						<MarkLine kind={stepMark(s().state)}>
 							<Text class="text-sm text-foreground">{`${s().label}: ${stepWord(s().state)}`}</Text>
 							<Text class="text-xs text-faint">{s().line}</Text>
-						</View>
+						</MarkLine>
 					</View>
 				)}
 			</Each>
@@ -498,7 +472,7 @@ export function StartWork(props: { plans: Plans; page: PlanPage }) {
 				<If when={work()?.canStart && !shown() && !uncertain()}>
 					<Action
 						label="Start work"
-						primary
+						variant="primary"
 						disabled={busy() || !props.plans.feed.startWork}
 						onPress={() => shown.set(work() ?? null)}
 					/>
@@ -509,7 +483,7 @@ export function StartWork(props: { plans: Plans; page: PlanPage }) {
 					<View class="flex-row gap-2">
 						<Action
 							label={busy() ? "Starting…" : "Start task"}
-							primary
+							variant="primary"
 							disabled={busy() || !current()}
 							onPress={() => void send()}
 						/>
@@ -544,9 +518,14 @@ function Rounds(props: { page: PlanPage }) {
 						const key = () => `${p().missionId}/${r().id}`;
 						const open = () => roundOpen()[key()] === true;
 						return (
-							<Collapsible
+							<ExpandableRow
 								open={open()}
-								class="border-t border-border py-2"
+								testID={`round-${r().id}`}
+								onToggle={() => {
+									if (r().answers.length > 0) put(roundOpen, key(), !open());
+								}}
+								class="py-2"
+								summaryClass="flex-row items-center gap-3"
 								content={
 									<View testID={`round-answers-${r().id}`} class="gap-2 pb-1 pl-4 pt-2">
 										<Each of={r().answers} key={(a) => a.prompt}>
@@ -560,23 +539,13 @@ function Rounds(props: { page: PlanPage }) {
 									</View>
 								}
 							>
-								<View
-									testID={`round-${r().id}`}
-									role="button"
-									accessibilityState={{ expanded: open() }}
-									onPress={() => {
-										if (r().answers.length > 0) put(roundOpen, key(), !open());
-									}}
-									class="flex-row items-center gap-3 rounded-md focus-visible:ring-2 focus-visible:ring-ring/40"
-								>
-									<Mark kind={r().state === "submitted" ? "done" : "unreported"} />
-									<Text class="w-40 text-sm text-foreground">{r().title}</Text>
-									<Text class="flex-1 text-sm text-muted-foreground">{r().line}</Text>
-									<If when={r().answers.length > 0}>
-										<Text class="text-xs text-faint">{open() ? "Hide answers" : "Show answers"}</Text>
-									</If>
-								</View>
-							</Collapsible>
+								<Mark kind={r().state === "submitted" ? "done" : "unreported"} />
+								<Text class="w-40 text-sm text-foreground">{r().title}</Text>
+								<Text class="flex-1 text-sm text-muted-foreground">{r().line}</Text>
+								<If when={r().answers.length > 0}>
+									<Text class="text-xs text-faint">{open() ? "Hide answers" : "Show answers"}</Text>
+								</If>
+							</ExpandableRow>
 						);
 					}}
 				</Each>
@@ -653,9 +622,7 @@ function Body(props: {
 			<View class="gap-3">
 				<View class="flex-row items-start gap-4">
 					<View class="flex-1 gap-2">
-						<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-							{p().title || props.title || "Mission planning"}
-						</Text>
+						<PageTitle title={p().title || props.title || "Mission planning"} />
 						<If when={p().available}>
 							<View class="flex-row flex-wrap items-center gap-1.5">
 								<Text class="text-xs text-muted-foreground">Interview and plan</Text>
@@ -672,10 +639,7 @@ function Body(props: {
 					<View class="pt-1">{props.action}</View>
 				</View>
 				<If when={!p().available}>
-					<View testID="planning-unavailable" class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-						<Mark kind="unknown" />
-						<Text class="flex-1 text-sm text-foreground">{p().reason}</Text>
-					</View>
+					<Notice testID="planning-unavailable" text={p().reason} />
 				</If>
 				<If when={p().goal}>
 					<Text class="text-sm leading-relaxed text-muted-foreground">{`You asked: ${p().goal}`}</Text>
@@ -684,12 +648,7 @@ function Body(props: {
 					<Text class="text-sm leading-relaxed text-foreground">{`Where it should end up: ${p().destination}`}</Text>
 				</If>
 				<If when={p().note}>
-					<View class="mt-2 flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-						<Mark kind="needs" />
-						<Text role="alert" class="flex-1 text-sm text-foreground">
-							{p().note}
-						</Text>
-					</View>
+					<Notice kind="needs" role="alert" text={p().note} class="mt-2" />
 				</If>
 				<If when={p().activity}>
 					<View class="mt-2">
@@ -814,7 +773,7 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 				scrollEventThrottle={100}
 				onScroll={scroll.onScroll}
 			>
-				<View class={`${PAGE_COLUMN} gap-8`}>
+				<Page gap={8}>
 					<If when={message() && page()}>
 						<Text role="alert" class="text-sm text-needs-ink">
 							{message()}
@@ -851,7 +810,7 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 							)}
 						</Each>
 					</If>
-				</View>
+				</Page>
 			</Scroll>
 			<If when={fullChart()}>
 				{(p) => (

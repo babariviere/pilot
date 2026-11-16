@@ -8,14 +8,12 @@
 // After in the same place.
 // Nothing here is saved, sent or counted as anyone's check.
 import { cleanup, effect, type Signal, signal, Text, View, type ViewRef } from "nsh";
-import { Button } from "nsh/base";
 import { savedTitle } from "./ArtifactExport";
 import { ArtifactBody, ArtifactTools, closeFullFor, InFullNote, inFull, openFull, paneLine } from "./ArtifactViewer";
 import type { ArtifactList, ArtifactRow, ArtifactSource, Shown } from "./artifactReads";
 import { artifactPreviewsAvailable } from "./bridge";
 import { kindName } from "./deliveryView";
-import { glide } from "./motion";
-import { Action, Field, Mark, SectionTitle, TabItem, TabRow } from "./ui";
+import { Action, Field, glide, Notice, Pressable, SectionTitle, TabItem, TabRow } from "./ui";
 
 export { FullArtifact } from "./ArtifactViewer";
 
@@ -111,8 +109,8 @@ function Card(props: { source: ArtifactSource; shelf: Shelf; row: ArtifactRow; i
 			: `Show the saved source of ${name()}, revision ${props.row.revision}, as plain text. Looking records nothing.`;
 	};
 	return (
-		<Button
-			ref={(node: ViewRef) => props.shelf.anchors.set(key, node)}
+		<Pressable
+			anchor={(node: ViewRef) => props.shelf.anchors.set(key, node)}
 			testID={`artifact-card-${key}`}
 			accessibilityLabel={label()}
 			disabled={props.row.revision === null}
@@ -120,7 +118,7 @@ function Card(props: { source: ArtifactSource; shelf: Shelf; row: ArtifactRow; i
 				if (isOpen()) props.shelf.hideLast();
 				else void openRow(props.shelf, props.source, props.row);
 			}}
-			class="group flex-1 gap-2 rounded-xl border p-2 transition duration-150 hover:bg-accent active:bg-accent disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-ring/40"
+			class="group flex-1 gap-2 rounded-xl border p-2 transition duration-150 hover:bg-accent active:bg-accent disabled:opacity-60"
 			classList={{ "border-border-strong bg-accent": isOpen(), "border-border": !isOpen() }}
 		>
 			<View class="h-24 items-center justify-center rounded-lg bg-muted">
@@ -130,7 +128,7 @@ function Card(props: { source: ArtifactSource; shelf: Shelf; row: ArtifactRow; i
 				<Text class="truncate text-sm text-foreground group-hover:underline">{props.row.title || "Artifact"}</Text>
 				<Text class="truncate text-xs text-muted-foreground">{revisionLine(props.row, props.inMission)}</Text>
 			</View>
-		</Button>
+		</Pressable>
 	);
 }
 
@@ -378,12 +376,7 @@ export function ArtifactShelf(props: {
 				<Text class="text-sm text-muted-foreground">Reading saved artifacts…</Text>
 			</If>
 			<If when={refusal()}>
-				<View class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-					<Mark kind="unknown" />
-					<Text role="alert" class="flex-1 text-sm text-foreground">
-						{`${refusal()} This is not the same as having none.`}
-					</Text>
-				</View>
+				<Notice role="alert" text={`${refusal()} This is not the same as having none.`} />
 			</If>
 			<If when={listed() && rows().length === 0}>
 				<Text class="text-sm text-muted-foreground">

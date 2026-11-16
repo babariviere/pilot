@@ -5,7 +5,6 @@
 // is kept as a draft for the revision shown; words written before Pilot
 // changed the request are shown as history and count only once sent again.
 import { cleanup, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
-import { Input } from "nsh/base";
 import type { ActionAsk, HumanAction } from "pilot-day/native";
 import {
 	actionNeedsCheck,
@@ -20,7 +19,7 @@ import {
 import { COMMIT_KEY } from "./DecisionCard";
 import type { Day } from "./day";
 import { keepField } from "./kept";
-import { Action, InlineAction, Mark } from "./ui";
+import { Action, InlineAction, Mark, Panel, TextField } from "./ui";
 import { anchors, focusFront, focusInput, messages, reports, reportText, setFor } from "./view";
 
 function verb(asked: ActionAsk | null | undefined): string {
@@ -137,7 +136,7 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 				<Text class="text-sm leading-relaxed text-muted-foreground">{a().why}</Text>
 			</View>
 
-			<View selectable class="gap-2 rounded-xl bg-muted px-4 py-3">
+			<Panel selectable class="gap-2">
 				<Each of={a().files} key={(f) => `${f.name}\u0000${f.digest}`}>
 					{(f) => (
 						<Fact
@@ -155,7 +154,7 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 					</View>
 				</If>
 				<Fact label="Asked by">{`“${a().origin.chatTitle}” · ${a().origin.chatLink}`}</Fact>
-			</View>
+			</Panel>
 
 			<If when={a().progress}>
 				<Text class="text-sm text-muted-foreground">{`Saved progress: ${a().progress}`}</Text>
@@ -187,7 +186,7 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 						? `When it is done, tell Pilot: ${a().needs.join("; ")}.`
 						: "Tell Pilot when it is done."}
 				</Text>
-				<Input
+				<TextField
 					testID="report"
 					ref={reportField.ref}
 					value={text()}
@@ -207,7 +206,7 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 						props.day.feed.flushDrafts();
 					}}
 					placeholder={a().needs[0] ?? "What you did"}
-					class="min-h-8 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary"
+					compact
 				/>
 				<Text class="text-xs text-faint">Opening the link or the file does not count. Only your report does.</Text>
 			</View>
@@ -233,7 +232,7 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 					when={actionNeedsCheck(a())}
 					else={
 						<Action
-							primary
+							variant="primary"
 							label="Mark done"
 							shortcut={COMMIT_KEY}
 							disabled={!idle() || (a().needs.length > 0 && text().trim() === "")}
@@ -242,7 +241,7 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 					}
 				>
 					<Action
-						primary
+						variant="primary"
 						label="Check again"
 						shortcut={COMMIT_KEY}
 						disabled={a().delivery === "checking"}

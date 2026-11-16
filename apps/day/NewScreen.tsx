@@ -6,7 +6,6 @@
 // existing chat moves or changes what it may do. The user always chooses the
 // project: New never picks one, so both starts wait for that choice.
 import { cleanup, effect, keymap, Scroll, Text, untracked, View } from "nsh";
-import { Input, RadioGroup } from "nsh/base";
 import {
 	checkNewChat,
 	chooseChat,
@@ -22,7 +21,6 @@ import type { Day } from "./day";
 import { fundingAmount } from "./FundingSettings";
 import { keepField, keepScroll } from "./kept";
 import { newFundingDraft } from "./modelSettingsDraft";
-import { glide } from "./motion";
 import { stageMark, stageWord } from "./PlanScreen";
 import { checkCreation, dismissCreation, planMission } from "./planCommands";
 import type { Plans } from "./planning";
@@ -41,7 +39,22 @@ import {
 	replacesDraft,
 	requestDraft,
 } from "./planView";
-import { Action, Field, Mark, PAGE_COLUMN, Picker, RadioRow, RowLink, SectionTitle } from "./ui";
+import {
+	Action,
+	Field,
+	glide,
+	Mark,
+	Notice,
+	Page,
+	PageTitle,
+	Panel,
+	Picker,
+	RadioList,
+	RadioRow,
+	RowLink,
+	SectionTitle,
+	TextField,
+} from "./ui";
 
 const MODES: { mode: ChatMode; label: string }[] = [
 	{ mode: "build", label: modeWords("build") },
@@ -125,12 +138,12 @@ function ConfirmStart(props: { plans: Plans }) {
 	return (
 		<View testID="confirm-start" class="gap-3 rounded-2xl border border-border-strong bg-card px-5 py-4">
 			<Text class="text-sm font-medium text-card-foreground">Start one chat with exactly these words?</Text>
-			<View selectable class="rounded-lg bg-muted px-3 py-2">
+			<Panel size="sm" selectable>
 				<Text class="text-sm text-foreground">{goalDraft()}</Text>
-			</View>
+			</Panel>
 			<View class="gap-1">
 				<Text class="text-xs text-faint">What it may do</Text>
-				<RadioGroup class="gap-0.5">
+				<RadioList>
 					<Each of={MODES} key={(m) => m.mode}>
 						{(m) => (
 							<RadioRow
@@ -145,7 +158,7 @@ function ConfirmStart(props: { plans: Plans }) {
 							/>
 						)}
 					</Each>
-				</RadioGroup>
+				</RadioList>
 			</View>
 			<Text testID="chat-setup" class="text-xs text-muted-foreground">
 				{where()}
@@ -173,7 +186,7 @@ function ConfirmStart(props: { plans: Plans }) {
 			</Text>
 			<View class="flex-row gap-2">
 				<Action
-					primary
+					variant="primary"
 					label={newBusy() ? "Starting…" : "Start chat"}
 					disabled={newBusy() || !ready() || (!!choice()?.fundingRequired && fundingAmount(allowance()) == null)}
 					onPress={() => void startNewChat(chats)}
@@ -191,16 +204,11 @@ function Unconfirmed(props: { plans: Plans }) {
 	return (
 		<Each of={view().unsettled} key={(o) => o.operationId}>
 			{(o) => (
-				<View testID={`chat-unknown-${o().operationId}`} class="gap-2 rounded-xl bg-muted px-4 py-3">
-					<View class="flex-row items-center gap-2.5">
-						<Mark kind="unknown" />
-						<Text class="flex-1 text-sm text-foreground">
-							{`A new chat in ${projectName(view(), o().projectId)} is not confirmed.`}
-						</Text>
-					</View>
-					<Text class="text-xs leading-relaxed text-faint">
-						Pilot will not send it again. Check only reads its saved answer. Another new chat waits until then.
-					</Text>
+				<Notice
+					testID={`chat-unknown-${o().operationId}`}
+					text={`A new chat in ${projectName(view(), o().projectId)} is not confirmed.`}
+					detail="Pilot will not send it again. Check only reads its saved answer. Another new chat waits until then."
+				>
 					<View class="flex-row">
 						<Action
 							label={o().delivery === "checking" ? "Checking…" : "Check"}
@@ -209,7 +217,7 @@ function Unconfirmed(props: { plans: Plans }) {
 							onPress={() => void checkNewChat(chats, o().operationId)}
 						/>
 					</View>
-				</View>
+				</Notice>
 			)}
 		</Each>
 	);
@@ -299,15 +307,13 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 			scrollEventThrottle={100}
 			onScroll={scroll.onScroll}
 		>
-			<View class={`${PAGE_COLUMN} gap-8`}>
+			<Page gap={8}>
 				<View class="gap-3">
-					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-						What do you want done?
-					</Text>
+					<PageTitle title="What do you want done?" />
 					<Text class="text-sm leading-relaxed text-muted-foreground">
 						Say it in your own words. A mission starts with questions to clarify what you want.
 					</Text>
-					<Input
+					<TextField
 						testID="goal"
 						ref={goal.ref}
 						accessibilityLabel="What you want done"
@@ -326,7 +332,8 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 						onFocus={goal.focus}
 						onSelectionChange={goal.select}
 						placeholder="For example: let people export a chat as Markdown"
-						class="min-h-20 rounded-xl border border-input bg-background px-3.5 py-2.5 text-base text-foreground focus:border-primary"
+						variant="composer"
+						large
 					/>
 					<ProjectRow plans={props.plans} />
 					<If when={requestDraft()}>
@@ -341,16 +348,16 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 					</If>
 				</View>
 				<If when={off() || canCheck()}>
-					<View testID="planning-off" class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-						<Mark kind="unknown" />
-						<Text class="flex-1 text-sm text-foreground">
-							{!off()
+					<Notice
+						testID="planning-off"
+						text={
+							!off()
 								? planning().createReason
 								: chatsOff()
 									? `${planning().createReason} Nothing can be sent from here.`
-									: `${planning().createReason} You can still start one chat.`}
-						</Text>
-					</View>
+									: `${planning().createReason} You can still start one chat.`
+						}
+					/>
 				</If>
 				<If when={canCheck()}>
 					<View class="flex-row flex-wrap gap-2">
@@ -374,7 +381,7 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 					<View class="gap-3">
 						<View class="flex-row flex-wrap items-center gap-2">
 							<Action
-								primary
+								variant="primary"
 								label={newBusy() ? "Writing questions…" : "Plan a mission"}
 								disabled={off() || empty() || newBusy() || !canPlan()}
 								onPress={() => {
@@ -499,7 +506,7 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 						</Each>
 					</View>
 				</If>
-			</View>
+			</Page>
 		</Scroll>
 	);
 }

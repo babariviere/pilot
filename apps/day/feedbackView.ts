@@ -8,7 +8,7 @@
 // triage are kept the same way. Restoring them sends and starts nothing.
 import { signal } from "nsh";
 import type { UserFeedbackOriginRef } from "./feedbackFeed";
-import { glide } from "./motion";
+import { glide } from "./ui";
 
 /** Whether the feedback page is open, over the screen it was opened from. */
 export const feedbackOpen = signal(false);

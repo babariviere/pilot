@@ -10,7 +10,7 @@ import { closeChat } from "./chatView";
 import { DiagnosisReply } from "./DiagnosisSettings";
 import type { Day } from "./day";
 import type { SessionChat, SessionChatMirror } from "./sessionChat";
-import { Mark, type MarkKind, PAGE_COLUMN } from "./ui";
+import { type MarkKind, MarkLine, Page, PageTitle } from "./ui";
 
 /** The chat's state as one quiet line and its mark. */
 function stateLine(chat: SessionChat | null): { mark: MarkKind; text: string } | null {
@@ -45,11 +45,9 @@ export function ChatScreen(props: { day: Day; sessionId: string }) {
 	const state = () => stateLine(chat());
 	return (
 		<Scroll class="flex-1 bg-background">
-			<View testID="chat" class={`${PAGE_COLUMN} gap-8`}>
+			<Page testID="chat" gap={8}>
 				<View class="gap-3">
-					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-						{chat()?.title || "Chat"}
-					</Text>
+					<PageTitle title={chat()?.title || "Chat"} />
 					<Text class="text-sm text-muted-foreground">
 						{chat()?.specialist
 							? "Read-only specialist. Its findings are an assessment, not a verified cause. Reading sends nothing."
@@ -67,12 +65,9 @@ export function ChatScreen(props: { day: Day; sessionId: string }) {
 								</Text>
 							</View>
 						</If>
-						<View testID="chat-state" class="flex-row items-start gap-2.5">
-							<View class="pt-1.5">
-								<Mark kind={state()?.mark ?? "still"} />
-							</View>
-							<Text class="flex-1 text-sm text-foreground">{state()?.text ?? ""}</Text>
-						</View>
+						<MarkLine testID="chat-state" kind={state()?.mark ?? "still"}>
+							<Text class="text-sm text-foreground">{state()?.text ?? ""}</Text>
+						</MarkLine>
 					</If>
 				</View>
 				<ChatTranscript
@@ -85,7 +80,7 @@ export function ChatScreen(props: { day: Day; sessionId: string }) {
 				<If when={chat()?.specialist && props.day.diagnosis}>
 					<DiagnosisReply controls={props.day.diagnosis!} sessionId={props.sessionId} />
 				</If>
-			</View>
+			</Page>
 		</Scroll>
 	);
 }

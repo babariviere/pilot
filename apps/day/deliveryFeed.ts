@@ -22,7 +22,7 @@ import {
 	readSavedDeliveries,
 	type VerificationSubject,
 } from "./deliveryBridge";
-import { glide } from "./motion";
+import { glide } from "./ui";
 
 export type { AgentWork, ArtifactLink, CapturedArtifact, DeliveredWork, DeliveryOperation, VerificationSubject };
 

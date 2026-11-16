@@ -10,11 +10,9 @@
 // not the coordinator's answer. A lost answer stays Unknown: Check only
 // reads it, and the words stay until the service accepted them.
 import { cleanup, effect, keymap, Scroll, type ScrollRef, signal, Text, View, type ViewRef } from "nsh";
-import { Button, Input } from "nsh/base";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
 import { keepField, keepScroll, restoreScroll, scrollOf } from "./kept";
-import { glide } from "./motion";
 import {
 	type Catalog,
 	type HistoryEntry,
@@ -52,7 +50,21 @@ import {
 	threadDrafts,
 	threadMessages,
 } from "./threadView";
-import { Action, InlineAction, Mark, type MarkKind, PAGE_COLUMN, RowLink, SectionTitle } from "./ui";
+import {
+	Action,
+	glide,
+	InlineAction,
+	Mark,
+	type MarkKind,
+	MarkLine,
+	Page,
+	PageTitle,
+	Panel,
+	Pressable,
+	RowLink,
+	SectionTitle,
+	TextField,
+} from "./ui";
 
 const STATUS: Record<Topic["disposition"], { word: string; mark: MarkKind }> = {
 	open: { word: "Open", mark: "still" },
@@ -96,18 +108,13 @@ function Unsettled(props: { mirror: ThreadsMirror; missionId: string; ops: Threa
 	};
 	return (
 		<If when={props.ops.length > 0}>
-			<View testID={props.testID} class="gap-2 rounded-xl bg-muted px-4 py-3">
+			<Panel testID={props.testID} class="gap-2">
 				<Each of={props.ops} key={(o) => o.operationId}>
 					{(o) => (
 						<View class="gap-1.5">
-							<View class="flex-row items-start gap-2.5">
-								<View class="pt-1.5">
-									<Mark kind="unknown" />
-								</View>
-								<View selectable class="flex-1">
-									<Text class="text-sm text-foreground">{words(o())}</Text>
-								</View>
-							</View>
+							<MarkLine kind="unknown" selectable>
+								<Text class="text-sm text-foreground">{words(o())}</Text>
+							</MarkLine>
 							<Text class="pl-4 text-xs text-muted-foreground">
 								Pilot sent it but heard nothing back. It will not send it again. Check reads what happened.
 							</Text>
@@ -141,7 +148,7 @@ function Unsettled(props: { mirror: ThreadsMirror; missionId: string; ops: Threa
 						{threadMessages()[key()] ?? ""}
 					</Text>
 				</If>
-			</View>
+			</Panel>
 		</If>
 	);
 }
@@ -150,14 +157,11 @@ function Unsettled(props: { mirror: ThreadsMirror; missionId: string; ops: Threa
 function Unreadable(props: { mirror: ThreadsMirror; missionId: string; m: MissionThreads }) {
 	return (
 		<View testID="threads-off" class="gap-2">
-			<View class="flex-row items-start gap-2.5">
-				<View class="pt-1.5">
-					<Mark kind="unknown" />
-				</View>
-				<Text class="flex-1 text-sm text-foreground">
+			<MarkLine kind="unknown">
+				<Text class="text-sm text-foreground">
 					{`${props.m.reason} Threads are not shown; this is not the same as having none.`}
 				</Text>
-			</View>
+			</MarkLine>
 			<View class="flex-row pl-3">
 				<Action
 					label="Read again"
@@ -246,7 +250,8 @@ function NewThread(props: { mirror: ThreadsMirror; missionId: string; m: Mission
 			}
 		>
 			<View class="gap-2">
-				<Input
+				<TextField
+					variant="composer"
 					testID="thread-title"
 					ref={field.ref}
 					autoFocus
@@ -257,7 +262,6 @@ function NewThread(props: { mirror: ThreadsMirror; missionId: string; m: Mission
 					onChange={({ value }) => setDraft(key(), value)}
 					onFocus={field.focus}
 					onSelectionChange={field.select}
-					class="min-h-20 rounded-xl border border-input bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary"
 				/>
 				<If when={tooLong()}>
 					<Text class="text-xs text-needs-ink">{`Too long. Keep it under ${MAX_TEXT_BYTES} bytes.`}</Text>
@@ -269,7 +273,7 @@ function NewThread(props: { mirror: ThreadsMirror; missionId: string; m: Mission
 				</If>
 				<View class="flex-row flex-wrap items-center gap-2">
 					<Action
-						primary
+						variant="primary"
 						label={props.m.writing ? "Sending…" : "Send"}
 						testID="thread-start"
 						shortcut="⌘↩"
@@ -493,7 +497,7 @@ function Links(props: {
 				</View>
 			</If>
 			<If when={open()}>
-				<View class="gap-0.5 rounded-xl bg-muted px-3 py-2">
+				<Panel size="sm" class="gap-0.5">
 					<If when={choices().length === 0}>
 						<Text class="text-xs text-muted-foreground">Every task and decision is linked already.</Text>
 					</If>
@@ -515,7 +519,7 @@ function Links(props: {
 							/>
 						)}
 					</Each>
-				</View>
+				</Panel>
 			</If>
 		</View>
 	);
@@ -537,7 +541,7 @@ function HandoffNote(props: { topic: Topic }) {
 	const h = () => props.topic.handoff;
 	return (
 		<If when={props.topic.disposition === "open" && h()}>
-			<View testID="thread-handoff" class="gap-2 rounded-xl bg-muted px-4 py-3">
+			<Panel testID="thread-handoff" class="gap-2">
 				<Text class="text-sm font-medium text-foreground">
 					{h()?.queued ? "Sent to the planner" : "Waits to go to the planner"}
 				</Text>
@@ -549,7 +553,7 @@ function HandoffNote(props: { topic: Topic }) {
 					The planner proposes a revision with these tasks. Confirm it on the mission's planning page; nothing
 					changes before.
 				</Text>
-			</View>
+			</Panel>
 		</If>
 	);
 }
@@ -663,17 +667,17 @@ function Steps(props: { missionId: string; topicId: string; sessionId: string; i
 	return (
 		<View class="gap-1.5 px-3">
 			<View class="flex-row">
-				<Button
+				<Pressable
 					testID={`steps-${props.id}`}
 					accessibilityLabel={`${words()}. ${open() ? "Hide them" : "Show what they did"}. This only reads.`}
 					onPress={() => {
 						glide();
 						stepsOpen.update((all) => ({ ...all, [key()]: !open() }));
 					}}
-					class="flex-row items-center gap-1.5 rounded-md py-0.5 focus-visible:ring-2 focus-visible:ring-ring/40"
+					class="flex-row items-center gap-1.5 rounded-md py-0.5"
 				>
 					<Text class="text-xs text-faint">{open() ? `Hide ${words().toLowerCase()}` : words()}</Text>
-				</Button>
+				</Pressable>
 			</View>
 			<If when={open()}>
 				<View class="gap-1.5 border-l border-border pl-3">
@@ -705,7 +709,7 @@ function Activity(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 	const read = (which: "older" | "latest", sessionId?: string) =>
 		void props.mirror.source.history(props.missionId, props.topic.id, which, sessionId);
 	return (
-		<View testID="thread-history" class="gap-2 rounded-xl bg-muted px-4 py-3">
+		<Panel testID="thread-history" class="gap-2">
 			<View class="flex-row flex-wrap items-center gap-2">
 				<Text class="text-sm font-medium text-foreground">
 					{chat() ? "Thread chat activity" : "Coordinator activity"}
@@ -747,14 +751,11 @@ function Activity(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 				</View>
 			</If>
 			<If when={h()?.reason}>
-				<View class="flex-row items-start gap-2.5">
-					<View class="pt-1.5">
-						<Mark kind="unknown" />
-					</View>
-					<Text testID="thread-history-off" role="alert" class="flex-1 text-sm text-foreground">
+				<MarkLine kind="unknown">
+					<Text testID="thread-history-off" role="alert" class="text-sm text-foreground">
 						{h()?.reason ?? ""}
 					</Text>
-				</View>
+				</MarkLine>
 			</If>
 			<If when={!h() || (h()?.reading && h()?.entries.length === 0)}>
 				<Text class="text-sm text-muted-foreground">Reading the activity…</Text>
@@ -798,7 +799,7 @@ function Activity(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 					/>
 				</View>
 			</If>
-		</View>
+		</Panel>
 	);
 }
 
@@ -957,9 +958,18 @@ function Message(props: {
 					/>
 				</If>
 			</View>
-			<View selectable class={m().author === "you" ? "rounded-xl bg-muted px-4 py-3" : "py-1"}>
-				<Text class="text-base leading-relaxed text-foreground">{m().text}</Text>
-			</View>
+			<If
+				when={m().author === "you"}
+				else={
+					<View selectable class="py-1">
+						<Text class="text-base leading-relaxed text-foreground">{m().text}</Text>
+					</View>
+				}
+			>
+				<Panel selectable>
+					<Text class="text-base leading-relaxed text-foreground">{m().text}</Text>
+				</Panel>
+			</If>
 			{/* Only your messages wait for an answer; the agent's do not. */}
 			<If when={m().author === "you" && REPLY[m().reply]}>
 				<View class="flex-row items-center gap-1.5">
@@ -1056,14 +1066,11 @@ function Conversation(props: {
 		<View testID="thread-conversation" class="gap-6">
 			<If when={c()?.reason}>
 				<View class="gap-2">
-					<View class="flex-row items-start gap-2.5">
-						<View class="pt-1.5">
-							<Mark kind="unknown" />
-						</View>
-						<Text testID="thread-conversation-off" role="alert" class="flex-1 text-sm text-foreground">
+					<MarkLine kind="unknown">
+						<Text testID="thread-conversation-off" role="alert" class="text-sm text-foreground">
 							{c()?.reason ?? ""}
 						</Text>
-					</View>
+					</MarkLine>
 					<View class="flex-row pl-3">
 						<Action
 							label="Read again"
@@ -1175,7 +1182,7 @@ function Conversation(props: {
 function WaitingMessages(props: { messages: WaitingMessage[] }) {
 	return (
 		<If when={props.messages.length > 0}>
-			<View testID="thread-waiting" class="gap-2 rounded-xl bg-muted px-4 py-3">
+			<Panel testID="thread-waiting" class="gap-2">
 				<Text class="text-xs text-muted-foreground">
 					{props.messages.length === 1
 						? "Waiting for the coordinator. It goes with your next answers, or as soon as the coordinator is free."
@@ -1183,17 +1190,12 @@ function WaitingMessages(props: { messages: WaitingMessage[] }) {
 				</Text>
 				<Each of={props.messages} key={(w) => w.operationId}>
 					{(w) => (
-						<View class="flex-row items-start gap-2.5">
-							<View class="pt-1.5">
-								<Mark kind="still" />
-							</View>
-							<View selectable class="flex-1">
-								<Text class="text-sm text-foreground">{w().text}</Text>
-							</View>
-						</View>
+						<MarkLine kind="still" selectable>
+							<Text class="text-sm text-foreground">{w().text}</Text>
+						</MarkLine>
 					)}
 				</Each>
-			</View>
+			</Panel>
 		</If>
 	);
 }
@@ -1246,7 +1248,8 @@ function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 					{why()}
 				</Text>
 			</If>
-			<Input
+			<TextField
+				variant="composer"
 				testID="thread-reply"
 				ref={field.ref}
 				multiline
@@ -1256,7 +1259,6 @@ function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 				onChange={({ value }) => setDraft(key(), value)}
 				onFocus={field.focus}
 				onSelectionChange={field.select}
-				class="min-h-20 rounded-xl border border-input bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary"
 			/>
 			<If when={tooLong()}>
 				<Text class="text-xs text-needs-ink">{`Too long. Keep it under ${MAX_TEXT_BYTES} bytes.`}</Text>
@@ -1270,7 +1272,7 @@ function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 			</If>
 			<View class="flex-row flex-wrap items-center gap-2">
 				<Action
-					primary
+					variant="primary"
 					label={props.m.writing ? "Sending…" : "Send"}
 					shortcut="⌘↩"
 					testID="thread-send"
@@ -1415,7 +1417,7 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 				if (waiting === null) scroll.onScroll(e);
 			}}
 		>
-			<View testID="thread" class={`${PAGE_COLUMN} gap-8`}>
+			<Page testID="thread" gap={8}>
 				<If when={topic()} else={<Absent mirror={mirror} missionId={props.missionId} m={m()} />}>
 					<Each of={topic() ? [topic() as Topic] : []} key={(t) => t.id}>
 						{(t) => (
@@ -1424,12 +1426,7 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 									<Text class="text-xs text-faint">
 										{title() ? `${title()} · Thread with the coordinator` : "Thread with the coordinator"}
 									</Text>
-									<Text
-										role="header"
-										class="text-3xl font-semibold leading-tight tracking-tight text-foreground"
-									>
-										{t().title}
-									</Text>
+									<PageTitle title={t().title} />
 									<View class="flex-row flex-wrap items-center gap-1.5">
 										<Mark kind={STATUS[t().disposition].mark} />
 										<Text testID="thread-status" class="text-xs text-muted-foreground">
@@ -1452,17 +1449,14 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 									</View>
 								</View>
 								<If when={m().reason}>
-									<View testID="thread-stale" class="flex-row items-start gap-2.5">
-										<View class="pt-1.5">
-											<Mark kind="unknown" />
-										</View>
-										<Text role="alert" class="flex-1 text-sm text-muted-foreground">
+									<MarkLine testID="thread-stale" kind="unknown">
+										<Text role="alert" class="text-sm text-muted-foreground">
 											{m().reason}
 										</Text>
-									</View>
+									</MarkLine>
 								</If>
 								<If when={t().disposition !== "open"}>
-									<View testID="thread-closed" class="gap-2 rounded-xl bg-muted px-4 py-3">
+									<Panel testID="thread-closed" class="gap-2">
 										<Text class="text-sm text-foreground">
 											{t().disposition === "later"
 												? "This thread is in Later. Its history stays."
@@ -1487,7 +1481,7 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 												}
 											/>
 										</View>
-									</View>
+									</Panel>
 								</If>
 								<Links
 									mirror={mirror}
@@ -1534,7 +1528,7 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 						)}
 					</Each>
 				</If>
-			</View>
+			</Page>
 		</Scroll>
 	);
 }

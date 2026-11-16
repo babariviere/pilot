@@ -18,9 +18,8 @@ import type {
 } from "pilot-day/native";
 import type { Changes } from "./changeFeed";
 import type { Day } from "./day";
-import { Arrive, glide } from "./motion";
 import type { Plans } from "./planning";
-import { Action, Mark, type MarkKind, PAGE_COLUMN, SectionTitle } from "./ui";
+import { Action, Arrive, glide, Mark, type MarkKind, Page, Panel, SectionTitle } from "./ui";
 import type { Update } from "./updateFeed";
 import { captureView, closeUpdate, restoreView, saveForms, startFresh, updateBusy, updateMessage } from "./updateView";
 
@@ -332,7 +331,7 @@ function Offer(props: { update: Update }) {
 		return o.kind === "register" ? "Register Pilot's service" : `Pilot ${o.version} is ready ${kindWords(o.kind)}`;
 	};
 	return (
-		<View class="gap-3 rounded-xl bg-muted px-4 py-4">
+		<Panel size="lg" class="gap-3">
 			<Text class="text-base font-medium text-foreground">{title()}</Text>
 			<Text class="text-sm text-muted-foreground">{offer()?.note ?? ""}</Text>
 			<If when={service().blocked}>
@@ -342,7 +341,7 @@ function Offer(props: { update: Update }) {
 			</If>
 			<View class="flex-row gap-2">
 				<Action
-					primary
+					variant="primary"
 					testID="update-prepare"
 					label={offer()?.kind === "register" ? "Register…" : "Update…"}
 					disabled={!!service().blocked || updateBusy() || refused()}
@@ -357,7 +356,7 @@ function Offer(props: { update: Update }) {
 					/>
 				</If>
 			</View>
-		</View>
+		</Panel>
 	);
 }
 
@@ -370,31 +369,33 @@ function Confirm(props: { update: Update; day: Day; plans?: Plans; pending: Conf
 				? `${c().mode === "force" ? "Force update" : "Update"} from ${c().from} to ${c().to}?`
 				: `${c().mode === "force" ? "Force update" : "Update"} to ${c().to}?`;
 	return (
-		<Arrive class="gap-3 rounded-xl bg-muted px-4 py-4">
-			<Text role="header" class="text-base font-medium text-foreground">
-				{title()}
-			</Text>
-			<View class="gap-1">
-				<Each of={confirmLines(c())} key={(line) => line}>
-					{(line) => <Text class="text-sm text-muted-foreground">{line()}</Text>}
-				</Each>
-			</View>
-			<View class="flex-row gap-2">
-				<Action
-					primary
-					testID="update-confirm"
-					label={
-						c().kind === "register"
-							? "Register"
-							: c().mode === "force"
-								? "Force update and accept loss"
-								: "Update"
-					}
-					disabled={updateBusy()}
-					onPress={() => void confirm(props.update, props.day, props.plans)}
-				/>
-				<Action label="Cancel" disabled={updateBusy()} onPress={() => void cancel(props.update)} />
-			</View>
+		<Arrive>
+			<Panel size="lg" class="gap-3">
+				<Text role="header" class="text-base font-medium text-foreground">
+					{title()}
+				</Text>
+				<View class="gap-1">
+					<Each of={confirmLines(c())} key={(line) => line}>
+						{(line) => <Text class="text-sm text-muted-foreground">{line()}</Text>}
+					</Each>
+				</View>
+				<View class="flex-row gap-2">
+					<Action
+						variant="primary"
+						testID="update-confirm"
+						label={
+							c().kind === "register"
+								? "Register"
+								: c().mode === "force"
+									? "Force update and accept loss"
+									: "Update"
+						}
+						disabled={updateBusy()}
+						onPress={() => void confirm(props.update, props.day, props.plans)}
+					/>
+					<Action label="Cancel" disabled={updateBusy()} onPress={() => void cancel(props.update)} />
+				</View>
+			</Panel>
 		</Arrive>
 	);
 }
@@ -430,7 +431,7 @@ function Run(props: { update: Update; run: UpdateRun }) {
 			<If when={lost()}>
 				<View class="flex-row">
 					<Action
-						primary
+						variant="primary"
 						testID="update-check"
 						label="Check again"
 						disabled={updateBusy()}
@@ -476,7 +477,7 @@ export function UpdateScreen(props: { update: Update; day: Day; plans?: Plans })
 	});
 	return (
 		<Scroll class="flex-1 bg-background">
-			<View class={`${PAGE_COLUMN} gap-8`}>
+			<Page gap={8}>
 				<ServiceLine service={service()} />
 				<If when={updateMessage()}>
 					<Text role="alert" class="text-sm text-needs-ink">
@@ -518,7 +519,7 @@ export function UpdateScreen(props: { update: Update; day: Day; plans?: Plans })
 						/>
 					</View>
 				</If>
-			</View>
+			</Page>
 		</Scroll>
 	);
 }

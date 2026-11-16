@@ -8,7 +8,6 @@
 // answers shows checkboxes and sends every option picked. Later is kept
 // with the draft; the chat still waits.
 import { cleanup, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
-import { Checkbox, Input, Radio, RadioGroup } from "nsh/base";
 import type { Answer, Decision, DecisionOption } from "pilot-day/native";
 import type { ArtifactSource } from "./artifactReads";
 import {
@@ -28,7 +27,20 @@ import type { Day } from "./day";
 import { InterviewCard } from "./InterviewCard";
 import { keepField } from "./kept";
 import { QuestionArtifacts } from "./QuestionArtifacts";
-import { Action, Bars, EvidenceChip, HelpChip, InlineAction, Mark, type MarkKind } from "./ui";
+import {
+	Action,
+	Bars,
+	CheckboxRow,
+	EvidenceChip,
+	InlineAction,
+	Mark,
+	type MarkKind,
+	Panel,
+	RadioList,
+	RadioRow,
+	TextField,
+	ToggleChip,
+} from "./ui";
 import {
 	anchors,
 	asking,
@@ -269,7 +281,7 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 				when={d().helpUnavailable}
 				else={
 					<View class="flex-row flex-wrap gap-1.5">
-						<HelpChip
+						<ToggleChip
 							label="Say it simpler"
 							shortcut="S"
 							anchor={(node) => {
@@ -279,7 +291,7 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 							onChange={() => toggleHelp(d(), "simpler")}
 						/>
 						<If when={d().more.length > 0}>
-							<HelpChip
+							<ToggleChip
 								label="More context"
 								shortcut="C"
 								pressed={helpOpen(id, "more")}
@@ -287,21 +299,21 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 							/>
 						</If>
 						<If when={d().visual}>
-							<HelpChip
+							<ToggleChip
 								label="Show me"
 								shortcut="V"
 								pressed={helpOpen(id, "visual")}
 								onChange={() => toggleHelp(d(), "visual")}
 							/>
 						</If>
-						<HelpChip
+						<ToggleChip
 							label="Ask a question"
 							shortcut="Q"
 							pressed={helpOpen(id, "ask")}
 							onChange={() => toggleHelp(d(), "ask")}
 						/>
 						<If when={d().details}>
-							<HelpChip
+							<ToggleChip
 								label="What was pushed"
 								pressed={helpOpen(id, "details")}
 								onChange={() => toggleHelp(d(), "details")}
@@ -316,34 +328,34 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 			</If>
 
 			<If when={helpOpen(id, "more")}>
-				<View class="gap-1.5 rounded-xl bg-muted px-4 py-3">
+				<Panel class="gap-1.5">
 					<Each of={d().more} key={(line) => line}>
 						{(line) => <Text class="text-sm text-foreground">{line()}</Text>}
 					</Each>
-				</View>
+				</Panel>
 			</If>
 
 			<If when={helpOpen(id, "visual") && d().visual}>
-				<View testID="visual" class="gap-3 rounded-xl bg-muted px-4 py-3">
+				<Panel testID="visual" class="gap-3">
 					<Text class="text-sm text-foreground">{d().visual?.explanation ?? ""}</Text>
 					<Bars bars={d().visual?.bars ?? []} />
 					<Text class="text-xs text-faint">{`From ${d().visual?.source ?? ""}. It explains; it does not answer for you.`}</Text>
-				</View>
+				</Panel>
 			</If>
 
 			<If when={helpOpen(id, "details") && d().details}>
-				<View class="rounded-xl bg-muted px-4 py-3">
+				<Panel>
 					<Text class="text-sm text-foreground">{d().details ?? ""}</Text>
-				</View>
+				</Panel>
 			</If>
 
 			<If when={helpOpen(id, "ask") && !d().helpUnavailable}>
-				<View class="gap-3 rounded-xl bg-muted px-4 py-3">
+				<Panel class="gap-3">
 					<Each of={d().answers} key={(a) => a.id}>
 						{(a) => <AnswerLine day={props.day} decision={d()} answer={a()} />}
 					</Each>
 					<View class="flex-row items-center gap-2">
-						<Input
+						<TextField
 							testID="question"
 							ref={questionField.ref}
 							value={questionText(d())}
@@ -360,7 +372,8 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 							onBlur={unbindEscape}
 							submitBehavior="submit"
 							placeholder="Ask about this decision"
-							class="min-h-8 flex-1 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary"
+							compact
+							class="flex-1"
 						/>
 						<Action
 							label={asking()[id] ? "Asking…" : "Ask"}
@@ -369,7 +382,7 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 						/>
 					</View>
 					<Text class="text-xs text-faint">Questions help you decide. They never answer for you.</Text>
-				</View>
+				</Panel>
 			</If>
 
 			<If when={d().tried.length > 0}>
@@ -389,49 +402,40 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 					</Text>
 					<Each of={d().options} key={(o) => o.id}>
 						{(o) => (
-							<Checkbox
-								ref={(node) => radios.set(o().id, node)}
+							<CheckboxRow
+								size="lg"
+								anchor={(node) => radios.set(o().id, node)}
 								checked={picked(d()).includes(o().id)}
 								disabled={!idle()}
 								onChange={() => choose(props.day, d(), o().id)}
-								class="flex-row gap-3 rounded-xl px-3 py-2.5 checked:bg-selection hover:bg-accent checked:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
-								indicatorClass="mt-0.5 size-4 items-center justify-center rounded border border-input checked:border-primary checked:bg-primary"
-								indicator={
-									<If when={picked(d()).includes(o().id)}>
-										<View class="size-2 rounded-sm bg-primary-foreground" />
-									</If>
-								}
 							>
 								<OptionText decision={d()} option={o()} />
-							</Checkbox>
+							</CheckboxRow>
 						)}
 					</Each>
 				</View>
 			</If>
 
 			<If when={showOptions() && !d().multiple}>
-				<RadioGroup class="gap-1">
+				<RadioList>
 					<Each of={d().options} key={(o) => o.id}>
 						{(o) => (
-							<Radio
-								ref={(node) => radios.set(o().id, node)}
+							<RadioRow
+								size="lg"
+								anchor={(node) => radios.set(o().id, node)}
 								checked={chosen(d()) === o().id}
 								disabled={!idle()}
 								onChange={() => choose(props.day, d(), o().id)}
-								class="group flex-row gap-3 rounded-xl px-3 py-2.5 checked:bg-selection hover:bg-accent checked:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
 							>
-								<View class="mt-0.5 size-4 items-center justify-center rounded-full border border-input group-checked:border-primary">
-									<View class="size-2 rounded-full group-checked:bg-primary" />
-								</View>
 								<OptionText decision={d()} option={o()} />
-							</Radio>
+							</RadioRow>
 						)}
 					</Each>
-				</RadioGroup>
+				</RadioList>
 			</If>
 
 			<If when={d().reply}>
-				<Input
+				<TextField
 					testID="reply"
 					ref={replyField.ref}
 					value={replyText(d())}
@@ -447,7 +451,7 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 					onSelectionChange={replyField.select}
 					onBlur={unbindEscape}
 					placeholder={d().options.length > 0 ? "Add detail, or answer in your own words" : "Your answer"}
-					class="min-h-8 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary"
+					compact
 				/>
 			</If>
 
@@ -477,7 +481,7 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 					when={needsCheck(d())}
 					else={
 						<Action
-							primary
+							variant="primary"
 							label={commitLabel(d())}
 							shortcut={COMMIT_KEY}
 							anchor={(node) => {
@@ -489,7 +493,7 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 					}
 				>
 					<Action
-						primary
+						variant="primary"
 						label="Check again"
 						shortcut={COMMIT_KEY}
 						anchor={(node) => {

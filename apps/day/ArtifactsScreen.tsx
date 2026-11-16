@@ -7,7 +7,7 @@ import { ArtifactShelf, createShelf } from "./ArtifactShelf";
 import { type ArtifactSource, closeArtifacts } from "./artifactReads";
 import { keepScroll } from "./kept";
 import { pageScroll, scrolled } from "./onScreen";
-import { PAGE_COLUMN } from "./ui";
+import { Page, PageTitle } from "./ui";
 
 export function ArtifactsScreen(props: { source: ArtifactSource }) {
 	const shelf = createShelf();
@@ -30,11 +30,9 @@ export function ArtifactsScreen(props: { source: ArtifactSource }) {
 				scrolled();
 			}}
 		>
-			<View testID="artifacts" class={`${PAGE_COLUMN} gap-8`}>
+			<Page testID="artifacts" gap={8}>
 				<View class="gap-2">
-					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-						Artifacts
-					</Text>
+					<PageTitle title="Artifacts" />
 					<Text class="text-sm text-muted-foreground">What chats in this project saved, newest first.</Text>
 				</View>
 				<ArtifactShelf
@@ -47,7 +45,7 @@ export function ArtifactsScreen(props: { source: ArtifactSource }) {
 					Open a card to see a saved image, NSH preview or readable source. Previews run apart from Pilot, change
 					only their own state and pause out of view. Looking records nothing.
 				</Text>
-			</View>
+			</Page>
 		</Scroll>
 	);
 }

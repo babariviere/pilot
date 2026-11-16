@@ -3,7 +3,7 @@ import { mount, Scroll, signal, Text, View } from "nsh";
 import { ModelSettingsSection } from "./ModelSettings";
 import type { ModelControls, ModelSettings, SignInView } from "./modelControls";
 import { modelEdit, restoreModelDraft, savedModelDraft } from "./modelSettingsDraft";
-import { Action, PAGE_COLUMN } from "./ui";
+import { Action, Page } from "./ui";
 
 const a = {
 	id: "fixture/reasoner",
@@ -149,7 +149,7 @@ const controls: ModelControls = {
 const kept = signal("");
 mount(() => (
 	<Scroll class="flex-1 bg-background">
-		<View class={`${PAGE_COLUMN} gap-4`}>
+		<Page gap={4}>
 			<Text>Mock data. AI settings behavior fixture.</Text>
 			<View class="flex-row flex-wrap gap-2">
 				<Action label="Next unknown" onPress={() => next.set("unknown")} />
@@ -207,6 +207,6 @@ mount(() => (
 			<Text testID="models-kept">{kept()}</Text>
 			<Text>{`Editing: ${modelEdit() ?? "none"}`}</Text>
 			<ModelSettingsSection controls={controls} />
-		</View>
+		</Page>
 	</Scroll>
 ));

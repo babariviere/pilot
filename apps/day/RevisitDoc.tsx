@@ -5,7 +5,6 @@
 // starts, resumes or permits work. Finished tasks and earlier decisions
 // stay as history, readable here on request.
 import { type JSX, Text, View } from "nsh";
-import { Collapsible } from "nsh/base";
 import type {
 	ChangeKind,
 	Correction,
@@ -17,11 +16,10 @@ import type {
 	TaskChange,
 	TextChange,
 } from "pilot-day/native";
-import { glide } from "./motion";
 import { askRevisit, checkRevision, confirmRevision } from "./planCommands";
 import type { Plans } from "./planning";
 import { drop, put, revisionShown, revisitBusy, revisitMessages, revisitOpen } from "./planView";
-import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
+import { Action, Disclosure, glide, Mark, type MarkKind, MarkLine, Notice, Panel, SectionTitle } from "./ui";
 
 /** The words beside a part a revision touches. */
 export function changeWord(kind: ChangeKind): string {
@@ -55,18 +53,14 @@ function Fold(props: { missionId: string; part: string; label: string; children?
 	const key = () => `${props.missionId}/${props.part}`;
 	const open = () => revisitOpen()[key()] === true;
 	return (
-		<Collapsible open={open()} class="gap-1" content={<View class="gap-2 pl-4 pt-2">{props.children}</View>}>
-			<View
-				testID={`fold-${props.part}`}
-				role="button"
-				accessibilityState={{ expanded: open() }}
-				onPress={() => put(revisitOpen, key(), !open())}
-				class="flex-row items-baseline gap-2 rounded-md focus-visible:ring-2 focus-visible:ring-ring/40"
-			>
-				<Text class="text-sm text-muted-foreground">{open() ? "▾" : "▸"}</Text>
-				<Text class="text-sm text-muted-foreground">{props.label}</Text>
-			</View>
-		</Collapsible>
+		<Disclosure
+			testID={`fold-${props.part}`}
+			label={props.label}
+			open={open()}
+			onToggle={() => put(revisitOpen, key(), !open())}
+		>
+			<View class="gap-2 pl-4 pt-2">{props.children}</View>
+		</Disclosure>
 	);
 }
 
@@ -209,21 +203,18 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 	const unknown = () => r().confirm === "unknown" || r().confirm === "checking";
 	const message = () => revisitMessages()[id()] ?? "";
 	return (
-		<View testID="revision-confirm" class="gap-3 rounded-xl bg-muted px-4 py-3.5">
+		<Panel testID="revision-confirm" size="lg" class="gap-3">
 			<If when={message()}>
 				<Text testID="revisit-message" role="alert" class="text-sm text-foreground">
 					{message()}
 				</Text>
 			</If>
 			<If when={why()}>
-				<View class="flex-row items-start gap-2.5">
-					<View class="pt-1.5">
-						<Mark kind="unknown" />
-					</View>
-					<Text role="alert" class="flex-1 text-sm text-foreground">
+				<MarkLine kind="unknown">
+					<Text role="alert" class="text-sm text-foreground">
 						{why()}
 					</Text>
-				</View>
+				</MarkLine>
 			</If>
 			<If when={r().pause === "paused" && !why()}>
 				<Text class="text-xs text-muted-foreground">
@@ -256,7 +247,7 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 							when={pin()}
 							else={
 								<Action
-									primary
+									variant="primary"
 									testID="confirm-revision"
 									label="Confirm revision"
 									disabled={!!why() || busy() || r().confirm !== "open"}
@@ -269,7 +260,7 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 							}
 						>
 							<Action
-								primary
+								variant="primary"
 								testID="confirm-revision-now"
 								label={busy() || r().confirm === "confirming" ? "Confirming…" : "Confirm"}
 								disabled={!!why() || busy() || !pinned()}
@@ -287,7 +278,7 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 					}
 				>
 					<Action
-						primary
+						variant="primary"
 						testID="check-revision"
 						label="Check again"
 						icon="refresh"
@@ -305,7 +296,7 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 					/>
 				</If>
 			</View>
-		</View>
+		</Panel>
 	);
 }
 
@@ -445,15 +436,7 @@ export function RevisitSection(props: { plans: Plans; page: PlanPage; revisit: R
 	return (
 		<View testID="revisit" class="gap-4">
 			<SectionTitle title="Revisit" />
-			<If
-				when={r().available}
-				else={
-					<View testID="revisit-unavailable" class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-						<Mark kind="unknown" />
-						<Text class="flex-1 text-sm text-foreground">{r().reason}</Text>
-					</View>
-				}
-			>
+			<If when={r().available} else={<Notice testID="revisit-unavailable" text={r().reason} />}>
 				<If when={r().stage === "idle" || r().stage === "confirmed"}>
 					<Text class="text-sm leading-relaxed text-muted-foreground">
 						Check the goal, agreement and open tasks against what you want now. Pilot asks only about gaps, then
@@ -461,14 +444,11 @@ export function RevisitSection(props: { plans: Plans; page: PlanPage; revisit: R
 					</Text>
 				</If>
 				<If when={stageLine(props.page, r())}>
-					<View class="flex-row items-start gap-2.5">
-						<View class="pt-1.5">
-							<Mark kind={r().stage === "confirmed" ? "done" : "moving"} />
-						</View>
-						<Text testID="revisit-stage" class="flex-1 text-sm leading-relaxed text-foreground">
+					<MarkLine kind={r().stage === "confirmed" ? "done" : "moving"}>
+						<Text testID="revisit-stage" class="text-sm leading-relaxed text-foreground">
 							{stageLine(props.page, r())}
 						</Text>
-					</View>
+					</MarkLine>
 				</If>
 				<Now missionId={id()} revisit={r()} />
 				<If when={props.page.stage === "unknown" && !r().revision}>
@@ -494,7 +474,7 @@ export function RevisitSection(props: { plans: Plans; page: PlanPage; revisit: R
 				<If when={r().stage === "idle" || r().stage === "confirmed"}>
 					<View class="flex-row">
 						<Action
-							primary={r().stage === "idle"}
+							variant={r().stage === "idle" ? "primary" : "plain"}
 							testID="ask-revisit"
 							label={busy() ? "Asking…" : "Revisit mission"}
 							accessibilityLabel="Revisit mission: Pilot compares it with what you agreed and asks about gaps. Nothing changes until you confirm."

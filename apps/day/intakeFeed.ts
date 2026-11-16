@@ -7,7 +7,7 @@
 import { type Signal, signal } from "nsh";
 import type { Intake, Request } from "pilot-day/native";
 import { call, type Refusal, type Reply } from "./bridge";
-import { glide } from "./motion";
+import { glide } from "./ui";
 
 /** The user's triage of a request. Separate from any Slack or Linear status. */
 export type Triage = "new" | "later" | "discarded";

@@ -7,9 +7,9 @@ import type { Planning } from "pilot-day/native";
 import { changesRoute } from "./changesView";
 import type { ChatMirror } from "./chatFeed";
 import type { PlanningFeed } from "./feeds";
-import { glide } from "./motion";
 import { planRoute } from "./planView";
 import { ritualRoute } from "./ritualView";
+import { glide } from "./ui";
 import { route } from "./view";
 
 /** Planning's read model as Rust last published it, and the feed to change it. */

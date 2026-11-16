@@ -4,8 +4,8 @@
 // over a newer list without the user choosing. Leaving the page, closing or
 // updating keeps it (updateView.ts); only Save sends it, once.
 import { signal } from "nsh";
-import { glide } from "./motion";
 import type { ProjectPreference, ProjectPreferences } from "./preferencesFeed";
+import { glide } from "./ui";
 
 /** Whether Settings is open over Today. */
 export const settingsOpen = signal(false);

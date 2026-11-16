@@ -5,7 +5,7 @@
 // Nothing here opens, runs, saves, sends or records anything.
 import { signal } from "nsh";
 import { call, type Refusal } from "./bridge";
-import { glide } from "./motion";
+import { glide } from "./ui";
 
 /** One saved revision as inert text, or why it is not shown. */
 export type SavedArtifact = {

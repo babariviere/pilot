@@ -29,7 +29,20 @@ import {
 	requestLine,
 } from "./changeWords";
 import { keepScroll } from "./kept";
-import { Action, InlineAction, Mark, PAGE_COLUMN, PatchDiff, RowLink, SectionTitle, TabItem, TabRow } from "./ui";
+import {
+	Action,
+	InlineAction,
+	Mark,
+	Notice,
+	Page,
+	PageTitle,
+	Panel,
+	PatchDiff,
+	RowLink,
+	SectionTitle,
+	TabItem,
+	TabRow,
+} from "./ui";
 import { setFor } from "./view";
 
 function say(id: string, message: string) {
@@ -168,15 +181,10 @@ function ChangeList(props: { changes: Changes }) {
 			scrollEventThrottle={100}
 			onScroll={scroll.onScroll}
 		>
-			<View class={`${PAGE_COLUMN} gap-8`}>
+			<Page gap={8}>
 				<View class="gap-2">
 					<View class="flex-row items-start gap-4">
-						<Text
-							role="header"
-							class="flex-1 text-3xl font-semibold leading-tight tracking-tight text-foreground"
-						>
-							Changes
-						</Text>
+						<PageTitle title="Changes" class="flex-1" />
 						<If when={list().availability === "available"}>
 							<View class="pt-1">
 								<Action
@@ -202,11 +210,7 @@ function ChangeList(props: { changes: Changes }) {
 				<If
 					when={list().availability === "available"}
 					else={
-						<View testID="changes-unavailable" class="gap-1.5 rounded-xl bg-muted px-4 py-3">
-							<View class="flex-row items-center gap-2.5">
-								<Mark kind="unknown" />
-								<Text class="flex-1 text-sm text-foreground">Pilot cannot show kept changes here.</Text>
-							</View>
+						<Notice testID="changes-unavailable" text="Pilot cannot show kept changes here.">
 							<Text class="text-sm text-muted-foreground">{list().reason}</Text>
 							<If when={list().more}>
 								<Text class="text-sm text-muted-foreground">
@@ -221,7 +225,7 @@ function ChangeList(props: { changes: Changes }) {
 									onPress={() => readAgain(props.changes)}
 								/>
 							</View>
-						</View>
+						</Notice>
 					}
 				>
 					<View class="gap-8">
@@ -274,7 +278,7 @@ function ChangeList(props: { changes: Changes }) {
 						</If>
 					</View>
 				</If>
-			</View>
+			</Page>
 		</Scroll>
 	);
 }
@@ -283,7 +287,7 @@ function ChangeList(props: { changes: Changes }) {
 function Kept(props: { changes: Changes; page: ChangePage }) {
 	const identity = () => props.page.identity;
 	return (
-		<View testID="kept" class="gap-1.5 rounded-xl bg-muted px-4 py-3">
+		<Panel testID="kept" class="gap-1.5">
 			<Text class="text-sm text-foreground">
 				{`The snapshot Pilot kept on ${identity().capturedAt}. The files may have changed since.`}
 			</Text>
@@ -303,7 +307,7 @@ function Kept(props: { changes: Changes; page: ChangePage }) {
 					/>
 				</View>
 			</If>
-		</View>
+		</Panel>
 	);
 }
 
@@ -334,7 +338,7 @@ function Now(props: { changes: Changes; page: ChangePage }) {
 				</If>
 				<If when={row().delivery === "unknown" || row().delivery === "checking"}>
 					<Action
-						primary
+						variant="primary"
 						label="Check again"
 						disabled={row().delivery === "checking"}
 						onPress={() => check(props.changes, props.page)}

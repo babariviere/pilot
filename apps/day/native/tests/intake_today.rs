@@ -29,6 +29,12 @@ fn entry() -> PathBuf {
     }
     // Shared chrome imports its packaged SVGs. Keep this isolated source copy
     // complete rather than removing icons or granting filesystem capabilities.
+    // The component library lives in ui/; screens import it as "./ui".
+    std::fs::create_dir(dir.join("ui")).unwrap();
+    for file in std::fs::read_dir(app.join("ui")).unwrap() {
+        let path = file.unwrap().path();
+        std::fs::copy(&path, dir.join("ui").join(path.file_name().unwrap())).unwrap();
+    }
     std::fs::create_dir(dir.join("icons")).unwrap();
     for file in std::fs::read_dir(app.join("icons")).unwrap() {
         let path = file.unwrap().path();

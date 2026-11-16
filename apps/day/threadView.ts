@@ -4,8 +4,8 @@
 // or mission, and they stay across Back, other pages, close and update
 // (updateView.ts). Only Send sends one, once.
 import { signal } from "nsh";
-import { glide } from "./motion";
 import type { ThreadsMirror } from "./threadFeed";
+import { glide } from "./ui";
 
 /** The thread on screen, over its mission. */
 export type ThreadPlace = { missionId: string; topicId: string };

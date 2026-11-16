@@ -26,7 +26,7 @@ import {
 import type { Rituals } from "./ritualFeed";
 import { backFromStandup, closeRitual, openStandup, ritualRoute, START_STEPS, startStep } from "./ritualView";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
-import { Action, Mark, type MarkKind, PAGE_COLUMN, SectionTitle } from "./ui";
+import { Action, Mark, type MarkKind, MarkLine, Notice, Page, SectionTitle } from "./ui";
 import { focused, focusFront, type Item, queue } from "./view";
 import { freshnessLine, provenance } from "./words";
 
@@ -75,14 +75,11 @@ function Results(props: { day: Day; rituals: Rituals; title: string }) {
 			<If when={shown().length > 0} else={<Text class="text-sm text-muted-foreground">{none()}</Text>}>
 				<Each of={shown()} key={(d) => d.id}>
 					{(d) => (
-						<View class="flex-row gap-3 py-2">
-							<View class="pt-1.5">
-								<Mark kind={resultMark(d())} />
-							</View>
-							<View class="flex-1 gap-0.5">
+						<View class="py-2">
+							<MarkLine kind={resultMark(d())}>
 								<Text class="text-sm text-foreground">{d().text}</Text>
 								<Text class="text-xs text-faint">{resultSource(d())}</Text>
-							</View>
+							</MarkLine>
 						</View>
 					)}
 				</Each>
@@ -206,13 +203,16 @@ function SavedNote(props: { rituals: Rituals; context: string }) {
 			: r.message();
 	return (
 		<If when={line()}>
-			<View testID="ritual-note" class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-				<Mark kind={r.uncertain() ? "unknown" : "still"} />
-				<Text class="flex-1 text-sm text-foreground">{line()}</Text>
-				<If when={r.uncertain()}>
-					<Action label="Read again" icon="refresh" testID="ritual-read" onPress={() => void r.refresh()} />
-				</If>
-			</View>
+			<Notice
+				testID="ritual-note"
+				kind={r.uncertain() ? "unknown" : "still"}
+				text={line()}
+				action={
+					<If when={r.uncertain()}>
+						<Action label="Read again" icon="refresh" testID="ritual-read" onPress={() => void r.refresh()} />
+					</If>
+				}
+			/>
 		</If>
 	);
 }
@@ -310,7 +310,7 @@ function StartDay(props: { day: Day; rituals: Rituals }) {
 			</If>
 			<SavedNote rituals={r} context={context} />
 			<View class="flex-row flex-wrap items-center gap-2 border-t border-border pt-5">
-				<Action primary label={primaryLabel()} shortcut={NEXT_KEY} anchor={anchor} onPress={primary} />
+				<Action variant="primary" label={primaryLabel()} shortcut={NEXT_KEY} anchor={anchor} onPress={primary} />
 				<If when={step() === 1 && items().length > 0}>
 					<Action label="Next" onPress={next} />
 				</If>
@@ -342,7 +342,13 @@ function Closed(props: { day: Day; anchor: (node: ViewRef) => void }) {
 				<Text class="text-sm text-foreground">{cue()}</Text>
 			</If>
 			<View class="flex-row flex-wrap items-center gap-2">
-				<Action primary label="Back to Today" testID="closed-today" anchor={props.anchor} onPress={closeRitual} />
+				<Action
+					variant="primary"
+					label="Back to Today"
+					testID="closed-today"
+					anchor={props.anchor}
+					onPress={closeRitual}
+				/>
 				<Action label="Standup notes" onPress={() => openStandup("end")} />
 			</View>
 		</View>
@@ -418,7 +424,7 @@ function EndDay(props: { day: Day; rituals: Rituals }) {
 					<Scheduled day={props.day} />
 					<SavedNote rituals={r} context={context} />
 					<View class="flex-row flex-wrap items-center gap-2 border-t border-border pt-5">
-						<Action primary label="Close the day" shortcut={NEXT_KEY} anchor={anchor} onPress={close} />
+						<Action variant="primary" label="Close the day" shortcut={NEXT_KEY} anchor={anchor} onPress={close} />
 						<Action label="Standup notes" onPress={() => openStandup("end")} />
 						<View class="flex-1" />
 						<Action label="Skip for today" onPress={() => void skip()} />
@@ -476,7 +482,7 @@ export function RitualScreen(props: { day: Day; rituals: Rituals }) {
 			scrollEventThrottle={100}
 			onScroll={scroll.onScroll}
 		>
-			<View class={`${PAGE_COLUMN} gap-8`}>
+			<Page gap={8}>
 				<If
 					when={readable()}
 					else={
@@ -498,7 +504,7 @@ export function RitualScreen(props: { day: Day; rituals: Rituals }) {
 						<Standup day={props.day} rituals={props.rituals} />
 					</If>
 				</If>
-			</View>
+			</Page>
 		</Scroll>
 	);
 }

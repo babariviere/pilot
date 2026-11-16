@@ -14,6 +14,9 @@
 - Use the verified NSH 0.5.0 (`f4d68f7`) distribution (`NSH_DAY_CLI` can select a local copy). Keep NSH dependencies
   on the pinned release and preserve Cargo locks. Do not rebuild or patch NSH,
   edit shared dependency caches, or install tools to work around a setup failure.
+- Build screens from the component library in `ui/` (`ui/index.ts` lists it). Screens do not import
+  `nsh/base` or restyle a control: add a variant to the library instead. Only single-use overlays
+  (the palette, the full-window artifact) assemble `nsh/base` themselves.
 - Keep entries beside `nsh.json`, which supplies their theme and capabilities.
   Keep the default entry's capabilities deny-all.
 - Preserve stable identities: `pilot-day/native`, `dev.pilot.day`, and existing

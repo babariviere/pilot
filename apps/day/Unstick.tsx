@@ -4,13 +4,12 @@
 // one fix, which also applies only on Apply.
 
 import { signal, Text, View } from "nsh";
-import { Input } from "nsh/base";
 import type { PlanPage } from "pilot-day/native";
 import { openChat } from "./chatView";
 import { errorText, logEvent } from "./dayLog";
 import { openFeedbackWith } from "./feedbackView";
 import type { Plans } from "./planning";
-import { Action, Mark } from "./ui";
+import { Action, MarkLine, Panel, TextField } from "./ui";
 
 type Repair = NonNullable<NonNullable<PlanPage["unstick"]>["repair"]>;
 type Fix = NonNullable<Repair["proposal"]>["fix"];
@@ -79,15 +78,12 @@ export function Unstick(props: { plans: Plans; page: PlanPage }) {
 					/>
 				</View>
 				<If when={open()}>
-					<View testID="unstick-card" class="gap-3 rounded-xl bg-muted px-4 py-3">
-						<View class="flex-row items-start gap-2.5">
-							<View class="pt-1.5">
-								<Mark kind={u()?.state === "stuck" ? "needs" : u()?.state === "moving" ? "moving" : "still"} />
-							</View>
-							<Text testID="unstick-line" class="flex-1 text-sm text-foreground">
+					<Panel testID="unstick-card" class="gap-3">
+						<MarkLine kind={u()?.state === "stuck" ? "needs" : u()?.state === "moving" ? "moving" : "still"}>
+							<Text testID="unstick-line" class="text-sm text-foreground">
 								{u()?.line ?? ""}
 							</Text>
-						</View>
+						</MarkLine>
 						<If when={u()?.state === "stuck" && u()?.fix !== "none" && !agentProposes()}>
 							<View class="gap-2">
 								<Text class="text-sm text-muted-foreground">{`Fix: ${FIX_WORDS[(u()?.fix ?? "continue") as keyof typeof FIX_WORDS] ?? ""}`}</Text>
@@ -123,7 +119,7 @@ export function Unstick(props: { plans: Plans; page: PlanPage }) {
 								{message()}
 							</Text>
 						</If>
-					</View>
+					</Panel>
 				</If>
 			</View>
 		</If>
@@ -188,13 +184,13 @@ function RepairAgent(props: {
 					</Text>
 					<Text class="text-sm text-muted-foreground">{REPAIR_WORDS[p()?.fix ?? "none"]}</Text>
 					<If when={p()?.fix === "plannerNote"}>
-						<Input
+						<TextField
 							testID="repair-note"
 							multiline
+							compact
 							value={note() ?? p()?.note ?? ""}
 							onChange={({ value }) => note.set(value)}
 							accessibilityLabel="The note to Pilot's planning agent"
-							class="min-h-8 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary"
 						/>
 					</If>
 					<View class="gap-0.5">

@@ -1,13 +1,12 @@
 // Feedback attention in Today's New section. Reading and Later send no work intent.
 import { Keyboard, signal, Text, View } from "nsh";
-import { Button, Collapsible } from "nsh/base";
 import type { Day } from "./day";
 import { FeedbackRow } from "./FeedbackRow";
 import type { FeedbackItem } from "./feedbackFeed";
 import { chatState, clip, questionOf, stepsOf } from "./feedbackSteps";
 import { dayOf, feedbackLater } from "./feedbackView";
 import { todayProject } from "./todayScope";
-import { Action, Mark } from "./ui";
+import { Action, DividedRow, Mark, Pressable } from "./ui";
 
 /** A new question or triage replaces an earlier Later. */
 export function feedbackAttention(item: FeedbackItem): string | null {
@@ -50,9 +49,8 @@ export function FeedbackIncoming(props: { day: Day }) {
 			</If>
 			<Each of={newFeedback(props.day)} key={(i) => i.id}>
 				{(item) => (
-					<Collapsible
+					<DividedRow
 						open={open() === item().id}
-						class="border-t border-border"
 						content={
 							<FeedbackRow day={props.day} mirror={mirror} item={item()} when={dayOf(item().recordedAt)} />
 						}
@@ -60,10 +58,10 @@ export function FeedbackIncoming(props: { day: Day }) {
 						<View class="flex-row items-center gap-2.5 py-2.5">
 							<Mark kind={questionOf(stepsOf(item()).triage) ? "needs" : "new"} />
 							<View class="min-w-0 flex-1">
-								<Button
+								<Pressable
 									testID={`feedback-new-${item().id}`}
 									accessibilityLabel={`${clip(item().text, 100)}. Feedback. ${questionOf(stepsOf(item()).triage) ? "The triage asks" : "Triage finished"}. Show or hide details.`}
-									class="min-h-8 flex-row items-center rounded-lg px-3 py-1 transition duration-150 hover:bg-accent active:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+									class="min-h-8 flex-row items-center rounded-lg px-3 py-1 transition duration-150 hover:bg-accent active:bg-accent"
 									onPress={() => {
 										Keyboard.dismiss();
 										const opening = open() !== item().id;
@@ -72,7 +70,7 @@ export function FeedbackIncoming(props: { day: Day }) {
 									}}
 								>
 									<Text class="min-w-0 shrink text-sm text-muted-foreground">{clip(item().text, 100)}</Text>
-								</Button>
+								</Pressable>
 								<Text class="text-xs text-faint">
 									{questionOf(stepsOf(item()).triage)
 										? "Feedback · The triage asks"
@@ -81,7 +79,7 @@ export function FeedbackIncoming(props: { day: Day }) {
 							</View>
 							<Action label="Later" testID={`feedback-later-${item().id}`} onPress={() => defer(item(), true)} />
 						</View>
-					</Collapsible>
+					</DividedRow>
 				)}
 			</Each>
 			<If when={kept().length > 0}>

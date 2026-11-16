@@ -7,8 +7,7 @@
 // or the exact mission it was opened from). Send sends it once; only an
 // accepted receipt clears it. A Send whose answer was lost stays Unknown:
 // Check only reads its result. Leaving, closing or updating keeps the draft.
-import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
-import { Input } from "nsh/base";
+import { effect, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
 import type { Day } from "./day";
 import { clearFeedbackImagePreviews, FeedbackImages } from "./FeedbackImages";
 import { FeedbackRow } from "./FeedbackRow";
@@ -41,26 +40,9 @@ import {
 	setStepMessage,
 } from "./feedbackView";
 import { keepField, keepScroll } from "./kept";
-import { glide } from "./motion";
-import { Action, Mark, PAGE_COLUMN, Picker, SectionTitle } from "./ui";
+import { Action, glide, Notice, Page, PageTitle, Picker, SectionTitle, TextField } from "./ui";
 
 const SEND_KEYS = keymap.label("mod+enter");
-
-/** A quiet note with a mark, for what needs a look. */
-function Note(props: { testID: string; text: string; detail?: string; children?: JSX.Element }) {
-	return (
-		<View testID={props.testID} class="gap-2 rounded-xl bg-muted px-4 py-3">
-			<View class="flex-row items-center gap-2.5">
-				<Mark kind="unknown" />
-				<Text class="flex-1 text-sm text-foreground">{props.text}</Text>
-			</View>
-			<If when={props.detail}>
-				<Text class="text-xs text-faint">{props.detail ?? ""}</Text>
-			</If>
-			{props.children}
-		</View>
-	);
-}
 
 /** What an origin the user can pick is called on this page. */
 function originName(day: Day, origin: UserFeedbackOriginRef | null): string {
@@ -227,7 +209,7 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 				key={(o) => originKey(o.origin)}
 			>
 				{(o) => (
-					<Note
+					<Notice
 						testID="feedback-offer"
 						text={`Your unsent feedback is about ${originName(props.day, d().origin)}.`}
 						detail={`You opened this page from ${originName(props.day, o().origin)}. Your words keep their context unless you change it.`}
@@ -240,7 +222,7 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 							/>
 							<Action label="Keep it" testID="feedback-offer-keep" onPress={() => feedbackOffer.set(null)} />
 						</View>
-					</Note>
+					</Notice>
 				)}
 			</Each>
 			<FeedbackImages
@@ -248,7 +230,7 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 				protectedUploads={v().unsettled.flatMap((o) => (o.attachments ?? []).map((a) => a.uploadId))}
 			>
 				{(onPaste) => (
-					<Input
+					<TextField
 						testID="feedback-text"
 						ref={field.ref}
 						multiline
@@ -261,7 +243,7 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 						onPaste={onPaste}
 						onFocus={field.focus}
 						onSelectionChange={field.select}
-						class="min-h-28 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
+						rows={5}
 					/>
 				)}
 			</FeedbackImages>
@@ -273,7 +255,7 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 			</If>
 			<Each of={v().unsettled} key={(o) => o.operationId}>
 				{(o) => (
-					<Note
+					<Notice
 						testID="feedback-unknown"
 						text={o().text}
 						detail="Save not confirmed. Check only reads this item's result. Other feedback can still be sent."
@@ -298,12 +280,12 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 								/>
 							</If>
 						</View>
-					</Note>
+					</Notice>
 				)}
 			</Each>
 			<Each of={feedbackKeptDrafts()} key={feedbackDraftKey}>
 				{(kept) => (
-					<Note
+					<Notice
 						testID="feedback-kept"
 						text={kept().text}
 						detail="Kept draft. Resume keeps your current words too. Images already saved with another item must be attached again."
@@ -317,12 +299,12 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 								clearFeedbackImagePreviews();
 							}}
 						/>
-					</Note>
+					</Notice>
 				)}
 			</Each>
 			<View class="flex-row items-center gap-3">
 				<Action
-					primary
+					variant="primary"
 					label={v().sending ? "Sending…" : "Send"}
 					shortcut={SEND_KEYS}
 					testID="feedback-send"
@@ -363,13 +345,12 @@ function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 					only you mark feedback resolved.
 				</Text>
 			</View>
-			<Input
+			<TextField
 				testID="feedback-search"
 				value={feedbackSearch()}
 				accessibilityLabel="Search feedback history"
 				placeholder="Search feedback history"
 				onChange={({ value }) => feedbackSearch.set(value)}
-				class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
 			/>
 			<Text class="text-xs text-faint">
 				{v().more
@@ -377,7 +358,7 @@ function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 					: "Open items first, then resolved history."}
 			</Text>
 			<If when={v().reason}>
-				<Note
+				<Notice
 					testID="feedback-off"
 					text={v().availability === "live" ? v().reason : `Pilot cannot show your feedback. ${v().reason}`}
 					detail={v().availability === "live" ? undefined : "This is not the same as having none."}
@@ -442,11 +423,9 @@ export function FeedbackScreen(props: { day: Day }) {
 				if (waiting === null) scroll.onScroll(e);
 			}}
 		>
-			<View testID="feedback" class={`${PAGE_COLUMN} gap-10`}>
+			<Page testID="feedback" gap={10}>
 				<View class="gap-3">
-					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-						Feedback
-					</Text>
+					<PageTitle title="Feedback" />
 					<Text class="text-base leading-relaxed text-muted-foreground">
 						Tell Pilot what works and what gets in your way. Your words are saved with the context you choose.
 						Sending feedback approves nothing.
@@ -454,7 +433,7 @@ export function FeedbackScreen(props: { day: Day }) {
 				</View>
 				<Compose day={props.day} mirror={mirror} />
 				<Sent day={props.day} mirror={mirror} />
-			</View>
+			</Page>
 		</Scroll>
 	);
 }

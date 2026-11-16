@@ -249,7 +249,7 @@ export function SlackSettings(props: { controls: SlackControls }) {
 						</If>
 						<View class="flex-row">
 							<Action
-								primary
+								variant="primary"
 								label="Import message"
 								testID="slack-import"
 								disabled={locked() || !safeSlackLink(d()?.url.trim() ?? "")}

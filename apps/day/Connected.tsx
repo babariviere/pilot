@@ -2,10 +2,10 @@
 // chose, never mock data. Without a root (`nsh run Connected.tsx`), it says
 // it is not connected and shows nothing else. App.tsx, the default entry,
 // runs this one.
-import { mount, Text, View } from "nsh";
+import { mount, View } from "nsh";
 import { type Connection, connection, readAgain } from "./connection";
 import { DayScreen } from "./DayScreen";
-import { Action, Mark } from "./ui";
+import { Action, Notice } from "./ui";
 import { dataSource } from "./view";
 
 dataSource.set("pilot");
@@ -31,19 +31,22 @@ function Connected() {
 			when={open().length > 0}
 			else={
 				<View testID="not-connected" class="flex-1 items-center justify-center bg-background px-6">
-					<View class="w-full max-w-md flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-						<Mark kind={connection().state === "none" ? "unknown" : "still"} />
-						<Text class="flex-1 text-sm text-foreground">{note()}</Text>
-						<If when={canRead()}>
-							<Action
-								label="Read again"
-								testID="connection-read"
-								onPress={() => {
-									void readAgain();
-								}}
-							/>
-						</If>
-					</View>
+					<Notice
+						class="w-full max-w-md"
+						kind={connection().state === "none" ? "unknown" : "still"}
+						text={note()}
+						action={
+							<If when={canRead()}>
+								<Action
+									label="Read again"
+									testID="connection-read"
+									onPress={() => {
+										void readAgain();
+									}}
+								/>
+							</If>
+						}
+					/>
 				</View>
 			}
 		>

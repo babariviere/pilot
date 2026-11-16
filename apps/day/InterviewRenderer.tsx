@@ -1,12 +1,24 @@
 // The shared saved-round presentation. Adapters own drafts, authority, help,
 // and submission. This renderer owns only layout, navigation and keys.
 import { cleanup, computed, effect, type JSX, keymap, signal, Text, View, type ViewRef } from "nsh";
-import { Button, Input, Toggle } from "nsh/base";
 import type { Interview, Question, QuestionSection } from "pilot-day/native";
 import { answerKey, atQuestion, focusAsk, focusField, put, seeAll, writing } from "./interviewView";
 import { keepField } from "./kept";
-import { Arrive, glide } from "./motion";
-import { Action, KeyCap, KeyHint, Mark, type MarkKind } from "./ui";
+import {
+	Action,
+	Arrive,
+	glide,
+	KeyCap,
+	KeyHint,
+	LinkAction,
+	type MarkKind,
+	MarkLine,
+	Notice,
+	Panel,
+	Pressable,
+	TextField,
+	ToggleRow,
+} from "./ui";
 
 export type InterviewAnswerView = {
 	choice: string | null | undefined;
@@ -211,16 +223,16 @@ function QuestionView(props: {
 			</Text>
 			<If when={!locked()}>{props.source.questionHelp?.(q(), key)}</If>
 			<If when={q().state === "changed"}>
-				<View class="gap-0.5 rounded-lg bg-muted px-3 py-2">
+				<Panel size="sm" class="gap-0.5">
 					<Text class="text-sm text-needs-ink">This question changed after you answered. Answer it again.</Text>
 					<Text class="text-xs text-muted-foreground">{`Your earlier answer: ${q().earlier}`}</Text>
-				</View>
+				</Panel>
 			</If>
 			<View class="gap-0.5" accessibilityLabel="Suggested answers">
 				<Each of={q().choices} key={(c) => c.id}>
 					{(c) => (
-						<Toggle
-							ref={(node) => {
+						<ToggleRow
+							anchor={(node) => {
 								toggles[q().choices.findIndex((x) => x.id === c().id)] = node;
 							}}
 							testID={`choice-${q().id}-${c().id}`}
@@ -228,9 +240,9 @@ function QuestionView(props: {
 							disabled={locked()}
 							accessibilityLabel={c().recommended ? `${c().meaning}, recommended` : c().meaning}
 							onChange={() => pick(c().id)}
-							class="group flex-row items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-accent aria-pressed:bg-selection aria-pressed:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
+							size="lg"
+							indicator={<KeyCap label={keyOf(q(), c().id)} on={choice() === c().id} />}
 						>
-							<KeyCap label={keyOf(q(), c().id)} on={choice() === c().id} />
 							{/* min-w-0 lets a long answer wrap inside the card instead of running past it. */}
 							<View class="min-w-0 flex-1 gap-0.5">
 								<Text class="text-base text-foreground">{c().meaning}</Text>
@@ -241,24 +253,24 @@ function QuestionView(props: {
 							<If when={!props.compact && choice() === c().id && !locked()}>
 								<KeyHint keys="↩" label="next" />
 							</If>
-						</Toggle>
+						</ToggleRow>
 					)}
 				</Each>
 				<If
 					when={open()}
 					else={
-						<Button
+						<Pressable
 							testID={`own-${q().id}`}
 							accessibilityLabel={picked() ? "Add detail to your choice" : "Answer in your own words"}
 							disabled={locked()}
 							onPress={write}
-							class="flex-row items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-accent disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
+							class="flex-row items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-accent disabled:opacity-70"
 						>
 							<KeyCap label="0" />
 							<Text class="text-base text-muted-foreground">
 								{picked() ? "Add detail" : "Something else: write your own"}
 							</Text>
-						</Button>
+						</Pressable>
 					}
 				>
 					<View class="gap-1.5 px-3 pt-1.5">
@@ -269,7 +281,7 @@ function QuestionView(props: {
 							</Text>
 						</View>
 						<View class="gap-1 pl-8">
-							<Input
+							<TextField
 								ref={kept.ref}
 								testID={`answer-${q().id}`}
 								accessibilityLabel={`Your answer to: ${q().prompt}`}
@@ -295,7 +307,7 @@ function QuestionView(props: {
 									stopEscape = null;
 									props.source.dispatch({ kind: "save", questionId: q().id });
 								}}
-								class="min-h-16 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
+								rows={2}
 							/>
 							<If when={answerView(props.source, q()).message}>
 								<Text role="alert" class="text-xs text-needs-ink">
@@ -373,16 +385,13 @@ function Answers(props: { source: InterviewSource; anchor?: (node: ViewRef) => v
 						</Text>
 						<Each of={g().questions} key={(q) => q.id}>
 							{(q) => (
-								<Button
+								<Pressable
 									testID={`review-${q().id}`}
 									disabled={fixed(iv())}
 									onPress={() => go(props.source, q().id)}
-									class="flex-row gap-3 rounded-lg px-2 py-2 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+									class="rounded-lg px-2 py-2 hover:bg-accent"
 								>
-									<View class="pt-1.5">
-										<Mark kind={questionMark(props.source, q())} />
-									</View>
-									<View class="flex-1 gap-0.5">
+									<MarkLine kind={questionMark(props.source, q())}>
 										<Text class="text-sm text-muted-foreground">{q().prompt}</Text>
 										<Text
 											class="text-sm"
@@ -393,21 +402,20 @@ function Answers(props: { source: InterviewSource; anchor?: (node: ViewRef) => v
 										>
 											{answerWords(props.source, q())}
 										</Text>
-									</View>
-								</Button>
+									</MarkLine>
+								</Pressable>
 							)}
 						</Each>
 					</View>
 				)}
 			</Each>
 			<If when={!iv().current}>
-				<View class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-					<Mark kind="unknown" />
-					<Text class="flex-1 text-sm text-foreground">
-						{props.source.read().outdatedHint ??
-							"These questions changed. Read the current round before submitting."}
-					</Text>
-				</View>
+				<Notice
+					text={
+						props.source.read().outdatedHint ??
+						"These questions changed. Read the current round before submitting."
+					}
+				/>
 			</If>
 			<If when={submitLine(iv())}>
 				<Text role="alert" class="text-sm text-muted-foreground">
@@ -429,7 +437,7 @@ function Answers(props: { source: InterviewSource; anchor?: (node: ViewRef) => v
 					else={
 						<If when={iv().submit !== "submitted"}>
 							<Action
-								primary
+								variant="primary"
 								testID="submit"
 								label={busy() || iv().submit === "submitting" ? "Submitting…" : props.source.read().submitLabel}
 								disabled={!ready()}
@@ -440,7 +448,7 @@ function Answers(props: { source: InterviewSource; anchor?: (node: ViewRef) => v
 					}
 				>
 					<Action
-						primary
+						variant="primary"
 						label="Check again"
 						disabled={iv().submit === "checking"}
 						anchor={(node) => props.anchor?.(node)}
@@ -559,29 +567,25 @@ export function InterviewRenderer(props: { source: InterviewSource; anchor?: (no
 							: `Question ${number()} of ${total()} · ${iv().answered} answered`}
 					</Text>
 					<If when={total() > 1 && !fixed(iv()) && !all() && at() !== REVIEW}>
-						<Button
+						<LinkAction
+							label="All answers"
 							testID="goto-review"
 							accessibilityLabel="All answers and Submit"
 							onPress={() => go(props.source, REVIEW)}
-							class="rounded-md px-1.5 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-						>
-							<Text class="text-xs text-primary">All answers</Text>
-						</Button>
+						/>
 					</If>
 					<If when={total() > 1 && !fixed(iv())}>
-						<Toggle
+						<LinkAction
+							label="See all questions"
 							testID="see-all"
 							pressed={all()}
-							onChange={() => {
+							onPress={() => {
 								const now = place(iv());
 								const q = iv().questions.find((x) => x.id === now);
 								if (q) props.source.dispatch({ kind: "save", questionId: q.id });
 								put(seeAll, iv().id, !all());
 							}}
-							class="rounded-md px-1.5 hover:bg-accent aria-pressed:bg-selection focus-visible:ring-2 focus-visible:ring-ring/40"
-						>
-							<Text class="text-xs text-primary">See all questions</Text>
-						</Toggle>
+						/>
 					</If>
 				</View>
 				<View class="h-1 flex-row overflow-hidden rounded-full bg-track">
@@ -629,7 +633,7 @@ export function InterviewRenderer(props: { source: InterviewSource; anchor?: (no
 				<View class="flex-row flex-wrap items-center gap-2 border-t border-border pt-4">
 					<Action label="‹ Back" disabled={number() <= 1} onPress={() => step(props.source, -1)} />
 					<Action
-						primary
+						variant="primary"
 						testID="next"
 						anchor={(node) => props.anchor?.(node)}
 						shortcut={NEXT_KEY}

@@ -9,7 +9,6 @@
 // scroll offset (updateView.ts). The restored page reads again, as opening
 // it does, and shows nothing when the read is for another project.
 import { effect, keymap, Scroll, type ScrollRef, signal, Text, View, type ViewRef } from "nsh";
-import { Button, Collapsible } from "nsh/base";
 import type { MissionRow } from "pilot-day/native";
 import type { Day } from "./day";
 import { openRequest } from "./Incoming";
@@ -37,8 +36,18 @@ import {
 	savedLine,
 	troubleLine,
 } from "./linearView";
-import { glide } from "./motion";
-import { Action, InlineAction, Mark, type MarkKind, PAGE_COLUMN, SectionTitle } from "./ui";
+import {
+	Action,
+	ExpandableRow,
+	glide,
+	InlineAction,
+	Mark,
+	type MarkKind,
+	Notice,
+	Page,
+	PageTitle,
+	SectionTitle,
+} from "./ui";
 import { openMission } from "./view";
 
 const MARK: Record<GroupKey, MarkKind> = {
@@ -52,21 +61,6 @@ const MARK: Record<GroupKey, MarkKind> = {
 function missionsOf(day: Day): MissionRow[] {
 	const t = day.today();
 	return [...t.moving, ...t.notMoving, ...t.unreported];
-}
-
-/** A quiet note with a mark, for trouble and for what is not shown. */
-function Note(props: { testID: string; text: string; detail?: string }) {
-	return (
-		<View testID={props.testID} class="gap-1.5 rounded-xl bg-muted px-4 py-3">
-			<View class="flex-row items-center gap-2.5">
-				<Mark kind="unknown" />
-				<Text class="flex-1 text-sm text-foreground">{props.text}</Text>
-			</View>
-			<If when={props.detail}>
-				<Text class="text-xs text-faint">{props.detail ?? ""}</Text>
-			</If>
-		</View>
-	);
 }
 
 /** The cycle Pilot's last sync read, and the user's own progress in it. */
@@ -143,9 +137,17 @@ function Issue(props: { item: TrackedItem; group: GroupKey; place: Place }) {
 		}
 	});
 	return (
-		<Collapsible
+		<ExpandableRow
 			open={open()}
-			class="border-t border-border"
+			anchor={(n: ViewRef) => node.set(n)}
+			testID={`linear-issue-${i().id}`}
+			accessibilityLabel={`${i().title}, ${i().status}. ${placeWord(props.place)}. ${open() ? "Hide" : "Show"} its details.`}
+			onToggle={() => {
+				glide();
+				openIssue.set(open() ? null : i().id);
+				node()?.focus();
+			}}
+			summaryClass="gap-1 py-3"
 			content={
 				<View testID={`linear-detail-${i().id}`} class="flex-row gap-2.5 pb-3.5">
 					<View class="size-2" />
@@ -164,30 +166,16 @@ function Issue(props: { item: TrackedItem; group: GroupKey; place: Place }) {
 				</View>
 			}
 		>
-			<Button
-				ref={(n: ViewRef) => node.set(n)}
-				testID={`linear-issue-${i().id}`}
-				accessibilityLabel={`${i().title}, ${i().status}. ${placeWord(props.place)}. ${open() ? "Hide" : "Show"} its details.`}
-				onPress={() => {
-					glide();
-					openIssue.set(open() ? null : i().id);
-					node()?.focus();
-				}}
-				class="group gap-1 rounded-md py-3 focus-visible:ring-2 focus-visible:ring-ring/40"
-			>
-				<View class="flex-row items-center gap-2.5">
-					<Mark kind={MARK[props.group]} />
-					<Text class="flex-1 text-sm font-medium text-foreground group-hover:underline">{i().title}</Text>
-					<Text class="text-xs text-muted-foreground">{i().status}</Text>
-				</View>
-				<View class="flex-row gap-2.5">
-					<View class="size-2" />
-					<Text class="flex-1 text-xs text-faint">
-						{[key(), placeWord(props.place)].filter(Boolean).join(" · ")}
-					</Text>
-				</View>
-			</Button>
-		</Collapsible>
+			<View class="flex-row items-center gap-2.5">
+				<Mark kind={MARK[props.group]} />
+				<Text class="flex-1 text-sm font-medium text-foreground group-hover:underline">{i().title}</Text>
+				<Text class="text-xs text-muted-foreground">{i().status}</Text>
+			</View>
+			<View class="flex-row gap-2.5">
+				<View class="size-2" />
+				<Text class="flex-1 text-xs text-faint">{[key(), placeWord(props.place)].filter(Boolean).join(" · ")}</Text>
+			</View>
+		</ExpandableRow>
 	);
 }
 
@@ -216,7 +204,7 @@ function Issues(props: { day: Day; read: SavedLinearRead }) {
 	return (
 		<View class="gap-8">
 			<If when={lost()}>
-				<Note
+				<Notice
 					testID="linear-issue-gone"
 					text={
 						props.read.complete
@@ -258,12 +246,12 @@ function Saved(props: { day: Day; read: SavedLinearRead }) {
 	return (
 		<View class="gap-8">
 			<If when={troubleLine(r())}>
-				<Note testID="linear-trouble" text={troubleLine(r())} />
+				<Notice testID="linear-trouble" text={troubleLine(r())} />
 			</If>
 			<If
 				when={configured()}
 				else={
-					<Note
+					<Notice
 						testID="linear-unset"
 						text="Linear is not set up for this project, so Pilot saved no issues."
 						detail="This is not the same as having none."
@@ -273,7 +261,7 @@ function Saved(props: { day: Day; read: SavedLinearRead }) {
 				<If
 					when={r().configurationCurrent}
 					else={
-						<Note
+						<Notice
 							testID="linear-not-current"
 							text="Pilot has not saved issues for this project's current Linear settings yet."
 							detail="Nothing is shown. This is not the same as having none."
@@ -354,12 +342,10 @@ export function LinearScreen(props: { day: Day }) {
 				if (waiting === null) scroll.onScroll(e);
 			}}
 		>
-			<View testID="linear" class={`${PAGE_COLUMN} gap-8`}>
+			<Page testID="linear" gap={8}>
 				<View class="gap-2">
 					<Text class="text-xs text-faint">Linear · read only</Text>
-					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-						{linearTitle(read())}
-					</Text>
+					<PageTitle title={linearTitle(read())} />
 					<Text class="text-base leading-relaxed text-muted-foreground">
 						Your own issues that Pilot saved for this project. Not your team's other issues or other cycles.
 					</Text>
@@ -380,14 +366,14 @@ export function LinearScreen(props: { day: Day }) {
 					</View>
 				</View>
 				<If when={other()}>
-					<Note
+					<Notice
 						testID="linear-other-project"
 						text="Pilot cannot show the issues this page showed before. Its saved copy is now for another project."
 						detail="Nothing is shown. This is not the same as having none."
 					/>
 				</If>
 				<If when={v().reason && !other()}>
-					<Note
+					<Notice
 						testID="linear-off"
 						text={read() ? v().reason : `Pilot cannot show your Linear issues here. ${v().reason}`}
 						detail={read() ? undefined : "This is not the same as having none."}
@@ -408,7 +394,7 @@ export function LinearScreen(props: { day: Day }) {
 				<Text class="border-t border-border pt-5 text-xs text-faint">
 					Read only. Nothing here changes Linear, starts work or triages a request.
 				</Text>
-			</View>
+			</Page>
 		</Scroll>
 	);
 }

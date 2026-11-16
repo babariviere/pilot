@@ -5,7 +5,6 @@
 // Command+K opens the palette over any screen: the same places, and the
 // missions Today lists, by name.
 import { keymap, Text, View, windowSize } from "nsh";
-import { Button } from "nsh/base";
 import type { Changes } from "./changeFeed";
 import type { Day } from "./day";
 import {
@@ -24,7 +23,7 @@ import { Palette } from "./Palette";
 import { PowerPause } from "./PowerPause";
 import type { Plans } from "./planning";
 import { updateLabel } from "./UpdateScreen";
-import { Action, Icon } from "./ui";
+import { Action, Icon, Pressable } from "./ui";
 import { showUpdate, updateEntry, updateOpen } from "./updateView";
 import { dataSource } from "./view";
 
@@ -39,16 +38,16 @@ const NARROW = 640;
 /** Pilot's mark and name: the way home. */
 function Home() {
 	return (
-		<Button
+		<Pressable
 			testID="home"
 			accessibilityLabel="Pilot. Go to Today"
 			tooltip="Today"
 			onPress={goHome}
-			class="h-8 flex-row items-center gap-2 rounded-lg px-2 hover:bg-accent active:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+			class="h-8 flex-row items-center gap-2 rounded-lg px-2 hover:bg-accent active:bg-accent"
 		>
 			<View class="size-4 rounded-md bg-primary" />
 			<Text class="text-sm font-semibold text-foreground">Pilot</Text>
-		</Button>
+		</Pressable>
 	);
 }
 
@@ -56,23 +55,15 @@ function Home() {
 function ChangesPlace(props: { changes: Changes; narrow: boolean }) {
 	const waiting = () => props.changes.list().waiting.length;
 	return (
-		<Button
+		<Action
+			label="Changes"
+			icon="changes"
+			iconOnly={props.narrow}
+			badge={waiting() > 0 ? String(waiting()) : undefined}
 			testID="changes-open"
 			accessibilityLabel={waiting() > 0 ? `Changes, ${waiting()} to review` : "Changes"}
-			tooltip={props.narrow ? "Changes" : undefined}
 			onPress={goChanges}
-			class="h-8 flex-row items-center gap-1.5 rounded-lg px-2.5 hover:bg-accent active:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-		>
-			<Icon name="changes" />
-			<If when={!props.narrow}>
-				<Text class="text-sm text-muted-foreground">Changes</Text>
-			</If>
-			<If when={waiting() > 0}>
-				<View class="h-5 min-w-5 items-center justify-center rounded-full bg-muted px-1.5">
-					<Text class="text-xs font-semibold text-foreground">{String(waiting())}</Text>
-				</View>
-			</If>
-		</Button>
+		/>
 	);
 }
 
@@ -97,16 +88,16 @@ export function AppHeader(props: { day: Day; plans?: Plans; changes?: Changes })
 				{(b) => (
 					<View class="min-w-0 shrink flex-row items-center gap-1">
 						<View class="mx-1 h-4 w-px bg-border" />
-						<Button
+						<Pressable
 							testID="back"
 							accessibilityLabel={b().accessibilityLabel}
 							tooltip="Back  Esc"
 							onPress={() => back()?.go()}
-							class="h-8 min-w-0 shrink flex-row items-center gap-1 rounded-lg pl-1.5 pr-2.5 hover:bg-accent active:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+							class="h-8 min-w-0 shrink flex-row items-center gap-1 rounded-lg pl-1.5 pr-2.5 hover:bg-accent active:bg-accent"
 						>
 							<Icon name="back" />
 							<Text class="shrink truncate text-sm text-muted-foreground">{b().label}</Text>
-						</Button>
+						</Pressable>
 					</View>
 				)}
 			</Each>
@@ -154,7 +145,7 @@ export function AppHeader(props: { day: Day; plans?: Plans; changes?: Changes })
 				<View class="pl-1">
 					<Action
 						label="New"
-						outline
+						variant="outline"
 						icon="plus"
 						iconOnly={narrow()}
 						shortcut={NEW_KEYS}

@@ -9,7 +9,7 @@ import type { Day } from "./day";
 import type { DeliveryEntry, DeliveryMirror, DeliveryOp, DeliveryView } from "./deliveryFeed";
 import { openDelivery, ownPullRequests, settledLine, titleOf, unsettledLine, waitsForCheck } from "./deliveryView";
 import { restoreScroll, scrollOf } from "./kept";
-import { Action, Mark, RowLink, SectionTitle } from "./ui";
+import { Action, Mark, Notice, RowLink, SectionTitle } from "./ui";
 import { placeRow } from "./view";
 
 function missions(day: Day): MissionRow[] {
@@ -43,31 +43,6 @@ export function checkRows(v: DeliveryView, missionId?: string): DeliveryEntry[] 
 export function toCheckCount(day: Day): number {
 	const v = day.delivery?.view();
 	return v ? checkRows(v).length + v.unsettled.length : 0;
-}
-
-/** One saved command whose answer is lost, and its read-only Check. */
-function Unsettled(props: { mirror: DeliveryMirror; op: DeliveryOp; title: string; onResult: (m: string) => void }) {
-	return (
-		<View testID={`check-unsettled-${props.op.operationId}`} class="gap-1.5 rounded-xl bg-muted px-4 py-3">
-			<View class="flex-row items-center gap-2.5">
-				<Mark kind="unknown" />
-				<Text class="flex-1 text-sm text-foreground">{unsettledLine(props.op, props.title)}</Text>
-				<Action
-					label={props.op.checking ? "Checking…" : "Check"}
-					testID={`check-op-${props.op.operationId}`}
-					accessibilityLabel="Check whether it happened. This reads Pilot's saved answer and sends nothing."
-					disabled={props.op.checking}
-					onPress={() => {
-						props.onResult("");
-						void props.mirror.source.check(props.op.operationId).then((r) => {
-							if (r.status !== "accepted") props.onResult(r.message);
-						});
-					}}
-				/>
-			</View>
-			<Text class="text-xs text-faint">Pilot will not send it again. Check only reads its saved answer.</Text>
-		</View>
-	);
 }
 
 function LiveToCheck(props: { day: Day; mirror: DeliveryMirror; missionId?: string; nested?: boolean }) {
@@ -136,18 +111,34 @@ function LiveToCheck(props: { day: Day; mirror: DeliveryMirror; missionId?: stri
 					/>
 				</If>
 				<If when={v().saved === "unavailable"}>
-					<View class="mb-2 flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-						<Mark kind="unknown" />
-						<Text class="flex-1 text-sm text-foreground">
-							Pilot could not read your earlier checks. This is not the same as having none.
-						</Text>
-					</View>
+					<Notice
+						class="mb-2"
+						text="Pilot could not read your earlier checks. This is not the same as having none."
+					/>
 				</If>
 				<Each of={unsettled()} key={(o) => o.operationId}>
 					{(o) => (
-						<View class="mb-2">
-							<Unsettled mirror={props.mirror} op={o()} title={title(o())} onResult={(m) => message.set(m)} />
-						</View>
+						// One saved command whose answer is lost, and its read-only Check.
+						<Notice
+							testID={`check-unsettled-${o().operationId}`}
+							class="mb-2"
+							text={unsettledLine(o(), title(o()))}
+							detail="Pilot will not send it again. Check only reads its saved answer."
+							action={
+								<Action
+									label={o().checking ? "Checking…" : "Check"}
+									testID={`check-op-${o().operationId}`}
+									accessibilityLabel="Check whether it happened. This reads Pilot's saved answer and sends nothing."
+									disabled={o().checking}
+									onPress={() => {
+										message.set("");
+										void props.mirror.source.check(o().operationId).then((r) => {
+											if (r.status !== "accepted") message.set(r.message);
+										});
+									}}
+								/>
+							}
+						/>
 					)}
 				</Each>
 				<If when={message()}>

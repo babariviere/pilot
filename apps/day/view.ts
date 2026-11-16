@@ -5,8 +5,8 @@
 // restart the screen starts from those drafts.
 import { effect, type Signal, signal, type ViewRef } from "nsh";
 import type { Decision, HumanAction, Today } from "pilot-day/native";
-import { glide } from "./motion";
 import { closeThread } from "./threadView";
+import { glide } from "./ui";
 
 /** The help a decision card shows. */
 export type Help = "simpler" | "more" | "visual" | "ask" | "details";

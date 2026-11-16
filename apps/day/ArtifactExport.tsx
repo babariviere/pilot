@@ -2,10 +2,9 @@
 // exports only what was saved and is on screen: an image's raster bytes, or
 // code's exact source as text. There is no capture of a running preview.
 import { effect, signal, Text, View } from "nsh";
-import { Menu, MenuItem } from "nsh/base";
 import { ArtifactExport as NativeExport } from "pilot-day/native";
 import type { SavedArtifact, Shown } from "./artifactReads";
-import { Icon } from "./ui";
+import { Menu, MenuItem, MenuTitle, MenuTrigger } from "./ui";
 
 /** The one export a saved copy supports, or none while nothing usable was read. */
 function exportOf(artifact: SavedArtifact | null): string {
@@ -79,36 +78,29 @@ export function ShareMenu(props: { shown: Shown; testID: string }) {
 				</If>
 				<Menu
 					open={open()}
-					onOpenChange={(e) => {
-						if (e.open) target.set(props.shown.state === "shown" ? props.shown.artifact : null);
-						open.set(e.open);
+					onOpenChange={(isOpen) => {
+						if (isOpen) target.set(props.shown.state === "shown" ? props.shown.artifact : null);
+						open.set(isOpen);
 					}}
 					align="end"
-					offset={4}
-					popupClass="min-w-56 rounded-xl border border-border bg-popover p-1 shadow-md"
 					trigger={
-						<View
+						<MenuTrigger
 							testID={props.testID}
-							role="button"
+							icon="share"
 							accessibilityLabel={`Share ${savedTitle(props.shown)}, revision ${props.shown.pin.revision}`}
 							tooltip="Share"
-							class="min-h-8 min-w-8 items-center justify-center rounded-lg px-2 hover:bg-accent active:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-						>
-							<Icon name="share" />
-						</View>
+						/>
 					}
 				>
-					<Text class="px-2.5 pb-1 pt-1.5 text-xs text-faint">
-						{`${target()?.metadata.title || "Artifact"} · revision ${target()?.reference.revision ?? ""}`}
-					</Text>
+					<MenuTitle
+						label={`${target()?.metadata.title || "Artifact"} · revision ${target()?.reference.revision ?? ""}`}
+					/>
 					<MenuItem
 						testID={`${props.testID}-export`}
+						label={busy() ? "Exporting…" : exportOf(target())}
 						disabled={busy() || !exportOf(target())}
 						onSelect={() => void save(target())}
-						class="rounded-lg px-2.5 py-1.5 hover:bg-accent focus:bg-accent disabled:opacity-50"
-					>
-						<Text class="text-sm text-popover-foreground">{busy() ? "Exporting…" : exportOf(target())}</Text>
-					</MenuItem>
+					/>
 				</Menu>
 			</View>
 		</If>

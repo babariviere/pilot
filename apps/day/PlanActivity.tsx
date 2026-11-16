@@ -8,7 +8,7 @@ import { activityQuiet, activityTime } from "./activityWords";
 import { ChatTranscript } from "./ChatRows";
 import type { Plans } from "./planning";
 import { chatOpen, put } from "./planView";
-import { Action, Mark, SectionTitle } from "./ui";
+import { Action, MarkLine, Notice, SectionTitle } from "./ui";
 
 /** How often the times read again while the line shows. */
 const CLOCK_MS = 15_000;
@@ -27,33 +27,21 @@ export function ActivityLine(props: { plans: Plans; page: PlanPage; activity: Pl
 	return (
 		<View testID="plan-activity" class="gap-3">
 			<If when={status()}>
-				<View class="flex-row items-start gap-2.5">
-					<View class="pt-1.5">
-						<Mark kind={props.activity.working ? "moving" : "still"} />
-					</View>
-					<View class="flex-1 gap-0.5">
-						<Text testID="plan-activity-step" class="text-sm text-foreground">
-							{props.activity.working
-								? props.activity.step || "Working"
-								: "Pilot's planning agent is not working now."}
+				<MarkLine kind={props.activity.working ? "moving" : "still"}>
+					<Text testID="plan-activity-step" class="text-sm text-foreground">
+						{props.activity.working
+							? props.activity.step || "Working"
+							: "Pilot's planning agent is not working now."}
+					</Text>
+					<If when={time()}>
+						<Text testID="plan-activity-time" class="text-xs text-faint">
+							{time()}
 						</Text>
-						<If when={time()}>
-							<Text testID="plan-activity-time" class="text-xs text-faint">
-								{time()}
-							</Text>
-						</If>
-					</View>
-				</View>
+					</If>
+				</MarkLine>
 			</If>
 			<If when={quiet()}>
-				<View class="flex-row items-start gap-2.5 rounded-xl bg-muted px-4 py-3">
-					<View class="pt-1.5">
-						<Mark kind="needs" />
-					</View>
-					<Text testID="plan-activity-quiet" role="alert" class="flex-1 text-sm text-foreground">
-						{quiet()}
-					</Text>
-				</View>
+				<Notice testID="plan-activity-quiet" kind="needs" role="alert" text={quiet()} />
 			</If>
 			<If when={props.plans.feed.readChat}>
 				<View class="-ml-3 flex-row">

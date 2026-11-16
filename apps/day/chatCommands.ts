@@ -8,7 +8,6 @@
 import type { ChatMirror, ChatMode, ChatView } from "./chatFeed";
 import { fundingAmount } from "./FundingSettings";
 import { newFundingDraft } from "./modelSettingsDraft";
-import { glide } from "./motion";
 import {
 	chatChoice,
 	chatNote,
@@ -22,6 +21,7 @@ import {
 	requestDraft,
 	restoredDraft,
 } from "./planView";
+import { glide } from "./ui";
 
 /** The newest choice. An answer to an older one is dropped. */
 let selection = 0;

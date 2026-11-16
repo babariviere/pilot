@@ -6,7 +6,6 @@
 // builds and fences the command; this screen names only the mission, the
 // revision it showed and, for Resume, the Pause it showed.
 import { computed, keymap, Scroll, signal, Text, View } from "nsh";
-import { Input } from "nsh/base";
 import type { Decision, MissionPage, MissionRow, PlanPage, PlanRow, ReportLine, TaskLine } from "pilot-day/native";
 import { createShelf, MissionArtifacts, type Shelf } from "./ArtifactShelf";
 import { openChat } from "./chatView";
@@ -15,7 +14,6 @@ import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
 import { openFeedback } from "./feedbackView";
 import { keepScroll, restoreScroll, scrollOf } from "./kept";
-import { glide } from "./motion";
 import { goHome } from "./nav";
 import { pageScroll, scrolled } from "./onScreen";
 import { mapSummary, stageMark, stageWord } from "./PlanScreen";
@@ -27,7 +25,19 @@ import { MissionThreadsSection } from "./ThreadScreen";
 import { ToCheck } from "./ToCheck";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
 import { naming } from "./threadView";
-import { Action, EvidenceList, Mark, PAGE_COLUMN, RowLink, SectionTitle, Track } from "./ui";
+import {
+	Action,
+	EvidenceList,
+	glide,
+	Mark,
+	Page,
+	PageTitle,
+	Panel,
+	RowLink,
+	SectionTitle,
+	TextField,
+	Track,
+} from "./ui";
 import {
 	archiving,
 	closeMission,
@@ -185,7 +195,7 @@ function ArchiveConfirm(props: { day: Day; page: MissionPage }) {
 				</Text>
 			</If>
 			<If when={archiving() === row().id}>
-				<View testID="mission-archive-confirm" class="gap-2 rounded-xl bg-muted px-4 py-3.5">
+				<Panel testID="mission-archive-confirm" size="lg" class="gap-2">
 					<Text class="text-sm text-foreground">{`Archive “${row().title}”?`}</Text>
 					<Text class="text-xs text-muted-foreground">
 						It leaves Today. Its history, tasks, decisions and chats stay. Chats that are working keep working:
@@ -193,10 +203,16 @@ function ArchiveConfirm(props: { day: Day; page: MissionPage }) {
 						idle. You can reopen it.
 					</Text>
 					<View class="flex-row flex-wrap items-center gap-2 pt-1">
-						<Action primary label="Archive" icon="archive" testID="mission-archive-yes" onPress={archive} />
+						<Action
+							variant="primary"
+							label="Archive"
+							icon="archive"
+							testID="mission-archive-yes"
+							onPress={archive}
+						/>
 						<Action label="Cancel" testID="mission-archive-cancel" onPress={() => archiving.set(null)} />
 					</View>
-				</View>
+				</Panel>
 			</If>
 		</View>
 	);
@@ -260,9 +276,7 @@ function MissionTitle(props: { day: Day; page: MissionPage }) {
 			when={editing()}
 			else={
 				<View class="gap-2">
-					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-						{row().title}
-					</Text>
+					<PageTitle title={row().title} />
 					<If when={r()?.state === "unknown"}>
 						<Text testID="mission-rename-message" role="alert" class="text-sm text-needs-ink">
 							{r()?.message ?? ""}
@@ -280,7 +294,8 @@ function MissionTitle(props: { day: Day; page: MissionPage }) {
 			}
 		>
 			<View class="gap-2">
-				<Input
+				<TextField
+					variant="title"
 					testID="mission-title"
 					autoFocus
 					readonly={busy()}
@@ -291,7 +306,6 @@ function MissionTitle(props: { day: Day; page: MissionPage }) {
 						if (now?.state === "editing") setRename(row().id, { ...now, draft: value });
 					}}
 					onSubmit={save}
-					class="min-h-11 rounded-lg border border-input bg-background px-3 py-1.5 text-2xl font-semibold tracking-tight text-foreground focus:border-primary"
 				/>
 				<If when={r()?.message}>
 					<Text testID="mission-rename-message" role="alert" class="text-sm text-needs-ink">
@@ -300,7 +314,7 @@ function MissionTitle(props: { day: Day; page: MissionPage }) {
 				</If>
 				<View class="flex-row flex-wrap items-center gap-2">
 					<Action
-						primary
+						variant="primary"
 						label={busy() ? "Saving…" : "Save"}
 						testID="mission-rename-save"
 						disabled={busy()}
@@ -326,9 +340,7 @@ function Archived(props: { day: Day; missionId: string; life: Lifecycle }) {
 		void changeLifecycle(props.day, props.missionId, props.life.title, action, check);
 	return (
 		<View testID="mission-archived" class="gap-3">
-			<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-				{props.life.title}
-			</Text>
+			<PageTitle title={props.life.title} />
 			<If when={props.life.state === "archived"}>
 				<Text class="text-sm font-medium text-foreground">Archived</Text>
 				<Text class="text-sm text-muted-foreground">
@@ -406,7 +418,7 @@ function Control(props: { day: Day; page: MissionPage }) {
 
 	return (
 		<If when={shown()}>
-			<View testID="pause" class="gap-3 rounded-xl bg-muted px-4 py-3.5">
+			<Panel testID="pause" size="lg" class="gap-3">
 				<If when={controlLine(control())}>
 					<Text class="text-sm leading-relaxed text-foreground">{controlLine(control())}</Text>
 				</If>
@@ -450,18 +462,18 @@ function Control(props: { day: Day; page: MissionPage }) {
 							stopped. You can resume it later.
 						</Text>
 						<View class="flex-row flex-wrap items-center gap-2 pt-1">
-							<Action primary label="Pause" icon="pause" onPress={pause} />
+							<Action variant="primary" label="Pause" icon="pause" onPress={pause} />
 							<Action label="Cancel" onPress={() => confirming.set(null)} />
 						</View>
 					</View>
 				</If>
 				<View class="flex-row flex-wrap items-center gap-2">
 					<If when={control().canResume}>
-						<Action primary label="Resume" icon="play" onPress={resume} />
+						<Action variant="primary" label="Resume" icon="play" onPress={resume} />
 					</If>
 					<If when={control().delivery === "unknown" || control().delivery === "checking"}>
 						<Action
-							primary
+							variant="primary"
 							label="Check again"
 							icon="refresh"
 							disabled={control().delivery === "checking"}
@@ -472,7 +484,7 @@ function Control(props: { day: Day; page: MissionPage }) {
 				<If when={!live()}>
 					<Text class="text-xs text-muted-foreground">Pause and Resume need a fresh read.</Text>
 				</If>
-			</View>
+			</Panel>
 		</If>
 	);
 }
@@ -488,17 +500,14 @@ function Waiting(props: { day: Day; row: MissionRow }) {
 	return (
 		<Each of={decision() ? [decision() as Decision] : []} key={(d) => d.id}>
 			{(d) => (
-				<View
-					testID="mission-waiting"
-					class="flex-row flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-muted px-4 py-3"
-				>
+				<Panel testID="mission-waiting" class="flex-row flex-wrap items-center gap-x-3 gap-y-2">
 					<Mark kind={decisionMark(d())} />
 					<View class="min-w-48 flex-1 gap-0.5">
 						<Text class="text-xs text-needs-ink">Waiting for you</Text>
 						<Text class="text-sm font-medium text-foreground">{d().title}</Text>
 					</View>
 					<Action
-						primary
+						variant="primary"
 						label={verb(d())}
 						accessibilityLabel={`${verb(d())}: ${d().title}`}
 						onPress={() => {
@@ -509,7 +518,7 @@ function Waiting(props: { day: Day; row: MissionRow }) {
 							goHome();
 						}}
 					/>
-				</View>
+				</Panel>
 			)}
 		</Each>
 	);
@@ -983,7 +992,7 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 				scrolled();
 			}}
 		>
-			<View class={`${PAGE_COLUMN} gap-8`}>
+			<Page gap={8}>
 				<If when={readNote()}>
 					<Text role="alert" class="text-sm text-muted-foreground">
 						{readNote()}
@@ -1010,7 +1019,7 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 				>
 					<Archived day={props.day} missionId={props.missionId} life={archived() as Lifecycle} />
 				</If>
-			</View>
+			</Page>
 		</Scroll>
 	);
 }

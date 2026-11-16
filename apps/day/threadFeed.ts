@@ -10,7 +10,7 @@
 // stops work. A send the service accepted is not the coordinator's answer.
 import { type Signal, signal } from "nsh";
 import { call, type Refusal, type Reply } from "./bridge";
-import { glide } from "./motion";
+import { glide } from "./ui";
 
 /** What a topic links: a canonical task or decision, or one original coordinator entry. */
 export type ThreadReference =

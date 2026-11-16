@@ -34,7 +34,6 @@ import {
 	type ViewRef,
 	windowSize,
 } from "nsh";
-import { Button } from "nsh/base";
 import type { Exploration, ExploreKind, PlanPage } from "pilot-day/native";
 import {
 	type Cam,
@@ -61,7 +60,7 @@ import {
 } from "./chartLayout";
 import { Agreement, exploreLine, FogRecord, ItemRecord, itemWord } from "./MapRecords";
 import type { Plans } from "./planning";
-import { Action, Icon, SectionTitle } from "./ui";
+import { Action, Icon, Pressable, SectionTitle } from "./ui";
 
 /** The keystroke that opens the chart full window, and closes it again. */
 export const OPEN_CHART = "mod+shift+m";
@@ -1072,18 +1071,18 @@ export function ExpeditionChart(props: {
 			/>
 			<If when={!full}>
 				<View class="absolute right-3 top-3">
-					<Button
-						ref={(node) => {
+					<Pressable
+						anchor={(node) => {
 							openButton = node;
 						}}
 						testID="open-chart"
 						accessibilityLabel={`Open chart (${keymap.label(OPEN_CHART)})`}
 						tooltip={`Open chart (${keymap.label(OPEN_CHART)})`}
 						onPress={() => props.onOpenFull?.(openButton)}
-						class="size-8 items-center justify-center rounded-lg border border-map-ink/30 bg-map-paper hover:bg-map-ink/10 focus-visible:ring-2 focus-visible:ring-ring/40"
+						class="size-8 items-center justify-center rounded-lg border border-map-ink/30 bg-map-paper hover:bg-map-ink/10"
 					>
 						<Icon name="fullscreen" tint="tint-map-ink" />
-					</Button>
+					</Pressable>
 				</View>
 			</If>
 			<If when={full}>
@@ -1218,17 +1217,17 @@ function ChartButton(props: {
 	onPress: () => void;
 }) {
 	return (
-		<Button
+		<Pressable
 			testID={props.testID}
-			accessibilityLabel={props.accessibilityLabel ?? null}
+			accessibilityLabel={props.accessibilityLabel}
 			tooltip={props.hint}
 			disabled={props.disabled}
 			onPress={props.onPress}
-			class="h-8 min-w-8 items-center justify-center rounded-lg px-2 hover:bg-map-ink/10 disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-ring/40"
+			class="h-8 min-w-8 items-center justify-center rounded-lg px-2 hover:bg-map-ink/10 disabled:opacity-40"
 			classList={{ "border border-map-ink/30 bg-map-paper px-3": props.wide === true }}
 		>
 			<Text class={props.wide ? "text-sm text-map-ink" : "text-base text-map-ink"}>{props.label}</Text>
-		</Button>
+		</Pressable>
 	);
 }
 
@@ -1252,13 +1251,12 @@ function PlaceMark(props: {
 	onPress: () => void;
 }) {
 	return (
-		<View
+		<Pressable
 			testID={props.testID}
-			role="button"
 			accessibilityLabel={props.label}
-			accessibilityState={{ selected: props.selected }}
+			selected={props.selected}
 			onPress={props.onPress}
-			class="group absolute left-0 top-0 flex-row items-start gap-1 rounded-md focus-visible:ring-2 focus-visible:ring-ring/40"
+			class="group absolute left-0 top-0 flex-row items-start gap-1 rounded-md"
 			style={{ transform: props.style }}
 		>
 			<Glyph kind={props.kind} tone={props.tone} selected={props.selected} />
@@ -1287,7 +1285,7 @@ function PlaceMark(props: {
 					{props.line}
 				</Text>
 			</View>
-		</View>
+		</Pressable>
 	);
 }
 
@@ -1302,17 +1300,16 @@ function FogMark(props: {
 	const f = () => props.fog;
 	const line = () => (f().after.length > 0 ? `After ${f().after.join(", ")}` : "Ready to explore");
 	return (
-		<View
+		<Pressable
 			testID={`place-fog-${f().id}`}
-			role="button"
 			accessibilityLabel={
 				f().active
 					? `Fog of war: ${f().area}. ${line()}`
 					: `Fog lifted: ${f().area}. It became ${f().became.join(", ")}`
 			}
-			accessibilityState={{ selected: props.selected }}
+			selected={props.selected}
 			onPress={props.onPress}
-			class="group absolute left-0 top-0 w-[190px] items-center rounded-lg px-1 py-1 focus-visible:ring-2 focus-visible:ring-ring/40"
+			class="group absolute left-0 top-0 w-[190px] items-center rounded-lg px-1 py-1"
 			style={{ transform: props.style, opacity: props.labelAlpha }}
 		>
 			<If
@@ -1336,7 +1333,7 @@ function FogMark(props: {
 				</Text>
 				<Text class="line-clamp-1 text-xs text-map-faint">{line()}</Text>
 			</If>
-		</View>
+		</Pressable>
 	);
 }
 
@@ -1365,11 +1362,10 @@ function Harbor(props: { chart: Chart; at: At; selected: string | null; onPress:
 	const last = () => props.chart.camps.length;
 	return (
 		<If when={props.chart.regionRounds > 0}>
-			<View
+			<Pressable
 				testID="place-harbor"
-				role="button"
 				accessibilityLabel={`${props.chart.regionRounds} planning ${props.chart.regionRounds === 1 ? "round" : "rounds"} in this region${here() === "region" ? ". Pilot is here." : ""}`}
-				accessibilityState={{ selected: props.selected === "harbor" }}
+				selected={props.selected === "harbor"}
 				onPress={() => props.onPress("harbor")}
 				class="absolute left-0 top-0 flex-row items-center gap-1.5"
 				style={{ transform: props.at(props.chart.harbor.x, props.chart.harbor.y, -34, -12) }}
@@ -1394,7 +1390,7 @@ function Harbor(props: { chart: Chart; at: At; selected: string | null; onPress:
 						{`Pilot is here, round ${last()}`}
 					</Text>
 				</If>
-			</View>
+			</Pressable>
 		</If>
 	);
 }
@@ -1428,13 +1424,12 @@ function Destination(props: { page: PlanPage; style: TransformStep[]; selected: 
 	const tasks = () => props.page.map?.tasks ?? [];
 	return (
 		<View class="absolute left-0 top-0 w-50 gap-2" style={{ transform: props.style }}>
-			<View
+			<Pressable
 				testID="place-dest"
-				role="button"
 				accessibilityLabel={`Destination: ${props.page.destination}. ${stageName(props.page)}`}
-				accessibilityState={{ selected: props.selected }}
+				selected={props.selected}
 				onPress={props.onPress}
-				class="group gap-1 rounded-lg focus-visible:ring-2 focus-visible:ring-ring/40"
+				class="group gap-1 rounded-lg"
 			>
 				<Text
 					class="font-serif text-lg italic group-hover:underline"
@@ -1444,7 +1439,7 @@ function Destination(props: { page: PlanPage; style: TransformStep[]; selected: 
 				</Text>
 				<Text class="text-sm text-map-ink">{props.page.destination || "Not written yet"}</Text>
 				<Text class="text-xs text-map-faint">{stageName(props.page)}</Text>
-			</View>
+			</Pressable>
 			<View class="gap-1 border-t border-map-ink/25 pt-2">
 				<Text class="font-serif text-sm italic text-map-faint">Build tasks</Text>
 				<If
@@ -1476,16 +1471,15 @@ function Destination(props: { page: PlanPage; style: TransformStep[]; selected: 
 
 function Compass(props: { angle: AnimatedValue; target: { id: string; title: string } | null; onPress: () => void }) {
 	return (
-		<View
+		<Pressable
 			testID="compass"
-			role="button"
 			accessibilityLabel={
 				props.target
 					? `Compass. It points at what needs you: ${props.target.title}`
 					: "Compass. Nothing needs you, so it points ahead to the destination."
 			}
 			onPress={props.onPress}
-			class="absolute items-center gap-0.5 rounded-full focus-visible:ring-2 focus-visible:ring-ring/40"
+			class="absolute items-center gap-0.5 rounded-full"
 			style={{ right: COMPASS.right, bottom: 8, width: COMPASS.size }}
 		>
 			<Canvas
@@ -1500,7 +1494,7 @@ function Compass(props: { angle: AnimatedValue; target: { id: string; title: str
 			>
 				{props.target ? "points at what needs you" : "nothing needs you"}
 			</Text>
-		</View>
+		</Pressable>
 	);
 }
 
@@ -1548,14 +1542,14 @@ function FieldNotes(props: {
 					<View class="gap-3 p-4">
 						<View class="flex-row items-center gap-2">
 							<Text class="flex-1 text-xs text-faint">{kind()}</Text>
-							<Button
+							<Pressable
 								accessibilityLabel="Close field notes"
 								tooltip="Close  Esc"
 								onPress={props.onClose}
-								class="size-7 items-center justify-center rounded-md hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+								class="size-7 items-center justify-center rounded-md hover:bg-accent"
 							>
 								<Text class="text-base text-muted-foreground">×</Text>
-							</Button>
+							</Pressable>
 						</View>
 						<Text role="header" class="font-serif text-xl leading-snug text-popover-foreground">
 							{title()}
@@ -1648,15 +1642,14 @@ export function ExpeditionLog(props: { page: PlanPage; state: ChartState }) {
 			</SectionTitle>
 			<Each of={camps()} key={(c) => `${c.n}`}>
 				{(c, i) => (
-					<View
+					<Pressable
 						testID={`log-${c().n}`}
-						role="button"
 						accessibilityLabel={`Planning round ${c().n}: ${c().title}. ${c().line}. Show it on the chart.`}
 						onPress={() => {
 							props.state.selected.set(c().harbor === "region" ? "harbor" : c().harbor);
 							props.state.frame.ref?.reveal({ vertical: "nearest" });
 						}}
-						class="group flex-row items-start gap-3 rounded-md border-t border-border py-2 focus-visible:ring-2 focus-visible:ring-ring/40"
+						class="group flex-row items-start gap-3 rounded-md border-t border-border py-2"
 					>
 						<View
 							class="mt-0.5 size-5 items-center justify-center rounded-full border border-map-route"
@@ -1676,7 +1669,7 @@ export function ExpeditionLog(props: { page: PlanPage; state: ChartState }) {
 							<Text class="text-sm font-medium text-foreground group-hover:underline">{c().title}</Text>
 							<Text class="line-clamp-2 text-xs text-muted-foreground">{c().line}</Text>
 						</View>
-					</View>
+					</Pressable>
 				)}
 			</Each>
 		</View>

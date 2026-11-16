@@ -12,13 +12,13 @@ import type { DayFeed } from "./feeds";
 import type { IntakeMirror } from "./intakeFeed";
 import type { LinearMirror } from "./linearFeed";
 import type { ModelControls } from "./modelControls";
-import { glide } from "./motion";
 import type { PowerControls } from "./power";
 import type { PreferencesMirror } from "./preferencesFeed";
 import type { SessionChatMirror } from "./sessionChat";
 import type { SlackControls } from "./slackControls";
 import type { ThreadsMirror } from "./threadFeed";
 import type { ScopeMirror } from "./todayScope";
+import { glide } from "./ui";
 
 /** Today's read model as Rust last published it, and the feed to change it. */
 export type Day = {

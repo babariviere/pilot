@@ -14,7 +14,6 @@
 // Share and the full window for what it shows. A newer result or lost read
 // hides them and closes a full window opened from them; looking records nothing.
 import { cleanup, effect, keymap, Scroll, signal, Text, untracked, View, type ViewRef } from "nsh";
-import { Checkbox, Input } from "nsh/base";
 import { ArtifactBody, ArtifactTools, closeFullFor, InFullNote, inFull, openFull, paneLine } from "./ArtifactViewer";
 import { artifactPreviewsAvailable } from "./bridge";
 import type { Day } from "./day";
@@ -74,10 +73,21 @@ import {
 	workOnOpen,
 } from "./deliveryView";
 import { keepField, keepScroll } from "./kept";
-import { glide } from "./motion";
 import { OutputComparison } from "./OutputComparison";
 import { pageScroll, scrolled } from "./onScreen";
-import { Action, Mark, PAGE_COLUMN, RowLink, SectionTitle } from "./ui";
+import {
+	Action,
+	CheckboxRow,
+	glide,
+	Mark,
+	Notice,
+	Page,
+	PageTitle,
+	Panel,
+	RowLink,
+	SectionTitle,
+	TextField,
+} from "./ui";
 import { setFor } from "./view";
 
 /** The most UTF-8 bytes a Send back note holds. */
@@ -131,7 +141,7 @@ function Report(props: { work: DeliveredWork }) {
 	const nothing = () =>
 		!w().completion && !w().nonCodeDelivery && !w().submission && !w().outcome && !w().workerDelivery;
 	return (
-		<View testID="delivery-report" selectable class="gap-3 rounded-xl bg-muted px-4 py-4">
+		<Panel testID="delivery-report" size="lg" selectable class="gap-3">
 			<Text class="text-xs text-faint">The agent reports</Text>
 			<If when={w().completion}>
 				<Text class="text-xs text-faint">
@@ -201,7 +211,7 @@ function Report(props: { work: DeliveredWork }) {
 				<Text class="text-sm text-muted-foreground">No report with this result.</Text>
 			</If>
 			<Text class="text-xs text-faint">This is the agent's account. It is not done until you say so.</Text>
-		</View>
+		</Panel>
 	);
 }
 
@@ -710,8 +720,10 @@ function Reminders(props: { place: DeliveryPlace; work: DeliveredWork }) {
 		<View class="gap-0.5">
 			<Each of={items()} key={(i) => i.id}>
 				{(i) => (
-					<Checkbox
+					<CheckboxRow
 						testID={`reminder-${i().id}`}
+						label={i().label}
+						tickTestID={`reminder-ticked-${i().id}`}
 						checked={ticked().includes(i().id)}
 						onChange={() =>
 							setTicks(
@@ -719,16 +731,7 @@ function Reminders(props: { place: DeliveryPlace; work: DeliveredWork }) {
 								ticked().includes(i().id) ? ticked().filter((x) => x !== i().id) : [...ticked(), i().id],
 							)
 						}
-						class="flex-row items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-						indicatorClass="size-4 items-center justify-center rounded border border-input checked:border-primary checked:bg-primary"
-						indicator={
-							<If when={ticked().includes(i().id)}>
-								<View testID={`reminder-ticked-${i().id}`} class="size-2 rounded-sm bg-primary-foreground" />
-							</If>
-						}
-					>
-						<Text class="text-sm text-foreground">{i().label}</Text>
-					</Checkbox>
+					/>
 				)}
 			</Each>
 		</View>
@@ -794,12 +797,10 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
 				Your check
 			</Text>
 			<If when={unsettled()}>
-				<View testID="delivery-unknown" class="gap-1.5 rounded-xl bg-muted px-4 py-3">
-					<View class="flex-row items-center gap-2.5">
-						<Mark kind="unknown" />
-						<Text class="flex-1 text-sm text-foreground">
-							{unsettled() ? unsettledLine(unsettled() as DeliveryOp, props.title) : ""}
-						</Text>
+				<Notice
+					testID="delivery-unknown"
+					text={unsettled() ? unsettledLine(unsettled() as DeliveryOp, props.title) : ""}
+					action={
 						<Action
 							label={unsettled()?.checking ? "Checking…" : "Check"}
 							testID="delivery-check"
@@ -814,12 +815,13 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
 								});
 							}}
 						/>
-					</View>
+					}
+				>
 					<If when={unsettled()?.note}>
 						<Text class="text-sm text-muted-foreground">{`Your note: ${unsettled()?.note ?? ""}`}</Text>
 					</If>
 					<Text class="text-xs text-faint">Pilot will not send it again. Check only reads its saved answer.</Text>
-				</View>
+				</Notice>
 			</If>
 			<If when={!unsettled() && !!w().pendingOperationId}>
 				<Text class="text-sm text-muted-foreground">
@@ -878,7 +880,8 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
 					<Reminders place={props.place} work={w()} />
 					<If when={open()}>
 						<View class="gap-1.5">
-							<Input
+							<TextField
+								variant="composer"
 								testID="send-back-note"
 								ref={field.ref}
 								accessibilityLabel="What should change. The agent gets this note."
@@ -889,7 +892,6 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
 								onFocus={field.focus}
 								onSelectionChange={field.select}
 								placeholder="What should change? The agent gets this note."
-								class="min-h-20 rounded-xl border border-input bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary"
 							/>
 							<If when={tooLong()}>
 								<Text class="text-xs text-needs-ink">This note is too long to send. Shorten it first.</Text>
@@ -899,7 +901,7 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
 							</Text>
 							<View class="flex-row gap-2">
 								<Action
-									primary
+									variant="primary"
 									label={sending() ? "Sending…" : "Send back"}
 									testID="send-back"
 									disabled={sending() || note().trim() === "" || tooLong()}
@@ -918,7 +920,7 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
 						</View>
 					</If>
 					<If when={asked()}>
-						<View testID="done-confirm" class="gap-2 rounded-xl bg-muted px-4 py-3">
+						<Panel testID="done-confirm" class="gap-2">
 							<Text class="text-sm text-foreground">
 								{`${openPrs().join(", ") || "Its pull request"} ${openPrs().length > 1 ? "are" : "is"} not merged. Done means you accept the result now. Pilot won't merge it, and it won't count as released.`}
 							</Text>
@@ -929,7 +931,7 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
 							</If>
 							<View class="flex-row gap-2">
 								<Action
-									primary
+									variant="primary"
 									label={sending() ? "Sending…" : "Mark done anyway"}
 									testID="done-anyway"
 									disabled={sending() || !askedCurrent()}
@@ -942,12 +944,12 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
 									onPress={() => doneAsk.set(null)}
 								/>
 							</View>
-						</View>
+						</Panel>
 					</If>
 					<If when={!open() && !asked()}>
 						<View class="flex-row flex-wrap gap-2">
 							<Action
-								primary
+								variant="primary"
 								label={sending() ? "Sending…" : "Mark done"}
 								testID="mark-done"
 								disabled={sending()}
@@ -1064,18 +1066,13 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 				scrolled();
 			}}
 		>
-			<View testID="delivery" class={`${PAGE_COLUMN} gap-8`}>
+			<Page testID="delivery" gap={8}>
 				<View class="gap-2">
-					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-						{title()}
-					</Text>
+					<PageTitle title={title()} />
 					<Text class="text-sm text-muted-foreground">{origin()}</Text>
 				</View>
 				<If when={entry()?.reason}>
-					<View testID="delivery-off" class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-						<Mark kind="unknown" />
-						<Text class="flex-1 text-sm text-foreground">{entry()?.reason ?? ""}</Text>
-					</View>
+					<Notice testID="delivery-off" text={entry()?.reason ?? ""} />
 				</If>
 				<If
 					when={work()}
@@ -1099,7 +1096,7 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 						)}
 					</Each>
 				</If>
-			</View>
+			</Page>
 		</Scroll>
 	);
 }

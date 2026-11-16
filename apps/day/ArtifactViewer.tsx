@@ -11,9 +11,8 @@ import { ArtifactPreview } from "./ArtifactPreview";
 import type { Shown } from "./artifactReads";
 import { artifactPreviewsAvailable } from "./bridge";
 import { kindName } from "./deliveryView";
-import { glide } from "./motion";
 import { SourcePanel } from "./SourcePanel";
-import { Action } from "./ui";
+import { Action, glide } from "./ui";
 
 /** Whether `shown` runs in the app's isolated preview rather than showing its saved content. */
 export function showsPreview(shown: Shown): boolean {

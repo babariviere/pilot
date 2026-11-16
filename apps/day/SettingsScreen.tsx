@@ -7,15 +7,13 @@
 // silently replaces typed text, and a draft for another project is never
 // saved here. A Save whose answer was lost stays Unknown: Check only reads
 // its result. Leaving, closing or updating keeps the draft (updateView.ts).
-import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, untracked, View } from "nsh";
-import { Button, Collapsible, Input } from "nsh/base";
+import { effect, keymap, Scroll, type ScrollRef, signal, Text, untracked, View } from "nsh";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { DiagnosisSettings } from "./DiagnosisSettings";
 import type { Day } from "./day";
 import { KnowledgeSection } from "./KnowledgeSection";
 import { keepField, keepScroll } from "./kept";
 import { ModelSettingsSection } from "./ModelSettings";
-import { glide } from "./motion";
 import { ProjectsSection } from "./ProjectsSection";
 import {
 	type HistoryPage,
@@ -43,23 +41,7 @@ import {
 	sourceLine,
 } from "./preferencesView";
 import { SlackSettings } from "./SlackSettings";
-import { Action, Mark, PAGE_COLUMN, SectionTitle } from "./ui";
-
-/** A quiet note with a mark, for what needs a look. */
-function Note(props: { testID: string; text: string; detail?: string; children?: JSX.Element }) {
-	return (
-		<View testID={props.testID} class="gap-2 rounded-xl bg-muted px-4 py-3">
-			<View class="flex-row items-center gap-2.5">
-				<Mark kind="unknown" />
-				<Text class="flex-1 text-sm text-foreground">{props.text}</Text>
-			</View>
-			<If when={props.detail}>
-				<Text class="text-xs text-faint">{props.detail ?? ""}</Text>
-			</If>
-			{props.children}
-		</View>
-	);
-}
+import { Action, ExpandableRow, glide, Notice, Page, PageTitle, SectionTitle, TextField } from "./ui";
 
 /** The new row that takes the keyboard focus once. */
 const focusRow = signal<string | null>(null);
@@ -205,7 +187,7 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 				/>
 			</View>
 			<If when={elsewhere()}>
-				<Note
+				<Notice
 					testID="preferences-elsewhere"
 					text="You have unsaved preferences for another project."
 					detail={`This window saves only ${name()}'s preferences. They stay unsaved until you discard them.`}
@@ -236,10 +218,10 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 							/>
 						</If>
 					</View>
-				</Note>
+				</Notice>
 			</If>
 			<If when={v().reason}>
-				<Note
+				<Notice
 					testID="preferences-off"
 					text={read() ? v().reason : `Pilot cannot show this project's preferences. ${v().reason}`}
 					detail={read() ? undefined : "This is not the same as having none."}
@@ -247,7 +229,7 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 			</If>
 			<Each of={unsettled()} key={(o) => o.operationId}>
 				{(o) => (
-					<Note
+					<Notice
 						testID="preferences-unknown"
 						text="Pilot does not know if your last change was saved."
 						detail="It will not send it again. Check only reads its result. Your text stays here."
@@ -260,11 +242,11 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 								onPress={() => void check(o().operationId)}
 							/>
 						</View>
-					</Note>
+					</Notice>
 				)}
 			</Each>
 			<If when={conflict()}>
-				<Note
+				<Notice
 					testID="preferences-conflict"
 					text="These preferences changed since you started editing. Nothing was saved; your text is kept."
 					detail="Saved now:"
@@ -286,7 +268,7 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 						/>
 						<Action label="Use the saved version" testID="preferences-use-saved" onPress={revert} />
 					</View>
-				</Note>
+				</Notice>
 			</If>
 			<If
 				when={read() || dirty()}
@@ -312,7 +294,7 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 							);
 							return (
 								<View testID={`preference-row-${e().key}`} class="gap-1.5 border-t border-border py-3">
-									<Input
+									<TextField
 										testID={`preference-${e().key}`}
 										ref={field.ref}
 										multiline
@@ -327,7 +309,6 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 											if (focusRow() === e().key) focusRow.set(null);
 										}}
 										onSelectionChange={field.select}
-										class="min-h-9 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
 									/>
 									<If when={tooLong(e().text)}>
 										<Text class="text-xs text-needs-ink">{`Too long. Keep it under ${MAX_TEXT_BYTES} bytes.`}</Text>
@@ -385,7 +366,7 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 					</Text>
 					<View class="flex-row gap-2">
 						<Action
-							primary
+							variant="primary"
 							label={v().saving ? "Saving…" : "Save"}
 							shortcut={keymap.label("mod+s")}
 							testID="preferences-save"
@@ -462,7 +443,7 @@ function History(props: { mirror: PreferencesMirror }) {
 			</View>
 			<If when={historyOpen()}>
 				<If when={historyError()}>
-					<Note
+					<Notice
 						testID="preferences-history-off"
 						text={historyError()}
 						detail="This is not the same as having no history."
@@ -476,9 +457,15 @@ function History(props: { mirror: PreferencesMirror }) {
 				<View>
 					<Each of={revisions()} key={(r) => String(r.revision)}>
 						{(r) => (
-							<Collapsible
+							<ExpandableRow
 								open={openRevision() === r().revision}
-								class="border-t border-border"
+								testID={`preferences-revision-${r().revision}`}
+								accessibilityLabel={`${revisionLine(r())}. ${openRevision() === r().revision ? "Hide" : "Show"} the list it saved.`}
+								onToggle={() => {
+									glide();
+									openRevision.set(openRevision() === r().revision ? null : r().revision);
+								}}
+								summaryClass="gap-0.5 py-2.5"
 								content={
 									<View testID={`preferences-revision-detail-${r().revision}`} class="gap-1 pb-3">
 										<If when={r().entries.length === 0}>
@@ -498,21 +485,11 @@ function History(props: { mirror: PreferencesMirror }) {
 									</View>
 								}
 							>
-								<Button
-									testID={`preferences-revision-${r().revision}`}
-									accessibilityLabel={`${revisionLine(r())}. ${openRevision() === r().revision ? "Hide" : "Show"} the list it saved.`}
-									onPress={() => {
-										glide();
-										openRevision.set(openRevision() === r().revision ? null : r().revision);
-									}}
-									class="group gap-0.5 rounded-md py-2.5 focus-visible:ring-2 focus-visible:ring-ring/40"
-								>
-									<Text class="text-sm text-foreground group-hover:underline">{revisionLine(r())}</Text>
-									<If when={r().reason}>
-										<Text class="text-xs text-faint">{r().reason ?? ""}</Text>
-									</If>
-								</Button>
-							</Collapsible>
+								<Text class="text-sm text-foreground group-hover:underline">{revisionLine(r())}</Text>
+								<If when={r().reason}>
+									<Text class="text-xs text-faint">{r().reason ?? ""}</Text>
+								</If>
+							</ExpandableRow>
 						)}
 					</Each>
 				</View>
@@ -559,10 +536,8 @@ export function SettingsScreen(props: { day: Day }) {
 				if (waiting === null) scroll.onScroll(e);
 			}}
 		>
-			<View testID="settings" class={`${PAGE_COLUMN} gap-10`}>
-				<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-					Settings
-				</Text>
+			<Page testID="settings" gap={10}>
+				<PageTitle title="Settings" />
 				<If when={props.day.models}>{(controls) => <ModelSettingsSection controls={controls()} />}</If>
 				<If when={props.day.connections}>{(controls) => <ConnectionSettings controls={controls()} />}</If>
 				<If when={props.day.slack}>{(controls) => <SlackSettings controls={controls()} />}</If>
@@ -574,7 +549,7 @@ export function SettingsScreen(props: { day: Day }) {
 				<Text class="border-t border-border pt-5 text-xs text-faint">
 					Preferences are what you chose. Pilot's approvals, Stop and spending limits still apply.
 				</Text>
-			</View>
+			</Page>
 		</Scroll>
 	);
 }

@@ -6,16 +6,25 @@
 // Undo send, each once, naming the exact request and revision shown. A
 // write whose answer is lost stays "not confirmed" until Check reads its
 // saved receipt. The words come from outside Pilot and show as text only.
-import { effect, signal, Text, View, type ViewRef } from "nsh";
-import { Button, Collapsible, Radio, RadioGroup } from "nsh/base";
+import { effect, type JSX, signal, Text, View, type ViewRef } from "nsh";
 import type { MissionRow, Request, Today } from "pilot-day/native";
 import type { Day } from "./day";
 import { FeedbackIncoming, incomingFeedback, newFeedback } from "./FeedbackIncoming";
 import type { IntakeMirror, IntakeOp, IntakeResult, IntakeRow, IntakeView, Triage } from "./intakeFeed";
 import { openLinear } from "./linearView";
-import { glide } from "./motion";
 import { goalDraft, openNew, replacesDraft, requestDraft } from "./planView";
-import { Action, InlineAction, Mark, SectionTitle } from "./ui";
+import {
+	Action,
+	ExpandableRow,
+	glide,
+	InlineAction,
+	Mark,
+	Notice,
+	Panel,
+	RadioList,
+	RadioRow,
+	SectionTitle,
+} from "./ui";
 import { dataSource, placeRow } from "./view";
 
 /** The request open in place, by ID. One at a time; it closes when the request leaves. */
@@ -102,8 +111,14 @@ function settledLine(op: IntakeOp, missions: MissionRow[]): string {
 	return op.delivery === "rejected" ? `Pilot did not change ${title}.${reason}` : "";
 }
 
-/** A row's button: opens or closes it in place. The pressed row keeps the keyboard focus. */
-function RequestButton(props: { request: Request; mark: "new" | "still"; word: string; open: boolean }) {
+/** A request's row: its summary opens or closes `content` in place. The pressed row keeps the keyboard focus. */
+function RequestRow(props: {
+	request: Request;
+	mark: "new" | "still";
+	word: string;
+	open: boolean;
+	content: JSX.Element;
+}) {
 	const r = () => props.request;
 	const node = signal<ViewRef | null>(null);
 	effect(() => {
@@ -114,15 +129,17 @@ function RequestButton(props: { request: Request; mark: "new" | "still"; word: s
 		}
 	});
 	return (
-		<Button
-			ref={(n: ViewRef) => node.set(n)}
+		<ExpandableRow
+			open={props.open}
+			anchor={(n: ViewRef) => node.set(n)}
 			testID={`request-${r().id}`}
 			accessibilityLabel={`${r().title}, ${props.word.toLowerCase()} from ${r().sourceLabel}. ${props.open ? "Hide" : "Show"} what you can do with it.`}
-			onPress={() => {
+			onToggle={() => {
 				toggle(r().id);
 				node()?.focus();
 			}}
-			class="group gap-1 rounded-md py-3.5 focus-visible:ring-2 focus-visible:ring-ring/40"
+			summaryClass="gap-1 py-3.5"
+			content={props.content}
 		>
 			<View class="flex-row items-center gap-2.5">
 				<Mark kind={props.mark} />
@@ -133,7 +150,7 @@ function RequestButton(props: { request: Request; mark: "new" | "still"; word: s
 				<View class="size-2" />
 				<Text class="flex-1 text-xs text-faint">{requestLine(r())}</Text>
 			</View>
-		</Button>
+		</ExpandableRow>
 	);
 }
 
@@ -286,24 +303,19 @@ function NewControls(props: { mirror: IntakeMirror; row: IntakeRow; missions: Mi
 			>
 				<View class="gap-1">
 					<Text class="text-xs text-faint">Where should the work go?</Text>
-					<RadioGroup class="gap-0.5">
+					<RadioList>
 						<Each of={[{ id: "", title: "Standalone work" }, ...props.missions]} key={(m) => m.id}>
 							{(m) => (
-								<Radio
+								<RadioRow
 									testID={`route-${id()}-${m().id || "standalone"}`}
+									label={m().title}
 									checked={route() === m().id}
 									disabled={props.busy || !!pinned()}
 									onChange={() => routes.set({ ...routes(), [id()]: m().id })}
-									class="group flex-row items-center gap-2.5 rounded-lg px-2 py-1.5 checked:bg-selection hover:bg-accent checked:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
-								>
-									<View class="size-3.5 items-center justify-center rounded-full border border-input group-checked:border-primary">
-										<View class="size-1.5 rounded-full group-checked:bg-primary" />
-									</View>
-									<Text class="text-sm text-foreground">{m().title}</Text>
-								</Radio>
+								/>
 							)}
 						</Each>
-					</RadioGroup>
+					</RadioList>
 				</View>
 			</If>
 			<If when={!offered()}>
@@ -315,7 +327,7 @@ function NewControls(props: { mirror: IntakeMirror; row: IntakeRow; missions: Mi
 					<View class="flex-row flex-wrap gap-1">
 						<Action
 							label="Start work…"
-							primary
+							variant="primary"
 							testID={`start-${id()}`}
 							anchor={(n) => startNode.set(n)}
 							disabled={props.busy || !offered()}
@@ -349,7 +361,7 @@ function NewControls(props: { mirror: IntakeMirror; row: IntakeRow; missions: Mi
 					</View>
 				}
 			>
-				<View testID={`confirm-${id()}`} class="gap-2 rounded-xl bg-muted px-4 py-3">
+				<Panel testID={`confirm-${id()}`} class="gap-2">
 					<Text class="text-sm text-foreground">
 						{`Start one Build chat for ${quoted(props.row.request.title)} ${place(pinned()?.missionId ?? "")}?`}
 					</Text>
@@ -365,14 +377,14 @@ function NewControls(props: { mirror: IntakeMirror; row: IntakeRow; missions: Mi
 					<View class="flex-row gap-2">
 						<Action
 							label={props.busy ? "Starting…" : "Start"}
-							primary
+							variant="primary"
 							testID={`confirm-start-${id()}`}
 							disabled={props.busy || !current()}
 							onPress={start}
 						/>
 						<Action label="Cancel" disabled={props.busy} onPress={cancel} />
 					</View>
-				</View>
+				</Panel>
 			</If>
 		</View>
 	);
@@ -383,9 +395,11 @@ function NewRow(props: { mirror: IntakeMirror; row: IntakeRow; missions: Mission
 	const r = () => props.row.request;
 	const open = () => openRequest() === r().id;
 	return (
-		<Collapsible
+		<RequestRow
+			request={r()}
+			mark="new"
+			word="New"
 			open={open()}
-			class="border-t border-border"
 			content={
 				<View testID={`request-detail-${r().id}`} class="flex-row gap-2.5 pb-3.5">
 					<View class="size-2" />
@@ -398,9 +412,7 @@ function NewRow(props: { mirror: IntakeMirror; row: IntakeRow; missions: Mission
 					</View>
 				</View>
 			}
-		>
-			<RequestButton request={r()} mark="new" word="New" open={open()} />
-		</Collapsible>
+		/>
 	);
 }
 
@@ -480,32 +492,6 @@ function Kept(props: {
 	);
 }
 
-/** One write whose result is not known, and its read-only Check. */
-function Unsettled(props: { mirror: IntakeMirror; op: IntakeOp }) {
-	const checking = () => props.op.delivery === "checking";
-	return (
-		<View testID={`unsettled-${props.op.operationId}`} class="gap-1.5 rounded-xl bg-muted px-4 py-3">
-			<View class="flex-row items-center gap-2.5">
-				<Mark kind="unknown" />
-				<Text class="flex-1 text-sm text-foreground">{unsettledLine(props.op)}</Text>
-				<Action
-					label={checking() ? "Checking…" : "Check"}
-					testID={`check-${props.op.operationId}`}
-					accessibilityLabel="Check whether it happened. This reads Pilot's saved answer and sends nothing."
-					disabled={checking()}
-					onPress={() => {
-						result.set("");
-						void props.mirror.source.check(props.op.operationId).then((r) => {
-							if (r.status === "unknown") result.set(r.message);
-						});
-					}}
-				/>
-			</View>
-			<Text class="text-xs text-faint">Pilot will not send it again. Check only reads its saved answer.</Text>
-		</View>
-	);
-}
-
 /** The New section over the connected window's requests. */
 function LiveIncoming(props: { day: Day; mirror: IntakeMirror }) {
 	const v = (): IntakeView => props.mirror.view();
@@ -568,18 +554,12 @@ function LiveIncoming(props: { day: Day; mirror: IntakeMirror }) {
 					</SectionTitle>
 				</View>
 				<If when={v().reason}>
-					<View testID="incoming-off" class="mb-2 gap-1.5 rounded-xl bg-muted px-4 py-3">
-						<View class="flex-row items-center gap-2.5">
-							<Mark kind="unknown" />
-							<Text class="flex-1 text-sm text-foreground">
-								{v().availability === "live"
-									? v().reason
-									: `Pilot cannot show new requests here. ${v().reason}`}
-							</Text>
-						</View>
-						<If when={v().availability !== "live"}>
-							<Text class="text-xs text-faint">This is not the same as having none.</Text>
-						</If>
+					<Notice
+						testID="incoming-off"
+						class="mb-2"
+						text={v().availability === "live" ? v().reason : `Pilot cannot show new requests here. ${v().reason}`}
+						detail={v().availability !== "live" ? "This is not the same as having none." : undefined}
+					>
 						<View class="flex-row pt-1">
 							<Action
 								label={reading() ? "Reading…" : "Read again"}
@@ -590,21 +570,33 @@ function LiveIncoming(props: { day: Day; mirror: IntakeMirror }) {
 								onPress={() => void readAgain()}
 							/>
 						</View>
-					</View>
+					</Notice>
 				</If>
 				<Each of={v().intake.trouble} key={(t) => t}>
-					{(t) => (
-						<View class="mb-2 flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-							<Mark kind="unknown" />
-							<Text class="flex-1 text-sm text-foreground">{t()}</Text>
-						</View>
-					)}
+					{(t) => <Notice class="mb-2" text={t()} />}
 				</Each>
 				<Each of={v().unsettled} key={(o) => o.operationId}>
 					{(o) => (
-						<View class="mb-2">
-							<Unsettled mirror={props.mirror} op={o()} />
-						</View>
+						<Notice
+							testID={`unsettled-${o().operationId}`}
+							class="mb-2"
+							text={unsettledLine(o())}
+							detail="Pilot will not send it again. Check only reads its saved answer."
+							action={
+								<Action
+									label={o().delivery === "checking" ? "Checking…" : "Check"}
+									testID={`check-${o().operationId}`}
+									accessibilityLabel="Check whether it happened. This reads Pilot's saved answer and sends nothing."
+									disabled={o().delivery === "checking"}
+									onPress={() => {
+										result.set("");
+										void props.mirror.source.check(o().operationId).then((r) => {
+											if (r.status === "unknown") result.set(r.message);
+										});
+									}}
+								/>
+							}
+						/>
 					)}
 				</Each>
 				<If when={result()}>
@@ -662,9 +654,11 @@ function ExampleRow(props: { request: Request }) {
 	const r = () => props.request;
 	const open = () => openRequest() === r().id;
 	return (
-		<Collapsible
+		<RequestRow
+			request={r()}
+			mark="new"
+			word="New"
 			open={open()}
-			class="border-t border-border"
 			content={
 				<View testID={`request-detail-${r().id}`} class="flex-row gap-2.5 pb-3.5">
 					<View class="size-2" />
@@ -676,9 +670,7 @@ function ExampleRow(props: { request: Request }) {
 					</View>
 				</View>
 			}
-		>
-			<RequestButton request={r()} mark="new" word="New" open={open()} />
-		</Collapsible>
+		/>
 	);
 }
 
@@ -711,12 +703,7 @@ function ExampleIncoming(props: { day: Day }) {
 					</SectionTitle>
 				</View>
 				<Each of={intake().trouble} key={(t) => t}>
-					{(t) => (
-						<View class="mb-2 flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-							<Mark kind="unknown" />
-							<Text class="flex-1 text-sm text-foreground">{t()}</Text>
-						</View>
-					)}
+					{(t) => <Notice class="mb-2" text={t()} />}
 				</Each>
 				<FeedbackIncoming day={props.day} />
 				<If when={shown().length > 0} else={<Text class="text-sm text-muted-foreground">{empty()}</Text>}>

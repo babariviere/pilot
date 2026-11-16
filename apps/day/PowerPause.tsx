@@ -22,7 +22,7 @@ export function PowerPause(props: { power: PowerControls; narrow: boolean }) {
 				<Text class="text-xs text-muted-foreground">{props.power.message() || "Work paused for sleep"}</Text>
 			</If>
 			<Action
-				primary
+				variant="primary"
 				label={props.power.busy() ? "Resuming…" : "Resume work"}
 				icon="play"
 				testID="power-resume"

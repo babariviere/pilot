@@ -1,11 +1,10 @@
 // A paged library inside Settings. One page at a time limits kept rows;
 // selecting or reading sources never starts AI work or accepts guidance.
 import { cleanup, effect, host, signal, Text, untracked, View } from "nsh";
-import { Input } from "nsh/base";
 import type { KnowledgeDetail, KnowledgePage, KnowledgeRevisionPage } from "../../packages/protocol/src/knowledge";
 import { call, windowId } from "./bridge";
 import { editKnowledge, type KnowledgeEdit, knowledgeDraft, knowledgeFingerprint, libraryOpen } from "./knowledgeView";
-import { Action, Field, SectionTitle } from "./ui";
+import { Action, Field, SectionTitle, TextField } from "./ui";
 
 export type LibraryCall = (name: string, args: unknown) => Promise<unknown>;
 const nativeCall: LibraryCall = async (name, args) => {
@@ -392,13 +391,13 @@ export function KnowledgeSection(props: { projectId: string; source?: LibraryCal
 								<Field label="Title" value={d().title} onChange={(v) => change("title", v)} />
 								<Field label="Synopsis" value={d().synopsis} onChange={(v) => change("synopsis", v)} />
 								<Text class="text-sm text-foreground">Body (Markdown, keep the entry's required headings)</Text>
-								<Input
+								<TextField
 									testID="knowledge-body"
 									accessibilityLabel="Knowledge body"
 									multiline
 									value={d().body}
 									onChange={({ value }) => change("body", value)}
-									class="min-h-40 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
+									rows={8}
 								/>
 								<Text class="text-xs text-muted-foreground">
 									Saved sources stay attached. Editing does not claim they were checked.

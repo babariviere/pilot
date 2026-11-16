@@ -5,7 +5,7 @@ import type { Decision, Interview, Question, QuestionSection } from "pilot-day/n
 import { checkDecision, laterDecision, needsCheck, saveDecisionDraft } from "./commands";
 import type { Day } from "./day";
 import { type InterviewRead, InterviewRenderer, type InterviewSource } from "./InterviewRenderer";
-import { Action, HelpChip } from "./ui";
+import { Action, ToggleChip } from "./ui";
 import { anchors, focusFront, messages, replies, setFor } from "./view";
 
 const SECTIONS: Record<string, QuestionSection> = {
@@ -195,7 +195,7 @@ export function InterviewCard(props: { day: Day; decision: Decision; later: bool
 		questionHelp: (q) => (
 			<If when={q.context}>
 				<View class="flex-row flex-wrap gap-1.5">
-					<HelpChip
+					<ToggleChip
 						label="More context"
 						shortcut="M"
 						pressed={contextOpen()[q.id] === true}

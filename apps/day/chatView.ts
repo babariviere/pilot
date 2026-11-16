@@ -2,7 +2,7 @@
 // opened, over the screen it was opened from. Opening and leaving it only
 // change where the user is; they send nothing.
 import { signal } from "nsh";
-import { glide } from "./motion";
+import { glide } from "./ui";
 
 /** The open chat page and the name of the screen under it, for Back. */
 export type ChatPlace = { sessionId: string; from: string };

@@ -11,7 +11,6 @@ import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { Incoming } from "./Incoming";
 import { todayScrollTo } from "./kept";
-import { Arrive } from "./motion";
 import { stageMark, stageWord } from "./PlanScreen";
 import { Problems } from "./Problems";
 import type { Plans } from "./planning";
@@ -37,7 +36,20 @@ import {
 	todayScope,
 } from "./ScopeRows";
 import { ToCheck, toCheckCount } from "./ToCheck";
-import { Action, EvidenceChip, InlineAction, Mark, PAGE_COLUMN, RowLink, SectionTitle, Track } from "./ui";
+import {
+	Action,
+	Arrive,
+	EvidenceChip,
+	InlineAction,
+	Mark,
+	MarkLine,
+	Notice,
+	Page,
+	PageTitle,
+	RowLink,
+	SectionTitle,
+	Track,
+} from "./ui";
 import { focused, focusFront, front, type Item, move, openMission, placeRow, queue, todayPlace } from "./view";
 import { freshnessLine, provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
 
@@ -437,11 +449,7 @@ function Planning(props: { plans: Plans; ctx: TodayScope }) {
 					</SectionTitle>
 				</View>
 				<If when={off()}>
-					<View testID="planning-off" class="gap-1.5 rounded-xl bg-muted px-4 py-3">
-						<View class="flex-row items-center gap-2.5">
-							<Mark kind="unknown" />
-							<Text class="flex-1 text-sm text-foreground">Pilot cannot show missions in planning here.</Text>
-						</View>
+					<Notice testID="planning-off" text="Pilot cannot show missions in planning here.">
 						<Text class="text-sm text-muted-foreground">{planning().reason}</Text>
 						<Text class="text-xs text-faint">This is not the same as having none.</Text>
 						<If when={canReadAgain()}>
@@ -455,7 +463,7 @@ function Planning(props: { plans: Plans; ctx: TodayScope }) {
 								/>
 							</View>
 						</If>
-					</View>
+					</Notice>
 				</If>
 				<If when={!off()}>
 					<Text testID="planning-note" class="text-xs text-muted-foreground">
@@ -512,27 +520,26 @@ function DoneSince(props: { day: Day; ctx: TodayScope }) {
 			</If>
 			<Each of={today().done} key={(e) => e.id}>
 				{(e) => (
-					<View class="flex-row gap-3 py-2.5">
-						<View class="pt-1.5">
-							<Mark
-								kind={
-									e().evidence.some((x) => x.tone === "bad")
-										? "failed"
-										: e().evidence.some((x) => x.tone === "warn")
-											? "needs"
-											: "done"
-								}
-							/>
-						</View>
-						<View class="flex-1 gap-2">
-							<Text class="text-sm text-foreground">{e().text}</Text>
-							<View class="flex-row flex-wrap items-center gap-1.5">
-								<Each of={e().evidence} key={(x) => x.label}>
-									{(x) => <EvidenceChip evidence={x()} />}
-								</Each>
-								<Text class="text-xs text-faint">{e().missionTitle}</Text>
+					<View class="py-2.5">
+						<MarkLine
+							kind={
+								e().evidence.some((x) => x.tone === "bad")
+									? "failed"
+									: e().evidence.some((x) => x.tone === "warn")
+										? "needs"
+										: "done"
+							}
+						>
+							<View class="gap-2">
+								<Text class="text-sm text-foreground">{e().text}</Text>
+								<View class="flex-row flex-wrap items-center gap-1.5">
+									<Each of={e().evidence} key={(x) => x.label}>
+										{(x) => <EvidenceChip evidence={x()} />}
+									</Each>
+									<Text class="text-xs text-faint">{e().missionTitle}</Text>
+								</View>
 							</View>
-						</View>
+						</MarkLine>
 					</View>
 				)}
 			</Each>
@@ -635,7 +642,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 				todayPlace.y = e.offset.y;
 			}}
 		>
-			<View class={`${PAGE_COLUMN} gap-12`}>
+			<Page gap={12}>
 				<If when={ctx.on() || today().freshness.state !== "unreadable"} else={<Unreadable day={props.day} />}>
 					<View class="gap-12">
 						<View class="gap-3">
@@ -645,9 +652,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 								</View>
 								<ScopeControl ctx={ctx} />
 							</View>
-							<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-								{ctx.showsOwn() ? headline(props.day) : scopedHeadline(ctx)}
-							</Text>
+							<PageTitle title={ctx.showsOwn() ? headline(props.day) : scopedHeadline(ctx)} />
 							<If when={ctx.showsOwn()}>
 								<Text class="text-base leading-relaxed text-muted-foreground">{today().summary}</Text>
 								<If when={today().leftOff && today().decisions.length === 0}>
@@ -696,7 +701,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 						</If>
 					</View>
 				</If>
-			</View>
+			</Page>
 		</Scroll>
 	);
 }

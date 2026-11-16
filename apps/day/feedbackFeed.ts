@@ -19,7 +19,7 @@ import type {
 	UserFeedbackQuestion,
 	UserFeedbackWorkView,
 } from "./feedbackContract";
-import { glide } from "./motion";
+import { glide } from "./ui";
 
 export type {
 	UserFeedback,

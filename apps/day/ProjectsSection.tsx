@@ -1,5 +1,4 @@
 import { effect, signal, Text, untracked, View } from "nsh";
-import { Input } from "nsh/base";
 import {
 	type ImportPreview,
 	nativeProjects,
@@ -11,7 +10,7 @@ import {
 	projectRepository,
 	type SourcePreview,
 } from "./projectSetup";
-import { Action, SectionTitle } from "./ui";
+import { Action, Panel, SectionTitle, TextField } from "./ui";
 
 // Keep Settings small; paging reaches every project and saved import.
 const PAGE_SIZE = 5;
@@ -140,7 +139,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 			<If when={form() === "folder"}>
 				<View class="gap-3">
 					<Text class="text-sm text-foreground">Local folder</Text>
-					<Input
+					<TextField
 						testID="project-folder"
 						accessibilityLabel="Local folder"
 						value={projectFolder()}
@@ -149,7 +148,6 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 							preview.set(null);
 						}}
 						placeholder="/Users/you/src/project"
-						class="rounded-lg border border-input px-3 py-2 text-sm text-foreground"
 					/>
 					<Action
 						label="Preview folder"
@@ -164,7 +162,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 						}
 					/>
 					<If when={preview()}>
-						<View class="gap-2 rounded-lg bg-muted p-3">
+						<Panel class="gap-2">
 							<Text class="text-sm text-foreground">
 								{preview()?.copy === "jj"
 									? "Agents will use private jj copies. Main is read-only."
@@ -176,21 +174,21 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 							<Action
 								label="Add project"
 								testID="project-add"
-								primary
+								variant="primary"
 								disabled={disabled()}
 								onPress={() => {
 									const p = preview();
 									if (p) void action({ action: "add", path: p.path, digest: p.digest });
 								}}
 							/>
-						</View>
+						</Panel>
 					</If>
 				</View>
 			</If>
 			<If when={form() === "repository"}>
 				<View class="gap-3">
 					<Text class="text-sm text-foreground">GitHub repository</Text>
-					<Input
+					<TextField
 						testID="project-url"
 						accessibilityLabel="Repository URL"
 						value={projectRepository()}
@@ -199,9 +197,8 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 							imported.set(null);
 						}}
 						placeholder="https://github.com/owner/repository"
-						class="rounded-lg border border-input px-3 py-2 text-sm text-foreground"
 					/>
-					<Input
+					<TextField
 						testID="project-destination"
 						accessibilityLabel="Import destination"
 						value={projectDestination()}
@@ -210,7 +207,6 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 							imported.set(null);
 						}}
 						placeholder="Destination (optional)"
-						class="rounded-lg border border-input px-3 py-2 text-sm text-foreground"
 					/>
 					<Action
 						label="Preview import"
@@ -231,7 +227,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 						}
 					/>
 					<If when={imported()}>
-						<View class="gap-2 rounded-lg bg-muted p-3">
+						<Panel class="gap-2">
 							<View selectable>
 								<Text class="text-sm text-foreground">{imported()?.resolvedDestination ?? ""}</Text>
 							</View>
@@ -242,7 +238,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 							<Action
 								label="Import repository"
 								testID="import-start"
-								primary
+								variant="primary"
 								disabled={disabled() || !snapshot()?.github.apiReady || !snapshot()?.github.sshReady}
 								onPress={() => {
 									const p = imported();
@@ -254,7 +250,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 										});
 								}}
 							/>
-						</View>
+						</Panel>
 					</If>
 				</View>
 			</If>
@@ -387,7 +383,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 			</If>
 			<Each of={unsettled()} key={(o) => o.operationId}>
 				{(o) => (
-					<View class="gap-2 rounded-lg bg-muted p-3">
+					<Panel class="gap-2">
 						<Text class="text-sm text-foreground">
 							The previous action is unconfirmed. Check only reads its receipt.
 						</Text>
@@ -397,7 +393,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 							disabled={busy()}
 							onPress={() => void run(async () => accept(await source.check(o().operationId)))}
 						/>
-					</View>
+					</Panel>
 				)}
 			</Each>
 			<If when={message()}>

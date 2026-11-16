@@ -6,7 +6,7 @@
 import { type Signal, signal } from "nsh";
 import type { Refusal } from "./bridge";
 import { readSavedLinear, type SavedLinearRead } from "./linearRead";
-import { glide } from "./motion";
+import { glide } from "./ui";
 
 /** What the Linear page shows. */
 export type LinearView = {

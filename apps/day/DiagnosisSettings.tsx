@@ -1,6 +1,5 @@
 // Native privacy controls and explicit entry to an on-demand read-only specialist.
 import { signal, Text, View } from "nsh";
-import { Input } from "nsh/base";
 import { openChat } from "./chatView";
 import type { DiagnosisControls, Privacy } from "./diagnosisControls";
 import {
@@ -13,7 +12,7 @@ import {
 } from "./diagnosisDraft";
 import { keepField } from "./kept";
 import { utf8Bytes } from "./preferencesFeed";
-import { Action, Field, Picker, SectionTitle } from "./ui";
+import { Action, Field, Panel, Picker, SectionTitle, TextField } from "./ui";
 
 function PrivacyRow(props: {
 	label: string;
@@ -186,7 +185,7 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 						<Action
 							label="Save privacy controls"
 							testID="privacy-save"
-							primary
+							variant="primary"
 							disabled={
 								disabled() ||
 								stale() ||
@@ -227,7 +226,7 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 						onPress={() => clearing.set(true)}
 					/>
 					<If when={clearing()}>
-						<View class="gap-3 rounded-xl bg-muted p-4">
+						<Panel size="lg" class="gap-3">
 							<Text class="text-sm font-medium text-foreground">Clear managed local evidence?</Text>
 							<Text class="text-sm text-muted-foreground">
 								Deletes managed service evidence, local feature counts and this app writer's log segments.
@@ -246,7 +245,7 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 									}}
 								/>
 							</View>
-						</View>
+						</Panel>
 					</If>
 				</View>
 			</If>
@@ -280,7 +279,7 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 				<Action
 					label="Ask about Pilot"
 					testID="diagnosis-ask"
-					primary
+					variant="primary"
 					disabled={disabled()}
 					onPress={() => asking.set(!asking())}
 				/>
@@ -316,7 +315,7 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 							disabled={disabled()}
 							onChange={diagnosisThinking.set}
 						/>
-						<Input
+						<TextField
 							ref={questionField.ref}
 							onFocus={questionField.focus}
 							onSelectionChange={questionField.select}
@@ -326,12 +325,12 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 							value={diagnosisQuestion()}
 							onChange={({ value }) => diagnosisQuestion.set(value)}
 							placeholder="What should we investigate?"
-							class="min-h-24 rounded-lg border border-input bg-background p-3 text-sm text-foreground"
+							rows={4}
 						/>
 						<Action
 							label="Start diagnosis"
 							testID="diagnosis-start"
-							primary
+							variant="primary"
 							disabled={
 								disabled() ||
 								!model() ||
@@ -379,7 +378,7 @@ export function DiagnosisReply(props: { controls: DiagnosisControls; sessionId: 
 			<Text class="text-sm text-muted-foreground">
 				Ask a follow-up. This specialist is read-only; a fix needs a separate start.
 			</Text>
-			<Input
+			<TextField
 				ref={replyField.ref}
 				onFocus={replyField.focus}
 				onSelectionChange={replyField.select}
@@ -388,14 +387,14 @@ export function DiagnosisReply(props: { controls: DiagnosisControls; sessionId: 
 				multiline
 				value={text()}
 				onChange={({ value }) => diagnosisReplies.set({ ...diagnosisReplies(), [props.sessionId]: value })}
-				class="min-h-24 rounded-lg border border-input bg-background p-3 text-sm text-foreground"
+				rows={4}
 			/>
 			<View class="flex-row gap-2">
 				<Action label="Read controls again" disabled={c.busy()} onPress={() => void c.read()} />
 				<Action
 					label="Send follow-up"
 					testID="diagnosis-send"
-					primary
+					variant="primary"
 					disabled={
 						c.busy() ||
 						!c.snapshot() ||

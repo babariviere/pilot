@@ -4,7 +4,7 @@
 // rows before what shows; it sends nothing.
 import { Text, View } from "nsh";
 import type { ChatRow } from "pilot-day/native";
-import { Action, Mark } from "./ui";
+import { Action, Mark, MarkLine } from "./ui";
 
 /** What the transcript needs of a chat as read. */
 export type ChatRead = { rows: ChatRow[]; more: boolean; reading: boolean; reason: string };
@@ -36,14 +36,11 @@ export function ChatTranscript(props: {
 				</View>
 			</If>
 			<If when={chat()?.reason}>
-				<View class="flex-row items-start gap-2.5">
-					<View class="pt-1.5">
-						<Mark kind="unknown" />
-					</View>
-					<Text testID={`${props.id}-off`} class="flex-1 text-sm text-muted-foreground">
+				<MarkLine kind="unknown">
+					<Text testID={`${props.id}-off`} class="text-sm text-muted-foreground">
 						{chat()?.reason ?? ""}
 					</Text>
-				</View>
+				</MarkLine>
 			</If>
 			<If when={!chat() || (chat()?.reading && chat()?.rows.length === 0)}>
 				<Text class="text-sm text-muted-foreground">{props.readingWords}</Text>

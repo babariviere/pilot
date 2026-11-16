@@ -1,0 +1,135 @@
+// Popups: a value chosen from a list, and a menu of commands. They share
+// one popup frame.
+import { type JSX, Text, View } from "nsh";
+import { type Align, Menu as BaseMenu, MenuItem as BaseMenuItem, Select, type SelectItem } from "nsh/base";
+import { FOCUS_RING } from "./button";
+import { Icon, type IconName } from "./icon";
+
+/** The frame of every popup: a picker's list and a menu. */
+const POPUP = "min-w-56 rounded-xl border border-border bg-popover p-1 shadow-md";
+
+/**
+ * One value chosen from a list, such as a project: a quiet trigger naming
+ * the choice, and a popup list with a second line per item (`detail`).
+ * `searchable` adds a filter field for long lists. Choosing only reports
+ * the value; the caller decides what that does.
+ */
+export function Picker(props: {
+	testID?: string;
+	/** What the choice is about, for screen readers. */
+	label: string;
+	items: SelectItem[];
+	value: string | null;
+	/** What the trigger says while nothing listed is chosen. */
+	placeholder: string;
+	disabled?: boolean;
+	searchable?: boolean;
+	searchPlaceholder?: string;
+	/** A quiet second line for an item, by value. */
+	detail?: (value: string) => string;
+	onChange: (value: string) => void;
+	onOpenChange?: (open: boolean) => void;
+}) {
+	const title = () => props.items.find((i) => i.value === props.value)?.title ?? props.placeholder;
+	return (
+		<Select
+			testID={props.testID}
+			items={props.items}
+			value={props.value}
+			disabled={props.disabled}
+			searchable={props.searchable}
+			searchPlaceholder={props.searchPlaceholder ?? null}
+			searchAccessibilityLabel={props.searchPlaceholder ?? null}
+			accessibilityLabel={props.label}
+			offset={4}
+			onChange={({ value }) => {
+				if (value !== null) props.onChange(value);
+			}}
+			onOpenChange={({ open }) => props.onOpenChange?.(open)}
+			class={`rounded-lg disabled:opacity-50 ${FOCUS_RING}`}
+			popupClass={POPUP}
+			listClass="max-h-72"
+			itemClass="group rounded-lg px-2.5 py-1.5 focus:bg-accent selected:bg-selection disabled:opacity-50"
+			searchClass="mb-1 rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground"
+			renderItem={(item) => (
+				<View class="gap-0.5">
+					<Text class="text-sm text-popover-foreground group-selected:font-medium">{item.title}</Text>
+					<If when={props.detail?.(item.value)}>
+						<Text class="text-xs text-faint">{props.detail?.(item.value) ?? ""}</Text>
+					</If>
+				</View>
+			)}
+			trigger={
+				<View class="min-h-8 flex-row items-center gap-2 rounded-lg border border-input px-3 py-1 hover:bg-accent">
+					<Text class="text-sm text-foreground">{title()}</Text>
+					<Text class="text-xs text-faint">▾</Text>
+				</View>
+			}
+		/>
+	);
+}
+
+/** A menu of commands under a trigger. The page owns whether it is open. */
+export function Menu(props: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	/** How it lines up with the trigger (default `start`). */
+	align?: Align;
+	/** What opens it: a view with `role="button"`. */
+	trigger: JSX.Element;
+	/** A `MenuTitle` and its `MenuItem`s. */
+	children?: JSX.Element;
+}) {
+	return (
+		<BaseMenu
+			open={props.open}
+			onOpenChange={(e) => props.onOpenChange(e.open)}
+			align={props.align}
+			offset={4}
+			popupClass={POPUP}
+			trigger={props.trigger}
+		>
+			{props.children}
+		</BaseMenu>
+	);
+}
+
+/** A `Menu`'s trigger: an icon framed like an icon-only `Action`. The label names it for screen readers. */
+export function MenuTrigger(props: {
+	icon: IconName;
+	accessibilityLabel: string;
+	/** A short name, shown as a tooltip. */
+	tooltip: string;
+	testID?: string;
+}) {
+	return (
+		<View
+			testID={props.testID}
+			role="button"
+			accessibilityLabel={props.accessibilityLabel}
+			tooltip={props.tooltip}
+			class={`min-h-8 min-w-8 items-center justify-center rounded-lg px-2 hover:bg-accent active:bg-accent ${FOCUS_RING}`}
+		>
+			<Icon name={props.icon} />
+		</View>
+	);
+}
+
+/** What a `Menu`'s commands act on, as a quiet line above them. */
+export function MenuTitle(props: { label: string }) {
+	return <Text class="px-2.5 pb-1 pt-1.5 text-xs text-faint">{props.label}</Text>;
+}
+
+/** One command of a `Menu`. Choosing it closes the menu. */
+export function MenuItem(props: { label: string; testID?: string; disabled?: boolean; onSelect: () => void }) {
+	return (
+		<BaseMenuItem
+			testID={props.testID}
+			disabled={props.disabled}
+			onSelect={props.onSelect}
+			class="rounded-lg px-2.5 py-1.5 hover:bg-accent focus:bg-accent disabled:opacity-50"
+		>
+			<Text class="text-sm text-popover-foreground">{props.label}</Text>
+		</BaseMenuItem>
+	);
+}

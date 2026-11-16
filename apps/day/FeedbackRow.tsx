@@ -8,7 +8,6 @@
 // as an unsent draft until the user sends it; it goes to that triage chat
 // once and only clarifies: it starts no fix and approves no proposal.
 import { type JSX, Text, View } from "nsh";
-import { Input, Toggle } from "nsh/base";
 import { openChat } from "./chatView";
 import type { Day } from "./day";
 import {
@@ -44,9 +43,8 @@ import {
 	stepMessages,
 } from "./feedbackView";
 import { keepField } from "./kept";
-import { glide } from "./motion";
 import { goalDraft, openNew } from "./planView";
-import { Action, Mark, Picker, RowLink } from "./ui";
+import { Action, glide, type Mark, MarkLine, Panel, Picker, PickMark, RowLink, TextField, ToggleRow } from "./ui";
 import { openMission } from "./view";
 
 /**
@@ -86,12 +84,9 @@ function Line(props: {
 }) {
 	return (
 		<View testID={props.testID} class="gap-1.5">
-			<View class="flex-row items-start gap-2.5">
-				<View class="pt-1.5">
-					<Mark kind={props.mark} />
-				</View>
-				<Text class="flex-1 text-sm leading-relaxed text-foreground">{props.text}</Text>
-			</View>
+			<MarkLine kind={props.mark}>
+				<Text class="text-sm leading-relaxed text-foreground">{props.text}</Text>
+			</MarkLine>
 			{props.children}
 		</View>
 	);
@@ -155,7 +150,7 @@ function Proposal(props: {
 		openNew();
 	};
 	return (
-		<View testID={`feedback-proposal-${props.item.id}`} class="gap-2.5 rounded-xl bg-muted px-4 py-3">
+		<Panel testID={`feedback-proposal-${props.item.id}`} class="gap-2.5">
 			<Text class="text-xs font-medium text-muted-foreground">{heading()}</Text>
 			<Text class="text-sm leading-relaxed text-foreground">{p().summary}</Text>
 			<View selectable>
@@ -170,7 +165,7 @@ function Proposal(props: {
 			<View class="flex-row flex-wrap items-center gap-2">
 				<If when={p().next === "existing-mission" && suggested()}>
 					<Action
-						outline
+						variant="outline"
 						label="Link to this mission"
 						testID={`feedback-link-suggested-${props.item.id}`}
 						disabled={props.busy}
@@ -182,7 +177,7 @@ function Proposal(props: {
 				</If>
 				<If when={p().next === "new-mission"}>
 					<Action
-						outline
+						variant="outline"
 						label="Plan a new mission"
 						testID={`feedback-plan-${props.item.id}`}
 						accessibilityLabel="Open New with the suggested goal. Nothing is created until you plan it there."
@@ -191,7 +186,7 @@ function Proposal(props: {
 				</If>
 				<If when={!fixed()}>
 					<Action
-						outline
+						variant="outline"
 						label="Start fix"
 						testID={`feedback-fix-${props.item.id}`}
 						disabled={props.busy || !project() || running(steps().fix)}
@@ -227,7 +222,7 @@ function Proposal(props: {
 					/>
 				</View>
 			</If>
-		</View>
+		</Panel>
 	);
 }
 
@@ -279,7 +274,7 @@ function Clarify(props: {
 	);
 	const options = () => q().options.map((o, n) => ({ ...o, n }));
 	return (
-		<View testID={`feedback-question-${props.item.id}`} class="gap-3 rounded-xl bg-muted px-4 py-3">
+		<Panel testID={`feedback-question-${props.item.id}`} class="gap-3">
 			<Text class="text-xs font-medium text-muted-foreground">The triage asks</Text>
 			<View selectable class="gap-1">
 				<Text class="text-sm leading-relaxed text-foreground">{q().question}</Text>
@@ -291,31 +286,16 @@ function Clarify(props: {
 				<View class="gap-0.5" accessibilityLabel="Suggested answers">
 					<Each of={options()} key={(o) => String(o.n)}>
 						{(o) => (
-							<Toggle
+							<ToggleRow
 								testID={`feedback-option-${props.item.id}-${o().n + 1}`}
 								pressed={draft().picks.includes(o().n)}
 								disabled={props.sending}
 								accessibilityLabel={o().suggested ? `${o().label}, suggested` : o().label}
 								onChange={() => pick(o().n)}
-								class="flex-row items-start gap-2.5 rounded-lg px-2 py-1.5 hover:bg-accent aria-pressed:bg-selection aria-pressed:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
+								indicator={
+									<PickMark shape={several() ? "checkbox" : "radio"} checked={draft().picks.includes(o().n)} />
+								}
 							>
-								<View
-									class="mt-1 size-3.5 items-center justify-center border"
-									classList={{
-										"rounded-full": !several(),
-										"rounded-sm": several(),
-										"border-primary": draft().picks.includes(o().n),
-										"border-input": !draft().picks.includes(o().n),
-									}}
-								>
-									<View
-										class="size-1.5"
-										classList={{
-											"rounded-full": !several(),
-											"bg-primary": draft().picks.includes(o().n),
-										}}
-									/>
-								</View>
 								<View class="min-w-0 flex-1 gap-0.5">
 									<View class="flex-row flex-wrap items-baseline gap-2">
 										<Text class="min-w-0 shrink text-sm text-foreground">{o().label}</Text>
@@ -327,12 +307,12 @@ function Clarify(props: {
 										<Text class="text-xs text-muted-foreground">{o().detail ?? ""}</Text>
 									</If>
 								</View>
-							</Toggle>
+							</ToggleRow>
 						)}
 					</Each>
 				</View>
 			</If>
-			<Input
+			<TextField
 				testID={`feedback-answer-${props.item.id}`}
 				ref={field.ref}
 				multiline
@@ -343,14 +323,14 @@ function Clarify(props: {
 				onChange={({ value }) => setAnswerDraft(key, { ...draft(), text: value })}
 				onFocus={field.focus}
 				onSelectionChange={field.select}
-				class="min-h-16 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
+				rows={2}
 			/>
 			<If when={tooLong()}>
 				<Text class="text-xs text-needs-ink">{`Too long. Keep it under ${MAX_ANSWER_LENGTH} characters.`}</Text>
 			</If>
 			<View class="flex-row flex-wrap items-center gap-3">
 				<Action
-					outline
+					variant="outline"
 					label={props.sending ? "Sending…" : "Send answer"}
 					testID={`feedback-answer-send-${props.item.id}`}
 					disabled={!canSend()}
@@ -361,7 +341,7 @@ function Clarify(props: {
 					Goes to this triage only. It starts no fix and approves nothing.
 				</Text>
 			</View>
-		</View>
+		</Panel>
 	);
 }
 

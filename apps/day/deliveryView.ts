@@ -17,7 +17,7 @@ import type {
 	VerificationSubject,
 } from "./deliveryFeed";
 import { deliveryKey, subjectOf, workOf } from "./deliveryFeed";
-import { glide } from "./motion";
+import { glide } from "./ui";
 
 /** The result open on its page, and the title Pilot knows for it. */
 export type DeliveryPlace = { key: string; subject: VerificationSubject; title: string };
