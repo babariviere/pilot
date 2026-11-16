@@ -218,8 +218,12 @@ export class ScriptedThreads implements ThreadsSource {
 	readonly unlinked = signal(false);
 	/** Whether your unanswered messages have an answer is not known. */
 	readonly replyUnknown = signal(false);
+	/** The service has not learned which turn answered your messages yet: every reply status is unknown. */
+	readonly linksUnknown = signal(false);
 	/** The turn that took your latest message ended without a reply. */
 	readonly turnEnded = signal(false);
+	/** Old saved words of the scope thread whose place Pilot cannot tell, as the service reports them. */
+	#unplaced: { operationId: string; text: string; timestamp: number }[] = [];
 	/** Page reads wait until releaseReads(). */
 	readonly holdReads = signal(false);
 	#held: (() => void)[] = [];
@@ -335,6 +339,7 @@ export class ScriptedThreads implements ThreadsSource {
 		const own = all.filter((e) => this.#belongs(topic, selected, e));
 		const reply = (e: DemoEntry): string => {
 			// Answered: a reply of the thread's follows it before your next message. Pilot knows only from the links.
+			if (this.linksUnknown()) return "unknown";
 			const next = own.filter((x) => x.id > e.id);
 			const stop = next.findIndex((x) => x.role === "you");
 			const until = stop < 0 ? next : next.slice(0, stop);
@@ -360,9 +365,12 @@ export class ScriptedThreads implements ThreadsSource {
 			more,
 			nextBefore: page[0]?.id ?? null,
 			conversation: {
-				queuedMessages: m.waiting
-					.filter((w) => w.topicId === topic.id)
-					.map((w) => ({ operationId: w.operationId, text: w.text, timestamp: null, replyState: "pending" })),
+				queuedMessages: [
+					...m.waiting
+						.filter((w) => w.topicId === topic.id)
+						.map((w) => ({ operationId: w.operationId, text: w.text, timestamp: null, replyState: "pending" })),
+					...(topic === m.topics[0] ? this.#unplaced.map((u) => ({ ...u, replyState: "unknown" })) : []),
+				],
 				entries: page
 					.filter((e) => this.#belongs(topic, selected, e))
 					.flatMap((e) =>
@@ -470,6 +478,31 @@ export class ScriptedThreads implements ThreadsSource {
 		for (let i = 0; i < PAGE; i++)
 			log?.push(entry(this.#next(m, COORDINATOR), Date.now(), "activity", `Tool call: read\n{"step":${i + 1}}`));
 		this.reply(missionId, text, [(m.topics[0] as Topic).id]);
+	}
+
+	/** Whether the service knows which turns answered your messages; a change reads the thread again. */
+	learnLinks(missionId: string, known: boolean) {
+		this.linksUnknown.set(!known);
+		this.#refresh(missionId);
+		this.#publish();
+	}
+
+	/** The service reports old saved words of the scope thread whose place it cannot tell. */
+	unplace(missionId: string) {
+		this.#unplaced = Array.from({ length: 6 }, (_, i) => ({
+			operationId: `op-old-${i}`,
+			text: `Old carried words ${i}. ${"These words were saved before Pilot kept their place. ".repeat(5)}`,
+			timestamp: at(2, 10, i),
+		}));
+		this.#refresh(missionId);
+		this.#publish();
+	}
+
+	/** Their places were learned in older history: the service stops reporting them. */
+	placeOld(missionId: string) {
+		this.#unplaced = [];
+		this.#refresh(missionId);
+		this.#publish();
 	}
 
 	/** Messages that waited for the coordinator are placed in its conversation, under their own operations. */

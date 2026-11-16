@@ -322,6 +322,49 @@ test("earlier messages keep the message on screen where it was; hiding the activ
 	expect(app.value("id:thread-reply")).toBe("Keep me");
 });
 
+test("a live update that removes old words and status lines above the screen keeps the message being read exactly in place", async () => {
+	const app = await open("./ThreadFixture.tsx", { platform: "macos", width: 1100, height: 1000 });
+	await app.press("id:mission-search");
+	await app.press("id:thread-search-scope");
+	await app.waitFor("id:message-s-coordinator:11");
+	// The service reports old words it cannot place, and does not know yet which turns answered your messages.
+	await app.press("Old words unplaced");
+	await app.waitFor("id:thread-unplaced");
+	await app.press("Reply links unknown");
+	await app.waitFor("id:message-reply-s-coordinator:11");
+	// Read on to the middle of the page, past the old words and a status line, away from the end.
+	await app.scroll("id:thread", 1000);
+	await app.wait(500);
+	const probe = async (n: number) => {
+		await app.press("Where");
+		await app.waitUntil(() => app.texts().some((t) => t.startsWith(`Anchor ${n}: `)));
+		const text = app.texts().find((t) => t.startsWith(`Anchor ${n}: `)) ?? "";
+		const [, key, top] = /^Anchor \d+: (\S+) (-?\d+)$/.exec(text) ?? [];
+		const scroll = Number(
+			app
+				.texts()
+				.find((t) => t.startsWith("Scroll: "))
+				?.slice(8),
+		);
+		return { key: key ?? "", top: Number(top), scroll };
+	};
+	const before = await probe(1);
+	expect(before.key).toBe("s-coordinator:15");
+	expect(before.top).toBeLessThan(0);
+	expect(before.scroll).toBeGreaterThan(0);
+	// Both learned live: the old words' places, and which turns answered. What sat above the reader goes away.
+	await app.press("Old words placed");
+	await app.press("Reply links learned");
+	await app.waitUntil(() => !app.shows("id:thread-unplaced") && !app.shows("id:message-reply-s-coordinator:11"));
+	await app.wait(500);
+	const after = await probe(2);
+	// The same message, at the same place in the viewport; the page scrolled back by what went away.
+	expect(after.key).toBe(before.key);
+	expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(1);
+	expect(after.scroll).toBeLessThan(before.scroll);
+	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
+});
+
 test("Send sends the exact words once; the service's acceptance is not the coordinator's answer", async () => {
 	const app = await thread();
 	await app.type("id:thread-reply", "  What about zip files? 日本語\n");

@@ -523,4 +523,15 @@ test("legacy user words survive lost carrier links while the chat keeps its exis
 		[],
 		"a placed batch also suppresses its sends even when the carrier page was not read",
 	);
+	t.mock.method(f.sessions, "inputCausality", async (sessionId: string) =>
+		sessionId === "chat-1"
+			? [{ requestId: legacy.operationId, entryId: Number(input.id), status: "placed" as const }]
+			: [],
+	);
+	const migratedPage = await f.threads.history(f.project.id, f.missionId, f.topicId);
+	assert.deepEqual(
+		migratedPage.conversation.queuedMessages,
+		[],
+		"migration's exact chat placement also suppresses an old receipt without a chat binding",
+	);
 });

@@ -5,13 +5,17 @@
 // conversation and activity reads, "Open a gone thread" opens one no read
 // has, "Coordinator replies" writes an answer linked to the scope thread
 // (… "elsewhere" to the release thread, "Coordinator works" to none),
-// "Hold reads" keeps page reads waiting until "Release reads", and "Save and
-// reopen" keeps the window as a close or an update saves it and shows it again fresh.
+// "Hold reads" keeps page reads waiting until "Release reads", "Old words …"
+// and "Reply links …" change what the service reports above the reader, "Where"
+// says the scroll offset and where the message being read sits in the
+// viewport, and "Save and reopen" keeps the window as a close or an update
+// saves it and shows it again fresh.
 import { mount, signal, Text, View } from "nsh";
 import { ScriptedDelivery } from "./deliveryDemo";
 import { mirrorDelivery } from "./deliveryFeed";
 import { scrollOf } from "./kept";
 import { MockDayScreen, openDay } from "./mockFeeds";
+import { readingProbe } from "./ThreadScreen";
 import { ScriptedThreads, type ThreadsDemoNext } from "./threadDemo";
 import { mirrorThreads } from "./threadFeed";
 import { openThread } from "./threadView";
@@ -28,6 +32,10 @@ const kept = signal("");
 
 /** The scope thread's kept scroll offset, as its page last reported it. */
 const where = signal("");
+
+/** The message the thread keeps in place and its distance from the viewport's top. */
+const anchor = signal("");
+let probes = 0;
 
 mount(() => (
 	<View class="flex-1">
@@ -68,11 +76,22 @@ mount(() => (
 				onPress={() => threads.busy("search", "Markdown export is ready to review.")}
 			/>
 			<Action label="Place waiting" onPress={() => threads.placeWaiting("search")} />
+			<Action label="Old words unplaced" onPress={() => threads.unplace("search")} />
+			<Action label="Old words placed" onPress={() => threads.placeOld("search")} />
+			<Action label="Reply links unknown" onPress={() => threads.learnLinks("search", false)} />
+			<Action label="Reply links learned" onPress={() => threads.learnLinks("search", true)} />
 			<Action
 				label="Where"
-				onPress={() => where.set(`Scroll: ${Math.round(scrollOf("thread/search/search-scope"))}`)}
+				onPress={() => {
+					where.set(`Scroll: ${Math.round(scrollOf("thread/search/search-scope"))}`);
+					const n = ++probes;
+					void readingProbe().then((p) =>
+						anchor.set(p ? `Anchor ${n}: ${p.key} ${Math.round(p.top)}` : `Anchor ${n}: none`),
+					);
+				}}
 			/>
 			<Text testID="where">{where()}</Text>
+			<Text testID="anchor">{anchor()}</Text>
 			<Action label="Pages fail" onPress={() => threads.pagesFail.set(true)} />
 			<Action label="Pages work" onPress={() => threads.pagesFail.set(false)} />
 			<Action label="Unlinked replies" onPress={() => threads.unlinked.set(true)} />

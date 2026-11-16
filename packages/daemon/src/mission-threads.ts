@@ -222,7 +222,8 @@ export class MissionThreads {
 				...[...carriers].filter(([, ids]) => ids.some((i) => legacyIds.has(i))).map(([id]) => id),
 			]),
 		];
-		const placed = new Set<string>();
+		// Migration can place an old send in this chat without changing its old accepted receipt.
+		const placed = new Set(causality.flatMap((link) => (link.entryId && link.requestId ? [link.requestId] : [])));
 		if (legacyRequests.length) this.historyOwner(id, topic);
 		for (let start = 0; start < legacyRequests.length; start += 2048) {
 			const links = await this.deps.sessions.inputCausality(

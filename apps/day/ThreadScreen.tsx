@@ -804,30 +804,133 @@ function Activity(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 }
 
 /**
- * NSH's `<Scroll>` keeps its offset, not what shows: messages added above the viewport push the ones on screen
- * down (only a `List` has maintainVisibleContentPosition, and this page is not one). Around a change that adds
- * messages above `anchor`, this measures the anchor before and after and scrolls by the difference, so what was on
- * screen stays put. Content added below the viewport moves nothing and is left alone.
+ * NSH's `<Scroll>` keeps its offset, not what shows: content that grows or shrinks above the viewport moves the
+ * messages on screen (only a `List` has maintainVisibleContentPosition, and this page is a `Scroll`). ReadingPlace
+ * keeps the message being read still. When scrolling rests, it notes the message intersecting the viewport's top
+ * (or the next one below it) and where it is, with a binary search over the messages in order (a few
+ * measures). When the threads' state changes (a page, a live read, a status that goes away), it measures that one
+ * message again and scrolls by how far it moved. It measures nothing per frame or per scroll event, and leaves the
+ * page alone while the user scrolls. Activity entries are not anchors: content that changes above the viewport
+ * inside the activity can still move it.
  */
-async function keepInView(
-	scroller: ScrollRef | null,
-	scrollY: () => number,
-	anchor: ViewRef | undefined,
-	change: () => Promise<void>,
-): Promise<void> {
-	const before = anchor ? await anchor.measure() : null;
-	const frame = scroller ? await scroller.measure() : null;
-	await change();
-	if (!scroller || !anchor || !before || !frame) return;
-	if (before.pagePosition.y > frame.pagePosition.y + frame.bounds.size.height) return;
-	const after = await anchor.measure();
-	if (!after) return;
-	const moved = after.pagePosition.y - before.pagePosition.y;
-	if (moved !== 0) scroller.scrollTo({ y: Math.max(0, scrollY() + moved), animated: false });
+class ReadingPlace {
+	#refs = new Map<string, ViewRef>();
+	#scroller: () => ScrollRef | null;
+	#scrollY: () => number;
+	#order: () => string[];
+	/** Position relative to the viewport, not window chrome that can move. */
+	#anchor: { key: string; y: number } | null = null;
+	/** The user scrolled and the page has not rested since. */
+	#moving = false;
+	/** Where this put the page, until the scroll view reports it. */
+	#placed: number | null = null;
+	#rest: ReturnType<typeof setTimeout> | undefined;
+	#turn = 0;
+
+	constructor(scroller: () => ScrollRef | null, scrollY: () => number, order: () => string[]) {
+		this.#scroller = scroller;
+		this.#scrollY = scrollY;
+		this.#order = order;
+	}
+
+	/** The ref handler of message `key`. */
+	ref(key: string): (node: ViewRef | null) => void {
+		return (node) => {
+			if (node) this.#refs.set(key, node);
+			else this.#refs.delete(key);
+		};
+	}
+
+	/** The scroll view reported `y`. A scroll this made is not the user's. */
+	scrolled(y: number) {
+		if (this.#placed !== null && Math.abs(y - this.#placed) < 1) {
+			this.#placed = null;
+			return;
+		}
+		this.#placed = null;
+		this.#moving = true;
+		this.#turn++;
+		clearTimeout(this.#rest);
+		this.#rest = setTimeout(() => void this.#note(), 150);
+	}
+
+	/** The threads' state changed: puts the noted message back where it was, once laid out. */
+	async changed() {
+		const a = this.#anchor;
+		const scroller = this.#scroller();
+		if (this.#moving || !scroller) return;
+		if (!a) return this.#note();
+		const turn = ++this.#turn;
+		const [now, frame] = await Promise.all([this.#refs.get(a.key)?.measure(), scroller.measure()]);
+		if (turn !== this.#turn || this.#moving) return;
+		if (!now || !frame) return this.#note();
+		const moved = now.pagePosition.y - frame.pagePosition.y - a.y;
+		if (Math.abs(moved) < 1) return;
+		const y = Math.max(0, (this.#placed ?? this.#scrollY()) + moved);
+		this.#placed = y;
+		scroller.scrollTo({ y, animated: false });
+	}
+
+	/** Notes the message crossing the viewport's top, or the nearest message after it. */
+	async #note() {
+		const turn = ++this.#turn;
+		const scroller = this.#scroller();
+		const frame = scroller ? await scroller.measure() : null;
+		if (!frame || turn !== this.#turn) return;
+		const top = frame.pagePosition.y;
+		const keys = this.#order().filter((k) => this.#refs.has(k));
+		let below: { key: string; y: number } | null = null;
+		let above: { key: string; y: number; bottom: number } | null = null;
+		let lo = 0;
+		let hi = keys.length - 1;
+		while (lo <= hi) {
+			const mid = (lo + hi) >> 1;
+			const key = keys[mid] as string;
+			const at = await this.#refs.get(key)?.measure();
+			if (turn !== this.#turn) return;
+			if (!at) break;
+			if (at.pagePosition.y >= top) {
+				below = { key, y: at.pagePosition.y };
+				hi = mid - 1;
+			} else {
+				above = { key, y: at.pagePosition.y, bottom: at.pagePosition.y + at.bounds.size.height };
+				lo = mid + 1;
+			}
+		}
+		const found = above && above.bottom > top ? above : (below ?? above);
+		this.#anchor = found ? { key: found.key, y: found.y - top } : null;
+		this.#moving = false;
+	}
+
+	/** State can arrive before native layout. Recheck only the anchor when its layout finishes. */
+	laidOut(key: string) {
+		if (key === this.#anchor?.key) void this.changed();
+	}
+
+	dispose() {
+		clearTimeout(this.#rest);
+		this.#turn++;
+	}
+
+	/** Where the noted message is now, from the top of the viewport. Reads only. */
+	async probe(): Promise<{ key: string; top: number } | null> {
+		const a = this.#anchor;
+		const frame = await this.#scroller()?.measure();
+		const now = a ? await this.#refs.get(a.key)?.measure() : null;
+		return a && frame && now ? { key: a.key, top: now.pagePosition.y - frame.pagePosition.y } : null;
+	}
 }
 
-/** The page's scroll view, for keepInView. */
-type Place = { scroller: () => ScrollRef | null; scrollY: () => number };
+/** The reading place of the thread on screen, for probe(). */
+let shownPlace: ReadingPlace | null = null;
+
+/**
+ * For test fixtures: the message the thread on screen keeps in place and how far it is from the top of the
+ * viewport now, or null. Reads only; it measures two views once.
+ */
+export function readingProbe(): Promise<{ key: string; top: number } | null> {
+	return shownPlace ? shownPlace.probe() : Promise.resolve(null);
+}
 
 /** The activity, below the conversation on request. Opening it only reads; the draft and the conversation stay. */
 function ActivityToggle(props: { mirror: ThreadsMirror; missionId: string; topic: Topic; canLink: boolean }) {
@@ -1013,40 +1116,21 @@ function Conversation(props: {
 	missionId: string;
 	topic: Topic;
 	topics: Topic[];
-	place: Place;
+	place: ReadingPlace;
 }) {
 	const c = () => props.mirror.state().conversations[historyKey(props.missionId, props.topic.id)];
 	const now = Date.now();
-	// Plain refs, read only to keep the reading place: never shown.
-	const anchors = new Map<string, ViewRef>();
-	let gapMark: ViewRef | undefined;
-	const anchorOf = (key: string) => (node: ViewRef | null) => {
-		if (node) anchors.set(key, node);
-		else anchors.delete(key);
-	};
-	const earlier = () => {
-		const now = c();
-		if (!now) return;
-		// New messages go above this one: the first after the gap, or the first shown.
-		const below = now.gap
-			? now.gap.newer
-				? anchors.get(now.gap.newer)
-				: gapMark
-			: anchors.get(now.messages[0]?.key ?? "");
-		void keepInView(props.place.scroller(), props.place.scrollY, below, () =>
-			props.mirror.source.earlierMessages(props.missionId, props.topic.id),
-		);
-	};
+	// Any change of the threads' state may move what is above the viewport (a page, a placed or answered message,
+	// a new link). Start the check here; layout callbacks repeat it once native frames have changed.
+	effect(() => {
+		props.mirror.state();
+		void Promise.resolve().then(() => props.place.changed());
+	});
+	const earlier = () => void props.mirror.source.earlierMessages(props.missionId, props.topic.id);
 	const gapAt = (key: string) => c()?.gap?.newer === key;
 	function Gap() {
 		return (
-			<View
-				ref={(node) => {
-					gapMark = node;
-				}}
-				testID="thread-gap"
-				class="gap-2 border-y border-dashed border-border py-3"
-			>
+			<View testID="thread-gap" class="gap-2 border-y border-dashed border-border py-3">
 				<Text class="text-sm text-muted-foreground">
 					Pilot has not read the messages between these yet. Some may belong to this thread.
 				</Text>
@@ -1063,7 +1147,7 @@ function Conversation(props: {
 		);
 	}
 	return (
-		<View testID="thread-conversation" class="gap-6">
+		<View testID="thread-conversation" class="gap-6" onLayout={() => void props.place.changed()}>
 			<If when={c()?.reason}>
 				<View class="gap-2">
 					<MarkLine kind="unknown">
@@ -1121,7 +1205,7 @@ function Conversation(props: {
 								topics={props.topics}
 								message={m()}
 								now={now}
-								anchor={anchorOf(m().key)}
+								anchor={props.place.ref(m().key)}
 							/>
 						)}
 					</Each>
@@ -1142,7 +1226,7 @@ function Conversation(props: {
 			</If>
 			<Each of={c()?.messages ?? []} key={(m) => m.key}>
 				{(m) => (
-					<View class="gap-6">
+					<View class="gap-6" onLayout={() => props.place.laidOut(m().key)}>
 						<If when={gapAt(m().key)}>
 							<Gap />
 						</If>
@@ -1153,7 +1237,7 @@ function Conversation(props: {
 							topics={props.topics}
 							message={m()}
 							now={now}
-							anchor={anchorOf(m().key)}
+							anchor={props.place.ref(m().key)}
 						/>
 					</View>
 				)}
@@ -1170,7 +1254,7 @@ function Conversation(props: {
 						topics={props.topics}
 						message={m()}
 						now={now}
-						anchor={anchorOf(m().key)}
+						anchor={props.place.ref(m().key)}
 					/>
 				)}
 			</Each>
@@ -1399,6 +1483,17 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 	// A restored offset waits for the conversation it scrolled through.
 	let waiting = scroll.contentOffset.y > 0 ? scroll.contentOffset.y : null;
 	const scroller = signal<ScrollRef | null>(null);
+	const reading = new ReadingPlace(
+		() => scroller(),
+		() => scrollOf(place),
+		() =>
+			(mirror.state().conversations[historyKey(props.missionId, props.topicId)]?.messages ?? []).map((m) => m.key),
+	);
+	shownPlace = reading;
+	cleanup(() => {
+		if (shownPlace === reading) shownPlace = null;
+		reading.dispose();
+	});
 	effect(() => {
 		const node = scroller();
 		const c = mirror.state().conversations[historyKey(props.missionId, props.topicId)];
@@ -1414,7 +1509,9 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 			contentOffset={scroll.contentOffset}
 			scrollEventThrottle={100}
 			onScroll={(e) => {
-				if (waiting === null) scroll.onScroll(e);
+				if (waiting !== null) return;
+				scroll.onScroll(e);
+				reading.scrolled(e.offset.y);
 			}}
 		>
 			<Page testID="thread" gap={8}>
@@ -1496,7 +1593,7 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 									missionId={props.missionId}
 									topic={t()}
 									topics={m().snapshot?.topics ?? []}
-									place={{ scroller, scrollY: () => scrollOf(place) }}
+									place={reading}
 								/>
 								<HandoffNote topic={t()} />
 								<Unsettled
