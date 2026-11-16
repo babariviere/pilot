@@ -109,8 +109,12 @@ agreement, not a required step or build task. When a research question is ready,
 read-only research chat for it (at most two at a time). Pilot saves the chat's findings word for word as
 Knowledge linked to the mission, and the planner cites them. Research chats read `main`, change no files
 and create no tasks. Its linked artifact, findings and open questions stay
-with the mission. Findings are evidence, not your acceptance or permission to build. Interactive
-prototype execution remains unavailable; see [native planning](technical/day-mission-planning.md).
+with the mission. Findings are evidence, not your acceptance or permission to build. When a prototype
+question is ready, Pilot starts one read-only prototype chat for it, with the model the planner chose. The
+chat publishes one NSH mock with the variants, and Pilot links it to the mission. The planner then asks
+you about it, and the round shows **The prototype**, which opens in the app's isolated preview. A chat
+stops at its question's time limit; its cost limit is shown, not enforced. See
+[mission prototypes](technical/mission-prototypes.md).
 When Pilot's planning agent has stopped while the plan is still open, **Continue planning** under its
 status asks it to pick up where it stopped. It answers, approves and starts nothing.
 **Unstick**, under the same status, says whether planning moves, waits for you or is stuck, lists what

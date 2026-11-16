@@ -9,6 +9,10 @@ export interface PlanPrototype {
 	smallestExperiment: string;
 	maxMinutes: number;
 	maxCostUsd: number;
+	/** The model of the chat that makes the prototype, chosen by the planner. Omitted: the project's task model. */
+	model?: string;
+	/** Its thinking level. Omitted: the model's default. */
+	thinking?: string;
 }
 export interface PlanPrototypeResult {
 	/** Exact input snapshot. Later map changes make this evidence stale, not deleted. */
@@ -163,6 +167,8 @@ export interface PlanMapItem {
 	fromFog: string | null;
 	sources: PlanMapSource[];
 	settledBy: PlanMapSource | null;
+	/** Prototype questions only: the limits its planner set, shown to the user. Cost is not enforced. */
+	limits?: { maxMinutes: number; maxCostUsd: number; model?: string };
 	/** Prototype questions only. Findings are evidence, never acceptance or build authority. */
 	evidence?: {
 		state: "missing" | "current" | "stale";

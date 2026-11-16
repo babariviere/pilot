@@ -17,6 +17,14 @@ test("question help: background, an answered question and waiting notes, capture
 	await app.screenshot("output/question-help-light.png");
 });
 
+test("the prototype a topic round asks about, opened as its saved source, captured", async () => {
+	const app = await open("./RoundPrototypeFixture.tsx", { platform: "macos", width: 900, height: 700 });
+	await app.press("id:artifact-card-/chat-proto/variants/3");
+	await app.waitFor("id:artifact-viewer");
+	await app.wait(400);
+	await app.screenshot("output/round-prototype-light.png");
+});
+
 test("Unstick with the repair agent's proposed note, captured", async () => {
 	const app = await open("./UnstickFixture.tsx", { platform: "macos", width: 900, height: 900 });
 	await app.press("id:unstick");

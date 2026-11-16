@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use crate::plan::{
     AnswerIntent, AskState, Choice, ContinueIntent, Delivery, Exploration, ExploreKind,
     ExploreState, FogArea, Interview, MapInfo, MapTask, OutcomeStatus, PlanIdentity, PlanPage,
-    PlanRoute, PlanRow, PlanStage, PlanWork, Proposal, PrototypeSupport, Question,
+    PlanRoute, PlanRow, PlanStage, PlanWork, Proposal, PrototypePin, PrototypeSupport, Question,
     QuestionAskIntent, QuestionSection, QuestionState, RoundAnswer, RoundKind, RoundLine,
     RoundState, Slice, SliceOwner, Spec, Step, StepState, Story, SubmitIntent, SubmitState,
 };
@@ -424,7 +424,34 @@ fn exploration(map: &Value, item: &Value) -> Exploration {
             .chain(by.is_object().then_some(by))
             .filter_map(changed)
             .collect(),
+        prototype: prototype_pin(&evidence["artifact"]),
+        prototype_current: evidence["state"] == "current",
+        limits: limits(&item["limits"]),
     }
+}
+
+/// The exact prototype revision a finding names, if it names one.
+fn prototype_pin(artifact: &Value) -> Option<PrototypePin> {
+    let revision = u32::try_from(artifact["revision"].as_u64()?).ok()?;
+    let pin = PrototypePin {
+        session_id: s(&artifact["sessionId"]),
+        artifact_id: s(&artifact["artifactId"]),
+        revision,
+    };
+    (!pin.session_id.is_empty() && !pin.artifact_id.is_empty() && revision > 0).then_some(pin)
+}
+
+/// "Up to 30 minutes and about $3, with faux/opus." The cost is shown, not enforced.
+fn limits(limits: &Value) -> String {
+    let Some(minutes) = limits["maxMinutes"].as_u64() else {
+        return String::new();
+    };
+    let cost = limits["maxCostUsd"].as_f64().unwrap_or(0.0);
+    let model = limits["model"]
+        .as_str()
+        .map(|m| format!(", with {m}"))
+        .unwrap_or_default();
+    format!("Up to {minutes} minutes and about ${cost}{model}.")
 }
 
 fn fog(map: &Value, f: &Value) -> FogArea {
@@ -738,8 +765,10 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
             .map(|item| exploration(&view["map"], item))
             .collect(),
         prototypes: PrototypeSupport {
-            available: false,
-            line: "Prototypes are not available yet. Pilot does not make or guess one.".into(),
+            available: true,
+            line:
+                "Pilot makes each prototype in a read-only chat. It is a mock, not the real screen."
+                    .into(),
         },
         fog: arr(&view["map"]["fog"])
             .iter()

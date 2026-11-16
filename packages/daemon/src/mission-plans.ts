@@ -27,6 +27,8 @@ interface Dependencies {
 	 * No actor label in a model request can satisfy this check. */
 	authorize(purpose: string, missionId: string, ownerSessionId: string): void;
 	validateRound?(questions: InterviewQuestion[]): void;
+	/** Checks a prototype's model and thinking level against the project's task models. Throws with the allowed ones. */
+	checkModel?(model: string, thinking?: string): Promise<void>;
 }
 const kinds = [
 	"plan-map",
@@ -334,10 +336,12 @@ export class MissionPlanReader {
 export class MissionPlans extends MissionPlanReader {
 	private readonly journal: OperationJournal;
 	private readonly validateRound?: Dependencies["validateRound"];
+	private readonly checkModel?: Dependencies["checkModel"];
 	constructor(deps: Dependencies) {
 		super(deps);
 		this.journal = deps.journal;
 		this.validateRound = deps.validateRound;
+		this.checkModel = deps.checkModel;
 	}
 	/**
 	 * `kept`: settled questions' sources already saved before this write (canonical JSON). They were checked
@@ -369,7 +373,16 @@ export class MissionPlans extends MissionPlanReader {
 			if (!["human", "research", "prototype"].includes(q.kind)) throw new Conflict("Invalid question type");
 			if (q.kind === "prototype") {
 				const p = q.prototype;
-				exact(p, ["context", "experimentType", "smallestExperiment", "maxMinutes", "maxCostUsd"]);
+				exact(p, [
+					"context",
+					"experimentType",
+					"smallestExperiment",
+					"maxMinutes",
+					"maxCostUsd",
+					...(["model", "thinking"] as const).filter((k) => !!p && Object.hasOwn(p, k)),
+				]);
+				if (p.model !== undefined) text(p.model, 256);
+				if (p.thinking !== undefined) text(p.thinking, 32);
 				text(p.context, 2000);
 				text(p.smallestExperiment, 2000);
 				if (
@@ -471,6 +484,14 @@ export class MissionPlans extends MissionPlanReader {
 				"plan-publish": [],
 			};
 			exact(request, ["purpose", "expectedRevision", ...keys[request.purpose]!]);
+			if (this.checkModel && (request.purpose === "plan-map" || request.purpose === "plan-promote"))
+				for (const q of Array.isArray(request.questions) ? request.questions : []) {
+					const p = (q as PlanQuestion).prototype;
+					if (typeof p?.model !== "string") continue;
+					await this.checkModel(p.model, typeof p.thinking === "string" ? p.thinking : undefined).catch((e: unknown) => {
+						throw new Conflict(`Prototype "${(q as PlanQuestion).id}": ${e instanceof Error ? e.message : String(e)}`);
+					});
+				}
 			const pin = this.context(op.targetId);
 			const check = () => {
 				this.deps.authorize(request.purpose, op.targetId, pin.owner);

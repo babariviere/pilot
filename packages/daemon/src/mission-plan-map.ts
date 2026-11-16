@@ -121,6 +121,15 @@ function item(input: PlanMapInput, plan: MissionPlan, q: PlanQuestion): PlanMapI
 		settledBy: settledBy(input, q),
 		...(q.kind === "prototype"
 			? {
+					...(q.prototype
+						? {
+								limits: {
+									maxMinutes: q.prototype.maxMinutes,
+									maxCostUsd: q.prototype.maxCostUsd,
+									...(q.prototype.model ? { model: q.prototype.model } : {}),
+								},
+							}
+						: {}),
 					evidence: {
 						state: input.evidence(q),
 						...(result

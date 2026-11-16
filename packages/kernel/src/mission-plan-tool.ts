@@ -52,6 +52,16 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 			smallestExperiment: Type.String(),
 			maxMinutes: Type.Integer({ minimum: 1, maximum: 480 }),
 			maxCostUsd: Type.Number({ minimum: 0, maximum: 10 }),
+			model: Type.Optional(
+				Type.String({
+					maxLength: 256,
+					description:
+						"Model of the chat that makes this prototype, chosen by you: a scoped provider/modelId within the task price cap. Pilot makes the prototype only once it is set. A refused save lists allowed models.",
+				}),
+			),
+			thinking: Type.Optional(
+				Type.String({ maxLength: 32, description: "Thinking level for that model. Omit for its default." }),
+			),
 		},
 		{ additionalProperties: false },
 	);

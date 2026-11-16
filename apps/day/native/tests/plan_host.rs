@@ -158,7 +158,10 @@ fn the_real_read_maps_with_backend_digests_and_honest_unavailable_steps() {
     let step = |label: &str| page.steps.iter().find(|s| s.label == label).unwrap().state;
     assert_eq!(step("Pilot continues planning"), StepState::Unavailable);
     assert_eq!(step("Work started"), StepState::Unavailable);
-    assert!(!page.prototypes.available);
+    assert!(
+        page.prototypes.available,
+        "Pilot makes prototypes in read-only chats"
+    );
     reply(host.close()).unwrap();
 }
 

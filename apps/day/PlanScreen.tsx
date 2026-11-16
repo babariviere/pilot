@@ -15,6 +15,7 @@ import type {
 	Step,
 	StepState,
 } from "pilot-day/native";
+import type { ArtifactSource } from "./artifactReads";
 import type { Day } from "./day";
 import { errorText, logEvent } from "./dayLog";
 import { ChartKey, chartState, ExpeditionChart, ExpeditionLog, FullChart, OPEN_CHART } from "./ExpeditionChart";
@@ -27,6 +28,7 @@ import { flush, unsavedCount } from "./planCommands";
 import type { Plans } from "./planning";
 import { fogOpen, mapOpen, put, roundOpen, settledOpen } from "./planView";
 import { RevisitSection } from "./RevisitDoc";
+import { RoundPrototype } from "./RoundPrototype";
 import { Unstick } from "./Unstick";
 import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
 
@@ -636,6 +638,8 @@ function Body(props: {
 	onOpenChart?: (button: ViewRef | undefined) => void;
 	/** A command beside the title, such as Read again. */
 	action?: JSX.Element;
+	/** Reads the prototype a topic round asks about. Absent in mock flows. */
+	artifacts?: ArtifactSource;
 }) {
 	const p = () => props.page;
 	const asking = () =>
@@ -699,6 +703,9 @@ function Body(props: {
 				<ContinuePlanning plans={props.plans} page={p()} />
 				<Unstick plans={props.plans} page={p()} />
 			</View>
+			<If when={asking() && props.artifacts}>
+				<RoundPrototype page={p()} source={props.artifacts as ArtifactSource} />
+			</If>
 			<If when={asking()}>
 				<Each of={asking() ? [asking() as NonNullable<PlanPage["interview"]>] : []} key={(iv) => iv.id}>
 					{(iv) => <InterviewDoc plans={props.plans} page={p()} interview={iv()} />}
@@ -838,6 +845,7 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 									}
 									onOpenTasks={inToday() ? toOverview : undefined}
 									onOpenChart={openChart}
+									artifacts={props.day?.artifacts as ArtifactSource | undefined}
 									action={readAgain()}
 								/>
 							)}

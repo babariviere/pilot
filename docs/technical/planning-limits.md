@@ -36,9 +36,12 @@ stopped at the old 40-question map limit.
 | Linked Knowledge in a read (`LINKED_KNOWLEDGE`) | 100 | Model tokens per read | About 300 bytes each (measured), about 30 KB in total; the page says when there are more | Raised from 40 |
 | Research chats at once | 2 | Worker slots and cost | Small; the mission worker cap also applies | Kept |
 | Research chats per question | 2 | Cost of weak findings | One retry | Kept |
+| Prototype chats at once | 1 | The user's attention: one prototype is reviewed at a time | One round asks about one prototype; the worker cap also applies | Added |
+| Prototype chats per question | 2 | Cost, and a loop with no progress | The same as research: one try, one after feedback | Added |
+| Prototype chat time | The question's `maxMinutes` (1 to 480) | Cost | Set by the planner for that experiment | Added: Pilot stops the chat and passes what it published |
+| Prototype cost | The question's `maxCostUsd` (0 to 10) | Spend | Set by the planner | Shown to the user, not enforced |
 | Research report read | 48,000 characters | Knowledge entry size (64 KiB revision) | Fits one entry | Kept |
 | Question asks kept | 60 | Planning worker record size | Not measured | Kept |
 | Question answer read | 6,000 characters | Card size | Not measured | Kept |
 | Repair reply read | 16,000 characters | Memory; the JSON block comes last | Not measured | Kept |
 | Recent operations for Diagnostics | 20 per mission, 50 missions, memory only | Memory | pilotd.log has the rest | Kept |
-

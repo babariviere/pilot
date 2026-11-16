@@ -87,6 +87,16 @@ export interface PlanningResearch {
 	attempts?: number;
 	/** The Knowledge entry Pilot saved the findings in, word for word, linked to the mission. */
 	knowledge?: { id: string; revision: number; synopsis: string };
+	/** "prototype": a prototype chat for a prototype question. Absent: research. */
+	kind?: "prototype";
+	/** When the prototype chat started, for its time limit. */
+	startedAt?: number;
+	/** Pilot stopped the prototype chat at its time limit. */
+	timedOut?: boolean;
+	/** The prototype the chat published, linked to the mission at this revision. */
+	artifact?: { sessionId: string; artifactId: string; revision: number };
+	/** The prototype of the attempt before, which the next chat starts from. */
+	earlier?: { sessionId: string; artifactId: string; revision: number };
 }
 interface Port {
 	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;

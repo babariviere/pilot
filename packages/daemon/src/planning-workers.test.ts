@@ -247,8 +247,13 @@ test("a submitted round is sent when a research chat joined the mission while th
 }, async (t) => {
 	const f = await heldFixture(t);
 	await answerAll(f);
-	// A research chat joins the mission while the round waits: nothing the user answered changed.
+	// A research chat joins the mission and a prototype is linked while the round waits: nothing the user answered changed.
 	f.store.join("research-chat", f.missionId);
+	f.store.linkArtifact(
+		f.missionId,
+		{ sessionId: "research-chat", artifactId: "variants", title: "Variants", kind: "nsh", revision: 1 },
+		{ sessionId: "research-chat" },
+	);
 	assert.equal((await submit(f)).receipt.state, "accepted");
 	await f.changed(
 		() =>

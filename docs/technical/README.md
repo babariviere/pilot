@@ -63,6 +63,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Focused mission discussion API and history](mission-threads.md)
 - [Authorized work continuation and current-policy source](mission-continuation.md)
 - [Mission Unstick: repair agent (plan)](mission-unstick-repair.md)
+- [Mission prototypes: prototype chats (plan)](mission-prototypes.md)
 - [Planning limits: what each protects and why](planning-limits.md)
 - [Mission Pause/Resume and versioned agent reports](mission-controls-reports.md)
 - [Mission results and failure visibility audit](day-results-visibility.md)

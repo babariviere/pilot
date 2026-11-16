@@ -443,6 +443,24 @@ pub struct Exploration {
     /// Cited records that changed or went away since Pilot mapped this, in words.
     /// Pilot updates the map; nothing here changes it.
     pub changed: Vec<String>,
+    /// For a prototype with a finding: the exact prototype Pilot linked, to open in the preview.
+    pub prototype: Option<PrototypePin>,
+    /// For a prototype: whether its finding still matches the map.
+    pub prototype_current: bool,
+    /// For a prototype: the limits its planner set, in words. Empty otherwise.
+    pub limits: String,
+}
+
+/// One saved prototype revision, linked to the mission. Opening it runs it only in the isolated preview.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrototypePin {
+    /// The chat that made it.
+    pub session_id: String,
+    /// The artifact.
+    pub artifact_id: String,
+    /// Its exact revision.
+    pub revision: u32,
 }
 
 /// An area that is not understood well enough for precise questions yet.

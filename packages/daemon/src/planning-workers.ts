@@ -19,6 +19,7 @@ import {
 	isPlanOperation,
 	LINKED_KNOWLEDGE,
 	MissionPlans,
+	planFrontier,
 	planQuestionDigest,
 	planResearchFrontier,
 } from "./mission-plans.ts";
@@ -90,6 +91,9 @@ const RESEARCH_ATTEMPTS = 2;
 const RESEARCH_BATCH = 3;
 /** Final answer characters sent to the planner per research chat. Broad research should be split instead. */
 const RESEARCH_REPORT_LIMIT = 48_000;
+/** Prototype chats a mission runs at once: the user reviews one prototype at a time. The worker cap also applies.
+ * Attempts per question are RESEARCH_ATTEMPTS, and each chat stops at its question's maxMinutes. */
+const PROTOTYPE_CHATS = 1;
 /** Chats answering the user's questions about interview questions at once, per mission. */
 const ASK_CHATS = 2;
 /** Questions kept per mission; the oldest finished ones go first. */
@@ -180,6 +184,33 @@ function researchMessage(missionTitle: string, q: PlanQuestion): string {
 	].join("\n\n");
 }
 
+function prototypeMessage(
+	missionTitle: string,
+	q: PlanQuestion,
+	earlier?: { sessionId: string; artifactId: string; revision: number },
+): string {
+	const p = q.prototype!;
+	return [
+		`Make one prototype for a planning question of the mission "${missionTitle}". This chat is read-only: it changes no project files.`,
+		`Question: ${q.title}`,
+		q.question,
+		`What to make (${p.experimentType === "ui" ? "UI" : "logic and state"}): ${p.smallestExperiment}`,
+		`Context: ${p.context}`,
+		`Limits: about ${p.maxMinutes} minutes and ${p.maxCostUsd}. Pilot stops this chat after ${p.maxMinutes} minutes and passes on what it published.`,
+		earlier
+			? `An earlier prototype for this question exists: artifact ${earlier.artifactId}, revision ${earlier.revision}, of chat ${earlier.sessionId}. mission({action:"map"}) and the latest interview answers say what the user wants changed. Start from it.`
+			: "",
+		'Read the bundled pilot-artifacts skill and its NSH guide first. mission({action:"map"}) shows the planning map. Use source tools to match the real app: its layout, words and density.',
+		p.experimentType === "ui"
+			? "Make several clearly different variants of the same screen, inside a realistic copy of the screen around it, switchable from a small bar. The user flips between them and picks one or combines parts."
+			: "Make the logic visible: the states, the events between them and a few scenarios the user can step through, with controls to drive them.",
+		"Publish exactly one NSH artifact with the artifact tool, with every variant in it. Use mock data that looks real and keep state in memory. No live data, credentials, network or real actions. To fix it, update the same artifact; do not create others.",
+		"End with a short report in Markdown: what each variant shows, what the user should compare, and what stays open. Do not decide for the user.",
+	]
+		.filter(Boolean)
+		.join("\n\n");
+}
+
 /** A short plain summary of a research report: the start of its findings, for the Knowledge synopsis. */
 export function researchSynopsis(report: string): string {
 	const at = report.search(/^#{1,6}\s+.*(finding|conclusion)/im);
@@ -208,6 +239,8 @@ export class PlanningWorkers {
 	private readonly repairChats = new Map<string, string>();
 	/** Missions whose submitted round is being sent to the planner now. */
 	private readonly continuing = new Set<string>();
+	/** Time-limit timers of running prototype chats, by chat. Cleared on close. */
+	private readonly prototypeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	/** Submitted rounds Pilot is sending by itself, or stopped trying because the map changed. */
 	private readonly resumeTried = new Set<string>();
 	private readonly recentOperations = new Map<
@@ -352,15 +385,21 @@ export class PlanningWorkers {
 		return state;
 	}
 	/** `round`: the fingerprint a held round keeps, without chats joining the mission (research, asks,
-	 * repair), and pause and resume. They change nothing the user answered; pause is checked at send time. */
+	 * repair), artifacts they link (prototypes), and pause and resume. They change nothing the user answered;
+	 * pause is checked at send time. */
 	private authority(binding: PlanningWorkerBinding, round = false): string {
 		this.scope(binding);
 		this.deps.sessions.assertPlanningOpen(binding.ownerSessionId);
 		const { store, sessions } = this.deps,
 			mission = store.require(binding.missionId),
 			control = store.controls.fenceCurrent(binding.missionId);
-		const { briefRevision: _brief, memberEventId, ...rest } = store.allocationContextFence(binding.missionId);
-		const context = round ? rest : { ...rest, memberEventId };
+		const {
+			briefRevision: _brief,
+			memberEventId,
+			artifactEventId,
+			...rest
+		} = store.allocationContextFence(binding.missionId);
+		const context = round ? rest : { ...rest, memberEventId, artifactEventId };
 		if (control.held) throw new Conflict("Mission planning is paused");
 		return hash({
 			binding,
@@ -417,13 +456,20 @@ export class PlanningWorkers {
 							: op.kind === "plan-continue" && JSON.parse(op.payload).note !== undefined
 								? `Pilot's repair agent looked at why planning stopped, and the user approved this note. Act on it, then continue planning: read mission_plan, and judge only by Pilot's answers. The note answers no question and approves nothing. Planning only: no build work or worker starts.\nNote: ${JSON.stringify(JSON.parse(op.payload).note)}`
 								: op.kind === "plan-continue"
-									? `The user asked you to continue planning. Read mission_plan for the current map and answers. Link human answers that settle map questions and save a new round only for real new human questions. Pilot starts read-only research chats for ready research questions and sends you their findings. ${this.refusalHint(state.binding.missionId)} Planning only: no build work or worker starts.`
+									? `The user asked you to continue planning. Read mission_plan for the current map and answers. Link human answers that settle map questions and save a new round only for real new human questions. Pilot starts read-only research chats for ready research questions and prototype chats for ready prototype questions, and sends you their results. ${this.modelHint(state.binding.missionId)}${this.refusalHint(state.binding.missionId)} Planning only: no build work or worker starts.`
 									: op.kind === "plan-research-result"
 										? this.researchContent(state, op)
 										: op.kind === "interview-continue"
 											? `Continue planning from this exact submitted interview. Answers are not build permission. Use the trusted native planning skills and records only.\n${canonicalJSON(submitted)}`
 											: `Plan this requested outcome using the trusted upstream skills. Read mission_plan, then publish the complete first saved round with action questions. Do not ask inside ask_user or start implementation.\n${state.goal}`,
 		};
+	}
+	/** For Continue planning: ready prototype questions that wait for the planner to choose their model. */
+	private modelHint(missionId: string): string {
+		const plan = this.deps.store.plans.get(missionId);
+		const waiting = plan ? planFrontier(plan).filter((q) => q.kind === "prototype" && !q.prototype?.model) : [];
+		if (!waiting.length) return "";
+		return `These prototype questions wait for you to choose the model of the chat that makes them: ${waiting.map((q) => JSON.stringify(q.id)).join(", ")}. Set prototype.model (and optional prototype.thinking) with plan-map; a refused save lists the allowed models. `;
 	}
 	/** For Continue planning: the last refused save's reason, so the planner changes it instead of resending it. */
 	private refusalHint(missionId: string): string {
@@ -432,18 +478,41 @@ export class PlanningWorkers {
 			return "A save Pilot refused before may be accepted now: try it again, and judge only by Pilot's answer, not by source code you read.";
 		return `Pilot refused your last ${refusal.kind} save: ${JSON.stringify(refusal.reason)}. Change the save so it fits that reason (for example merge or drop open questions); never resend it unchanged, and never drop settled questions. Judge only by Pilot's answer.`;
 	}
-	/** The saved findings of every research chat in one batch, as one planning input. */
+	/** The saved results of every research and prototype chat in one batch, as one planning input. */
 	private researchContent(state: PlanningWorkerState, op: DurableOperation): string {
 		const batch = Object.entries(state.research ?? {}).filter(([, r]) => r.operation?.operationId === op.operationId);
 		if (!batch.length || batch.some(([, r]) => !r.report)) throw new Error("Saved research findings required");
 		const questions = this.deps.store.plans.get(state.binding.missionId)?.questions ?? [];
+		const research = batch.filter(([, r]) => r.kind !== "prototype");
+		const prototypes = batch.filter(([, r]) => r.kind === "prototype");
 		return [
-			"Research chats finished for these map questions. They ran read-only.",
-			"Pilot saved each chat's final answer word for word as project Knowledge, linked to this mission. Read an entry with the knowledge tool when you need its detail; do not copy findings into new entries. For each: cite that Knowledge as the question source with plan-map, then resolve the question with kind knowledge.",
-			"Where a full report is included below instead, Pilot could not save it: record it as Knowledge yourself (create, then link to this mission), keeping its text as written.",
-			"If a question proved too broad for one chat, split it with plan-map into narrower research questions (one area each, keeping dependent questions linked) instead of retrying it. If the scope was right but findings are thin, say what is missing and unclaim it with plan-claim claimedBy null; Pilot then starts one more research chat for it. Planning only: no build work.",
+			...(research.length
+				? [
+						"Research chats finished for these map questions. They ran read-only.",
+						"Pilot saved each chat's final answer word for word as project Knowledge, linked to this mission. Read an entry with the knowledge tool when you need its detail; do not copy findings into new entries. For each: cite that Knowledge as the question source with plan-map, then resolve the question with kind knowledge.",
+						"Where a full report is included below instead, Pilot could not save it: record it as Knowledge yourself (create, then link to this mission), keeping its text as written.",
+						"If a question proved too broad for one chat, split it with plan-map into narrower research questions (one area each, keeping dependent questions linked) instead of retrying it. If the scope was right but findings are thin, say what is missing and unclaim it with plan-claim claimedBy null; Pilot then starts one more research chat for it. Planning only: no build work.",
+					]
+				: []),
+			...(prototypes.length
+				? [
+						"Prototype chats finished for these map questions. They ran read-only and published a mock, not production code.",
+						"For each prototype with an artifact: save plan-prototype-result with exactly that artifact pin, observations from the report and a verdict. Then ask the user about it with plan-ask (topicId = the question id), with clickable choices for the variants and free text. Pilot Day shows the prototype with that round. Settle the question only from the user's answer.",
+						"With no artifact or a weak prototype: unclaim once with plan-claim claimedBy null, saying what to change in the question; Pilot then starts one more prototype chat, which starts from the earlier prototype. After two, ask the user how to go on. Planning only: no build work.",
+					]
+				: []),
 			...batch.map(([id, r]) => {
 				const q = questions.find((x) => x.id === id);
+				if (r.kind === "prototype") {
+					const head = `# Prototype for map question "${id}"${q ? ` (${q.title})` : ""}, prototype chat ${r.sessionId}`;
+					const made = r.artifact
+						? `Artifact pin, linked to this mission: ${canonicalJSON(r.artifact)}`
+						: "The chat published no NSH artifact.";
+					const stopped = r.timedOut
+						? `\n\nPilot stopped the chat at its ${q?.prototype?.maxMinutes ?? "time"}-minute limit.`
+						: "";
+					return `${head}\n\n${made}${stopped}\n\nThe chat's report:\n\n${r.report}`;
+				}
 				const head = `# Map question "${id}"${q ? ` (${q.title})` : ""}, research chat ${r.sessionId}`;
 				return r.knowledge
 					? `${head}\n\nSaved as Knowledge ${r.knowledge.id}, revision ${r.knowledge.revision}. Synopsis: ${r.knowledge.synopsis}`
@@ -726,8 +795,31 @@ export class PlanningWorkers {
 			return result("stuck", "Pilot's planning stopped partway, and its agent is idle. Report it with Feedback.");
 		if (this.deps.store.plans.get(missionId)?.publication)
 			return result("waiting", "The plan is published. Use Revisit to change it.");
+		const plan = this.deps.store.plans.get(missionId);
+		const titleOf = (id: string) => plan?.questions.find((q) => q.id === id)?.title ?? id;
+		const prototyping = Object.entries(state.research ?? {}).find(
+			([, r]) => r.kind === "prototype" && (r.state === "starting" || r.state === "running"),
+		);
+		if (prototyping) return result("moving", `A prototype chat is working on "${titleOf(prototyping[0])}".`);
+		const ready =
+			plan &&
+			planFrontier(plan).find((q) => {
+				const prior = state.research?.[q.id];
+				return (
+					q.kind === "prototype" &&
+					!!q.prototype &&
+					(!prior || (["reported", "failed"].includes(prior.state) && (prior.attempts ?? 1) < RESEARCH_ATTEMPTS))
+				);
+			});
+		if (ready?.prototype?.model) return result("moving", `Pilot starts a prototype chat for "${ready.title}".`);
 		if (chats) return result("moving", "A chat is working for this mission.");
 		const canContinue = this.continueView(missionId).available;
+		if (ready)
+			return result(
+				"stuck",
+				`"${ready.title}" waits for the planning agent to choose the model that makes the prototype. Continue asks it to.`,
+				canContinue ? "continue" : null,
+			);
 		const refusal = this.deps.store.plans.refusal(missionId);
 		if (refusal) {
 			checks.push(`Last save refused: ${refusal.kind}`);
@@ -749,9 +841,23 @@ export class PlanningWorkers {
 				`Pilot's planning agent ${owner.outcome === "failed" ? "failed" : "was stopped"} and the plan is still open.`,
 				canContinue ? "continue" : null,
 			);
+		const spent = Object.entries(state.research ?? {}).find(
+			([id, r]) =>
+				r.kind === "prototype" &&
+				r.state === "reported" &&
+				(r.attempts ?? 1) >= RESEARCH_ATTEMPTS &&
+				!plan?.questions.find((q) => q.id === id)?.resolution,
+		);
+		if (spent)
+			return result(
+				"stuck",
+				`Pilot made ${RESEARCH_ATTEMPTS} prototypes for "${titleOf(spent[0])}". Continue asks the planning agent to ask you how to go on.`,
+				canContinue ? "continue" : null,
+			);
 		return result(
 			"stuck",
 			"Pilot's planning agent stopped while the plan is still open.",
+
 			canContinue ? "continue" : null,
 		);
 	}
@@ -1349,7 +1455,39 @@ export class PlanningWorkers {
 				state = this.changeResearch(state, questionId, { state: "failed", reason: "Research chat is gone" });
 				continue;
 			}
+			if (entry.kind === "prototype" && !entry.timedOut) {
+				const minutes = plan.questions.find((q) => q.id === questionId)?.prototype?.maxMinutes ?? 0;
+				const deadline = (entry.startedAt ?? Date.now()) + minutes * 60_000;
+				const busy = chat.working || (chat.state !== "idle" && chat.state !== "parked") || !chat.outcome;
+				if (busy && Date.now() >= deadline) {
+					state = this.changeResearch(state, questionId, { timedOut: true });
+					await this.deps.store.durable();
+					trace(
+						`pilotd: planning ${missionId} prototype chat for ${questionId} reached its ${minutes}-minute limit; stopping it`,
+					);
+					await this.deps.sessions.stop(entry.sessionId).catch((error: unknown) => {
+						console.warn(`pilotd: prototype chat ${entry.sessionId} not stopped: ${error}`);
+					});
+					continue;
+				}
+				if (busy) this.prototypeTimer(missionId, entry.sessionId, deadline);
+			}
 			if (chat.working || (chat.state !== "idle" && chat.state !== "parked") || !chat.outcome) continue;
+			if (entry.kind === "prototype") {
+				const reply = (await this.deps.sessions.lastAssistantReply(entry.sessionId, RESEARCH_REPORT_LIMIT)) ?? "";
+				const artifact = await this.linkPrototype(missionId, entry.sessionId).catch((error: unknown) => {
+					console.warn(`pilotd: prototype for ${questionId} not linked to the mission: ${error}`);
+					return undefined;
+				});
+				state = this.changeResearch(this.deps.store.planningWorkers.get(missionId)!, questionId, {
+					state: "reporting",
+					report: reply.trim() || `The prototype chat ended (${chat.outcome}) without a report.`,
+					...(artifact ? { artifact } : {}),
+				});
+				await this.deps.store.durable();
+				continue;
+			}
+
 			const report =
 				chat.outcome === "done"
 					? ((await this.deps.sessions.lastAssistantReply(entry.sessionId, RESEARCH_REPORT_LIMIT)) ?? "")
@@ -1420,66 +1558,135 @@ export class PlanningWorkers {
 		}
 		if (plannerBusy || plan.review) return; // Never join members while the planner works or a review is open.
 		if (Date.now() < (this.research?.retryAt.get(missionId) ?? 0)) return;
-		let active = Object.values(state.research ?? {}).filter(
-			(r) => r.state === "starting" || r.state === "running",
-		).length;
+		const working = (kind?: "prototype") =>
+			Object.values(this.deps.store.planningWorkers.get(missionId)?.research ?? {}).filter(
+				(r) => r.kind === kind && (r.state === "starting" || r.state === "running"),
+			).length;
+		// The planner chooses each prototype's model; a question without one waits for it (Unstick and Continue say so).
+		for (const q of planFrontier(plan).filter((x) => x.kind === "prototype" && x.prototype?.model)) {
+			if (working("prototype") >= PROTOTYPE_CHATS) break;
+			const prior = state.research?.[q.id];
+			if (prior && !(["reported", "failed"].includes(prior.state) && (prior.attempts ?? 1) < RESEARCH_ATTEMPTS))
+				continue;
+			if (!(await this.startExplorer(state, missionId, q, "prototype"))) return;
+			state = this.deps.store.planningWorkers.get(missionId)!;
+		}
+		let active = working();
 		for (const q of planResearchFrontier(plan)) {
 			if (active >= RESEARCH_CHATS) return;
 			// A question unclaimed after weak findings gets one more research chat, never more.
 			const prior = state.research?.[q.id];
 			if (prior && !(["reported", "failed"].includes(prior.state) && (prior.attempts ?? 1) < RESEARCH_ATTEMPTS))
 				continue;
-			state = this.changeResearch(state, q.id, {
-				questionDigest: planQuestionDigest(q),
-				state: "starting",
-				sessionId: null,
-				attempts: (prior?.attempts ?? 1) + (prior ? 1 : 0),
-				operation: undefined,
-				report: undefined,
-				reason: undefined,
-			});
-			await this.deps.store.durable();
-			let sessionId: string;
-			try {
-				const project = this.deps.projects.require(state.binding.projectId);
-				const selection = await this.deps.sessions.selectTaskModel(project.path);
-				this.authority(state.binding);
-				const mission = this.deps.store.require(missionId);
-				const chat = await this.deps.sessions.spawn(
-					{
-						projectId: state.binding.projectId,
-						missionId,
-						mode: "ask",
-						title: `Research: ${q.title}`.slice(0, 200),
-						message: researchMessage(mission.title, q),
-						...selection,
-					},
-					false,
-					undefined,
-					{ role: "explorer", actorSessionId: state.binding.ownerSessionId, mainView: true },
-				);
-				sessionId = chat.id;
-			} catch (error) {
-				// No slot, paused or held: forget this start and try again later, never in a tight loop.
-				const current = this.deps.store.planningWorkers.get(missionId)!;
-				this.deps.store.planningWorkers.change(missionId, current.revision, (s) => {
-					delete s.research?.[q.id];
-				});
-				await this.deps.store.durable();
-				this.research?.retryAt.set(missionId, Date.now() + RESEARCH_RETRY_MS);
-				console.warn(`pilotd: research chat for ${q.id} not started: ${error}`);
-				return;
-			}
-			state = this.changeResearch(this.deps.store.planningWorkers.get(missionId)!, q.id, {
-				state: "running",
-				sessionId,
-			});
+			if (!(await this.startExplorer(state, missionId, q))) return;
 			active++;
-			await this.deps.store.durable();
-			await this.claimResearch(state, q.id, sessionId);
 			state = this.deps.store.planningWorkers.get(missionId)!;
 		}
 	}
+	/**
+	 * Starts a research or prototype chat for map question `q` and claims the question for it. False when Pilot
+	 * could not start it (no slot, paused or held): it tries again later, never in a tight loop.
+	 */
+	private async startExplorer(
+		state: PlanningWorkerState,
+		missionId: string,
+		q: PlanQuestion,
+		kind?: "prototype",
+	): Promise<boolean> {
+		const prior = state.research?.[q.id];
+		const earlier = prior?.artifact ?? prior?.earlier;
+		state = this.changeResearch(state, q.id, {
+			questionDigest: planQuestionDigest(q),
+			state: "starting",
+			sessionId: null,
+			attempts: (prior?.attempts ?? 1) + (prior ? 1 : 0),
+			operation: undefined,
+			report: undefined,
+			reason: undefined,
+			kind,
+			startedAt: undefined,
+			timedOut: undefined,
+			artifact: undefined,
+			earlier: kind ? earlier : undefined,
+		});
+		await this.deps.store.durable();
+		let sessionId: string;
+		try {
+			const project = this.deps.projects.require(state.binding.projectId);
+			const p = kind ? q.prototype! : undefined;
+			// A prototype uses the model its planner chose; research uses the project's task model.
+			const selection = await this.deps.sessions.selectTaskModel(project.path, p?.model, p?.thinking);
+			this.authority(state.binding);
+			const mission = this.deps.store.require(missionId);
+			const chat = await this.deps.sessions.spawn(
+				{
+					projectId: state.binding.projectId,
+					missionId,
+					mode: "ask",
+					title: (p
+						? `Prototype: ${q.title} (up to ${p.maxMinutes} min, $${p.maxCostUsd})`
+						: `Research: ${q.title}`
+					).slice(0, 200),
+					message: p ? prototypeMessage(mission.title, q, earlier) : researchMessage(mission.title, q),
+					...selection,
+				},
+				false,
+				undefined,
+				{ role: "explorer", actorSessionId: state.binding.ownerSessionId, mainView: true },
+			);
+			sessionId = chat.id;
+		} catch (error) {
+			// No slot, paused or held: forget this start and try again later, never in a tight loop.
+			const current = this.deps.store.planningWorkers.get(missionId)!;
+			this.deps.store.planningWorkers.change(missionId, current.revision, (s) => {
+				if (prior) s.research![q.id] = prior;
+				else delete s.research?.[q.id];
+			});
+			await this.deps.store.durable();
+			this.research?.retryAt.set(missionId, Date.now() + RESEARCH_RETRY_MS);
+			console.warn(`pilotd: ${kind ?? "research"} chat for ${q.id} not started: ${error}`);
+			return false;
+		}
+		state = this.changeResearch(this.deps.store.planningWorkers.get(missionId)!, q.id, {
+			state: "running",
+			sessionId,
+			...(kind ? { startedAt: Date.now() } : {}),
+		});
+		await this.deps.store.durable();
+		await this.claimResearch(state, q.id, sessionId);
+		return true;
+	}
+	/** Links the newest NSH artifact a prototype chat published to the mission, at its current revision. */
+	private async linkPrototype(
+		missionId: string,
+		sessionId: string,
+	): Promise<{ sessionId: string; artifactId: string; revision: number } | undefined> {
+		const newest = (await this.deps.sessions.artifacts(sessionId))
+			.filter((a) => a.kind === "nsh")
+			.sort((a, b) => b.updatedAt - a.updatedAt)[0];
+		if (!newest) return undefined;
+		this.deps.store.linkArtifact(
+			missionId,
+			{ sessionId, artifactId: newest.id, title: newest.title, kind: newest.kind, revision: newest.revision },
+			{ sessionId },
+		);
+		await this.deps.store.durable();
+		return { sessionId, artifactId: newest.id, revision: newest.revision };
+	}
+	/** Wakes the mission's reconcile when a running prototype chat reaches its time limit. */
+	private prototypeTimer(missionId: string, sessionId: string, deadline: number): void {
+		if (this.prototypeTimers.has(sessionId) || this.closing.signal.aborted) return;
+		const timer = setTimeout(
+			() => {
+				this.prototypeTimers.delete(sessionId);
+				this.scheduleResearch(missionId);
+			},
+			Math.max(0, deadline - Date.now()) + 1000,
+		);
+		timer.unref?.();
+		this.prototypeTimers.set(sessionId, timer);
+	}
+
 	/** Marks the question as worked on by its research chat, so nobody else researches it too. */
 	private async claimResearch(state: PlanningWorkerState, questionId: string, sessionId: string): Promise<void> {
 		const plan = this.deps.store.plans.get(state.binding.missionId);
@@ -1577,6 +1784,13 @@ export class PlanningWorkers {
 			...this.deps,
 			authorize: guard,
 			validateRound: (questions) => this.deps.store.interviews.assertNewQuestions(binding.missionId, questions),
+			checkModel: async (model, thinking) => {
+				await this.deps.sessions.selectTaskModel(
+					this.deps.projects.require(binding.projectId).path,
+					model,
+					thinking,
+				);
+			},
 		});
 		const interviews = new MissionInterviews({
 			...this.deps,
@@ -2240,6 +2454,8 @@ export class PlanningWorkers {
 		if (this.closed) return this.closed;
 		this.closing.abort(new Error("Planning worker host is closing"));
 		this.research?.off();
+		for (const timer of this.prototypeTimers.values()) clearTimeout(timer);
+		this.prototypeTimers.clear();
 		this.closed = Promise.allSettled([...this.tasks, ...this.admissions.values()]).then(() => {
 			this.detach();
 			this.offSettled();

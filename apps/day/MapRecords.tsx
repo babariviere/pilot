@@ -91,6 +91,9 @@ export function ItemRecord(props: { plans: Plans; page: PlanPage; item: Explorat
 			<If when={e().evidence}>
 				<Text class="text-sm text-foreground">{e().evidence}</Text>
 			</If>
+			<If when={e().limits}>
+				<Text class="text-xs text-faint">{`Prototype limits: ${e().limits}`}</Text>
+			</If>
 			<Detail title="What the prototype showed" lines={e().observations} />
 			<Detail title="What it left open" lines={e().unresolved} />
 			<If when={round()}>

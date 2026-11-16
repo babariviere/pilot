@@ -169,7 +169,9 @@ bound is 1–480 minutes; the cost bound is $0–$10. These are declared experim
 spend service or permission to start work. Fog promotion accepts the same question input, atomically
 keeps its source fog/history and adds no build task. Research-only dispatchers must use
 `planResearchFrontier`, which filters the mixed frontier to `kind === "research"`. Prototype claims
-are record ownership only, never worker admission. Automatic prototype execution is not implemented.
+are record ownership only, never worker admission. Pilot makes each ready prototype in a read-only
+prototype chat with the model its planner chose (`prototype.model`, checked when the map is saved); see
+[mission prototypes](mission-prototypes.md).
 
 `MissionPlans.view` and the authenticated native planning read share the canonical records. Open
 `exploration` rows expose `needs-prototype`, `ready`, `questionDigest`, `contextDigest` and

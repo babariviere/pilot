@@ -266,6 +266,11 @@ export function ArtifactShelf(props: {
 	);
 }
 
+/** Exact pinned revisions as cards, such as the prototype a round asks about. Nothing is read until one opens. */
+export function PinnedArtifacts(props: { source: ArtifactSource; shelf: Shelf; rows: ArtifactRow[] }) {
+	return <Grid source={props.source} shelf={props.shelf} rows={props.rows} inMission={true} />;
+}
+
 /** A mission's Artifacts section: what its agents linked, by task. */
 export function MissionArtifacts(props: { source: ArtifactSource; shelf: Shelf; missionId: string }) {
 	return (
