@@ -172,29 +172,47 @@ test("a prototype chat stops at its time limit and passes what it published", as
 	assert.match(f.inputs[0]!.content, /"artifactId":"variants"/);
 });
 
-test("an unclaimed prototype gets one more chat that starts from the earlier prototype, never a third", async (t) => {
+test("a prototype is made again only when the planner changes its question, never a third time", async (t) => {
 	const f = await prototypes(t, [prototype("p1")]);
 	f.workers.startResearch();
 	await f.workers.settleResearch();
 	f.publish("chat-1", "variants", 2);
 	await f.finish("chat-1");
 	assert.equal(f.inputs.length, 1);
-	const unclaim = () =>
+	// Saving the result releases the question; an unchanged question gets no second prototype.
+	await f.plan({
+		purpose: "plan-claim",
+		expectedRevision: f.store.plans.get(f.missionId)!.revision,
+		questionId: "p1",
+		claimedBy: null,
+	} as { purpose: string });
+	await f.settle();
+	assert.equal(f.spawned.length, 1, "a released, unchanged question is not made again");
+	const change = (what: string) =>
 		f.plan({
-			purpose: "plan-claim",
+			purpose: "plan-map",
 			expectedRevision: f.store.plans.get(f.missionId)!.revision,
-			questionId: "p1",
-			claimedBy: null,
+			destination: "Today",
+			sources: [],
+			questions: [prototype("p1", { smallestExperiment: what })],
+			fog: [],
 		} as { purpose: string });
-	await unclaim();
+	await change("Variant B with a larger error banner");
 	await f.settle();
 	assert.equal(f.spawned.length, 2);
 	assert.match(
 		f.spawned[1]!.message,
 		/An earlier prototype for this question exists: artifact variants, revision 2, of chat chat-1/,
 	);
+	assert.match(f.spawned[1]!.message, /Variant B with a larger error banner/);
 	await f.finish("chat-2");
-	await unclaim();
+	await f.plan({
+		purpose: "plan-claim",
+		expectedRevision: f.store.plans.get(f.missionId)!.revision,
+		questionId: "p1",
+		claimedBy: null,
+	} as { purpose: string });
+	await change("Again");
 	await f.settle();
 	assert.equal(f.spawned.length, 2, "at most two prototype chats per question");
 	assert.match(f.workers.unstickView(f.missionId).line, /Pilot made 2 prototypes for "Prototype p1"/);

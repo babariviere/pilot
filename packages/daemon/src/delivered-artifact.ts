@@ -9,7 +9,6 @@ import type {
 	ProjectArtifactRequest,
 	SavedArtifactContent,
 } from "@pilot/protocol";
-import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, OperationRejected } from "./operation-journal.ts";
@@ -43,7 +42,9 @@ async function capture(
 
 /**
  * The inert answer for one captured container: its text, or why it is held back.
- * Images never carry bytes; oversize and possible secrets are never cut or shown.
+ * Images never carry bytes; oversize is never cut. Source holding one of Pilot's own secrets (such as the app
+ * capability) is held back. The log redactor is not used here: it flags ordinary code such as an NSH
+ * `key={…}`, and the same source is readable in the chat that wrote it.
  */
 function describe(
 	a: Stored["artifact"],
@@ -55,11 +56,7 @@ function describe(
 	if (a.kind === "image") return { metadata, content: { state: "unavailable", reason: "unsupported" } };
 	if (Buffer.byteLength(a.source) > 512 * 1024)
 		return { metadata, content: { state: "unavailable", reason: "oversize" } };
-	if (
-		redactDiagnosticText(a.source) !== a.source ||
-		title !== a.title ||
-		knownSecrets.some((s) => s && (a.source.includes(s) || a.title.includes(s)))
-	)
+	if (title !== a.title || knownSecrets.some((s) => s && (a.source.includes(s) || a.title.includes(s))))
 		return { metadata: { ...metadata, title: "Artifact" }, content: { state: "unavailable", reason: "redacted" } };
 	return {
 		metadata,
@@ -102,8 +99,7 @@ export class DeliveredArtifacts {
 		)
 			throw new OperationRejected("Exact delivered artifact pin required");
 		const { store, sessions, projects, verifications } = this.deps;
-		const safeTitle = (title: string) =>
-			knownSecrets.some((s) => s && title.includes(s)) ? "Artifact" : redactDiagnosticText(title);
+		const safeTitle = (title: string) => (knownSecrets.some((s) => s && title.includes(s)) ? "Artifact" : title);
 		const observe = () => {
 			const page = verifications.readNow(r.subject);
 			if (
@@ -186,8 +182,7 @@ export class DeliveredArtifacts {
 		)
 			throw new OperationRejected("Exact project artifact revision required");
 		const { sessions, projects } = this.deps;
-		const safeTitle = (title: string) =>
-			knownSecrets.some((s) => s && title.includes(s)) ? "Artifact" : redactDiagnosticText(title);
+		const safeTitle = (title: string) => (knownSecrets.some((s) => s && title.includes(s)) ? "Artifact" : title);
 		const observe = async () => {
 			projects.require(r.projectId);
 			if (sessions.get(r.sourceSessionId)?.projectId !== r.projectId)

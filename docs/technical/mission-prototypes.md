@@ -53,8 +53,8 @@ build. The user's feedback, in the interview, is what settles the question.
 4. The planner asks about it in an interview round. Above the questions, **The prototype** shows its card. The prototype
    opens below the question, in the isolated preview, and the user switches between the variants.
 5. The user answers (picks a variant, combines parts, or asks for changes) and submits as usual.
-6. If the user asks for changes, the planner can unclaim the question. Pilot then starts one more prototype chat,
-   which reads the earlier prototype and the feedback.
+6. If the user asks for changes, the planner edits the question to say what to change. Pilot then starts one more
+   prototype chat, which starts from the earlier prototype.
 
 ## Daemon
 
@@ -64,7 +64,10 @@ Add prototypes to `reconcileResearch`, beside research. Keep the same records (`
 by question ID) and add `kind: "prototype"`, so restart, claims and failures behave the same.
 
 - **Starts:** a ready, unclaimed `kind: "prototype"` question on the frontier, when the planner is not working
-  and no review is open (the same conditions as research).
+  and no review is open (the same conditions as research). Never while the user answers the round about it.
+  Again only when its last chat failed or the planner changed the question since (`prototypeDue`): saving a
+  prototype's result releases the question, so "unclaimed" alone never means "make another". This rule came from
+  the first live run, where a second chat started as soon as the result was saved.
 - **Chat:** `sessions.spawn` with `mode: "ask"`, role `explorer` and `mainView: true`. The model is the one the
   planner chose for the question (`prototype.model` and optional `prototype.thinking`). A question without a
   model waits for the planner to choose one. Pilot checks the model when the map is saved and refuses the save with the allowed
@@ -86,8 +89,8 @@ by question ID) and add `kind: "prototype"`, so restart, claims and failures beh
    `plan-research-result` input as research findings, with the artifact pin (`sessionId`, `artifactId`,
    `revision`). Reusing that input needs no change to the planning worker's input kinds; the text tells the
    planner what to do with a prototype.
-4. If the chat published no NSH artifact, the input says so and passes the report. The planner decides: unclaim
-   for one more attempt, change the question, or ask the user without a prototype.
+4. If the chat published no NSH artifact, the input says so and passes the report. The planner decides: change
+   the question for one more attempt, or ask the user without a prototype.
 
 ### Limits
 
@@ -119,7 +122,7 @@ Change the prototype paragraph in `packages/kernel/src/mission-planning-skills.t
 - On the prototype result: save `plan-prototype-result` with the given artifact pin and observations from the
   report, then ask the user with `plan-ask` (`topicId` = the prototype question ID). Settle the question only from
   the user's answer.
-- With no artifact or weak evidence: unclaim once (`plan-claim` `claimedBy: null`), or ask the user how to go on.
+- For changes, with no artifact or with weak evidence: edit the question with `plan-map`, or ask the user how to go on.
 
 Remove "This profile cannot create/execute previews" and keep the rules that a prototype is not acceptance or
 permission to build.
@@ -183,4 +186,3 @@ Each step ends with tests and, for user-visible steps, a capture from fixtures.
   not the real screen. The interview says so.
 - **Cost.** Each prototype is a full chat. The one-at-a-time limit and two attempts keep this small. The time
   limit stops a chat that runs long.
-

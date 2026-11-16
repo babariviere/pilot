@@ -55,11 +55,11 @@ source substitutes for missing or oversized bytes.
 
 `missing`, `oversize`, `redacted`, `unsupported` and `invalid` are distinct content
 states. Current access/selection failures refuse the entire read, rather than
-returning formerly readable content. The existing conservative diagnostic
-redactor checks source/title; changed text is withheld, not silently presented
-as the saved source. The active native capability is also treated as a known
-secret. This is conservative credential filtering, not proof that arbitrary
-artifact prose contains no private information.
+returning formerly readable content. A source or title that contains one of
+Pilot's own secrets (the active native capability) is `redacted`, never cut.
+The log redactor is not used: it flags ordinary code (an NSH `key={…}`), and
+the same source is readable in the chat that wrote it. This is not proof that
+arbitrary artifact prose contains no private information.
 
 ## Native bridge
 

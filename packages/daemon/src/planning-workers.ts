@@ -184,6 +184,18 @@ function researchMessage(missionTitle: string, q: PlanQuestion): string {
 	].join("\n\n");
 }
 
+/**
+ * Whether Pilot should make a prototype for open question `q` now: never while the user answers the round about it,
+ * and again only after its last chat failed or the planner changed the question (at most RESEARCH_ATTEMPTS).
+ * Saving a prototype's result releases the question, so being unclaimed alone never means "make another".
+ */
+function prototypeDue(plan: MissionPlan, q: PlanQuestion, prior: PlanningResearch | undefined): boolean {
+	if (q.kind !== "prototype" || !q.prototype || plan.round?.topicId === q.id) return false;
+	if (!prior) return true;
+	if ((prior.attempts ?? 1) >= RESEARCH_ATTEMPTS) return false;
+	return prior.state === "failed" || (prior.state === "reported" && prior.questionDigest !== planQuestionDigest(q));
+}
+
 function prototypeMessage(
 	missionTitle: string,
 	q: PlanQuestion,
@@ -498,7 +510,7 @@ export class PlanningWorkers {
 				? [
 						"Prototype chats finished for these map questions. They ran read-only and published a mock, not production code.",
 						"For each prototype with an artifact: save plan-prototype-result with exactly that artifact pin, observations from the report and a verdict. Then ask the user about it with plan-ask (topicId = the question id), with clickable choices for the variants and free text. Pilot Day shows the prototype with that round. Settle the question only from the user's answer.",
-						"With no artifact or a weak prototype: unclaim once with plan-claim claimedBy null, saying what to change in the question; Pilot then starts one more prototype chat, which starts from the earlier prototype. After two, ask the user how to go on. Planning only: no build work.",
+						"For changes (from the user's answers, or with no artifact or a weak prototype): edit the question with plan-map to say what to change; Pilot then starts one more prototype chat, which starts from the earlier prototype. After two, ask the user how to go on. Planning only: no build work.",
 					]
 				: []),
 			...batch.map(([id, r]) => {
@@ -801,16 +813,7 @@ export class PlanningWorkers {
 			([, r]) => r.kind === "prototype" && (r.state === "starting" || r.state === "running"),
 		);
 		if (prototyping) return result("moving", `A prototype chat is working on "${titleOf(prototyping[0])}".`);
-		const ready =
-			plan &&
-			planFrontier(plan).find((q) => {
-				const prior = state.research?.[q.id];
-				return (
-					q.kind === "prototype" &&
-					!!q.prototype &&
-					(!prior || (["reported", "failed"].includes(prior.state) && (prior.attempts ?? 1) < RESEARCH_ATTEMPTS))
-				);
-			});
+		const ready = plan && planFrontier(plan).find((q) => prototypeDue(plan, q, state.research?.[q.id]));
 		if (ready?.prototype?.model) return result("moving", `Pilot starts a prototype chat for "${ready.title}".`);
 		if (chats) return result("moving", "A chat is working for this mission.");
 		const canContinue = this.continueView(missionId).available;
@@ -1565,9 +1568,7 @@ export class PlanningWorkers {
 		// The planner chooses each prototype's model; a question without one waits for it (Unstick and Continue say so).
 		for (const q of planFrontier(plan).filter((x) => x.kind === "prototype" && x.prototype?.model)) {
 			if (working("prototype") >= PROTOTYPE_CHATS) break;
-			const prior = state.research?.[q.id];
-			if (prior && !(["reported", "failed"].includes(prior.state) && (prior.attempts ?? 1) < RESEARCH_ATTEMPTS))
-				continue;
+			if (!prototypeDue(plan, q, state.research?.[q.id])) continue;
 			if (!(await this.startExplorer(state, missionId, q, "prototype"))) return;
 			state = this.deps.store.planningWorkers.get(missionId)!;
 		}

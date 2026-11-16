@@ -175,10 +175,12 @@ test("missing, oversized, redacted and corrupt captured revisions never fall bac
 	assert.deepEqual((await (await f.read()).json()).content, { state: "unavailable", reason: "oversize" });
 	await writeFile(file, JSON.stringify({ ...f.artifact, source: "a".repeat(512 * 1024 + 1) }));
 	assert.deepEqual((await (await f.read()).json()).content, { state: "unavailable", reason: "oversize" });
-	for (const source of ["password=synthetic-secret", `show(${f.capability})`]) {
-		await writeFile(file, JSON.stringify({ ...f.artifact, source }));
-		assert.deepEqual((await (await f.read()).json()).content, { state: "unavailable", reason: "redacted" });
-	}
+	await writeFile(file, JSON.stringify({ ...f.artifact, source: `show(${f.capability})` }));
+	assert.deepEqual((await (await f.read()).json()).content, { state: "unavailable", reason: "redacted" });
+	// Ordinary code is shown as saved: field names such as key or token are not secrets.
+	const code = "<Each of={rows()} key={(r) => r.id}>{(r) => <Text>{r().token}</Text>}</Each>";
+	await writeFile(file, JSON.stringify({ ...f.artifact, source: code }));
+	assert.equal((await (await f.read()).json()).content.source, code);
 	await writeFile(file, "invalid JSON contains private text");
 	assert.deepEqual((await (await f.read()).json()).content, { state: "unavailable", reason: "invalid" });
 });
@@ -228,7 +230,7 @@ test("project artifact reads one exact revision of a chat in that project, with 
 		route(f.other.id, f.worker.id, f.artifact.id, "revision=1"),
 	])
 		assert.notEqual((await get(url)).status, 200, url);
-	await writeFile(join(f.directory, "1.json"), JSON.stringify({ ...f.artifact, source: "password=synthetic-secret" }));
+	await writeFile(join(f.directory, "1.json"), JSON.stringify({ ...f.artifact, source: `show(${f.capability})` }));
 	assert.deepEqual((await (await get(exact)).json()).content, { state: "unavailable", reason: "redacted" });
 });
 
