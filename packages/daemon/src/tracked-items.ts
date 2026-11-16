@@ -289,6 +289,9 @@ export class TrackedItemStore {
 		return this.rpc("slackLinkedSessions", { projectId, sessionIds });
 	}
 	/** The triage item behind each of a project's linked chats. */
+	startedChats(): Promise<Array<{ sessionId: string; kind: "slack" | "linear" }>> {
+		return this.rpc("startedChats", {});
+	}
 	sessionSources(projectId: string): Promise<TrackedSessionSource[]> {
 		return this.rpc("sessionSources", { projectId });
 	}

@@ -62,6 +62,8 @@ typed read model. Important fields:
   how it knows, limits, next step and links. Only standalone chats started from a Slack or Linear
   intake Start or a schedule are job chats (`job` in the chat's metadata, set at creation). They
   declare the tool; other chats don't. Each call replaces `sessions/<id>/chat-report.json`.
+  At startup pilotd also marks older standalone chats that a Slack or Linear item names as its
+  chat (`tracked_items.session_id`). They get the tool on their next worker start.
   The page shows the report only when the latest run saved it (after the last user message, and
   not after the outcome). Limits and their reasons are in `packages/daemon/src/chat-report.ts`.
   A report never changes `deliveryId`: it is written during the run that sets the outcome.

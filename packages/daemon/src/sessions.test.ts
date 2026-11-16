@@ -7056,6 +7056,29 @@ test("chat_report: only job chats declare it; a call saves the report the result
 	assert.equal(await sessions.chatReport(plain.id), undefined);
 });
 
+test("chats a Slack Start created before job chats existed are marked once; mission chats are not", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const old = await sessions.spawn({
+		projectId: f.project.id,
+		workspace: "direct",
+		message: "Work on this Slack request",
+	});
+	await sessions["starting"].get(old.id);
+	assert.equal(sessions["metas"].get(old.id)!.job, undefined);
+	assert.equal(
+		await sessions.markJobChats([
+			{ sessionId: old.id, kind: "slack" },
+			{ sessionId: "missing", kind: "linear" },
+		]),
+		1,
+	);
+	assert.equal(sessions["metas"].get(old.id)!.job, "slack");
+	assert.equal(await sessions.markJobChats([{ sessionId: old.id, kind: "linear" }]), 0, "an existing mark stays");
+	const saved = JSON.parse(await readFile(join(sessions["dir"](old.id), "meta.json"), "utf8")) as { job?: string };
+	assert.equal(saved.job, "slack");
+});
+
 test("native Insights status and host leases stay passive and fail closed", async (t) => {
 	const f = await insightsFixture(t);
 	const { sessions, id } = f;

@@ -452,6 +452,11 @@ await power?.start();
 await schedules.load();
 await sessions.load(server.runtimeFrozen());
 for (const project of projects.list()) sessions.refreshTrackedSources(project.id);
+// Chats started from Slack or Linear before job chats existed get the chat_report tool too.
+void trackedItems
+	.startedChats()
+	.then((chats) => sessions.markJobChats(chats))
+	.catch((error: unknown) => console.warn(`pilotd: could not mark job chats: ${error}`));
 power?.refresh();
 if (!server.runtimeFrozen()) await resumeRuntime();
 if (runtimeOwner) {

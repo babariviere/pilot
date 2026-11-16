@@ -1064,6 +1064,15 @@ export class TrackedItemDisk {
 	 * The triage item behind each of a project's linked chats: the item whose latest chat it is first, then the most
 	 * recently updated. Reads only chat links, never thread text.
 	 */
+	/** Chats a Slack or Linear Start (or a schedule run for that item) created. Pilot marks them as job chats. */
+	startedChats(): Array<{ sessionId: string; kind: "slack" | "linear" }> {
+		return this.db
+			.prepare(
+				"SELECT DISTINCT session_id AS sessionId, kind FROM tracked_items WHERE session_id IS NOT NULL AND kind IN ('slack', 'linear')",
+			)
+			.all() as Array<{ sessionId: string; kind: "slack" | "linear" }>;
+	}
+
 	sessionSources(projectId: string): TrackedSessionSource[] {
 		if (typeof projectId !== "string" || !projectId || projectId.length > 200) throw new Error("Invalid project");
 		// CROSS JOIN keeps the small chat-link set outermost instead of scanning the project's items.

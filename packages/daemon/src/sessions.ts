@@ -11198,6 +11198,23 @@ ${run.excerpt}`,
 		);
 	}
 
+	/**
+	 * Marks standalone chats that a Slack or Linear Start created as job chats, once. Chats created before the mark
+	 * existed get chat_report on their next worker start. Mission members and specialist chats are left alone.
+	 */
+	async markJobChats(chats: Array<{ sessionId: string; kind: ChatJob }>): Promise<number> {
+		let marked = 0;
+		for (const { sessionId, kind } of chats) {
+			const meta = this.metas.get(sessionId);
+			if (!meta || meta.job || meta.role || meta.planning || this.missions?.membership(meta.id)) continue;
+			meta.job = kind;
+			await this.save(meta);
+			marked++;
+		}
+		if (marked) console.log(`pilotd: marked ${marked} chats started from Slack or Linear as job chats`);
+		return marked;
+	}
+
 	/** The report a job chat saved with chat_report, if any. Read only for one result page. */
 	async chatReport(id: string): Promise<import("@pilot/protocol").ChatReport | undefined> {
 		const meta = this.metas.get(id);
