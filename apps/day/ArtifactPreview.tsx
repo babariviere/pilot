@@ -13,14 +13,15 @@ const NativePreview = nativeComponent<{ snapshot: SavedArtifact }, { state: Stat
 	events: ["state"],
 });
 
-export function ArtifactPreview(props: { inspection: Shown }) {
+/** `fill`: takes the height it is given, as in the full window, and never pauses out of the page's view. */
+export function ArtifactPreview(props: { inspection: Shown; fill?: boolean }) {
 	const state = signal<State>({ state: "loading", message: "" });
 	const inView = signal(true);
 	let box: ViewRef | undefined;
 	let checks = 0;
 	const check = () => {
 		const node = box;
-		if (!node) return;
+		if (!node || props.fill) return;
 		const mine = ++checks;
 		void showsInPage(node).then((shows) => {
 			if (mine !== checks || shows === inView()) return;
@@ -36,7 +37,7 @@ export function ArtifactPreview(props: { inspection: Shown }) {
 	const saved = () => props.inspection.artifact;
 	const present = () => saved()?.content.state === "text";
 	return (
-		<View testID="artifact-preview" class="gap-2 rounded-xl bg-muted px-4 py-3">
+		<View testID="artifact-preview" class={`gap-2 rounded-xl bg-muted px-4 py-3 ${props.fill ? "flex-1" : ""}`}>
 			<Text class="text-xs text-faint">{`Preview · revision ${props.inspection.pin.revision}`}</Text>
 			<Text role="header" class="text-sm font-medium text-foreground">
 				{props.inspection.title || "Artifact"}
@@ -63,7 +64,7 @@ export function ArtifactPreview(props: { inspection: Shown }) {
 						box = node;
 						check();
 					}}
-					class="h-96 w-full"
+					class={props.fill ? "min-h-0 w-full flex-1" : "h-96 w-full"}
 				>
 					<If
 						when={inView()}

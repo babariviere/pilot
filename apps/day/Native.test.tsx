@@ -25,6 +25,15 @@ test("the prototype a topic round asks about, opened as its saved source, captur
 	await app.screenshot("output/round-prototype-light.png");
 });
 
+test("the prototype in the full window, captured", async () => {
+	const app = await open("./RoundPrototypeFixture.tsx", { platform: "macos", width: 1100, height: 760 });
+	await app.press("id:artifact-card-/chat-proto/variants/3");
+	await app.press("id:artifact-viewer-full");
+	await app.waitFor("id:artifact-full");
+	await app.wait(400);
+	await app.screenshot("output/artifact-full-light.png");
+});
+
 test("Unstick with the repair agent's proposed note, captured", async () => {
 	const app = await open("./UnstickFixture.tsx", { platform: "macos", width: 900, height: 900 });
 	await app.press("id:unstick");

@@ -3,6 +3,7 @@
 // source: the card names the exact pinned revision and one press reads it once.
 import { mount, signal, Text, View } from "nsh";
 import type { PlanPage } from "pilot-day/native";
+import { FullArtifact } from "./ArtifactShelf";
 import type { ArtifactRow, ArtifactSource, ListResult, ReadResult } from "./artifactReads";
 import { RoundPrototype } from "./RoundPrototype";
 
@@ -42,5 +43,6 @@ mount(() => (
 	<View class="flex-1 gap-4 bg-background p-6">
 		<RoundPrototype page={page} source={source} />
 		<Text>{`Reads: [${reads().join(" ")}]`}</Text>
+		<FullArtifact />
 	</View>
 ));

@@ -75,6 +75,9 @@ preview starts a fresh AppView with an empty host and base-only UI sets. The
 app restores Day's canonical process-wide sets before returning to AppKit;
 the artifact engine keeps its isolated snapshot.
 
+**Full window** shows the open artifact over the whole page (`FullArtifact`, one per window), with the same
+preview or source. The card's own viewer closes first, so one preview runs. Escape or Close comes back to the card.
+
 Hiding the inspection, changing the result, losing read authority or closing
 the page disposes that preview. Generation checks reject late preparation
 results. Preview-local editors are not conversation drafts; native draft

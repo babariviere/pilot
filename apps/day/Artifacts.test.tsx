@@ -49,6 +49,29 @@ test("the project gallery shows cards and opens one exact revision per press", a
 	expect(app.texts().includes("<p>Saved page</p>")).toBe(false);
 });
 
+test("an open artifact shows in the full window, and Escape comes back to its card", async () => {
+	const app = await open("./ArtifactsFixture.tsx", desktop);
+	await app.waitFor("Timeline");
+	expect(app.shows("id:artifact-viewer-full")).toBe(false);
+	await app.press(`id:artifact-card-/chat-a/${NSH}/2`);
+	await app.waitFor("export default () => <Text>Revision two</Text>;");
+	await app.press("id:artifact-viewer-full");
+	await app.waitFor("id:artifact-full");
+	expect(app.texts().includes("Timeline · NSH · revision 2")).toBe(true);
+	expect(app.shows("id:artifact-viewer")).toBe(false);
+	expect(app.texts().includes("export default () => <Text>Revision two</Text>;")).toBe(true);
+	expect(reads(app)).toBe(`Reads: [${NSH}@2]`, "the full window reads nothing again");
+	// Escape closes the full window first; the page and its gallery stay.
+	await app.keyboard.press("escape");
+	expect(app.shows("id:artifact-full")).toBe(false);
+	expect(app.texts().includes("Timeline")).toBe(true);
+	await app.press(`id:artifact-card-/chat-a/${NSH}/2`);
+	await app.waitFor("id:artifact-viewer-full");
+	await app.press("id:artifact-viewer-full");
+	await app.press("id:artifact-full-close");
+	expect(app.shows("id:artifact-full")).toBe(false);
+});
+
 test("a refused or empty list says so instead of showing artifacts", async () => {
 	const app = await open("./ArtifactsFixture.tsx", desktop);
 	await app.waitFor("Timeline");

@@ -4,6 +4,7 @@
 // and Escape goes back too.
 
 import { effect, lifecycle, untracked, View } from "nsh";
+import { FullArtifact } from "./ArtifactShelf";
 import { ArtifactsScreen } from "./ArtifactsScreen";
 import { type ArtifactSource, artifactsOpen } from "./artifactReads";
 import { ChangesScreen } from "./ChangesScreen";
@@ -110,6 +111,8 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 						<UpdateScreen update={props.update as Update} day={props.day} plans={props.plans} />
 					</Arrive>
 				</If>
+				{/* One artifact in the whole window, over any page. Hidden until opened there. */}
+				<FullArtifact />
 			</View>
 		</View>
 	);

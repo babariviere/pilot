@@ -3,7 +3,7 @@
 // exact revision, one press reads that revision once, and a refusal shows
 // nothing earlier. The project page and one mission's section share rows.
 import { mount, Scroll, signal, Text, View } from "nsh";
-import { createShelf, MissionArtifacts } from "./ArtifactShelf";
+import { createShelf, FullArtifact, MissionArtifacts } from "./ArtifactShelf";
 import { ArtifactsScreen } from "./ArtifactsScreen";
 import { type ArtifactRow, type ArtifactSource, type ListResult, type ReadResult, readRefused } from "./artifactReads";
 import { Action } from "./ui";
@@ -71,6 +71,7 @@ mount(() => (
 					</View>
 				</Scroll>
 			</If>
+			<FullArtifact />
 		</View>
 		<View class="gap-1 border-t border-border px-6 py-3">
 			<Text testID="reads">{`Reads: [${reads().join(" ")}]`}</Text>

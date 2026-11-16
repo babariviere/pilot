@@ -112,7 +112,8 @@ and create no tasks. Its linked artifact, findings and open questions stay
 with the mission. Findings are evidence, not your acceptance or permission to build. When a prototype
 question is ready, Pilot starts one read-only prototype chat for it, with the model the planner chose. The
 chat publishes one NSH mock with the variants, and Pilot links it to the mission. The planner then asks
-you about it, and the round shows **The prototype**, which opens in the app's isolated preview. A chat
+you about it, and the round shows **The prototype**, which opens in the app's isolated preview (**Full window**
+shows it over the whole page). A chat
 stops at its question's time limit; its cost limit is shown, not enforced. See
 [mission prototypes](technical/mission-prototypes.md).
 When Pilot's planning agent has stopped while the plan is still open, **Continue planning** under its
