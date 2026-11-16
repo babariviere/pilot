@@ -60,6 +60,15 @@ impl log::Log for Facade {
         if !self.enabled(record.metadata()) {
             return;
         }
+        // NSH stops a preview's engine at one of its limits and tells the embedding
+        // app only through this log line (`stopped: <reason>`, target `js`).
+        #[cfg(all(target_os = "macos", feature = "macos-host"))]
+        if record.target() == "js" && record.level() == log::Level::Error {
+            let message = record.args().to_string();
+            if let Some(reason) = message.strip_prefix("stopped: ") {
+                crate::macos_artifact::engine_stopped(reason);
+            }
+        }
         let name = match (record.target(), record.level()) {
             ("js", log::Level::Error) => "js.error",
             ("js", _) => "js.warning",

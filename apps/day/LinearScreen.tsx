@@ -38,7 +38,7 @@ import {
 	troubleLine,
 } from "./linearView";
 import { glide } from "./motion";
-import { Action, InlineAction, Mark, type MarkKind, SectionTitle } from "./ui";
+import { Action, InlineAction, Mark, type MarkKind, PAGE_COLUMN, SectionTitle } from "./ui";
 import { openMission } from "./view";
 
 const MARK: Record<GroupKey, MarkKind> = {
@@ -354,7 +354,7 @@ export function LinearScreen(props: { day: Day }) {
 				if (waiting === null) scroll.onScroll(e);
 			}}
 		>
-			<View testID="linear" class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
+			<View testID="linear" class={`${PAGE_COLUMN} gap-8`}>
 				<View class="gap-2">
 					<Text class="text-xs text-faint">Linear · read only</Text>
 					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">

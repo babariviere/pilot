@@ -41,7 +41,7 @@ import {
 	threadDrafts,
 	threadMessages,
 } from "./threadView";
-import { Action, InlineAction, Mark, type MarkKind, RowLink, SectionTitle } from "./ui";
+import { Action, InlineAction, Mark, type MarkKind, PAGE_COLUMN, RowLink, SectionTitle } from "./ui";
 
 const STATUS: Record<Topic["disposition"], { word: string; mark: MarkKind }> = {
 	open: { word: "Open", mark: "still" },
@@ -831,7 +831,7 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 				if (waiting === null) scroll.onScroll(e);
 			}}
 		>
-			<View testID="thread" class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
+			<View testID="thread" class={`${PAGE_COLUMN} gap-8`}>
 				<If when={topic()} else={<Absent mirror={mirror} missionId={props.missionId} m={m()} />}>
 					<Each of={topic() ? [topic() as Topic] : []} key={(t) => t.id}>
 						{(t) => (

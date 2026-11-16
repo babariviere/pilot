@@ -20,7 +20,7 @@ import type { Changes } from "./changeFeed";
 import type { Day } from "./day";
 import { Arrive, glide } from "./motion";
 import type { Plans } from "./planning";
-import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
+import { Action, Mark, type MarkKind, PAGE_COLUMN, SectionTitle } from "./ui";
 import type { Update } from "./updateFeed";
 import { captureView, closeUpdate, restoreView, saveForms, startFresh, updateBusy, updateMessage } from "./updateView";
 
@@ -476,7 +476,7 @@ export function UpdateScreen(props: { update: Update; day: Day; plans?: Plans })
 	});
 	return (
 		<Scroll class="flex-1 bg-background">
-			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
+			<View class={`${PAGE_COLUMN} gap-8`}>
 				<ServiceLine service={service()} />
 				<If when={updateMessage()}>
 					<Text role="alert" class="text-sm text-needs-ink">

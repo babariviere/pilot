@@ -77,7 +77,7 @@ import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
 import { pageScroll, scrolled } from "./onScreen";
 import { SourcePanel } from "./SourcePanel";
-import { Action, Mark, RowLink, SectionTitle } from "./ui";
+import { Action, Mark, PAGE_COLUMN, RowLink, SectionTitle } from "./ui";
 import { setFor } from "./view";
 
 /** The most UTF-8 bytes a Send back note holds. */
@@ -957,7 +957,7 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 				scrolled();
 			}}
 		>
-			<View testID="delivery" class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
+			<View testID="delivery" class={`${PAGE_COLUMN} gap-8`}>
 				<View class="gap-2">
 					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
 						{title()}

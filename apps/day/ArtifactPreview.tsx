@@ -6,6 +6,7 @@
 import { effect, nativeComponent, signal, Text, View, type ViewRef } from "nsh";
 import type { SavedArtifact, Shown } from "./artifactReads";
 import { rested, showsInPage } from "./onScreen";
+import { Action } from "./ui";
 
 type State = { state: string; message: string };
 const NativePreview = nativeComponent<{ snapshot: SavedArtifact }, { state: State }>("pilot/artifact-preview", {
@@ -17,6 +18,12 @@ const NativePreview = nativeComponent<{ snapshot: SavedArtifact }, { state: Stat
 export function ArtifactPreview(props: { inspection: Shown; fill?: boolean }) {
 	const state = signal<State>({ state: "loading", message: "" });
 	const inView = signal(true);
+	// Each start of the preview's engine. Start again makes a new one from the same saved revision.
+	const run = signal(0);
+	const startAgain = () => {
+		state.set({ state: "loading", message: "" });
+		run.update((n) => n + 1);
+	};
 	let box: ViewRef | undefined;
 	let checks = 0;
 	const check = () => {
@@ -58,6 +65,14 @@ export function ArtifactPreview(props: { inspection: Shown; fill?: boolean }) {
 					{state().message}
 				</Text>
 			</If>
+			<If when={state().state === "stopped"}>
+				<View class="flex-row items-start gap-4">
+					<Text role="alert" testID="artifact-preview-stopped" class="flex-1 text-sm text-needs-ink">
+						{`This preview was stopped: ${state().message}. Pilot limits each preview so a runaway mock cannot use up Day's memory or time. Start again resets it.`}
+					</Text>
+					<Action label="Start again" icon="refresh" testID="artifact-preview-restart" onPress={startAgain} />
+				</View>
+			</If>
 			<If when={present()}>
 				<View
 					ref={(node: ViewRef) => {
@@ -76,11 +91,15 @@ export function ArtifactPreview(props: { inspection: Shown; fill?: boolean }) {
 							</View>
 						}
 					>
-						<NativePreview
-							snapshot={saved() as SavedArtifact}
-							class="h-full w-full"
-							onState={(next) => state.set(next)}
-						/>
+						<Each of={[run()]} key={(n) => String(n)}>
+							{() => (
+								<NativePreview
+									snapshot={saved() as SavedArtifact}
+									class="h-full w-full"
+									onState={(next) => state.set(next)}
+								/>
+							)}
+						</Each>
 					</If>
 				</View>
 			</If>

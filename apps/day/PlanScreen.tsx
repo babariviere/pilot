@@ -30,7 +30,7 @@ import { fogOpen, mapOpen, put, roundOpen, settledOpen } from "./planView";
 import { RevisitSection } from "./RevisitDoc";
 import { RoundPrototype } from "./RoundPrototype";
 import { Unstick } from "./Unstick";
-import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
+import { Action, Mark, type MarkKind, PAGE_COLUMN, SectionTitle } from "./ui";
 
 /** The words beside a plan's mark. */
 export function stageWord(stage: PlanStage): string {
@@ -814,7 +814,7 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 				scrollEventThrottle={100}
 				onScroll={scroll.onScroll}
 			>
-				<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
+				<View class={`${PAGE_COLUMN} gap-8`}>
 					<If when={message() && page()}>
 						<Text role="alert" class="text-sm text-needs-ink">
 							{message()}

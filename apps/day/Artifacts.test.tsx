@@ -60,7 +60,8 @@ test("an open artifact shows in the full window, and Escape comes back to its ca
 	expect(app.texts().includes("Timeline · NSH · revision 2")).toBe(true);
 	expect(app.shows("id:artifact-viewer")).toBe(false);
 	expect(app.texts().includes("export default () => <Text>Revision two</Text>;")).toBe(true);
-	expect(reads(app)).toBe(`Reads: [${NSH}@2]`, "the full window reads nothing again");
+	// The full window reads nothing again.
+	expect(reads(app)).toBe(`Reads: [${NSH}@2]`);
 	// Escape closes the full window first; the page and its gallery stay.
 	await app.keyboard.press("escape");
 	expect(app.shows("id:artifact-full")).toBe(false);

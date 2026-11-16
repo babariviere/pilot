@@ -169,16 +169,39 @@ pub fn config(captured: CapturedSource) -> Result<EngineConfig, String> {
     });
     let mut config = EngineConfig::new(bundle);
     config.ui_sets = vec![registry];
-    config.limits = Limits {
-        memory_bytes: 16 << 20,
-        stack_bytes: 512 << 10,
-        load_budget: Duration::from_millis(250),
-        call_budget: Duration::from_millis(100),
-        max_op_values: 4096,
-        max_canvas_ops: 1024,
-        max_nodes: 256,
-    };
+    config.limits = limits();
     // EngineConfig::new installs no Day registry/context, host advertisement,
     // network, filesystem, assets, storage, paths, clipboard or window service.
     Ok(config)
+}
+
+/// The UI nodes one preview may keep. It protects Day's memory: each node may
+/// have a native view, which the heap limit does not cover. A large mock (three
+/// variants of a full page, a table of a few hundred rows) keeps a few thousand;
+/// 10,000 leaves room for that and still stops a loop that makes views without
+/// end. Going over it stops the preview, which then says so and can start again.
+pub const MAX_NODES: usize = 10_000;
+
+/// The limits of one artifact preview's engine. Day keeps at most four previews
+/// open (`MAX_PREVIEWS`), so the sums stay within what NSH gives one embedded
+/// app by default (256 MiB heap). The engine runs on its own thread: a slow
+/// call does not freeze Day, so time limits only stop code that never ends.
+pub fn limits() -> Limits {
+    Limits {
+        // 64 MiB × 4 previews = NSH's default heap for one embedded app.
+        memory_bytes: 64 << 20,
+        // Deep recursion becomes a RangeError, well below the engine thread's stack.
+        stack_bytes: 512 << 10,
+        // Evaluating the kit and the mock once; a correct mock takes a few ms.
+        load_budget: Duration::from_secs(2),
+        // One event with the drawing it causes, such as a switch to another
+        // variant that draws thousands of nodes.
+        call_budget: Duration::from_secs(1),
+        // Changes queued at once, held outside the heap. NSH's defaults allow
+        // 40 per node; the same ratio keeps a full redraw of MAX_NODES possible.
+        max_op_values: MAX_NODES * 40,
+        // One canvas drawing: a dense chart of some thousand marks with labels.
+        max_canvas_ops: 50_000,
+        max_nodes: MAX_NODES,
+    }
 }

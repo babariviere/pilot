@@ -37,7 +37,7 @@ import {
 	todayScope,
 } from "./ScopeRows";
 import { ToCheck } from "./ToCheck";
-import { Action, EvidenceChip, InlineAction, Mark, RowLink, SectionTitle, Track } from "./ui";
+import { Action, EvidenceChip, InlineAction, Mark, PAGE_COLUMN, RowLink, SectionTitle, Track } from "./ui";
 import { focused, focusFront, front, type Item, move, openMission, placeRow, queue, todayPlace } from "./view";
 import { freshnessLine, provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
 
@@ -627,7 +627,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 				todayPlace.y = e.offset.y;
 			}}
 		>
-			<View class="w-full max-w-2xl self-center gap-12 px-6 pb-24 pt-10">
+			<View class={`${PAGE_COLUMN} gap-12`}>
 				<If when={ctx.on() || today().freshness.state !== "unreadable"} else={<Unreadable day={props.day} />}>
 					<View class="gap-12">
 						<View class="gap-3">

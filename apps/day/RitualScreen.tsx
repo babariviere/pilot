@@ -26,7 +26,7 @@ import {
 import type { Rituals } from "./ritualFeed";
 import { backFromStandup, closeRitual, openStandup, ritualRoute, START_STEPS, startStep } from "./ritualView";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
-import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
+import { Action, Mark, type MarkKind, PAGE_COLUMN, SectionTitle } from "./ui";
 import { focused, focusFront, type Item, queue } from "./view";
 import { freshnessLine, provenance } from "./words";
 
@@ -476,7 +476,7 @@ export function RitualScreen(props: { day: Day; rituals: Rituals }) {
 			scrollEventThrottle={100}
 			onScroll={scroll.onScroll}
 		>
-			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
+			<View class={`${PAGE_COLUMN} gap-8`}>
 				<If
 					when={readable()}
 					else={

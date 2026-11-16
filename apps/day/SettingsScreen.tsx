@@ -37,7 +37,7 @@ import {
 	revisionQuote,
 	sourceLine,
 } from "./preferencesView";
-import { Action, Mark, SectionTitle } from "./ui";
+import { Action, Mark, PAGE_COLUMN, SectionTitle } from "./ui";
 
 /** A quiet note with a mark, for what needs a look. */
 function Note(props: { testID: string; text: string; detail?: string; children?: JSX.Element }) {
@@ -545,7 +545,7 @@ export function SettingsScreen(props: { day: Day }) {
 				if (waiting === null) scroll.onScroll(e);
 			}}
 		>
-			<View testID="settings" class="w-full max-w-2xl self-center gap-10 px-6 pb-24 pt-10">
+			<View testID="settings" class={`${PAGE_COLUMN} gap-10`}>
 				<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
 					Settings
 				</Text>

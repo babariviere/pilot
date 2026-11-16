@@ -29,7 +29,7 @@ import {
 	requestLine,
 } from "./changeWords";
 import { keepScroll } from "./kept";
-import { Action, InlineAction, Mark, PatchDiff, RowLink, SectionTitle, TabItem, TabRow } from "./ui";
+import { Action, InlineAction, Mark, PAGE_COLUMN, PatchDiff, RowLink, SectionTitle, TabItem, TabRow } from "./ui";
 import { setFor } from "./view";
 
 function say(id: string, message: string) {
@@ -168,7 +168,7 @@ function ChangeList(props: { changes: Changes }) {
 			scrollEventThrottle={100}
 			onScroll={scroll.onScroll}
 		>
-			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
+			<View class={`${PAGE_COLUMN} gap-8`}>
 				<View class="gap-2">
 					<View class="flex-row items-start gap-4">
 						<Text

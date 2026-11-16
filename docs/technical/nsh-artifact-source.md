@@ -67,6 +67,21 @@ NSH's base registry, with no Day context, host channel advertisement, network,
 filesystem, assets, storage or credentials. Interpreter limits do not cover
 native/GPU allocations.
 
+The preview limits (`artifact_runtime::limits()`) follow the "Limits" rule in `CODING_STANDARDS.md`.
+Day keeps at most four previews open, and the engine runs on its own thread, so a slow call never freezes Day.
+
+| Limit | Value | What it protects | Why this number |
+| --- | --- | --- | --- |
+| UI nodes | 10,000 | Day's memory: native views are outside the heap | A large mock (three variants of a full page) keeps a few thousand. 256, the feasibility probe's value, stopped real prototypes at their first switch |
+| Queued changes | 400,000 | Memory outside the heap | NSH's default ratio of 40 per node, so a full redraw fits |
+| Canvas operations per drawing | 50,000 | Memory outside the heap | A dense chart of some thousand marks with labels |
+| Heap | 64 MiB | Day's memory | Four previews add up to NSH's default heap for one embedded app (256 MiB) |
+| Load / one call | 2 s / 1 s | Code that never ends | A correct mock loads in milliseconds; one call may draw a whole variant |
+
+When NSH stops an engine at a limit, it says so only in its log (`stopped: <reason>`). Day's log facade passes
+that to every running preview (NSH does not say which engine). Each shows "This preview was stopped: <reason>"
+with **Start again**, which starts a fresh engine from the same saved revision.
+
 On macOS, the connected window registers `pilot/artifact-preview` on its own
 native component registry. Preview reads the displayed exact pin through the
 existing delivery reader, then passes those saved bytes as data to the native

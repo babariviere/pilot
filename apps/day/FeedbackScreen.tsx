@@ -34,7 +34,7 @@ import {
 } from "./feedbackView";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
-import { Action, Mark, Picker, SectionTitle } from "./ui";
+import { Action, Mark, PAGE_COLUMN, Picker, SectionTitle } from "./ui";
 
 const SEND_KEYS = keymap.label("mod+enter");
 
@@ -374,7 +374,7 @@ export function FeedbackScreen(props: { day: Day }) {
 				if (waiting === null) scroll.onScroll(e);
 			}}
 		>
-			<View testID="feedback" class="w-full max-w-2xl self-center gap-10 px-6 pb-24 pt-10">
+			<View testID="feedback" class={`${PAGE_COLUMN} gap-10`}>
 				<View class="gap-3">
 					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
 						Feedback

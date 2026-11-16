@@ -32,6 +32,12 @@ import settings from "./icons/settings.svg";
 import sun from "./icons/sun.svg";
 import update from "./icons/update.svg";
 
+/**
+ * The column every page sits in: centred, up to 1024 px wide, with the page's side and top padding. Change the
+ * width here for all pages. Long paragraphs inside may keep a narrower measure for comfortable reading.
+ */
+export const PAGE_COLUMN = "w-full max-w-5xl self-center px-6 pb-24 pt-10";
+
 // One small family of line icons, drawn on a 16-point grid with the same
 // stroke. They are template images: the class's tint colors them. They
 // stand beside words, never in place of a label the user must guess.

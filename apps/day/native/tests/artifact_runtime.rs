@@ -39,7 +39,7 @@ export default function Artifact() {
         assert!(config.clipboard.is_none());
         assert!(config.windows.is_none());
         assert!(config.host.params().is_empty());
-        assert_eq!(config.limits.memory_bytes, 16 << 20);
+        assert_eq!(config.limits, artifact_runtime::limits());
         let mut app = Headless::start(config).expect("separate artifact engine");
         app.wait_for("Count: 0").expect("fresh local state");
         if let Some((control, node)) = &retired {
@@ -129,4 +129,45 @@ fn captured_runtime_rejects_wrong_identity_and_host_imports_before_execution() {
     ] {
         assert!(artifact_runtime::config(captured(source)).is_err());
     }
+}
+
+#[test]
+fn a_large_mock_switches_variants_and_a_runaway_one_stops_at_the_node_limit() {
+    // Three variants of a few hundred rows each: far past the old 256-node limit.
+    let source = r#"
+import {Text, View, signal} from 'nsh';
+import {Button} from 'nsh/base';
+const rows = Array.from({length: 400}, (_, i) => i);
+export default function Artifact() {
+  const variant = signal('A');
+  return <View>
+    <Button onPress={() => variant.set('B')}><Text>Variant B</Text></Button>
+    <Text>{'Showing ' + variant()}</Text>
+    {rows.map((i) => <View><Text>{variant() + ' row ' + i}</Text></View>)}
+  </View>;
+}"#;
+    let mut app =
+        Headless::start(artifact_runtime::config(captured(source)).expect("valid source"))
+            .expect("isolated engine");
+    app.wait_for("A row 0").expect("large first screen");
+    app.press("role:button[Variant B]")
+        .expect("still interactive");
+    app.wait_for("B row 0").expect("second variant drawn");
+    assert!(app.shows("Showing B"), "the preview kept running");
+
+    let runaway = format!(
+        r#"
+import {{Text, View}} from 'nsh';
+const rows = Array.from({{length: {}}}, (_, i) => i);
+export default () => <View>{{rows.map((i) => <Text>{{'row ' + i}}</Text>)}}</View>;"#,
+        artifact_runtime::MAX_NODES + 1
+    );
+    let mut app =
+        Headless::start(artifact_runtime::config(captured(&runaway)).expect("valid source"))
+            .expect("isolated engine");
+    let stopped = app.wait_for("Never shown").err().unwrap_or_default();
+    assert!(
+        stopped.contains("nodes"),
+        "a runaway mock stops at the node limit: {stopped}"
+    );
 }

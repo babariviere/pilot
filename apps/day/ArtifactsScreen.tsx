@@ -7,6 +7,7 @@ import { ArtifactShelf, createShelf } from "./ArtifactShelf";
 import { type ArtifactSource, closeArtifacts } from "./artifactReads";
 import { keepScroll } from "./kept";
 import { pageScroll, scrolled } from "./onScreen";
+import { PAGE_COLUMN } from "./ui";
 
 export function ArtifactsScreen(props: { source: ArtifactSource }) {
 	const shelf = createShelf();
@@ -29,7 +30,7 @@ export function ArtifactsScreen(props: { source: ArtifactSource }) {
 				scrolled();
 			}}
 		>
-			<View testID="artifacts" class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
+			<View testID="artifacts" class={`${PAGE_COLUMN} gap-8`}>
 				<View class="gap-2">
 					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
 						Artifacts

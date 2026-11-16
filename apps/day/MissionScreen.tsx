@@ -26,7 +26,7 @@ import { goalDraft, openNew, openPlan, replacesDraft } from "./planView";
 import { MissionThreadsSection } from "./ThreadScreen";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
 import { naming } from "./threadView";
-import { Action, EvidenceChip, Mark, RowLink, SectionTitle, Track } from "./ui";
+import { Action, EvidenceChip, Mark, PAGE_COLUMN, RowLink, SectionTitle, Track } from "./ui";
 import {
 	archiving,
 	closeMission,
@@ -973,7 +973,7 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 				scrolled();
 			}}
 		>
-			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
+			<View class={`${PAGE_COLUMN} gap-8`}>
 				<If when={readNote()}>
 					<Text role="alert" class="text-sm text-muted-foreground">
 						{readNote()}

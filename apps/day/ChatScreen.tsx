@@ -9,7 +9,7 @@ import { ChatTranscript } from "./ChatRows";
 import { closeChat } from "./chatView";
 import type { Day } from "./day";
 import type { SessionChat, SessionChatMirror } from "./sessionChat";
-import { Mark, type MarkKind } from "./ui";
+import { Mark, type MarkKind, PAGE_COLUMN } from "./ui";
 
 /** The chat's state as one quiet line and its mark. */
 function stateLine(chat: SessionChat | null): { mark: MarkKind; text: string } | null {
@@ -44,7 +44,7 @@ export function ChatScreen(props: { day: Day; sessionId: string }) {
 	const state = () => stateLine(chat());
 	return (
 		<Scroll class="flex-1 bg-background">
-			<View testID="chat" class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
+			<View testID="chat" class={`${PAGE_COLUMN} gap-8`}>
 				<View class="gap-3">
 					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
 						{chat()?.title || "Chat"}

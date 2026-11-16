@@ -247,3 +247,29 @@ pub fn register(main: MainThreadMarker, components: &Components, host: &HostChan
     }
     host.set_params(params);
 }
+
+/// An NSH engine was stopped at one of its limits (`reason` as NSH wrote it, such
+/// as "the app created more than 10000 nodes and was stopped"). NSH does not say
+/// which engine, so every running preview says it stopped and offers Start again;
+/// one that was not stopped starts over from the same saved revision.
+pub fn engine_stopped(reason: &str) {
+    let reason = reason
+        .trim_end_matches(" and was stopped")
+        .trim()
+        .to_owned();
+    DispatchQueue::main().exec_async(move || {
+        let previews: Vec<_> = PREVIEWS.with(|previews| {
+            previews
+                .borrow()
+                .values()
+                .filter_map(Weak::upgrade)
+                .collect()
+        });
+        for preview in previews {
+            let state = preview.borrow();
+            if state.view.is_some() {
+                state.report("stopped", &reason);
+            }
+        }
+    });
+}
