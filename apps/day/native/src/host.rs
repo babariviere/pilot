@@ -14,6 +14,7 @@ pub(crate) mod feedback;
 pub(crate) mod intake;
 mod inventory;
 mod journal;
+pub(crate) mod knowledge;
 pub(crate) mod model_controls;
 #[cfg(target_os = "macos")]
 mod native_clock;

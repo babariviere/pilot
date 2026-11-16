@@ -318,6 +318,17 @@ export class ProjectKnowledgeStore {
 	}
 
 	/** Whether this project already saved an operation ID. */
+	lookup(projectId: string, operationId: string) {
+		const row = this.db.one(
+			"SELECT * FROM project_knowledge_revisions WHERE project_id = ? AND operation_id = ?",
+			projectId,
+			operationId,
+		);
+		return row
+			? { operationId, detail: this.detail(projectId, String(row.knowledge_id), Number(row.revision)) }
+			: null;
+	}
+
 	operation(projectId: string, operationId: string): boolean {
 		return !!this.db.one(
 			"SELECT 1 FROM project_knowledge_revisions WHERE project_id = ? AND operation_id = ?",

@@ -14,7 +14,9 @@ let race = "",
 	posts = 0;
 const proxy = createServer(async (req, res) => {
 	try {
-		const writing = req.method === "POST" && req.url === "/api/operations";
+		const writing =
+			(req.method === "POST" && req.url === "/api/operations") ||
+			(req.method === "PUT" && req.url === `/api/projects/${f.project.id}/knowledge/${knowledge.entry.id}`);
 		if (req.method !== "GET" && !writing) {
 			res.writeHead(405).end();
 			return;
@@ -33,7 +35,16 @@ const proxy = createServer(async (req, res) => {
 			...(bytes.length ? { body: bytes } : {}),
 		});
 		const body = await reply.text();
-		if (race && (req.url === `/api/missions/${f.missionId}` || req.url?.includes("/knowledge/"))) {
+		if (writing && race === "lose-knowledge") {
+			race = "";
+			res.destroy();
+			return;
+		}
+		if (
+			race &&
+			race !== "lose-knowledge" &&
+			(req.url === `/api/missions/${f.missionId}` || req.url?.includes("/knowledge/"))
+		) {
 			const action = race;
 			race = "";
 			if (action === "leave") f.store.leave(f.owner);

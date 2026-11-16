@@ -32,6 +32,9 @@ pub const METHODS: &[&str] = &[
     "day.intake.read",
     "day.linear.read",
     "day.preferences.read",
+    "day.knowledge.read",
+    "day.knowledge.save",
+    "day.knowledge.check",
     "day.models.read",
     "day.connections.read",
     "day.connections.write",
@@ -246,6 +249,9 @@ pub(crate) enum Command {
     IntakeRead,
     LinearRead,
     PreferencesRead,
+    KnowledgeRead(crate::host::knowledge::Read),
+    KnowledgeSave(crate::host::knowledge::Edit),
+    KnowledgeCheck(String),
     ModelsRead,
     ConnectionsRead,
     ConnectionsWrite(crate::host::connection_controls::Intent),
@@ -846,6 +852,22 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             r.validate()?;
             C::PlanSource(r)
         }
+        "day.knowledge.read" => C::KnowledgeRead(exact(args)?),
+        "day.knowledge.save" => {
+            let r: crate::host::knowledge::Edit = exact(args)?;
+            r.validate()?;
+            C::KnowledgeSave(r)
+        }
+        "day.knowledge.check" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Check {
+                operation_id: String,
+            }
+            let r: Check = exact(args)?;
+            id(&r.operation_id)?;
+            C::KnowledgeCheck(r.operation_id)
+        }
         "day.plan.chat" => {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1084,6 +1106,7 @@ impl Command {
                     | Self::IntakeRead
                     | Self::LinearRead
                     | Self::PreferencesRead
+                    | Self::KnowledgeRead(_)
                     | Self::ModelsRead
                     | Self::ConnectionsRead
                     | Self::ModelsRecovery(_)

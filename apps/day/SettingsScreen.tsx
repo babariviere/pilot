@@ -11,6 +11,7 @@ import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, untrack
 import { Button, Collapsible, Input } from "nsh/base";
 import { ConnectionSettings } from "./ConnectionSettings";
 import type { Day } from "./day";
+import { KnowledgeSection } from "./KnowledgeSection";
 import { keepField, keepScroll } from "./kept";
 import { ModelSettingsSection } from "./ModelSettings";
 import { glide } from "./motion";
@@ -345,6 +346,9 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 											{`Your words: “${quoteOf(savedOf(e()) as ProjectPreference)}”`}
 										</Text>
 									</If>
+									<If when={savedOf(e())}>
+										<Text class="text-xs text-faint">{`Source: ${JSON.stringify(savedOf(e())?.source)}`}</Text>
+									</If>
 								</View>
 							);
 						}}
@@ -479,7 +483,12 @@ function History(props: { mirror: PreferencesMirror }) {
 											<Text class="text-sm text-muted-foreground">No preferences.</Text>
 										</If>
 										<Each of={r().entries} key={(e) => e.id}>
-											{(e) => <Text class="text-sm text-muted-foreground">{`• ${e().text}`}</Text>}
+											{(e) => (
+												<View selectable class="gap-1">
+													<Text class="text-sm text-muted-foreground">{`• ${e().text}`}</Text>
+													<Text class="text-xs text-faint">{`Source: ${JSON.stringify(e().source)}. ${sourceLine(e())}`}</Text>
+												</View>
+											)}
 										</Each>
 										<If when={revisionQuote(r())}>
 											<Text class="text-xs text-faint">{`From your note: “${revisionQuote(r())}”`}</Text>
@@ -555,6 +564,7 @@ export function SettingsScreen(props: { day: Day }) {
 				<If when={props.day.models}>{(controls) => <ModelSettingsSection controls={controls()} />}</If>
 				<If when={props.day.connections}>{(controls) => <ConnectionSettings controls={controls()} />}</If>
 				<Preferences mirror={mirror} />
+				<KnowledgeSection projectId={mirror.view().projectId} />
 				<ProjectsSection />
 				<History mirror={mirror} />
 				<Text class="border-t border-border pt-5 text-xs text-faint">

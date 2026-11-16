@@ -44,6 +44,7 @@ pub(super) struct Cache {
 }
 
 pub(super) struct Journal {
+    pub knowledge: BTreeMap<String, super::knowledge::Record>,
     pub losses: BTreeMap<String, super::update_loss::Record>,
     pub windows: BTreeMap<String, super::window::SavedWindow>,
     pub updates: BTreeMap<String, super::updates::Record>,
@@ -64,6 +65,7 @@ pub(super) struct Journal {
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum Entry {
+    Knowledge(Box<super::knowledge::Record>),
     Loss(Box<super::update_loss::Record>),
     Window(Box<super::window::SavedWindow>),
     Update(Box<super::updates::Record>),
@@ -156,6 +158,7 @@ impl Journal {
             return Err(Error::Storage);
         }
         let mut records: BTreeMap<String, Record> = BTreeMap::new();
+        let mut knowledge: BTreeMap<String, super::knowledge::Record> = BTreeMap::new();
         let mut planning: BTreeMap<String, PlanningRecord> = BTreeMap::new();
         let mut attention: BTreeMap<String, AttentionRecord> = BTreeMap::new();
         let mut attention_drafts: BTreeMap<String, Draft> = BTreeMap::new();
@@ -167,6 +170,22 @@ impl Journal {
         for line in body.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
             let entry: Entry = serde_json::from_slice(line).map_err(|_| Error::Storage)?;
             let record = match entry {
+                Entry::Knowledge(record) => {
+                    record.validate()?;
+                    if knowledge
+                        .get(&record.knowledge_operation)
+                        .map_or(record.state != super::knowledge::State::Pending, |old| {
+                            !record.follows(old)
+                        })
+                    {
+                        return Err(Error::Storage);
+                    }
+                    knowledge.insert(record.knowledge_operation.clone(), *record);
+                    if knowledge.len() > MAX_OPERATIONS {
+                        return Err(Error::Storage);
+                    }
+                    continue;
+                }
                 Entry::Loss(record) => {
                     record.validate()?;
                     if losses
@@ -393,7 +412,8 @@ impl Journal {
                 return Err(Error::Storage);
             }
         }
-        if windows.len()
+        if knowledge.len()
+            + windows.len()
             + updates.len()
             + losses.len()
             + rituals.len()
@@ -409,6 +429,7 @@ impl Journal {
         file.sync_all().map_err(|_| Error::Storage)?;
         sync_parent(&path)?;
         Ok(Self {
+            knowledge,
             losses,
             windows,
             file,
@@ -437,6 +458,28 @@ impl Journal {
         self.append(&record)?;
         self.records
             .insert(record.command.operation_id.clone(), record);
+        Ok(())
+    }
+
+    pub fn save_knowledge(&mut self, record: super::knowledge::Record) -> Result<(), Error> {
+        record.validate()?;
+        if self
+            .knowledge
+            .get(&record.knowledge_operation)
+            .map_or(record.state != super::knowledge::State::Pending, |old| {
+                !record.follows(old)
+            })
+        {
+            return Err(Error::Stale);
+        }
+        if !self.knowledge.contains_key(&record.knowledge_operation)
+            && self.count() >= MAX_OPERATIONS
+        {
+            return Err(Error::Capacity);
+        }
+        self.append(&record)?;
+        self.knowledge
+            .insert(record.knowledge_operation.clone(), record);
         Ok(())
     }
 
@@ -512,7 +555,8 @@ impl Journal {
     }
 
     fn count(&self) -> usize {
-        self.losses.len()
+        self.knowledge.len()
+            + self.losses.len()
             + self.windows.len()
             + self.updates.len()
             + self.rituals.len()

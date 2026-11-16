@@ -111,10 +111,13 @@ impl Fixture {
             "recordId":if kind=="decision" {"choice"} else {"fact"},"kind":kind,"id":self.info[kind]})
     }
     fn read(&self, bridge: &Bridge, request: Value) -> Value {
+        self.call(bridge, "day.plan.source", request)
+    }
+    fn call(&self, bridge: &Bridge, name: &str, request: Value) -> Value {
         let source = format!(
             r#"import {{mount,signal,Text,host}} from "nsh";
 const result=signal("waiting"); mount(()=> <Text>{{result()}}</Text>);
-setTimeout(()=>{{host.call("day.plan.source",{{version:1,window:host.params.day.window,args:{request}}},{{timeout:0}}).then(r=>result.set("source-result:"+JSON.stringify(r)),e=>result.set("source-result:"+JSON.stringify({{error:String(e)}})));}},0);"#
+setTimeout(()=>{{host.call("{name}",{{version:1,window:host.params.day.window,args:{request}}},{{timeout:0}}).then(r=>result.set("source-result:"+JSON.stringify(r)),e=>result.set("source-result:"+JSON.stringify({{error:String(e)}})));}},0);"#
         );
         let entry = self.dir.join("ReadSource.tsx");
         std::fs::write(&entry, source).unwrap();
@@ -185,6 +188,94 @@ fn flush(app: &mut Headless, bridge: &Bridge) {
         );
         app.wait(Duration::from_millis(50)).unwrap();
     }
+}
+
+#[test]
+fn library_search_edit_and_lost_reply_recovery_use_exact_revisions_without_resending() {
+    let mut f = Fixture::new();
+    let bridge = f.bridge();
+    let listed = f.call(
+        &bridge,
+        "day.knowledge.read",
+        json!({"kind":"list","query":"storage","cursor":null,"missionId":null}),
+    );
+    assert_eq!(
+        listed["value"]["snapshot"]["data"]["entries"][0]["id"], f.info["knowledge"],
+        "{listed}"
+    );
+    let d = f.call(
+        &bridge,
+        "day.knowledge.read",
+        json!({"kind":"detail","id":f.info["knowledge"],"revision":1}),
+    );
+    let d = &d["value"]["snapshot"]["data"];
+    let edit = json!({"projectId":f.info["source"]["project_id"],"id":f.info["knowledge"],"expectedRevision":1,
+        "title":d["revision"]["title"],"synopsis":d["revision"]["synopsis"],"body":d["revision"]["body"],"sources":d["revision"]["sources"],"reason":"Clarify checked coverage"});
+    let mut wrong = edit.clone();
+    wrong["projectId"] = json!("other-project");
+    assert_eq!(
+        f.call(&bridge, "day.knowledge.save", wrong)["error"],
+        "stale"
+    );
+    let mut invalid = edit.clone();
+    invalid["body"] = json!("No required headings");
+    let rejected = f.call(&bridge, "day.knowledge.save", invalid);
+    assert_eq!(rejected["value"]["snapshot"]["state"], "rejected", "{rejected}");
+    let prior = f.call(&bridge, "day.knowledge.read", json!({"kind":"pending","id":f.info["knowledge"],"expectedRevision":1}));
+    assert_eq!(prior["value"]["snapshot"]["data"], json!([]), "old rejected attempts cannot stand in for a newer submitted draft");
+    f.command("race", "lose-knowledge");
+    let lost = f.call(&bridge, "day.knowledge.save", edit.clone());
+    assert_eq!(lost["value"]["snapshot"]["state"], "unknown", "{lost}");
+    let operation = lost["value"]["snapshot"]["operationId"].clone();
+    assert_eq!(
+        f.call(&bridge, "day.knowledge.save", edit.clone())["error"],
+        "unknown"
+    );
+    close(bridge);
+    let bridge = f.bridge();
+    let pending = f.call(&bridge, "day.knowledge.read", json!({"kind":"pending"}));
+    assert_eq!(
+        pending["value"]["snapshot"]["data"][0]["operationId"],
+        operation
+    );
+    let checked = f.call(
+        &bridge,
+        "day.knowledge.check",
+        json!({"operationId":operation}),
+    );
+    assert_eq!(checked["value"]["snapshot"]["state"], "saved", "{checked}");
+    assert_eq!(
+        checked["value"]["snapshot"]["receipt"]["detail"]["revision"]["revision"],
+        2
+    );
+    // A lost GUI reply can hide an already-saved native receipt. The kept
+    // draft's exact target/base also finds terminal operations, without PUT.
+    let terminal = f.call(
+        &bridge,
+        "day.knowledge.read",
+        json!({"kind":"pending","id":f.info["knowledge"],"expectedRevision":1}),
+    );
+    assert_eq!(
+        terminal["value"]["snapshot"]["data"][0]["operationId"],
+        operation
+    );
+    assert_eq!(
+        f.call(&bridge, "day.knowledge.save", edit)["error"],
+        "stale"
+    );
+    let old = f.call(
+        &bridge,
+        "day.knowledge.read",
+        json!({"kind":"detail","id":f.info["knowledge"],"revision":1}),
+    );
+    assert_eq!(old["value"]["snapshot"]["data"]["revision"]["revision"], 1);
+    assert_eq!(old["value"]["snapshot"]["data"]["entry"]["revision"], 2);
+    assert_eq!(
+        f.command("stats", "")["posts"],
+        2,
+        "only the two explicit saves write (one rejected); checks and reopen never resend"
+    );
+    close(bridge);
 }
 
 #[test]
@@ -343,8 +434,8 @@ fn the_connected_map_opens_sources_in_place_and_returns_without_losing_its_saved
     f.command("restart", "");
     let bridge = f.bridge();
     let mut app = open(&f.dir.join("Connected.tsx"), &bridge);
-    wait(&mut app, &format!("id:plan-{mission}"));
-    app.press(&format!("id:plan-{mission}")).unwrap();
+    // The joined close saved the open plan as well as its draft. Reopen
+    // restores that page directly; it does not return to Today's list.
     wait(&mut app, "id:interview");
     // The answer is the daemon's saved draft, not a duplicated source tracker.
     assert!(

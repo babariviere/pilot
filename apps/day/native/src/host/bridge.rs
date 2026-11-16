@@ -356,6 +356,24 @@ async fn run(
             .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
         return Ok(json!({"snapshot":snapshot,"outcome":null}));
     }
+    if matches!(
+        call.command,
+        Command::KnowledgeRead(_) | Command::KnowledgeSave(_) | Command::KnowledgeCheck(_)
+    ) {
+        let snapshot = match &call.command {
+            Command::KnowledgeRead(r) => super::knowledge::read(t, r, journal).await?,
+            Command::KnowledgeSave(r) => super::knowledge::save(t, journal, r, &call.gate).await?,
+            Command::KnowledgeCheck(id) => super::knowledge::check(t, journal, id).await?,
+            _ => unreachable!(),
+        };
+        if matches!(call.command, Command::KnowledgeRead(_)) {
+            shared.current(epoch)?;
+        }
+        shared.open()?;
+        call.command
+            .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
+        return Ok(json!({"snapshot":snapshot,"outcome":null}));
+    }
     if let Command::PlanChat { mission, older } = &call.command {
         // Passive. A failed read keeps what shows; the chat says why.
         let _ = super::planning_chat::read(t, shared, mission, *older).await;
@@ -424,6 +442,9 @@ async fn run(
     let mut value = Value::Null;
     let mut enrollment = None;
     let work = match &call.command {
+        Command::KnowledgeRead(_) | Command::KnowledgeSave(_) | Command::KnowledgeCheck(_) => {
+            unreachable!("handled library command")
+        }
         Command::TodayScope(_) => unreachable!("handled scoped Today read"),
         Command::DeliveryArtifact(_) => unreachable!("handled captured artifact read"),
         Command::DeliveryWork(_) => unreachable!("handled agent work read"),

@@ -468,11 +468,8 @@ test("Build agents leave remote CI monitoring to Pilot, not background jobs", ()
 
 test("memory guidance is short and limited to project chats with memory, never Ask", () => {
 	const prompt = pilotPrompt({ projectMemory: true });
-	assert.match(
-		prompt,
-		/Use memory\(\{action: 'note', \.\.\.\}\) for lasting decisions, user preferences\/corrections, non-obvious facts and hard-won outcomes/,
-	);
-	assert.match(prompt, /never task status, secrets or what memory already says/);
+	assert.match(prompt, /Historical project memory is read-only. Save new sourced understanding with knowledge/);
+	assert.match(prompt, /explicit user choices with project_preferences, keeping sources\/history/);
 	assert.match(
 		prompt,
 		/Before finishing a turn that ends a task, consider whether you learned anything lasting worth saving/,

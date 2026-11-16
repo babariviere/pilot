@@ -3013,6 +3013,8 @@ export function createDaemonServer(
 		if (parts[1] === "projects" && parts[3] === "knowledge" && parts.length <= 6) {
 			const knowledge = missions?.knowledge;
 			if (!knowledge) throw new ServiceUnavailable("Project knowledge is unavailable");
+			if (parts[4] === "operations" && parts.length === 6 && req.method === "GET")
+				return json(res, 200, await knowledge.durableRead(() => knowledge.lookup(parts[2]!, parts[5]!)));
 			const projectId = parts[2]!;
 			const entryId = parts[4];
 			const query = (name: string) => url.searchParams.get(name) ?? undefined;

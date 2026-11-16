@@ -1,5 +1,22 @@
 # Project memory and knowledge
 
+## Pilot Day
+
+Open Settings (⌘,), then **Knowledge → Open library** for the selected project.
+Search its saved entries, inspect sources and revision history, or read historical
+memory ranges. Old notes and summaries can be stale; new shared understanding
+belongs in Knowledge. The daemon no longer starts the shared-note AI summarizer.
+
+**Edit this revision** prepares an unsaved correction. Give a reason and select
+**Save new revision** to append it. Earlier revisions and sources stay readable.
+Drafts keep their project and base revision across navigation and close. A changed
+base needs explicit reconciliation. An uncertain save offers **Check save**, which
+only looks up that operation. It never sends the edit again.
+
+Preferences and their sources/history remain in Settings. Preferences are explicit
+choices, not permissions. Opening either section does not start AI maintenance,
+approve a finding, grant access or change spending limits.
+
 ## Small project preferences
 
 Project coordinators can record small explicit user choices with a cited user note.

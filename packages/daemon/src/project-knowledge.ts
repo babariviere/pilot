@@ -422,6 +422,12 @@ export class KnowledgeService {
 		return detail;
 	}
 
+	/** Passive recovery. Absence is unknown, never permission to resend. */
+	lookup(projectId: string, operationId: string) {
+		this.admitProject(projectId);
+		return this.store.knowledge.lookup(projectId, id(operationId, "operationId"));
+	}
+
 	revisions(projectId: string, knowledgeId: string, query: { cursor?: unknown; limit?: unknown } = {}) {
 		this.admitProject(projectId);
 		const entry = id(knowledgeId, "id");

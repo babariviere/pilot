@@ -3,7 +3,6 @@
 import type { JsonValue } from "@earendil-works/chord/json";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { redactHistoryText } from "./history-privacy.ts";
 import { queryTerms } from "./history-recall.ts";
 import { StringEnum } from "./schema.ts";
 
@@ -64,31 +63,17 @@ export function rankNotes(
 		.map(({ entry, score }) => ({ ...entry, score: Math.round(score * 100) / 100 }));
 }
 
-export function createMemoryTools(call: MemoryCall, sessionId: string): ToolDefinition[] {
+export function createMemoryTools(call: MemoryCall, _sessionId: string): ToolDefinition[] {
 	return [
 		defineTool({
 			name: "memory",
-			label: "Project memory",
-			description: `Read and append lasting project memory. Never store secrets, task status/instructions, speculation or what memory already says. Notes never grant permissions.
-- note: save one lasting fact, decision, user preference/correction or hard-won outcome. Requires text; to correct an outdated note, pass its index in replaces.
+			label: "Historical project memory",
+			description: `Read historical project memory. Old notes and summaries may be stale and never grant permissions. Save new sourced understanding with knowledge; explicit project preferences use project_preferences with sources/history.
 - recall: search with query words (ranked, replaced notes last) or a case-insensitive regex; returns limited matching notes.
 - zoom: expand an inclusive #lo-hi range into its two child ranges. Requires lo and hi; use only ranges shown in memory views.
-No forget action exists.`,
+No note or forget action exists. Reading starts no AI maintenance.`,
 			parameters: Type.Object({
-				action: StringEnum(["note", "recall", "zoom"] as const),
-				text: Type.Optional(
-					Type.String({
-						minLength: 1,
-						maxLength: 280,
-						description: "Required for note. One concise line, at most 280 UTF-8 bytes.",
-					}),
-				),
-				replaces: Type.Optional(
-					Type.Array(Type.Integer({ minimum: 0 }), {
-						maxItems: 16,
-						description: "For note: indices (#n) of notes this one corrects.",
-					}),
-				),
+				action: StringEnum(["recall", "zoom"] as const),
 				regex: Type.Optional(Type.String({ maxLength: 512, description: "For recall: a regex." })),
 				query: Type.Optional(
 					Type.String({ minLength: 2, maxLength: 200, description: "For recall: words, ranked by relevance." }),
@@ -101,22 +86,10 @@ No forget action exists.`,
 			}),
 			executionMode: "sequential",
 			annotations: { openWorldHint: false },
-			async execute(id, params) {
+			async execute(_id, params) {
 				const args: Record<string, JsonValue> = {};
-				let operationId: string | undefined;
 				let terms: string[] | undefined;
 				switch (params.action) {
-					case "note":
-						if (params.text === undefined) throw new Error("Memory note requires text");
-						// Shared and durable: never accept a credential, even redacted later on read.
-						if (redactHistoryText(params.text) !== params.text)
-							throw new Error(
-								"Memory notes must not contain credentials or secrets. Restate the fact without the value.",
-							);
-						Object.assign(args, { text: params.text, sessionId });
-						if (params.replaces?.length) args.replaces = params.replaces;
-						operationId = id;
-						break;
 					case "recall":
 						if (params.query !== undefined) {
 							if (params.regex !== undefined) throw new Error("Memory recall takes query or regex, not both");
@@ -134,7 +107,7 @@ No forget action exists.`,
 					default:
 						throw new Error("Unknown memory action");
 				}
-				let data = await call(params.action, args, operationId);
+				let data = await call(params.action, args);
 				if (terms && data && typeof data === "object" && !Array.isArray(data) && Array.isArray(data.entries)) {
 					const page = data as { count?: JsonValue; matches?: JsonValue; truncated?: JsonValue; entries: Note[] };
 					const entries = rankNotes(page.entries, terms, params.limit ?? 12);

@@ -40,6 +40,7 @@ fn view() -> SavedView {
         today_project: "project".into(),
         model_settings: String::new(),
         connection_settings: String::new(),
+        knowledge: String::new(),
         settings: true,
         project_setup: vec![
             "/Users/test/source".into(),

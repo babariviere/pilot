@@ -42,6 +42,7 @@ import {
 	savedFeedback,
 } from "./feedbackView";
 import { forgetPlaces, lastField, restoreField, restoreScroll, scrollOf, todayScrollTo } from "./kept";
+import { restoreKnowledge, savedKnowledge } from "./knowledgeView";
 import { focusIssue, linearOpen, linearProject, openIssue, restoreLinear, savedLinear } from "./linearView";
 import { restoreModelDraft, savedModelDraft } from "./modelSettingsDraft";
 import { flushAll } from "./planCommands";
@@ -226,6 +227,7 @@ export function captureView(today?: Today): SavedView {
 		projectSetup: savedProjectSetup(),
 		modelSettings: savedModelDraft(),
 		connectionSettings: savedConnectionDraft(),
+		knowledge: savedKnowledge(),
 		// The thread on screen and unsent thread words, by mission and thread.
 		// Restoring them sends nothing and never moves words to another thread.
 		thread: savedThread(),
@@ -356,6 +358,7 @@ export function startFresh() {
 	settingsOpen.set(false);
 	preferencesDraft.set(null);
 	restoreModelDraft("");
+	restoreKnowledge("");
 	preferencesMessage.set("");
 	forgetFeedback();
 	closeChat();
@@ -443,6 +446,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	restoreProjectSetup(view.projectSetup ?? []);
 	restoreModelDraft(view.modelSettings ?? "");
 	restoreConnectionDraft(view.connectionSettings ?? "");
+	restoreKnowledge(view.knowledge ?? "");
 	settingsOpen.set(settings && view.settings === true);
 	// Unsent feedback always comes back as unsent words with their own origin.
 	// The page shows again only in a window that has it.

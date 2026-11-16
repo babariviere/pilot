@@ -92,6 +92,11 @@ test("knowledge HTTP reads are passive and writes act for the user with CAS", as
 		reason: "Clarify",
 	});
 	assert.equal(appended.status, 200);
+	const recovered = await call("GET", `/api/projects/${project.id}/knowledge/operations/append-1`);
+	assert.equal(recovered.status, 200);
+	assert.equal(recovered.body.operationId, "append-1");
+	assert.equal((recovered.body.detail as { revision: { revision: number } }).revision.revision, 2);
+	assert.equal((await call("GET", `/api/projects/${project.id}/knowledge/operations/never-sent`)).body, null);
 	assert.equal((await call("GET", `/api/projects/${project.id}/knowledge/${id}?revision=1`)).status, 200);
 	assert.equal((await call("GET", `/api/projects/${project.id}/knowledge/${id}?revision=3`)).status, 404);
 	const revisions = await call("GET", `/api/projects/${project.id}/knowledge/${id}/revisions?limit=1`);

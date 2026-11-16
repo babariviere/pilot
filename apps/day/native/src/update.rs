@@ -349,6 +349,9 @@ pub struct SavedView {
     /// Unsent connection setup, never authentication responses. Restore sends nothing.
     #[prop(default)]
     pub connection_settings: String,
+    /// Unsaved Knowledge edit and library location. Restore never submits it.
+    #[prop(default)]
+    pub knowledge: String,
     /// The thread on screen over its mission, as "<mission>/<thread>", or
     /// empty. Showing it again only reads.
     #[prop(default)]
@@ -423,6 +426,7 @@ impl SavedView {
             + self.today_project.len()
             + self.model_settings.len()
             + self.connection_settings.len()
+            + self.knowledge.len()
             + self.thread.len()
             + self.feedback.len()
             + self.feedback_images.len()

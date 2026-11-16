@@ -415,7 +415,10 @@ for (const mode of ["on", "only", "off"] as const) {
 						.join("\n");
 					if (chat === "project") {
 						assert.match(prompt, /#0-1: durable project fact/);
-						assert.match(prompt, /Use memory\(\{action: 'note', \.\.\.\}\) for lasting decisions/);
+						assert.match(
+							prompt,
+							/Historical project memory is read-only. Save new sourced understanding with knowledge/,
+						);
 						assert.match(prompt, /Before finishing a turn that ends a task/);
 					} else {
 						assert.doesNotMatch(prompt, /Project memory|memory\(|anything lasting worth saving/);
@@ -431,7 +434,7 @@ for (const mode of ["on", "only", "off"] as const) {
 				assert.equal(requests, 1);
 				assert.deepEqual(calls, chat === "project" ? [["wake", {}]] : [], "completion never auto-writes memory");
 				if (chat === "project") {
-					// Verify both direct execution and the existing script path on a later request.
+					// Old note calls are refused through both direct and script paths.
 					f.faux.setResponses([
 						(transcript) => {
 							inspect(transcript);
@@ -446,15 +449,12 @@ for (const mode of ["on", "only", "off"] as const) {
 						},
 						(transcript) => {
 							inspect(transcript);
-							return fauxAssistantMessage("Saved.");
+							return fauxAssistantMessage("Historical memory is read-only.");
 						},
 					]);
 					await submit("note", "Save the correction");
 					assert.equal(requests, 3);
-					assert.deepEqual(calls, [
-						["wake", {}],
-						["note", { text: "A lasting correction", sessionId: "memory-session" }],
-					]);
+					assert.deepEqual(calls, [["wake", {}]], "legacy note attempts never reach the shared store");
 				}
 			});
 		}

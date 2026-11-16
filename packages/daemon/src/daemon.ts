@@ -108,7 +108,7 @@ tracking.register("slack", createSlackPoller(trackedItems, models));
 tracking.slackAdder = createSlackAdder(trackedItems, models);
 const memory = new ProjectMemoryService(
 	config.home,
-	(prompt, signal, observe, projectId) => models.summarizeMemory(prompt, signal, observe, { projectId }),
+	undefined, // Historical notes stay readable. New shared understanding belongs in Knowledge.
 	30_000,
 	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
 );

@@ -4,7 +4,7 @@ import type { JsonValue } from "@earendil-works/chord/json";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { createMemoryTools, MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 
-test("project memory dispatches only the requested action and binds notes to the chat", async () => {
+test("historical project memory dispatches reads only", async () => {
 	const calls: unknown[] = [];
 	const tools = createMemoryTools(async (action, args, operationId) => {
 		calls.push([action, args, operationId]);
@@ -17,8 +17,6 @@ test("project memory dispatches only the requested action and binds notes to the
 	assert.deepEqual(MEMORY_TOOL_NAMES, ["memory"]);
 	const tool = tools[0]!;
 	for (const [id, args] of [
-		["1", { action: "note", text: "Durable preference", regex: "ignored" }],
-		["4", { action: "note", text: "Corrected preference", replaces: [0] }],
 		["2", { action: "recall", regex: "preference", text: "must not be saved" }],
 		["3", { action: "zoom", lo: 0, hi: 31 }],
 	] as const) {
@@ -26,8 +24,6 @@ test("project memory dispatches only the requested action and binds notes to the
 		assert.deepEqual(result, { content: [{ type: "text", text: '{"ok":true}' }], details: { ok: true } });
 	}
 	assert.deepEqual(calls, [
-		["note", { text: "Durable preference", sessionId: "chat-1" }, "1"],
-		["note", { text: "Corrected preference", sessionId: "chat-1", replaces: [0] }, "4"],
 		["recall", { regex: "preference" }, undefined],
 		["zoom", { lo: 0, hi: 31 }, undefined],
 	]);
@@ -110,12 +106,12 @@ test("recall by query sends an escaped word regex and ranks live notes above rep
 	assert.equal(details.entries[0]!.sessionId, "s2");
 });
 
-test("memory refuses credentials before they reach the shared store, and recall needs one search form", async () => {
+test("memory refuses new notes and recall needs one search form", async () => {
 	const [tool] = createMemoryTools(async () => assert.fail("must not reach pilotd"), "chat");
 	for (const text of ["Staging DB password=hunter2-very-secret", "CI token ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"])
 		await assert.rejects(
 			tool!.execute("n", { action: "note", text }, undefined, undefined, {} as never),
-			/must not contain credentials/,
+			/Unknown memory action/,
 		);
 	await assert.rejects(
 		tool!.execute("r", { action: "recall", query: "deploy", regex: "x" }, undefined, undefined, {} as never),

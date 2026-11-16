@@ -357,7 +357,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 	}
 	if (context.projectMemory && !context.ask) {
 		lines.push(
-			"- Use memory({action: 'note', ...}) for lasting decisions, user preferences/corrections, non-obvious facts and hard-won outcomes; never task status, secrets or what memory already says.",
+			"- Historical project memory is read-only. Save new sourced understanding with knowledge and explicit user choices with project_preferences, keeping sources/history. Mission agreement stays in mission records; none of these grants permissions.",
 			"- Before finishing a turn that ends a task, consider whether you learned anything lasting worth saving.",
 		);
 	}
