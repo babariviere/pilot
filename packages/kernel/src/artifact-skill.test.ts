@@ -45,7 +45,11 @@ test("bundled artifact skill is valid and keeps detailed writing guidance outsid
 		"workspace/credential access",
 		"arbitrary npm imports",
 		"read-only",
-		"no artifact screenshot preview host",
+		"runs the file once like Day's preview",
+		"there is no screenshot",
+		"no `.get()`",
+		"`Page` scrolls already",
+		"must be `Choices` (or an `nsh/base` `Tab`)",
 	])
 		assert.ok(source.includes(guidance), `missing ${guidance}`);
 	assert.doesNotMatch(

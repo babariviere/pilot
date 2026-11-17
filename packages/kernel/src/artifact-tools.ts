@@ -8,6 +8,7 @@ import {
 	imageSize,
 	loadArtifactImage,
 	MAX_IMAGE_SOURCE_BYTES,
+	type NshRendered,
 	writeNshScratchSource,
 } from "@pilot/artifacts";
 import type {
@@ -51,6 +52,7 @@ const referenceSchema = Type.Object({
 		revision: Type.Integer(),
 	}),
 	warnings: Type.Optional(Type.Array(Type.String())),
+	preview: Type.Optional(Type.String()),
 });
 const revisionNumber = Type.Integer({ minimum: 1 });
 export interface ArtifactToolOptions {
@@ -65,8 +67,11 @@ export interface ArtifactToolOptions {
 	ask?: boolean;
 	/** Trusted host session root, never a caller-supplied path. Ask writes NSH source only into its scratch/artifacts. */
 	nshSessionDirectory?: string;
-	/** Host-owned capture+compile binding, never an executable/path selected by an artifact request. */
-	captureNsh?: (sourcePath: string, signal?: AbortSignal) => Promise<{ source: string; entry: string }>;
+	/** Host-owned capture+compile+preview-run binding, never an executable/path selected by an artifact request. */
+	captureNsh?: (
+		sourcePath: string,
+		signal?: AbortSignal,
+	) => Promise<{ source: string; entry: string; rendered?: NshRendered }>;
 }
 
 /** Agents write these kinds. The store also writes visuals/shaders for compatibility and fixtures. */
@@ -94,6 +99,30 @@ function dataResult<T extends JsonValue>(data: T): AgentToolResult<T> {
 	return { content: [{ type: "text", text: JSON.stringify(data) }], details: data, structuredContent: data };
 }
 
+const quote = (texts: string[]) => texts.map((text) => JSON.stringify(text)).join(", ");
+
+/** What the publish-time preview run showed, for the agent. Problems go in warnings so they stand out. */
+function previewReport(rendered: NshRendered | undefined): { preview: string; warnings: string[] } {
+	if (!rendered) return { preview: "Source compiled and saved. The preview did not run.", warnings: [] };
+	const warnings: string[] = [];
+	if (rendered.noRoomCount)
+		warnings.push(
+			`${rendered.noRoomCount} texts have no room and do not show, such as ${quote(rendered.noRoom)}. A parent that clips has no height: often a Scroll or flex-1 inside Page. Fix it and update.`,
+		);
+	if (!rendered.texts && !rendered.noRoomCount) warnings.push("The preview shows no text.");
+	const more = rendered.texts > rendered.shows.length ? ", …" : "";
+	const pressed = rendered.pressed
+		? ` Pressed ${rendered.pressed} variant switches (Choices options and tabs) once each with no errors.`
+		: "";
+	const unpressed = rendered.unpressed
+		? ` ${rendered.unpressed} more were not pressed: the check ran out of time.`
+		: "";
+	return {
+		preview: `Ran once like Day's preview (900×650, headless) with no errors. The first screen shows ${rendered.texts} texts${rendered.texts ? `: ${quote(rendered.shows)}${more}` : ""}.${pressed}${unpressed} This checks errors and layout, not looks.`,
+		warnings,
+	};
+}
+
 /** Register through createAgentSession(customTools), so codemode and extension hooks see these tools. */
 export function createArtifactTools(options: ArtifactToolOptions): ToolDefinition[] {
 	const { store } = options;
@@ -101,7 +130,7 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 	const scratch = JSON.stringify(`${options.nshSessionDirectory}/scratch/artifacts`);
 	const offeredKinds: ArtifactWrite["kind"][] = nsh ? ["image", "nsh"] : ["image"];
 	const actions = ["create", "update", "get", "list"] as const;
-	const published = async (value: ArtifactRevision, warnings: string[] = []) => {
+	const published = async (value: ArtifactRevision, warnings: string[] = [], preview?: string) => {
 		const artifact = {
 			id: value.id,
 			sessionId: value.sessionId,
@@ -120,7 +149,11 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 		} catch (error) {
 			console.warn("pilot: artifact change notification failed", error);
 		}
-		return dataResult({ artifact, ...(warnings.length ? { warnings } : {}) });
+		return dataResult({
+			artifact,
+			...(warnings.length ? { warnings } : {}),
+			...(preview === undefined ? {} : { preview }),
+		});
 	};
 	return [
 		defineTool({
@@ -137,7 +170,7 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 - get: read source and metadata by id, optionally at a historical revision. Local artifacts read latest when revision is omitted. Linked mission/task references are read-only: omission uses the pinned revision, or latest for unpinned links; conflicting pins require an explicit linked revision.
 - list: list current session summaries without source.
 New artifacts use kind ${nsh ? "nsh or image" : "image"}. Visual, shader, HTML, React and SwiftUI artifacts are read-only: get and list still return them as saved.
-${nsh ? `NSH: ${options.ask ? `pass the complete TSX as source and a .tsx basename as sourcePath; the tool writes that one file in ${scratch}, then captures and compiles it. Ask writes nothing else.` : `kind nsh captures and compiles one sourcePath (.tsx basename or absolute path in ${scratch}). Do not pass inline source.`} Compile errors publish nothing; fix the source and retry. Saved UTF-8 bytes are immutable and survive scratch cleanup. Compilation does not run the preview or fully typecheck TypeScript. No local/remote imports or assets are loaded. Source: 512 KiB UTF-8 max.\n` : ""}Images: 16 MiB decoded max. ${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Pass a local PNG, JPEG, GIF or WebP path or an inline data URL, never a remote URL."}
+${nsh ? `NSH: ${options.ask ? `pass the complete TSX as source and a .tsx basename as sourcePath; the tool writes that one file in ${scratch}, then captures it. Ask writes nothing else.` : `kind nsh captures one sourcePath (.tsx basename or absolute path in ${scratch}). Do not pass inline source.`} The tool compiles it and runs it once headless like Day's preview: errors publish nothing (fix and retry), and the result says what it shows. Not a full TypeScript typecheck. Saved UTF-8 bytes are immutable and survive scratch cleanup. No local/remote imports or assets are loaded. Source: 512 KiB UTF-8 max.\n` : ""}Images: 16 MiB decoded max. ${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Pass a local PNG, JPEG, GIF or WebP path or an inline data URL, never a remote URL."}
 Get the current source before updating, and pass its revision as expectedRevision.`,
 			promptSnippet: nsh
 				? "Publish NSH or image artifacts; inspect older artifact sources"
@@ -213,7 +246,7 @@ Get the current source before updating, and pass its revision as expectedRevisio
 						`Artifact kind ${JSON.stringify(params.kind)} is read-only. Publish kind nsh or image instead; get still reads older artifacts.`,
 					);
 				if ((action as string) === "preview")
-					throw new Error("Artifact preview is unavailable; publish without preview");
+					throw new Error("There is no preview action: create and update run the preview and say what it shows");
 				if ((action === "get" || action === "update") && id === undefined)
 					throw new Error(`Artifact ${action} requires id`);
 				switch (action) {
@@ -255,6 +288,7 @@ Get the current source before updating, and pass its revision as expectedRevisio
 							source: source ?? "",
 							...(libraries === undefined ? {} : { libraries: [] }),
 						};
+						let report: ReturnType<typeof previewReport> | undefined;
 						if (kind === "nsh") {
 							if (
 								typeof params.sourcePath !== "string" ||
@@ -275,6 +309,7 @@ Get the current source before updating, and pass its revision as expectedRevisio
 								: await captureNshSource(options.nshSessionDirectory!, params.sourcePath, signal);
 							write.source = captured.source;
 							write.entry = captured.entry;
+							report = previewReport(captured.rendered);
 							signal?.throwIfAborted();
 						}
 						if (write.kind === "image") {
@@ -289,23 +324,15 @@ Get the current source before updating, and pass its revision as expectedRevisio
 
 						if (action === "create") {
 							const value = await store.create(write, signal);
-							return published(
-								value,
-								write.kind === "nsh"
-									? ["Source compiled and saved. Preview availability depends on your app."]
-									: [],
-							);
+							return published(value, report?.warnings, report?.preview);
 						}
 						const value = await store.update(id!, write, params.expectedRevision, signal);
-						const warnings: string[] =
-							write.kind === "nsh"
-								? ["Source compiled and saved. Preview availability depends on your app."]
-								: [];
+						const warnings = [...(report?.warnings ?? [])];
 						if (params.expectedRevision === undefined)
 							warnings.unshift(
 								`Updated without expectedRevision, so a concurrent change could have been replaced. Pass expectedRevision (${value.revision}) next time.`,
 							);
-						return published(value, warnings);
+						return published(value, warnings, report?.preview);
 					}
 					default:
 						throw new Error(`Unknown artifact action: ${action}`);

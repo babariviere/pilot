@@ -16,11 +16,16 @@ or Pilot actions. Calls that need them fail. Pressing things in an artifact chan
    It is session scratch, not repository source. In Ask, which has no write tool, pass the file's text as `source`
    with `sourcePath: "release-plan.tsx"` on every create and update; the artifact tool writes the file, then
    publishes it.
-2. Publish it with the artifact tool. The tool compiles the captured bytes first. Fix reported compile errors
-   and retry; failed compilation saves nothing. Success saves those exact bytes as a new revision. Every reader,
-   and any later preview, uses that saved revision, never the file. Editing the file changes nothing until you
-   publish an update. Compilation does not run the preview or fully typecheck TypeScript.
-3. Workspace cleanup deletes the scratch folder, unpublished files included. Published revisions stay.
+2. Publish it with the artifact tool. The tool compiles the captured bytes, then runs them once like Day's
+   preview: headless, 900 x 650, with the same helpers, sandbox and limits. A compile error, a thrown error or a
+   stopped preview saves nothing; fix the file and publish again. Success saves those exact bytes as a new
+   revision. Every reader and preview uses that saved revision, never the file. Editing the file changes nothing
+   until you publish an update.
+3. Read the result. `preview` lists the texts the first screen shows. The run also presses each `Choices`
+   option and tab once and refuses errors in those variants. Other buttons are not pressed. A warning about text
+   with no room means part of a screen is blank in Day: fix it and update. The run checks errors and layout, not
+   looks or fonts. It is not a full TypeScript typecheck.
+4. Workspace cleanup deletes the scratch folder, unpublished files included. Published revisions stay.
 
 ## The file
 
@@ -40,18 +45,21 @@ export default function Artifact() {
 }
 ```
 
-- Export one component as `default`. Do not call `mount`: Pilot mounts the published component.
-- Import only from `"nsh"` (views, text, `List`, canvas, signals, `effect`, `token`, `reduceMotion`), `"nsh/base"`
-  (unstyled components: `Button`, `Input`, `Select`, `Combobox`, `Checkbox`, `Switch`, `Slider`, `Tabs`, `Dialog`,
-  `Sheet`, `Popover`, `Menu`, `Tooltip`, `Toast`, `Accordion`, `Table`, `DataTable`, `Tree`, `DatePicker` and
-  more; style each part) and `"pilot-artifact/ui"` (the helpers below). Host access, links, editors, motion,
-  relative files and assets do not load.
+- Export one component as `default`. Do not call `mount` or `mountArtifact`: Pilot mounts the published component.
+- Import anything from `"nsh"`, `"nsh/base"`, `"nsh/base/plot"` and `"pilot-artifact/ui"`: views, animation,
+  gestures, keymap, editors, charts. Refused, with the reason in the error: what reaches outside the preview
+  (`host`, `Clipboard`, `Storage`, `openUrl`, `Picker`, `WebView`, `Notifications`, sound and speech, `Link`,
+  `Terminal`, `AlertDialog`), shaders, `mount`, other modules and relative files.
+- `If` and `Each` are built into the JSX and need no import: `<If when={…} else={…}>`, `<Each of={rows} key={(r) => r.id}>{(r) => …r()…}</Each>`.
+- Read a signal by calling it, `count()`, and change it with `count.set(next)`. There is no `.get()` or `.value`:
+  they stop the preview with "not a function".
+- `Page` scrolls already. Do not put a `Scroll`, `flex-1` or `h-full` view inside it: it gets no height and what it
+  holds does not show. Use plain `View`s; only a wide row may scroll sideways with `<Scroll horizontal>`.
 - Put the data in the file. The artifact cannot fetch it later.
 - Style with the theme's semantic classes (`bg-card`, `text-foreground`, `text-muted-foreground`,
   `border-border`, `bg-primary`) and the spacing scale (`gap-3`, `p-4`). The artifact then follows light and dark.
 - Write every number as text. Say states in words; color only supports them.
-- Keep motion short and skip it when `reduceMotion()` is true. Never imitate loading, progress or success: Pilot's
-  viewer reports the artifact's real state itself.
+- Never imitate loading, progress or success: Pilot's viewer reports the artifact's real state itself.
 - A mockup says it is a preview. It changes nothing outside itself.
 
 ## Helpers (`pilot-artifact/ui`)
@@ -60,17 +68,17 @@ Each helper takes declarative data and does the layout, sizing, arrows and label
 faithfully (an unknown id, a negative bar, over a limit) shows the reason in place of the drawing. It never draws
 part of it. Fix the data and publish again. The exact types are in [nsh/kit/index.ts](../nsh/kit/index.ts).
 
-| Helper | Data | Limits |
-| --- | --- | --- |
-| `Page`, `Section`, `Card` | `title`, children | |
-| `Stat` | `label`, `value`, optional `note` | |
-| `Choices` | `label`, `options: [{ id, label }]`, `value`, `onChange` | |
-| `ComparisonTable` | `spec: { columns, rows: [{ label, cells }], recommended? }` | 6 columns, 40 rows |
-| `BarChart` | `spec: { bars: [{ label, value }], unit? }`, values from 0 | 50 bars |
-| `TrendChart` | `spec: { points: [{ label, value }], unit? }`, `height?` | 2–400 points |
-| `Timeline` | `spec: { events: [{ when, title, detail?, state? }] }`, state `done`, `now`, `next` | 50 events |
-| `FlowDiagram` | `spec: { direction?, nodes: [{ id, label, detail?, tone? }], edges: [{ from, to, label?, dashed? }] }` | 40 steps, 80 links |
-| `SequenceDiagram` | `spec: { participants: [{ id, label }], steps: [{ from, to, label, reply? } or { note, over }] }` | 10 participants, 80 steps |
+| Helper                    | Data                                                                                                   | Limits                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------- |
+| `Page`, `Section`, `Card` | `title`, children                                                                                      |                           |
+| `Stat`                    | `label`, `value`, optional `note`                                                                      |                           |
+| `Choices`                 | `label`, `options: [{ id, label }]`, `value`, `onChange`                                               |                           |
+| `ComparisonTable`         | `spec: { columns, rows: [{ label, cells }], recommended? }`                                            | 6 columns, 40 rows        |
+| `BarChart`                | `spec: { bars: [{ label, value }], unit? }`, values from 0                                             | 50 bars                   |
+| `TrendChart`              | `spec: { points: [{ label, value }], unit? }`, `height?`                                               | 2–400 points              |
+| `Timeline`                | `spec: { events: [{ when, title, detail?, state? }] }`, state `done`, `now`, `next`                    | 50 events                 |
+| `FlowDiagram`             | `spec: { direction?, nodes: [{ id, label, detail?, tone? }], edges: [{ from, to, label?, dashed? }] }` | 40 steps, 80 links        |
+| `SequenceDiagram`         | `spec: { participants: [{ id, label }], steps: [{ from, to, label, reply? } or { note, over }] }`      | 10 participants, 80 steps |
 
 - `FlowDiagram` reads `"right"` (default) or `"down"`. Loops (links back against the flow) are routed below the
   steps, and links that skip ranks go around the steps in their way. Tones are `default`, `accent`, `muted` and
@@ -85,8 +93,8 @@ part of it. Fix the data and publish again. The exact types are in [nsh/kit/inde
 - Fixed-size views are artboards: a phone (390 x 844), a tablet or a desktop window. Put alternatives side by side in
   a wrapping row (`flex-row flex-wrap`), and switch screen, width or theme from local state.
 - Use mock data that looks real: names, dates and counts the product would show.
-- Switch variants, situations and settings with `Choices`. Do not make your own chips: on macOS a `hover:` style
-  covers a `selected:` one while the pointer stays on it, so the chosen option looks empty.
+- Every variant, situation or setting switch must be `Choices` (or an `nsh/base` `Tab`): publishing presses only
+  those, so errors behind your own chips or buttons go unchecked. Hand-made chips also look empty on macOS when hovered.
 - A prototype starts from [nsh/examples/prototype.tsx](../nsh/examples/prototype.tsx): variants of one screen inside
   a realistic copy of the screen around it, tried in a few situations. It draws only the shown variant.
 - Images, photos and other assets do not load inside NSH. Publish an image artifact beside the mockup instead.

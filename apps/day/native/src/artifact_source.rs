@@ -1,4 +1,4 @@
-//! Single saved-source preparation, not a rendering or host-action capability.
+//! Single saved-source preparation and the publish-time check, not a host-action capability.
 use std::{
     ffi::CString,
     fs::File,
@@ -54,110 +54,92 @@ const KIT_EXPORTS: &[&str] = &[
     "Stat",
     "TABLE_LIMITS",
 ];
-/// What an artifact may take from `nsh`: views, text, drawing, reactivity and read-only settings. Not host,
-/// clipboard, storage, files, media, network, notifications, theme changes or motion (not yet qualified here).
-const NSH_EXPORTS: &[&str] = &[
-    "View",
-    "Text",
-    "Scroll",
-    "List",
-    "Canvas",
-    "Path2D",
-    "ErrorBoundary",
-    "signal",
-    "computed",
-    "effect",
-    "batch",
-    "untracked",
-    "cleanup",
-    "context",
-    "token",
-    "reduceMotion",
-    "colorScheme",
-    "fontScale",
-    "windowSize",
-    "locale",
-    "localeSettings",
+/// The modules an artifact may import from. Everything they export is allowed except \`REFUSED\`.
+const MODULES: &[&str] = &["nsh", "nsh/base", "nsh/base/plot", "pilot-artifact/ui"];
+/// Names an artifact may not import, and why. Each one reaches outside the preview: the host app, the
+/// computer, the network, or Pilot's own window. The deny-all policy also stops the capabilities at run
+/// time (\`artifact_runtime\`); this list says why before anything is published.
+const REFUSED: &[(&str, &str, &str)] = &[
+    ("nsh", "mount", "Pilot mounts the default export itself"),
+    ("nsh", "host", "it calls the app that hosts the preview"),
+    (
+        "nsh",
+        "nativeComponent",
+        "it reaches native code outside the preview",
+    ),
+    (
+        "nsh",
+        "nativeModule",
+        "it reaches native code outside the preview",
+    ),
+    (
+        "nsh",
+        "Clipboard",
+        "it reads and writes the computer's clipboard",
+    ),
+    ("nsh", "Storage", "it saves data outside the preview"),
+    (
+        "nsh",
+        "openUrl",
+        "it opens links and apps outside the preview",
+    ),
+    ("nsh", "UrlScheme", "it receives links sent to the app"),
+    ("nsh", "Notifications", "it sends system notifications"),
+    (
+        "nsh",
+        "Picker",
+        "it opens files and photos from the computer",
+    ),
+    ("nsh", "WebView", "it loads web pages from the network"),
+    ("nsh", "Speech", "it uses the microphone"),
+    ("nsh", "SpeechSession", "it uses the microphone"),
+    ("nsh", "AudioPlayer", "it plays sound on the computer"),
+    ("nsh", "Sound", "it plays sound on the computer"),
+    (
+        "nsh",
+        "setColorScheme",
+        "it changes the appearance of Pilot's window",
+    ),
+    ("nsh", "Shader", SHADER),
+    ("nsh", "ShaderEffect", SHADER),
+    ("nsh", "ShaderTransition", SHADER),
+    ("nsh", "ScreenEffect", SHADER),
+    ("nsh", "ScreenTransition", SHADER),
+    ("nsh/base", "Link", "it opens links outside the preview"),
+    ("nsh/base", "Terminal", "it runs programs on the computer"),
+    (
+        "nsh/base",
+        "ColorEyeDropper",
+        "it reads colors from the whole screen",
+    ),
+    (
+        "nsh/base",
+        "AlertDialog",
+        "it opens a system alert over Pilot's window; use Dialog",
+    ),
+    (
+        "pilot-artifact/ui",
+        "mountArtifact",
+        "Pilot mounts the default export itself",
+    ),
 ];
-/// Components an artifact may take from `nsh/base`. They keep their state in the preview. Left out: host-reaching
-/// or heavy parts (`Link`, `AlertDialog`, `ColorEyeDropper`, editors, terminal, dock, emoji picker, status bar).
-const BASE_EXPORTS: &[&str] = &[
-    "Accordion",
-    "AccordionHeader",
-    "AccordionItem",
-    "AccordionPanel",
-    "AccordionTrigger",
-    "Avatar",
-    "AvatarGroup",
-    "Button",
-    "Calendar",
-    "Carousel",
-    "CarouselContent",
-    "CarouselItem",
-    "CarouselNext",
-    "CarouselPagination",
-    "CarouselPaginationItem",
-    "CarouselPrevious",
-    "Checkbox",
-    "Collapsible",
-    "ColorArea",
-    "ColorField",
-    "ColorPicker",
-    "ColorSlider",
-    "ColorSwatch",
-    "Combobox",
-    "Command",
-    "ContextMenu",
-    "DataTable",
-    "DatePicker",
-    "Dialog",
-    "DiffView",
-    "HoverCard",
-    "Input",
-    "Menu",
-    "MenuItem",
-    "MenuSeparator",
-    "NavPage",
-    "NavStack",
-    "NumberInput",
-    "OtpInput",
-    "Pagination",
-    "Popover",
-    "Progress",
-    "Radio",
-    "RadioGroup",
-    "ResizablePanel",
-    "ResizablePanelGroup",
-    "Scrollbar",
-    "Select",
-    "Sheet",
-    "Slider",
-    "Submenu",
-    "Switch",
-    "Tab",
-    "Table",
-    "TableBody",
-    "TableCaption",
-    "TableCell",
-    "TableFooter",
-    "TableHead",
-    "TableHeader",
-    "TableRow",
-    "Tabs",
-    "TextView",
-    "TimeField",
-    "Toast",
-    "ToastManager",
-    "ToastStack",
-    "Toggle",
-    "ToggleGroup",
-    "Toolbar",
-    "ToolbarGroup",
-    "ToolbarSeparator",
-    "Tooltip",
-    "Tree",
-    "createNavStack",
-];
+const SHADER: &str = "Pilot cannot limit a shader's GPU time, and a shader can read what is drawn behind the preview";
+/// Why other modules do not load.
+fn module_refusal(module: &str) -> &'static str {
+    match module {
+        "nsh/desktop" => "it controls Pilot's windows, menus, tray and global shortcuts",
+        "nsh/mobile" => "it is for phones; previews run on macOS",
+        "nsh/updater" => "it updates the app",
+        "nsh/test" => "it is for test files",
+        "nsh/web" => "it is for web pages",
+        "nsh/i18n" => "a preview has no translation files; write the text itself",
+        "fs" | "fs/promises" => "it reads and writes files",
+        "net" | "websocket" => "it opens network connections",
+        "process" | "os" => "it reaches programs and the computer",
+        "pilot-day/native" => "it is Pilot's own native bridge",
+        _ => "a preview has no other packages or files",
+    }
+}
 
 /// The exact source identity supplied by a saved canonical revision, never authored bytecode.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -259,22 +241,29 @@ pub fn compile_source(source: &str, entry: &str) -> Result<String, String> {
 
 #[derive(Default)]
 struct Imports {
-    error: Option<&'static str>,
+    error: Option<String>,
     default_export: bool,
 }
 impl<'a> Visit<'a> for Imports {
     fn visit_import_declaration(&mut self, it: &ImportDeclaration<'a>) {
         if it.phase.is_some() || it.with_clause.is_some() {
-            self.error = Some("Import attributes and phases are unsupported");
+            self.error = Some("Import attributes and phases are unsupported".into());
         }
         let module = it.source.value.as_str();
+        if !MODULES.contains(&module) {
+            self.error = Some(format!(
+                "imports from {module:?} are refused: {}. Import from \"nsh\", \"nsh/base\", \"nsh/base/plot\" and \"pilot-artifact/ui\"",
+                module_refusal(module)
+            ));
+            return;
+        }
         let Some(specifiers) = &it.specifiers else {
-            self.error = Some("Only named imports are supported");
+            self.error = Some("Only named imports are supported".into());
             return;
         };
         for specifier in specifiers {
             let ImportDeclarationSpecifier::ImportSpecifier(specifier) = specifier else {
-                self.error = Some("Default and namespace imports are unsupported");
+                self.error = Some("Default and namespace imports are unsupported".into());
                 continue;
             };
             let name = match &specifier.imported {
@@ -283,37 +272,34 @@ impl<'a> Visit<'a> for Imports {
             };
             // Types are erased before the module runs, so any type from an allowed module is fine.
             let type_only = it.import_kind.is_type() || specifier.import_kind.is_type();
-            let allowed = match module {
-                "nsh" => type_only || NSH_EXPORTS.contains(&name),
-                "nsh/base" => type_only || BASE_EXPORTS.contains(&name),
-                "pilot-artifact/ui" => KIT_EXPORTS.contains(&name),
-                _ => false,
-            };
-            if !allowed {
-                self.error = Some("Import is outside the native artifact allowlist");
+            if type_only {
+                continue;
             }
-        }
-        if !["nsh", "nsh/base", "pilot-artifact/ui"].contains(&module) {
-            self.error = Some("Local, remote and other module imports are unsupported");
+            if let Some((_, _, why)) = REFUSED.iter().find(|(m, n, _)| *m == module && *n == name) {
+                self.error = Some(format!("{name} from {module:?} is refused: {why}"));
+            } else if module == "pilot-artifact/ui" && !KIT_EXPORTS.contains(&name) {
+                // NSH modules check their own names when compiling; the kit is linked later, so check it here.
+                self.error = Some(format!("pilot-artifact/ui has no {name}"));
+            }
         }
     }
     fn visit_import_expression(&mut self, _: &ImportExpression<'a>) {
-        self.error = Some("Dynamic imports are unsupported");
+        self.error = Some("Dynamic imports are unsupported".into());
     }
     fn visit_import_meta(&mut self, _: &ImportMeta) {
-        self.error = Some("Import metadata is unsupported");
+        self.error = Some("Import metadata is unsupported".into());
     }
     fn visit_export_all_declaration(&mut self, _: &ExportAllDeclaration<'a>) {
-        self.error = Some("Module re-exports are unsupported");
+        self.error = Some("Module re-exports are unsupported".into());
     }
     fn visit_export_from_declaration(&mut self, _: &ExportFromDeclaration<'a>) {
-        self.error = Some("Module re-exports are unsupported");
+        self.error = Some("Module re-exports are unsupported".into());
     }
     fn visit_ts_import_equals_declaration(&mut self, _: &TSImportEqualsDeclaration<'a>) {
-        self.error = Some("Import aliases are unsupported");
+        self.error = Some("Import aliases are unsupported".into());
     }
     fn visit_ts_import_type(&mut self, _: &TSImportType<'a>) {
-        self.error = Some("Import types are unsupported");
+        self.error = Some("Import types are unsupported".into());
     }
     fn visit_export_default_declaration(&mut self, it: &ExportDefaultDeclaration<'a>) {
         self.default_export = true;
@@ -358,7 +344,10 @@ fn check_imports(source: &str) -> Result<(), String> {
         return Err(format!("Artifact.tsx: {error}"));
     }
     if !imports.default_export {
-        return Err("Artifact.tsx: export a default Artifact component".into());
+        return Err(
+            "Artifact.tsx: export the component as default (export default function Artifact() {...}). Do not call mount"
+                .into(),
+        );
     }
     Ok(())
 }
@@ -381,7 +370,8 @@ pub enum Request {
     },
 }
 
-/// The helper's only operations. It never mounts or evaluates a module.
+/// The helper's only operations. Capture also runs the entry once headless, as Day's preview
+/// would (`artifact_check`), and refuses one that fails. Ensure and Compile never evaluate code.
 pub fn handle(request: Request) -> Result<Value, String> {
     match request {
         Request::Compile { source, entry } => {
@@ -433,8 +423,9 @@ pub fn handle(request: Request) -> Result<Value, String> {
             if source.trim().is_empty() {
                 return Err("Empty NSH source".into());
             }
-            compile_source(&source, &entry)?;
-            Ok(json!({"source": source}))
+            let code = compile_source(&source, &entry)?;
+            let rendered = crate::artifact_check::run(code)?;
+            Ok(json!({"source": source, "rendered": rendered}))
         }
     }
 }
@@ -501,22 +492,77 @@ fn open_at(directory: &File, name: &str, is_directory: bool) -> Result<File, Str
 
 #[cfg(test)]
 mod tests {
-    use super::{BASE_EXPORTS, NSH_EXPORTS, compile_source};
+    use super::{REFUSED, compile_source};
+
+    /// What NSH's compiler says of \`source\` without the artifact import rules.
+    fn nsh_compiles(source: &str) -> Result<String, String> {
+        let sets: Vec<_> = nsh_base::registry()
+            .sets()
+            .into_iter()
+            .map(nsh_core::element::description::SetDescription::from)
+            .collect();
+        nsh_bundler::compile_module("Artifact.tsx", source, &sets)
+    }
 
     #[test]
-    fn every_allowed_nsh_and_base_name_exists() {
-        let mut missing_names = Vec::new();
-        for (module, names) in [("nsh", NSH_EXPORTS), ("nsh/base", BASE_EXPORTS)] {
-            for name in names {
-                let source =
-                    format!("import {{{name}}} from '{module}'; export default () => {name};");
-                if let Err(error) = compile_source(&source, "Artifact.tsx") {
-                    missing_names.push(format!("{module} {name}: {error}"));
-                }
+    fn every_refused_name_exists_and_says_why() {
+        for (module, name, why) in REFUSED {
+            let source = format!("import {{{name}}} from '{module}'; export default () => {name};");
+            if *module != "pilot-artifact/ui" {
+                nsh_compiles(&source)
+                    .unwrap_or_else(|error| panic!("{module} {name} no longer exists: {error}"));
             }
+            let error = compile_source(&source, "Artifact.tsx").unwrap_err();
+            assert!(
+                error.contains(&format!("{name} from {module:?} is refused: {why}")),
+                "{error}"
+            );
         }
-        assert!(missing_names.is_empty(), "{missing_names:#?}");
         let missing = "import {NoSuchPart} from 'nsh/base'; export default () => NoSuchPart;";
         assert!(compile_source(missing, "Artifact.tsx").is_err());
+    }
+
+    #[test]
+    fn components_hooks_animation_gestures_editors_and_charts_are_allowed() {
+        for (module, names) in [
+            (
+                "nsh",
+                "View, Text, Scroll, List, Canvas, Image, Video, Overlay, LayoutAnimation, Animated, createAnimatedValue, createMotion, Easing, motions, PanResponder, keymap, Keyboard, lifecycle, resource, split, setTheme, announce, appInfo, platform, safeArea, shadersAvailable, registerFont",
+            ),
+            (
+                "nsh/base",
+                "Button, Dialog, Sheet, Editor, RichEditor, createRichEditor, starterKit, TextView, DiffView, DockArea, EmojiPicker, DataTable, Tree, Toast, ResizablePanelGroup",
+            ),
+            (
+                "nsh/base/plot",
+                "Plot, Line, Bar, Area, Pie, Sankey, Treemap, PlotAxis",
+            ),
+        ] {
+            let source =
+                format!("import {{{names}}} from '{module}'; export default () => [{names}];");
+            compile_source(&source, "Artifact.tsx")
+                .unwrap_or_else(|error| panic!("{module}: {error}"));
+        }
+        let typed =
+            "import type {SpeechSession} from 'nsh'; export default (s: SpeechSession) => null;";
+        assert!(
+            compile_source(typed, "Artifact.tsx").is_ok(),
+            "types are erased"
+        );
+        for (module, why) in [
+            ("nsh/desktop", "it controls Pilot's windows"),
+            ("fs/promises", "it reads and writes files"),
+            ("react", "a preview has no other packages or files"),
+        ] {
+            let error = compile_source(
+                &format!("import {{x}} from '{module}'; export default () => x;"),
+                "Artifact.tsx",
+            )
+            .unwrap_err();
+            assert!(
+                error.contains(&format!("imports from {module:?} are refused: {why}")),
+                "{error}"
+            );
+        }
     }
 }

@@ -5,6 +5,7 @@ export {
 	compileNshSource,
 	ensureArtifactScratch,
 	NSH_SOURCE_BYTES,
+	type NshRendered,
 	nshSource,
 	writeNshScratchSource,
 } from "./nsh-source.ts";

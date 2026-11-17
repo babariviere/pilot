@@ -11,10 +11,12 @@ In ordinary Local Build chats, paste clipboard images or drop supported image fi
 into the composer. Review the attachment previews before sending. Conversation images
 and raster artifacts offer **Copy image** separately from copying source text.
 
-Where the tool offers NSH TSX, it captures and compiles one session-scratch file
-before saving a revision. Ask chats can publish NSH too: the tool writes that one
-scratch file itself and never touches the project. Compile errors leave history
-unchanged. These artifacts show as a preview in the native Day app: on a delivered result's page, the
+Where the tool offers NSH TSX, it captures and compiles one session-scratch file,
+then runs it once headless the way Day's preview does, before saving a revision.
+Ask chats can publish NSH too: the tool writes that one
+scratch file itself and never touches the project. Compile errors and previews
+that fail to start or render leave history unchanged, and the agent is told what
+the preview shows and which text has no room. These artifacts show as a preview in the native Day app: on a delivered result's page, the
 primary image or native preview opens automatically. Others open with **Preview**. A preview pauses
 while it is scrolled out of view and starts again from the same revision when
 it shows. Interactions change only that preview's local state; hiding or

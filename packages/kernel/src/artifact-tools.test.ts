@@ -241,6 +241,36 @@ test("Ask inspects stored SwiftUI source without entering rendering or publicati
 	assert.equal(f.notifications, 0);
 });
 
+test("NSH publication says what the preview shows and warns about text with no room", async () => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "nsh-tool-report-")));
+	try {
+		const store = new ArtifactStore(root, { sessionId: "owner" });
+		const rendered = {
+			shows: ["Plan", "Ready"],
+			texts: 40,
+			noRoom: ["Inside"],
+			noRoomCount: 12,
+			pressed: 6,
+			unpressed: 2,
+		};
+		const f = fixture({
+			store,
+			nshSessionDirectory: root,
+			captureNsh: async () => ({ source: "export default () => null;", entry: "view.tsx", rendered }),
+		});
+		const created = (await f.call("create", { title: "Plan", kind: "nsh", sourcePath: "view.tsx" }))
+			.structuredContent as { warnings: string[]; preview: string };
+		assert.match(created.preview, /The first screen shows 40 texts: "Plan", "Ready", …\./);
+		assert.match(created.preview, /Pressed 6 variant switches .* 2 more were not pressed/);
+		assert.match(
+			created.warnings.join(),
+			/12 texts have no room and do not show, such as "Inside"\..*flex-1 inside Page/,
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("NSH read schema accepts fresh and historical metadata without rewriting it", async () => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "nsh-tool-schema-")));
 	try {
@@ -390,7 +420,7 @@ test("unavailable preview is neither advertised nor callable, while publishing s
 			}),
 		/Validation failed/,
 	);
-	await assert.rejects(f.call("preview", write), /unavailable; publish without preview/);
+	await assert.rejects(f.call("preview", write), /no preview action/);
 	assert.deepEqual(f.calls, []);
 	await f.call("create", write);
 	await f.call("update", { id: "artifact-1", ...write });
@@ -711,7 +741,7 @@ test("NSH tool waits for compilation of the exact captured bytes before publicat
 	assert.deepEqual(f.calls, [
 		{ method: "create", args: [{ title: "Preview", kind: "nsh", source, entry: "view.tsx" }, controller.signal] },
 	]);
-	assert.match((result.structuredContent as { warnings: string[] }).warnings.join(), /compiled and saved/);
+	assert.match((result.structuredContent as { preview: string }).preview, /compiled and saved/);
 	assert.equal(f.notifications, 1);
 });
 
@@ -758,25 +788,47 @@ test("NSH failed update compilation keeps the saved revision and history unchang
 	assert.equal(f.notifications, 0);
 });
 
-test("NSH tool captures only session scratch and keeps exact pins without executing source", {
+test("NSH tool captures only session scratch, runs the preview once and keeps exact pins", {
 	skip: !process.env.NSH_ARTIFACT_TEST_HOST ? "Run the focused Day artifact-source wrapper" : false,
 }, async (t) => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "nsh-tool-")));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const host = process.env.NSH_ARTIFACT_TEST_HOST;
 	const directory = await ensureArtifactScratch(root, host);
-	const source = "throw Error('never executed at publication'); export default () => null;\r\n";
-	await writeFile(join(directory, "view.tsx"), source);
 	const store = new ArtifactStore(root, { sessionId: "owner" });
 	const f = fixture({
 		store,
 		nshSessionDirectory: root,
 		captureNsh: (path, signal) => captureNshSource(root, path, signal, host),
 	});
+	// A preview that fails to start or render publishes nothing and says why.
+	for (const [failing, error] of [
+		["throw Error('fails at load'); export default () => null;", /could not start: Error: fails at load/],
+		[
+			"import {Text, signal} from 'nsh'; export default function A() { const s = signal(1); return <Text>{s.get()}</Text>; }",
+			/stopped with an error: not a function/,
+		],
+		[
+			"import {Text, signal} from 'nsh'; import {Choices} from 'pilot-artifact/ui'; const rows = {a: 'One'}; export default function A() { const v = signal('a'); return <Choices label=\"Layout\" options={[{id: 'a', label: 'A'}, {id: 'b', label: 'B'}]} value={v()} onChange={(id) => v.set(rows[id].x.y)} />; }",
+			/failed after pressing "B": .*the app threw/,
+		],
+	] as const) {
+		await writeFile(join(directory, "view.tsx"), failing);
+		await assert.rejects(f.call("create", { title: "Broken", kind: "nsh", sourcePath: "view.tsx" }), error);
+	}
+	assert.equal((await store.list()).length, 0);
+	const source =
+		"import {Text} from 'nsh'; import {Page} from 'pilot-artifact/ui';\r\nexport default () => <Page title=\"Plan\"><Text>Ready</Text></Page>;\r\n";
+	await writeFile(join(directory, "view.tsx"), source);
 	const result = await f.call("create", { title: "Preview", kind: "nsh", sourcePath: "view.tsx" });
-	const data = result.structuredContent as { artifact: { id: string; revision: number }; warnings: string[] };
+	const data = result.structuredContent as {
+		artifact: { id: string; revision: number };
+		warnings?: string[];
+		preview: string;
+	};
 	assert.equal(data.artifact.revision, 1);
-	assert.match(data.warnings.join(), /Preview availability depends on your app/);
+	assert.equal(data.warnings, undefined);
+	assert.match(data.preview, /with no errors\. The first screen shows 2 texts: "Plan", "Ready"\. This checks/);
 	assert.equal((await store.get(data.artifact.id)).source, source);
 	await assert.rejects(
 		f.call("update", { id: data.artifact.id, title: "Next", kind: "nsh", sourcePath: "view.tsx" }),

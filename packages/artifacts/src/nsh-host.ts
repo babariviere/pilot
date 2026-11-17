@@ -8,6 +8,9 @@ import { fileURLToPath } from "node:url";
 
 const INSTALLED_HOST = fileURLToPath(new URL("../native/pilot-artifact-host", import.meta.url));
 const MAX_RESPONSE = 4 * 1024 * 1024;
+/** Ends a helper that never finishes. Capture runs the preview once and presses its variant switches, which
+ * artifact_check.rs ends within 9 s; 10 s leaves room for compiling on a busy machine. */
+const DEADLINE_MS = 10_000;
 let active = 0;
 let verified: { key: string; identity: Record<string, unknown> } | undefined;
 
@@ -156,7 +159,10 @@ export async function callArtifactHost(
 			child.kill("SIGKILL");
 		};
 		const aborted = () => stop(new Error("Artifact host canceled"));
-		const timer = setTimeout(() => stop(new Error("Artifact host exceeded 5 second deadline")), 5000);
+		const timer = setTimeout(
+			() => stop(new Error(`Artifact host exceeded its ${DEADLINE_MS / 1000} second deadline`)),
+			DEADLINE_MS,
+		);
 		signal?.addEventListener("abort", aborted, { once: true });
 		// Node leaves stdio null when spawn fails early (EMFILE/ENFILE). "error" and "close"
 		// still follow, so the failure settles through the same join path.

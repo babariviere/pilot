@@ -149,7 +149,15 @@ fn entry(captured: &CapturedSource) -> Result<String, String> {
 /// # Errors
 /// Returns source identity, syntax or import errors before any code executes.
 pub fn config(captured: CapturedSource) -> Result<EngineConfig, String> {
-    let code = entry(&captured)?;
+    config_for(entry(&captured)?)
+}
+
+/// The engine configuration for an entry `compile_source` has just compiled.
+/// Same kit, bootstrap, policy, UI sets and limits as a saved revision gets.
+///
+/// # Errors
+/// Returns kit compile errors before any code executes.
+pub fn config_for(code: String) -> Result<EngineConfig, String> {
     let registry = nsh_base::registry();
     let mut chunks = Vec::with_capacity(KIT.len() + 2);
     for (id, code) in kit()? {
@@ -190,8 +198,10 @@ pub fn limits() -> Limits {
     Limits {
         // 64 MiB × 4 previews = NSH's default heap for one embedded app.
         memory_bytes: 64 << 20,
-        // Deep recursion becomes a RangeError, well below the engine thread's stack.
-        stack_bytes: 512 << 10,
+        // Deep recursion becomes a RangeError, well below the engine thread's 8 MiB stack.
+        // Three saved 700-850 line mocks overflowed 512 KiB in a debug build and render at
+        // 1 MiB; release frames are smaller. NSH's own default is 4 MiB.
+        stack_bytes: 1 << 20,
         // Evaluating the kit and the mock once; a correct mock takes a few ms.
         load_budget: Duration::from_secs(2),
         // One event with the drawing it causes, such as a switch to another

@@ -1,7 +1,15 @@
-//! Unprivileged bounded capture/compiler helper. It never evaluates authored JavaScript.
+//! Unprivileged bounded capture/compiler helper. Capture also runs the captured entry once on
+//! NSH's headless engine, with Day's preview kit, deny-all policy and limits, and no window.
 #[cfg(unix)]
 use std::io::{Read, Write};
 
+#[path = "../artifact_check.rs"]
+#[cfg(unix)]
+mod artifact_check;
+#[path = "../artifact_runtime.rs"]
+#[cfg(unix)]
+#[allow(dead_code)] // Day's saved-revision entry cache; the helper only checks a fresh capture.
+mod artifact_runtime;
 #[path = "../artifact_source.rs"]
 #[cfg(unix)]
 mod artifact_source;

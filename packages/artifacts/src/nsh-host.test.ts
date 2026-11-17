@@ -137,7 +137,7 @@ test("NSH production compiler rejects import/export reach-through without readin
 });
 
 test(
-	"NSH supplied examples prepare without filesystem resolution; unqualified motion is refused",
+	"NSH supplied examples prepare without filesystem resolution; host reach is refused with its reason",
 	options,
 	async () => {
 		for (const name of ["summary", "charts", "flow", "sequence", "prototype", "mockup"]) {
@@ -145,18 +145,13 @@ test(
 				new URL(`../../kernel/skills/pilot-artifacts/nsh/examples/${name}.tsx`, import.meta.url),
 				"utf8",
 			);
-			if (name === "mockup") {
-				await assert.rejects(
-					callArtifactHost({ action: "compile", source, entry: "demo.tsx" }, undefined, host),
-					/allowlist/,
-				);
-			} else {
-				assert.equal(
-					await callArtifactHost({ action: "compile", source, entry: "demo.tsx" }, undefined, host),
-					null,
-				);
-			}
+			assert.equal(await callArtifactHost({ action: "compile", source, entry: "demo.tsx" }, undefined, host), null);
 		}
+		const clipboard = "import {Clipboard} from 'nsh'; export default () => null;";
+		await assert.rejects(
+			callArtifactHost({ action: "compile", source: clipboard, entry: "demo.tsx" }, undefined, host),
+			/Clipboard from "nsh" is refused: it reads and writes the computer's clipboard/,
+		);
 	},
 );
 
@@ -216,7 +211,7 @@ test("NSH helper transport joins the owned helper before it releases a slot or s
 	await assert.rejects(callArtifactHost({}, controller.signal, executable), { name: "AbortError" });
 	await joined(0);
 
-	await fail("setInterval(() => {}, 1000);", /5 second deadline/);
+	await fail("setInterval(() => {}, 1000);", /10 second deadline/);
 	await fail("process.exit(13);", /host failed/);
 	// A helper that closes stdout early settles only after it exits.
 	await script("process.stdout.end(JSON.stringify({value: 2})); setTimeout(() => {}, 300);");

@@ -1,6 +1,6 @@
 // An interactive mockup with artifact-local state. Pressing things changes
 // only this preview; nothing is saved or sent anywhere.
-import { LayoutAnimation, reduceMotion, signal, Text, View } from "nsh";
+import { signal, Text, View } from "nsh";
 import { Button } from "nsh/base";
 import { Card, Choices, Page, Section } from "pilot-artifact/ui";
 
@@ -16,23 +16,11 @@ const LAYOUTS = [
 	{ id: "cards", label: "Cards" },
 ] as const;
 
-/** Lets the next change glide, unless the reader asked for less motion. */
-function glide() {
-	if (reduceMotion()) return;
-	LayoutAnimation.configureNext({ duration: 180, update: { type: "easeInEaseOut" } });
-}
-
 export default function Artifact() {
 	const layout = signal<Layout>("list");
 	const open = signal<string | undefined>(undefined);
-	const choose = (next: Layout) => {
-		glide();
-		layout.set(next);
-	};
-	const toggle = (id: string) => {
-		glide();
-		open.set(open() === id ? undefined : id);
-	};
+	const choose = (next: Layout) => layout.set(next);
+	const toggle = (id: string) => open.set(open() === id ? undefined : id);
 	return (
 		<Page title="Inbox layout" subtitle="Preview only. Try both layouts; nothing here changes Pilot.">
 			<Choices label="Layout" options={LAYOUTS} value={layout()} onChange={choose} />

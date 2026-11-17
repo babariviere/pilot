@@ -1,4 +1,5 @@
 ---
+
 name: pilot-artifacts
 description: Create NSH and image artifacts. Use before creating or updating an artifact with the artifact tool.
 ---
@@ -48,16 +49,22 @@ artifact and keep the original.
 ```js
 const { artifact: current } = await tools.artifact({ action: "get", id });
 await tools.artifact({
-  action: "update", id: current.id, expectedRevision: current.revision,
-  title: current.title, kind: "nsh", sourcePath: "release-plan.tsx",
+	action: "update",
+	id: current.id,
+	expectedRevision: current.revision,
+	title: current.title,
+	kind: "nsh",
+	sourcePath: "release-plan.tsx",
 });
 ```
 
 ## Verification
 
-There is no artifact screenshot preview host. Publication compiles NSH source and checks image bytes; it is not a
-visual fidelity check. Use actual app fixtures for application fidelity checks when authorized. Never compile generated
-Swift/Rust or use a browser as an artifact fallback. Say when visual verification was not performed.
+Publishing NSH runs the file once like Day's preview, headless. Errors publish nothing; fix them and publish again.
+Read the result's `preview` (what the first screen shows) and fix every warning before you report the artifact.
+It checks errors and layout, not looks, and there is no screenshot. Image publication checks only the bytes. Use
+actual app fixtures for application fidelity checks when authorized. Never compile generated Swift/Rust or use a
+browser as an artifact fallback. Say when visual verification was not performed.
 
 ## Before and after of the real app
 

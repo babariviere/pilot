@@ -28,18 +28,16 @@ test("charts write their numbers and states as text", async () => {
 });
 
 test("the mockup changes only its own local state", async () => {
-	for (const reducedMotion of [false, true]) {
-		const app = await open("./entries/mockup.tsx", { ...SIZE, reducedMotion });
-		await app.waitFor("Showing list; no item open.");
-		await app.press("role:button[Cards]");
-		await app.waitFor("Showing cards; no item open.");
-		await app.press("text:Fix the flaky upload test");
-		await app.waitFor("Timeout raised; root cause unknown.");
-		expect(app.shows("Showing cards; one item open.")).toBe(true);
-		expect(app.requests()).toEqual([]);
-		expect(app.openedUrls()).toEqual([]);
-		expect(app.storage()).toEqual({});
-	}
+	const app = await open("./entries/mockup.tsx", SIZE);
+	await app.waitFor("Showing list; no item open.");
+	await app.press("role:button[Cards]");
+	await app.waitFor("Showing cards; no item open.");
+	await app.press("text:Fix the flaky upload test");
+	await app.waitFor("Timeout raised; root cause unknown.");
+	expect(app.shows("Showing cards; one item open.")).toBe(true);
+	expect(app.requests()).toEqual([]);
+	expect(app.openedUrls()).toEqual([]);
+	expect(app.storage()).toEqual({});
 });
 
 test("the prototype switches variant and situation and starts each case over", async () => {

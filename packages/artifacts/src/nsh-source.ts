@@ -10,6 +10,40 @@ export const NSH_SOURCE_BYTES = 512 * 1024;
 export const NSH_RUNTIME = "nsh 0.5.0";
 const ENTRY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.tsx$/;
 
+/** What the publish-time preview run showed (artifact_check.rs). Texts are cut short; counts are complete. */
+export interface NshRendered {
+	shows: string[];
+	texts: number;
+	noRoom: string[];
+	noRoomCount: number;
+	/** Variant switches (Choices options, tabs) pressed once each, and those the time or press limit left. */
+	pressed: number;
+	unpressed: number;
+}
+
+function rendered(value: unknown): NshRendered {
+	const r = value as NshRendered | undefined;
+	const strings = (x: unknown) => Array.isArray(x) && x.every((s) => typeof s === "string");
+	if (
+		!r ||
+		!strings(r.shows) ||
+		!strings(r.noRoom) ||
+		!Number.isSafeInteger(r.texts) ||
+		!Number.isSafeInteger(r.noRoomCount) ||
+		!Number.isSafeInteger(r.pressed) ||
+		!Number.isSafeInteger(r.unpressed)
+	)
+		throw new Error("Invalid artifact capture response");
+	return {
+		shows: r.shows,
+		texts: r.texts,
+		noRoom: r.noRoom,
+		noRoomCount: r.noRoomCount,
+		pressed: r.pressed,
+		unpressed: r.unpressed,
+	};
+}
+
 /** Host-selected session directory only, never a tool-supplied root. Does not clear existing files. */
 export async function ensureArtifactScratch(sessionDirectory: string, executable?: string): Promise<string> {
 	await callArtifactHost({ action: "ensure", sessionDirectory }, undefined, executable);
@@ -73,7 +107,8 @@ export async function compileNshSource(source: string, entry: string, signal?: A
 	signal?.throwIfAborted();
 }
 
-/** Capture and compile once. No relative imports/assets are read; every path component is no-follow. */
+/** Capture, compile and run the preview once headless, as Day would. No relative imports/assets are read; every
+ * path component is no-follow. A preview that fails to start or render rejects with its error. */
 export async function captureNshSource(
 	sessionDirectory: string,
 	sourcePath: string,
@@ -86,5 +121,10 @@ export async function captureNshSource(
 	if (!value || typeof value !== "object" || !("source" in value) || typeof value.source !== "string")
 		throw new Error("Invalid artifact capture response");
 	signal?.throwIfAborted();
-	return { source: value.source, entry, nsh: nshSource(value.source, entry) };
+	return {
+		source: value.source,
+		entry,
+		nsh: nshSource(value.source, entry),
+		rendered: rendered("rendered" in value ? value.rendered : undefined),
+	};
 }
