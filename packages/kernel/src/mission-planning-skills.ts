@@ -23,8 +23,12 @@ export function assertPlanningSkills(skills: readonly Pick<Skill, "name" | "file
 			throw new Error(`Required upstream planning skill unavailable or shadowed: ${path}`);
 }
 
-/** Runs on every native tool call, including nested codemode. No generic mission/MCP write surface. */
-export function planningToolAllowed(name: string): boolean {
+/**
+ * Runs on every native tool call, including nested codemode. No generic mission/MCP write surface.
+ * Mission ticket is the one mission action allowed: the daemon reads linked Linear context without writes.
+ */
+export function planningToolAllowed(name: string, input?: Record<string, unknown>): boolean {
+	if (name === "mission") return input?.action === "ticket";
 	return [
 		"codemode",
 		"read",

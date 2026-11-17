@@ -196,6 +196,9 @@ test("actual NativeAdapter planning profile reads upstream but blocks direct and
 	assert.equal(planningToolAllowed("project_preferences"), true);
 	assert.equal(planningToolAllowed("knowledge"), true);
 	assert.equal(planningToolAllowed("interview"), true);
+	assert.equal(planningToolAllowed("mission", { action: "ticket", resourceId: "ref" }), true);
+	for (const action of ["get", "comment", "updateLink", "split"])
+		assert.equal(planningToolAllowed("mission", { action }), false, action);
 	const home = await realpath(await mkdtemp(join(tmpdir(), "native-planning-")));
 	const main = join(home, "main"),
 		scratch = join(home, "scratch"),
@@ -286,6 +289,18 @@ test("actual NativeAdapter planning profile reads upstream but blocks direct and
 			input: {},
 		});
 		assert.ok(result?.block, toolName);
+	}
+	for (const [action, blocked] of [
+		["ticket", false],
+		["get", true],
+	] as const) {
+		const result = await adapter.session.extensionRunner.emitToolCall({
+			type: "tool_call",
+			toolCallId: `mission-${action}`,
+			toolName: "mission",
+			input: { action, resourceId: "ref" },
+		});
+		assert.equal(Boolean(result?.block), blocked, action);
 	}
 	const definition = adapter.session.getToolDefinition("codemode")!,
 		sourceInfo = adapter.session.getAllTools().find((t) => t.name === "codemode")!.sourceInfo;

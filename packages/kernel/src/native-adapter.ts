@@ -565,7 +565,7 @@ export class NativeAdapter {
 			for (const tool of hostTools.values()) pi.registerTool(tool);
 			if (options.missionPlanning)
 				pi.on("tool_call", (event) => {
-					if (!planningToolAllowed(event.toolName))
+					if (!planningToolAllowed(event.toolName, event.input))
 						return { block: true, reason: `Planning profile denies tool: ${event.toolName}` };
 				});
 			if (readOnly) {

@@ -75,7 +75,9 @@ appends an explicit native adapter.
 Paths resolve relative to the runtime module after packaging/relocation.
 
 The dedicated profile denies generic mission writes, shell/file tools, jobs, subagents, updates
-and all MCP tool calls, including nested codemode calls. Its mutation surfaces are the bound
+and all MCP tool calls, including nested codemode calls. The one allowed `mission` action is
+`ticket`: the daemon reads limited context for a linked Linear ticket, with no Linear writes.
+Its mutation surfaces are the bound
 native planning port and the project `knowledge` tool, so the planner can do ready research itself
 and save findings with provenance. `mission_plan` action `replaced` reads the old mission this one
 re-plans (brief, decisions, task list, or one task with its latest report). It writes nothing.
