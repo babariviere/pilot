@@ -22,6 +22,10 @@ export type DatabaseAccessPolicy = "allow" | "ask";
 export interface DatabaseGrant {
 	env: string;
 	mode: DatabaseMode;
+	/** Legacy grants without a scope never authorize a query. */
+	scope?: string;
+	provider?: string;
+	destination?: string;
 }
 
 /**
@@ -41,7 +45,13 @@ export interface DatabaseState {
 /** PEM contents, not filenames. Explicit TLS always verifies certificates and server identity. */
 export type DatabaseSsl = boolean | { ca?: string; cert?: string; key?: string; rejectUnauthorized?: true };
 
+export interface DatabaseTlsException {
+	name: string;
+	mode: "plaintext" | "unverified";
+}
+
 interface Target {
+	tlsException?: DatabaseTlsException;
 	url: string;
 	access: DatabaseAccessPolicy;
 	ssl?: DatabaseSsl;
@@ -68,6 +78,7 @@ export interface DatabaseConnectionTarget {
 	url: string;
 	mode: DatabaseMode;
 	applicationName: string;
+	tlsException?: DatabaseTlsException;
 	ssl?: DatabaseSsl;
 }
 
@@ -136,7 +147,13 @@ function parseEnvironments(project: string, value: unknown): DatabaseConfig {
 			if (access !== "allow" && access !== "ask")
 				throw new Error(`Database environment ${name}.${mode} access must be "allow" or "ask"`);
 			const ssl = parseDatabaseSsl(target.ssl, `Database environment ${name}.${mode}`);
-			modes[mode] = { url: target.url, access, ...(ssl === undefined ? {} : { ssl }) };
+			const tlsException = parseTlsException(target.tlsException);
+			modes[mode] = {
+				url: target.url,
+				access,
+				...(ssl === undefined ? {} : { ssl }),
+				...(tlsException ? { tlsException } : {}),
+			};
 		}
 		if (!modes.read && !modes.write) throw new Error(`Database environment ${name} has no read or write connection`);
 		config.set(name, modes);
@@ -252,18 +269,41 @@ function existingProject(raw: Record<string, unknown>, path: string) {
 function connectionSummary(url: string) {
 	try {
 		const parsed = new URL(url);
+		// Match pg's last-query-value routing, without opening certificate files during a settings read.
+		const safe = new URL(url);
+		for (const key of ["sslcert", "sslkey", "sslrootcert"]) safe.searchParams.delete(key);
+		const effective = parse(safe.toString());
 		// Omit ALL query parameters, not just a credential-name denylist.
 		return {
 			scheme: parsed.protocol.slice(0, -1),
-			host: parsed.hostname,
-			port: parsed.port,
-			database: decodeURIComponent(parsed.pathname.slice(1)),
-			user: decodeURIComponent(parsed.username),
+			host: effective.host ?? "",
+			port: effective.port ?? "",
+			database: effective.database ?? "",
+			user: effective.user ?? "",
 			hasCredentials: !!parsed.password || !!parsed.search,
 		};
 	} catch {
 		throw new DatabaseSettingsError(422, "A database connection URL cannot be edited. Fix it in the settings file.");
 	}
+}
+
+function transportWarning(target: Target): string | undefined {
+	if (target.tlsException) return undefined;
+	try {
+		const url = new URL(target.url);
+		for (const key of ["sslcert", "sslkey", "sslrootcert"]) url.searchParams.delete(key);
+		const ssl = parse(url.toString()).ssl;
+		if (
+			target.ssl === false ||
+			ssl === false ||
+			ssl === "no-verify" ||
+			(target.ssl === undefined && typeof ssl === "object" && ssl?.rejectUnauthorized === false)
+		)
+			return "TLS is blocked until you name an explicit local or legacy exception, or restore verified TLS.";
+	} catch {
+		return "TLS settings need correction before this connection can be used.";
+	}
+	return undefined;
 }
 
 function settingsView(raw: Record<string, unknown>, path: string, revision: string): ProjectDatabaseSettings {
@@ -276,21 +316,62 @@ function settingsView(raw: Record<string, unknown>, path: string, revision: stri
 			...Object.fromEntries(
 				DATABASE_MODES.flatMap((mode) => {
 					const target = modes[mode];
-					return target ? [[mode, { ...connectionSummary(target.url), access: target.access }]] : [];
+					const warning = target && transportWarning(target);
+					return target
+						? [
+								[
+									mode,
+									{
+										...connectionSummary(target.url),
+										access: "ask",
+										...(warning ? { tlsWarning: warning } : {}),
+										...(target.tlsException ? { tlsException: target.tlsException } : {}),
+									},
+								],
+							]
+						: [];
 				}),
 			),
 		})),
 	};
 }
 
-function granted(state: DatabaseState | undefined, env: string, mode: DatabaseMode): boolean {
-	// Write access is the broader grant: it covers read-mode queries too.
-	return !!state?.grants?.some((grant) => grant.env === env && (grant.mode === mode || grant.mode === "write"));
+function granted(state: DatabaseState | undefined, env: string, mode: DatabaseMode, scope: string): boolean {
+	return !!state?.grants?.some((g) => g.env === env && g.mode === mode && g.scope === scope);
+}
+function approval(target: Target, env: string, mode: DatabaseMode, provider: string, agent: string): DatabaseGrant {
+	const warning = transportWarning(target);
+	if (warning) throw new Error(warning);
+	const c = connectionSummary(target.url);
+	if (!c.host || !c.database || !c.user)
+		throw new Error("Database access needs an explicit host, database and user. Driver defaults cannot be approved.");
+	const destination = `${c.user}@${c.host}:${c.port || "5432"}/${c.database}`;
+	const url = new URL(target.url);
+	// Credentials are not a destination and must not become an offline password verifier in a grant hash.
+	url.password = "";
+	for (const key of ["password", "sslpassword"]) url.searchParams.delete(key);
+	const scope = createHash("sha256")
+		.update(JSON.stringify([agent, env, mode, provider, url.toString(), target.ssl, target.tlsException]))
+		.digest("hex");
+	return { env, mode, scope, provider, destination };
+}
+function parseTlsException(value: unknown): DatabaseTlsException | undefined {
+	if (value === undefined || value === null) return undefined;
+	if (
+		!record(value) ||
+		Object.keys(value).some((k) => !["name", "mode"].includes(k)) ||
+		typeof value.name !== "string" ||
+		!/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,79}$/.test(value.name) ||
+		!["plaintext", "unverified"].includes(String(value.mode))
+	)
+		throw new Error("TLS exception needs a name and plaintext or unverified mode");
+	return value as unknown as DatabaseTlsException;
 }
 
-function withGrant(state: DatabaseState | undefined, env: string, mode: DatabaseMode): DatabaseState {
+function withGrant(state: DatabaseState | undefined, grant: DatabaseGrant): DatabaseState {
+	const { env, mode } = grant;
 	const grants = (state?.grants ?? []).filter((grant) => !(grant.env === env && grant.mode === mode));
-	grants.push({ env, mode });
+	grants.push(grant);
 	const request =
 		state?.request && !(state.request.env === env && state.request.mode === mode) ? state.request : undefined;
 	return { grants, ...(request ? { request } : {}) };
@@ -303,7 +384,15 @@ function withGrant(state: DatabaseState | undefined, env: string, mode: Database
 export function decideDatabaseRequest(state: DatabaseState | undefined, id: string, allow: boolean): DatabaseState {
 	const request = state?.request;
 	if (!request || request.id !== id) throw new Error("This database access request is no longer pending");
-	return allow ? withGrant(state, request.env, request.mode) : withoutRequest(state);
+	return allow
+		? withGrant(state, {
+				env: request.env,
+				mode: request.mode,
+				scope: request.scope,
+				provider: request.provider,
+				destination: request.destination,
+			})
+		: withoutRequest(state);
 }
 
 /** Any message while a request is pending declines it: the agent moves on. Undefined when nothing is pending. */
@@ -317,6 +406,7 @@ function withoutRequest(state: DatabaseState | undefined): DatabaseState {
 
 export interface DatabaseStateStore {
 	read(): DatabaseState | undefined;
+	authority?(): { provider: string; eligible: boolean };
 	write(state: DatabaseState): Promise<void>;
 }
 
@@ -346,6 +436,42 @@ export class DatabaseService {
 	constructor(configDir = getPilotConfigDir(), run: QueryRunner = runPostgres) {
 		this.#configDir = configDir;
 		this.#run = run;
+	}
+
+	async validateRequest(path: string, request: DatabaseRequest, provider: string, agent: string): Promise<void> {
+		const target = (await loadDatabaseConfig(this.#configDir))?.get(projectKey(path))?.get(request.env)?.[
+			request.mode
+		];
+		if (
+			!target ||
+			!request.scope ||
+			approval(target, request.env, request.mode, provider, agent).scope !== request.scope
+		)
+			throw new Error("Database destination or provider changed. Request fresh approval.");
+	}
+
+	async testConnection(path: string, env: string, mode: DatabaseMode, revision: string): Promise<void> {
+		const saved = await settingsFile(this.#configDir);
+		if (saved.revision !== revision)
+			throw new DatabaseSettingsError(409, "Database settings changed. Read again before testing.");
+		const target = parseDatabaseConfig(saved.raw).get(projectKey(path))?.get(env)?.[mode];
+		if (!target) throw new DatabaseSettingsError(404, "Connection not found.");
+		await this.#limited(async () => {
+			if ((await settingsFile(this.#configDir)).revision !== revision)
+				throw new DatabaseSettingsError(409, "Database settings changed while waiting. Read again before testing.");
+			const client = new pg.Client(
+				postgresClientConfig({ ...target, mode, applicationName: "pilot-connection-test" }),
+			);
+			client.on("error", () => {});
+			// Authentication only. No SQL, even with write credentials.
+			try {
+				await client.connect();
+			} catch (error) {
+				throw new DatabaseConnectionError(error);
+			} finally {
+				await client.end().catch(() => {});
+			}
+		});
 	}
 
 	async settings(path: string): Promise<ProjectDatabaseSettings> {
@@ -384,7 +510,10 @@ export class DatabaseService {
 				for (const mode of DATABASE_MODES) {
 					if (!Object.hasOwn(entry, mode)) continue;
 					const target = entry[mode];
-					if (!record(target) || Object.keys(target).some((key) => !["url", "access"].includes(key)))
+					if (
+						!record(target) ||
+						Object.keys(target).some((key) => !["url", "access", "tlsException"].includes(key))
+					)
 						throw new DatabaseSettingsError(400, "Each connection accepts only URL and access policy.");
 					const old = previous[entry.name]?.[mode];
 					const url = target.url === undefined ? old?.url : target.url;
@@ -397,7 +526,38 @@ export class DatabaseService {
 					}
 					if (target.access !== undefined && target.access !== "ask" && target.access !== "allow")
 						throw new DatabaseSettingsError(400, "Connection access must be ask or allow.");
-					modes[mode] = { ...old, url, ...(target.access === undefined ? {} : { access: target.access }) };
+					let tlsException: DatabaseTlsException | undefined;
+					try {
+						tlsException = parseTlsException(
+							target.tlsException === undefined ? old?.tlsException : target.tlsException,
+						);
+					} catch {
+						throw new DatabaseSettingsError(400, "TLS exception needs a name and mode.");
+					}
+					const candidate: Record<string, unknown> & { url: string } = {
+						...old,
+						url,
+						...(target.access === undefined ? {} : { access: target.access }),
+					};
+					if (tlsException) candidate.tlsException = tlsException;
+					else delete candidate.tlsException;
+					if (target.tlsException === null && candidate.ssl === false) candidate.ssl = true;
+					try {
+						const params = new URL(url).searchParams;
+						if (
+							!tlsException &&
+							(candidate.ssl === false ||
+								["disable", "no-verify"].includes(params.get("sslmode") ?? "") ||
+								["false", "0", "no-verify"].includes(params.get("ssl") ?? ""))
+						)
+							throw new Error();
+					} catch {
+						throw new DatabaseSettingsError(
+							400,
+							"Check TLS settings. Insecure transport requires a named exception.",
+						);
+					}
+					modes[mode] = candidate;
 				}
 				if (!Object.keys(modes).length)
 					throw new DatabaseSettingsError(400, "Each environment needs a read or write connection.");
@@ -474,9 +634,11 @@ export class DatabaseService {
 		const config = projectPath
 			? (await loadDatabaseConfig(this.#configDir))?.get(projectKey(projectPath))
 			: undefined;
+		if (!store.authority?.().eligible || !store.authority().provider)
+			throw new Error("Database access is unavailable for this agent or provider");
 		if (!config) throw new Error(`No databases are configured for this project (${DATABASE_CONFIG_FILE})`);
-		if (action === "access") return this.#access(config, args, store);
-		if (action === "query") return this.#query(sessionId, config, args, store);
+		if (action === "access") return this.#access(config, args, store, sessionId);
+		if (action === "query") return this.#query(sessionId, config, args, store, projectPath!);
 		throw new Error('db action must be "access" or "query"');
 	}
 
@@ -484,27 +646,33 @@ export class DatabaseService {
 		config: DatabaseConfig,
 		args: Record<string, JsonValue>,
 		store: DatabaseStateStore,
+		agent: string,
 	): Promise<JsonValue> {
 		const state = store.read();
 		if (args.env === undefined) {
 			return {
 				environments: [...config].map(([name, modes]) => ({
 					name,
-					modes: Object.fromEntries(
-						DATABASE_MODES.flatMap((mode) => (modes[mode] ? [[mode, modes[mode].access]] : [])),
+					modes: Object.fromEntries(DATABASE_MODES.flatMap((mode) => (modes[mode] ? [[mode, "ask"]] : []))),
+					granted: DATABASE_MODES.filter(
+						(mode) =>
+							modes[mode] &&
+							granted(
+								state,
+								name,
+								mode,
+								approval(modes[mode]!, name, mode, store.authority!().provider, agent).scope!,
+							),
 					),
-					granted: DATABASE_MODES.filter((mode) => modes[mode] && granted(state, name, mode)),
 				})),
 			};
 		}
 		const { env, mode } = this.#target(config, args);
-		if (granted(state, env, mode)) return { status: "granted", env, mode };
-		if (config.get(env)![mode]!.access === "allow") {
-			await store.write(withGrant(store.read(), env, mode));
-			return { status: "granted", env, mode };
-		}
+		const target = config.get(env)![mode]!;
+		const grant = approval(target, env, mode, store.authority!().provider, agent);
+		if (granted(state, env, mode, grant.scope!)) return { status: "granted", env, mode };
 		const id = randomUUID();
-		await store.write({ ...withoutRequest(store.read()), request: { env, mode, id } });
+		await store.write({ ...withoutRequest(store.read()), request: { ...grant, id } });
 		const reason = typeof args.reason === "string" ? args.reason.trim().slice(0, 600) : "";
 		return {
 			status: "pending",
@@ -512,14 +680,14 @@ export class DatabaseService {
 			mode,
 			question: {
 				question: `Allow ${mode} access to the ${env} database?`,
-				...(reason ? { context: reason } : {}),
+				context: `${reason ? `${reason}\n` : ""}Destination: ${grant.destination}. Model provider: ${grant.provider}. Query results may be sent to this provider. ${target.tlsException ? `TLS exception: ${target.tlsException.name} (${target.tlsException.mode}).` : "Verified TLS."}`,
 				options: [
 					{
 						label: `Allow ${mode} access to ${env}`,
 						detail:
 							mode === "write"
-								? "Reads and writes, for the rest of this chat"
-								: "Read-only, for the rest of this chat",
+								? "Reads and writes until revoked or archived"
+								: "Read-only until revoked or archived",
 					},
 					{ label: "Deny" },
 				],
@@ -549,16 +717,13 @@ export class DatabaseService {
 		config: DatabaseConfig,
 		args: Record<string, JsonValue>,
 		store: DatabaseStateStore,
+		projectPath: string,
 	): Promise<JsonValue> {
 		const { env, mode } = this.#target(config, args);
 		const target = config.get(env)![mode]!;
-		if (!granted(store.read(), env, mode)) {
-			if (target.access !== "allow")
-				throw new Error(
-					`No ${mode} access to ${env} yet. Call db({ action: "access", env: "${env}", mode: "${mode}" }) first.`,
-				);
-			await store.write(withGrant(store.read(), env, mode));
-		}
+		const grant = approval(target, env, mode, store.authority!().provider, sessionId);
+		if (!granted(store.read(), env, mode, grant.scope!))
+			throw new Error(`No ${mode} access to ${env} yet. Request explicit access first.`);
 		let statements: DatabaseStatement[];
 		if (args.statements !== undefined) {
 			if (args.sql !== undefined) throw new Error("Pass either db sql or statements, not both");
@@ -583,19 +748,37 @@ export class DatabaseService {
 		if (typeof requested !== "number" || !Number.isInteger(requested) || requested < 1)
 			throw new Error("db maxRows must be a positive integer");
 		const maxRows = Math.min(requested, DATABASE_LIMITS.maxRows);
-		const results = await this.#limited(() =>
-			this.#run(
+		const results = await this.#limited(async () => {
+			const fresh = (await loadDatabaseConfig(this.#configDir))?.get(projectKey(projectPath))?.get(env)?.[mode];
+			if (
+				!fresh ||
+				!store.authority?.().eligible ||
+				store.authority().provider !== grant.provider ||
+				approval(fresh, env, mode, grant.provider!, sessionId).scope !== grant.scope ||
+				!granted(store.read(), env, mode, grant.scope!)
+			)
+				throw new Error("Database access changed before dispatch");
+			return this.#run(
 				{
 					url: target.url,
 					mode,
 					applicationName: `pilot-${sessionId}`,
 					...(target.ssl === undefined ? {} : { ssl: target.ssl }),
+					...(target.tlsException ? { tlsException: target.tlsException } : {}),
 				},
 				statements,
 				maxRows,
-			),
-		);
+			);
+		});
 		const bounded = boundResults(results);
+		if (
+			!store.authority?.().eligible ||
+			store.authority().provider !== grant.provider ||
+			!granted(store.read(), env, mode, grant.scope!)
+		)
+			throw new Error(
+				"Database access changed while the query ran. Results were withheld; a write may have committed. Investigate with approved reads.",
+			);
 		return (
 			args.statements === undefined ? { env, mode, ...bounded[0] } : { env, mode, results: bounded }
 		) as JsonValue;
@@ -692,8 +875,22 @@ export function postgresClientConfig(target: DatabaseConnectionTarget): pg.Clien
 			config.ssl = merged;
 		}
 	}
+	const exception = parseTlsException(target.tlsException);
+	const unsafe = config.ssl === false || (typeof config.ssl === "object" && config.ssl.rejectUnauthorized === false);
+	if (unsafe && !exception)
+		throw new Error("Database TLS requires a named exception for insecure transport. No connection was attempted.");
+	if (exception?.mode === "plaintext") config.ssl = false;
+	else if (exception?.mode === "unverified")
+		config.ssl = { ...(typeof config.ssl === "object" ? config.ssl : {}), rejectUnauthorized: false };
+	else {
+		const verified = { ...(typeof config.ssl === "object" ? config.ssl : {}), rejectUnauthorized: true };
+		delete verified.checkServerIdentity;
+		config.ssl = verified;
+	}
 	return {
 		...config,
+		// Do not disclose 5432 and then silently route to a different PGPORT default.
+		port: config.port || 5432,
 		application_name: target.applicationName,
 		statement_timeout: DATABASE_LIMITS.statementTimeoutMs,
 		lock_timeout: DATABASE_LIMITS.lockTimeoutMs,
@@ -724,7 +921,7 @@ export const runPostgres: QueryRunner = async (target, statements, maxRows) => {
 		timer = setTimeout(() => {
 			reject(
 				new Error(
-					`Database call exceeded ${DATABASE_LIMITS.deadlineMs / 1000} s and was cancelled; uncommitted changes were rolled back`,
+					`Database call exceeded ${DATABASE_LIMITS.deadlineMs / 1000} s and was cancelled. A write outcome may be unknown; investigate with approved reads, never blindly retry`,
 				),
 			);
 			// Dropping the connection rolls back any open transaction on the server.
@@ -765,7 +962,12 @@ export const runPostgres: QueryRunner = async (target, statements, maxRows) => {
 	try {
 		return await Promise.race([work(), deadline]);
 	} catch (error) {
-		throw databaseError(error);
+		const failure = databaseError(error);
+		if (target.mode === "write")
+			throw new Error(
+				`${failure.message}\nWrite outcome may be unknown. Investigate with approved reads; retry only with safe evidence and current approval.`,
+			);
+		throw failure;
 	} finally {
 		clearTimeout(timer);
 		await client.end().catch(() => {});

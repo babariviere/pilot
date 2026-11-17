@@ -156,7 +156,16 @@ before(async () => {
 	tlsUrl = `postgres://pilot@localhost:${port}/postgres`;
 	for (let attempt = 0; ; attempt++) {
 		try {
-			await runPostgres({ url, mode: "read", applicationName: "pilot-test" }, [{ sql: "select 1", params: [] }], 1);
+			await runPostgres(
+				{
+					url,
+					tlsException: { name: "Disposable Unix socket", mode: "plaintext" },
+					mode: "read",
+					applicationName: "pilot-test",
+				},
+				[{ sql: "select 1", params: [] }],
+				1,
+			);
 			break;
 		} catch (error) {
 			if (attempt > 100) throw error;
@@ -172,10 +181,24 @@ after(async () => {
 });
 
 const read = (sql: string, params: unknown[] = [], maxRows = 100) =>
-	runPostgres({ url, mode: "read", applicationName: "pilot-test" }, [{ sql, params: params as never }], maxRows);
+	runPostgres(
+		{
+			url,
+			tlsException: { name: "Disposable Unix socket", mode: "plaintext" },
+			mode: "read",
+			applicationName: "pilot-test",
+		},
+		[{ sql, params: params as never }],
+		maxRows,
+	);
 const write = (statements: Array<{ sql: string; params?: unknown[] }>) =>
 	runPostgres(
-		{ url, mode: "write", applicationName: "pilot-test" },
+		{
+			url,
+			tlsException: { name: "Disposable Unix socket", mode: "plaintext" },
+			mode: "write",
+			applicationName: "pilot-test",
+		},
 		statements.map((statement) => ({ sql: statement.sql, params: (statement.params ?? []) as never })),
 		100,
 	);
@@ -227,11 +250,7 @@ test("TLS-required connections retain object CA, verify certificates, and enforc
 		run(`${tlsUrl.replace("localhost", "127.0.0.1")}?sslmode=require&uselibpqcompat=true`, { ca }),
 		/TLS certificate verification failed/,
 	);
-	await assert.rejects(
-		run(`${tlsUrl}?sslmode=disable`),
-		// A plaintext HBA rejection is not proof that TLS would grant access.
-		/SQLSTATE 28000.*server authentication rules.*unencrypted connection.*does not establish a TLS requirement/,
-	);
+	await assert.rejects(run(`${tlsUrl}?sslmode=disable`), /named exception/);
 });
 
 test("saved project TLS reaches the real driver, while discovery and approval never open a connection", {
@@ -244,6 +263,7 @@ test("saved project TLS reaches the real driver, while discovery and approval ne
 	const connect = t.mock.method(pg.Client.prototype, "connect");
 	let state: DatabaseState | undefined;
 	const store: DatabaseStateStore = {
+		authority: () => ({ eligible: true, provider: "fixture" }),
 		read: () => state,
 		write: async (value) => {
 			state = value;
@@ -298,11 +318,15 @@ test("saved project TLS reaches the real driver, while discovery and approval ne
 	assert.equal(connect.mock.callCount(), 1, "no retry on connection rejection");
 	assert.deepEqual(state, approved);
 	await update(`${tlsUrl.replace("localhost", "127.0.0.1")}?sslmode=verify-full`);
+	await call("access", { env: "prod" });
+	await store.write(decideDatabaseRequest(state, state!.request!.id, true));
 	await assert.rejects(call("query", { env: "prod", sql: "select 1" }), /TLS certificate verification failed/);
 	assert.equal(connect.mock.callCount(), 2, "hostname verification fails without a fallback connection");
-	assert.deepEqual(state, approved);
+	assert.notDeepEqual(state, approved);
 	// Only an explicit query against the disposable server demonstrates verified TLS and read-only mode.
 	await update(`${tlsUrl}?sslmode=verify-full`);
+	await call("access", { env: "prod" });
+	await store.write(decideDatabaseRequest(state, state!.request!.id, true));
 	assert.deepEqual(
 		await call("query", {
 			env: "prod",
@@ -322,7 +346,8 @@ test("saved project TLS reaches the real driver, while discovery and approval ne
 		/SQLSTATE 25006/,
 	);
 	assert.equal(connect.mock.callCount(), 4, "one connection per explicit fixture query");
-	assert.deepEqual(state, approved);
+	assert.equal(state?.grants?.[0]?.provider, "fixture");
+	assert.match(state?.grants?.[0]?.destination ?? "", /^pilot@localhost:/);
 });
 
 test("real password and server-rule failures preserve SQLSTATE without exposing server details", {
@@ -446,7 +471,7 @@ test("reads keep lossless types and cap rows", { skip: !bin && "no Postgres bina
 });
 
 test("connection failures do not echo the URL", { skip: !bin && "no Postgres binaries" }, async () => {
-	const secretUrl = `postgres://pilot:hunter2@/postgres?host=${encodeURIComponent(join(dir, "missing"))}&port=1`;
+	const secretUrl = `postgres://pilot:****@/postgres?host=${encodeURIComponent(join(dir, "missing"))}&port=1`;
 	await assert.rejects(
 		runPostgres(
 			{ url: secretUrl, mode: "read", applicationName: "pilot-test" },

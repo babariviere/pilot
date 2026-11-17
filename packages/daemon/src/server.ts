@@ -68,6 +68,7 @@ import { InvalidChatSettings } from "./chat-settings.ts";
 import { ChatStreams } from "./chat-streams.ts";
 import { CONNECTION_CONTROLS } from "./connection-controls.ts";
 import type { DaemonServices } from "./daemon-services.ts";
+import { DATABASE_CONTROLS } from "./database-controls.ts";
 import { DatabaseSettingsError } from "./databases.ts";
 import { dayMissionAgents } from "./day-mission-agents.ts";
 import { dayWorking } from "./day-working.ts";
@@ -386,6 +387,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		insightsReplacement,
 		connectionControls,
 		slackControls,
+		databaseControls,
 		modelControls,
 		diagnosticsControls,
 	} = services;
@@ -566,6 +568,14 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			throw new SetupError(404, "Unknown GitHub import operation.");
 		}
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "database-controls") {
+			res.setHeader("cache-control", "no-store");
+			if (!nativeAuthority) throw new ServiceUnavailable("Native database controls unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			if (parts.length === 2 && req.method === "GET")
+				return json(res, 200, await databaseControls.read(url.searchParams.get("projectId") ?? ""));
+			throw new HttpError(405, "Method not allowed");
+		}
 		if (parts[1] === "slack-controls") {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority || !slackControls) throw new ServiceUnavailable("Native Slack unavailable");
@@ -1006,6 +1016,26 @@ export function createDaemonServer(services: DaemonServices): Server & {
 						res,
 						200,
 						await journal.execute(operation, (op, entry) => planningWorkers.enroll(op, entry.firstEntry)),
+					);
+				} finally {
+					end();
+				}
+			}
+			if (operation?.kind === DATABASE_CONTROLS) {
+				res.setHeader("cache-control", "no-store");
+				if (!nativeAuthority) throw new ServiceUnavailable("Native database controls unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				if (parts[2] === "receipt")
+					return json(res, 200, (await journal.lookup(operation)) ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					return json(
+						res,
+						200,
+						await journal.execute(operation, (op, entry) =>
+							databaseControls.admit(op, journal, entry.firstEntry),
+						),
 					);
 				} finally {
 					end();
@@ -3297,6 +3327,8 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				}
 			}
 			if (parts[3] === "database-access") {
+				if (!nativeAuthority) throw new ServiceUnavailable("Native database controls unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				const body = await readJson<DatabaseAccessDecision | null>(req);
 				if (!body || typeof body.id !== "string" || !body.id || typeof body.allow !== "boolean")
 					throw new HttpError(400, "id and allow are required");

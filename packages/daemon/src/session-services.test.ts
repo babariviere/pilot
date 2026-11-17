@@ -61,7 +61,12 @@ for (const [offline, workerUsageHistory] of [
 		});
 		await sessions.load();
 		assert.equal(subscription.mock.callCount(), offline ? 0 : 1);
-		await sessions.spawn({ cwd: home, title: "Synthetic", message: "Check independent services" });
+		await sessions.spawn({
+			cwd: home,
+			title: "Synthetic",
+			message: "Check independent services",
+			model: "fake/model",
+		});
 		const spec = await ready;
 		assert.equal(spec.databases, offline ? undefined : true);
 		assert.equal(database.mock.callCount(), offline ? 0 : 1);

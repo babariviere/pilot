@@ -7,6 +7,8 @@ export interface DatabaseConnectionSettings {
 	user: string;
 	hasCredentials: boolean;
 	access: "ask" | "allow";
+	tlsException?: { name: string; mode: "plaintext" | "unverified" };
+	tlsWarning?: string;
 }
 export interface DatabaseEnvironmentSettings {
 	name: string;
@@ -18,6 +20,8 @@ export interface ProjectDatabaseSettings {
 	environments: DatabaseEnvironmentSettings[];
 }
 export interface DatabaseConnectionUpdate {
+	/** Null restores verified TLS. Omit to preserve advanced TLS settings. */
+	tlsException?: { name: string; mode: "plaintext" | "unverified" } | null;
 	/** Omit to retain the stored URL, including all credentials and parameters. */
 	url?: string;
 	/** Omit to retain the stored policy (or the default ask for a new connection). */

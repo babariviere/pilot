@@ -10,6 +10,7 @@ import { ConnectedPlans, ConnectedRituals, ConnectedToday, call, type Refusal, w
 import { ConnectedChats, mirrorChats } from "./chatFeed";
 import { connectedUpdates } from "./connectedUpdates";
 import { connectedConnectionControls } from "./connectionControls";
+import { connectedDatabaseControls } from "./databaseControls";
 import { type Day, mirrorDay } from "./day";
 import { errorText, logEvent, setLogSink } from "./dayLog";
 import { ConnectedDelivery, deliveryKey, mirrorDelivery, type VerificationSubject } from "./deliveryFeed";
@@ -183,6 +184,7 @@ function refresh() {
 		feedbackFeed?.read(true),
 		open.state === "open" ? open.day.chat?.source.refresh() : undefined,
 		open.state === "open" && settingsOpen() ? open.day.connections?.read() : undefined,
+		open.state === "open" ? open.day.databases?.read() : undefined,
 		open.state === "open" ? open.day.power?.read() : undefined,
 		open.state === "open" && settingsOpen() ? open.day.slack?.read() : undefined,
 		// The thread on screen reads its newest messages again: a chat's reply changes no thread revision.
@@ -350,6 +352,8 @@ async function connect() {
 		day.models = connectedModelControls(window);
 		day.diagnosis = connectedDiagnosisControls(window);
 		day.connections = connectedConnectionControls(window);
+		day.databases = connectedDatabaseControls(window);
+		void day.databases.refresh();
 		day.power = connectedPower(window);
 		void day.power.read();
 		day.slack = connectedSlackControls(window, () => void intakeFeed.read());

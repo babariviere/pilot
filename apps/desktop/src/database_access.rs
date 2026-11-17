@@ -69,6 +69,9 @@ pub(crate) async fn submit(
     if let Err(error) = crate::local_client::gate(client, options).await {
         return Outcome::Refused(error);
     }
+    let Ok(token) = options.model_scope_capability() else {
+        return Outcome::Refused("Native database approval is unavailable. Nothing was sent.");
+    };
     let payload = json!({ "id": decision.access.id, "allow": decision.allow });
     let Ok(bytes) = serde_json::to_vec(&payload) else {
         return Outcome::Refused("The decision could not be encoded. Nothing was sent.");
@@ -80,6 +83,7 @@ pub(crate) async fn submit(
             decision.session
         ))
         .header("Content-Type", "application/json")
+        .header("x-pilot-github-capability", token)
         .body(bytes)
         .send()
         .await;

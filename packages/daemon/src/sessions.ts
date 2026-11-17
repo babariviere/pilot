@@ -10406,6 +10406,21 @@ ${run.excerpt}`,
 		const meta = this.require(id);
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before answering");
 		const request = meta.databases?.request;
+		if (!request || request.id !== requestId) throw new Conflict("This database access request is no longer pending");
+		if (!this.databaseAuthority(meta).eligible || !this.databases)
+			throw new Conflict("Database access is unavailable");
+		await this.databases.validateRequest(
+			this.projectPath(meta)!,
+			request,
+			this.databaseAuthority(meta).provider,
+			meta.id,
+		);
+		if (
+			meta.databases?.request !== request ||
+			!this.databaseAuthority(meta).eligible ||
+			this.databaseAuthority(meta).provider !== request.provider
+		)
+			throw new Conflict("Database approval changed");
 		let databases: DatabaseState;
 		try {
 			databases = decideDatabaseRequest(meta.databases, requestId, allow);
@@ -10413,7 +10428,12 @@ ${run.excerpt}`,
 			throw new Conflict(error instanceof Error ? error.message : String(error));
 		}
 		meta.databases = databases;
-		await this.save(meta);
+		try {
+			await this.save(meta, undefined, undefined, true);
+		} catch (error) {
+			meta.databases = {};
+			throw error;
+		}
 		const message = `${allow ? "Allowed" : "Denied"} ${request!.mode} access to the ${request!.env} database.`;
 		await this.send(id, message, "steer", `database-access:${requestId}`);
 	}
@@ -10422,6 +10442,67 @@ ${run.excerpt}`,
 		const project = this.projects.require(projectId);
 		if (!this.databases) throw new ServiceUnavailable("Database settings are unavailable");
 		return this.databases.settings(project.path);
+	}
+
+	private databaseAuthority(meta: SessionMeta) {
+		const membership = this.missions?.membership(meta.id);
+		const context = this.missions?.context(meta.id);
+		const provider = modelProvider(meta.model) ?? "";
+		const actual = this.workers.get(meta.id)?.usage?.provider;
+		return {
+			provider,
+			eligible:
+				!!provider &&
+				(!actual || actual === provider) &&
+				!meta.ask &&
+				meta.mode !== "ask" &&
+				!meta.role &&
+				!meta.planning &&
+				!meta.control &&
+				!meta.coordinatorView &&
+				!meta.delegationFenced &&
+				meta.archivedAt === undefined &&
+				!this.changingModels.has(meta.id) &&
+				!this.archiveTransitions.has(meta.id) &&
+				(!membership ||
+					(membership.active &&
+						membership.role === "builder" &&
+						!!context?.tasks.some((t) => t.status === "in_progress"))),
+		};
+	}
+
+	async databaseControls(projectId: string) {
+		const settings = await this.projectDatabases(projectId);
+		const agents = [...this.metas.values()]
+			.filter(
+				(m) =>
+					m.projectId === projectId &&
+					m.archivedAt === undefined &&
+					(!!m.databases?.grants?.length || !!m.databases?.request),
+			)
+			.map((m) => {
+				const authority = this.databaseAuthority(m);
+				return {
+					id: m.id,
+					title: m.title ?? m.id,
+					provider: authority.provider,
+					eligible: authority.eligible,
+					grants: m.databases?.grants ?? [],
+					request: m.databases?.request ?? null,
+				};
+			});
+		return { settings, agents };
+	}
+
+	async revokeDatabaseAccess(id: string, env: string, mode: string) {
+		const meta = this.require(id);
+		meta.databases = { grants: (meta.databases?.grants ?? []).filter((g) => g.env !== env || g.mode !== mode) };
+		await this.save(meta, undefined, undefined, true);
+	}
+
+	async testProjectDatabase(projectId: string, env: string, mode: "read" | "write", revision: string) {
+		if (!this.databases) throw new ServiceUnavailable("Database settings are unavailable");
+		return this.databases.testConnection(this.projects.require(projectId).path, env, mode, revision);
 	}
 
 	async updateProjectDatabases(projectId: string, input: unknown) {
@@ -12889,7 +12970,9 @@ ${run.excerpt}`,
 						if (meta.cwd !== join(this.dir(id), "workspace"))
 							throw new Error("Invalid session workspace destination");
 						if (meta.workspaceCustody === "review" && existsSync(meta.cwd))
-							throw new Error("Interrupted coding copy kept. Inspect the existing files before preparing another copy.");
+							throw new Error(
+								"Interrupted coding copy kept. Inspect the existing files before preparing another copy.",
+							);
 						// Unregister linked jj/Git workspaces before removing an interrupted preparation.
 						if (!this.factories.workspace && (plan.jj === true || existsSync(join(plan.source, ".jj"))))
 							await this.sharedWorkspaces.discardPartial(meta.cwd, plan.source);
@@ -13423,7 +13506,7 @@ ${run.excerpt}`,
 						...(meta.automation?.setup ? { workspaceSetup: { state: meta.automation.setup.state } } : {}),
 					},
 					...(mission ? { mission } : {}),
-					...(!meta.ask && !meta.control && this.databases?.configured(this.projectPath(meta))
+					...(this.databaseAuthority(meta).eligible && this.databases?.configured(this.projectPath(meta))
 						? { databases: true }
 						: {}),
 				},
@@ -14357,13 +14440,16 @@ ${run.excerpt}`,
 				if (this.workers.get(meta.id) === worker)
 					worker.send({ type: "database.result", callId: packet.callId, ...(result as { result?: never }) });
 			};
-			const call = Promise.resolve().then(() => {
-				if (!this.databases || meta.ask) throw new Error("Database access is unavailable in this chat");
+			const call = Promise.resolve().then(async () => {
+				if (!this.databases || !this.databaseAuthority(meta).eligible)
+					throw new Error("Database access is unavailable in this chat");
+				await this.saving.get(meta.id);
 				return this.databases.call(meta.id, this.projectPath(meta), packet.action, packet.args, {
+					authority: () => this.databaseAuthority(meta),
 					read: () => meta.databases,
 					write: async (state) => {
 						meta.databases = state;
-						await this.save(meta);
+						await this.save(meta, undefined, undefined, true);
 					},
 				});
 			});
@@ -14617,6 +14703,7 @@ ${run.excerpt}`,
 		}
 		if (packet.type === "modelChanged") {
 			if (this.workers.get(meta.id) !== worker) return;
+			if (modelProvider(meta.model) !== modelProvider(packet.model)) meta.databases = {};
 			meta.model = packet.model;
 			meta.thinking = packet.thinking;
 			if (packet.switched) {
@@ -16131,6 +16218,8 @@ ${run.excerpt}`,
 			if (meta.lifecycleCheckpoint) persisted.lifecycleCheckpoint = structuredClone(meta.lifecycleCheckpoint);
 			else delete persisted.lifecycleCheckpoint;
 			persisted.inputGeneration = meta.inputGeneration;
+			// Queued lifecycle snapshots cannot resurrect revoked database authority.
+			persisted.databases = archive?.timestamp !== undefined ? {} : structuredClone(meta.databases);
 			persisted.missionUserStopGeneration = meta.missionUserStopGeneration;
 			// Preserve the immutable execution ceiling across queued lifecycle snapshots.
 			persisted.executionPermission = meta.executionPermission;
@@ -16238,6 +16327,7 @@ ${run.excerpt}`,
 			}
 			// Commit in memory before the next queued save can read the metadata.
 			if (archive) {
+				if (archive.timestamp !== undefined) meta.databases = {};
 				if (archive.preserveWorkspace) meta.coordinatorArchivePreservesWorkspace = true;
 				if (archive.timestamp === undefined) delete meta.archivedAt;
 				else meta.archivedAt = archive.timestamp;

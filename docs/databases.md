@@ -1,30 +1,34 @@
-# Postgres databases
+# Databases
 
-Project Build chats can query configured Postgres databases. Ask chats, subagents,
-and chats from other projects do not receive this tool.
+Choose a project in Today, then open **Settings → Databases**. Add an environment and its read or write
+connection. Saving settings does not connect. **Test read connection** and **Test write connection** only
+authenticate and disconnect. They run no SQL and do not test permission to change data.
 
-1. In **Project Settings → Databases**, add an environment.
-2. Enter a read connection, write connection, or both in the secure fields.
-3. Choose the access policy and **Save Databases**.
+Day edits the destination without displaying credentials. Existing credentials and advanced certificate options
+stay in the host's owner-only `database.json` when the destination is unchanged. Configure passwords and
+advanced options in that file. Changing a destination replaces its URL, including any credentials in that URL.
+Review advanced certificate settings in `database.json` before testing a different host. Settings are host-local,
+not replicated.
 
-Connections default to **Ask each chat**. Enabling writes or automatic access is
-an explicit choice. Leave a replacement URL empty to keep the existing secret.
-Settings stay on this machine; saving does not test the connection.
+Eligible work agents ask for access in **Today → Needs you**. The request names the agent, environment,
+read/write mode, destination and model provider. Query results enter that agent's context and may be sent to
+that provider. Approve each mode separately. Planning agents, Ask chats and internal helpers cannot use it.
 
-## Approve deliberately
+Approvals survive restarts until revoked or archived. A different agent, destination or provider needs fresh
+approval. **Revoke access** in Settings blocks new queries. Sent queries may finish, including writes; approval
+is not a database rollback. Old unscoped grants and the legacy `access: "allow"` setting do not bypass approval.
 
-When a chat requests access, check the named environment and mode, then use
-**Allow … access** in the app. Typing the same words does not grant access.
-Grants last for that chat; write access also permits reads.
+Verified TLS is the default. A local or legacy endpoint needs an explicitly named **No TLS** or **Unverified TLS**
+exception. The exception and warning stay visible in settings and approval requests. Prefer a trusted CA instead
+of weakening TLS. Credentials and certificates are never returned in settings responses.
 
-Query results go to the model provider. Configure only data you are comfortable
-sharing with it. Use a read-only database role for read connections and verified
-TLS for remote connections. Approval does not prove connectivity or correct TLS.
+Queries keep their existing limits: 100 rows by default, at most 1,000, 256 KiB of results, 30-second statements,
+a five-second lock timeout and a 50-second call deadline. Truncated results are marked. Use database roles that
+also enforce the intended read/write access. Read queries use read-only transactions.
 
-Advanced configuration lives in `~/.config/pilot/database.json` (or
-`$XDG_CONFIG_HOME/pilot/database.json`) and must be owner-only, mode `0600`.
-Do not commit credentials. Agent shells run as you; these controls are not a secret
-vault or a hard isolation boundary against a full-access shell.
+A failed or interrupted write may have committed. The agent must investigate with approved reads, and retry
+only with safe evidence and still-current write approval. Pilot does not automatically replay it. An uncertain
+settings or approval action offers **Check status**, which only reads the original receipt.
 
-See the [configuration reference](technical/product-reference.md#databases) for
-the JSON format, TLS options, and query limits.
+These are cooperating-agent controls, not an OS sandbox: trusted local shells can still access files and the
+loopback API. Keep the database settings protected by your filesystem and sandbox policy.

@@ -1122,6 +1122,16 @@ Slack links without a workspace ID use Slack's active workspace.
 
 ### Databases
 
+For the current Day interface, see [Databases](../databases.md). Day uses explicit per-agent,
+environment, mode, destination and model-provider approvals. Saving never connects; separate connection tests
+authenticate without SQL. Verified TLS is the default. Insecure local/legacy transport needs a named
+`tlsException` (`plaintext` or `unverified`) with a persistent warning. Old unscoped grants and
+`access: "allow"` no longer authorize queries automatically. Grants end on revocation or archive;
+a changed destination/provider needs fresh approval. Each connection mode is approved separately.
+Failed or interrupted writes may have committed: investigate with approved reads and retry only with safe
+evidence and current authority. The following setup details describe the legacy editor and file format;
+the linked Day guide takes precedence for access and TLS policy.
+
 Build chats of a project can query Postgres databases you configure for that project. Chats of other projects,
 Ask chats and subagents do not get the tool. In **Project Settings → Databases**, add an environment and its
 read connection, write connection, or both. Enter the connection URL (including any password) in the secure field,

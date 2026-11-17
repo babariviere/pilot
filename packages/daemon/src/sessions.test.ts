@@ -7191,7 +7191,7 @@ test("database access: only configured projects get db, and only the app's decis
 		queries.push(`${target.url} ${statements[0]?.sql}`);
 		return [{ columns: ["n"], rows: [{ n: 1 }], rowCount: 1, truncated: false }];
 	});
-	const sessions = await f.manager({}, { databases });
+	let sessions = await f.manager({}, { databases });
 	const settings = await sessions.projectDatabases(f.project.id);
 	assert.equal(JSON.stringify(settings).includes("postgres://"), false);
 	await sessions.updateProjectDatabases(f.project.id, {
@@ -7204,9 +7204,9 @@ test("database access: only configured projects get db, and only the app's decis
 	assert.equal((await sessions.projectDatabases(f.project.id)).environments[1]?.write?.access, "ask");
 	const created = await sessions.spawn({ projectId: f.project.id, workspace: "direct", message: "Start" });
 	await sessions["starting"].get(created.id);
-	const worker = f.workers.at(-1)!;
+	let worker = f.workers.at(-1)!;
 	assert.equal(worker.spec.databases, true);
-	const meta = sessions["metas"].get(created.id)!;
+	let meta = sessions["metas"].get(created.id)!;
 	const call = async (callId: string, action: "access" | "query", args: Record<string, JsonValue>) => {
 		sessions["onPacket"](meta, worker, { type: "database.call", callId, action, args });
 		await until(() => worker.sent.some((command) => command.type === "database.result" && command.callId === callId));
@@ -7227,7 +7227,8 @@ test("database access: only configured projects get db, and only the app's decis
 	assert.equal(typeof requestId, "string");
 	await assert.rejects(sessions.decideDatabaseAccess(created.id, "forged", true), /no longer pending/);
 	await sessions.decideDatabaseAccess(created.id, requestId as string, true);
-	assert.deepEqual(sessions["metas"].get(created.id)?.databases, { grants: [{ env: "prod", mode: "read" }] });
+	assert.equal(sessions["metas"].get(created.id)?.databases?.grants?.[0]?.env, "prod");
+	assert.ok(sessions["metas"].get(created.id)?.databases?.grants?.[0]?.scope);
 	await until(() =>
 		worker.requests.some(
 			(command) => command.type === "input" && command.content === "Allowed read access to the prod database.",
@@ -7237,6 +7238,30 @@ test("database access: only configured projects get db, and only the app's decis
 	await assert.rejects(sessions.decideDatabaseAccess(created.id, requestId as string, false), /no longer pending/);
 	assert.deepEqual(field((await call("q2", "query", { env: "prod", sql: "select 1" })).result, "rows"), [{ n: 1 }]);
 	assert.deepEqual(queries, ["postgres://ro@prod/app select 1"]);
+	await sessions.shutdown();
+	sessions = await f.manager({}, { databases });
+	assert.ok(
+		(await sessions.databaseControls(f.project.id)).agents.find((a) => a.id === created.id)?.grants[0]?.scope,
+		"approval survives daemon reopen",
+	);
+	await sessions.send(created.id, "Check configured access after reopen");
+	await sessions["starting"].get(created.id);
+	worker = f.workers.at(-1)!;
+	meta = sessions["metas"].get(created.id)!;
+	const originalModel = meta.model;
+	meta.model = "other/model";
+	assert.match((await call("provider-change", "query", { env: "prod", sql: "select 1" })).error ?? "", /access/);
+	meta.model = originalModel;
+	meta.control = true;
+	assert.match((await call("helper", "query", { env: "prod", sql: "select 1" })).error ?? "", /unavailable/);
+	assert.ok(
+		(await sessions.databaseControls(f.project.id)).agents.find((a) => a.id === created.id)?.grants.length,
+		"temporarily ineligible agents keep visible approvals",
+	);
+	await sessions.revokeDatabaseAccess(created.id, "prod", "read");
+	delete meta.control;
+	assert.match((await call("revoked", "query", { env: "prod", sql: "select 1" })).error ?? "", /No read access/);
+	assert.equal(queries.length, 1);
 
 	// Another project has no databases: its chats never get the tool.
 	const other = join(f.root, "other");

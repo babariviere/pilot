@@ -9,6 +9,7 @@
 // its result. Leaving, closing or updating keeps the draft (windowState.ts).
 import { effect, keymap, Scroll, type ScrollRef, signal, Text, untracked, View } from "nsh";
 import { ConnectionSettings } from "./ConnectionSettings";
+import { DatabaseSettings } from "./DatabaseSettings";
 import { DiagnosisSettings } from "./DiagnosisSettings";
 import type { Day } from "./day";
 import { KnowledgeSection } from "./KnowledgeSection";
@@ -540,6 +541,7 @@ export function SettingsScreen(props: { day: Day }) {
 				<PageTitle title="Settings" />
 				<If when={props.day.models}>{(controls) => <ModelSettingsSection controls={controls()} />}</If>
 				<If when={props.day.connections}>{(controls) => <ConnectionSettings controls={controls()} />}</If>
+				<If when={props.day.databases}>{(controls) => <DatabaseSettings controls={controls()} />}</If>
 				<If when={props.day.slack}>{(controls) => <SlackSettings controls={controls()} />}</If>
 				<If when={props.day.diagnosis}>{(controls) => <DiagnosisSettings controls={controls()} />}</If>
 				<Preferences mirror={mirror} />

@@ -7,6 +7,7 @@ import { captureChangesTab, changesRoute, resetChangesView, restoreChangesView }
 import { closeChat } from "./chatView";
 import { saveTodayForms } from "./commands";
 import { restoreConnectionDraft, savedConnectionDraft } from "./connectionDraft";
+import { restoreDatabaseDraft, savedDatabaseDraft } from "./databaseDraft";
 import type { Day } from "./day";
 import { captureDeliveryView, deliveryRoute, resetDeliveryView, restoreDeliveryView } from "./deliveryView";
 import { restoreDiagnosis, savedDiagnosis } from "./diagnosisDraft";
@@ -120,6 +121,7 @@ export function captureView(today?: Today): SavedView {
 		diagnosis: savedDiagnosis(),
 		connectionSettings: savedConnectionDraft(),
 		slackSettings: savedSlackDraft(),
+		databaseSettings: savedDatabaseDraft(),
 		knowledge: savedKnowledge(),
 		...thread,
 		...feedback,
@@ -196,6 +198,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	restoreDiagnosis(view.diagnosis ?? "");
 	restoreConnectionDraft(view.connectionSettings ?? "");
 	restoreSlackDraft(view.slackSettings ?? "");
+	restoreDatabaseDraft(view.databaseSettings ?? "");
 	restoreKnowledge(view.knowledge ?? "");
 	restoreSettingsPlace(view.settings, settings);
 	restoreFeedbackView(view);

@@ -23,7 +23,7 @@ export function createDatabaseTool(call: DatabaseCall, publish: PublishQuestion)
 		name: DATABASE_TOOL,
 		label: "Database",
 		description:
-			'Query the user\'s configured Postgres databases. access without env lists environments, their modes and your grants. access with env and mode requests access: it is granted at once, or the user is asked and your turn ends (their decision arrives as the next message). Grants last for this chat. query runs one SQL statement with $1 params (mode "read" by default, read-only). In mode "write", statements runs several statements in one transaction. Results are capped by maxRows (default 100).',
+			"Query configured Postgres databases. access without env lists modes and grants; access with env and mode asks the user and ends your turn. Approval is per agent, destination and model provider until revoked or archived. query runs SQL with $1 params (default read-only); write statements run in one transaction. Results are capped by maxRows (default 100, maximum 1000) and may be truncated. A failed or interrupted write may have committed: investigate with approved reads; retry only with safe evidence and still-current write approval, never blindly repeat.",
 		promptSnippet: "Query configured Postgres databases",
 		parameters: Type.Object({
 			action: Type.Union([Type.Literal("access"), Type.Literal("query")]),

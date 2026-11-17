@@ -4,6 +4,7 @@ import { type Signal, signal } from "nsh";
 import type { Today } from "pilot-day/native";
 import type { ArtifactSource } from "./artifactReads";
 import type { ConnectionControls } from "./connectionControls";
+import type { DatabaseControls } from "./databaseControls";
 import type { DeliveryMirror } from "./deliveryFeed";
 import type { DiagnosisControls } from "./diagnosisControls";
 import type { FeedbackMirror } from "./feedbackFeed";
@@ -25,6 +26,7 @@ export type Day = {
 	models?: ModelControls;
 	diagnosis?: DiagnosisControls;
 	connections?: ConnectionControls;
+	databases?: DatabaseControls;
 	slack?: SlackControls;
 	/** Sends intents. Never written to from TSX state. */
 	feed: DayFeed;

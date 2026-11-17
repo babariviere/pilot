@@ -44,6 +44,7 @@ fn view() -> SavedView {
         diagnosis: String::new(),
         connection_settings: String::new(),
         slack_settings: String::new(),
+        database_settings: String::new(),
         knowledge: String::new(),
         settings: true,
         project_setup: vec![

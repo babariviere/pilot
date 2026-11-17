@@ -67,7 +67,7 @@ test("database settings round-trip preserves secrets, omitted access, unknown fi
 	raw.projects[project].future = 7;
 	raw.projects[project].environments.staging.write.extra = "keep";
 	raw.projects[project].environments.prod.read.url =
-		"postgresql://ro:secret@prod:5444/app?password=query-secret&sslkey=key-secret&sslpassword=ssl-secret&future_secret=hidden";
+		"postgresql://ro:****@prod:5444/app?password=query-secret&sslkey=key-secret&sslpassword=ssl-secret&future_secret=hidden";
 	const f = await fixture(raw);
 	try {
 		const before = await f.service.settings(project);
@@ -258,6 +258,7 @@ async function fixture(value: unknown = config, mode = 0o600) {
 	};
 	let state: DatabaseState | undefined;
 	const store = {
+		authority: () => ({ provider: "test-provider", eligible: true }),
 		read: () => state,
 		write: async (next: DatabaseState) => {
 			state = next;
@@ -269,6 +270,10 @@ async function fixture(value: unknown = config, mode = 0o600) {
 		calls,
 		store,
 		state: () => state,
+		approve: async (env: string, mode = "read") => {
+			await service.call("session-1", project, "access", { env, mode }, store);
+			state = decideDatabaseRequest(state, state!.request!.id, true);
+		},
 		call: (action: string, args: Record<string, never> | Record<string, unknown>) =>
 			service.call("session-1", project, action, args as never, store),
 		service,
@@ -315,14 +320,16 @@ test("per-environment TLS options reach the runner and survive secret-free setti
 		})),
 	});
 	assert.deepEqual((await loadDatabaseConfig(db.dir))?.get(project)?.get("prod")?.read?.ssl, ssl);
-	await db.store.write({ grants: [{ env: "prod", mode: "read" }] });
+	await db.approve("prod");
 	await db.call("query", { env: "prod", sql: "select 1" });
 	assert.deepEqual((db.calls.at(-1) as unknown as { ssl: unknown }).ssl, ssl);
 	raw.projects[project].environments.prod.read.ssl = true;
 	await writeFile(join(db.dir, DATABASE_CONFIG_FILE), JSON.stringify(raw));
+	await db.approve("prod");
 	await db.call("query", { env: "prod", sql: "select 1" });
 	assert.equal((db.calls.at(-1) as unknown as { ssl: unknown }).ssl, true, "no pool or cache keeps stale TLS options");
-	assert.deepEqual(db.state(), { grants: [{ env: "prod", mode: "read" }] });
+	assert.equal(db.state()?.grants?.[0]?.env, "prod");
+	assert.ok(db.state()?.grants?.[0]?.scope);
 });
 
 test("TLS configuration validates options without echoing certificate or key values", () => {
@@ -352,7 +359,10 @@ test("TLS options are resolved once, with object certificate options overriding 
 		const path = join(dir, "ca.pem");
 		await writeFile(path, "url-ca-pem");
 		const url = `${connectionTarget.url}?sslmode=verify-full&sslrootcert=${encodeURIComponent(path)}`;
-		assert.deepEqual({ ...(postgresClientConfig({ ...connectionTarget, url }).ssl as object) }, { ca: "url-ca-pem" });
+		assert.deepEqual(
+			{ ...(postgresClientConfig({ ...connectionTarget, url }).ssl as object) },
+			{ ca: "url-ca-pem", rejectUnauthorized: true },
+		);
 		const resolved = postgresClientConfig({
 			...connectionTarget,
 			url,
@@ -389,9 +399,14 @@ test("TLS requirements cannot silently become plaintext or disable explicit veri
 			postgresClientConfig({ ...connectionTarget, url: `${connectionTarget.url}?sslmode=verify-full`, ssl: false }),
 		/disagree about TLS/,
 	);
-	assert.equal(postgresClientConfig({ ...connectionTarget, ssl: false }).ssl, false);
+	assert.throws(() => postgresClientConfig({ ...connectionTarget, ssl: false }), /exception/);
 	assert.equal(
-		postgresClientConfig({ ...connectionTarget, url: `${connectionTarget.url}?sslmode=disable`, ssl: false }).ssl,
+		postgresClientConfig({
+			...connectionTarget,
+			url: `${connectionTarget.url}?sslmode=disable`,
+			ssl: false,
+			tlsException: { name: "Local", mode: "plaintext" },
+		}).ssl,
 		false,
 	);
 	const resolved = postgresClientConfig({
@@ -403,7 +418,11 @@ test("TLS requirements cannot silently become plaintext or disable explicit veri
 	assert.deepEqual(postgresClientConfig({ ...connectionTarget, ssl: {} }).ssl, { rejectUnauthorized: true });
 	assert.equal(
 		(
-			postgresClientConfig({ ...connectionTarget, url: `${connectionTarget.url}?ssl=no-verify` }).ssl as {
+			postgresClientConfig({
+				...connectionTarget,
+				url: `${connectionTarget.url}?ssl=no-verify`,
+				tlsException: { name: "Legacy", mode: "unverified" },
+			}).ssl as {
 				rejectUnauthorized: boolean;
 			}
 		).rejectUnauthorized,
@@ -431,11 +450,16 @@ test("driver TLS environment defaults survive when no per-connection TLS option 
 	const previous = process.env.PGSSLMODE;
 	try {
 		process.env.PGSSLMODE = "verify-full";
-		assert.equal(new pg.Client(postgresClientConfig(connectionTarget)).ssl, true);
-		assert.equal(new pg.Client(postgresClientConfig({ ...connectionTarget, ssl: false })).ssl, false);
+		assert.deepEqual(new pg.Client(postgresClientConfig(connectionTarget)).ssl, { rejectUnauthorized: true });
+		assert.throws(() => postgresClientConfig({ ...connectionTarget, ssl: false }), /exception/);
 		assert.equal(
-			new pg.Client(postgresClientConfig({ ...connectionTarget, url: `${connectionTarget.url}?sslmode=disable` }))
-				.ssl,
+			new pg.Client(
+				postgresClientConfig({
+					...connectionTarget,
+					url: `${connectionTarget.url}?sslmode=disable`,
+					tlsException: { name: "Local", mode: "plaintext" },
+				}),
+			).ssl,
 			false,
 		);
 	} finally {
@@ -499,7 +523,8 @@ test("access approval is not a connectivity test and failed queries leave grants
 		await call("query", { env: "prod", sql: "select * from information_schema.tables" });
 	}, /connection failed.*does not verify connectivity/);
 	assert.equal(attempts, 1);
-	assert.deepEqual(db.state(), { grants: [{ env: "prod", mode: "read" }] });
+	assert.equal(db.state()?.grants?.[0]?.env, "prod");
+	assert.ok(db.state()?.grants?.[0]?.scope);
 });
 
 test("connection failures classify only supported evidence, preserve SQLSTATE and redact server details", async (t) => {
@@ -619,17 +644,17 @@ test("access lists environments without URLs", async () => {
 	const listed = await db.call("access", {});
 	assert.deepEqual(listed, {
 		environments: [
-			{ name: "local", modes: { read: "allow", write: "allow" }, granted: [] },
-			{ name: "staging", modes: { read: "allow", write: "ask" }, granted: [] },
+			{ name: "local", modes: { read: "ask", write: "ask" }, granted: [] },
+			{ name: "staging", modes: { read: "ask", write: "ask" }, granted: [] },
 			{ name: "prod", modes: { read: "ask" }, granted: [] },
 		],
 	});
 	assert.doesNotMatch(JSON.stringify(listed), /postgres/);
 });
 
-test("allow grants at once; ask asks and only a decision for its id grants", async () => {
+test("legacy allow still asks; only a decision for its id grants", async () => {
 	await using db = await fixture();
-	assert.deepEqual(await db.call("access", { env: "staging" }), { status: "granted", env: "staging", mode: "read" });
+	await db.approve("staging");
 	const pending = (await db.call("access", { env: "staging", mode: "write", reason: " Fix a stuck renewal " })) as {
 		status: string;
 		question: {
@@ -640,7 +665,9 @@ test("allow grants at once; ask asks and only a decision for its id grants", asy
 		};
 	};
 	assert.equal(pending.status, "pending");
-	assert.equal(pending.question.context, "Fix a stuck renewal");
+	assert.match(pending.question.context, /Fix a stuck renewal/);
+	assert.match(pending.question.context, /Destination: rw@staging:5432\/app/);
+	assert.match(pending.question.context, /test-provider/);
 	assert.deepEqual(
 		pending.question.options.map((option) => option.label),
 		["Allow write access to staging", "Deny"],
@@ -654,18 +681,19 @@ test("allow grants at once; ask asks and only a decision for its id grants", asy
 	);
 
 	// Messages only ever decline; denying and stale ids never grant.
-	assert.deepEqual(declineDatabaseRequest(db.state()), { grants: [{ env: "staging", mode: "read" }] });
+	assert.equal(declineDatabaseRequest(db.state())?.grants?.[0]?.mode, "read");
 	assert.equal(declineDatabaseRequest({ grants: [] }), undefined);
-	assert.deepEqual(decideDatabaseRequest(db.state(), id, false), { grants: [{ env: "staging", mode: "read" }] });
+	assert.equal(decideDatabaseRequest(db.state(), id, false).grants?.length, 1);
 	assert.throws(() => decideDatabaseRequest(db.state(), "other", true), /no longer pending/);
 	assert.throws(() => decideDatabaseRequest(declineDatabaseRequest(db.state()), id, true), /no longer pending/);
 	await db.store.write(decideDatabaseRequest(db.state(), id, true));
-	assert.deepEqual(db.state(), {
-		grants: [
-			{ env: "staging", mode: "read" },
-			{ env: "staging", mode: "write" },
+	assert.deepEqual(
+		db.state()?.grants?.map((g) => [g.env, g.mode]),
+		[
+			["staging", "read"],
+			["staging", "write"],
 		],
-	});
+	);
 	await db.call("query", { env: "staging", mode: "write", sql: "update t set x = 1" });
 	assert.equal(db.calls.at(-1)?.url, "postgres://rw@staging/app");
 	assert.equal(db.calls.at(-1)?.applicationName, "pilot-session-1");
@@ -673,19 +701,17 @@ test("allow grants at once; ask asks and only a decision for its id grants", asy
 
 test("queries check grants, modes and inputs before connecting", async () => {
 	await using db = await fixture();
-	await assert.rejects(
-		db.call("query", { env: "prod", sql: "select 1" }),
-		/Call db\(\{ action: "access", env: "prod", mode: "read" \}\) first/,
-	);
+	await assert.rejects(db.call("query", { env: "prod", sql: "select 1" }), /Request explicit access first/);
 	await assert.rejects(db.call("query", { env: "prod", mode: "write", sql: "select 1" }), /does not allow writes/);
 	await assert.rejects(db.call("query", { env: "nope", sql: "select 1" }), /Unknown database environment/);
+	await db.approve("local");
 	await assert.rejects(db.call("query", { env: "local", sql: " " }), /sql is required/);
 	await assert.rejects(db.call("query", { env: "local", statements: [{ sql: "select 1" }] }), /need mode "write"/);
 	await assert.rejects(db.call("query", { env: "local", sql: "select 1", maxRows: 0 }), /maxRows/);
 	await assert.rejects(db.call("drop", {}), /must be "access" or "query"/);
 	assert.equal(db.calls.length, 0);
 
-	// An "allow" environment grants on first use, so the agent may skip access.
+	// The explicit approval above allows the bounded query.
 	assert.deepEqual(await db.call("query", { env: "local", sql: "select 1" }), {
 		env: "local",
 		mode: "read",
@@ -694,7 +720,8 @@ test("queries check grants, modes and inputs before connecting", async () => {
 		rowCount: 1,
 		truncated: false,
 	});
-	assert.deepEqual(db.state(), { grants: [{ env: "local", mode: "read" }] });
+	assert.equal(db.state()?.grants?.[0]?.mode, "read");
+	await db.approve("local", "write");
 	const batch = (await db.call("query", {
 		env: "local",
 		mode: "write",
@@ -704,13 +731,12 @@ test("queries check grants, modes and inputs before connecting", async () => {
 	assert.deepEqual(db.calls.at(-1)?.sql, ["insert into t values ($1)", "select 1"]);
 });
 
-test("a write grant also covers read-mode queries", async () => {
+test("a write approval never authorizes a different read destination", async () => {
 	await using db = await fixture();
-	await db.store.write({ grants: [{ env: "staging", mode: "write" }] });
+	await db.approve("staging", "write");
 	const before = db.calls.length;
-	await db.call("query", { env: "staging", sql: "select 1" });
-	assert.equal(db.calls.length, before + 1);
-	assert.equal(db.calls.at(-1)?.url, "postgres://ro@staging/app");
+	await assert.rejects(db.call("query", { env: "staging", sql: "select 1" }), /No read access/);
+	assert.equal(db.calls.length, before);
 });
 
 test("results are bounded by value length and a shared byte budget", () => {

@@ -8,16 +8,37 @@ use tokio::{
 };
 
 type Seen = Arc<Mutex<Vec<(String, String, Value)>>>;
+struct CapabilityHome(std::path::PathBuf);
+impl Drop for CapabilityHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 /// Hello reports `daemon`; the decision POST gets `reply`, or a dropped connection.
 async fn serve(daemon: &'static str, reply: Option<(u16, &'static str)>) -> (LocalOptions, Seen) {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
-    let options = LocalOptions::synthetic(listener.local_addr().unwrap().port());
+    use std::os::unix::fs::PermissionsExt;
+    let home = CapabilityHome(
+        std::env::temp_dir().join(format!("database-capability-{}", uuid::Uuid::new_v4())),
+    );
+    std::fs::create_dir(&home.0).unwrap();
+    let cap = home.0.join("github-app-capability");
+    std::fs::write(
+        &cap,
+        json!({"daemonId":"test-daemon","lineageId":"test-lineage","token":"b".repeat(64)})
+            .to_string(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&cap, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let options = LocalOptions::synthetic(listener.local_addr().unwrap().port())
+        .with_scope_home(home.0.clone());
     let seen = Seen::default();
     let record = seen.clone();
     tokio::spawn(async move {
+        let _home = home;
         while let Ok((stream, _)) = listener.accept().await {
             let record = record.clone();
             tokio::spawn(async move {
@@ -28,12 +49,15 @@ async fn serve(daemon: &'static str, reply: Option<(u16, &'static str)>) -> (Loc
                 }
                 let words: Vec<_> = first.split_whitespace().map(str::to_owned).collect();
                 let mut length = 0;
+                let mut authorized = false;
                 loop {
                     let mut line = String::new();
                     reader.read_line(&mut line).await.unwrap();
                     if line == "\r\n" {
                         break;
                     }
+                    authorized |= line.to_ascii_lowercase().trim()
+                        == format!("x-pilot-github-capability: {}", "b".repeat(64));
                     if let Some(n) = line.to_ascii_lowercase().strip_prefix("content-length:") {
                         length = n.trim().parse().unwrap();
                     }
@@ -41,6 +65,9 @@ async fn serve(daemon: &'static str, reply: Option<(u16, &'static str)>) -> (Loc
                 let mut bytes = vec![0; length];
                 reader.read_exact(&mut bytes).await.unwrap();
                 let payload = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                if words[0] == "POST" {
+                    assert!(authorized, "database approval requires native authority");
+                }
                 record
                     .lock()
                     .unwrap()
