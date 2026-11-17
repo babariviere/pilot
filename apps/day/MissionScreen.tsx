@@ -72,7 +72,9 @@ function ReportedOutput(props: { report: ReportLine }) {
 				<Text class="text-xs text-faint">
 					Worker delivery claim. Task completion and your check remain separate.
 				</Text>
-				<Text class="text-sm text-muted-foreground">{`Reported commit: ${props.report.delivery?.commit ?? ""}`}</Text>
+				<Text class="text-sm text-muted-foreground">
+					{props.report.delivery?.commit ? `Reported commit: ${props.report.delivery.commit}` : "No code changed."}
+				</Text>
 				<Text class="text-sm text-muted-foreground">{`Reported checks: ${props.report.delivery?.checks ?? ""}`}</Text>
 				<If when={props.report.delivery?.issues}>
 					<Text class="text-sm text-muted-foreground">{`Open issues: ${props.report.delivery?.issues}`}</Text>

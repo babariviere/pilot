@@ -35,7 +35,9 @@ export interface ScreenPairSummary {
 }
 
 /** Scoped worker delivery facts. */
-export interface MissionReportDelivery extends MissionCodeCompletion {
+/** Omitted commit: the task changed no code, such as a decision, a mockup or research. */
+export interface MissionReportDelivery extends Omit<MissionCodeCompletion, "commit"> {
+	commit?: string;
 	screens?: MissionDeliveryScreens;
 }
 

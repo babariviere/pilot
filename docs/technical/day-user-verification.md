@@ -63,7 +63,8 @@ typed read model. Important fields:
   takes notices (`canSendNotice` refuses planning chats) or completes tasks. So
   `MissionStore.plannedWithoutCoordinator` missions treat the current task worker's latest report with
   `delivery` facts as the result: saving it records a `report:<id>` discovery source, and its report ID
-  is the delivery identity. No one else finishes tasks there, so the user's check moves the task: Done
+  is the delivery identity. A task that changes no code (a decision, a mockup, research) delivers with no
+  `commit`, so it reaches To check too. No one else finishes tasks there, so the user's check moves the task: Done
   finishes it, and a send-back or reopen of a finished task puts it back in progress. The worker's open
   comments to the coordinator (no target chat, newest 10) show on the page, and the user answers with
   Send back or a thread. Pilot also queues no mission notices for these missions.

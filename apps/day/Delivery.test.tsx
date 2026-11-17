@@ -80,6 +80,20 @@ test("publication claims, PR health observations and user verification stay sepa
 		pendingOperationId: null,
 	};
 	expect(agentLine(direct)).toBe("Says it finished. Commit bbbbbbb.");
+	const report = {
+		reportId: "r",
+		reportedAt: 1,
+		summary: "The user chose layout A.",
+		nextStep: "Build it in #40.",
+		evidence: [],
+		checks: "Asked the user with the mockup.",
+		issues: "",
+	};
+	const { completion: _code, ...noCompletion } = direct;
+	expect(agentLine({ ...noCompletion, workerDelivery: report })).toBe("Reports it finished. No code changed.");
+	expect(agentLine({ ...noCompletion, workerDelivery: { ...report, commit: "c".repeat(40) } })).toBe(
+		"Reports it finished. Commit ccccccc.",
+	);
 	expect(pullRequestLine(direct)).toBe("None linked.");
 	expect(productionLine(direct)).toBe("Not tracked.");
 	expect(checkLine(direct, undefined)).toBe("Not checked yet.");

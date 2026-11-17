@@ -564,7 +564,10 @@ export function agentLine(work: DeliveredWork): string {
 	if (v?.state === "sent_back") return "Has your note. No new result yet.";
 	if (!work.deliveryId) return "Has not delivered a result yet.";
 	if (work.completion) return `Says it finished. Commit ${work.completion.commit.slice(0, 7)}.`;
-	if (work.workerDelivery) return `Reports it finished. Commit ${work.workerDelivery.commit.slice(0, 7)}.`;
+	if (work.workerDelivery)
+		return work.workerDelivery.commit
+			? `Reports it finished. Commit ${work.workerDelivery.commit.slice(0, 7)}.`
+			: "Reports it finished. No code changed.";
 	if (work.nonCodeDelivery) return "Says it finished, without code changes.";
 	if (work.submission) return "Submitted its result.";
 	if (work.outcome) return work.outcome.reason ? `Says it is done: ${work.outcome.reason}` : "Says it is done.";

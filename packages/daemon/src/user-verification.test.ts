@@ -512,6 +512,37 @@ test("a planned mission with no execution coordinator shows the worker's deliver
 	assert.equal(f.store.task(f.mission.id, f.task.id).status, "in_progress");
 });
 
+test("a worker delivers a task that changes no code without a commit, and the user can mark it done", async (t) => {
+	const f = await fixture(t);
+	t.mock.method(f.store, "plannedWithoutCoordinator", () => true);
+	await f.service.list(f.project.id);
+	const reports = new MissionReports(f.store);
+	const write = (reportId: string, delivery: unknown) => {
+		const source = reports.source(f.mission.id, "worker", f.task.id);
+		return reports.write(f.mission.id, "worker", {
+			version: 1,
+			reportId,
+			taskId: f.task.id,
+			source: source.source,
+			expectedPreviousId: source.expectedPreviousId,
+			movement: "moving",
+			summary: "The user chose layout A.",
+			nextStep: "Build layout A in task #40.",
+			evidence: ["Answer to the layout question"],
+			delivery,
+		});
+	};
+	await assert.rejects(write("bad", { commit: "not-a-hash", checks: "Asked", issues: "" }), /scoped delivery/);
+	await assert.rejects(write("empty", { issues: "" }), /scoped delivery/);
+	await write("choice", { checks: "Asked the user with the mockup; they chose A.", issues: "" });
+	const page = await f.service.read(f.subject);
+	assert.ok(page.deliveryId, "a delivery with no commit is still a result to check");
+	assert.equal(page.workerDelivery?.commit, undefined);
+	assert.equal(page.workerDelivery?.checks, "Asked the user with the mockup; they chose A.");
+	assert.equal((await f.run(operation(page))).state, "accepted");
+	assert.equal(f.store.task(f.mission.id, f.task.id).status, "done");
+});
+
 test("a task's result shows the worker's latest named screens, and naming new ones is a new delivery", async (t) => {
 	const f = await fixture(t);
 	t.mock.method(f.store, "plannedWithoutCoordinator", () => true);

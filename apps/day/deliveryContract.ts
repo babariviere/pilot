@@ -69,7 +69,8 @@ export interface DeliveredWork {
 		summary: string;
 		nextStep: string;
 		evidence: string[];
-		commit: string;
+		/** Omitted when the task changed no code. */
+		commit?: string;
 		checks: string;
 		issues: string;
 	};

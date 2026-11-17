@@ -28,7 +28,8 @@ checks stay available. Other projects' results are read-only in this window.
 A result's Agent work section (folded until Show, or opened from a task linked in a thread) lists
 the changes its agent owns, the chat's saved pushes and pull requests, and what Pilot saw on GitHub.
 A push with no saved result stays Unknown. It is Pilot's record, not the agent's report or your check.
-In a planned mission, a worker's delivery report reaches To check: you check it, and what the worker
+In a planned mission, a worker's delivery report reaches To check, also for work with no code such as a choice
+between mockups: you check it, and what the worker
 asks its coordinator shows on that page. Answer with Send back or a thread.
 After your first Start work, marking a task's result done finishes the task, and Pilot starts the next
 tasks that are ready, within the worker limit, Pause and Stop. A merged pull request of a task finishes it too.

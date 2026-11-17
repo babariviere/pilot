@@ -107,11 +107,11 @@ export class MissionReports {
 				typeof delivery !== "object" ||
 				Array.isArray(delivery) ||
 				Object.keys(delivery)
-					.filter((key) => key !== "screens")
+					.filter((key) => key !== "screens" && key !== "commit")
 					.sort()
-					.join() !== "checks,commit,issues" ||
-				!text(delivery.commit, 40) ||
-				!/^[a-f0-9]{40}$/.test(delivery.commit) ||
+					.join() !== "checks,issues" ||
+				// No commit: the task changed no code (a decision, a mockup or research).
+				("commit" in delivery && (!text(delivery.commit, 40) || !/^[a-f0-9]{40}$/.test(delivery.commit!))) ||
 				!text(delivery.checks, 2000) ||
 				typeof delivery.issues !== "string" ||
 				delivery.issues.length > 1000
