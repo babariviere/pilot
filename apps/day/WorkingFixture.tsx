@@ -1,0 +1,271 @@
+// Scripted transport, real Today/chat views. No service, provider or execution.
+import { keymap, mount, Scroll, signal, Text, View } from "nsh";
+import { TodayFeed } from "pilot-day/native";
+import { mirrorDay } from "./day";
+import { MockDayScreen } from "./mockFeeds";
+import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessionChat";
+import { mirrorScope, type ScopeMirror, todayProject } from "./todayScope";
+import { Action } from "./ui";
+
+const feed = new TodayFeed("decisions");
+const opened = signal("");
+const sends = signal(0);
+let chat: SessionChat | null = null;
+const listeners = new Set<(c: SessionChat | null) => void>();
+const source: SessionChatSource = {
+	chat: () => chat,
+	onChange: (l) => {
+		listeners.add(l);
+		return () => listeners.delete(l);
+	},
+	async open(id) {
+		opened.set(id);
+		chat = {
+			sessionId: id,
+			title: `Exact chat ${id}`,
+			state: "working",
+			stateReason: "",
+			rows: [],
+			more: false,
+			reading: false,
+			reason: "",
+		};
+		for (const l of listeners) l(chat);
+	},
+	async earlier() {},
+	async refresh() {},
+	close() {
+		chat = null;
+		for (const l of listeners) l(null);
+	},
+	async continueChat() {
+		sends.update((n) => n + 1);
+		return { status: "rejected", message: "No execution in this fixture" };
+	},
+	async checkContinue() {
+		return { status: "unknown", message: "" };
+	},
+	dispose() {},
+};
+let rows: {
+	sessionId: string;
+	title: string;
+	missionId: string | null;
+	missionTitle: string | null;
+	purpose: string | null;
+	status: "working";
+}[] = [
+	{
+		sessionId: "mission-agent",
+		title: "Native activity",
+		missionId: "mission",
+		missionTitle: "Daily work",
+		purpose: "Show working agents",
+		status: "working" as const,
+	},
+	{
+		sessionId: "solo-agent",
+		title: "Standalone investigation",
+		missionId: null,
+		missionTitle: null,
+		purpose: null,
+		status: "working" as const,
+	},
+];
+let state = "live";
+let hold = true;
+let refusal: "offline" | "invalid" | "stale" | "identity" | null = null;
+const held: (() => void)[] = [];
+let accessible = true;
+// Also loads against the parent renderer for Before captures.
+const scope: ScopeMirror & { invalidate?: () => void } = mirrorScope({
+	async read(selected, generation) {
+		const projects = [
+			{ id: "one", name: "pilot" },
+			{ id: "two", name: "website" },
+		]
+			.filter((p) => accessible || p.id !== "two")
+			.map((p, i) => ({
+				...p,
+				selected: selected === "all" || selected === p.id,
+				currentness: "live",
+				observedAt: "",
+				needsYou: { count: 0, complete: true },
+				today: null,
+				planning: null,
+				results: null,
+				errors: {},
+				canAct: false,
+				working: { state, items: rows.filter((r) => (i === 0) === (r.sessionId !== "solo-agent")) },
+			}));
+		const snapshot = {
+			version: 1,
+			scope: selected,
+			generation,
+			own: "one",
+			catalogComplete: true,
+			complete: true,
+			outsideNeedsYou: { count: 0, complete: true },
+			projects,
+		};
+		if (hold) await new Promise<void>((resolve) => held.push(resolve));
+		return refusal ? { ok: false, refusal } : { ok: true, snapshot };
+	},
+});
+const day = mirrorDay(feed, { scope, chat: mirrorSessionChat(source) });
+const read = () => void scope.read(todayProject());
+function update(run: () => void) {
+	run();
+	read();
+}
+
+function changeTask() {
+	update(() => {
+		rows = rows.map((r) => (r.sessionId === "mission-agent" ? { ...r, purpose: "Updated task" } : r));
+	});
+}
+
+mount(() => {
+	keymap.bind("mod+shift+u", changeTask, { when: "always" });
+	return (
+		<View class="flex-1 bg-background">
+			<View class="flex-1">
+				<MockDayScreen day={day} />
+			</View>
+			<Scroll class="max-h-44 border-t border-border">
+				<View class="gap-1 px-6 py-2">
+					<Text>{`Opened: ${opened()} · Sends: ${sends()}`}</Text>
+					<View class="flex-row flex-wrap gap-1">
+						<Action
+							label="Change task"
+							onPress={() =>
+								update(() => {
+									rows = rows.map((r) =>
+										r.sessionId === "mission-agent" ? { ...r, purpose: "Updated task" } : r,
+									);
+								})
+							}
+						/>
+						<Action
+							label="Stop agent"
+							onPress={() =>
+								update(() => {
+									rows = rows.filter((r) => r.sessionId !== "mission-agent");
+								})
+							}
+						/>
+						<Action
+							label="Start agent"
+							onPress={() =>
+								update(() => {
+									rows = [
+										...rows,
+										{
+											sessionId: "new-agent",
+											title: "New worker",
+											purpose: "New task",
+											missionId: null,
+											missionTitle: null,
+											status: "working",
+										},
+									];
+								})
+							}
+						/>
+						<Action
+							label="None working"
+							onPress={() =>
+								update(() => {
+									rows = [];
+								})
+							}
+						/>
+						<Action
+							label="Access lost"
+							onPress={() =>
+								update(() => {
+									accessible = false;
+								})
+							}
+						/>
+						<Action
+							label="Disconnected"
+							onPress={() =>
+								update(() => {
+									refusal = "offline";
+								})
+							}
+						/>
+						<Action
+							label="Failed"
+							onPress={() =>
+								update(() => {
+									refusal = "invalid";
+								})
+							}
+						/>
+						<Action
+							label="Stale"
+							onPress={() =>
+								update(() => {
+									state = "stale";
+								})
+							}
+						/>
+						<Action label="Duplicate read" onPress={read} />
+						<Action
+							label="Start many"
+							onPress={() =>
+								update(() => {
+									rows = [
+										...rows,
+										...Array.from({ length: 5 }, (_, i) => ({
+											sessionId: `extra-${i}`,
+											title: `Extra worker ${i}`,
+											missionId: null,
+											missionTitle: null,
+											purpose: "Check native activity",
+											status: "working" as const,
+										})),
+									];
+								})
+							}
+						/>
+						<Action label="Invalidate" onPress={() => scope.invalidate?.()} />
+						<Action
+							label="Identity lost"
+							onPress={() =>
+								update(() => {
+									refusal = "identity";
+								})
+							}
+						/>
+						<Action
+							label="Restore access"
+							onPress={() =>
+								update(() => {
+									refusal = null;
+								})
+							}
+						/>
+						<Action
+							label="Hold reads"
+							onPress={() => {
+								hold = true;
+								read();
+							}}
+						/>
+						<Action
+							label="Release newer"
+							onPress={() => {
+								hold = false;
+								held.pop()?.();
+							}}
+						/>
+						<Action label="Release older" onPress={() => held.shift()?.()} />
+					</View>
+				</View>
+			</Scroll>
+		</View>
+	);
+});

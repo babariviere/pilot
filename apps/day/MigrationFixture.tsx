@@ -17,7 +17,9 @@ const source = {
 			briefRevision: 3,
 			agreement: "Read exact archive bytes. Do not deploy.",
 			oldAgreement: "Keep original importer history.",
-			oldTasks: [{ id: "old-task", number: 1, title: "Unfinished import tests", status: "blocked" }],
+			oldTasks: [
+				{ id: "old-task", number: 1, title: "Unfinished import tests", status: "blocked", sessionId: "old-chat" },
+			],
 			newTasks: [{ id: "new-task", number: 1, title: "Reviewed importer", status: "todo" }],
 			keptChats: [{ id: "kept", title: "Importer work", unpublishedWork: true as const }],
 			digest: "exact-preview",
@@ -53,7 +55,7 @@ mount(() => (
 		<Text>Mock data · Migration</Text>
 		<Action label="Make preview stale" onPress={() => mode.set("stale")} />
 		<MigrationControls source={source} missionId="old" successorId="new" />
-		<PreviousMission source={source} oldId="old" successorId="new" />
+		<PreviousMission source={source} oldId="old" successorId="new" canReadChats />
 		<Text>{`Finish sends: ${sends()} · Checks: ${checks()}`}</Text>
 	</View>
 ));

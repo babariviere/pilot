@@ -12,7 +12,7 @@ const snapshot = signal<DiagnosisSnapshot | null>({
 	models: [
 		{ id: "test/model", provider: "test", name: "Test model", thinkingLevels: ["off"], taskDefaultThinking: "off" },
 	],
-	chats: { items: [], hasMore: false },
+	chats: { items: [{ sessionId: "specialist", title: "Why did planning wait?", status: "done" }], hasMore: false },
 	retained: ["OS logs, service stdout, exports and agent replies are kept independently."],
 });
 const busy = signal(false),
