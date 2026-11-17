@@ -3,9 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { UserFeedback, UserFeedbackPage } from "@pilot/protocol";
+import type { DurableOperation, UserFeedback, UserFeedbackPage } from "@pilot/protocol";
 import { AttachmentStore } from "./attachment-store.ts";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
+import { payloadHash } from "./operation-journal.ts";
 
 test("user feedback saves once with exact receipts, derived origins and a native-only newest-first history", async (t) => {
 	const f = await nativePlanningFixture();
@@ -133,4 +134,143 @@ test("user feedback saves once with exact receipts, derived origins and a native
 	assert.deepEqual(await readFile(paths[0]!), png);
 	assert.deepEqual(await (await f.post(mission, true)).json(), receipt);
 	assert.equal((await page()).items.length, 4);
+});
+
+test("saved feedback owns only its retained same-host investigation operation; reads never dispatch it", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	Object.defineProperty(f.sessions, "start", { value: async () => new Map() });
+	f.sessions.selectTaskModel = async () => ({ model: "fake/model", thinking: "high" });
+	const response = await fetch(`${f.root}/api/projects/${f.project.id}/chat-profile?mode=ask`, {
+		headers: { "x-pilot-github-capability": f.capability },
+	});
+	assert.equal(response.status, 200);
+	const { mode: _mode, ...choice } = await response.json();
+	const child = (feedbackId: string) =>
+		f.operation(
+			randomUUID(),
+			{ purpose: "feedback-work", action: "triage", feedbackId, ...choice },
+			choice.contextDigest,
+		);
+	const parent = (feedbackId: string, operation: DurableOperation) =>
+		f.operation(feedbackId, {
+			purpose: "user-feedback",
+			text: "Investigate this saved feedback",
+			origin: null,
+			investigation: { operation },
+		});
+	const post = async (operation: DurableOperation, lookup = false) => (await f.post(operation, lookup)).json();
+	const feedbackId = randomUUID();
+	const nested = child(feedbackId);
+	const save = parent(feedbackId, nested);
+	const accepted = await post(save);
+	assert.equal(accepted.state, "accepted", JSON.stringify(accepted));
+	assert.deepEqual(accepted.result.investigation, { operation: nested });
+	assert.equal(accepted.result.savePayloadHash, save.payloadHash);
+	assert.equal(f.sessions.list().length, 0, "saving the claim does not start it");
+	assert.equal((await post(nested, true)).state, "unknown", "saving a claim creates no child journal record");
+	await fetch(`${f.root}/api/feedback`, { headers: { "x-pilot-github-capability": f.capability } }).then((r) =>
+		r.json(),
+	);
+	assert.deepEqual(await post(save, true), accepted);
+	assert.equal(f.sessions.list().length, 0, "GET and accepted parent Check remain passive");
+	assert.equal(
+		(await post(child(feedbackId))).state,
+		"rejected",
+		"fresh manual triage cannot replace the claimed child",
+	);
+	const otherId = randomUUID();
+	const changedPayload = JSON.stringify({ ...JSON.parse(nested.payload), feedbackId: otherId });
+	const duplicateClaim = { ...nested, payload: changedPayload, payloadHash: payloadHash(changedPayload) };
+	assert.equal(
+		(await post(parent(otherId, duplicateClaim))).state,
+		"rejected",
+		"a child operation identity belongs to one feedback",
+	);
+	const reusedChat = { ...child(otherId), targetId: nested.targetId };
+	assert.equal((await post(parent(otherId, reusedChat))).state, "rejected", "a reserved chat belongs to one feedback");
+	for (const bad of [
+		{ ...child(otherId), origin: { ...nested.origin, daemonId: "other-daemon" } },
+		{ ...child(otherId), destination: { ...nested.destination, lineageId: "other-lineage" } },
+		nested,
+		{ ...child(otherId), payload: nested.payload },
+		{ ...child(otherId), bindingId: "0".repeat(64) },
+		{ ...child(otherId), kind: "native-chat-create" },
+	])
+		assert.equal((await post(parent(otherId, bad))).state, "rejected", JSON.stringify(bad));
+	assert.equal(f.store.feedback.get(otherId), undefined);
+	await f.restart();
+	assert.deepEqual(await post(save, true), accepted);
+	assert.deepEqual(f.store.feedback.get(feedbackId)?.investigation, { operation: nested });
+	assert.equal((await post(nested, true)).state, "unknown");
+	const started = await post(nested);
+	assert.equal(started.state, "accepted", JSON.stringify(started));
+	assert.deepEqual(await post(nested, true), started);
+	assert.deepEqual(await post(nested), started);
+	assert.equal(f.store.feedback.work(feedbackId).length, 1);
+	assert.equal(f.sessions.list().length, 1);
+	const meta = JSON.parse(await readFile(join(f.home, "sessions", nested.targetId, "meta.json"), "utf8"));
+	assert.equal(meta.projectId, choice.projectId);
+	assert.equal(meta.mode, "ask");
+	assert.equal(meta.fundingBackground, true);
+	assert(
+		!meta.pending[0].content.includes(nested.operationId),
+		"agent context excludes the native operation capability",
+	);
+});
+
+test("unknown feedback save confirms exact durable input after restart; an entered child never replays", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	Object.defineProperty(f.sessions, "start", { value: async () => new Map() });
+	f.sessions.selectTaskModel = async () => ({ model: "fake/model", thinking: "high" });
+	const response = await fetch(`${f.root}/api/projects/${f.project.id}/chat-profile?mode=ask`, {
+		headers: { "x-pilot-github-capability": f.capability },
+	});
+	const { mode: _mode, ...choice } = await response.json();
+	const feedbackId = randomUUID();
+	const nested = f.operation(
+		randomUUID(),
+		{ purpose: "feedback-work", action: "triage", feedbackId, ...choice },
+		choice.contextDigest,
+	);
+	const save = f.operation(feedbackId, {
+		purpose: "user-feedback",
+		text: "Saved before ACK",
+		origin: null,
+		investigation: { operation: nested },
+	});
+	const post = async (operation: DurableOperation, lookup = false) => (await f.post(operation, lookup)).json();
+	const add = f.store.feedback.add.bind(f.store.feedback);
+	t.mock.method(f.store.feedback, "add", (feedback: UserFeedback) => {
+		add(feedback);
+		throw new Error("lost parent ACK after save");
+	});
+	assert.equal((await post(save)).state, "pending");
+	assert.equal(f.sessions.list().length, 0);
+	await f.restart();
+	const recovered = await post(save, true);
+	assert.equal(recovered.state, "accepted", JSON.stringify(recovered));
+	assert.equal(recovered.result.savePayloadHash, save.payloadHash);
+	assert.deepEqual(recovered.result.investigation, { operation: nested });
+	assert.deepEqual(await post(save), recovered, "save re-entry only confirms, never saves twice");
+	assert.equal(f.sessions.list().length, 0, "parent recovery never dispatches a child");
+	assert.equal((await post(nested, true)).state, "unknown", "native may now send this never-entered exact child");
+	const spawn = f.sessions.spawnDurable.bind(f.sessions);
+	let attempts = 0;
+	t.mock.method(f.sessions, "spawnDurable", async (...args: Parameters<typeof spawn>) => {
+		attempts++;
+		await spawn(...args);
+		throw new Error("lost child ACK after entry");
+	});
+	assert.equal((await post(nested)).state, "pending");
+	assert.equal((await post(nested, true)).state, "pending");
+	assert.equal((await post(nested)).state, "pending");
+	await f.restart();
+	assert.deepEqual(await post(save, true), recovered);
+	assert.equal((await post(nested, true)).state, "pending");
+	assert.equal((await post(nested)).state, "pending");
+	assert.equal(attempts, 1, "entered child is never admitted twice, including after parent Check and restart");
+	assert.equal(f.store.feedback.work(feedbackId).length, 1);
+	assert.equal(f.sessions.list().length, 1);
 });

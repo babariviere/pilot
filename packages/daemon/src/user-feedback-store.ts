@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS user_feedback (
  operation_id TEXT NOT NULL UNIQUE,
  record TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS user_feedback_investigation_operation
+ ON user_feedback(json_extract(record,'$.investigation.operation.operationId'));
+CREATE UNIQUE INDEX IF NOT EXISTS user_feedback_investigation_session
+ ON user_feedback(json_extract(record,'$.investigation.operation.targetId'));
 CREATE TABLE IF NOT EXISTS user_feedback_work (
  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
  feedback_id TEXT NOT NULL,
@@ -111,6 +115,16 @@ export class UserFeedbackStore {
 		return this.db.transaction(() => {
 			if (this.db.one("SELECT 1 FROM user_feedback WHERE id=? OR operation_id=?", feedback.id, feedback.operationId))
 				throw new Conflict("Feedback already exists. Look up its exact receipt; do not resend.");
+			const claim = feedback.investigation?.operation;
+			if (
+				claim &&
+				this.db.one(
+					"SELECT 1 FROM user_feedback WHERE json_extract(record,'$.investigation.operation.operationId')=? OR json_extract(record,'$.investigation.operation.targetId')=?",
+					claim.operationId,
+					claim.targetId,
+				)
+			)
+				throw new Conflict("This investigation operation or chat is already claimed by another feedback item");
 			this.db.run(
 				"INSERT INTO user_feedback(id,operation_id,record) VALUES(?,?,?)",
 				feedback.id,

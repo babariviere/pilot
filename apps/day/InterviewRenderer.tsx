@@ -22,6 +22,8 @@ import {
 
 export type InterviewAnswerView = {
 	choice: string | null | undefined;
+	/** Optional multi-select adapter. Mission interviews remain single-choice. */
+	choices?: string[];
 	text: string;
 	unsaved: boolean;
 	message: string;
@@ -46,6 +48,7 @@ export type InterviewCommand =
 	| { kind: "edit"; questionId: string; text: string }
 	| { kind: "compose"; questionId: string; active: boolean }
 	| { kind: "save"; questionId: string }
+	| { kind: "focus"; questionId: string }
 	| { kind: "submit" }
 	| { kind: "check" }
 	| { kind: "help"; questionId: string; help: string };
@@ -54,11 +57,17 @@ export interface InterviewSource {
 	dispatch(command: InterviewCommand): void;
 	helpKeys?: Record<string, string>;
 	questionHelp?: (question: Question, key: string) => JSX.Element;
+	choiceDetail?: (question: Question, choiceId: string) => string;
 	roundNotes?: () => JSX.Element;
 }
 
 function answerView(source: InterviewSource, question: Question): InterviewAnswerView {
 	return source.read().answers[question.id] ?? { choice: undefined, text: "", unsaved: false, message: "" };
+}
+
+function selected(source: InterviewSource, question: Question, id: string): boolean {
+	const answer = answerView(source, question);
+	return answer.choices ? answer.choices.includes(id) : answer.choice === id;
 }
 /** The page after the last question: every answer, and Submit. No question id can hold a NUL. */
 const REVIEW = "\u0000answers";
@@ -84,6 +93,7 @@ function fixed(interview: Interview): boolean {
 function hasAnswer(source: InterviewSource, question: Question): boolean {
 	if (question.state === "changed" && !answerView(source, question).unsaved) return false;
 	const choice = answerView(source, question).choice;
+	if (answerView(source, question).choices?.length) return true;
 	if (typeof choice === "string") return true;
 	return answerView(source, question).text.trim() !== "";
 }
@@ -160,7 +170,7 @@ function QuestionView(props: {
 	const choice = computed(() => answerView(props.source, q()).choice);
 	const text = computed(() => answerView(props.source, q()).text);
 	const locked = () => fixed(iv()) || !props.source.read().fresh;
-	const picked = () => typeof choice() === "string";
+	const picked = () => typeof choice() === "string" || !!answerView(props.source, q()).choices?.length;
 	// The text field opens on 0, for own words or detail, and stays open while it holds text.
 	const open = () => props.compact === true || writing()[key] === true || text().trim() !== "";
 	// Answering keeps this question in front: the place no longer depends on what is unanswered.
@@ -168,10 +178,15 @@ function QuestionView(props: {
 	// Pressing the chosen suggestion again clears it.
 	const pick = (id: string) => {
 		stay();
-		props.source.dispatch({ kind: "choose", questionId: q().id, choice: choice() === id ? "" : id });
+		props.source.dispatch({
+			kind: "choose",
+			questionId: q().id,
+			choice: answerView(props.source, q()).choices ? id : choice() === id ? "" : id,
+		});
 	};
 	const write = () => {
 		stay();
+		props.source.dispatch({ kind: "focus", questionId: q().id });
 		put(writing, key, true);
 		focusField.set(key);
 	};
@@ -236,21 +251,32 @@ function QuestionView(props: {
 								toggles[q().choices.findIndex((x) => x.id === c().id)] = node;
 							}}
 							testID={`choice-${q().id}-${c().id}`}
-							pressed={choice() === c().id}
+							pressed={selected(props.source, q(), c().id)}
 							disabled={locked()}
-							accessibilityLabel={c().recommended ? `${c().meaning}, recommended` : c().meaning}
+							accessibilityLabel={[
+								c().meaning,
+								props.source.choiceDetail?.(q(), c().id),
+								c().recommended ? "recommended" : "",
+							]
+								.filter(Boolean)
+								.join(". ")}
 							onChange={() => pick(c().id)}
 							size="lg"
-							indicator={<KeyCap label={keyOf(q(), c().id)} on={choice() === c().id} />}
+							indicator={<KeyCap label={keyOf(q(), c().id)} on={selected(props.source, q(), c().id)} />}
 						>
 							{/* min-w-0 lets a long answer wrap inside the card instead of running past it. */}
 							<View class="min-w-0 flex-1 gap-0.5">
 								<Text class="text-base text-foreground">{c().meaning}</Text>
+								<If when={props.source.choiceDetail?.(q(), c().id)}>
+									<Text class="text-sm text-muted-foreground">
+										{props.source.choiceDetail?.(q(), c().id) ?? ""}
+									</Text>
+								</If>
 								<If when={c().recommended}>
 									<Text class="text-xs text-muted-foreground">Recommended</Text>
 								</If>
 							</View>
-							<If when={!props.compact && choice() === c().id && !locked()}>
+							<If when={!props.compact && selected(props.source, q(), c().id) && !locked()}>
 								<KeyHint keys="↩" label="next" />
 							</If>
 						</ToggleRow>
@@ -298,6 +324,7 @@ function QuestionView(props: {
 								}
 								onSelectionChange={kept.select}
 								onFocus={() => {
+									props.source.dispatch({ kind: "focus", questionId: q().id });
 									kept.focus();
 									stopEscape?.();
 									stopEscape = keymap.bind("escape", leaveField, { when: "always" });
@@ -354,7 +381,13 @@ function submitLine(interview: Interview): string {
 function answerWords(source: InterviewSource, question: Question): string {
 	if (question.state === "changed" && !answerView(source, question).unsaved) return "Changed. Answer it again.";
 	const choice = answerView(source, question).choice;
-	const meaning = question.choices.find((c) => c.id === choice)?.meaning ?? "";
+	const answer = answerView(source, question);
+	const meaning = answer.choices
+		? question.choices
+				.filter((c) => answer.choices!.includes(c.id))
+				.map((c) => c.meaning)
+				.join("; ")
+		: (question.choices.find((c) => c.id === choice)?.meaning ?? "");
 	const text = answerView(source, question).text.trim();
 	if (!meaning && !text) return "Not answered";
 	return [meaning, text].filter(Boolean).join(". ");
@@ -524,7 +557,7 @@ function bindKeys(source: InterviewSource) {
 			source.dispatch({
 				kind: "choose",
 				questionId: q.id,
-				choice: answerView(source, q).choice === c.id ? "" : c.id,
+				choice: answerView(source, q).choices ? c.id : answerView(source, q).choice === c.id ? "" : c.id,
 			});
 		};
 	const active = computed(() => source.read().keyboardActive);

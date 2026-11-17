@@ -9,6 +9,7 @@ import { commit, later, pickNth, toggleHelp, writeReply } from "./commands";
 import { DayLine } from "./DayLine";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
+import { FeedbackIncoming, feedbackFocus, incomingFeedback, newFeedback } from "./FeedbackIncoming";
 import { Incoming } from "./Incoming";
 import { todayScrollTo } from "./kept";
 import { stageMark, stageWord } from "./PlanScreen";
@@ -71,6 +72,7 @@ function headline(day: Day): string {
 		return "Your last read.";
 	}
 	const left = today.decisions.length + today.actions.length;
+	if (newFeedback(day).length > 0 && left === 0) return "Feedback needs a look.";
 	if (today.notes.length === 0) return today.headline;
 	if (left === 0) return "That was everything. Pilot is back on it.";
 	if (left === 1) return "One thing left.";
@@ -162,10 +164,19 @@ function itemTitle(item: Item): string {
 	return item.kind === "decision" ? item.decision.title : item.action.title;
 }
 
+/** Deferred chat questions wait behind fresh feedback questions, without sending anything. */
+function feedbackTurn(day: Day): boolean {
+	return (
+		newFeedback(day).length > 0 &&
+		(newFeedback(day).some((i) => i.id === feedbackFocus()) ||
+			queue(day.today()).every((item) => item.kind === "decision" && item.decision.draft.later))
+	);
+}
+
 /** What waits for the user: one card in front, the rest as "Up next". */
 function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 	const items = () => queue(props.day.today());
-	const first = () => front(props.day.today());
+	const first = () => (feedbackTurn(props.day) ? undefined : front(props.day.today()));
 	const rest = () => items().filter((item) => item.id !== first()?.id);
 	const decisions = () => props.day.today().decisions;
 	const attention = () => props.day.today().attention;
@@ -187,7 +198,10 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 	});
 	return (
 		<View class="gap-4">
-			<SectionTitle title="Needs you" count={items().length + checks() + otherNeedsCount(props.ctx)} />
+			<SectionTitle
+				title="Needs you"
+				count={items().length + newFeedback(props.day).length + checks() + otherNeedsCount(props.ctx)}
+			/>
 			<If when={props.ctx.tagged()}>
 				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
 			</If>
@@ -215,11 +229,13 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 							</Text>
 						}
 					>
-						<Text class="text-base text-foreground">
-							{checks() > 0
-								? "No question or action waits for you. Check the results below."
-								: "Nothing needs you. Pilot keeps going on its own."}
-						</Text>
+						<If when={incomingFeedback(props.day).length === 0}>
+							<Text class="text-base text-foreground">
+								{checks() > 0
+									? "No question or action waits for you. Check the results below."
+									: "Nothing needs you. Pilot keeps going on its own."}
+							</Text>
+						</If>
 					</If>
 				}
 			>
@@ -275,6 +291,7 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 					</Each>
 				</View>
 			</If>
+			<FeedbackIncoming day={props.day} active={!first()} />
 			<ToCheck day={props.day} nested />
 			<OtherNeeds ctx={props.ctx} />
 			<OtherToCheck ctx={props.ctx} nested />
@@ -622,7 +639,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 	// The window's project scope: All projects unless the user chose one. Reading only.
 	const ctx = todayScope(props.day, plans);
 	bindScopeReads(props.day, ctx);
-	bindTriage(props.day, ctx.showsOwn);
+	bindTriage(props.day, () => ctx.showsOwn() && !feedbackTurn(props.day) && !!front(props.day.today()));
 	// A restored offset for a Today already on screen: scrolled to once, without animation.
 	const scroller = signal<ScrollRef | null>(null);
 	effect(() => {

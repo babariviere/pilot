@@ -64,3 +64,36 @@ test("diagnostic logs exposes only inventory, catalogue search and returned-ref 
 	]);
 	assert.deepEqual(JSON.parse((inventory.content[0] as { text: string }).text), result);
 });
+
+test("feedback logs declare only target operational sources and forward exact target selectors", async () => {
+	const calls: DiagnosticLogRequest[] = [];
+	const tool = createDiagnosticLogTool(
+		async (request) => {
+			calls.push(request);
+			return {} as DiagnosticLogResult;
+		},
+		{ kind: "feedback" },
+	);
+	const schema = JSON.stringify(tool.parameters);
+	for (const source of ["lifecycle", "request_timing", "tool_activity", "sessionId"]) assert(schema.includes(source));
+	for (const source of ["daemon", "app", "kernel_worker", "native_report"]) assert(!schema.includes(`"${source}"`));
+	assert.match(tool.description, /No shared host logs/);
+	await tool.execute(
+		"origin",
+		{ action: "inventory", sessionId: target.sessionId },
+		undefined,
+		undefined,
+		{} as never,
+	);
+	await tool.execute(
+		"excerpt",
+		{ action: "excerpt", sessionId: target.sessionId, ref: "opaque" },
+		undefined,
+		undefined,
+		{} as never,
+	);
+	assert.deepEqual(calls, [
+		{ action: "inventory", sessionId: target.sessionId },
+		{ action: "excerpt", sessionId: target.sessionId, ref: "opaque" },
+	]);
+});

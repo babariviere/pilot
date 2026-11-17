@@ -563,7 +563,8 @@ impl SavedView {
                 matches!(
                     (parts.next(), parts.next(), parts.next()),
                     (Some(at), Some(picks), Some(_))
-                        if at.split_once('/').is_some_and(|(chat, question)| id(chat) && number(question))
+                        if at.split_once('/').is_some_and(|(chat, question)| id(chat) && (number(question)
+                            || question.strip_prefix("correction-").is_some_and(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))))
                             && (picks.is_empty() || picks.split(',').all(number))
                 )
             });
@@ -576,7 +577,7 @@ impl SavedView {
         }
         let later = self.feedback_later.iter().all(|key| {
             let parts: Vec<_> = key.split('/').collect();
-            matches!(parts.as_slice(), [feedback, triage, event] if id(feedback) && id(triage) && (*event == "done" || number(event)))
+            matches!(parts.as_slice(), [feedback, triage, event] if id(feedback) && id(triage) && (matches!(*event,"done"|"failed"|"stopped"|"missing") || number(event) || event.strip_prefix("done-").is_some_and(|d| d.len() == 64 && d.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))))
         });
         if !later || !answers || !(self.feedback_project.is_empty() || id(&self.feedback_project)) {
             return false;

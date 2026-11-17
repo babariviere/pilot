@@ -1,12 +1,15 @@
-// Feedback attention in Today's New section. Reading and Later send no work intent.
-import { Keyboard, signal, Text, View } from "nsh";
+// Feedback attention in Today's Needs you queue. Reading and Later send no work intent.
+import { effect, Keyboard, signal, Text, View } from "nsh";
 import type { Day } from "./day";
 import { FeedbackRow } from "./FeedbackRow";
 import type { FeedbackItem } from "./feedbackFeed";
 import { chatState, clip, questionOf, stepsOf } from "./feedbackSteps";
 import { dayOf, feedbackLater } from "./feedbackView";
 import { todayProject } from "./todayScope";
-import { Action, DividedRow, Mark, Pressable } from "./ui";
+import { Action, Mark } from "./ui";
+
+/** User-selected feedback can come forward without answering the current chat question. */
+export const feedbackFocus = signal<string | null>(null);
 
 /** A new question or triage replaces an earlier Later. */
 export function feedbackAttention(item: FeedbackItem): string | null {
@@ -14,7 +17,10 @@ export function feedbackAttention(item: FeedbackItem): string | null {
 	if (s.resolved || !s.triage) return null;
 	const q = questionOf(s.triage);
 	if (q) return `${item.id}/${s.triage.operationId}/${q.id}`;
-	return chatState(s.triage) === "done" ? `${item.id}/${s.triage.operationId}/done` : null;
+	const digest = s.triage.proposal?.digest;
+	const state = chatState(s.triage);
+	if (["failed", "stopped", "missing"].includes(state)) return `${item.id}/${s.triage.operationId}/${state}`;
+	return state === "done" ? `${item.id}/${s.triage.operationId}/${digest ? `done-${digest}` : "done"}` : null;
 }
 
 export function incomingFeedback(day: Day): FeedbackItem[] {
@@ -28,58 +34,65 @@ export function newFeedback(day: Day): FeedbackItem[] {
 	return incomingFeedback(day).filter((item) => !feedbackLater().includes(feedbackAttention(item)!));
 }
 
-export function FeedbackIncoming(props: { day: Day }) {
-	const open = signal<string | null>(null);
+export function FeedbackIncoming(props: { day: Day; active?: boolean }) {
 	const laterOpen = signal(false);
 	const mirror = props.day.feedback;
 	if (!mirror) return null;
 	const v = () => mirror.view();
+	const pending = () => newFeedback(props.day);
+	const first = () =>
+		props.active === false ? null : (pending().find((i) => i.id === feedbackFocus()) ?? pending()[0] ?? null);
 	const kept = () => incomingFeedback(props.day).filter((i) => feedbackLater().includes(feedbackAttention(i)!));
+	let askedProjects = false;
+	effect(() => {
+		if (first() && !v().projects && !askedProjects) {
+			askedProjects = true;
+			void mirror.source.readProjects();
+		}
+	});
 	const defer = (item: FeedbackItem, later: boolean) => {
 		const key = feedbackAttention(item);
 		if (!key) return;
 		Keyboard.dismiss();
+		feedbackFocus.set(null);
 		feedbackLater.update((all) => [...all.filter((k) => !k.startsWith(`${item.id}/`)), ...(later ? [key] : [])]);
-		open.set(null);
 	};
 	return (
 		<View testID="incoming-feedback" class="gap-1">
 			<If when={v().reason}>
 				<Text class="text-sm text-muted-foreground">{v().reason}</Text>
 			</If>
-			<Each of={newFeedback(props.day)} key={(i) => i.id}>
+			<Each of={first() ? [first()!] : []} key={(i) => i.id}>
 				{(item) => (
-					<DividedRow
-						open={open() === item().id}
-						content={
-							<FeedbackRow day={props.day} mirror={mirror} item={item()} when={dayOf(item().recordedAt)} />
-						}
-					>
-						<View class="flex-row items-center gap-2.5 py-2.5">
-							<Mark kind={questionOf(stepsOf(item()).triage) ? "needs" : "new"} />
-							<View class="min-w-0 flex-1">
-								<Pressable
-									testID={`feedback-new-${item().id}`}
-									accessibilityLabel={`${clip(item().text, 100)}. Feedback. ${questionOf(stepsOf(item()).triage) ? "The triage asks" : "Triage finished"}. Show or hide details.`}
-									class="min-h-8 flex-row items-center rounded-lg px-3 py-1 transition duration-150 hover:bg-accent active:bg-accent"
-									onPress={() => {
-										Keyboard.dismiss();
-										const opening = open() !== item().id;
-										open.set(opening ? item().id : null);
-										if (opening) void mirror.source.readProjects();
-									}}
-								>
-									<Text class="min-w-0 shrink text-sm text-muted-foreground">{clip(item().text, 100)}</Text>
-								</Pressable>
-								<Text class="text-xs text-faint">
-									{questionOf(stepsOf(item()).triage)
-										? "Feedback · The triage asks"
-										: "Feedback · Triage finished"}
-								</Text>
-							</View>
+					<View class="gap-3">
+						<FeedbackRow
+							day={props.day}
+							mirror={mirror}
+							item={item()}
+							when={dayOf(item().recordedAt)}
+							routeKey="today"
+						/>
+						<View class="flex-row">
 							<Action label="Later" testID={`feedback-later-${item().id}`} onPress={() => defer(item(), true)} />
 						</View>
-					</DividedRow>
+					</View>
+				)}
+			</Each>
+			<Each of={pending().filter((i) => i.id !== first()?.id)} key={(i) => i.id}>
+				{(item) => (
+					<View class="flex-row items-center gap-2.5 py-1.5">
+						<Mark kind={questionOf(stepsOf(item()).triage) ? "needs" : "new"} />
+						<View class="flex-1">
+							<Action
+								label={`Up next: Feedback · ${clip(item().text, 100)}`}
+								testID={`feedback-new-${item().id}`}
+								onPress={() => {
+									Keyboard.dismiss();
+									feedbackFocus.set(item().id);
+								}}
+							/>
+						</View>
+					</View>
 				)}
 			</Each>
 			<If when={kept().length > 0}>

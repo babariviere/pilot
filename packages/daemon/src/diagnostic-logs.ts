@@ -251,6 +251,7 @@ export class DiagnosticLogReader {
 		request: DiagnosticLogRequest,
 		signal?: AbortSignal,
 		nextAppAllowed = false,
+		allowedSources: ReadonlySet<DiagnosticLogSourceId> = SOURCE_IDS,
 	): Promise<DiagnosticLogResult> {
 		if (signal?.aborted) throw new Error("Diagnostic read cancelled");
 		if (this.pending >= MAX_PENDING)
@@ -268,10 +269,11 @@ export class DiagnosticLogReader {
 				action: parsed.action,
 			};
 			if (parsed.action === "inventory") {
-				const sources = await this.sources(host, target, localDiagnostics, SOURCE_IDS, signal, nextAppAllowed);
+				const sources = await this.sources(host, target, localDiagnostics, allowedSources, signal, nextAppAllowed);
 				return { ...base, sources: [...sources.values()].map(inventory) };
 			}
 			if (parsed.action === "search") {
+				if (!allowedSources.has(parsed.source)) throw new Error("Log source is outside admitted scope");
 				const sources = await this.sources(
 					host,
 					target,
@@ -296,6 +298,7 @@ export class DiagnosticLogReader {
 				return { ...base, page };
 			}
 			const ref = parseOpaque<RefPayload>(REF_PREFIX, parsed.ref, this.opaqueSecret);
+			if (ref && !allowedSources.has(ref.s)) throw new Error("Log source is outside admitted scope");
 			const sources = await this.sources(
 				host,
 				target,

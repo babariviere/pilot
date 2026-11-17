@@ -2,11 +2,11 @@ import type { DurableOperation, UserFeedback, UserFeedbackOrigin, UserFeedbackPa
 import type { AttachmentStore } from "./attachment-store.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import type { MissionStore } from "./missions.ts";
-import { type OperationJournal, OperationRejected, sameHost } from "./operation-journal.ts";
+import { canonicalJSON, type OperationJournal, OperationRejected, sameHost } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
 import { USER_FEEDBACK_LIMITS as LIMITS } from "./user-feedback-store.ts";
-import type { UserFeedbackWorkService } from "./user-feedback-work.ts";
+import { feedbackWorkIntent, type UserFeedbackWorkService } from "./user-feedback-work.ts";
 
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -62,16 +62,16 @@ export class UserFeedbackService {
 		throw new OperationRejected("Invalid feedback origin");
 	}
 
-	/** Journal recovery is lookup-only; a saved row cannot replace a missing outer ACK. */
+	/** Initial save and exact durable-row recovery. Neither dispatches an investigation. */
 	async admitNative(op: DurableOperation, journal: OperationJournal, firstEntry: boolean): Promise<UserFeedback> {
-		if (!firstEntry) throw new Error("Feedback outcome is unknown; Check its exact receipt only");
+		if (!firstEntry) return this.recover(op);
 		let value: unknown;
 		try {
 			value = JSON.parse(op.payload);
 		} catch {
 			throw new OperationRejected("Invalid feedback payload JSON");
 		}
-		const p = object(value, ["purpose", "text", "origin", "attachments"]);
+		const p = object(value, ["purpose", "text", "origin", "attachments", "investigation"]);
 		if (op.kind !== "user-feedback" || p.purpose !== op.kind || !sameHost(op.origin, journal.destination))
 			throw new OperationRejected("Invalid feedback intent scope");
 		const id = identifier(op.targetId, "feedback ID");
@@ -81,6 +81,28 @@ export class UserFeedbackService {
 		await this.deps.store.durable();
 		try {
 			const origin = this.origin(p.origin ?? null);
+			let investigation: UserFeedback["investigation"];
+			if (p.investigation !== undefined) {
+				const claim = object(p.investigation, ["operation"]);
+				const nested = claim.operation as DurableOperation;
+				try {
+					// Validation/lookup only: the child has no journal reservation until native dispatch.
+					const existing = await journal.lookup(nested);
+					const intent = feedbackWorkIntent(nested);
+					if (
+						existing ||
+						nested.operationId === op.operationId ||
+						!sameHost(nested.origin, op.origin) ||
+						intent.action !== "triage" ||
+						intent.feedbackId !== id ||
+						this.deps.sessions.get(nested.targetId)
+					)
+						throw new Error("Investigation must be a fresh same-host triage for this saved feedback");
+				} catch (error) {
+					throw new OperationRejected(error instanceof Error ? error.message : "Invalid investigation operation");
+				}
+				investigation = { operation: nested };
+			}
 			let images: import("@pilot/protocol").StagedAttachmentRef[] | undefined;
 			if (p.attachments !== undefined) {
 				if (
@@ -108,6 +130,8 @@ export class UserFeedbackService {
 			}
 			const saved = this.deps.store.feedback.add({
 				id,
+				savePayloadHash: op.payloadHash,
+				...(investigation ? { investigation } : {}),
 				...(images ? { attachments: images } : {}),
 				text,
 				origin,
@@ -120,6 +144,22 @@ export class UserFeedbackService {
 			if (error instanceof Conflict || error instanceof NotFound) throw new OperationRejected(error.message);
 			throw error;
 		}
+	}
+
+	/** Confirms only the exact already-durable save. Never saves again or dispatches its child. */
+	async recover(op: DurableOperation): Promise<UserFeedback> {
+		await this.deps.store.durable();
+		const saved = this.deps.store.feedback.byOperation(op.operationId);
+		const original = JSON.parse(op.payload) as { investigation?: UserFeedback["investigation"] };
+		if (
+			!saved ||
+			saved.id !== op.targetId ||
+			saved.operationId !== op.operationId ||
+			saved.savePayloadHash !== op.payloadHash ||
+			canonicalJSON(saved.investigation ?? null) !== canonicalJSON(original.investigation ?? null)
+		)
+			throw new Error("Feedback outcome is unknown; no exact saved input was found");
+		return saved;
 	}
 
 	/** One page, newest first, with each item's steps. Passive. */

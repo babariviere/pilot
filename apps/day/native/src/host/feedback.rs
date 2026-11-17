@@ -85,12 +85,25 @@ pub(crate) struct Intent {
     origin: Value,
     #[serde(default)]
     attachments: Option<Value>,
+    #[serde(default)]
+    investigation: Option<Investigation>,
+}
+/// The UI selects a project, never an operation, model or path supplied by an agent.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Investigation {
+    project_id: String,
+    context_digest: String,
 }
 impl Intent {
     pub(crate) fn validate(&self) -> Result<(), Error> {
         if valid_text(&self.text)
             && valid_origin(&self.origin)
             && self.attachments.as_ref().is_none_or(valid_images)
+            && self
+                .investigation
+                .as_ref()
+                .is_none_or(|s| valid_id(&s.project_id) && valid_digest(&s.context_digest))
         {
             Ok(())
         } else {
@@ -252,7 +265,7 @@ impl Step {
             id(&self.project_id) && digest(&self.context_digest) && self.mission_id.is_none();
         let answer = self.question_id.is_some() || self.message.is_some();
         let ok = valid_id(&self.feedback_id)
-            && (self.action == "answer") == answer
+            && matches!(self.action.as_str(), "answer" | "correct") == answer
             && match self.action.as_str() {
                 "triage" => {
                     chat && self.triage_session_id.is_none() && self.proposal_digest.is_none()
@@ -282,6 +295,15 @@ impl Step {
                         && self.proposal_digest.is_none()
                         && self.mission_id.is_none()
                 }
+                "correct" => {
+                    id(&self.triage_session_id)
+                        && digest(&self.proposal_digest)
+                        && self.question_id.is_none()
+                        && self.message.as_deref().is_some_and(valid_answer)
+                        && self.project_id.is_none()
+                        && self.context_digest.is_none()
+                        && self.mission_id.is_none()
+                }
                 _ => false,
             };
         if ok { Ok(()) } else { Err(Error::Invalid) }
@@ -295,9 +317,11 @@ fn payload(op: &Value) -> Result<Value, Error> {
 /// A saved feedback operation holds only the words and an exact origin.
 pub(super) fn validate_record(op: &Value) -> Result<(), Error> {
     let p = payload(op)?;
-    if p.as_object()
-        .is_none_or(|o| o.len() != 3 + usize::from(o.contains_key("attachments")))
-        || p.get("attachments").is_some_and(|v| !valid_images(v))
+    if p.as_object().is_none_or(|o| {
+        o.len()
+            != 3 + usize::from(o.contains_key("attachments"))
+                + usize::from(o.contains_key("investigation"))
+    }) || p.get("attachments").is_some_and(|v| !valid_images(v))
         || p["purpose"] != KIND
         || op["kind"] != KIND
         || op["bindingGeneration"] != 1
@@ -305,6 +329,20 @@ pub(super) fn validate_record(op: &Value) -> Result<(), Error> {
         || !valid_origin(&p["origin"])
     {
         return Err(Error::Storage);
+    }
+    if let Some(selected) = p.get("investigation") {
+        let child = selected.get("operation").ok_or(Error::Storage)?;
+        let request = payload(child)?;
+        if selected.as_object().is_none_or(|o| o.len() != 1)
+            || child["origin"] != op["origin"]
+            || child["destination"] != op["destination"]
+            || child["operationId"] == op["operationId"]
+            || request["action"] != "triage"
+            || request["feedbackId"] != op["targetId"]
+        {
+            return Err(Error::Storage);
+        }
+        validate_step_record(child)?;
     }
     Ok(())
 }
@@ -333,6 +371,7 @@ fn step_fields(action: &str) -> Option<&'static [&'static str]> {
         "link" => Some(&["missionId"]),
         "resolve" | "reopen" | "remove" => Some(&[]),
         "answer" => Some(&["questionId", "message"]),
+        "correct" => Some(&["proposalDigest", "message"]),
         _ => None,
     }
 }
@@ -355,7 +394,16 @@ pub(super) fn validate_step_record(op: &Value) -> Result<(), Error> {
             && p["thinking"].as_str().is_some_and(|t| t.len() <= 128)
     };
     let target = op["targetId"].as_str().unwrap_or("");
-    let ok = o.len() == 3 + fields.len()
+    let funding_fields = if matches!(action, "triage" | "fix") {
+        usize::from(o.contains_key("allowanceMicros"))
+            + usize::from(o.contains_key("fundingRequired"))
+    } else {
+        0
+    };
+    let ok = o.len() == 3 + fields.len() + funding_fields
+        && p.get("allowanceMicros")
+            .is_none_or(|v| v.is_null() || v.as_u64().is_some_and(|n| n <= MAX_CURSOR))
+        && p.get("fundingRequired").is_none_or(|v| v == true)
         && fields.iter().all(|k| o.contains_key(*k))
         && p["purpose"] == WORK_KIND
         && op["kind"] == WORK_KIND
@@ -375,6 +423,11 @@ pub(super) fn validate_step_record(op: &Value) -> Result<(), Error> {
                     && p["questionId"].as_u64().is_some_and(valid_question)
                     && valid_answer(str_of("message"))
             }
+            "correct" => {
+                valid_id(target)
+                    && valid_digest(str_of("proposalDigest"))
+                    && valid_answer(str_of("message"))
+            }
             _ => target == str_of("feedbackId"),
         };
     if ok { Ok(()) } else { Err(Error::Storage) }
@@ -392,6 +445,7 @@ pub(super) fn exact_step(op: &Value, r: &Value) -> Result<(), Error> {
         Some("reopen") => "reopened",
         Some("remove") => "removed",
         Some("answer") => "answer",
+        Some("correct") => "correction",
         _ => return Err(Error::Unknown),
     };
     let same = match kind {
@@ -402,6 +456,11 @@ pub(super) fn exact_step(op: &Value, r: &Value) -> Result<(), Error> {
         "answer" => {
             result["sessionId"] == op["targetId"]
                 && result["questionId"] == p["questionId"]
+                && result["text"] == p["message"]
+        }
+        "correction" => {
+            result["sessionId"] == op["targetId"]
+                && result["proposalDigest"] == p["proposalDigest"]
                 && result["text"] == p["message"]
         }
         _ => true,
@@ -421,6 +480,7 @@ pub(super) fn exact_result(op: &Value, r: &Value) -> Result<(), Error> {
     let p = payload(op).map_err(|_| Error::Unknown)?;
     let result = &r["result"];
     if result["id"] != op["targetId"]
+        || result.get("investigation") != p.get("investigation")
         || result["operationId"] != op["operationId"]
         || result["text"] != p["text"]
         || result["attachments"] != p["attachments"]
@@ -464,7 +524,12 @@ fn unsettled(t: &Transport, journal: &Journal) -> Vec<Value> {
         .map(|r| {
             let p = payload(&r.operation).unwrap_or(Value::Null);
             if is_step(r) {
-                json!({"operationId":r.id(),"state":"unknown","step":p["action"],"feedbackId":p["feedbackId"]})
+                let reply_key = match p["action"].as_str() {
+                    Some("answer") => Some(format!("{}/{}", r.operation["targetId"].as_str().unwrap_or(""), p["questionId"])),
+                    Some("correct") => Some(format!("{}/correction-{}", r.operation["targetId"].as_str().unwrap_or(""), p["proposalDigest"].as_str().unwrap_or(""))),
+                    _ => None,
+                };
+                json!({"operationId":r.id(),"state":"unknown","step":p["action"],"feedbackId":p["feedbackId"],"replyKey":reply_key})
             } else {
                 json!({"operationId":r.id(),"state":"unknown","text":p["text"],"origin":p["origin"],"attachments":p["attachments"]})
             }
@@ -595,8 +660,38 @@ pub(super) async fn handle(
             if let Some(images) = &intent.attachments {
                 request["attachments"] = images.clone();
             }
-            let digest = planning::hash(&request.to_string());
             let id = uuid::Uuid::new_v4().to_string();
+            if let Some(selected) = &intent.investigation {
+                let select = super::new_chat::Select {
+                    project_id: selected.project_id.clone(),
+                    context_digest: selected.context_digest.clone(),
+                    mode: "ask".into(),
+                };
+                let profile = super::new_chat::profile(t, &select).await?;
+                check()?;
+                let mut child = json!({"purpose":WORK_KIND,"action":"triage","feedbackId":id});
+                for k in [
+                    "projectId",
+                    "projectPath",
+                    "contextDigest",
+                    "model",
+                    "thinking",
+                    "allowanceMicros",
+                    "fundingRequired",
+                ] {
+                    if let Some(v) = profile.get(k) {
+                        child[k] = v.clone();
+                    }
+                }
+                let pinned = planning::record(
+                    &t.source,
+                    uuid::Uuid::new_v4().to_string(),
+                    select.context_digest,
+                    child,
+                )?;
+                request["investigation"] = json!({"operation":pinned.operation});
+            }
+            let digest = planning::hash(&request.to_string());
             outcome = send_once(t, journal, &check, id, digest, request).await?;
         }
         Command::FeedbackStep(step) => {
@@ -638,6 +733,11 @@ pub(super) async fn handle(
                     ] {
                         request[k] = profile[k].clone();
                     }
+                    for k in ["allowanceMicros", "fundingRequired"] {
+                        if let Some(v) = profile.get(k) {
+                            request[k] = v.clone();
+                        }
+                    }
                     if step.action == "fix" {
                         request["triageSessionId"] = json!(step.triage_session_id);
                         request["proposalDigest"] = json!(step.proposal_digest);
@@ -649,8 +749,12 @@ pub(super) async fn handle(
                     let digest = planning::hash(&request.to_string());
                     (step.mission_id.clone().unwrap_or_default(), digest)
                 }
-                "answer" => {
-                    request["questionId"] = json!(step.question_id);
+                "answer" | "correct" => {
+                    if step.action == "answer" {
+                        request["questionId"] = json!(step.question_id);
+                    } else {
+                        request["proposalDigest"] = json!(step.proposal_digest);
+                    }
                     request["message"] = json!(step.message);
                     let digest = planning::hash(&request.to_string());
                     (step.triage_session_id.clone().unwrap_or_default(), digest)
@@ -682,6 +786,17 @@ pub(super) async fn handle(
         }
         _ => return Err(Error::Invalid),
     }
+    let investigation_outcome = if matches!(
+        command,
+        Command::FeedbackSend(_) | Command::FeedbackCheck(_)
+    ) && outcome["state"] == "accepted"
+    {
+        continue_investigation(t, journal, &check, &outcome)
+            .await
+            .unwrap_or_else(|_| json!({"state":"unknown"}))
+    } else {
+        Value::Null
+    };
     let cached = if matches!(command, Command::FeedbackRead(request) if request.cached) {
         shared
             .feedback
@@ -705,11 +820,13 @@ pub(super) async fn handle(
     if matches!(command, Command::FeedbackRead(_)) {
         let snapshot = snapshot?;
         check()?;
-        Ok(json!({"snapshot":snapshot,"operations":unsettled(t,journal),"outcome":outcome}))
+        Ok(
+            json!({"snapshot":snapshot,"operations":unsettled(t,journal),"outcome":outcome,"investigationOutcome":investigation_outcome}),
+        )
     } else {
         // A failed/raced refresh cannot erase the exact acknowledgement.
         Ok(
-            json!({"snapshot":snapshot.ok().filter(|_| check().is_ok()),"operations":unsettled(t,journal),"outcome":outcome}),
+            json!({"snapshot":snapshot.ok().filter(|_| check().is_ok()),"operations":unsettled(t,journal),"outcome":outcome,"investigationOutcome":investigation_outcome}),
         )
     }
 }
@@ -723,7 +840,56 @@ async fn send_once(
     digest: String,
     request: Value,
 ) -> Result<Value, Error> {
-    let mut record = planning::record(&t.source, target, digest, request)?;
+    let record = planning::record(&t.source, target, digest, request)?;
+    send_record(t, journal, check, record).await
+}
+
+/// The saved user intent contains a never-entered exact child. Reads never call this.
+async fn continue_investigation(
+    t: &Transport,
+    journal: &mut Journal,
+    check: &impl Fn() -> Result<(), Error>,
+    outcome: &Value,
+) -> Result<Value, Error> {
+    let parent = journal
+        .planning
+        .get(outcome["operationId"].as_str().unwrap_or(""))
+        .ok_or(Error::Unknown)?;
+    if !is_feedback(parent) {
+        return Ok(Value::Null);
+    }
+    let p = payload(&parent.operation)?;
+    let Some(operation) = p.get("investigation").and_then(|v| v.get("operation")) else {
+        return Ok(Value::Null);
+    };
+    if let Some(existing) = journal
+        .planning
+        .get(operation["operationId"].as_str().unwrap_or(""))
+    {
+        if existing.operation != *operation {
+            return Err(Error::Storage);
+        }
+        return Ok(outcome_of(existing, true));
+    }
+    let record = planning::PlanningRecord {
+        version: 1,
+        source: t.source.clone(),
+        operation: operation.clone(),
+        receipt: None,
+        not_sent: false,
+        setup_digest: None,
+        verification_pin: None,
+        dismissed: false,
+    };
+    send_record(t, journal, check, record).await
+}
+
+async fn send_record(
+    t: &Transport,
+    journal: &mut Journal,
+    check: &impl Fn() -> Result<(), Error>,
+    mut record: planning::PlanningRecord,
+) -> Result<Value, Error> {
     record.validate().map_err(|_| Error::Invalid)?;
     journal.save_planning(record.clone())?;
     if let Err(e) = t.local().and_then(|_| check()) {
@@ -958,6 +1124,27 @@ mod tests {
             json!({"feedbackId":"f","action":"triage","projectId":"p","contextDigest":d,"questionId":1}),
         ] {
             assert!(step(bad.clone()).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn correction_is_pinned_to_the_exact_explanation_and_words() {
+        let digest = "b".repeat(64);
+        assert!(step(json!({"feedbackId":"f","action":"correct","triageSessionId":"s","proposalDigest":digest,"message":"Restart, not navigation"})).is_ok());
+        assert!(step(json!({"feedbackId":"f","action":"correct","triageSessionId":"s","proposalDigest":digest,"questionId":7,"message":"x"})).is_err());
+        let p = json!({"purpose":WORK_KIND,"action":"correct","feedbackId":"f","proposalDigest":digest,"message":"Restart, not navigation"});
+        let op = json!({"operationId":"op","targetId":"s","kind":WORK_KIND,"bindingGeneration":1,"bindingId":digest,"payload":p.to_string()});
+        assert_eq!(validate_step_record(&op), Ok(()));
+        let receipt = json!({"result":{"operationId":"op","kind":"correction","sessionId":"s","proposalDigest":digest,"text":"Restart, not navigation","recordedAt":1}});
+        assert_eq!(exact_step(&op, &receipt), Ok(()));
+        for (field, value) in [
+            ("sessionId", json!("other")),
+            ("proposalDigest", json!("c".repeat(64))),
+            ("text", json!("changed")),
+        ] {
+            let mut changed = receipt.clone();
+            changed["result"][field] = value;
+            assert_eq!(exact_step(&op, &changed), Err(Error::Unknown));
         }
     }
 

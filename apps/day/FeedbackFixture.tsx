@@ -57,6 +57,7 @@ class ScriptedFeedback implements FeedbackSource {
 	#failed = false;
 	#listeners = new Set<(view: FeedbackView) => void>();
 	#sequence = 0;
+	#finished = new Map<string, number>();
 
 	view(): FeedbackView {
 		const items = this.#saved.slice(0, this.#shown);
@@ -209,11 +210,25 @@ class ScriptedFeedback implements FeedbackSource {
 				questionId: intent.questionId,
 				text: intent.message,
 			};
+		} else if (intent.action === "correct") {
+			this.answer.set(intent.message);
+			w = {
+				...base,
+				kind: "correction",
+				sessionId: intent.triageSessionId,
+				proposalDigest: intent.proposalDigest,
+				text: intent.message,
+			};
 		} else w = { ...base, kind: intent.action === "resolve" ? "resolved" : "reopened" };
 		// An answered triage goes back to work, without its question.
 		const work = item.work.map((x): UserFeedbackWorkView => {
-			if (intent.action !== "answer" || x.kind !== "triage" || x.sessionId !== intent.triageSessionId) return x;
-			const { question: _question, ...rest } = x;
+			if (
+				(intent.action !== "answer" && intent.action !== "correct") ||
+				x.kind !== "triage" ||
+				x.sessionId !== intent.triageSessionId
+			)
+				return x;
+			const { question: _question, proposal: _proposal, ...rest } = x;
 			return { ...rest, chat: { title: "Triage", state: "working" } };
 		});
 		this.#saved = this.#saved.map((i) => (i === item ? { ...i, work: [...work, w] } : i));
@@ -244,45 +259,62 @@ class ScriptedFeedback implements FeedbackSource {
 		return { status: "accepted", message: "" };
 	}
 	/** Finishes the newest item's triage with `proposal`, or leaves it asking. */
-	finishTriage(proposal: Partial<UserFeedbackProposal> | "asks") {
+	finishTriage(proposal: Partial<UserFeedbackProposal> | "asks" | "multiple" | "unusable") {
 		const item = this.#saved[0];
 		const t = item?.work.findIndex((w) => w.kind === "triage") ?? -1;
 		if (!item || t < 0) return;
+		const version =
+			proposal === "asks" || proposal === "multiple"
+				? (this.#finished.get(item.id) ?? 0)
+				: (this.#finished.get(item.id) ?? 0) + 1;
+		this.#finished.set(item.id, version);
+		const digest = version <= 1 ? DIGEST : version.toString(16).padStart(64, "e");
 		const w = item.work[t]!;
 		const others = this.#saved.slice(1).map((i) => i.id);
 		const work: UserFeedbackWorkView[] = item.work.map((x, i) =>
 			i !== t
 				? x
-				: proposal === "asks"
+				: proposal === "unusable"
 					? {
-							...w,
-							chat: { title: "Triage", state: "question" },
-							question: {
-								id: 7,
-								question: "Which page do you mean?",
-								context: "Plans and missions both list tasks.",
-								options: [
-									{ label: "The plan page", suggested: true },
-									{ label: "Mission overview", detail: "The task list on a mission" },
-								],
-							},
-						}
-					: {
 							...w,
 							chat: { title: "Triage", state: "done" },
 							proposal: {
-								value: {
-									summary: "The plan page hides who works on each task.",
-									duplicates: others.slice(0, 1),
-									next: "fix",
-									detail: "Show the assignee on each plan row and check it in Plan.test.tsx.",
-									missionId: null,
-									goal: null,
-									...proposal,
-								},
-								digest: DIGEST,
+								problem: "The last answer is not a usable proposal",
+								raw: "The filter belongs to the search improvements. Keep the filter when Pilot reopens.",
+								digest,
 							},
-						},
+						}
+					: proposal === "asks" || proposal === "multiple"
+						? {
+								...w,
+								chat: { title: "Triage", state: "question" },
+								question: {
+									id: 7,
+									multiSelect: proposal === "multiple",
+									question: "Which page do you mean?",
+									context: "Plans and missions both list tasks.",
+									options: [
+										{ label: "The plan page", suggested: true },
+										{ label: "Mission overview", detail: "The task list on a mission" },
+									],
+								},
+							}
+						: {
+								...w,
+								chat: { title: "Triage", state: "done" },
+								proposal: {
+									value: {
+										summary: "The plan page hides who works on each task.",
+										duplicates: others.slice(0, 1),
+										next: "fix",
+										detail: "Show the assignee on each plan row and check it in Plan.test.tsx.",
+										missionId: null,
+										goal: null,
+										...proposal,
+									},
+									digest,
+								},
+							},
 		);
 		this.#saved = [{ ...item, work }, ...this.#saved.slice(1)];
 		this.#publish();
@@ -399,6 +431,8 @@ mount(() => (
 			</Each>
 			<Action label="Triage fix" onPress={() => feedback.finishTriage({})} />
 			<Action label="Triage asks" onPress={() => feedback.finishTriage("asks")} />
+			<Action label="Triage multiple" onPress={() => feedback.finishTriage("multiple")} />
+			<Action label="Triage unusable" onPress={() => feedback.finishTriage("unusable")} />
 			<Action
 				label="Triage new mission"
 				onPress={() => feedback.finishTriage({ next: "new-mission", goal: "Make plans show their people" })}

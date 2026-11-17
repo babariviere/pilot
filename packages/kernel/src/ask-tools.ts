@@ -1,5 +1,5 @@
 /** Host-owned Ask tools. No model-supplied command, executable, revision or Git pathspec is accepted. */
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { createReadToolDefinition, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -27,6 +27,7 @@ export const ASK_TOOL_NAMES = [
 	// Declared only in job chats; it saves a report, never a file.
 	"chat_report",
 	"scoped_metrics",
+	"diagnostic_logs",
 	...EXPLORATION_TOOL_NAMES,
 ];
 const readOnlyAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
@@ -67,6 +68,7 @@ export async function createAskTools(
 	ask: AskContext,
 	options: { artifactSkill?: boolean } = {},
 ): Promise<ToolDefinition[]> {
+	if (ask.feedbackDeniedPaths) ask = { ...ask, source: await realpath(ask.source), sourceOnly: true };
 	const reader = new SourceReader(ask);
 	if (ask.commit && (await reader.git(["cat-file", "-t", ask.commit])).toString().trim() !== "commit")
 		throw new Error("Ask snapshot must pin a commit object");
@@ -81,7 +83,7 @@ export async function createAskTools(
 			annotations: readOnlyAnnotations,
 			label: "read",
 			description:
-				"Read source text or images, a Pilot pasted UUID.png attachment, or the bundled pilot-artifacts skill files by absolute path when enabled. Source paths are rooted and symlinks are denied. Maximum file size 16 MiB, text output 50 KiB / 2000 lines. Use offset and limit to page text.",
+				"Read source text or images, exact user-named feedback paths when admitted, pasted UUID.png attachments, or enabled artifact skill files. Rooted paths; symlinks denied. Files: 16 MiB; extra feedback text: 256000 bytes, credentials redacted. Output: 50 KiB / 2000 lines. Use offset and limit to page text.",
 			parameters: Type.Object({
 				path: Type.String({ maxLength: 4096 }),
 				offset: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -107,6 +109,7 @@ export async function createAskTools(
 				} else if (ask.feedbackImages?.includes(args.path)) {
 					bytes = await readLocal(dirname(args.path), args.path, signal);
 				} else if (
+					!ask.feedbackDeniedPaths &&
 					isAbsolute(args.path) &&
 					contained(ASK_ATTACHMENTS, absolute) &&
 					UUID_PNG.test(basename(absolute)) &&

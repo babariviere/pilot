@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
@@ -9,6 +10,7 @@ import { createAskTools } from "../../kernel/src/ask-tools.ts";
 import { Funding } from "./funding.ts";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
 import { payloadHash } from "./operation-journal.ts";
+import { UserFeedbackWorkService } from "./user-feedback-work.ts";
 
 test("feedback triage, fix, mission link and resolved marks are exact, saved steps on the original feedback", async (t) => {
 	const f = await nativeIntakeFixture();
@@ -44,18 +46,29 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 			bindingGeneration: 1,
 		} as DurableOperation;
 	};
-	const feedback = async (text: string, attachments?: import("@pilot/protocol").StagedAttachmentRef[]) => {
+	const contextMission = f.store.create({ projectId: f.project.id, title: "Context", goal: "Context" });
+	const feedback = async (
+		text: string,
+		attachments?: import("@pilot/protocol").StagedAttachmentRef[],
+		origin: unknown = null,
+	) => {
 		const op = operation("user-feedback", randomUUID(), {
 			purpose: "user-feedback",
 			text,
-			origin: null,
+			origin,
 			...(attachments ? { attachments } : {}),
 		});
 		const r = await post(op);
 		assert.equal(r.state, "accepted", JSON.stringify(r));
 		return op.targetId;
 	};
-	const older = await feedback("Plan page hides who works");
+	const older = await feedback("Plan page hides who works", undefined, {
+		kind: "mission",
+		missionId: contextMission.id,
+	});
+	const unrelated = f.store.create({ projectId: f.other.id, title: "Foreign", goal: "Foreign" });
+	const foreign = await feedback("Secret foreign feedback", undefined, { kind: "mission", missionId: unrelated.id });
+	const general = await feedback("Unscoped feedback is not chosen-project context");
 	// A recognizable image, not a one-pixel placeholder. Check the actual
 	// read tool's image payload, not just the path handed to triage.
 	const png = await readFile(new URL("../../../apps/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
@@ -72,7 +85,11 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	});
 	assert.equal(uploaded.status, 201);
 	await uploaded.arrayBuffer();
-	const id = await feedback("The plan page does not say who is working on a task", [image]);
+	const explicitHome = await mkdtemp(join(tmpdir(), "feedback-read-"));
+	t.after(() => rm(explicitHome, { recursive: true, force: true }));
+	const namedPath = join(explicitHome, "notes.txt");
+	await writeFile(namedPath, "Explicit user-selected source");
+	const id = await feedback(`The plan page does not say who is working on a task. Read ${namedPath}`, [image]);
 	const choice = async (mode: "ask" | "build") => {
 		const { mode: _mode, ...c } = await get(`/api/projects/${f.project.id}/chat-profile?mode=${mode}`);
 		return c as Record<string, string>;
@@ -109,7 +126,25 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	const imagePath = join(f.home, "attachments", `${image.uploadId}.png`);
 	assert.deepEqual(meta.ask.feedbackImages, [imagePath]);
 	assert.deepEqual(await readFile(imagePath), png);
+	assert.equal(meta.ask.feedbackSources.length, 1);
+	assert.equal(meta.ask.feedbackSources[0].path, namedPath);
+	assert.equal(meta.ask.feedbackSources[0].kind, "file");
+	const persisted = f.sessions["metas"].get(triage.targetId)!;
+	const originalSources = persisted.ask!.feedbackSources;
+	for (const bad of [
+		[{ path: "/", kind: "directory", dev: 1, ino: 1 }],
+		[{ path: namedPath, kind: "file", dev: -1, ino: 1 }],
+		[{ path: namedPath, kind: "file", dev: 1, ino: 1, extra: true }],
+	]) {
+		persisted.ask!.feedbackSources = bad as NonNullable<typeof originalSources>;
+		assert.throws(() => f.sessions["validateMode"](persisted), /Invalid feedback source context/);
+	}
+	persisted.ask!.feedbackSources = originalSources;
 	const reader = (await createAskTools(meta.ask)).find((tool) => tool.name === "read")!;
+	const named = await reader.execute("named-feedback-source", { path: namedPath }, undefined, undefined, {
+		cwd: meta.cwd,
+	} as ExtensionToolContext);
+	assert(named.content.some((block) => block.type === "text" && block.text.includes("Explicit user-selected source")));
 	const viewed = await reader.execute("feedback-image", { path: imagePath }, undefined, undefined, {
 		cwd: meta.cwd,
 	} as ExtensionToolContext);
@@ -125,7 +160,20 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	const message = meta.pending[0].content as string;
 	assert.match(message, /You only read and propose/);
 	assert.match(message, /ask_user/);
-	assert(message.includes(older), "other feedback is data for duplicates");
+	assert(message.includes(older), "chosen-project feedback is data for duplicates");
+	assert(!message.includes(foreign));
+	assert(!message.includes(general));
+	await mkdir(join(f.home, "source", "nested"), { recursive: true });
+	await writeFile(join(f.home, "source", "nested", "sample.ts"), "export const scoped = true;");
+	const source = await reader.execute("project-source", { path: "source/nested/sample.ts" }, undefined, undefined, {
+		cwd: meta.cwd,
+	} as ExtensionToolContext);
+	assert(source.content.some((block) => block.type === "text" && block.text.includes("scoped = true")));
+	await assert.rejects(
+		reader.execute("foreign-source", { path: join(f.home, "..", "unrelated.ts") }, undefined, undefined, {
+			cwd: meta.cwd,
+		} as ExtensionToolContext),
+	);
 	// A lost ACK is a lookup, never a second chat.
 	assert.deepEqual(await post(triage, true), ack);
 	assert.deepEqual(await post(triage), ack);
@@ -143,7 +191,7 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	const real = f.sessions.get.bind(f.sessions);
 	let answer = JSON.stringify({
 		summary: "Show the assignee on each plan row.",
-		duplicates: [older, "never-saved"],
+		duplicates: [older, foreign, general, "never-saved"],
 		next: "fix",
 		detail: "Add the assignee name to PlanRow and check it in Plan.test.tsx.",
 		missionId: null,
@@ -168,6 +216,10 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	assert.deepEqual(proposal.value.duplicates, [older], "only saved feedback can be a duplicate");
 	assert.equal(proposal.value.next, "fix");
 	assert.equal(finished.work[0]!.chat?.state, "done");
+
+	// A finished saved investigation cannot silently start again.
+	assert.equal((await post(step({ action: "triage", ...ask }))).state, "rejected");
+	assert.equal(f.stats().sessions, 1);
 
 	// Start fix names the exact proposal the user read.
 	const build = await choice("build");
@@ -396,7 +448,7 @@ test("an answer to the triage's question goes to that chat once; a lost ACK is a
 	);
 });
 
-test("funded feedback triage uses the project's quick-fix default and saves no step without one", async (t) => {
+test("feedback work honors limits-off and only configured quick-fix defaults", async (t) => {
 	const f = await nativeIntakeFixture(),
 		funding = new Funding(join(f.home, "funding.sqlite"));
 	f.sessions.funding = funding;
@@ -447,22 +499,78 @@ test("funded feedback triage uses the project's quick-fix default and saves no s
 			(i) => i.id === saved.targetId,
 		)!.work;
 
-	// No default: refused before the step is saved, so no dangling "no record" triage.
 	await configure(null);
-	const refused = await post(triage());
-	assert.equal(refused.state, "rejected", JSON.stringify(refused));
-	assert.equal(f.stats().sessions, 0);
-	assert.deepEqual(await work(), []);
-
-	await configure(3_000_000);
+	await funding.setEnabled((await funding.read()).revision, false);
 	const op = triage(),
 		receipt = await post(op);
 	assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
 	assert.equal(f.stats().sessions, 1);
-	assert.equal(f.sessions.fundingRequired(op.targetId), true);
-	const { accounts } = await funding.read();
-	assert.equal(accounts.length, 1);
-	assert.equal(accounts[0]!.limitMicros, 3_000_000);
+	assert.equal(f.sessions.fundingRequired(op.targetId), false);
+	assert.equal(f.sessions.fundingOwner(op.targetId).kind, "background");
+	assert.equal((await funding.read()).accounts.length, 0);
+	assert.equal((await work()).length, 1);
+	const get = f.sessions.get.bind(f.sessions);
+	t.mock.method(f.sessions, "get", (id: string) => {
+		const chat = get(id);
+		return chat ? ({ ...chat, working: false, outcome: "done", outcomeAt: 10 } as SessionSummary) : chat;
+	});
+	t.mock.method(f.sessions, "history", async () => ({
+		entries: [
+			{
+				id: "1",
+				kind: "pi.assistant",
+				model: [
+					{
+						role: "assistant",
+						content: [
+							{
+								type: "text",
+								text: JSON.stringify({
+									summary: "A small fix",
+									duplicates: [],
+									next: "fix",
+									detail: "Fix and test one file",
+									missionId: null,
+									goal: null,
+								}),
+							},
+						],
+					},
+				],
+			},
+		],
+		more: false,
+	}));
+	const proposal = (await work())[0]!.proposal!;
+	assert("value" in proposal);
+	const fix = () =>
+		operation(
+			randomUUID(),
+			{
+				purpose: "feedback-work",
+				feedbackId: saved.targetId,
+				action: "fix",
+				...ask,
+				triageSessionId: op.targetId,
+				proposalDigest: proposal.digest,
+			},
+			ask.contextDigest,
+		);
+	const unmetered = fix();
+	assert.equal((await post(unmetered)).state, "accepted");
+	assert.equal(f.sessions.fundingRequired(unmetered.targetId), false);
+	assert.equal((await funding.read()).accounts.length, 0);
+	await funding.setEnabled((await funding.read()).revision, true);
+	assert.equal((await post(fix())).state, "rejected", "enabled limits never guess a missing allowance");
+	assert.equal((await work()).length, 2);
+	await configure(3_000_000);
+	const configured = fix();
+	assert.equal((await post(configured)).state, "accepted");
+	assert.equal(f.sessions.fundingRequired(configured.targetId), true);
+	assert.equal(
+		(await funding.read()).accounts.find((account) => account.id === configured.targetId)?.limitMicros,
+		3_000_000,
+	);
 });
 
 test("remove deletes the feedback, its steps and its unread images, never its chats", async (t) => {
@@ -549,4 +657,226 @@ test("remove deletes the feedback, its steps and its unread images, never its ch
 	assert(!(await ids()).includes(triaged));
 	assert.equal(f.stats().sessions, 1);
 	await readFile(join(f.home, "sessions", triage.targetId, "meta.json"));
+});
+
+test("feedback triage shares daily background funding; unusable output and exact corrections survive lost ACKs", async (t) => {
+	const f = await nativeIntakeFixture();
+	const funding = new Funding(join(f.home, "feedback-funding.sqlite"));
+	f.sessions.funding = funding;
+	t.after(async () => {
+		await funding.close();
+		await f.close();
+	});
+	const headers = { "x-pilot-github-capability": f.capability, "content-type": "application/json" };
+	const post = async (op: DurableOperation, lookup = false) => {
+		const response = await fetch(`${f.root}/api/operations${lookup ? "/receipt" : ""}`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify(op),
+		});
+		return response.json();
+	};
+	const operation = (targetId: string, request: Record<string, unknown>): DurableOperation => {
+		const payload = JSON.stringify(request);
+		return {
+			schemaVersion: 1,
+			operationId: randomUUID(),
+			producerId: randomUUID(),
+			sequence: 1,
+			origin: { ...f.host, hostId: "local" },
+			destination: f.host,
+			kind: request.purpose as string,
+			targetId,
+			payload,
+			payloadHash: payloadHash(payload),
+			bindingId: (request.contextDigest as string) ?? payloadHash(payload),
+			bindingGeneration: 1,
+		};
+	};
+	const saved = operation(randomUUID(), { purpose: "user-feedback", text: "Investigate the project", origin: null });
+	assert.equal((await post(saved)).state, "accepted");
+	const response = await fetch(`${f.root}/api/projects/${f.project.id}/chat-profile?mode=ask`, { headers });
+	const { mode: _mode, ...choice } = await response.json();
+	assert.equal(choice.fundingRequired, true);
+	const step = (target: string, request: Record<string, unknown>) =>
+		operation(target, { purpose: "feedback-work", feedbackId: saved.targetId, ...request });
+	for (const allowanceMicros of [-1, 1.5]) {
+		const rejected = await post(step(randomUUID(), { action: "triage", ...choice, allowanceMicros }));
+		assert.equal(rejected.state, "rejected", JSON.stringify(rejected));
+	}
+	assert.equal(f.store.feedback.work(saved.targetId).length, 0, "invalid choices cannot consume the investigation");
+	assert.equal((await funding.read()).accounts.length, 0);
+	const triage = step(randomUUID(), { action: "triage", ...choice });
+	assert.equal((await post(triage)).state, "accepted");
+	assert.equal((await funding.read()).accounts.length, 0, "automatic triage opens no quick-fix allowance");
+	assert.deepEqual(f.sessions.fundingOwner(triage.targetId), {
+		kind: "background",
+		id: "daily",
+		projectId: f.project.id,
+	});
+	assert.equal(f.sessions.fundingRequired(triage.targetId), true);
+	const meta = JSON.parse(await readFile(join(f.home, "sessions", triage.targetId, "meta.json"), "utf8"));
+	assert.equal(meta.fundingBackground, true, "daily ownership is persisted, not inferred from title or model input");
+	const viewBefore = await funding.read();
+	await funding.configure(undefined, viewBefore.revision, {
+		missionDefaultMicros: null,
+		quickFixDefaultMicros: null,
+		dailyMicros: 300,
+	});
+	const quote = {
+		provider: "fake",
+		model: "model",
+		inputTokens: 100,
+		outputTokens: 10,
+		rate: { input: 1_000_000, output: 2_000_000, cacheRead: 100_000, cacheWrite: 2_000_000 },
+	};
+	await funding.reserve(f.sessions.fundingOwner(triage.targetId), randomUUID(), quote, "feedback-triage");
+	await assert.rejects(
+		funding.reserve(
+			{ kind: "background", id: "daily", projectId: f.project.id },
+			randomUUID(),
+			quote,
+			"another-background-job",
+		),
+		/cannot fund/,
+	);
+	assert.equal((await funding.read()).background.uncertainMicros, 220);
+	assert.equal(f.stats().sessions, 1);
+
+	const real = f.sessions.get.bind(f.sessions);
+	let outcomeAt = 20;
+	let raw = `The useful explanation was not JSON. ${"details ".repeat(1200)}`;
+	t.mock.method(f.sessions, "get", (sid: string) => {
+		const chat = real(sid);
+		return sid === triage.targetId && chat
+			? ({ ...chat, working: false, outcome: "done", outcomeAt } as SessionSummary)
+			: chat;
+	});
+	t.mock.method(f.sessions, "history", async () => ({
+		entries: [
+			{ id: "1", kind: "pi.user" },
+			{ id: "2", kind: "pi.assistant", model: [{ role: "assistant", content: [{ type: "text", text: raw }] }] },
+		],
+		more: false,
+	}));
+	const view = async () => {
+		const response = await fetch(`${f.root}/api/feedback`, { headers });
+		return ((await response.json()) as UserFeedbackPage).items.find((i) => i.id === saved.targetId)!;
+	};
+	const proposal = (await view()).work[0]!.proposal!;
+	assert("problem" in proposal);
+	assert.equal(proposal.raw, undefined, "overlong explanations stay in history, not inline pages or cache");
+	assert.equal(proposal.digest, payloadHash(raw));
+	const correction = (digest = proposal.digest, target = triage.targetId) =>
+		step(target, {
+			action: "correct",
+			proposalDigest: digest,
+			message: "Please check the nested source file and return the proposal JSON.",
+		});
+	assert.equal((await post(correction("0".repeat(64)))).state, "rejected");
+	assert.equal((await post(correction(proposal.digest, randomUUID()))).state, "rejected");
+	const sent = correction();
+	const ack = await post(sent);
+	assert.equal(ack.state, "accepted", JSON.stringify(ack));
+	assert.equal(ack.result.kind, "correction");
+	assert.equal(f.sessions.fundingOwner(triage.targetId).kind, "background", "correction keeps daily ownership");
+	assert.equal(ack.result.proposalDigest, proposal.digest);
+	assert.deepEqual(await post(sent, true), ack);
+	assert.deepEqual(await post(sent), ack);
+	assert.equal((await post(correction())).state, "rejected", "one correction for this exact output");
+	assert.equal(f.stats().sessions, 1, "correction never creates a chat or fix");
+
+	outcomeAt++;
+	raw = "A second unusable explanation";
+	const next = (await view()).work[0]!.proposal!;
+	assert("problem" in next);
+	assert.equal(next.raw, raw, "short unusable explanations remain verbatim");
+	const lost = correction(next.digest);
+	const send = f.sessions.sendDurable.bind(f.sessions);
+	let sends = 0;
+	t.mock.method(f.sessions, "sendDurable", async (...args: Parameters<typeof send>) => {
+		sends++;
+		await send(...args);
+		throw new Error("lost ACK after input admission");
+	});
+	let accepted = false;
+	t.mock.method(
+		f.sessions,
+		"lookupNativeAttentionInput",
+		async (_sid: string, operationId: string) => accepted && operationId === lost.operationId,
+	);
+	assert.equal((await post(lost)).state, "pending");
+	assert.equal((await post(lost, true)).state, "pending");
+	assert.equal((await post(lost)).state, "pending");
+	accepted = true;
+	const recovered = await post(lost, true);
+	assert.equal(recovered.state, "accepted", JSON.stringify(recovered));
+	assert.equal(recovered.result.kind, "correction");
+	assert.equal(sends, 1);
+	assert.deepEqual(
+		(await view()).work.map((w) => w.kind),
+		["triage", "correction", "correction"],
+	);
+	const restarted = new UserFeedbackWorkService({
+		store: f.store,
+		sessions: f.sessions,
+		chats: {
+			defaultAllowance: async () => ({}),
+			qualify: async () => {
+				throw new Error("passive read");
+			},
+			spawn: async () => {
+				throw new Error("passive read");
+			},
+		},
+	});
+	const reloaded = await restarted.view(saved.targetId);
+	assert.deepEqual(
+		reloaded,
+		(await view()).work,
+		"raw output and corrections reconstruct without in-memory service state",
+	);
+	outcomeAt++;
+	raw = JSON.stringify({
+		summary: "A small fix",
+		duplicates: [],
+		next: "fix",
+		detail: "Change one file and test it",
+		missionId: null,
+		goal: null,
+	});
+	const usable = (await view()).work[0]!.proposal!;
+	assert("value" in usable);
+	const buildResponse = await fetch(`${f.root}/api/projects/${f.project.id}/chat-profile?mode=build`, { headers });
+	const { mode: _buildMode, ...buildChoice } = await buildResponse.json();
+	const build = { action: "fix", ...buildChoice, triageSessionId: triage.targetId, proposalDigest: usable.digest };
+	assert.equal((await post(step(randomUUID(), build))).state, "rejected", "Build still needs its explicit allowance");
+	assert.equal(f.store.feedback.work(saved.targetId).length, 3);
+	const fix = step(randomUUID(), { ...build, allowanceMicros: 500 });
+	assert.equal((await post(fix)).state, "accepted");
+	assert.deepEqual(f.sessions.fundingOwner(fix.targetId), {
+		kind: "quick_fix",
+		id: fix.targetId,
+		projectId: f.project.id,
+	});
+	assert.equal((await funding.read()).accounts.find((a) => a.id === fix.targetId)?.limitMicros, 500);
+	// A syntactically valid recommendation can still be wrong. Correction never approves its fix.
+	t.mock.method(f.sessions, "sendDurable", async (...args: Parameters<typeof send>) => send(...args));
+	assert.equal(
+		(await post(correction(proposal.digest))).state,
+		"rejected",
+		"old explanation digest cannot correct a newer proposal",
+	);
+	const validCorrection = correction(usable.digest);
+	const corrected = await post(validCorrection);
+	assert.equal(corrected.state, "accepted", JSON.stringify(corrected));
+	assert.equal(corrected.result.kind, "correction");
+	assert.equal(corrected.result.proposalDigest, usable.digest);
+	assert.deepEqual(await post(validCorrection, true), corrected);
+	assert.equal(
+		(await post(correction(usable.digest))).state,
+		"rejected",
+		"the same finished recommendation is corrected once",
+	);
+	assert.equal(f.stats().sessions, 2, "valid recommendation correction starts no extra chat");
 });

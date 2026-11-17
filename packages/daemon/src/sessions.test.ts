@@ -31,6 +31,8 @@ import type {
 	SessionTrackedSource,
 } from "@pilot/protocol";
 import { WebSocket } from "ws";
+import { createAskTools } from "../../kernel/src/ask-tools.ts";
+import { SourceReader } from "../../kernel/src/source-reader.ts";
 import { openSessionStorage } from "../../kernel/src/storage.ts";
 import { DATABASE_CONFIG_FILE, DatabaseService } from "./databases.ts";
 import { diagnosticContextResponse } from "./diagnostic-context.ts";
@@ -1345,11 +1347,12 @@ async function fixture(t: TestContext) {
 		pullRequests: ConstructorParameters<typeof SessionManager>[4] = {},
 		beforeLoad?: (sessions: SessionManager) => void,
 		maintenance = false,
+		agentDir?: string,
 	) => {
 		const sessions = new SessionManager(
 			home,
 			projects,
-			undefined,
+			agentDir,
 			{
 				title: async () => undefined,
 				worker: workerFactory(),
@@ -7615,4 +7618,275 @@ test("native Insights durable operations and passive HTTP pages use explicit aut
 	assert.equal(revokedStatus.enabled, false);
 	assert.equal(revokedStatus.available, false);
 	assert.equal(revokedStatus.revision, 2);
+});
+
+test("feedback protected logs use saved same-project scope and revoke in-flight reads and excerpts", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({}, { diagnosticHost });
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const origin = await sessions.spawn({ projectId: f.project.id, mode: "ask", message: "Origin" });
+	const unrelated = await sessions.spawn({ projectId: f.project.id, mode: "ask", message: "Unrelated" });
+	const otherPath = join(f.root, "other");
+	await mkdir(otherPath);
+	const otherProject = await f.projects.create({ path: otherPath });
+	const foreign = await sessions.spawn({ projectId: otherProject.id, mode: "ask", message: "Foreign" });
+	const feedbackId = randomUUID(),
+		operationId = randomUUID(),
+		chatId = randomUUID();
+	store.feedback.add({
+		id: feedbackId,
+		operationId: randomUUID(),
+		recordedAt: 1,
+		text: "Feedback",
+		origin: { kind: "chat", sessionId: origin.id, projectId: f.project.id, title: "Origin" },
+	});
+	store.feedback.addWork(
+		feedbackId,
+		{ kind: "triage", sessionId: chatId, projectId: f.project.id, operationId, recordedAt: 2 },
+		() => {},
+	);
+	let admitted = true;
+	sessions.feedbackMetricsScope = (op, id) => (admitted ? store.feedback.metricsScope(op, id) : undefined);
+	const triage = await sessions.spawnDurable(
+		{ projectId: f.project.id, mode: "ask", message: "Triage" },
+		chatId,
+		operationId,
+	);
+	await Promise.all([origin.id, unrelated.id, foreign.id, triage.id].map((id) => sessions["starting"].get(id)));
+	const worker = f.workers.find((w) => w.spec.sessionId === chatId)!;
+	assert.equal(worker.spec.feedbackLogs, true);
+	assert.equal(f.workers.find((w) => w.spec.sessionId === unrelated.id)!.spec.feedbackLogs, undefined);
+	const meta = sessions["metas"].get(chatId)!;
+	await writeFile(
+		join(f.home, "sessions", origin.id, "lifecycle.jsonl"),
+		JSON.stringify({ kind: "execution.started", at: Date.now() }) + "\n",
+	);
+	const read = (request: import("@pilot/kernel").DiagnosticLogRequest, signal?: AbortSignal) =>
+		sessions["diagnosticLogsCall"](meta, request, signal);
+	const inventory = await read({ action: "inventory", sessionId: origin.id });
+	assert.deepEqual(
+		inventory.sources?.map((s) => s.id),
+		["lifecycle", "request_timing", "tool_activity"],
+	);
+	assert.equal((await read({ action: "inventory" })).targetSessionId, chatId);
+	for (const sessionId of [unrelated.id, foreign.id])
+		await assert.rejects(read({ action: "inventory", sessionId }), /outside saved feedback scope/);
+	await assert.rejects(read({ action: "search", source: "daemon", sessionId: origin.id }), /outside admitted scope/);
+	const searched = await read({ action: "search", source: "lifecycle", sessionId: origin.id });
+	assert(searched.page?.records.length);
+	const excerpt = { action: "excerpt" as const, sessionId: origin.id, ref: searched.page.records[0]!.ref };
+	assert.equal((await read(excerpt)).excerpt?.status, "ok");
+	const wrongTarget = await read({ ...excerpt, sessionId: chatId });
+	assert.notEqual(wrongTarget.excerpt?.status, "ok", "opaque refs cannot switch target");
+	admitted = false;
+	await assert.rejects(read(excerpt), /saved feedback investigation/);
+	admitted = true;
+	const originMeta = sessions["metas"].get(origin.id)!;
+	originMeta.archivedAt = Date.now();
+	await assert.rejects(read(excerpt), /outside saved feedback scope/);
+	delete originMeta.archivedAt;
+	originMeta.projectId = otherProject.id;
+	await assert.rejects(read(excerpt), /outside saved feedback scope/);
+	originMeta.projectId = f.project.id;
+	const telemetry = {
+		enabled: false,
+		serviceVersion: "test",
+		environment: "test" as const,
+		hostKind: "local" as const,
+		hostId: "host",
+		localDiagnostics: false,
+	};
+	sessions.configureTelemetry(telemetry);
+	assert(
+		(await read({ action: "inventory", sessionId: origin.id })).sources?.every((s) => s.availability === "disabled"),
+	);
+	sessions.configureTelemetry({ ...telemetry, localDiagnostics: true });
+	const call = sessions["diagnosticLogs"].call.bind(sessions["diagnosticLogs"]);
+	let revoke: () => void = () => {
+		admitted = false;
+	};
+	t.mock.method(sessions["diagnosticLogs"], "call", async (...args: Parameters<typeof call>) => {
+		const result = await call(...args);
+		revoke();
+		return result;
+	});
+	await assert.rejects(read(excerpt), /saved feedback investigation/);
+	admitted = true;
+	revoke = () => {
+		sessions.configureTelemetry(telemetry);
+		sessions.configureTelemetry({ ...telemetry, localDiagnostics: true });
+	};
+	await assert.rejects(read(excerpt), /controls changed/);
+	revoke = () => {};
+	await assert.rejects(read(excerpt, AbortSignal.abort()), /cancelled/);
+	assert.equal(f.workers.length, 4, "reads never launch targets or diagnostics specialists");
+});
+
+test("feedback protected logs admit only current members of the saved origin mission", async (t) => {
+	const store = new MissionStore(":memory:");
+	const f = await insightsFixture(t, {}, store);
+	t.after(() => store.close());
+	const peer = await f.sessions.spawn({ projectId: f.project.id, mode: "ask", message: "Origin member" });
+	const unrelated = await f.sessions.spawn({ projectId: f.project.id, mode: "ask", message: "Unrelated" });
+	f.members.set(peer.id, f.missionId);
+	const feedbackId = randomUUID(),
+		operationId = randomUUID(),
+		sessionId = randomUUID();
+	store.feedback.add({
+		id: feedbackId,
+		text: "Mission feedback",
+		recordedAt: 1,
+		operationId: randomUUID(),
+		origin: { kind: "mission", missionId: f.missionId, projectId: f.project.id, title: "Origin mission" },
+	});
+	store.feedback.addWork(
+		feedbackId,
+		{ kind: "triage", sessionId, operationId, recordedAt: 2, projectId: f.project.id },
+		() => {},
+	);
+	f.sessions.feedbackMetricsScope = (op, id) => store.feedback.metricsScope(op, id);
+	await f.sessions.spawnDurable({ projectId: f.project.id, mode: "ask", message: "Triage" }, sessionId, operationId);
+	await f.sessions["starting"].get(sessionId);
+	const meta = f.sessions["metas"].get(sessionId)!;
+	const read = (target: string) => f.sessions["diagnosticLogsCall"](meta, { action: "inventory", sessionId: target });
+	assert.equal((await read(peer.id)).targetSessionId, peer.id);
+	await assert.rejects(read(unrelated.id), /outside saved feedback scope/);
+	const call = f.sessions["diagnosticLogs"].call.bind(f.sessions["diagnosticLogs"]);
+	t.mock.method(f.sessions["diagnosticLogs"], "call", async (...args: Parameters<typeof call>) => {
+		const result = await call(...args);
+		f.members.delete(peer.id);
+		return result;
+	});
+	await assert.rejects(read(peer.id), /outside saved feedback scope/);
+	assert.equal(f.broadCalls(), 0, "no app-wide mission diagnostics or history calls");
+});
+
+test("feedback Ask always denies actual configured credentials, including restored legacy triage without external paths", async (t) => {
+	const f = await fixture(t);
+	const agentDir = join(f.source, "configured-pi");
+	await mkdir(agentDir);
+	for (const name of ["auth.json", "mcp-auth.json", ".pilot-credential-journal.json"])
+		await writeFile(join(agentDir, name), "credential-sentinel");
+	const sessions = await f.manager({}, {}, {}, undefined, false, agentDir);
+	const operationId = randomUUID(),
+		sessionId = randomUUID();
+	await sessions.spawnDurable(
+		{ projectId: f.project.id, mode: "ask", message: "Feedback without named paths" },
+		sessionId,
+		operationId,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		false,
+		true,
+	);
+	await sessions["starting"].get(sessionId);
+	const meta = sessions["metas"].get(sessionId)!;
+	assert.equal(meta.ask?.feedbackSources, undefined);
+	for (const name of ["auth.json", "mcp-auth.json", ".pilot-credential-journal.json"])
+		assert(meta.ask?.feedbackDeniedPaths?.includes(join(agentDir, name)), name);
+	assert(meta.ask?.feedbackDeniedPaths?.includes(join(f.home, "github-app-capability")));
+	assert(meta.ask?.feedbackDeniedPaths?.includes(join(f.home, "github-setup")));
+	const worker = f.workers.find((w) => w.spec.sessionId === sessionId)!;
+	const reader = new SourceReader(worker.spec.pilot!.ask!);
+	for (const name of ["auth.json", "mcp-auth.json", ".pilot-credential-journal.json"])
+		await assert.rejects(reader.read(join("configured-pi", name)), /protected credential store/);
+	const savedPaths = meta.ask!.feedbackDeniedPaths;
+	for (const paths of [["relative"], ["/path/../secret"], ["/secret\0file"]]) {
+		meta.ask!.feedbackDeniedPaths = paths;
+		assert.throws(() => sessions["validateMode"](meta), /Invalid feedback protected-path context/);
+	}
+	meta.ask!.feedbackDeniedPaths = savedPaths;
+	await sessions.shutdown();
+	const file = join(f.home, "sessions", sessionId, "meta.json");
+	const legacy = JSON.parse(await readFile(file, "utf8"));
+	delete legacy.fundingBackground;
+	delete legacy.ask.feedbackDeniedPaths;
+	await writeFile(file, JSON.stringify(legacy));
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const feedbackId = randomUUID();
+	store.feedback.add({
+		id: feedbackId,
+		text: "Legacy feedback",
+		recordedAt: 1,
+		operationId: randomUUID(),
+		origin: null,
+	});
+	store.feedback.addWork(
+		feedbackId,
+		{ kind: "triage", sessionId, operationId, projectId: f.project.id, recordedAt: 2 },
+		() => {},
+	);
+	const before = f.workers.length;
+	const restored = await f.manager(
+		{},
+		{},
+		{},
+		(s) => {
+			s.feedbackMetricsScope = (op, id) => store.feedback.metricsScope(op, id);
+		},
+		false,
+		agentDir,
+	);
+	await restored["start"](sessionId);
+	const reopened = f.workers.slice(before).find((w) => w.spec.sessionId === sessionId)!;
+	assert(
+		reopened.spec.pilot?.ask?.feedbackDeniedPaths?.includes(join(agentDir, "auth.json")),
+		"legacy workers get current configured exclusions from exact saved feedback scope",
+	);
+	await assert.rejects(
+		new SourceReader(reopened.spec.pilot!.ask!).read(join("configured-pi", "auth.json")),
+		/protected credential store/,
+	);
+});
+
+test("feedback jj source-only Ask keeps its exact trusted attachment read grant", async (t) => {
+	const f = await fixture(t);
+	const source = join(f.root, "jj-source");
+	await mkdir(source);
+	const project = await f.projects.create({ path: source }, "jj");
+	const preview = await f.projects.previewLocal(project.path);
+	t.mock.method(f.projects, "previewLocal", async () => ({ ...preview, copy: "jj" as const }));
+	const sessions = await f.manager();
+	// A faux prepared jj view keeps this focused on the trusted image grant, not repository fetching.
+	Object.defineProperty(sessions, "currentMainView", { value: async () => project.path });
+	const uploadId = randomUUID();
+	const imagePath = join(f.home, "attachments", `${uploadId}.png`);
+	await mkdir(join(f.home, "attachments"), { recursive: true });
+	const png = await readFile(new URL("../../../apps/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
+	await writeFile(imagePath, png);
+	const sessionId = randomUUID();
+	await sessions.spawnDurable(
+		{ projectId: project.id, mode: "ask", message: "Investigate this screenshot" },
+		sessionId,
+		randomUUID(),
+		undefined,
+		undefined,
+		[imagePath],
+		undefined,
+		false,
+		true,
+	);
+	await sessions["starting"].get(sessionId);
+	const ask = sessions["metas"].get(sessionId)!.ask!;
+	assert.equal(ask.sourceOnly, true);
+	assert.deepEqual(ask.feedbackImages, [imagePath]);
+	assert(ask.feedbackDeniedPaths?.length, "source-only branch also gets protected credential exclusions");
+	const reader = (await createAskTools(ask)).find((tool) => tool.name === "read")!;
+	const result = await reader.execute("own-feedback-image", { path: imagePath }, undefined, undefined, {
+		cwd: project.path,
+	} as never);
+	const image = result.content.find((block) => block.type === "image");
+	assert(image, "trusted attachment remains visible without the global legacy UUID exception");
+	assert.deepEqual(Buffer.from(image.data, "base64"), png);
+	const anotherImage = join(f.home, "attachments", `${randomUUID()}.png`);
+	await writeFile(anotherImage, png);
+	await assert.rejects(
+		reader.execute("unrelated-feedback-image", { path: anotherImage }, undefined, undefined, {
+			cwd: project.path,
+		} as never),
+	);
 });

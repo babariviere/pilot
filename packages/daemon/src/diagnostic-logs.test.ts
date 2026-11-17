@@ -287,3 +287,25 @@ test("redaction timing labels never contain record content", (t) => {
 	assert.equal(sanitizeDiagnosticLogLine("password=timing-canary"), "[REDACTED credential-bearing record]");
 	assert.deepEqual(labels, ["diagnostics.redact"]);
 });
+
+test("feedback source restriction applies to inventory, searches and opaque excerpts", async (t) => {
+	const f = await fixture(t);
+	const allowed = new Set(["lifecycle", "request_timing", "tool_activity"] as const);
+	const call = (request: DiagnosticLogRequest, enabled = true) =>
+		f.reader.call(host, { sessionId: id, directory: f.target }, enabled, request, undefined, false, allowed);
+	const inventory = await call({ action: "inventory" });
+	assert.deepEqual(
+		inventory.sources?.map((s) => s.id),
+		[...allowed],
+	);
+	for (const source of ["app", "daemon", "kernel_worker", "native_report", "next_app", "day_app"] as const)
+		await assert.rejects(call({ action: "search", source }), /outside admitted scope/);
+	const shared = await f.call({ action: "search", source: "daemon" });
+	assert(shared.page?.records.length);
+	await assert.rejects(call({ action: "excerpt", ref: shared.page.records[0]!.ref }), /outside admitted scope/);
+	const scoped = await call({ action: "search", source: "lifecycle" });
+	assert(scoped.page?.records.length);
+	assert.equal((await call({ action: "excerpt", ref: scoped.page.records[0]!.ref })).excerpt?.status, "ok");
+	const disabled = await call({ action: "inventory" }, false);
+	assert(disabled.sources?.every((s) => s.availability === "disabled"));
+});

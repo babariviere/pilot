@@ -42,7 +42,8 @@ export type DiagnosticLogSourceId =
 	| "request_timing"
 	| "tool_activity";
 
-export type DiagnosticLogRequest =
+/** sessionId is a feedback-only selector; ordinary diagnostics retain their pinned target. */
+export type DiagnosticLogRequest = { sessionId?: string } & (
 	| { action: "inventory" }
 	| {
 			action: "search";
@@ -52,7 +53,8 @@ export type DiagnosticLogRequest =
 			cursor?: string;
 			limit?: number;
 	  }
-	| { action: "excerpt"; ref: string; before?: number; after?: number };
+	| { action: "excerpt"; ref: string; before?: number; after?: number }
+);
 
 export interface DiagnosticLogSourceInventory {
 	id: DiagnosticLogSourceId;
@@ -136,6 +138,8 @@ export interface KernelSubagent extends SessionSubagent {
 export interface KernelSpec {
 	/** Declares a protected host tool, not a metrics grant. Daemon checks each read. */
 	scopedMetrics?: boolean;
+	/** Protected target-only log reads backed by an exact saved feedback admission. */
+	feedbackLogs?: boolean;
 	/** Creation-only trusted profile. Never inferred from membership or prompt text. */
 	planning?: import("./planning-worker.ts").PlanningWorkerBinding;
 	planningHeldOnOpen?: boolean;

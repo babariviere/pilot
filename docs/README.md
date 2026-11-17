@@ -55,14 +55,24 @@ the page explains gaps. Show activity opens underlying history below the convers
 coordinator work and tool calls. Reading either view sends nothing and keeps your reply draft.
 Feedback (in the header, or Send feedback on a mission) saves your words about Pilot, with the
 mission when you keep it. Choose the project with Pilot's code and a read-only agent triages what you
-send: it groups duplicates, may ask you a question and proposes a small fix, a mission or no change.
-You answer its question on the same page; the answer only clarifies. Start fix, linking a mission and
+send once, including after checking an uncertain save: Pilot keeps the exact original investigation
+intent and never restarts an entered attempt. It reads only that project's context, groups duplicates, may ask you a question and
+proposes a small fix, a mission or no change. Read access explains the project's source scope,
+including named folders and subfolders. Literal absolute or ~/ paths in your feedback are shown
+before Send and can be read if available. Quote paths with spaces. Known credential stores are
+excluded; extra text files are sanitized and limited to 256000 bytes, without silent truncation.
+Other projects' context and unrelated files are not included.
+Questions use the same form as interviews, with suggestions and your own words. Check answers,
+then Submit answers sends once; choosing or typing only keeps a draft. Start fix, linking a mission and
 Plan a new mission are your own steps; only you mark feedback resolved.
 Remove deletes one item and its steps after you confirm. Its chats and missions stay.
-Today's New section also shows finished triages and triage questions. Open a row to read the
-proposal or answer the question. Later keeps it out of New across reopening this window;
-Bring back restores it. A new question or finished triage returns to New. Reading or deferring
-feedback starts no work and approves nothing.
+Today's Needs you shows one question at a time. Other feedback waits under Up next; selecting it
+keeps the current question unanswered. Later keeps feedback aside across reopening this window;
+Bring back restores it with its draft. A new question or finished investigation returns.
+Routine investigation progress stays in Feedback. Reading or deferring starts no work and approves nothing.
+An unusable suggestion keeps the agent's explanation and offers Correct the investigation.
+Corrections go only to that investigation. Uncertain answers and corrections keep their words;
+Check again only looks up the exact send and never repeats it.
 Paste a screenshot into the feedback field with Cmd+V/Ctrl+V, or use the + icon
 (Add image…). Uploaded thumbnails stay above the field until you remove or send them
 (up to four PNGs, 8 MiB each). Text paste works as usual.

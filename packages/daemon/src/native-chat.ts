@@ -1,4 +1,5 @@
 /** Native standalone creation over the existing project, session and operation services. */
+import type { AskContext } from "@pilot/kernel";
 import type { DurableOperation } from "@pilot/protocol";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
@@ -141,7 +142,7 @@ export class NativeChat {
 	 * Rechecks an exact project selection and its model policy. Returns the project check that
 	 * creation repeats during admission. Opens no worker.
 	 */
-	async qualify(p: Selection): Promise<() => void> {
+	async qualify(p: Selection, background = false): Promise<() => void> {
 		const check = () => {
 			if (
 				canonicalJSON(this.project(p.projectId)) !==
@@ -152,6 +153,9 @@ export class NativeChat {
 		check();
 		const selected = await this.prepare(p.projectId, p.mode);
 		check();
+		// Refuse before a caller saves a work step. spawn repeats this check before opening funding.
+		if (selected.fundingRequired && !background && p.allowanceMicros == null)
+			throw new OperationRejected("Choose an allowance before starting this work");
 		if (selected.model !== p.model || selected.thinking !== p.thinking)
 			throw new OperationRejected("Model policy changed; select the project again");
 		return check;
@@ -165,9 +169,11 @@ export class NativeChat {
 		check: () => void,
 		title?: string,
 		images?: string[],
+		background = false,
+		feedbackSources?: AskContext["feedbackSources"],
 	) {
 		const funding = await this.deps.sessions.activeFunding();
-		if (funding) {
+		if (funding && !background) {
 			if (p.allowanceMicros == null) throw new OperationRejected("Choose an allowance before starting this work");
 			check();
 			await funding.open({ kind: "quick_fix", id: draftId, projectId: p.projectId }, p.allowanceMicros);
@@ -195,6 +201,8 @@ export class NativeChat {
 			images,
 			undefined,
 			!!funding,
+			background,
+			feedbackSources,
 		);
 	}
 	async createPinned(p: Selection, draftId: string, operationId: string, message: string) {

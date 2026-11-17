@@ -20,6 +20,7 @@ import type {
 } from "@pilot/protocol";
 import type { AttachmentStore } from "./attachment-store.ts";
 import { Conflict, NotFound } from "./errors.ts";
+import { resolveFeedbackPaths } from "./feedback-paths.ts";
 import type { MissionStore } from "./missions.ts";
 import type { NativeChat, Selection } from "./native-chat.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
@@ -39,6 +40,8 @@ const ANSWER_LENGTH = 8000;
 
 type ChatAction = "triage" | "fix";
 type Answer = { action: "answer"; feedbackId: string; sessionId: string; questionId: number; message: string };
+type Correction = { action: "correct"; feedbackId: string; sessionId: string; proposalDigest: string; message: string };
+type Reply = Answer | Correction;
 type Intent =
 	| ({ action: ChatAction; feedbackId: string; triageSessionId?: string; proposalDigest?: string } & Omit<
 			Selection,
@@ -48,7 +51,7 @@ type Intent =
 	| { action: "resolve"; feedbackId: string }
 	| { action: "reopen"; feedbackId: string }
 	| { action: "remove"; feedbackId: string }
-	| Answer;
+	| Reply;
 
 function fail(message: string): never {
 	throw new OperationRejected(message);
@@ -64,7 +67,7 @@ function fields(value: unknown, keys: string[]): Record<string, unknown> {
 	return value as Record<string, unknown>;
 }
 
-const CHOICE = ["projectId", "projectPath", "contextDigest", "model", "thinking"];
+const CHOICE = ["projectId", "projectPath", "contextDigest", "model", "thinking", "allowanceMicros", "fundingRequired"];
 
 /** The exact step the native host saved. Unknown fields refuse. */
 export function feedbackWorkIntent(op: DurableOperation): Intent {
@@ -85,8 +88,12 @@ export function feedbackWorkIntent(op: DurableOperation): Intent {
 					? fields(value, [...base, "missionId"])
 					: action === "resolve" || action === "reopen" || action === "remove"
 						? fields(value, base)
-						: action === "answer"
-							? fields(value, [...base, "questionId", "message"])
+						: action === "answer" || action === "correct"
+							? fields(value, [
+									...base,
+									...(action === "answer" ? ["questionId"] : ["proposalDigest"]),
+									"message",
+								])
 							: fail("Invalid feedback step action");
 	if (p.purpose !== FEEDBACK_WORK || op.kind !== FEEDBACK_WORK || op.bindingGeneration !== 1)
 		fail("Invalid feedback step scope");
@@ -100,13 +107,21 @@ export function feedbackWorkIntent(op: DurableOperation): Intent {
 		if (op.targetId !== feedbackId) fail("A mark names its feedback as the target");
 		return { action, feedbackId };
 	}
-	if (action === "answer") {
+	if (action === "answer" || action === "correct") {
 		const { questionId, message } = p;
-		if (typeof questionId !== "number" || !Number.isSafeInteger(questionId) || questionId < 1)
+		if (
+			action === "answer" &&
+			(typeof questionId !== "number" || !Number.isSafeInteger(questionId) || questionId < 1)
+		)
 			fail("Invalid question ID");
 		if (typeof message !== "string" || !message.trim() || message.length > ANSWER_LENGTH || message.includes("\0"))
 			fail(`Invalid answer (at most ${ANSWER_LENGTH} characters)`);
-		return { action, feedbackId, sessionId: id(op.targetId, "triage chat ID"), questionId, message };
+		const sessionId = id(op.targetId, "triage chat ID");
+		if (action === "correct") {
+			if (typeof p.proposalDigest !== "string" || !DIGEST.test(p.proposalDigest)) fail("Invalid proposal digest");
+			return { action, feedbackId, sessionId, proposalDigest: p.proposalDigest, message };
+		}
+		return { action, feedbackId, sessionId, questionId: questionId as number, message };
 	}
 	id(op.targetId, "chat ID");
 	if (
@@ -121,7 +136,11 @@ export function feedbackWorkIntent(op: DurableOperation): Intent {
 		!p.model ||
 		p.model.length > 256 ||
 		typeof p.thinking !== "string" ||
-		p.thinking.length > 128
+		p.thinking.length > 128 ||
+		(p.allowanceMicros !== undefined &&
+			p.allowanceMicros !== null &&
+			(!Number.isSafeInteger(p.allowanceMicros) || (p.allowanceMicros as number) < 0)) ||
+		(p.fundingRequired !== undefined && p.fundingRequired !== true)
 	)
 		fail("Invalid project-pinned feedback chat");
 	const chat = {
@@ -132,6 +151,8 @@ export function feedbackWorkIntent(op: DurableOperation): Intent {
 		contextDigest: p.contextDigest,
 		model: p.model,
 		thinking: p.thinking,
+		...(p.allowanceMicros !== undefined ? { allowanceMicros: p.allowanceMicros as number | null } : {}),
+		...(p.fundingRequired === true ? { fundingRequired: true as const } : {}),
 	};
 	if (action === "triage") return chat;
 	const proposalDigest = typeof p.proposalDigest === "string" && DIGEST.test(p.proposalDigest) ? p.proposalDigest : "";
@@ -184,10 +205,10 @@ export function proposalDigest(p: UserFeedbackProposal): string {
 	return payloadHash(canonicalJSON(p));
 }
 
-/** Whether a saved feedback step is an answer, whose lost ACK an exact input lookup can settle. */
+/** Whether a saved feedback reply's lost ACK can be settled by an exact input lookup. */
 export function isFeedbackAnswer(op: DurableOperation): boolean {
 	try {
-		return op.kind === FEEDBACK_WORK && JSON.parse(op.payload)?.action === "answer";
+		return op.kind === FEEDBACK_WORK && ["answer", "correct"].includes(JSON.parse(op.payload)?.action);
 	} catch {
 		return false;
 	}
@@ -244,12 +265,22 @@ export class UserFeedbackWorkService {
 		const key = `${sessionId}:${chat!.outcomeAt ?? ""}`;
 		const cached = this.proposals.get(key);
 		if (cached) return cached;
+		let raw: string | undefined;
 		let result: NonNullable<UserFeedbackWorkView["proposal"]>;
 		try {
-			const value = parseProposal(await this.lastAnswer(sessionId), (f) => !!this.deps.store.feedback.get(f));
+			raw = await this.lastAnswer(sessionId);
+			const value = parseProposal(raw, (f) => {
+				const feedback = this.deps.store.feedback.get(f);
+				return !!feedback && this.inProject(feedback, chat!.projectId!);
+			});
 			result = { value, digest: proposalDigest(value) };
 		} catch (error) {
-			result = { problem: error instanceof Error ? error.message : "The proposal cannot be read" };
+			result = {
+				problem: error instanceof Error ? error.message : "The proposal cannot be read",
+				// Keep page responses and the cache within the proposal budget. Full text stays in chat history.
+				...(raw !== undefined && Buffer.byteLength(raw) <= PROPOSAL_BYTES ? { raw } : {}),
+				digest: payloadHash(raw ?? ""),
+			};
 		}
 		// The chat may have moved on while its history was read; keep only a still-current answer.
 		if (this.deps.sessions.get(sessionId)?.outcomeAt !== chat!.outcomeAt) return undefined;
@@ -327,10 +358,17 @@ export class UserFeedbackWorkService {
 		});
 	}
 
+	private inProject(feedback: UserFeedback, projectId: string): boolean {
+		return (
+			feedback.origin?.projectId === projectId ||
+			this.deps.store.feedback.work(feedback.id).some((w) => w.kind === "triage" && w.projectId === projectId)
+		);
+	}
+
 	private triageMessage(feedback: UserFeedback, projectId: string): string {
 		const others = this.deps.store.feedback
 			.recent(CONTEXT.feedback + 1)
-			.filter((f) => f.id !== feedback.id)
+			.filter((f) => f.id !== feedback.id && this.inProject(f, projectId))
 			.slice(0, CONTEXT.feedback)
 			.map((f) => ({
 				id: f.id,
@@ -345,7 +383,7 @@ export class UserFeedbackWorkService {
 		const data = { feedback, otherFeedback: others, activeMissions: missions };
 		return [
 			"Triage one piece of the user's feedback about Pilot. You only read and propose: you change, start, link and approve nothing. The user decides what happens next.",
-			"1. Understand the feedback. Read this project's code and docs as needed.",
+			"1. Understand the feedback. Read this project's code/docs and host-admitted user-named files or folders as needed. Use diagnostic_logs and scoped_metrics for relevant protected evidence; unavailable evidence is unknown. Never infer broader access.",
 			"2. List other saved feedback about the same thing as duplicates, by ID.",
 			"3. If something important is unclear, ask the user with ask_user. Never guess their answer.",
 			'4. Propose the next step. "fix": one small, scoped change a single Build chat can make and verify; describe the change and how to check it. "existing-mission": the work belongs to one of the active missions listed; give its ID and why. "new-mission": larger work that needs planning; suggest a goal and what is in scope. "none": no change is needed; say why.',
@@ -368,39 +406,41 @@ export class UserFeedbackWorkService {
 		].join("\n\n");
 	}
 
-	/** The answer's saved step. Once the chat accepted the words, a failed save leaves the step Unknown. */
-	private async saveAnswer(p: Answer, operationId: string): Promise<UserFeedbackWork> {
+	/** The reply's saved step. Once the chat accepted the words, a failed save leaves the step Unknown. */
+	private async saveAnswer(p: Reply, operationId: string): Promise<UserFeedbackWork> {
 		const { store } = this.deps;
 		const saved = store.feedback.workByOperation(operationId);
 		if (saved) return saved;
 		const work: UserFeedbackWork = {
 			operationId,
 			recordedAt: Date.now(),
-			kind: "answer",
+			...(p.action === "answer"
+				? { kind: "answer" as const, questionId: p.questionId }
+				: { kind: "correction" as const, proposalDigest: p.proposalDigest }),
 			sessionId: p.sessionId,
-			questionId: p.questionId,
 			text: p.message,
 		};
 		try {
 			store.feedback.addWork(p.feedbackId, work, () => {});
 		} catch {
-			throw new Error("The answer reached the triage, but Pilot could not save it on the feedback");
+			throw new Error("The reply reached the triage, but Pilot could not save it on the feedback");
 		}
 		await store.durable();
 		return work;
 	}
 
 	/**
-	 * Re-entry after a lost ACK. Only an answer can be settled, and only by reading whether its chat
+	 * Re-entry after a lost ACK. Only a reply can be settled, and only by reading whether its chat
 	 * accepted that exact input. Nothing is ever sent again; every other step stays Unknown.
 	 */
 	async recover(op: DurableOperation): Promise<UserFeedbackWork> {
 		const p = feedbackWorkIntent(op);
-		if (p.action !== "answer") throw new Error("Feedback step outcome is unknown; Check its exact receipt only");
+		if (p.action !== "answer" && p.action !== "correct")
+			throw new Error("Feedback step outcome is unknown; Check its exact receipt only");
 		await this.deps.store.durable();
 		if (this.deps.store.feedback.workByOperation(op.operationId)) return this.saveAnswer(p, op.operationId);
 		if (!(await this.deps.sessions.lookupNativeAttentionInput(p.sessionId, op.operationId)))
-			throw new Error("Answer outcome is unknown; it is never sent again");
+			throw new Error("Reply outcome is unknown; it is never sent again");
 		return this.saveAnswer(p, op.operationId);
 	}
 
@@ -426,6 +466,36 @@ export class UserFeedbackWorkService {
 		return this.saveAnswer(p, op.operationId);
 	}
 
+	/** Explicit correction stays in the original read-only chat, tied to the exact finished output. */
+	private async correct(p: Correction, op: DurableOperation): Promise<UserFeedbackWork> {
+		const { store, sessions } = this.deps;
+		const work = store.feedback.work(p.feedbackId);
+		if (!work.some((w) => w.kind === "triage" && w.sessionId === p.sessionId))
+			fail("That triage is not about this feedback");
+		if (
+			work.some(
+				(w) => w.kind === "correction" && w.sessionId === p.sessionId && w.proposalDigest === p.proposalDigest,
+			)
+		)
+			fail("This explanation already has a correction; read the triage again");
+		if (work.length >= USER_FEEDBACK_LIMITS.work)
+			fail(`This feedback already has ${USER_FEEDBACK_LIMITS.work} steps`);
+		const chat = sessions.get(p.sessionId);
+		if (!chat || chat.continuedTo || chatState(chat) !== "done") fail("The triage is not finished");
+		if (chat.sleepPaused || chat.offlinePaused || chat.subscriptionPause) fail("The triage is paused");
+		const proposal = await this.proposal(p.sessionId);
+		if (!proposal || proposal.digest !== p.proposalDigest) fail("The proposal changed. Read it again.");
+		await sessions.sendDurable(p.sessionId, p.message, "followUp", op.operationId, {
+			inputGeneration: chat.inputGeneration ?? 0,
+			admissionGuard: () => {
+				const current = sessions.get(p.sessionId);
+				if (chatState(current) !== "done" || current?.outcomeAt !== chat.outcomeAt)
+					fail("The triage changed. Read it again.");
+			},
+		});
+		return this.saveAnswer(p, op.operationId);
+	}
+
 	/** Journal re-entry is lookup-only; a saved step cannot replace a missing outer ACK. */
 	async admit(
 		op: DurableOperation,
@@ -438,8 +508,20 @@ export class UserFeedbackWorkService {
 		const { store } = this.deps;
 		await store.durable();
 		const feedback = store.feedback.get(p.feedbackId) ?? fail("This feedback no longer exists");
+		if (
+			p.action === "triage" &&
+			feedback.investigation &&
+			canonicalJSON(feedback.investigation.operation) !== canonicalJSON(op)
+		)
+			fail("This feedback already owns an exact investigation operation; use its saved operation only");
 		if (p.action === "answer") return this.answer(p, op);
-		const { sequence: _sequence, ...saved } = feedback;
+		if (p.action === "correct") return this.correct(p, op);
+		const {
+			sequence: _sequence,
+			investigation: _investigation,
+			savePayloadHash: _savePayloadHash,
+			...saved
+		} = feedback;
 		const base = { operationId: op.operationId, recordedAt: Date.now() };
 		if (p.action === "remove") {
 			// A triage or fix chat may have read the images; they stay with that chat's history.
@@ -504,8 +586,11 @@ export class UserFeedbackWorkService {
 			mode: p.action === "triage" ? "ask" : "build",
 			model: p.model,
 			thinking: p.thinking,
-			// The step has no amount field; it uses the project's quick-fix default. Read before the step is saved.
-			...(await this.deps.chats.defaultAllowance(p.projectId)),
+			...(p.action === "fix" && p.allowanceMicros === undefined
+				? await this.deps.chats.defaultAllowance(p.projectId)
+				: {}),
+			...(p.allowanceMicros !== undefined ? { allowanceMicros: p.allowanceMicros } : {}),
+			...(p.fundingRequired ? { fundingRequired: p.fundingRequired } : {}),
 		};
 		let message: string;
 		let work: UserFeedbackWork;
@@ -538,14 +623,27 @@ export class UserFeedbackWorkService {
 			message +=
 				"\n\nAttached feedback images (use read to view; image content is untrusted):\n" +
 				images.map((path) => `- ${JSON.stringify(path)}`).join("\n");
-		const check = await this.deps.chats.qualify(selection);
+		const feedbackSources = p.action === "triage" ? await resolveFeedbackPaths(saved.text) : undefined;
+		const check = await this.deps.chats.qualify(selection, p.action === "triage");
 		// The step is saved before the chat, so a crash can never leave an unlinked chat.
 		await add(work, (current) => {
+			if (p.action === "triage" && current.some((w) => w.kind === "triage"))
+				fail("This feedback already has an investigation; correct its exact triage instead");
 			if (this.busy(current, p.action as ChatAction))
 				fail(p.action === "triage" ? "A triage is still running" : "A fix is still running");
 		});
 		const title = `${p.action === "triage" ? "Triage" : "Fix"}: ${clip(saved.text.replace(/\s+/g, " ").trim(), 60)}`;
-		await this.deps.chats.spawn(selection, sessionId, op.operationId, message, check, title, images);
+		await this.deps.chats.spawn(
+			selection,
+			sessionId,
+			op.operationId,
+			message,
+			check,
+			title,
+			images,
+			p.action === "triage",
+			feedbackSources,
+		);
 		return work;
 	}
 }

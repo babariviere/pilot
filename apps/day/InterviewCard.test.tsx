@@ -64,7 +64,7 @@ test("all forty questions use the same See all and bounded scroll", async () => 
 	await app.waitFor("Question 1 of 40 · 0 answered");
 	expect(app.shows("id:question-q39")).toBe(false);
 	await app.press("id:see-all");
-	await app.scroll("id:interview-scroll", 100000);
+	await app.scroll("id:interview-scroll", 16000);
 	await app.waitFor("id:question-q39");
 	expect(app.shows("Question 40: What must stay unchanged?")).toBe(true);
 	expect(app.enabled("id:submit")).toBe(false);

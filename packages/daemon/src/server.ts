@@ -1118,6 +1118,14 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
+				if (parts[2] === "receipt" && saved?.state === "pending") {
+					const end = mutations.begin({ kind: "operation", id: operation.operationId });
+					try {
+						return json(res, 200, await journal.execute(operation, (op) => userFeedback.recover(op)));
+					} finally {
+						end();
+					}
+				}
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
 				const end = mutations.begin({ kind: "operation", id: operation.operationId });
 				try {

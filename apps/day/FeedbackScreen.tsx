@@ -8,6 +8,7 @@
 // accepted receipt clears it. A Send whose answer was lost stays Unknown:
 // Check only reads its result. Leaving, closing or updating keeps the draft.
 import { effect, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
+import { namedFeedbackPaths } from "../../packages/kernel/src/feedback-paths";
 import type { Day } from "./day";
 import { clearFeedbackImagePreviews, FeedbackImages } from "./FeedbackImages";
 import { FeedbackRow } from "./FeedbackRow";
@@ -137,6 +138,7 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 			text: draft.text,
 			origin: draft.origin,
 			...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
+			...(project ? { investigation: { projectId: project.projectId, contextDigest: project.contextDigest } } : {}),
 		});
 		if (r.status === "accepted") forgetKeptFeedback(draft);
 		// Only an accepted receipt clears the words, and only the words that were sent.
@@ -147,8 +149,10 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 		}
 		// An Unknown Send shows as its own note, with Check.
 		feedbackMessage.set(r.status === "unknown" && v().unsettled.length > 0 ? "" : r.message);
+		if (r.saved && r.investigation && r.investigation.status !== "accepted")
+			setStepMessage(r.saved.id, `Saved. Investigation: ${r.investigation.message}`);
 		// The user chose a project for agents: the saved feedback's triage starts there, once.
-		if (r.status === "accepted" && r.saved && project) {
+		if (r.status === "accepted" && r.saved && project && !r.saved.investigation) {
 			const t = await props.mirror.source.step({
 				action: "triage",
 				feedbackId: r.saved.id,
@@ -174,6 +178,8 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 			clearFeedbackImagePreviews();
 		}
 		feedbackMessage.set(r.status === "accepted" ? "Your feedback was saved." : r.message);
+		if (r.saved && r.investigation && r.investigation.status !== "accepted")
+			setStepMessage(r.saved.id, `Saved. Investigation: ${r.investigation.message}`);
 		void props.mirror.source.read();
 	};
 	keymap.bind(
@@ -248,6 +254,19 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 				)}
 			</FeedbackImages>
 			<AgentProject mirror={props.mirror} />
+			<If when={namedFeedbackPaths(d().text).length > 0}>
+				<View class="gap-1.5" testID="feedback-named-paths">
+					<Text class="text-xs font-medium text-muted-foreground">Read access for this investigation</Text>
+					<Each of={namedFeedbackPaths(d().text)} key={(path) => path}>
+						{(path) => <Text class="text-sm text-foreground">{path()}</Text>}
+					</Each>
+					<Text class="text-xs text-faint">
+						Sending includes read-only access to these named files or folders and their subfolders, if available.
+						No unrelated files. Whole-home, filesystem root and repository metadata access are excluded. Put paths
+						with spaces in quotes or backticks.
+					</Text>
+				</View>
+			</If>
 			<If when={blocker()}>
 				<Text testID="feedback-blocked" class="text-xs text-needs-ink">
 					{blocker()}
@@ -379,7 +398,15 @@ function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 					</Text>
 				</If>
 				<Each of={items()} key={(i) => i.id}>
-					{(i) => <FeedbackRow day={props.day} mirror={props.mirror} item={i()} when={savedLine(i())} />}
+					{(i) => (
+						<FeedbackRow
+							day={props.day}
+							mirror={props.mirror}
+							item={i()}
+							when={savedLine(i())}
+							keyboardActive={items().find((item) => stepsOf(item).triage?.question)?.id === i().id}
+						/>
+					)}
 				</Each>
 			</View>
 			<If when={v().more}>
@@ -415,6 +442,7 @@ export function FeedbackScreen(props: { day: Day }) {
 	});
 	return (
 		<Scroll
+			testID="feedback-scroll"
 			ref={(node) => scroller.set(node)}
 			class="flex-1 bg-background"
 			contentOffset={scroll.contentOffset}

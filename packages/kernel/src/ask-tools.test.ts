@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, open, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, open, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { ARTIFACT_SKILL_PATH, ARTIFACT_SKILL_REFERENCES } from "./artifact-skill.ts";
-import { createAskTools } from "./ask-tools.ts";
+import { ASK_ATTACHMENTS, createAskTools } from "./ask-tools.ts";
 import type { AskContext } from "./policy.ts";
 
 const git = promisify(execFile);
@@ -44,6 +44,70 @@ function text(result: Awaited<ReturnType<Awaited<ReturnType<typeof calls>>>>): s
 		.map((block) => block.text)
 		.join("\n");
 }
+
+test("feedback named roots allow exact files and directory subtrees, never siblings, aliases or traversal", async (t) => {
+	const f = await fixture(t);
+	const folder = join(f.root, "selected");
+	await mkdir(join(folder, "sub"), { recursive: true });
+	await writeFile(join(folder, "sub", "note.txt"), "needle in selected folder");
+	await writeFile(join(folder, "secret.txt"), "API_KEY=example-secret-value\nSafe line");
+	await writeFile(join(folder, "gif-prefix.txt"), "GIF89a\nAPI_KEY=gif-prefix-secret\nneedle");
+	await symlink(join(f.root, "secret"), join(folder, "escape"));
+	const selected = await lstat(folder),
+		file = await lstat(join(f.root, "secret"));
+	const call = await calls({
+		source: f.source,
+		feedbackSources: [
+			{ path: folder, kind: "directory", dev: selected.dev, ino: selected.ino },
+			{ path: join(f.root, "secret"), kind: "file", dev: file.dev, ino: file.ino },
+		],
+	});
+	assert.match(text(await call("read", { path: join(folder, "sub", "note.txt") })), /needle in selected/);
+	assert.match(text(await call("grep", { path: folder, pattern: "needle" })), /note.txt/);
+	assert.match(text(await call("find", { path: folder, pattern: "*.txt" })), /note.txt/);
+	assert.match(text(await call("ls", { path: folder })), /sub\//);
+	assert.doesNotMatch(text(await call("read", { path: join(folder, "secret.txt") })), /example-secret-value/);
+	assert.match(text(await call("read", { path: join(folder, "secret.txt") })), /Safe line/);
+	assert.doesNotMatch(
+		text(await call("grep", { path: folder, pattern: "API_KEY" })),
+		/gif-prefix-secret|example-secret-value/,
+	);
+	assert.match(text(await call("read", { path: join(f.root, "secret") })), /outside source/);
+	await assert.rejects(call("ls", { path: f.root }), /inside the source/);
+	await assert.rejects(call("read", { path: join(folder, "escape") }), /symlink/);
+	await assert.rejects(call("read", { path: `${folder}/sub/../sub/note.txt` }), /traversal/);
+	await assert.rejects(call("read", { path: `${folder}-sibling/note.txt` }), /inside the source/);
+	const aborted = new AbortController();
+	aborted.abort();
+	await assert.rejects(call("read", { path: join(folder, "sub", "note.txt") }, aborted.signal), /abort/i);
+	await rename(folder, `${folder}-old`);
+	await symlink(`${folder}-old`, folder);
+	await assert.rejects(call("read", { path: join(folder, "sub", "note.txt") }), /selected feedback path changed/);
+});
+
+test("feedback credential exclusions apply to external and primary roots, including canonical aliases", async (t) => {
+	const f = await fixture(t);
+	const agent = join(f.root, "configured-agent");
+	await mkdir(agent);
+	await writeFile(join(agent, "auth.json"), '{"apiKey":"fake-secret"}');
+	await writeFile(join(agent, "settings.json"), '{"safe":true}');
+	const stat = await lstat(agent);
+	const grant = { path: agent, kind: "directory" as const, dev: stat.dev, ino: stat.ino };
+	for (const source of [f.source, agent]) {
+		const call = await calls({ source, feedbackSources: [grant], feedbackDeniedPaths: [join(agent, "auth.json")] });
+		await assert.rejects(call("read", { path: join(agent, "auth.json") }), /protected credential/);
+		assert.match(text(await call("read", { path: join(agent, "settings.json") })), /safe/);
+		await symlink(join(agent, "auth.json"), join(agent, "alias")).catch(() => {});
+		await assert.rejects(call("read", { path: join(agent, "alias") }), /protected credential/);
+	}
+	const feedback = await calls({ source: f.source, feedbackDeniedPaths: [] });
+	await link(join(agent, "auth.json"), join(f.source, "credential-alias"));
+	await assert.rejects(feedback("read", { path: "credential-alias" }), /hardlink/);
+	await assert.rejects(
+		feedback("read", { path: join(ASK_ATTACHMENTS, "00000000-0000-4000-8000-000000000001.png") }),
+		/inside the source/,
+	);
+});
 
 for (const snapshot of [false, true]) {
 	test(`Ask ${snapshot ? "pinned tree" : "checkout"} reads/searches/lists with rooted symlink safety`, async (t) => {

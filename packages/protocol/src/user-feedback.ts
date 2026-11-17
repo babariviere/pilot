@@ -1,3 +1,4 @@
+import type { DurableOperation } from "./operations.ts";
 import type { StagedAttachmentRef } from "./transfers.ts";
 
 /** The place the user sent feedback from. Identities only; the service derives the rest. */
@@ -6,11 +7,16 @@ export type UserFeedbackOriginRef = { kind: "mission"; missionId: string } | { k
 /** The saved origin, with the project and title the service read when it saved the feedback. */
 export type UserFeedbackOrigin = UserFeedbackOriginRef & { projectId: string; title: string };
 
-/**
- * One piece of feedback the user wrote about Pilot. It is the user's own words, separate from agent
- * Insights and findings. Saving it starts no work, approves nothing and grants no permission.
- */
+/** Exact native follow-up retained before Send. Saving it never dispatches it. */
+export interface UserFeedbackInvestigation {
+	operation: DurableOperation;
+}
+
+/** User-written feedback. An optional native-pinned investigation starts no fix or other work. */
 export interface UserFeedback {
+	investigation?: UserFeedbackInvestigation;
+	/** Immutable original save input hash. Missing on legacy feedback. */
+	savePayloadHash?: string;
 	/** Immutable images saved with this feedback. Omitted on older records. */
 	attachments?: StagedAttachmentRef[];
 	id: string;
@@ -55,6 +61,8 @@ export type UserFeedbackWork = {
 	| { kind: "resolved" | "reopened" }
 	/** The user's answer to the triage's question `questionId`, as sent to that chat. It clarifies only. */
 	| { kind: "answer"; sessionId: string; questionId: number; text: string }
+	/** An explicit correction of the exact finished recommendation, sent only to its triage. */
+	| { kind: "correction"; sessionId: string; proposalDigest: string; text: string }
 );
 
 /** The receipt of a remove step. The feedback and its saved steps are gone; its chats and missions stay. */
@@ -86,8 +94,8 @@ export type UserFeedbackWorkView = UserFeedbackWork & {
 	question?: UserFeedbackQuestion;
 	/** A linked mission now, or null when it is gone. */
 	mission?: { title: string; status: string; tasksDone: number; tasksTotal: number } | null;
-	/** A finished triage's proposal with its digest, or why it cannot be read. */
-	proposal?: { value: UserFeedbackProposal; digest: string } | { problem: string };
+	/** Finished proposal, or unusable explanation and its full-text hash. Raw over 8 KiB stays in chat history. */
+	proposal?: { value: UserFeedbackProposal; digest: string } | { problem: string; raw?: string; digest: string };
 };
 
 /** GET /api/feedback?before=<sequence>&limit=20. Native authenticated. Newest first, at most 20. */
@@ -104,6 +112,7 @@ export interface UserFeedbackPage {
  * Never resend after losing the ACK: look up the exact receipt, including after a restart.
  */
 export interface UserFeedbackIntent {
+	investigation?: UserFeedbackInvestigation;
 	attachments?: StagedAttachmentRef[];
 	purpose: "user-feedback";
 	text: string;
@@ -112,6 +121,8 @@ export interface UserFeedbackIntent {
 
 /** The project chat setup a triage or fix starts with, exactly as GET /api/projects/:id/chat-profile read it. */
 export interface UserFeedbackChatChoice {
+	allowanceMicros?: number | null;
+	fundingRequired?: true;
 	projectId: string;
 	projectPath: string;
 	contextDigest: string;
@@ -125,8 +136,9 @@ export interface UserFeedbackChatChoice {
  * exact proposal digest the user saw. link: targetId = the mission. resolve / reopen: targetId = the
  * feedback. remove: targetId = the feedback; deletes it and its steps, never its chats or missions.
  * answer: targetId = the item's latest triage chat, sent as the reply to its pending question
- * `questionId`; it starts no fix and approves no proposal. Accepted receipt.result is the saved
- * UserFeedbackWork. Lost ACK: receipt lookup only; for an answer that lookup also reads whether the chat
+ * `questionId`; it starts no fix and approves no proposal. correct: targetId = the exact finished triage,
+ * proposalDigest = its exact proposal or unusable explanation's digest. Sends a follow-up in that Ask chat only.
+ * Accepted receipt.result is the saved UserFeedbackWork. Lost ACK: receipt lookup only; for a reply it reads whether the chat
  * accepted that exact input, and never sends it again.
  */
 export type UserFeedbackWorkIntent = { purpose: "feedback-work"; feedbackId: string } & (
@@ -135,4 +147,5 @@ export type UserFeedbackWorkIntent = { purpose: "feedback-work"; feedbackId: str
 	| { action: "link"; missionId: string }
 	| { action: "resolve" | "reopen" | "remove" }
 	| { action: "answer"; questionId: number; message: string }
+	| { action: "correct"; proposalDigest: string; message: string }
 );

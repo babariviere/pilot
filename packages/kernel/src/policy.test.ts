@@ -52,6 +52,22 @@ test("Build guidance uses TMPDIR instead of session storage for temporary output
 	assert.doesNotMatch(pilotPrompt({ ask: { source: "/source" } }), /Create a unique directory/);
 });
 
+test("feedback Ask names its actual source and exact extra roots without claiming a main view", () => {
+	const prompt = pilotPrompt({
+		ask: {
+			source: "/chosen/project",
+			sourceOnly: true,
+			feedbackDeniedPaths: ["/private/auth.json"],
+			feedbackSources: [{ path: "/tmp/user-folder", kind: "directory", dev: 1, ino: 2 }],
+		},
+	});
+	assert.match(prompt, /selected project's source at this exact path/);
+	assert.match(prompt, /\/tmp\/user-folder/);
+	assert.match(prompt, /Replies do not grant new access/);
+	assert.doesNotMatch(prompt, /follows main/);
+	assert.doesNotMatch(prompt, /\/private\/auth.json/);
+});
+
 test("capability guidance distinguishes nested discovery, command failures and authority", () => {
 	for (const context of [{}, { ask: { source: "/fixture/source" } }]) {
 		const prompt = pilotPrompt(context);

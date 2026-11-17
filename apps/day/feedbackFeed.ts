@@ -43,7 +43,13 @@ export type FeedbackItem = UserFeedback & { sequence: number; work: UserFeedback
 export type FeedbackOp = SendIntent & { operationId: string; state: "unknown" | "checking" };
 
 /** One step whose result Pilot does not know, on one saved item. Only Check settles it. */
-export type FeedbackStepOp = { operationId: string; state: "unknown" | "checking"; feedbackId: string; step: string };
+export type FeedbackStepOp = {
+	operationId: string;
+	state: "unknown" | "checking";
+	feedbackId: string;
+	step: string;
+	replyKey?: string;
+};
 
 /** A project agents can work in, as Pilot read it. The ID is the identity. */
 export type FeedbackProject = { projectId: string; name: string; contextDigest: string };
@@ -55,6 +61,7 @@ export type StepIntent = { feedbackId: string } & (
 	| { action: "link"; missionId: string }
 	| { action: "resolve" | "reopen" | "remove" }
 	| { action: "answer"; triageSessionId: string; questionId: number; message: string }
+	| { action: "correct"; triageSessionId: string; proposalDigest: string; message: string }
 );
 
 /** What the feedback page shows. */
@@ -86,6 +93,8 @@ export type SendIntent = {
 	text: string;
 	origin: UserFeedbackOriginRef | null;
 	attachments?: UserFeedback["attachments"];
+	/** The native host pins the exact child before sending either operation. */
+	investigation?: { projectId: string; contextDigest: string };
 };
 
 /** Keep a possible duplicate, or an image it may own, behind its own receipt check. */
@@ -105,6 +114,7 @@ export type SendResult = {
 	operationId: string | null;
 	/** The saved feedback, when a receipt carried it. */
 	saved: UserFeedback | null;
+	investigation?: StepResult;
 };
 
 /** The feedback's source. The connected window asks its root; tests use a script. */
@@ -117,7 +127,7 @@ export interface FeedbackSource {
 	more(): Promise<void>;
 	/** Sends one piece of feedback once. Never resent. */
 	send(intent: SendIntent): Promise<SendResult>;
-	/** Reads one unsettled Send's saved receipt. Never sends it again. */
+	/** Confirms a saved Send and fulfills only its pinned, never-entered investigation. Never replays either. */
 	check(operationId: string): Promise<SendResult>;
 	/** Reads the projects agents can work in. Passive. */
 	readProjects(): Promise<void>;
@@ -240,6 +250,7 @@ export function feedbackOf(x: unknown): UserFeedback | null {
 		recordedAt: f.recordedAt,
 		operationId: f.operationId,
 		...(attachments ? { attachments } : {}),
+		...(f.investigation ? { investigation: f.investigation as UserFeedback["investigation"] } : {}),
 	};
 }
 
@@ -250,7 +261,12 @@ const str = (v: unknown) => typeof v === "string";
 function proposalOf(x: unknown): UserFeedbackWorkView["proposal"] | null {
 	const p = x as Record<string, unknown> | null;
 	if (!p || typeof p !== "object") return null;
-	if (str(p.problem)) return { problem: p.problem as string };
+	if (str(p.problem))
+		return {
+			problem: p.problem as string,
+			digest: str(p.digest) ? (p.digest as string) : "",
+			...(str(p.raw) ? { raw: p.raw as string } : {}),
+		};
 	const v = p.value as Record<string, unknown> | null;
 	if (!v || typeof v !== "object" || !str(p.digest) || !str(v.summary) || !str(v.detail)) return null;
 	if (!NEXT.includes(v.next as string) || !Array.isArray(v.duplicates) || !v.duplicates.every(str)) return null;
@@ -292,6 +308,8 @@ function workOf(x: unknown): UserFeedbackWorkView | null {
 		return str(w.sessionId) && typeof w.questionId === "number" && str(w.text)
 			? (w as unknown as UserFeedbackWorkView)
 			: null;
+	if (w.kind === "correction")
+		return str(w.sessionId) && str(w.proposalDigest) && str(w.text) ? (w as unknown as UserFeedbackWorkView) : null;
 	return w.kind === "resolved" || w.kind === "reopened" ? (w as unknown as UserFeedbackWorkView) : null;
 }
 
@@ -320,7 +338,7 @@ export function pageOf(x: unknown): Page | null {
 	return { items, more: p.more, before, older: p.older === true };
 }
 
-type Summary = SendIntent & { operationId: string; feedbackId: string | null; step: string | null };
+type Summary = SendIntent & { operationId: string; feedbackId: string | null; step: string | null; replyKey?: string };
 
 function summariesOf(x: unknown): Summary[] | null {
 	if (!Array.isArray(x)) return null;
@@ -335,6 +353,7 @@ function summariesOf(x: unknown): Summary[] | null {
 			attachments: raw.attachments as UserFeedback["attachments"],
 			feedbackId: step ? (raw.feedbackId as string) : null,
 			step: step ? (raw.step as string) : null,
+			...(typeof raw.replyKey === "string" ? { replyKey: raw.replyKey } : {}),
 		});
 	}
 	return out;
@@ -378,6 +397,12 @@ function stepOutcomeOf(x: unknown): StepResult {
 		};
 	}
 	return { status: "unknown", message: UNKNOWN_STEP };
+}
+
+function withInvestigation(result: SendResult, outcome: unknown): SendResult {
+	return result.status === "accepted" && result.saved?.investigation
+		? { ...result, investigation: stepOutcomeOf(outcome) }
+		: result;
 }
 
 /** The projects a root's `day.projects.read` lists, or null when they do not read. */
@@ -467,6 +492,7 @@ export class ConnectedFeedback implements FeedbackSource {
 					state: this.#checking.has(o.operationId) ? "checking" : "unknown",
 					feedbackId: o.feedbackId ?? "",
 					step: o.step ?? "",
+					replyKey: o.replyKey,
 				})),
 			projects: this.#projects,
 			reading: this.#reading !== null,
@@ -581,7 +607,7 @@ export class ConnectedFeedback implements FeedbackSource {
 		const id = typeof outcome?.operationId === "string" ? outcome.operationId : null;
 		if (!pageOf(r.snapshot)) void this.read();
 		this.#publish();
-		return outcomeOf(outcome, id);
+		return withInvestigation(outcomeOf(outcome, id), r.value.investigationOutcome);
 	}
 
 	async check(operationId: string): Promise<SendResult> {
@@ -598,12 +624,13 @@ export class ConnectedFeedback implements FeedbackSource {
 		if (!r.ok) {
 			return {
 				status: "unknown",
-				message: "Pilot could not check it now. Nothing was sent; it stays not confirmed.",
+				message:
+					"Pilot could not confirm the saved feedback or investigation. Entered work will not be sent again.",
 				operationId,
 				saved: null,
 			};
 		}
-		const result = outcomeOf(r.value.outcome, operationId);
+		const result = withInvestigation(outcomeOf(r.value.outcome, operationId), r.value.investigationOutcome);
 		if (result.status === "unknown")
 			result.message = "Pilot's service has no result for it yet. Nothing was sent again.";
 		return result;

@@ -98,6 +98,7 @@ import { continueModelInPlace } from "./model-continuation.ts";
 import { rebuildContext } from "./model-rebuild.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { recentSnapshot } from "./paged-history.ts";
+import { startParentBridge } from "./parent-bridge.ts";
 import { PerformanceLog } from "./performance.ts";
 import { admitPlanningInput, holdPlanning, PlanningWorkerDoc, planningBoundary } from "./planning-boundary.ts";
 import {
@@ -126,7 +127,6 @@ import { createScopedMetricsTool } from "./scoped-metrics-tool.ts";
 import { createSlackStatusTool, SLACK_STATUS_TOOL, type SlackStatusCall } from "./slack-status-tool.ts";
 import { findInputReceipt, openSessionStorage } from "./storage.ts";
 import { SubagentBridge, type SubagentCommand } from "./subagents.ts";
-import { startParentBridge } from "./parent-bridge.ts";
 import { createTodoTool } from "./todo-tool.ts";
 import {
 	applyTodo,
@@ -789,6 +789,9 @@ export class KernelSession {
 				],
 				subagents,
 				hostTools: [
+					...(spec.feedbackLogs && hooks.callDiagnosticLogs
+						? [createDiagnosticLogTool(hooks.callDiagnosticLogs, { kind: "feedback" })]
+						: []),
 					...(spec.scopedMetrics && hooks.callDiagnosticContext
 						? [createScopedMetricsTool(hooks.callDiagnosticContext)]
 						: []),

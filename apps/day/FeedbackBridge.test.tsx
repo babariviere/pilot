@@ -2,6 +2,112 @@
 import { expect, open, test } from "nsh/test";
 import type { FeedbackItem, SendIntent } from "./feedbackFeed";
 
+test("chosen investigation stays native-pinned through an uncertain save without a second UI start", async () => {
+	const d = "d".repeat(64);
+	let send: SendIntent | null = null;
+	let item: FeedbackItem | null = null;
+	let checks = 0,
+		steps = 0;
+	const app = await open("./FeedbackBridgeFixture.tsx", {
+		platform: "macos",
+		width: 1100,
+		height: 1600,
+		host: { params: { day: { version: 1, window: "fixture" } } },
+		modules: {
+			nsh: {
+				"host.call": (name: string, envelope: { args: unknown }) => {
+					if (name === "day.projects.read")
+						return {
+							version: 1,
+							value: {
+								snapshot: { projects: [{ projectId: "original", name: "Original project", contextDigest: d }] },
+							},
+						};
+					let outcome: unknown = null,
+						investigationOutcome: unknown = null;
+					if (name === "day.feedback.step") steps++;
+					if (name === "day.feedback.send") {
+						send = envelope.args as SendIntent;
+						expect(send.investigation).toEqual({ projectId: "original", contextDigest: d });
+						const payload = JSON.stringify({
+							purpose: "feedback-work",
+							action: "triage",
+							feedbackId: "f",
+							projectId: "original",
+							contextDigest: d,
+						});
+						item = {
+							id: "f",
+							text: send.text,
+							origin: null,
+							operationId: "parent",
+							recordedAt: 1,
+							sequence: 1,
+							work: [],
+							investigation: {
+								operation: {
+									schemaVersion: 1,
+									operationId: "child",
+									producerId: "producer",
+									sequence: 1,
+									origin: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+									destination: { hostId: "daemon", daemonId: "daemon", lineageId: "lineage" },
+									kind: "feedback-work",
+									targetId: "chat",
+									payload,
+									payloadHash: d,
+									bindingId: d,
+									bindingGeneration: 1,
+								},
+							},
+						};
+						outcome = { operationId: "parent", state: "unknown" };
+					}
+					if (name === "day.feedback.check") {
+						checks++;
+						expect(envelope.args).toEqual({ operationId: "parent" });
+						item!.work = [
+							{
+								kind: "triage",
+								sessionId: "chat",
+								projectId: "original",
+								operationId: "child",
+								recordedAt: 1,
+								chat: { title: "Triage", state: "working" },
+							},
+						];
+						outcome = { operationId: "parent", state: "accepted", receipt: { result: item } };
+						investigationOutcome = { operationId: "child", state: "accepted" };
+					}
+					return {
+						version: 1,
+						value: {
+							snapshot: { version: 1, items: item ? [item] : [], more: false, before: null },
+							operations:
+								send && checks === 0
+									? [{ operationId: "parent", state: "unknown", text: send.text, origin: null }]
+									: [],
+							outcome,
+							investigationOutcome,
+						},
+					};
+				},
+			},
+		},
+	});
+	await app.waitFor("id:feedback-text");
+	await app.press("label:Project where agents triage and fix your feedback");
+	await app.press("text:Original project");
+	await app.type("id:feedback-text", "Read this once");
+	await app.press("id:feedback-send");
+	await app.waitFor("id:feedback-unknown");
+	await app.press("id:feedback-project-none");
+	await app.press("id:feedback-check");
+	await app.waitFor("id:feedback-triage-f");
+	expect(steps).toBe(0);
+	expect(checks).toBe(1);
+});
+
 test("connected sends carry screenshots and reconcile only their item while unrelated feedback continues", async () => {
 	const image = { uploadId: "00000000-0000-4000-8000-000000000001", sha256: "a".repeat(64), bytes: 70 };
 	const sent: SendIntent[] = [];
@@ -31,8 +137,9 @@ test("connected sends carry screenshots and reconcile only their item while unre
 							unknown = intent;
 							outcome = { operationId: "op-1", state: "unknown" };
 						} else {
+							const { investigation: _selected, ...content } = intent;
 							const item = {
-								...intent,
+								...content,
 								origin: null,
 								id: "f2",
 								operationId: "op-2",
@@ -47,8 +154,9 @@ test("connected sends carry screenshots and reconcile only their item while unre
 					if (_name === "day.feedback.check") {
 						checks++;
 						expect(args).toEqual({ operationId: "op-1" });
+						const { investigation: _selected, ...content } = unknown!;
 						const item = {
-							...unknown!,
+							...content,
 							origin: null,
 							id: "f1",
 							operationId: "op-1",

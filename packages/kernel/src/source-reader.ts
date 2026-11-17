@@ -2,8 +2,10 @@
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { lstat, open, opendir, realpath } from "node:fs/promises";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { MAX_REDACT_CHARS, redactHistoryText } from "./history-privacy.ts";
 import type { AskContext } from "./policy.ts";
 
 const run = promisify(execFile);
@@ -11,6 +13,10 @@ const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_ENTRIES = 10_000;
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 export class ReadLimitError extends Error {}
+
+function expandHome(path: string): string {
+	return path.startsWith("~/") ? `${homedir()}/${path.slice(2)}` : path;
+}
 
 export function contained(root: string, path: string): boolean {
 	const rel = relative(root, path);
@@ -108,10 +114,64 @@ export class SourceReader {
 	readonly trees = new Map<string, Entry[]>();
 	#cachedEntries = 0;
 	constructor(ask: AskContext) {
-		this.ask = ask;
+		this.ask = ask.feedbackDeniedPaths ? { ...ask, sourceOnly: true } : ask;
 		this.root = resolve(ask.source);
 		if (!!ask.gitDir !== !!ask.commit) throw new Error("Ask branch snapshots require both gitDir and commit");
 		if (ask.commit && !SHA.test(ask.commit)) throw new Error("Ask requires a pinned full commit ID");
+	}
+	/** Select only an exact host-qualified root. Relative paths still mean the project source. */
+	private async feedbackSource(
+		path: string,
+		signal?: AbortSignal,
+	): Promise<{ reader: SourceReader; path: string; displayRoot: string } | undefined> {
+		if (!this.ask.feedbackSources && !this.ask.feedbackDeniedPaths) return undefined;
+		if (path.includes("\0") || path.length > 4096 || path.split(/[\\/]/).includes(".."))
+			throw new Error("Ask path traversal denied");
+		const absolute = resolve(this.root, path);
+		const primary = contained(this.root, absolute);
+		const source =
+			!primary && isAbsolute(path)
+				? this.ask.feedbackSources?.find((s) =>
+						s.kind === "file" ? s.path === absolute : contained(s.path, absolute),
+					)
+				: undefined;
+		// Refuse unrelated paths without probing their filesystem metadata.
+		if (!primary && !source) return undefined;
+		if (this.ask.feedbackDeniedPaths) {
+			signal?.throwIfAborted();
+			const target = resolve(this.root, path);
+			const canonical = await realpath(target).catch(() => target);
+			for (const denied of this.ask.feedbackDeniedPaths) {
+				const protectedPath = resolve(denied);
+				const protectedCanonical = await realpath(protectedPath).catch(() => protectedPath);
+				if ([target, canonical].some((p) => contained(protectedPath, p) || contained(protectedCanonical, p)))
+					throw new Error("Feedback cannot read a protected credential store");
+			}
+			if (contained(this.root, target)) sourceContentPath(this.root, path);
+		}
+		if (!source) return undefined;
+		signal?.throwIfAborted();
+		// Identity is checked on every operation, not just at admission or directory discovery.
+		const stat = await lstat(source.path);
+		if (
+			stat.isSymbolicLink() ||
+			stat.dev !== source.dev ||
+			stat.ino !== source.ino ||
+			(source.kind === "file" ? !stat.isFile() : !stat.isDirectory())
+		)
+			throw new Error("The selected feedback path changed; access is no longer valid");
+		const root = source.kind === "file" ? resolve(source.path, "..") : source.path;
+		const rel = sourceContentPath(root, absolute);
+		const canonicalRoot = await realpath(root);
+		return {
+			reader: new SourceReader({
+				source: canonicalRoot,
+				sourceOnly: true,
+				feedbackDeniedPaths: this.ask.feedbackDeniedPaths,
+			}),
+			path: resolve(canonicalRoot, rel),
+			displayRoot: root,
+		};
 	}
 	async git(args: string[], signal?: AbortSignal, maxBuffer = 2 * 1024 * 1024): Promise<Buffer> {
 		signal?.throwIfAborted();
@@ -172,6 +232,9 @@ export class SourceReader {
 		return entry;
 	}
 	async list(path: string, signal?: AbortSignal): Promise<Entry[]> {
+		path = expandHome(path);
+		const feedback = await this.feedbackSource(path, signal);
+		if (feedback) return feedback.reader.list(feedback.path, signal);
 		this.assertSourceOnly(path);
 		if (this.ask.commit) {
 			const entry = await this.object(path, signal);
@@ -198,6 +261,24 @@ export class SourceReader {
 		return entries.sort((a, b) => a.name.localeCompare(b.name));
 	}
 	async read(path: string, signal?: AbortSignal, maxBytes = MAX_FILE_BYTES): Promise<Buffer> {
+		path = expandHome(path);
+		const feedback = await this.feedbackSource(path, signal);
+		if (feedback) {
+			const bytes = await feedback.reader.read(feedback.path, signal, maxBytes);
+			// Images remain images. Extra text sources are sanitized before search or output.
+			const image =
+				bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
+				(bytes[0] === 255 && bytes[1] === 216) ||
+				bytes.subarray(0, 3).toString() === "GIF" ||
+				(bytes.subarray(0, 4).toString() === "RIFF" && bytes.subarray(8, 12).toString() === "WEBP");
+			if (image && bytes.includes(0)) return bytes;
+			if (bytes.includes(0)) throw new Error("Feedback source is not supported text or an image");
+			if (bytes.length > MAX_REDACT_CHARS)
+				throw new ReadLimitError(
+					`Named feedback text exceeds the ${MAX_REDACT_CHARS} byte sanitization limit; use protected log excerpts for large logs`,
+				);
+			return Buffer.from(redactHistoryText(bytes.toString("utf8")));
+		}
 		this.assertSourceOnly(path);
 		if (!this.ask.commit) return readLocal(this.root, path, signal, maxBytes, this.ask.sourceOnly);
 		const entry = await this.object(path, signal);
@@ -208,6 +289,12 @@ export class SourceReader {
 		return this.git(["cat-file", "blob", entry.oid!], signal, maxBytes);
 	}
 	async *walk(path: string, signal?: AbortSignal): AsyncGenerator<string> {
+		path = expandHome(path);
+		const feedback = await this.feedbackSource(path, signal);
+		if (feedback) {
+			for await (const name of feedback.reader.walk(feedback.path, signal)) yield join(feedback.displayRoot, name);
+			return;
+		}
 		const pending = [sourcePath(this.root, path)];
 		let visited = 0;
 		while (pending.length) {
@@ -224,6 +311,9 @@ export class SourceReader {
 		}
 	}
 	async kind(path: string, signal?: AbortSignal): Promise<Entry["kind"]> {
+		path = expandHome(path);
+		const feedback = await this.feedbackSource(path, signal);
+		if (feedback) return feedback.reader.kind(feedback.path, signal);
 		this.assertSourceOnly(path);
 		if (this.ask.commit) return (await this.object(path, signal)).kind;
 		const stat = await lstat(await checkedPath(this.root, path, signal, this.ask.sourceOnly));
@@ -232,6 +322,12 @@ export class SourceReader {
 		throw new Error("Ask only explores regular files and directories");
 	}
 	async *files(path: string, signal?: AbortSignal): AsyncGenerator<string> {
+		path = expandHome(path);
+		const feedback = await this.feedbackSource(path, signal);
+		if (feedback) {
+			for await (const name of feedback.reader.files(feedback.path, signal)) yield join(feedback.displayRoot, name);
+			return;
+		}
 		const rel = sourcePath(this.root, path);
 		const kind = await this.kind(rel, signal);
 		if (kind === "file") yield rel;

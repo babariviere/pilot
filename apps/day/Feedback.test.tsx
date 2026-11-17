@@ -286,23 +286,21 @@ test("long Today feedback keeps details, Later and Bring back usable across wind
 		await app.waitFor("id:feedback-proposal-f1");
 		expect(app.shows(words.trim())).toBe(true);
 		expect(app.enabled("id:feedback-later-f1")).toBe(true);
-		await app.press("id:feedback-new-f1");
-		await app.waitUntil(() => !app.shows("id:feedback-proposal-f1"));
-		await app.press("id:feedback-new-f1");
-		await app.waitFor("id:feedback-proposal-f1");
 		await app.press("id:feedback-later-f1");
 		await app.waitUntil(() => !app.shows("id:feedback-new-f1"));
 		await app.press("id:feedback-later-show");
 		await app.press("id:feedback-bring-back-f1");
 		await app.waitFor("id:feedback-new-f1");
 		expect(app.shows("id:feedback-proposal-f1")).toBe(false);
+		await app.press("id:feedback-new-f1");
+		await app.waitFor("id:feedback-proposal-f1");
 		expect(steps(app)).toBe("Steps: [triage]");
 		expect(counts(app)).toBe("Sends: 1 · Checks: 0");
 		app.dispose();
 	}
 });
 
-test("finished triage joins New; opening and saved Later start nothing", async () => {
+test("finished triage joins Needs you; opening and saved Later start nothing", async () => {
 	const app = await feedback();
 	await chooseProject(app);
 	await sendWords(app, "Show feedback in Today");
@@ -324,7 +322,7 @@ test("finished triage joins New; opening and saved Later start nothing", async (
 	expect(steps(app)).toBe("Steps: [triage]");
 });
 
-test("a triage question joins New and a later proposal returns after deferral", async () => {
+test("a triage question joins Needs you and a later proposal returns after deferral", async () => {
 	const app = await feedback();
 	await chooseProject(app);
 	await sendWords(app, "Which plan shows people?");
@@ -366,6 +364,15 @@ test("the header opens Feedback about Pilot in general; opening sends nothing an
 	await app.keyboard.press("escape");
 	await app.waitFor("id:feedback-open");
 	expect(app.shows("id:feedback")).toBe(false);
+});
+
+test("literal user paths show their read scope before feedback is sent", async () => {
+	const app = await feedback();
+	await app.type("id:feedback-text", "Read `/tmp/example folder` and ~/Library/Logs/Pilot for this failure");
+	await app.waitFor("id:feedback-named-paths");
+	expect(app.shows("/tmp/example folder")).toBe(true);
+	expect(app.shows("~/Library/Logs/Pilot")).toBe(true);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
 });
 
 test("Send saves the words once and lists them; only the accepted receipt clears the draft", async () => {
@@ -553,7 +560,7 @@ test("a new-mission proposal opens New with its goal; linking a mission and reso
 	expect(steps(app)).toBe("Steps: [triage,link,resolve,reopen]");
 });
 
-test("a triage question is answered here: its exact words, a kept draft and one explicit Send answer that starts nothing else", async () => {
+test("feedback reuses the interview form: kept draft, review, explicit submit, no other work", async () => {
 	const app = await feedback();
 	await chooseProject(app);
 	await sendWords(app, "The plan page hides who is working");
@@ -561,21 +568,28 @@ test("a triage question is answered here: its exact words, a kept draft and one 
 	await app.press("Triage asks");
 	await app.waitFor("id:feedback-question-f1");
 	expect(app.shows("Which page do you mean?")).toBe(true);
+	expect(app.shows("The task list on a mission")).toBe(true);
+	await app.press("More context");
 	expect(app.shows("Plans and missions both list tasks.")).toBe(true);
 	expect(app.shows("The triage needs your answer before it can propose a next step.")).toBe(true);
-	expect(app.enabled("id:feedback-answer-send-f1")).toBe(false);
-	await app.press("id:feedback-option-f1-2");
-	await app.type("id:feedback-answer-f1", "The one with the task rows 日本語");
-	await app.waitUntil(() => app.enabled("id:feedback-answer-send-f1"));
+	expect(app.shows("id:submit")).toBe(false);
+	await app.press("id:choice-7-1");
+	await app.press("id:own-7");
+	await app.type("id:answer-7", "The one with the task rows 日本語");
 	// Picking and typing send nothing.
 	expect(steps(app)).toBe("Steps: [triage]");
 	// The unsent answer, its pick and the chosen project come back after a close or update.
 	await app.press("Save and reopen");
 	await app.waitFor("id:feedback-question-f1");
-	expect(app.value("id:feedback-answer-f1")).toBe("The one with the task rows 日本語");
+	// Restored answers may open at review, never submit themselves.
+	if (app.shows("id:review-7")) await app.press("id:review-7");
+	expect(app.value("id:answer-7")).toBe("The one with the task rows 日本語");
 	await app.waitFor("id:feedback-project-none");
 	expect(steps(app)).toBe("Steps: [triage]");
-	await app.press("id:feedback-answer-send-f1");
+	await app.press("id:next");
+	await app.waitFor("id:answers");
+	expect(steps(app)).toBe("Steps: [triage]");
+	await app.press("id:submit");
 	await app.waitFor("id:feedback-answered-f1");
 	expect(app.shows("Answer: [Mission overview\n\nThe one with the task rows 日本語]")).toBe(true);
 	expect(app.shows("id:feedback-question-f1")).toBe(false);
@@ -592,18 +606,153 @@ test("a lost answer stays Unknown with its words kept; Check reads it once and n
 	await app.waitFor("id:feedback-triage-f1");
 	await app.press("Triage asks");
 	await app.waitFor("id:feedback-question-f1");
-	await app.type("id:feedback-answer-f1", "Only on large projects");
-	await app.waitUntil(() => app.enabled("id:feedback-answer-send-f1"));
+	await app.press("id:own-7");
+	await app.type("id:answer-7", "Only on large projects");
+	await app.press("id:next");
+	await app.waitFor("id:submit");
 	await app.press("Next step unknown");
-	await app.press("id:feedback-answer-send-f1");
+	await app.press("id:submit");
 	await app.waitFor("id:feedback-step-unknown-f1");
-	expect(app.value("id:feedback-answer-f1")).toBe("Only on large projects");
-	expect(app.enabled("id:feedback-answer-send-f1")).toBe(false);
-	await app.press("id:feedback-step-check-f1");
+	expect(app.shows("Only on large projects")).toBe(true);
+	expect(app.shows("id:submit")).toBe(false);
+	await app.press("Check again");
 	await app.waitFor("Pilot did it.");
 	expect(app.shows("id:feedback-question-f1")).toBe(false);
 	expect(steps(app)).toBe("Steps: [triage,answer]");
 	expect(counts(app)).toBe("Sends: 1 · Checks: 1");
+});
+
+test("multiple feedback choices use the shared form without losing selections", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "Both pages lose the filter");
+	await app.press("Triage multiple");
+	await app.waitFor("id:question-7");
+	expect(app.shows("id:submit")).toBe(false);
+	await app.press("id:choice-7-0");
+	await app.press("id:choice-7-1");
+	await app.press("id:choice-7-0");
+	await app.press("id:choice-7-0");
+	expect(steps(app)).toBe("Steps: [triage]");
+	await app.press("id:next");
+	await app.waitFor("id:submit");
+	expect(app.shows("The plan page; Mission overview")).toBe(true);
+	await app.press("id:submit");
+	await app.waitFor("id:feedback-answered-f1");
+	expect(app.shows("Answer: [- The plan page\n- Mission overview]")).toBe(true);
+});
+
+test("an unusable explanation stays linked while correction drafts and uncertain sends survive reopen", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "Filter resets after restarting");
+	await app.press("Triage unusable");
+	await app.waitFor("id:feedback-unusable-f1");
+	expect(app.shows("The filter belongs to the search improvements. Keep the filter when Pilot reopens.")).toBe(true);
+	expect(app.shows("id:feedback-triage-start-f1")).toBe(false);
+	await app.press("id:feedback-correct-f1");
+	const q = `correction-${"d".repeat(64)}`;
+	await app.press(`id:own-${q}`);
+	await app.type(`id:answer-${q}`, "Restart, not navigation 日本語");
+	await app.press("Save and reopen");
+	await app.waitFor("id:feedback-correct-f1");
+	await app.press("id:feedback-correct-f1");
+	if (app.shows(`id:review-${q}`)) await app.press(`id:review-${q}`);
+	expect(app.value(`id:answer-${q}`)).toBe("Restart, not navigation 日本語");
+	await app.press("id:next");
+	await app.press("Next step unknown");
+	await app.press("id:submit");
+	await app.waitFor("id:feedback-step-unknown-f1");
+	expect(app.shows("Restart, not navigation 日本語")).toBe(true);
+	expect(steps(app)).toBe("Steps: [triage,correct]");
+	await app.press("Check again");
+	await app.waitFor("Pilot did it.");
+	expect(steps(app)).toBe("Steps: [triage,correct]");
+	expect(app.shows("id:feedback-unusable-f1")).toBe(false);
+});
+
+test("a readable but wrong suggestion can be corrected without starting its fix", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "Wrong recommendation");
+	await app.press("Triage fix");
+	await app.press("id:feedback-correct-f1");
+	const q = `correction-${"d".repeat(64)}`;
+	await app.press(`id:own-${q}`);
+	await app.type(`id:answer-${q}`, "This happens only after restarting");
+	expect(app.shows("The plan page hides who works on each task.")).toBe(true);
+	await app.press("id:next");
+	await app.press("id:submit");
+	await app.waitUntil(() => steps(app) === "Steps: [triage,correct]");
+	expect(app.shows("id:feedback-fixing-f1")).toBe(false);
+});
+
+test("a changed corrected proposal does not inherit Later from the previous explanation", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "Suggestion needs correction");
+	await app.press("Triage fix");
+	await app.keyboard.press("escape");
+	await app.press("id:feedback-new-f1");
+	await app.press("id:feedback-later-f1");
+	await app.press("id:feedback-open");
+	await app.press("id:feedback-correct-f1");
+	const q = `correction-${"d".repeat(64)}`;
+	await app.press(`id:own-${q}`);
+	await app.type(`id:answer-${q}`, "This is about restart");
+	await app.press("id:next");
+	await app.press("id:submit");
+	await app.press("Triage new mission");
+	await app.keyboard.press("escape");
+	await app.waitFor("id:feedback-new-f1");
+	expect(steps(app)).toBe("Steps: [triage,correct]");
+});
+
+test("Today shows only one question, switches without answering, and Later returns with its draft", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "First question");
+	await app.press("Triage asks");
+	await sendWords(app, "Second question");
+	await app.press("Triage asks");
+	await app.keyboard.press("escape");
+	await app.waitFor("id:feedback-new-f2");
+	expect(app.shows("id:feedback-question-f1")).toBe(false);
+	expect(app.shows("id:feedback-question-f2")).toBe(false);
+	await app.press("id:feedback-new-f2");
+	await app.waitFor("id:feedback-question-f2");
+	expect(app.shows("id:feedback-question-f1")).toBe(false);
+	expect(app.shows("How should finished work reach you?")).toBe(false);
+	await app.press("id:own-7");
+	await app.type("id:answer-7", "Keep this draft");
+	await app.press("id:feedback-later-f2");
+	await app.press("id:feedback-new-f1");
+	await app.waitFor("id:feedback-question-f1");
+	expect(app.shows("id:feedback-question-f2")).toBe(false);
+	await app.press("id:feedback-later-show");
+	await app.press("id:feedback-bring-back-f2");
+	await app.press("id:feedback-new-f2");
+	await app.waitFor("id:feedback-question-f2");
+	expect(app.value("id:answer-7")).toBe("Keep this draft");
+	expect(steps(app)).toBe("Steps: [triage,triage]");
+});
+
+test("only the touched feedback history form owns question shortcuts", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "First question");
+	await app.press("Triage asks");
+	await sendWords(app, "Second question");
+	await app.press("Triage asks");
+	await app.press("id:feedback-question-f1 >> id:own-7");
+	await app.type("id:feedback-question-f1 >> id:answer-7", "Only first question");
+	await app.keyboard.press("mod+enter");
+	await app.waitFor("id:feedback-question-f1 >> id:submit");
+	expect(app.shows("id:feedback-question-f2 >> id:submit")).toBe(false);
+	expect(steps(app)).toBe("Steps: [triage,triage]");
+	await app.press("id:feedback-question-f1 >> id:submit");
+	await app.waitFor("id:feedback-answered-f1");
+	expect(app.shows("id:feedback-question-f2")).toBe(true);
 });
 
 test("the fix and triage chats open read only with their rows and state; Back and Escape return to Feedback", async () => {

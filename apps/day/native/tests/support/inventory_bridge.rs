@@ -105,8 +105,28 @@ impl InventoryFixture {
                     } else {
                         state.feedback_posts += 1;
                         let p: Value = serde_json::from_str(op["payload"].as_str().unwrap()).unwrap();
+                        if p["purpose"] == "feedback-work" {
+                            let result = if p["action"] == "triage" {
+                                let work = json!({"operationId":op["operationId"],"kind":"triage","sessionId":op["targetId"],"projectId":p["projectId"],"recordedAt":1});
+                                let item = state.feedback["items"].as_array_mut().unwrap().iter_mut().find(|i|i["id"]==p["feedbackId"]).unwrap();
+                                item["work"].as_array_mut().unwrap().push(work.clone());
+                                work
+                            } else {
+                                assert_eq!(p["action"], "correct");
+                                json!({"operationId":op["operationId"],"kind":"correction","sessionId":op["targetId"],"proposalDigest":p["proposalDigest"],"text":p["message"],"recordedAt":1})
+                            };
+                            let receipt = json!({"operationId":op["operationId"],"payloadHash":op["payloadHash"],"destination":op["destination"],"targetId":op["targetId"],"state":"accepted","result":result});
+                            state.feedback_receipts.push(receipt.clone());
+                            if state.lose_feedback_reply {
+                                state.lose_feedback_reply = false;
+                                stream.shutdown(Shutdown::Both).unwrap();
+                                continue;
+                            }
+                            receipt
+                        } else {
                         assert_eq!(p["purpose"], "user-feedback");
                         let mut item = json!({"id":op["targetId"],"operationId":op["operationId"],"text":p["text"],"origin":null,"recordedAt":1});
+                        if let Some(investigation) = p.get("investigation") { item["investigation"] = investigation.clone(); }
                         if let Some(images) = p.get("attachments") { item["attachments"] = images.clone(); }
                         let receipt = json!({"operationId":op["operationId"],"payloadHash":op["payloadHash"],"destination":op["destination"],"targetId":op["targetId"],"state":"accepted","result":item});
                         state.feedback_receipts.push(receipt.clone());
@@ -119,6 +139,7 @@ impl InventoryFixture {
                             continue;
                         }
                         receipt
+                        }
                     }.to_string();
                     write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",body.len()).unwrap();
                     stream.flush().unwrap();
@@ -146,11 +167,17 @@ impl InventoryFixture {
                 }
                 let body = if request.starts_with("GET /api/feedback?limit=20 ") {
                     state.feedback.clone()
+                } else if request.starts_with("GET /api/telemetry ") {
+                    // The connection now reads diagnostic controls before declaring Live.
+                    // This fixture grants no logging or telemetry capability.
+                    json!({"localDiagnostics":false,"localFeatureUsage":false,"remoteOperational":false,"productAnalytics":false})
                 } else if request.starts_with("GET /api/hello ") {
                     json!({"daemonId":"synthetic-daemon","lineageId":"synthetic-lineage","protocolVersion":1,
                         "minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"dayOverview":1}})
                 } else if request.starts_with("GET /api/projects/synthetic-project ") {
                     json!({"id":"synthetic-project","path":project})
+                } else if request.starts_with("GET /api/projects/synthetic-project/chat-profile?mode=ask ") {
+                    json!({"projectId":"synthetic-project","projectPath":project,"contextDigest":"d".repeat(64),"mode":"ask","model":"fake/model","thinking":"high","fundingRequired":true,"allowanceMicros":null})
                 } else if request.starts_with("GET /api/projects/synthetic-project/day ") {
                     json!({"version":1,"projectId":"synthetic-project","observedAt":1,"complete":true,
                         "dashboard":{"projectId":"synthetic-project","missions":{"total":0,"items":[]},"working":{"total":0,"items":[]}},"reports":[],"controls":[]})
@@ -288,6 +315,124 @@ fn unknown_feedback_holds_only_its_payload_and_images_and_check_never_resends() 
     assert_eq!(checked["value"]["operations"], json!([]));
     let state = fixture.state.lock().unwrap();
     assert_eq!(state.feedback_posts, 2);
+    assert_eq!(state.feedback_lookups, 1);
+}
+
+#[test]
+fn unknown_feedback_retains_its_original_investigation_and_starts_it_once_after_check() {
+    let mut fixture = InventoryFixture::new();
+    fixture.state.lock().unwrap().lose_feedback_reply = true;
+    let first = fixture.f.run(&format!("return await call('day.feedback.send', {{text:'Investigate once 日本語',origin:null,investigation:{{projectId:'synthetic-project',contextDigest:'{}'}}}});", "d".repeat(64)), Fixture::caps());
+    assert_eq!(first["value"]["outcome"]["state"], "unknown");
+    let parent = first["value"]["outcome"]["operationId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let child = first["value"]["snapshot"]["items"][0]["investigation"]["operation"]["operationId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(fixture.state.lock().unwrap().feedback_posts, 1);
+    assert_eq!(fixture.f.bridge.close().recv_blocking().unwrap(), Ok(()));
+    fixture.f.host = NativeHost::open(
+        Source {
+            profile: fixture.f.path.join("missing-profile"),
+            port: fixture.port,
+            home: Home {
+                daemon_id: "synthetic-daemon".into(),
+                lineage_id: "synthetic-lineage".into(),
+            },
+            project: Some(pilot_day_native::host::Project {
+                project_id: "synthetic-project".into(),
+                project_path: fixture.f.path.display().to_string(),
+            }),
+        },
+        fixture.f.path.join("journal"),
+    )
+    .unwrap();
+    fixture.f.bridge = Bridge::new(DayRoot::new(fixture.f.host.clone()));
+    let _ = fixture.f.host.read_planning_inventory().recv_blocking();
+    fixture.wait(|p| p.availability == PlanAvailability::Live);
+    fixture
+        .f
+        .run("return await call('day.feedback.read');", Fixture::caps());
+    assert_eq!(
+        fixture.state.lock().unwrap().feedback_posts,
+        1,
+        "reopening and reading never dispatch work"
+    );
+    for _ in 0..2 {
+        let checked = fixture.f.run(
+            &format!("return await call('day.feedback.check', {{operationId:'{parent}'}});"),
+            Fixture::caps(),
+        );
+        assert_eq!(checked["value"]["outcome"]["state"], "accepted");
+        assert_eq!(
+            checked["value"]["investigationOutcome"]["state"],
+            "accepted"
+        );
+        assert_eq!(
+            checked["value"]["investigationOutcome"]["operationId"],
+            child
+        );
+    }
+    let state = fixture.state.lock().unwrap();
+    assert_eq!(
+        state.feedback_posts, 2,
+        "one feedback save and one exact investigation, never another start"
+    );
+    assert_eq!(state.feedback["items"][0]["work"][0]["kind"], "triage");
+}
+
+#[test]
+fn correction_lost_reply_reopens_and_checks_without_another_send() {
+    let mut fixture = InventoryFixture::new();
+    fixture.state.lock().unwrap().lose_feedback_reply = true;
+    let digest = "d".repeat(64);
+    let first = fixture.f.run(&format!("return await call('day.feedback.step', {{action:'correct',feedbackId:'f1',triageSessionId:'triage-1',proposalDigest:'{digest}',message:'Restart, not navigation 日本語'}});"), Fixture::caps());
+    assert_eq!(first["value"]["outcome"]["state"], "unknown");
+    let id = first["value"]["operations"][0]["operationId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        first["value"]["operations"][0]["replyKey"],
+        format!("triage-1/correction-{digest}")
+    );
+    let blocked = fixture.f.run(&format!("return await call('day.feedback.step', {{action:'correct',feedbackId:'f1',triageSessionId:'triage-1',proposalDigest:'{digest}',message:'Other correction'}});"), Fixture::caps());
+    assert_eq!(blocked["error"], "unknown");
+    assert_eq!(fixture.f.bridge.close().recv_blocking().unwrap(), Ok(()));
+    fixture.f.host = NativeHost::open(
+        Source {
+            profile: fixture.f.path.join("missing-profile"),
+            port: fixture.port,
+            home: Home {
+                daemon_id: "synthetic-daemon".into(),
+                lineage_id: "synthetic-lineage".into(),
+            },
+            project: Some(pilot_day_native::host::Project {
+                project_id: "synthetic-project".into(),
+                project_path: fixture.f.path.display().to_string(),
+            }),
+        },
+        fixture.f.path.join("journal"),
+    )
+    .unwrap();
+    fixture.f.bridge = Bridge::new(DayRoot::new(fixture.f.host.clone()));
+    let _ = fixture.f.host.read_planning_inventory().recv_blocking();
+    fixture.wait(|p| p.availability == PlanAvailability::Live);
+    let checked = fixture.f.run(
+        &format!("return await call('day.feedback.check', {{operationId:'{id}'}});"),
+        Fixture::caps(),
+    );
+    assert_eq!(checked["value"]["outcome"]["state"], "accepted");
+    assert_eq!(checked["value"]["operations"], json!([]));
+    assert_eq!(
+        checked["value"]["outcome"]["receipt"]["result"]["text"],
+        "Restart, not navigation 日本語"
+    );
+    let state = fixture.state.lock().unwrap();
+    assert_eq!(state.feedback_posts, 1);
     assert_eq!(state.feedback_lookups, 1);
 }
 

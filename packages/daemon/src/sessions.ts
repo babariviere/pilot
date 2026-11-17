@@ -4,6 +4,7 @@ import { type ChildProcess, fork } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -518,6 +519,8 @@ interface SessionMeta extends OutcomeMeta {
 	fundingId?: string;
 	fundingMissionId?: string;
 	fundingRequired?: true;
+	/** Host-admitted automatic feedback investigations share the configured daily allowance. */
+	fundingBackground?: true;
 	continuedTo?: string;
 	/** A committed handoff is rolled forward before this chat may start. */
 	continuationPending?: boolean;
@@ -1684,6 +1687,7 @@ export class SessionManager {
 	private internetOnline?: boolean;
 	private internetObservedAt?: number;
 	private telemetry?: KernelTelemetryConfiguration;
+	private diagnosticControlsEpoch = 0;
 	/** Host-local diagnostic comparison only. Never sent to a worker or consulted by admission/execution paths. */
 	private aiUsageBudget?: AIUsageBudget;
 	/** Ephemeral input contexts. Never written into session metadata; bounded loss after restart is intentional. */
@@ -1702,6 +1706,7 @@ export class SessionManager {
 
 	configureTelemetry(configuration: KernelTelemetryConfiguration, aiUsageBudget?: AIUsageBudget): void {
 		const previous = this.telemetry;
+		if ((previous?.localDiagnostics ?? true) !== configuration.localDiagnostics) this.diagnosticControlsEpoch++;
 		this.telemetry = { ...configuration };
 		this.aiUsageBudget = aiUsageBudget ? { ...aiUsageBudget } : undefined;
 		this.lifecycle.setEnabled(configuration.localDiagnostics);
@@ -7068,6 +7073,7 @@ ${run.excerpt}`,
 				id: meta.planning?.missionId ?? meta.fundingMissionId ?? member!.missionId,
 				projectId: meta.projectId,
 			};
+		if (meta.fundingBackground) return { kind: "background", id: "daily", projectId: meta.projectId };
 		return { kind: "quick_fix", id: meta.fundingId ?? id, projectId: meta.projectId };
 	}
 	/** Native-created work is metered; old desktop work keeps its existing controls until migration. */
@@ -7539,6 +7545,7 @@ ${run.excerpt}`,
 		target.fundingId = source.fundingId ?? source.id;
 		if (source.fundingMissionId) target.fundingMissionId = source.fundingMissionId;
 		if (source.fundingRequired) target.fundingRequired = true;
+		if (source.fundingBackground) target.fundingBackground = true;
 		if (source.planning || target.planning)
 			throw new Conflict("Planning profile cannot transfer to an ordinary chat");
 		if (source.role === "insights" || source.insightsGrant || target.role === "insights" || target.insightsGrant)
@@ -7885,6 +7892,43 @@ ${run.excerpt}`,
 			throw new Conflict("Restore the archived session before accessing its workspace");
 	}
 
+	/** Host-owned locations, including configured stores outside the default pi directory. */
+	private feedbackDeniedPaths(): string[] {
+		const home = homedir();
+		const config = process.env.XDG_CONFIG_HOME || join(home, ".config");
+		const agents = [this.agentDir ?? getAgentDir(), this.credentials?.agentDir].filter(
+			(path): path is string => !!path,
+		);
+		return [
+			...new Set(
+				[
+					...agents.flatMap((agent) =>
+						["auth.json", "mcp-auth.json", ".pilot-credential-journal.json"].map((name) => join(agent, name)),
+					),
+					join(this.home, "github-app-capability"),
+					join(this.home, "github-app-capability.tmp"),
+					join(this.home, "github-setup"),
+					join(home, ".ssh"),
+					join(home, ".aws"),
+					join(home, ".kube"),
+					join(home, ".git-credentials"),
+					join(home, ".netrc"),
+					join(home, ".npmrc"),
+					join(home, ".pypirc"),
+					join(home, ".docker", "config.json"),
+					join(home, "Library", "Keychains"),
+					process.env.GH_CONFIG_DIR || join(config, "gh"),
+					join(config, "gcloud"),
+					...[
+						process.env.AWS_SHARED_CREDENTIALS_FILE,
+						process.env.AWS_CONFIG_FILE,
+						process.env.GOOGLE_APPLICATION_CREDENTIALS,
+					].filter((path): path is string => !!path),
+				].map((path) => resolve(path)),
+			),
+		];
+	}
+
 	/** Corrupt metadata must never silently reopen an Ask chat as an unrestricted Build kernel. */
 	private validateMode(meta: SessionMeta, prepared = false): void {
 		if (meta.role !== undefined && meta.role !== "diagnostics" && meta.role !== "insights")
@@ -8039,6 +8083,44 @@ ${run.excerpt}`,
 				))
 		)
 			throw new Error("Invalid feedback image context");
+		if (
+			ask.feedbackSources !== undefined &&
+			(!Array.isArray(ask.feedbackSources) ||
+				ask.feedbackSources.length > 8 ||
+				ask.feedbackSources.some(
+					(source) =>
+						!source ||
+						typeof source !== "object" ||
+						Array.isArray(source) ||
+						Object.keys(source).sort().join() !== "dev,ino,kind,path" ||
+						typeof source.path !== "string" ||
+						!source.path.startsWith("/") ||
+						source.path.length > 4096 ||
+						source.path.includes("\0") ||
+						resolve(source.path) !== source.path ||
+						source.path === "/" ||
+						source.path === homedir() ||
+						(source.kind !== "file" && source.kind !== "directory") ||
+						!Number.isSafeInteger(source.dev) ||
+						source.dev < 0 ||
+						!Number.isSafeInteger(source.ino) ||
+						source.ino < 0,
+				))
+		)
+			throw new Error("Invalid feedback source context");
+		if (
+			ask.feedbackDeniedPaths !== undefined &&
+			(!Array.isArray(ask.feedbackDeniedPaths) ||
+				ask.feedbackDeniedPaths.some(
+					(path) =>
+						typeof path !== "string" ||
+						!path.startsWith("/") ||
+						path.length > 4096 ||
+						path.includes("\0") ||
+						resolve(path) !== path,
+				))
+		)
+			throw new Error("Invalid feedback protected-path context");
 		if (ask.branch === undefined) {
 			if (ask.gitDir !== undefined || ask.commit !== undefined || meta.preparing)
 				throw new Error("Invalid Ask checkout context");
@@ -8118,6 +8200,8 @@ ${run.excerpt}`,
 		feedbackImages?: string[],
 		job?: ChatJob,
 		fundingRequired = false,
+		fundingBackground = false,
+		feedbackSources?: AskContext["feedbackSources"],
 	): Promise<SessionSummary> {
 		guard?.();
 		this.insightsBacklog?.replacements.assertNotRetired(targetId);
@@ -8153,7 +8237,7 @@ ${run.excerpt}`,
 					request,
 					false,
 					mission?.taskIds,
-					{ targetId, operationId, fundingRequired },
+					{ targetId, operationId, fundingRequired, fundingBackground },
 					mission?.admission,
 					undefined,
 					undefined,
@@ -8165,6 +8249,7 @@ ${run.excerpt}`,
 					mission ? guard : undefined,
 					feedbackImages,
 					job,
+					feedbackSources,
 				);
 			return this.repairProject.withBinding(request.diagnosticRepair.binding, async () => {
 				this.assertDiagnosticRepairAdmission(request);
@@ -9502,7 +9587,7 @@ ${run.excerpt}`,
 		request: SpawnRequest,
 		coordinator: boolean,
 		taskId?: string | string[],
-		admission?: { targetId: string; operationId: string; fundingRequired?: boolean },
+		admission?: { targetId: string; operationId: string; fundingRequired?: boolean; fundingBackground?: boolean },
 		missionAdmission?: MissionSpawnAdmission,
 		insightsGrant?: InsightsGrant,
 		flowAdmission?: { rootId: string; flow?: FlowState },
@@ -9514,6 +9599,7 @@ ${run.excerpt}`,
 		dispatchGuard?: () => void,
 		feedbackImages?: string[],
 		job?: ChatJob,
+		feedbackSources?: AskContext["feedbackSources"],
 	): Promise<SessionSummary> {
 		if (admission) this.insightsBacklog?.replacements.assertNotRetired(admission.targetId);
 		// Read before admission's synchronous checks. A planning worker started while limits are off stays unlimited.
@@ -9678,6 +9764,8 @@ ${run.excerpt}`,
 				throw new Conflict("A main view reader requires an Ask project chat");
 			cwd = await this.currentMainView(project.id);
 		}
+		const feedbackAsk = mode === "ask" && (feedbackSources !== undefined || admission?.fundingBackground);
+		if (feedbackAsk) cwd = await realpath(cwd);
 		const model = request.model?.trim() || project?.model;
 		const now = Date.now();
 		const id = admission?.targetId ?? randomUUID();
@@ -9728,9 +9816,13 @@ ${run.excerpt}`,
 		let ask: AskContext | undefined;
 		if (mode === "ask") {
 			ask =
-				missionAdmission?.mainView || project?.sourceCopy === "jj"
+				feedbackAsk || missionAdmission?.mainView || project?.sourceCopy === "jj"
 					? { source: cwd, sourceOnly: true }
-					: { source: cwd, ...(feedbackImages?.length ? { feedbackImages } : {}) };
+					: { source: cwd };
+			if (feedbackImages?.length) ask.feedbackImages = structuredClone(feedbackImages);
+			if (feedbackSources?.length) ask.feedbackSources = structuredClone(feedbackSources);
+			if (feedbackSources !== undefined || admission?.fundingBackground)
+				ask.feedbackDeniedPaths = this.feedbackDeniedPaths();
 			if (request.baseBranch !== undefined) {
 				ask = { ...ask, branch: request.baseBranch, gitDir: join(this.dir(id), "ask.git") };
 				preparing = { source: cwd, baseBranch: request.baseBranch };
@@ -9778,6 +9870,7 @@ ${run.excerpt}`,
 				: {}),
 			...(admission ? { createOperationId: admission.operationId } : {}),
 			...(admission?.fundingRequired || plannedFunding ? { fundingRequired: true as const } : {}),
+			...(admission?.fundingBackground ? { fundingBackground: true as const } : {}),
 			...(request.missionId &&
 			[...this.metas.values()].some((m) => m.planning?.missionId === request.missionId && m.fundingRequired)
 				? { fundingRequired: true as const, fundingMissionId: request.missionId }
@@ -11363,6 +11456,44 @@ ${run.excerpt}`,
 		return result;
 	}
 
+	/** Feedback grants come only from the exact saved operation, never model-supplied provenance. */
+	private feedbackLogTarget(caller: SessionMeta, sessionId: string): SessionMeta {
+		this.validateMode(caller);
+		const feedback = caller.createOperationId
+			? this.feedbackMetricsScope?.(caller.createOperationId, caller.id)
+			: undefined;
+		if (!feedback)
+			throw new Conflict(
+				"Only a diagnostics specialist, confirmed repair or saved feedback investigation may read Pilot logs",
+			);
+		const project = caller.projectId ? this.projects.get(caller.projectId) : undefined;
+		const target = this.metas.get(sessionId);
+		const origin = feedback.origin;
+		const member = origin?.kind === "mission" ? this.missions?.membership(sessionId) : undefined;
+		if (
+			!project ||
+			!target ||
+			caller.role ||
+			caller.archivedAt !== undefined ||
+			caller.delegationFenced ||
+			caller.continuedTo ||
+			this.closing ||
+			target.archivedAt !== undefined ||
+			target.projectId !== project.id ||
+			!(
+				sessionId === caller.id ||
+				(origin?.projectId === project.id &&
+					(origin.kind === "chat"
+						? origin.sessionId === sessionId
+						: member?.active &&
+							member.missionId === origin.missionId &&
+							this.missions!.spawnProject(origin.missionId) === project.id))
+			)
+		)
+			throw new Conflict("Log target is outside saved feedback scope");
+		return target;
+	}
+
 	/** Fixed-host catalogue read for one persisted diagnostics role. Never starts or subscribes to the target. */
 	private async diagnosticLogsCall(
 		specialist: SessionMeta,
@@ -11371,8 +11502,27 @@ ${run.excerpt}`,
 	): Promise<DiagnosticLogResult> {
 		this.validateMode(specialist);
 		const repair = this.repairDiagnosticSubject(specialist);
-		if (specialist.role !== "diagnostics" && !repair)
-			throw new Conflict("Only a diagnostics specialist or a confirmed repair may read Pilot logs");
+		if (specialist.role !== "diagnostics" && !repair) {
+			const { sessionId = specialist.id, ...read } = request;
+			const target = this.feedbackLogTarget(specialist, sessionId);
+			const host = this.diagnosticHost;
+			if (!host) throw new Conflict("Diagnostic host identity is unavailable");
+			const epoch = this.diagnosticControlsEpoch;
+			const result = await this.diagnosticLogs.call(
+				host,
+				{ sessionId: target.id, directory: this.dir(target.id) },
+				this.telemetry?.localDiagnostics ?? true,
+				read,
+				signal,
+				false,
+				new Set(["lifecycle", "request_timing", "tool_activity"]),
+			);
+			this.feedbackLogTarget(specialist, sessionId);
+			if (signal?.aborted || epoch !== this.diagnosticControlsEpoch || this.diagnosticHost !== host)
+				throw new Conflict("Feedback log scope or diagnostics controls changed during the read");
+			return result;
+		}
+		if (request.sessionId !== undefined) throw new Conflict("Diagnostic logs use their pinned target");
 		if (!this.diagnosticHost) throw new Conflict("Diagnostic host identity is unavailable");
 		if (specialist.role === "diagnostics") this.diagnosticExecutionHost(specialist);
 		const pinned =
@@ -12903,6 +13053,12 @@ ${run.excerpt}`,
 						? { liveUpdateProposals: true }
 						: {}),
 					...(repairDiagnostics ? { repairDiagnostics } : {}),
+					...(!meta.role &&
+					!repairDiagnostics &&
+					meta.createOperationId &&
+					this.feedbackMetricsScope?.(meta.createOperationId, id)
+						? { feedbackLogs: true }
+						: {}),
 					...(usageHistory ? { usageHistory } : {}),
 					...(usageMission ? { usageMission } : {}),
 					...(meta.role ||
@@ -12935,7 +13091,24 @@ ${run.excerpt}`,
 						...(meta.role ? { role: meta.role } : {}),
 						...(diagnosticTarget ? { diagnosticTarget } : {}),
 						...(meta.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true } : {}),
-						...(meta.ask ? { ask: meta.ask } : {}),
+						...(meta.ask
+							? {
+									ask:
+										meta.fundingBackground ||
+										meta.ask.feedbackSources !== undefined ||
+										(meta.createOperationId && this.feedbackMetricsScope?.(meta.createOperationId, meta.id))
+											? {
+													...meta.ask,
+													feedbackDeniedPaths: [
+														...new Set([
+															...(meta.ask.feedbackDeniedPaths ?? []),
+															...this.feedbackDeniedPaths(),
+														]),
+													],
+												}
+											: meta.ask,
+								}
+							: {}),
 						...(meta.job ? { job: meta.job } : {}),
 						...(meta.workspace ? { workspace: meta.workspace } : {}),
 						...(meta.coordinatorView

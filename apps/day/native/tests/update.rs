@@ -75,7 +75,10 @@ fn view() -> SavedView {
 
 #[test]
 fn deferred_feedback_round_trips_and_old_windows_default_to_none() {
-    let original = view();
+    let mut original = view();
+    original
+        .feedback_later
+        .push(format!("f3/op3/done-{}", "b".repeat(64)));
     let mut json = serde_json::to_value(&original).unwrap();
     let restored: SavedView = nsh_core::element::from_json(&json).unwrap();
     assert_eq!(restored.feedback_later, original.feedback_later);
@@ -87,6 +90,23 @@ fn deferred_feedback_round_trips_and_old_windows_default_to_none() {
         let mut invalid = view();
         invalid.feedback_later = vec![key.into()];
         assert!(!invalid.feedback_valid(), "{key}");
+    }
+}
+
+#[test]
+fn correction_draft_round_trips_with_its_exact_explanation() {
+    let mut saved = view();
+    saved.feedback_answers = vec![format!(
+        "triage-1/correction-{}\n\n  Restart, not navigation 日本語",
+        "a".repeat(64)
+    )];
+    assert!(saved.feedback_valid());
+    let json = serde_json::to_value(&saved).unwrap();
+    let restored: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert_eq!(restored.feedback_answers, saved.feedback_answers);
+    for key in ["correction-x", "correction-", "../path", "0"] {
+        saved.feedback_answers = vec![format!("triage-1/{key}\n\ntext")];
+        assert!(!saved.feedback_valid());
     }
 }
 
