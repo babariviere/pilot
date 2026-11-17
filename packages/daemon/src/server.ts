@@ -2052,6 +2052,19 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			const mission = missions.service.lifecycle(parts[2]!, write);
 			return json(res, 200, { operationId: write.operationId, mission });
 		}
+		if (
+			missions &&
+			parts[1] === "missions" &&
+			parts.length === 5 &&
+			parts[3] === "successor" &&
+			parts[4] === "preview"
+		) {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+			if (!nativeAuthority || !nativePlanning) throw new ServiceUnavailable("Mission re-planning unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			return json(res, 200, await nativePlanning.successorPreview(parts[2]!));
+		}
 		if (missions && parts[1] === "missions" && parts.length === 4 && parts[3] === "successor") {
 			// Stop re-planning. Only the link changes; both missions stay as they are.
 			res.setHeader("cache-control", "no-store");

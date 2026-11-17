@@ -19,6 +19,7 @@ function proposal(store: MissionStore, id: string, delta: MissionRevisionDelta) 
 }
 function pauseFixture(store: MissionStore, id: string) {
 	const current = store.controls.current(id);
+	const operationId = randomUUID();
 	store.controls.write(
 		{
 			version: 1,
@@ -27,15 +28,21 @@ function pauseFixture(store: MissionStore, id: string) {
 			ownerFence: "synthetic",
 			command: {
 				version: 1,
-				operationId: randomUUID(),
+				operationId,
 				home: { daemonId: "test", lineageId: "test" },
 				projectId: store.require(id).projectId,
 				coordinatorSessionId: store.require(id).coordinatorSessionId ?? null,
 				expectedRevision: current.revision,
 				action: "pause",
 			},
-			control: { ...current, revision: current.revision + 1, held: true, state: "paused" },
-			members: [],
+			control: {
+				...current,
+				revision: current.revision + 1,
+				held: true,
+				state: "paused",
+				pauseOperationId: operationId,
+			},
+			members: store.members(id).map((sessionId) => ({ sessionId, state: "paused" })),
 		},
 		current.revision,
 	);
@@ -283,11 +290,8 @@ test("a revision adds new tasks in order, with dependencies on existing and earl
 		tasks: [{ id: "3", title: "Export" }],
 		newTasks: [{ key: "x", title: "X", body: "B" }],
 	});
-	await assert.rejects(
-		store.revisions.confirm(id, edit.id, { digest: edit.digest, humanSource: "user:answer" }),
-		/Pause/,
-		"any other change still needs Pause",
-	);
+	await store.revisions.confirm(id, edit.id, { digest: edit.digest, humanSource: "user:answer" });
+	assert.equal(store.controls.current(id).held, false, "editing unowned independent tasks needs no Pause");
 });
 
 test("task progress does not stale a revision that only adds tasks; a dropped dependency does", async (t) => {

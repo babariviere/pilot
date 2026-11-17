@@ -16,6 +16,7 @@ pub(crate) mod intake;
 mod inventory;
 mod journal;
 pub(crate) mod knowledge;
+pub(crate) mod migration;
 pub(crate) mod model_controls;
 #[cfg(target_os = "macos")]
 mod native_clock;
@@ -751,7 +752,7 @@ impl NativeHost {
         self.request(Work::CheckPlanning(operation_id))
     }
     /// Passive authenticated profile discovery for a fresh New screen. No enrollment.
-    /// Refuses to replace an uncertain intent; recovery uses only `check_planning`.
+    /// Keeps uncertain intents for exact lookup; never replaces or replays them.
     pub fn prepare_planning(&self) -> Receiver<Result<IntentOutcome, Error>> {
         self.request(Work::PreparePlanning)
     }
@@ -1020,7 +1021,7 @@ async fn qualify_planning(
     }
     if matches!(
         request["purpose"].as_str(),
-        Some("revision-preview" | "revision-confirm")
+        Some("revision-preview" | "revision-confirm" | "revision-pause")
     ) {
         let revision = &read["revision"];
         let pending = &revision["pending"]["proposal"];
@@ -1029,6 +1030,21 @@ async fn qualify_planning(
             || pending["id"] != request["proposalId"]
             || pending["digest"] != request["digest"]
             || (request["purpose"] == "revision-confirm" && revision["pending"]["current"] != true)
+        {
+            return Err(Error::Stale);
+        }
+        return Ok(());
+    }
+    if request["purpose"] == "revision-resume" {
+        if read["revision"]["source"] != digest
+            || request["source"] != digest
+            || !read["revision"]["workPauses"]
+                .as_array()
+                .is_some_and(|all| {
+                    all.iter().any(|p| {
+                        p["operationId"] == request["pauseOperationId"] && p["state"] == "paused"
+                    })
+                })
         {
             return Err(Error::Stale);
         }

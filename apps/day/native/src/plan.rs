@@ -66,6 +66,9 @@ pub enum PlanAvailability {
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Setup {
+    /// Pending creations stay visible until their exact receipt settles.
+    #[prop(default)]
+    pub creations: Vec<NewCreation>,
     /// Catalog-value default shown before planning. No default means the user must choose.
     #[prop(default)]
     pub allowance_micros: Option<u64>,
@@ -83,6 +86,15 @@ pub struct Setup {
     /// An earlier creation from this window is not confirmed. It can be
     /// checked; it does not block a new one.
     pub unconfirmed: bool,
+}
+
+/// One uncertain creation, supplied by the native journal, never a new operation.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewCreation {
+    pub operation_id: String,
+    pub goal: String,
+    pub project_id: String,
 }
 
 /// Where a mission's planning is.
@@ -935,6 +947,15 @@ pub enum ConfirmState {
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Revision {
+    /// This service supports exact affected-work checkpoints.
+    #[prop(default)]
+    pub selective_pause: bool,
+    /// Assignment owners affected by the reviewed revision, including dependent work.
+    #[prop(default)]
+    pub affected_work: u32,
+    /// Canonical affected task labels, including real dependents.
+    #[prop(default)]
+    pub affected_tasks: Vec<String>,
     /// Stable for the revision's life.
     pub id: String,
     /// Changes when any part changes. A confirmation names it.
@@ -993,6 +1014,9 @@ pub struct RevisionLine {
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Revisit {
+    /// A saved selective checkpoint still holding work, if any. No automatic release.
+    #[prop(default)]
+    pub paused_work: Option<RevisionPause>,
     /// Whether a Revisit can be used here.
     pub available: bool,
     /// Why not, when unavailable. Empty otherwise.
@@ -1015,6 +1039,24 @@ pub struct Revisit {
     pub revision: Option<Revision>,
     /// Confirmed revisions, newest first.
     pub history: Vec<RevisionLine>,
+}
+
+/// The exact selective checkpoint shown for explicit release or passive lookup.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionPause {
+    pub operation_id: String,
+    pub state: String,
+    pub members: u32,
+}
+
+/// Release only the exact selective checkpoint the native read showed.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct ResumeRevisionIntent {
+    pub mission_id: String,
+    pub pause_operation_id: String,
 }
 
 /// Ask Pilot to revisit a mission: compare it with what was agreed, and
@@ -1243,6 +1285,9 @@ pub struct RevisionRef {
 #[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct NewIntent {
+    /// Explicitly create a separate mission despite a similar uncertain request.
+    #[prop(default)]
+    pub create_another: bool,
     /// Explicit lifetime mission allowance; never a provider bill.
     #[prop(default)]
     pub allowance_micros: Option<u64>,

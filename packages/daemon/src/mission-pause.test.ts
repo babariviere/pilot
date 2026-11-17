@@ -6,9 +6,11 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import type { MissionControlCommand } from "@pilot/protocol";
+import { ActionRunner } from "./automation-runner.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ProjectStore } from "./projects.ts";
+import { pauseRevisionWork, resumeRevisionWork } from "./revision-work-pause.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
@@ -270,6 +272,44 @@ test("Stop during durable mission resume admission vetoes worker creation", asyn
 	assert.equal(f.opened.filter((id) => id === f.a.id).length, 1);
 });
 
+test("revision source change inside durable session Resume vetoes worker admission", async (t) => {
+	const f = await fixture(t);
+	const source = f.store.revisions.source(f.mission.id);
+	const proposal = await f.store.revisions.propose(
+		f.mission.id,
+		{ operationId: randomUUID(), source, summary: "Reviewed goal", delta: { goal: "New goal" } },
+		{},
+	);
+	const pause = await pauseRevisionWork(f.store, f.sessions, f.mission.id, {
+		operationId: randomUUID(),
+		proposalId: proposal.id,
+		digest: proposal.digest,
+		source,
+	});
+	assert.equal(pause.state, "paused", pause.reason ?? "");
+	const internal = f.sessions as unknown as {
+		save(meta: { lifecycleCheckpoint?: { phase: string } }, ...args: unknown[]): Promise<void>;
+	};
+	const save = internal.save;
+	let changed = false;
+	t.mock.method(internal, "save", async (meta: { lifecycleCheckpoint?: { phase: string } }, ...args: unknown[]) => {
+		await save.call(f.sessions, meta, ...args);
+		if (!changed && meta.lifecycleCheckpoint?.phase === "resume-admitted") {
+			changed = true;
+			f.store.update(f.mission.id, { goal: "Concurrent goal" });
+		}
+	});
+	const result = await resumeRevisionWork(f.store, f.sessions, f.mission.id, {
+		operationId: randomUUID(),
+		pauseOperationId: pause.operationId,
+		source,
+	});
+	assert.equal(changed, true);
+	assert.equal(result.state, "unknown");
+	assert.equal(f.opened.filter((id) => id === f.a.id).length, 1);
+	assert.equal(f.service.controls.fence(f.a.id)?.held, true);
+});
+
 test("cold queued input is admission-only, never a fabricated kernel census", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-mission-queue-")),
 		id = randomUUID();
@@ -334,3 +374,53 @@ test("cold queued input is admission-only, never a fabricated kernel census", as
 		["original"],
 	);
 });
+
+for (const race of ["interrupted-action", "changed-fence"] as const) {
+	test(`cold checkpoint refuses ${race} before successful held return`, async (t) => {
+		const home = await mkdtemp(join(tmpdir(), "pilot-cold-checkpoint-")),
+			id = randomUUID();
+		const directory = join(home, "sessions", id);
+		await mkdir(directory, { recursive: true });
+		await writeFile(
+			join(directory, "meta.json"),
+			JSON.stringify({ id, cwd: home, title: "Cold", createdAt: 1, updatedAt: 1 }),
+		);
+		const fence = { missionId: "mission", pauseGeneration: 1, stopGeneration: 0, held: true };
+		let current = { ...fence },
+			active = false;
+		const actions = new ActionRunner();
+		const sessions = new SessionManager(
+			home,
+			new ProjectStore(home),
+			undefined,
+			{ title: async () => undefined },
+			{},
+			{ ...offlineSessionOptions(), actionRunner: actions },
+		);
+		sessions.setMissionBridge({
+			upgradeResumeFence: () => current,
+			membership: () => ({ missionId: "mission", active: true }),
+			context: () => undefined,
+			spawnProject: () => home,
+			joinSpawn() {},
+			call: async () => undefined,
+		});
+		t.after(async () => {
+			await sessions.shutdown();
+			await rm(home, { recursive: true, force: true });
+		});
+		await sessions.load();
+		active = race === "interrupted-action";
+		t.mock.method(actions, "isWorking", () => active);
+		t.mock.method(actions, "checkpointSession", async () => {
+			active = false;
+			if (race === "changed-fence") current = { ...fence, stopGeneration: 1 };
+		});
+		await assert.rejects(
+			sessions.checkpointMission(id, randomUUID(), fence),
+			race === "interrupted-action" ? /Interrupted shell effects/ : /fence changed/,
+		);
+		const saved = JSON.parse(await readFile(join(directory, "meta.json"), "utf8"));
+		assert.equal(saved.lifecycleCheckpoint?.quiescent, undefined);
+	});
+}

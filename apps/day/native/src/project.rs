@@ -638,6 +638,7 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
         .filter(|d| d.mission.planning_version.is_none())
         .map_or_else(String::new, |d| replan_draft(d, &problems));
     let link = |l: &c::SuccessorLink| MissionLink {
+        state: l.state.clone(),
         mission_id: l.mission_id.clone(),
         title: inputs
             .overview
@@ -649,7 +650,14 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
             .map_or_else(String::new, |m| m.title.clone()),
     };
     let replanning_as = mission.successor.as_ref().filter(|l| l.open()).map(link);
-    let replaces = mission.replaces.as_ref().filter(|l| l.open()).map(link);
+    let replaces = mission
+        .replaces
+        .as_ref()
+        .filter(|l| l.state == "planning" || l.state == "finished")
+        .map(link);
+    let replan_context = detail
+        .filter(|d| d.mission.planning_version.is_none())
+        .map_or_else(Vec::new, |d| replan_parts(d, &problems));
     Some(MissionPage {
         row,
         goal: detail.map_or_else(String::new, |d| d.mission.goal.clone()),
@@ -663,6 +671,7 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
         freshness,
         problems,
         can_replan: !replan_draft.is_empty() && replanning_as.is_none(),
+        replan_context,
         replan_draft,
         replanning_as,
         replaces,
@@ -676,7 +685,32 @@ const REPLAN_MAX: usize = crate::plan_desk::MAX_TEXT;
 /// the brief, decisions in force, open tasks, unfinished work and Linear
 /// ticket as fits. The user edits it before planning; nothing is sent here.
 pub fn replan_draft(detail: &c::MissionDetail, problems: &[Problem]) -> String {
-    fn section(out: &mut String, title: &str, lines: impl Iterator<Item = String>, cap: usize) {
+    let mut out = replan_parts(detail, problems)
+        .iter()
+        .map(|s| {
+            if s.title.is_empty() {
+                s.text.clone()
+            } else {
+                format!("\n{}\n{}", s.title, s.text)
+            }
+        })
+        .collect::<String>();
+    if out.chars().count() > REPLAN_MAX {
+        out = out.chars().take(REPLAN_MAX - 1).collect::<String>() + "…";
+    }
+    out
+}
+
+fn replan_parts(
+    detail: &c::MissionDetail,
+    problems: &[Problem],
+) -> Vec<crate::model::ReplanContext> {
+    fn section(
+        out: &mut Vec<crate::model::ReplanContext>,
+        title: &str,
+        lines: impl Iterator<Item = String>,
+        cap: usize,
+    ) {
         let mut body = String::new();
         for line in lines {
             if body.chars().count() + line.chars().count() + 1 > cap {
@@ -687,7 +721,10 @@ pub fn replan_draft(detail: &c::MissionDetail, problems: &[Problem]) -> String {
             body.push('\n');
         }
         if !body.is_empty() {
-            out.push_str(&format!("\n{title}\n{body}"));
+            out.push(crate::model::ReplanContext {
+                title: title.into(),
+                text: body,
+            });
         }
     }
     let cut = |text: &str, n: usize| -> String {
@@ -700,12 +737,16 @@ pub fn replan_draft(detail: &c::MissionDetail, problems: &[Problem]) -> String {
     };
     let mission = &detail.mission;
     // The first line is the new mission's title, so a re-plan keeps its name.
-    let mut out = format!(
+    let goal = format!(
         "{}\n\nRe-plan the old mission “{}” as a new mission. Keep what still matters and drop the rest.\n\nGoal: {}\n",
         cut(&mission.title, 80),
         mission.title,
         cut(&mission.goal, 600)
     );
+    let mut out = vec![crate::model::ReplanContext {
+        title: String::new(),
+        text: goal,
+    }];
     let brief = detail
         .brief
         .as_ref()
@@ -776,9 +817,6 @@ pub fn replan_draft(detail: &c::MissionDetail, problems: &[Problem]) -> String {
             }),
         200,
     );
-    if out.chars().count() > REPLAN_MAX {
-        out = out.chars().take(REPLAN_MAX - 1).collect::<String>() + "…";
-    }
     out
 }
 

@@ -498,7 +498,7 @@ impl PlanFeed {
     }
 
     /// Reads the selected planning setup for New. No enrollment or provider call.
-    /// An uncertain prior creation blocks a new identity until its exact lookup settles.
+    /// Uncertain identities stay checkable; unrelated requests may prepare independently.
     pub async fn prepare_new(this: Instance<Self>) -> PlanOutcome {
         let Some(side) = this.with(|f| f.native.clone()) else {
             return outcome(OutcomeStatus::Accepted, "", None);
@@ -762,6 +762,50 @@ impl PlanFeed {
         )
     }
 
+    /// Checkpoints only affected work for the exact revision shown.
+    pub async fn pause_revision(
+        this: Instance<Self>,
+        intent: ConfirmRevisionIntent,
+    ) -> PlanOutcome {
+        let Some(side) = this.with(|f| f.native.clone()) else {
+            return outcome(
+                OutcomeStatus::Rejected,
+                "This fixture uses a mission-wide pause.",
+                None,
+            );
+        };
+        Self::host_write(
+            &this,
+            side,
+            |read| crate::plan_revision_host::pause(read, &intent),
+            |_, _| (),
+            "Affected work paused. The revision is not applied yet.",
+        )
+        .await
+    }
+
+    /// Explicit release of one exact selective checkpoint. Never automatic after apply.
+    pub async fn resume_revision(
+        this: Instance<Self>,
+        intent: crate::plan::ResumeRevisionIntent,
+    ) -> PlanOutcome {
+        let Some(side) = this.with(|f| f.native.clone()) else {
+            return outcome(
+                OutcomeStatus::Rejected,
+                "No selective checkpoint in this fixture.",
+                None,
+            );
+        };
+        Self::host_write(
+            &this,
+            side,
+            |read| crate::plan_revision_host::resume(read, &intent),
+            |_, _| (),
+            "Affected work released. Other holds still apply.",
+        )
+        .await
+    }
+
     /// Confirms one revision exactly as shown: its id and digest. It applies
     /// only while the mission is what Pilot revised. It changes the agreement
     /// and open tasks; it resumes, starts and permits nothing. A lost answer
@@ -800,7 +844,13 @@ impl PlanFeed {
                 .find(|o| {
                     matches!(
                         o["kind"].as_str(),
-                        Some("plan-revisit" | "revision-preview" | "revision-confirm")
+                        Some(
+                            "plan-revisit"
+                                | "revision-preview"
+                                | "revision-confirm"
+                                | "revision-pause"
+                                | "revision-resume"
+                        )
                     ) && matches!(o["state"].as_str(), Some("pending" | "unknown"))
                         && (intent.revision_id.is_empty() || o["proposalId"] == intent.revision_id)
                 });

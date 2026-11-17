@@ -21,6 +21,7 @@ import {
 } from "./ui";
 
 export type InterviewAnswerView = {
+	deferred?: boolean;
 	choice: string | null | undefined;
 	/** Optional multi-select adapter. Mission interviews remain single-choice. */
 	choices?: string[];
@@ -53,6 +54,8 @@ export type InterviewCommand =
 	| { kind: "check" }
 	| { kind: "help"; questionId: string; help: string };
 export interface InterviewSource {
+	/** Optional mission-only deferral; never a saved answer or submission. */
+	defer?: (question: Question) => void;
 	read(): InterviewRead;
 	dispatch(command: InterviewCommand): void;
 	helpKeys?: Record<string, string>;
@@ -237,6 +240,11 @@ function QuestionView(props: {
 				{q().prompt}
 			</Text>
 			<If when={!locked()}>{props.source.questionHelp?.(q(), key)}</If>
+			<If when={answerView(props.source, q()).deferred}>
+				<Text class="text-sm text-muted-foreground">
+					Decide later. Your draft stays; choose or edit an answer when ready.
+				</Text>
+			</If>
 			<If when={q().state === "changed"}>
 				<Panel size="sm" class="gap-0.5">
 					<Text class="text-sm text-needs-ink">This question changed after you answered. Answer it again.</Text>
@@ -379,6 +387,7 @@ function submitLine(interview: Interview): string {
 
 /** The answer to `question` in words, for the answers page. */
 function answerWords(source: InterviewSource, question: Question): string {
+	if (answerView(source, question).deferred) return "Decide later. Draft kept; decision still open.";
 	if (question.state === "changed" && !answerView(source, question).unsaved) return "Changed. Answer it again.";
 	const choice = answerView(source, question).choice;
 	const answer = answerView(source, question);
@@ -665,6 +674,20 @@ export function InterviewRenderer(props: { source: InterviewSource; anchor?: (no
 				</Each>
 				<View class="flex-row flex-wrap items-center gap-2 border-t border-border pt-4">
 					<Action label="‹ Back" disabled={number() <= 1} onPress={() => step(props.source, -1)} />
+					<If when={props.source.defer && current() && !fixed(iv())}>
+						<Action
+							label="Decide later"
+							testID="decide-later"
+							disabled={props.source.read().busy || !props.source.read().fresh}
+							onPress={() => {
+								const q = current();
+								if (q) {
+									props.source.defer?.(q);
+									step(props.source, 1);
+								}
+							}}
+						/>
+					</If>
 					<Action
 						variant="primary"
 						testID="next"
@@ -692,6 +715,12 @@ export function InterviewRenderer(props: { source: InterviewSource; anchor?: (no
 						</View>
 					</If>
 				</View>
+			</If>
+			<If when={iv().questions.some((q) => answerView(props.source, q).deferred)}>
+				<Text testID="deferred-note" class="text-sm text-muted-foreground">
+					Deferred decisions stay open. Your drafts are kept. Work that needs those decisions must wait; other
+					missions and drafts stay available. Return and choose or edit an answer before submitting this round.
+				</Text>
 			</If>
 			{props.source.roundNotes?.()}
 		</View>

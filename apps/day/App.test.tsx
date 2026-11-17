@@ -303,6 +303,7 @@ test("an old mission offers a re-plan: New opens with a draft from it and nothin
 	expect(app.shows("· Old plan")).toBe(true);
 	expect(app.shows("Interview and plan")).toBe(false);
 	await app.press("id:mission-replan-start");
+	await app.press("id:replan-use-draft");
 	await app.waitFor("id:goal");
 	expect(app.shows("Re-plans “Docs refresh”. That mission stays as it is.")).toBe(true);
 	const draft = app.value("id:goal") ?? "";
@@ -314,11 +315,20 @@ test("an old mission offers a re-plan: New opens with a draft from it and nothin
 		expect(draft.includes(text)).toBe(true);
 	}
 	expect(draft.includes("Old intro")).toBe(false);
-	// Pressing it again replaces whatever New holds.
+	// A second re-plan preserves New until replacement is explicit.
+	await app.clear("id:goal");
 	await app.type("id:goal", "Something else");
 	await app.keyboard.press("escape");
 	await app.press("id:mission-docs");
 	await app.press("id:mission-replan-start");
+	await app.waitFor("id:replan-existing-draft");
+	await app.press("id:replan-keep-draft");
+	await app.waitFor("id:goal");
+	expect(app.value("id:goal")).toBe("Something else");
+	await app.keyboard.press("escape");
+	await app.press("id:mission-docs");
+	await app.press("id:mission-replan-start");
+	await app.press("id:replan-use-draft");
 	await app.waitFor("id:goal");
 	expect(app.value("id:goal")).toBe(draft);
 });

@@ -8,25 +8,29 @@
 import { computed, keymap, Scroll, signal, Text, View } from "nsh";
 import type { Decision, MissionPage, MissionRow, PlanPage, PlanRow, ReportLine, TaskLine } from "pilot-day/native";
 import { createShelf, MissionArtifacts, type Shelf } from "./ArtifactShelf";
+import { dropChoice } from "./chatCommands";
 import { openChat } from "./chatView";
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
 import { openFeedback } from "./feedbackView";
 import { keepScroll, restoreScroll, scrollOf } from "./kept";
+import { MigrationControls } from "./MigrationControls";
 import { goHome } from "./nav";
 import { pageScroll, scrolled } from "./onScreen";
 import { mapSummary, stageMark, stageWord } from "./PlanScreen";
+import { PreviousMission } from "./PreviousMission";
 import { Problems } from "./Problems";
 import { askRevisit } from "./planCommands";
 import type { Plans } from "./planning";
-import { goalDraft, openNew, openPlan, replacesDraft } from "./planView";
+import { goalDraft, openNew, openPlan, replacesDraft, requestDraft } from "./planView";
 import { MissionThreadsSection } from "./ThreadScreen";
 import { ToCheck } from "./ToCheck";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
 import { naming } from "./threadView";
 import {
 	Action,
+	CheckboxRow,
 	EvidenceList,
 	glide,
 	Mark,
@@ -634,10 +638,30 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
 function Replan(props: { day: Day; page: MissionPage }) {
 	const note = signal("");
 	const busy = signal(false);
-	// The user asked for this draft: it replaces whatever New holds.
+	const preparing = signal(false);
+	const omitted = signal<string[]>([]);
+	const context = () => props.page.replanContext ?? [];
+	const draft = () =>
+		context().length
+			? Array.from(
+					context()
+						.filter((c) => !omitted().includes(c.title))
+						.map((c) => (c.title ? `\n${c.title}\n${c.text}` : c.text))
+						.join(""),
+				)
+					.slice(0, 4000)
+					.join("")
+			: props.page.replanDraft;
 	const start = () => {
+		preparing.set(true);
+	};
+	// Replacing an existing draft is an explicit choice. Its old project and
+	// request association cannot silently move to this replacement goal.
+	const useDraft = () => {
 		glide();
-		goalDraft.set(props.page.replanDraft);
+		dropChoice();
+		requestDraft.set(null);
+		goalDraft.set(draft());
 		replacesDraft.set({ missionId: props.page.row.id, title: props.page.row.title });
 		openNew();
 	};
@@ -676,6 +700,50 @@ function Replan(props: { day: Day; page: MissionPage }) {
 								/>
 							</View>
 						</If>
+						<If when={preparing()}>
+							<View testID="replan-carryover" class="gap-3 rounded-xl bg-muted p-4">
+								<Text class="text-sm font-medium text-foreground">Choose what to bring into planning</Text>
+								<Text class="text-xs text-muted-foreground">
+									Context only, not approval or permission. Everything stays in the old mission's history,
+									including what you leave out.
+								</Text>
+								<Each of={context().filter((c) => c.title)} key={(c) => c.title}>
+									{(c) => (
+										<View class="gap-1">
+											<CheckboxRow
+												label={c().title}
+												checked={!omitted().includes(c().title)}
+												onChange={() =>
+													omitted.set(
+														omitted().includes(c().title)
+															? omitted().filter((t) => t !== c().title)
+															: [...omitted(), c().title],
+													)
+												}
+											/>
+											<Text class="text-xs text-muted-foreground">{c().text}</Text>
+										</View>
+									)}
+								</Each>
+								<If when={goalDraft().trim()}>
+									<Text testID="replan-existing-draft" class="text-sm text-needs-ink">
+										New already has a draft. Keep it, or explicitly replace its words and project choice.
+									</Text>
+								</If>
+								<View class="flex-row flex-wrap gap-2">
+									<Action
+										variant="primary"
+										label={goalDraft().trim() ? "Replace New draft" : "Open planning draft"}
+										testID="replan-use-draft"
+										onPress={useDraft}
+									/>
+									<If when={goalDraft().trim()}>
+										<Action label="Keep existing draft" testID="replan-keep-draft" onPress={openNew} />
+									</If>
+									<Action label="Cancel" onPress={() => preparing.set(false)} />
+								</View>
+							</View>
+						</If>
 					</View>
 				}
 			>
@@ -686,6 +754,11 @@ function Replan(props: { day: Day; page: MissionPage }) {
 					onPress={() => openMission(next()?.missionId ?? "")}
 				/>
 				<Text class="text-sm text-muted-foreground">This mission stays as it is while the new one is planned.</Text>
+				<MigrationControls
+					source={props.day.feed}
+					missionId={props.page.row.id}
+					successorId={next()?.missionId ?? ""}
+				/>
 				<View class="flex-row">
 					<Action
 						label="Stop re-planning"
@@ -812,12 +885,24 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 					<Text class="text-base leading-relaxed text-muted-foreground">{props.page.goal}</Text>
 				</If>
 				<If when={props.page.replaces}>
-					<RowLink
-						testID="mission-replaces"
-						title={`Replaces “${props.page.replaces?.title || "an old mission"}”`}
-						accessibilityLabel="Open the old mission this one re-plans."
-						onPress={() => openMission(props.page.replaces?.missionId ?? "")}
-					/>
+					<If
+						when={props.page.replaces?.state === "finished"}
+						else={
+							<RowLink
+								testID="mission-replaces"
+								title={`Replaces “${props.page.replaces?.title || "an old mission"}”`}
+								accessibilityLabel="Open the old mission this one re-plans."
+								onPress={() => openMission(props.page.replaces?.missionId ?? "")}
+							/>
+						}
+					>
+						<PreviousMission
+							source={props.day.feed}
+							oldId={props.page.replaces?.missionId ?? ""}
+							successorId={row().id}
+							canReadChats={!!props.day.chat}
+						/>
+					</If>
 				</If>
 				<FreshnessNote day={props.day} />
 				<Control day={props.day} page={props.page} />

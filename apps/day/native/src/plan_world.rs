@@ -45,6 +45,7 @@ fn strings(items: &[&str]) -> Vec<String> {
 /// The setup every mock world shows on New.
 pub fn setup() -> Setup {
     Setup {
+        creations: vec![],
         allowance_micros: None,
         allowance_required: false,
         project: s("pilot"),

@@ -3,6 +3,7 @@
 // these shapes, so the screens never know which one they talk to.
 import type { PlanFeed, PlanOutcome, PlanPage, TodayFeed } from "pilot-day/native";
 import type { MapSourceRead, MapSourceRequest } from "./mapSourceContract";
+import type { MigrationIntent, MigrationView } from "./migration";
 
 /** Today's reads and intents, as the screens use them. */
 export type DayFeed = Pick<
@@ -33,7 +34,7 @@ export type DayFeed = Pick<
 	| "rename"
 	| "pulse"
 	| "dispose"
->;
+> & { migration?: (intent: MigrationIntent) => Promise<MigrationView> };
 
 /**
  * Planning's reads and intents, as the screens use them. A connected feed
@@ -49,7 +50,7 @@ export type PlanningFeed = Pick<
 	readSource?: (request: MapSourceRequest) => Promise<MapSourceRead>;
 	canReadInventory?: () => boolean;
 	prepareNew?: () => Promise<PlanOutcome>;
-	checkNew?: () => Promise<PlanOutcome>;
+	checkNew?: (operationId?: string) => Promise<PlanOutcome>;
 	dismissNew?: () => Promise<PlanOutcome>;
 	canCheckNew?: () => boolean;
 	startWork?: (
@@ -67,6 +68,8 @@ export type PlanningFeed = Pick<
 			| "repairStart"
 			| "repairApply"
 			| "confirmRevision"
+			| "pauseRevision"
+			| "resumeRevision"
 			| "checkRevision"
 			| "chat"
 			| "readChat"

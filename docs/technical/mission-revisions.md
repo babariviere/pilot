@@ -67,11 +67,38 @@ bytes conflict. The durable SQLite writer must finish before acknowledgement or 
 
 ## Safe application
 
-Application is one SQLite transaction. A live membership or owned open assignment requires an
-already **Paused**, durably held mission from the existing Mission Pause checkpoint protocol.
-Running, Pausing or Unknown is refused, not treated as a safe boundary. Changing Pause or Stop
-invalidates a proposal's source. This is a conservative backend gate, not an automatic pause
-or checkpoint adapter.
+Application is one SQLite transaction. Preparation does not pause existing work. Changes to a
+task affect its owner and owners of transitive dependents, not independent work. Goal, agreement
+or decision changes conservatively affect all members and open task owners. Adds-only and edits
+to unowned tasks need no checkpoint.
+
+Native `revision-pause` uses `/api/operations` with the mission target, binding ID equal to the
+displayed source, generation 1, and `{purpose,proposalId,digest,source}`. Before interruption it
+durably saves the exact affected owner and owned-flow inventory. It calls the existing session
+checkpoint protocol, including final child inventory, census, close acknowledgement and exit.
+Only an acknowledged `paused` receipt with every member `paused` or independently `held` can
+authorize application. Unknown is lookup-only. The receipt never sets global controls to Paused.
+The planning revision read adds `affectedSessions` and active `workPauses`.
+
+Selective Pause does not change the proposal's source. Confirm the same exact proposal after its
+safe receipt; unrelated source changes still require a new preview. Existing whole-mission Pause
+also remains supported, but must name an acknowledged Pause operation covering affected owners.
+A displayed Paused boolean alone is not proof. Changing global Pause or Stop stales the source.
+
+Confirmation keeps all holds. A separate explicit `revision-resume` operation uses the current
+source as binding ID and `{purpose,pauseOperationId,source}`. It releases only that checkpoint.
+It never clears independent holds, re-enters Unknown, or silently starts a new task. Whole-mission
+Pause cannot take ownership away from an active selective checkpoint. A later Stop or uncertain
+checkpoint requires inspection rather than a guessed resume.
+Resume rechecks its current source, active mission and member/owned-flow ownership around every
+asynchronous boundary and at actual session admission. Delayed release of an independent hold
+still needs the saved Resume source and owner. An interrupted cold shell action cannot return a
+successful held checkpoint just because it has no queued input.
+Ownership is captured at Pause, not inferred when Resume is requested. It binds projects, session
+identity, flow roots, member fences and open-task owner/status/assignment. A narrow durable task
+counter detects ownership/status ABA while allowing intentional content edits. Immediate Resume
+and delayed held release compare this saved binding after restart. Older receipts without it
+cannot authorize Resume.
 
 A revision that only adds tasks (`newTasks`, with no goal, agreement, task or decision change)
 needs no Pause: it changes nothing a working chat uses. Each new task has a `key`, a title, a
@@ -185,6 +212,16 @@ older services remain unavailable. Native appearance and real-provider acceptanc
 gates; isolated tests do not authorize live check-ups.
 
 ## Verification
+
+`revision-work-pause.test.ts` checks selected and dependent owners, independent work left running,
+global control unchanged, application proof, explicit release and lookup-only uncertainty using
+fake checkpoint participants. `mission-successor-finish.test.ts` checks native migration against
+canonical storage and durable reopen. These do not prove real-process checkpoint behavior or
+large-session performance. Independent review of the selective checkpoint and migration paths is
+still required before live acceptance.
+Deterministic Resume races now cover source, archive and membership changes, initial/final
+persistence, delayed hold release, and a source change inside actual session resume admission.
+`mission-pause.test.ts` also covers cold interrupted shell effects and a changed fence before held.
 
 `mission-revisions.test.ts` covers inert proposals, exact confirmation, preserved completed
 tasks, replacement/withdrawal provenance, concurrent edits, ownership ABA, Stop/Pause source

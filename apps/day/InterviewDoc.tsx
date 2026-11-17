@@ -3,6 +3,7 @@
 import { computed } from "nsh";
 import type { Interview, PlanPage, Question } from "pilot-day/native";
 import { type InterviewRead, InterviewRenderer, type InterviewSource } from "./InterviewRenderer";
+import { deferred, deferredQuestions, put as putInterview } from "./interviewView";
 import {
 	answerText,
 	checkSubmit,
@@ -29,7 +30,9 @@ export function hasAnswer(interview: Interview, question: Question): boolean {
 export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: Interview }) {
 	const iv = () => props.interview;
 	const read = computed<InterviewRead>(() => {
-		const interview = iv();
+		const saved = iv();
+		const questions = saved.questions.map((q) => (deferred(saved, q) ? { ...q, state: "open" as const } : q));
+		const interview = { ...saved, questions, answered: questions.filter((q) => q.state === "answered").length };
 		const review = interview.kind === "review";
 		return {
 			interview,
@@ -43,6 +46,7 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 				interview.questions.map((q) => [
 					q.id,
 					{
+						deferred: deferred(interview, q),
 						choice: shownChoice(interview, q),
 						text: answerText(interview, q),
 						unsaved: unsaved(interview, q),
@@ -76,6 +80,11 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 	});
 	const source: InterviewSource = {
 		read,
+		defer(question) {
+			const interview = iv();
+			putInterview(deferredQuestions, answerKey(interview, question), question.digest);
+			void saveNow(props.plans, answerKey(interview, question));
+		},
 		dispatch(command) {
 			if (command.kind === "submit") {
 				void submit(props.plans, props.page);

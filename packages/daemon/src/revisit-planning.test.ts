@@ -7,6 +7,60 @@ import { interviewDigest } from "./mission-interview-contract.ts";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 import { publishedPlanningFixture as fixture } from "./published-planning.fixture.ts";
 
+test("native selective Pause, exact apply and separate Resume never claim global Paused", async (t) => {
+	const f = await fixture(t);
+	f.store.updateTask(f.missionId, "1", { sessionId: f.owner });
+	const source = f.store.revisions.source(f.missionId);
+	const p = await f.store.revisions.propose(
+		f.missionId,
+		{
+			operationId: randomUUID(),
+			source,
+			summary: "Reviewed title",
+			delta: { tasks: [{ id: "1", title: "Reviewed importer" }] },
+		},
+		{},
+	);
+	const checkpoints = t.mock.method(f.sessions, "checkpointMission", async () => "paused" as const);
+	const resumes = t.mock.method(f.sessions, "resumeMission", async () => "resumed" as const);
+	const pause = f.operation(
+		f.missionId,
+		{ purpose: "revision-pause", proposalId: p.id, digest: p.digest, source },
+		source,
+	);
+	assert.equal((await f.execute(pause)).state, "accepted");
+	assert.equal(
+		f.store.controls.revisionPause(pause.operationId)?.state,
+		"paused",
+		JSON.stringify(f.store.controls.revisionPause(pause.operationId)),
+	);
+	assert.equal(f.store.controls.current(f.missionId).held, false);
+	assert.equal((await f.native.lookup(pause))?.state, "accepted");
+	assert.equal(checkpoints.mock.callCount(), 1);
+	const read = await f.native.read(f.project.id, f.missionId);
+	assert.deepEqual(read.revision?.affectedSessions, [f.owner]);
+	assert.deepEqual(read.revision?.affectedTasks, [f.store.resolveTask(f.missionId, "1").id]);
+	assert.equal(read.revision?.workPauses.length, 1);
+	const confirm = f.operation(
+		f.missionId,
+		{ purpose: "revision-confirm", proposalId: p.id, digest: p.digest, source },
+		source,
+	);
+	assert.equal((await f.execute(confirm)).state, "accepted");
+	assert.equal(resumes.mock.callCount(), 0);
+	const now = f.store.revisions.source(f.missionId);
+	const resume = f.operation(
+		f.missionId,
+		{ purpose: "revision-resume", pauseOperationId: pause.operationId, source: now },
+		now,
+	);
+	assert.equal((await f.execute(resume)).state, "accepted");
+	assert.equal(f.store.controls.revisionPause(pause.operationId)?.state, "resumed");
+	assert.equal((await f.native.lookup(resume))?.state, "accepted");
+	assert.equal(resumes.mock.callCount(), 1);
+	assert.equal(f.inputs.length, 0);
+});
+
 test("HTTP Revisit requires native authentication and never adopts an unenrolled planner", async (t) => {
 	const f = await nativePlanningFixture();
 	t.after(() => f.close());
@@ -209,6 +263,7 @@ test("post-Pause requires a fresh user preview and exact confirmation; lost ACK 
 		{ sessionId: f.owner },
 	);
 	const control = f.store.controls.current(f.missionId);
+	const pauseOperationId = randomUUID();
 	f.store.controls.write(
 		{
 			version: 1,
@@ -217,15 +272,15 @@ test("post-Pause requires a fresh user preview and exact confirmation; lost ACK 
 			ownerFence: "isolated-fixture",
 			command: {
 				version: 1,
-				operationId: randomUUID(),
+				operationId: pauseOperationId,
 				home: { daemonId: f.hello.daemonId, lineageId: f.hello.lineageId! },
 				projectId: f.project.id,
 				coordinatorSessionId: f.owner,
 				expectedRevision: control.revision,
 				action: "pause",
 			},
-			control: { ...control, revision: control.revision + 1, held: true, state: "paused" },
-			members: [],
+			control: { ...control, revision: control.revision + 1, held: true, state: "paused", pauseOperationId },
+			members: f.store.members(f.missionId).map((sessionId) => ({ sessionId, state: "paused" })),
 		},
 		control.revision,
 	);

@@ -13,6 +13,10 @@ requires an explicit project choice; saved choices stay with their drafts.
 In a profile-only window, New reads that project's configured model and trusted
 planning setup. Choosing starts nothing. Plan a mission starts planning only;
 building still needs the separate Start work confirmation.
+If a mission creation reply is lost, Check status reads that request's saved receipt.
+A similar goal offers Create another as a separate request, never a replay; the first stays checkable.
+Other goals and drafts remain available. Re-planning an old mission offers context to carry over
+and asks before replacing New's existing words and project choice.
 While Pilot plans, the planning page shows the agent's current step and time, and
 Show planning chat opens its conversation, read only.
 Command+K opens a palette over any screen. Search to go to a place or to a mission
@@ -41,8 +45,16 @@ Linear or Slack. When the mission's first task starts, Pilot marks the request s
 A chat started from Slack, Linear or a schedule saves a report for its result page: its answer, how
 it knows, its limits, your next step and links. A chat with no report shows its last message instead.
 For published native plans, Revisit mission requests planning only. Review new questions and
-the exact proposed changes, then pause and request a fresh preview before confirming. Earlier
-answers and finished work stay kept. Revisit never starts work or changes permissions.
+the exact proposed changes. Pause affected work and apply checkpoints only affected agents before
+applying those exact changes; unaffected work continues. A whole-mission
+Pause needs a fresh preview. Earlier
+answers and finished work stay kept. Release affected work is separate and keeps other holds.
+Revisit never starts work or changes permissions.
+Preparing a revision leaves work running. Applying changes needs a safe checkpoint only for
+affected work (global agreement changes can affect everyone). Old missions can finish migration
+to their published successor after a safe Pause. History, chats and unpublished work stay;
+Linear management does not transfer automatically. The successor keeps Read previous mission,
+a read-only view of the old agreement, decisions, tasks, saved links and recent activity.
 A mission's overview lists its threads, one subject each. Start one by writing its first message; its
 first sentence becomes the title. Each thread has its own read-only chat: it answers at once, reads the
 mission like the coordinator, asks one question at a time about work you suggest, and shows mockups for

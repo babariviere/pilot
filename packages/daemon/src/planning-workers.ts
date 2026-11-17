@@ -2889,6 +2889,7 @@ export class PlanningWorkers {
 			.find(
 				(t) =>
 					t?.status === "todo" &&
+					!this.deps.store.revisionTaskHeld(missionId, t.id) &&
 					!t.sessionId &&
 					!(t.dependsOn ?? []).some((id) => pin.tasks.find((d) => d.id === id)?.status !== "done"),
 			);

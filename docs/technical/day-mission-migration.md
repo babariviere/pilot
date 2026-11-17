@@ -1,7 +1,10 @@
 # Re-plan an old mission (plan)
 
-Status: parts 1 (Old plan label and prefill) and 2 (successor link) are built;
-part 3 is a proposal. Facts checked against the code at `402b0307` and
+Status: parts 1 (Old plan label and prefill) and 2 (successor link) are built.
+Day now exposes reviewed finish without Linear transfer through the native operation journal.
+Opening a replacement first offers context sections and preserves an existing New draft unless
+the user explicitly replaces it. Window capture keeps the replacement origin without enrollment.
+Earlier facts below were checked against the code at `402b0307` and
 read-only reads of the live daemon on 2026-11-14.
 
 ## Goal
@@ -14,7 +17,36 @@ archived. Its history stays.
 Not in scope: changing an old mission in place ("adoption" is refused by the
 daemon, `missions.ts:2813`), deleting missions, moving chats or tasks.
 
-## Today's facts
+## Implemented finish contract
+
+Authenticated `GET /api/missions/:oldId/successor/preview` returns the exact `oldSource`,
+`newSource`, successor publication, both missions, member IDs and managed Linear resources.
+It does not pause, archive, transfer, grant permission or start work.
+The native preview also includes `oldBrief`, `newBrief`, `oldTasks`, `newTasks` and `keptChats`
+(ID, title, archive time and cached `unpublishedWork: true | null`). Null means unknown, not clean.
+The sources bind these displayed records and cached chat facts. The native read rechecks them after
+durability; native finish recomputes them at its transaction boundary. No workspace scan runs.
+
+Native durable kind `mission-replan-finish` uses the old mission target, binding ID `oldSource`,
+generation 1, and `{purpose,newMissionId,projectId,oldSource,newSource,transferLinear:false}`.
+Both missions must still be active in the same project, the old mission must remain legacy,
+and its exact linked successor must be published. Old members and assigned chats require an
+acknowledged existing Mission Pause covering them. Idle or parked is not safe checkpoint proof.
+Refresh the preview after Pause. A stale source refuses rather than substituting current bytes.
+
+One SQLite transaction archives the old mission, finishes the successor link and saves the
+receipt. All tasks, history, chats and unpublished work stay. The successor gets no Start or
+permission grant. Exact operation receipt lookup recovers lost replies, never repeats effects.
+
+Managed Linear resources stay on the old mission. Transfer is currently unavailable, and
+`transferLinear:true` is refused. Any future transfer needs its own explicit resource/contribution
+preview and sync drain, not the automatic transfer proposed below. No live acceptance or real
+worker process proof is claimed by the fake-participant backend tests.
+
+## Historical snapshot and proposal (14 November)
+
+The rest of this document records the earlier research and proposed steps. It is not a description
+of current behavior or permission to transfer tickets. The implemented contract above takes precedence.
 
 - Old missions have no `planningVersion`. Their planning read returns
   `not-enrolled`, so Revisit and mission threads are unavailable. All 19

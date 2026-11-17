@@ -3,13 +3,21 @@ import { Conflict } from "./errors.ts";
 import type { MissionResumeFence } from "./lifecycle-checkpoint.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
+import { revisionPauseOwnershipMatches } from "./revision-work-pause.ts";
 
 export interface MissionPauseParticipants {
+	get?(sessionId: string): { projectId?: string; createdAt: number } | undefined;
+	missionWorkOwner?(sessionId: string): string;
 	missionWorkMission?(sessionId: string): string | undefined;
 	missionWorkSessions?(missionId: string): string[];
 	missionWorkBelongs?(sessionId: string, missionId: string): boolean;
 	checkpointMission(sessionId: string, operationId: string, fence: MissionResumeFence): Promise<"paused" | "held">;
-	resumeMission(sessionId: string, operationId: string, fence: MissionResumeFence): Promise<"resumed" | "held">;
+	resumeMission(
+		sessionId: string,
+		operationId: string,
+		fence: MissionResumeFence,
+		guard?: () => void,
+	): Promise<"resumed" | "held">;
 }
 
 export function parseMissionControl(
@@ -73,7 +81,10 @@ export class MissionControls {
 		const { missionId, pauseGeneration, stopGeneration, held } = this.store.controls.fenceCurrent(
 			membership.missionId,
 		);
-		return { missionId, pauseGeneration, stopGeneration, held };
+		const selected = this.store.controls
+			.revisionPauses(missionId)
+			.some((p) => p.state !== "resumed" && p.members.some((m) => m.sessionId === sessionId));
+		return { missionId, pauseGeneration, stopGeneration, held: held || selected };
 	}
 	assertOpen(missionId: string): void {
 		this.store.require(missionId);
@@ -105,6 +116,23 @@ export class MissionControls {
 			const missionId = membership?.missionId ?? this.participants.missionWorkMission?.(sessionId);
 			if (!missionId || this.store.require(missionId).status !== "active") return false;
 			const current = this.store.controls.fenceCurrent(missionId);
+			const selected = this.store.controls.revisionPause(pauseOperationId);
+			if (
+				selected?.missionId === missionId &&
+				selected.state === "resumed" &&
+				revisionPauseOwnershipMatches(this.store, this.participants, selected) &&
+				selected.resumeSource === this.store.revisions.source(missionId) &&
+				selected.resumeOwners?.some(
+					(m) =>
+						m.sessionId === sessionId &&
+						m.ownerId === (this.participants.missionWorkOwner?.(sessionId) ?? sessionId),
+				) &&
+				!current.held &&
+				selected.fence.pauseGeneration === current.pauseGeneration &&
+				selected.fence.stopGeneration === current.stopGeneration &&
+				selected.members.some((m) => m.sessionId === sessionId && m.state === "held")
+			)
+				return true;
 			const record = current.operationId ? this.store.controls.operation(current.operationId) : undefined;
 			return (
 				!!record &&
@@ -159,6 +187,8 @@ export class MissionControls {
 		if (members.length > 128) throw new Conflict("Mission member inventory exceeds 128");
 		if (command.action === "pause") {
 			if (prior.held) throw new Conflict("A prior mission pause still holds work");
+			if (this.store.controls.revisionPauses(missionId).some((p) => p.state !== "resumed" && p.members.length))
+				throw new Conflict("A revision Pause still owns affected work; resume or inspect that exact checkpoint");
 		} else {
 			const pause = this.store.controls.operation(command.pauseOperationId!);
 			if (

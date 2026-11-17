@@ -17,6 +17,7 @@ import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, s
 import { planningActivity, planningChatPage } from "./planning-activity.ts";
 import type { PlanningWorkers } from "./planning-workers.ts";
 import type { ProjectStore } from "./projects.ts";
+import { pauseRevisionWork, resumeRevisionWork } from "./revision-work-pause.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
@@ -29,6 +30,9 @@ export const isNativePlanningOperation = (kind: string) =>
 		"plan-continue",
 		"plan-question-ask",
 		"plan-repair-start",
+		"revision-resume",
+		"revision-pause",
+		"mission-replan-finish",
 		"revision-preview",
 		"revision-confirm",
 	].includes(kind);
@@ -40,6 +44,9 @@ const humanKinds = [
 	"plan-continue",
 	"plan-question-ask",
 	"plan-repair-start",
+	"revision-resume",
+	"revision-pause",
+	"mission-replan-finish",
 	"revision-preview",
 	"revision-confirm",
 ];
@@ -330,6 +337,11 @@ export class NativeMissionPlanning {
 			!/^[a-f0-9]{64}$/.test(op.bindingId)
 		)
 			throw new OperationRejected("Native planning identity required");
+		if (op.kind === "mission-replan-finish") {
+			const mission = this.deps.store.require(op.targetId);
+			this.deps.projects.require(mission.projectId);
+			return;
+		}
 		const pin = this.scope(op.targetId);
 		let request: unknown;
 		try {
@@ -347,6 +359,9 @@ export class NativeMissionPlanning {
 				"plan-continue",
 				"plan-question-ask",
 				"plan-repair-start",
+				"revision-resume",
+				"revision-pause",
+				"mission-replan-finish",
 				"revision-preview",
 				"revision-confirm",
 			].includes(op.kind)
@@ -370,6 +385,9 @@ export class NativeMissionPlanning {
 				"plan-continue",
 				"plan-question-ask",
 				"plan-repair-start",
+				"revision-resume",
+				"revision-pause",
+				"mission-replan-finish",
 				"revision-preview",
 				"revision-confirm",
 			].includes(op.kind) &&
@@ -383,6 +401,65 @@ export class NativeMissionPlanning {
 	}
 	/** Journal recovery is exact saved-effect lookup, never new authority or model dispatch. */
 	async admit(op: DurableOperation, firstEntry = false): Promise<unknown> {
+		if (op.kind === "mission-replan-finish") return this.finishMigration(op, firstEntry);
+		if (op.kind === "revision-resume") {
+			const request = JSON.parse(op.payload);
+			if (!firstEntry) {
+				const saved = this.deps.store.controls.revisionPause(request.pauseOperationId);
+				if (!saved || saved.resumeOperationId !== op.operationId)
+					throw new Error("Unknown revision Resume; lookup only");
+				await this.deps.store.durable();
+				return saved;
+			}
+			try {
+				this.envelope(op);
+				interviewExact(request, ["purpose", "pauseOperationId", "source"]);
+				if (typeof request.pauseOperationId !== "string" || typeof request.source !== "string")
+					throw new Conflict("Invalid Resume identity");
+				if (request.purpose !== op.kind || op.bindingId !== request.source)
+					throw new Conflict("Exact revision Resume required");
+				return await resumeRevisionWork(this.deps.store, this.deps.sessions, op.targetId, {
+					operationId: op.operationId,
+					pauseOperationId: request.pauseOperationId,
+					source: request.source,
+				});
+			} catch (cause) {
+				if (this.deps.store.controls.revisionPause(request.pauseOperationId)?.resumeOperationId === op.operationId)
+					throw new Error("Unknown Resume; lookup only", { cause });
+				throw new OperationRejected(String(cause));
+			}
+		}
+		if (op.kind === "revision-pause") {
+			const request = JSON.parse(op.payload);
+			if (!firstEntry) {
+				const saved = this.deps.store.controls.revisionPause(op.operationId);
+				if (!saved) throw new Error("Unknown revision Pause; lookup only");
+				await this.deps.store.durable();
+				return saved;
+			}
+			try {
+				this.envelope(op);
+				interviewExact(request, ["purpose", "proposalId", "digest", "source"]);
+				if (
+					typeof request.proposalId !== "string" ||
+					typeof request.digest !== "string" ||
+					typeof request.source !== "string"
+				)
+					throw new Conflict("Invalid revision identity");
+				if (request.purpose !== op.kind || op.bindingId !== request.source)
+					throw new Conflict("Exact revision Pause preview required");
+				return await pauseRevisionWork(this.deps.store, this.deps.sessions, op.targetId, {
+					operationId: op.operationId,
+					proposalId: request.proposalId,
+					digest: request.digest,
+					source: request.source,
+				});
+			} catch (cause) {
+				if (this.deps.store.controls.revisionPause(op.operationId))
+					throw new Error("Unknown checkpoint; lookup only", { cause });
+				throw new OperationRejected(String(cause));
+			}
+		}
 		if (op.kind === "plan-revisit") {
 			if (!this.deps.workers) throw new OperationRejected("Revisit authority unavailable");
 			if (firstEntry) {
@@ -469,6 +546,70 @@ export class NativeMissionPlanning {
 			this.deps.workers?.recordUnstick(op.targetId, "drop-earlier-answers", { operationId: op.operationId });
 		return result;
 	}
+	private migrationChats(missionId: string) {
+		const sessions = this.deps.sessions;
+		const direct = sessions.list({ missionId, archived: "all" });
+		const owned = sessions.missionWorkSessions(missionId).flatMap((id) => {
+			const chat = sessions.get(id);
+			return chat ? [chat] : [];
+		});
+		return [...new Map([...direct, ...owned].map((chat) => [chat.id, chat])).values()]
+			.map((chat) => ({
+				id: chat.id,
+				title: chat.title,
+				archivedAt: chat.archivedAt ?? null,
+				unpublishedWork: chat.unpublishedWork === true ? (true as const) : null,
+			}))
+			.sort((a, b) => a.id.localeCompare(b.id));
+	}
+	/** Exact human comparison, checked again after the canonical storage barrier. */
+	async successorPreview(oldMissionId: string) {
+		const read = () => this.deps.store.successorPreview(oldMissionId, this.migrationChats(oldMissionId));
+		const preview = read();
+		await this.deps.store.durable();
+		if (canonicalJSON(read()) !== canonicalJSON(preview)) throw new Conflict("Migration preview changed during read");
+		return preview;
+	}
+	private async finishMigration(op: DurableOperation, firstEntry: boolean) {
+		const store = this.deps.store;
+		if (!firstEntry) {
+			const saved = store.successorFinishLookup(op.operationId);
+			if (!saved) throw new Error("Unknown migration effect; lookup only");
+			await store.durable();
+			return saved;
+		}
+		try {
+			this.envelope(op);
+			const request = JSON.parse(op.payload);
+			interviewExact(request, ["purpose", "newMissionId", "projectId", "oldSource", "newSource", "transferLinear"]);
+			if (request.purpose !== op.kind || request.oldSource !== op.bindingId)
+				throw new Conflict("Exact migration preview required");
+			if (
+				typeof request.newMissionId !== "string" ||
+				typeof request.projectId !== "string" ||
+				typeof request.oldSource !== "string" ||
+				typeof request.newSource !== "string" ||
+				request.transferLinear !== false
+			)
+				throw new Conflict("Invalid migration identity");
+			return await store.finishSuccessor(
+				op.targetId,
+				{
+					operationId: op.operationId,
+					newMissionId: request.newMissionId,
+					projectId: request.projectId,
+					oldSource: request.oldSource,
+					newSource: request.newSource,
+					transferLinear: false,
+				},
+				() => this.migrationChats(op.targetId),
+			);
+		} catch (cause) {
+			if (store.successorFinishLookup(op.operationId))
+				throw new Error("Unknown saved migration; lookup only", { cause });
+			throw new OperationRejected(String(cause));
+		}
+	}
 	private revisionView(missionId: string) {
 		const store = this.deps.store;
 		return {
@@ -480,6 +621,13 @@ export class NativeMissionPlanning {
 			tasks: store.tasks(missionId),
 			decisions: store.workflowConfirmationState(missionId).decisions,
 			control: store.controls.current(missionId),
+			affectedTasks: store.revisions.pending(missionId)
+				? store.revisionAffectedTasks(missionId, store.revisions.pending(missionId)!.proposal.delta)
+				: [],
+			affectedSessions: store.revisions.pending(missionId)
+				? store.revisionAffectedSessions(missionId, store.revisions.pending(missionId)!.proposal.delta)
+				: [],
+			workPauses: store.controls.revisionPauses(missionId),
 		};
 	}
 	private async revisionIntent(op: DurableOperation, firstEntry: boolean) {
@@ -503,6 +651,12 @@ export class NativeMissionPlanning {
 		try {
 			this.envelope(op);
 			interviewExact(request, ["purpose", "proposalId", "digest", "source"]);
+			if (
+				typeof request.proposalId !== "string" ||
+				typeof request.digest !== "string" ||
+				typeof request.source !== "string"
+			)
+				throw new Conflict("Invalid revision identity");
 			if (
 				request.purpose !== op.kind ||
 				request.source !== store.revisions.source(op.targetId) ||

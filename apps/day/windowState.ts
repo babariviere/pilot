@@ -105,6 +105,7 @@ export function captureView(today?: Today): SavedView {
 		...ritual,
 		help: todayView.help,
 		seeAll: interview.seeAll,
+		deferredQuestions: interview.deferredQuestions,
 		tab: captureChangesTab(),
 		todayY: todayView.todayY,
 		todayRow: todayView.todayRow,

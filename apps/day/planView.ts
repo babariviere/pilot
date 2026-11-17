@@ -90,11 +90,16 @@ export function drop<T>(store: Signal<Record<string, T>>, key: string) {
 	});
 }
 
-type SavedPlanningDraft = Pick<import("pilot-day/native").SavedView, "goal" | "chat" | "chatChosen">;
+type SavedPlanningDraft = Pick<import("pilot-day/native").SavedView, "goal" | "chat" | "chatChosen" | "replanningFrom">;
 
 /** Keeps New's exact words and the user's explicit project choice. */
 export function capturePlanningDraft(): SavedPlanningDraft {
-	return { goal: goalDraft(), chat: chatChoice(), chatChosen: chatChoice() !== null && chatPick() !== null };
+	return {
+		goal: goalDraft(),
+		chat: chatChoice(),
+		chatChosen: chatChoice() !== null && chatPick() !== null,
+		replanningFrom: replacesDraft(),
+	};
 }
 
 /** Restores a place without opening it or starting planning. */
@@ -107,7 +112,7 @@ export function restorePlanningPlace(view: Pick<import("pilot-day/native").Saved
 /** A restored choice must be selected again; it is never a new chat intent. */
 export function restorePlanningDraft(view: SavedPlanningDraft) {
 	goalDraft.set(view.goal);
-	replacesDraft.set(null);
+	replacesDraft.set(view.goal.trim() ? (view.replanningFrom ?? null) : null);
 	requestDraft.set(null);
 	const chat = view.chat;
 	chatPick.set(

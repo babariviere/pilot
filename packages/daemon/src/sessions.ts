@@ -8435,9 +8435,11 @@ ${run.excerpt}`,
 		return owned;
 	}
 	private readonly missionResuming = new Map<string, import("./lifecycle-checkpoint.ts").MissionResumeFence>();
+	private readonly missionResumeGuards = new Map<string, () => void>();
 
 	private missionWorkHeld(id: string): boolean {
 		try {
+			this.missionResumeGuards.get(id)?.();
 			const continuation = this.metas.get(id)?.missionContinuationStart;
 			if (
 				continuation &&
@@ -8488,6 +8490,12 @@ ${run.excerpt}`,
 		this.postRunTasks.get(id)?.controller.abort();
 		await this.actionRunner.checkpointSession(id);
 		await this.checkpointLifecycleWorkers(operationId, "mission-pause", undefined, new Set([id]));
+		const safe = () => {
+			if (actionWasActive) throw new Conflict("Interrupted shell effects require inspection; no automatic replay");
+			if (canonicalJSON(this.missionUpgradeFence(id)) !== canonicalJSON(fence))
+				throw new Conflict("Mission pause fence changed during checkpoint");
+		};
+		safe();
 		if (!meta.lifecycleCheckpoint || meta.lifecycleCheckpoint === prior) {
 			if (
 				meta.working ||
@@ -8497,7 +8505,10 @@ ${run.excerpt}`,
 				meta.subagents?.length
 			)
 				throw new Conflict("Cold work has no acknowledged checkpoint");
-			if (!meta.pending?.length) return "held"; // No executor or queued work owned by this Pause.
+			if (!meta.pending?.length) {
+				safe();
+				return "held"; // No executor or queued work owned by this Pause.
+			}
 			meta.lifecycleCheckpoint = {
 				schema: 1,
 				operationId,
@@ -8520,9 +8531,7 @@ ${run.excerpt}`,
 			};
 			await this.save(meta, undefined, undefined, true);
 		}
-		if (actionWasActive) throw new Conflict("Interrupted shell effects require inspection; no automatic replay");
-		if (canonicalJSON(this.missionUpgradeFence(id)) !== canonicalJSON(fence))
-			throw new Conflict("Mission pause fence changed during checkpoint");
+		safe();
 		return "paused";
 	}
 
@@ -8531,7 +8540,9 @@ ${run.excerpt}`,
 		id: string,
 		operationId: string,
 		fence: import("./lifecycle-checkpoint.ts").MissionResumeFence,
+		guard: () => void = () => {},
 	): Promise<"resumed" | "held"> {
+		guard();
 		const meta = this.require(id),
 			checkpoint = meta.lifecycleCheckpoint;
 		if (
@@ -8570,14 +8581,17 @@ ${run.excerpt}`,
 		// but never change this session's input/Stop ownership generations.
 		checkpoint.mission = structuredClone(fence);
 		await this.save(meta, undefined, undefined, true);
+		guard();
 		if (canonicalJSON(this.missionUpgradeFence(id)) !== canonicalJSON(fence) || !matchingCheckpoint(checkpoint, meta))
 			throw new Conflict("Mission resume controls changed");
 		this.missionResuming.set(id, structuredClone(fence));
+		this.missionResumeGuards.set(id, guard);
 		try {
 			if (!checkpoint.prior.working && !meta.pending?.length) {
 				checkpoint.phase = "resume-acknowledged";
 				delete meta.updatePaused;
 				await this.save(meta, undefined, undefined, true);
+				guard();
 				if (
 					this.require(id).lifecycleCheckpoint?.phase !== "resume-acknowledged" ||
 					!matchingCheckpoint(checkpoint, meta) ||
@@ -8586,7 +8600,9 @@ ${run.excerpt}`,
 					throw new Conflict("Mission idle resume controls changed");
 				return "resumed";
 			}
+			guard();
 			await this.start(id);
+			guard();
 			if (
 				meta.lifecycleCheckpoint !== checkpoint ||
 				this.require(id).lifecycleCheckpoint?.phase !== "resume-acknowledged"
@@ -8595,6 +8611,7 @@ ${run.excerpt}`,
 			return "resumed";
 		} finally {
 			this.missionResuming.delete(id);
+			this.missionResumeGuards.delete(id);
 		}
 	}
 	private lifecycleCheckpointOwner?: string;
@@ -9407,6 +9424,7 @@ ${run.excerpt}`,
 	): boolean {
 		try {
 			if (checkpoint.purpose === "mission-pause") {
+				this.missionResumeGuards.get(id)?.();
 				const permit = this.missionResuming.get(id);
 				if (!permit) return this.missions?.missionResumeAuthorized?.(id, checkpoint.operationId) === true;
 				return (
@@ -12680,6 +12698,7 @@ ${run.excerpt}`,
 				if (this.globalUpdatePreparing) return;
 				const worker = await this.ensureWorker(id);
 				await worker.ready;
+				this.missionResumeGuards.get(id)?.();
 				if (this.closing || this.sleepPause || this.globalUpdatePreparing) return;
 				if (this.workers.get(id) !== worker) throw new WorkerUnavailable("Kernel exited during startup");
 				if (checkpoint?.phase === "resume-admitted" && meta.lifecycleCheckpoint === checkpoint) {

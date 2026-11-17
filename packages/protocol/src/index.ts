@@ -2297,6 +2297,7 @@ export type {
 	SavedArtifactContent,
 } from "./delivered-artifact.ts";
 export type * from "./diagnostics-controls.ts";
+export type * from "./mission-migration.ts";
 export type {
 	ChatReport,
 	DeliveredWork,

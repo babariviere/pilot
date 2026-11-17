@@ -16,7 +16,7 @@ import type {
 	TaskChange,
 	TextChange,
 } from "pilot-day/native";
-import { askRevisit, checkRevision, confirmRevision } from "./planCommands";
+import { askRevisit, checkRevision, confirmRevision, resumeRevision } from "./planCommands";
 import type { Plans } from "./planning";
 import { drop, put, revisionShown, revisitBusy, revisitMessages, revisitOpen } from "./planView";
 import { Action, Disclosure, glide, Mark, type MarkKind, MarkLine, Notice, Panel, SectionTitle } from "./ui";
@@ -185,7 +185,7 @@ function confirmLine(r: Revision): string {
 /** Why the confirmation cannot be sent now, or nothing. */
 function blocked(page: PlanPage, r: Revision): string {
 	if (!r.current) return "The mission changed after Pilot proposed this revision. It cannot be confirmed.";
-	if (r.pause === "needed")
+	if (r.pause === "needed" && !r.selectivePause)
 		return "Chats still work on this mission. Pause it on its overview first: Pilot applies a revision only while its work is paused.";
 	if (!page.fresh) return "This is an older read. Read the page again before you confirm.";
 	return "";
@@ -218,8 +218,16 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 			</If>
 			<If when={r().pause === "paused" && !why()}>
 				<Text class="text-xs text-muted-foreground">
-					The mission's work is paused. Confirming keeps it paused; resume it on its overview when you want.
+					{r().selectivePause
+						? "Affected work is paused. Applying keeps it paused; release it explicitly below when ready."
+						: "The mission's work is paused. Confirming keeps it paused; resume it on its overview when you want."}
 				</Text>
+			</If>
+			<If when={r().selectivePause && r().pause === "needed"}>
+				<Text class="text-sm text-muted-foreground">{`Applying pauses ${r().affectedWork} affected agents first. Unaffected work continues. The exact revision applies only after safe pause is confirmed.`}</Text>
+				<Each of={r().affectedTasks ?? []} key={(t) => t}>
+					{(t) => <Text class="text-sm text-foreground">{t()}</Text>}
+				</Each>
 			</If>
 			<If when={unknown()}>
 				<Text role="alert" class="text-sm text-foreground">
@@ -262,7 +270,13 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 							<Action
 								variant="primary"
 								testID="confirm-revision-now"
-								label={busy() || r().confirm === "confirming" ? "Confirming…" : "Confirm"}
+								label={
+									busy() || r().confirm === "confirming"
+										? "Applying…"
+										: r().selectivePause && r().pause === "needed"
+											? "Pause affected work and apply"
+											: "Confirm"
+								}
 								disabled={!!why() || busy() || !pinned()}
 								onPress={() => void confirmRevision(props.plans, id())}
 							/>
@@ -436,6 +450,28 @@ export function RevisitSection(props: { plans: Plans; page: PlanPage; revisit: R
 	return (
 		<View testID="revisit" class="gap-4">
 			<SectionTitle title="Revisit" />
+			<If when={r().pausedWork}>
+				<View class="gap-2 rounded-xl bg-muted p-4">
+					<Text class="text-sm text-foreground">{`Revisit holds ${r().pausedWork?.members ?? 0} work participants. Other holds remain separate.`}</Text>
+					<If
+						when={r().pausedWork?.state === "paused" && props.plans.feed.resumeRevision}
+						else={
+							<Action
+								label="Check status"
+								disabled={busy()}
+								onPress={() => void checkRevision(props.plans, id(), "")}
+							/>
+						}
+					>
+						<Action
+							label="Release affected work"
+							testID="release-revision-work"
+							disabled={busy() || !props.page.fresh}
+							onPress={() => void resumeRevision(props.plans, id(), r().pausedWork?.operationId ?? "")}
+						/>
+					</If>
+				</View>
+			</If>
 			<If when={r().available} else={<Notice testID="revisit-unavailable" text={r().reason} />}>
 				<If when={r().stage === "idle" || r().stage === "confirmed"}>
 					<Text class="text-sm leading-relaxed text-muted-foreground">

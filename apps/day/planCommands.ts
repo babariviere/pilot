@@ -6,6 +6,7 @@
 import type { Interview, PlanPage, Question } from "pilot-day/native";
 import { dropChoice } from "./chatCommands";
 import { fundingAmount } from "./FundingSettings";
+import { deferred, returnToQuestion } from "./interviewView";
 import { newFundingDraft } from "./modelSettingsDraft";
 import type { Plans } from "./planning";
 import {
@@ -173,6 +174,7 @@ export function saveNow(plans: Plans, key: string): Promise<void> {
 
 /** The user typed: keep the text exactly and save it once typing rests. */
 export function editAnswer(plans: Plans, missionId: string, interview: Interview, question: Question, value: string) {
+	returnToQuestion(interview, question);
 	const key = remember(missionId, interview, question);
 	put(answerDrafts, key, value);
 	schedule(plans, key);
@@ -213,6 +215,7 @@ export function pickAnswer(
 	question: Question,
 	choice: string | null,
 ) {
+	returnToQuestion(interview, question);
 	const key = remember(missionId, interview, question);
 	put(answerPicks, key, choice);
 	void saveNow(plans, key);
@@ -249,6 +252,14 @@ export async function flushAll(plans: Plans) {
 export async function submit(plans: Plans, page: PlanPage) {
 	const interview = page.interview;
 	if (!interview || submitting()[interview.id]) return;
+	if (interview.questions.some((q) => deferred(interview, q))) {
+		put(
+			planMessages,
+			page.missionId,
+			"Return to deferred questions before submitting. Decide later is not an answer.",
+		);
+		return;
+	}
 	put(submitting, interview.id, true);
 	put(planMessages, page.missionId, "");
 	try {
@@ -260,6 +271,14 @@ export async function submit(plans: Plans, page: PlanPage) {
 		}
 		if (unsavedCount(now) > 0) {
 			put(planMessages, page.missionId, "Some answers are not saved. Read the notes beside them first.");
+			return;
+		}
+		if (now.questions.some((q) => deferred(now, q))) {
+			put(
+				planMessages,
+				page.missionId,
+				"Return to deferred questions before submitting. Decide later is not an answer.",
+			);
 			return;
 		}
 		const outcome = await plans.feed.submit({
@@ -310,6 +329,25 @@ export async function confirmRevision(plans: Plans, missionId: string) {
 	put(revisitBusy, missionId, true);
 	put(revisitMessages, missionId, "");
 	try {
+		const before = plans.feed.page(missionId)?.revisit?.revision;
+		if (before?.pause === "needed" && before.selectivePause) {
+			if (!plans.feed.pauseRevision || before.id !== pin.revisionId || before.digest !== pin.digest) return;
+			const paused = await plans.feed.pauseRevision({ missionId, ...pin });
+			if (paused.status !== "accepted") {
+				put(revisitMessages, missionId, paused.message);
+				return;
+			}
+			await plans.feed.open(missionId);
+			const now = plans.feed.page(missionId)?.revisit?.revision;
+			if (!now?.current || now.id !== pin.revisionId || now.digest !== pin.digest || now.pause === "needed") {
+				put(
+					revisitMessages,
+					missionId,
+					"Affected work was paused, but the revision changed. Review it again before applying.",
+				);
+				return;
+			}
+		}
 		let outcome = await plans.feed.confirmRevision({ missionId, ...pin });
 		// Refused before sending, often only because the page was read before the service restarted. Read it again,
 		// and confirm once more only if the same revision is still shown and current. Rust checks it again.
@@ -341,8 +379,22 @@ export async function checkRevision(plans: Plans, missionId: string, revisionId:
 	}
 }
 
+/** Releases one exact selective checkpoint only on an explicit user action. */
+export async function resumeRevision(plans: Plans, missionId: string, pauseOperationId: string) {
+	if (revisitBusy()[missionId] || !plans.feed.resumeRevision) return;
+	put(revisitBusy, missionId, true);
+	try {
+		const result = await plans.feed.resumeRevision({ missionId, pauseOperationId });
+		put(revisitMessages, missionId, result.message);
+	} catch {
+		put(revisitMessages, missionId, "Release is not confirmed. Check status; do not release again.");
+	} finally {
+		put(revisitBusy, missionId, false);
+	}
+}
+
 /** Starts a mission interview from the goal, and opens it once its questions arrive. */
-export async function planMission(plans: Plans) {
+export async function planMission(plans: Plans, createAnother = false) {
 	if (newBusy()) return;
 	newBusy.set(true);
 	newMessage.set("");
@@ -360,6 +412,7 @@ export async function planMission(plans: Plans) {
 			return;
 		}
 		const outcome = await plans.feed.plan({
+			createAnother,
 			goal,
 			setup: setup.digest,
 			replaces,
@@ -383,12 +436,12 @@ export async function planMission(plans: Plans) {
 }
 
 /** Looks up one saved creation outcome. It never resends or clears an unsent goal. */
-export async function checkCreation(plans: Plans) {
+export async function checkCreation(plans: Plans, operationId?: string) {
 	if (newBusy() || !plans.feed.checkNew) return;
 	newBusy.set(true);
 	newMessage.set("");
 	try {
-		const outcome = await plans.feed.checkNew();
+		const outcome = await plans.feed.checkNew(operationId);
 		newMessage.set(outcome.message);
 		if (outcome.status === "accepted" && outcome.missionId) openPlan(outcome.missionId);
 	} catch {

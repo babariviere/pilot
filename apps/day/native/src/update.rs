@@ -255,6 +255,9 @@ pub struct SavedView {
     pub update: bool,
     /// New's unsent goal, exactly as typed.
     pub goal: String,
+    /// The old mission the unsent New draft re-plans. Restoring never enrolls.
+    #[prop(default)]
+    pub replanning_from: Option<crate::model::MissionLink>,
     /// Standalone New's project, permission and draft identity. Restoring never creates a chat.
     #[prop(default)]
     pub chat: Option<crate::new_chat::ChatChoice>,
@@ -284,6 +287,10 @@ pub struct SavedView {
     /// Interviews that showed all their questions at once.
     #[prop(default)]
     pub see_all: Vec<String>,
+    /// View-local deferrals as JSON [interview/question, exact question digest].
+    /// These are unresolved, never answers, submissions or execution authority.
+    #[prop(default)]
+    pub deferred_questions: Vec<String>,
     /// The tab of the kept change on screen: "diff", "history" or empty.
     #[prop(default)]
     pub tab: String,
@@ -411,6 +418,7 @@ impl SavedView {
             .iter()
             .chain(&self.help)
             .chain(&self.see_all)
+            .chain(&self.deferred_questions)
             .chain(&self.notes)
             .chain(&self.reminders)
             .chain(&self.preferences)
@@ -423,6 +431,10 @@ impl SavedView {
             .map(String::len)
             .sum::<usize>();
         self.goal.len()
+            + self
+                .replanning_from
+                .as_ref()
+                .map_or(0, |m| m.mission_id.len() + m.title.len())
             + self.chat.as_ref().map_or(0, |c| c.text_bytes())
             + self.id.len()
             + self.focused.len()
@@ -451,6 +463,7 @@ impl SavedView {
         self.questions.len()
             + self.help.len()
             + self.see_all.len()
+            + self.deferred_questions.len()
             + self.notes.len()
             + self.reminders.len()
             + self.preferences.len()

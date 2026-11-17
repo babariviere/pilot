@@ -22,7 +22,7 @@ import { fundingAmount } from "./FundingSettings";
 import { keepField, keepScroll } from "./kept";
 import { newFundingDraft } from "./modelSettingsDraft";
 import { stageMark, stageWord } from "./PlanScreen";
-import { checkCreation, dismissCreation, planMission } from "./planCommands";
+import { checkCreation, planMission } from "./planCommands";
 import type { Plans } from "./planning";
 import {
 	chatChoice,
@@ -268,6 +268,14 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 	};
 	const ownName = () => projectName(chatView(), chatView().current ?? "");
 	const canPlan = () => !!picked() && !!chatChoice() && !chatSelecting() && !elsewhere();
+	const creations = () => planning().setup.creations ?? [];
+	const similar = () =>
+		creations().some(
+			(c) =>
+				c.projectId === picked()?.projectId &&
+				c.goal.trim().replace(/\s+/gu, " ").toLowerCase() ===
+					goalDraft().trim().replace(/\s+/gu, " ").toLowerCase(),
+		);
 	const canStartChat = () =>
 		chatView().availability === "live" && !!picked() && chatView().unsettled.length === 0 && !chatView().creating;
 	// Reopening New renews setup and reads projects: neither is execution authority or a pending send.
@@ -347,30 +355,29 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 						</Text>
 					</If>
 				</View>
-				<If when={off() || canCheck()}>
+				<If when={off()}>
 					<Notice
 						testID="planning-off"
-						text={
-							!off()
-								? planning().createReason
-								: chatsOff()
-									? `${planning().createReason} Nothing can be sent from here.`
-									: `${planning().createReason} You can still start one chat.`
-						}
+						text={`${planning().createReason} ${chatsOff() ? "Nothing can be sent from here." : "You can still start one chat."}`}
 					/>
 				</If>
-				<If when={canCheck()}>
-					<View class="flex-row flex-wrap gap-2">
-						<Action label="Check creation" disabled={newBusy()} onPress={() => void checkCreation(props.plans)} />
-						<If when={props.plans.feed.dismissNew}>
+				<Each of={creations()} key={(c) => c.operationId}>
+					{(c) => (
+						<View class="gap-2 rounded-xl bg-muted px-4 py-3">
+							<Text class="text-sm font-medium text-foreground">Mission creation is not confirmed</Text>
+							<Text class="text-sm text-foreground">{c().goal}</Text>
+							<Text class="text-xs text-muted-foreground">{`Project: ${projectName(chatView(), c().projectId)}. Check only reads its saved result. Other drafts stay available.`}</Text>
 							<Action
-								label="Dismiss"
-								testID="new-dismiss-unconfirmed"
+								label="Check status"
 								disabled={newBusy()}
-								accessibilityLabel="Stop showing the unconfirmed creation. Nothing is sent."
-								onPress={() => void dismissCreation(props.plans)}
+								onPress={() => void checkCreation(props.plans, c().operationId)}
 							/>
-						</If>
+						</View>
+					)}
+				</Each>
+				<If when={canCheck() && creations().length === 0}>
+					<View class="flex-row flex-wrap gap-2">
+						<Action label="Check status" disabled={newBusy()} onPress={() => void checkCreation(props.plans)} />
 					</View>
 				</If>
 				<If when={off() && !canCheck() && props.plans.feed.prepareNew}>
@@ -382,10 +389,10 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 						<View class="flex-row flex-wrap items-center gap-2">
 							<Action
 								variant="primary"
-								label={newBusy() ? "Writing questions…" : "Plan a mission"}
+								label={newBusy() ? "Writing questions…" : similar() ? "Create another" : "Plan a mission"}
 								disabled={off() || empty() || newBusy() || !canPlan()}
 								onPress={() => {
-									if (canPlan()) void planMission(props.plans);
+									if (canPlan()) void planMission(props.plans, similar());
 								}}
 							/>
 							<Action
@@ -401,6 +408,12 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 								}}
 							/>
 						</View>
+						<If when={similar()}>
+							<Text class="text-xs text-muted-foreground">
+								A similar request may already have created a mission. Create another makes a separate request,
+								not a retry. The original stays available to check.
+							</Text>
+						</If>
 						<If when={!picked()}>
 							<Text testID="choose-first" class="text-xs leading-relaxed text-faint">
 								Plan a mission and Start as one chat wait for a project.

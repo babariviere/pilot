@@ -260,6 +260,27 @@ export class ConnectedToday implements DayFeed {
 		return r.outcome ?? { status: "accepted", revision: this.#today.revision, message: "" };
 	}
 
+	async migration(intent: import("./migration").MigrationIntent): Promise<import("./migration").MigrationView> {
+		const r = await call<import("./migration").MigrationView>(this.#window, "day.mission.migration", intent);
+		if (!r.ok && intent.action === "finish" && (r.refusal === "stale" || r.refusal === "denied"))
+			return {
+				state: "rejected",
+				digest: "",
+				message: "The preview changed or access was refused before sending. Nothing was sent. Review again.",
+				oldTitle: null,
+				newTitle: null,
+				members: 0,
+				linkedTickets: 0,
+			};
+		if (!r.ok)
+			throw new Error(
+				intent.action === "read" || intent.action === "history"
+					? "A published replacement and a current migration preview are required."
+					: "Migration is not confirmed. Check status; do not finish again.",
+			);
+		return r.snapshot;
+	}
+
 	/** Sends one mutation, marks its item as sending meanwhile, and reads again after a refusal. */
 	async #send(item: string, name: string, args: unknown): Promise<IntentOutcome> {
 		this.#sending.add(item);
@@ -429,7 +450,7 @@ export class ConnectedToday implements DayFeed {
 	}
 }
 
-const NO_SETUP: Setup = { project: "", model: "", access: "", digest: "", unconfirmed: false };
+const NO_SETUP: Setup = { project: "", model: "", access: "", digest: "", unconfirmed: false, creations: [] };
 
 /**
  * The start and end of day's saved progress over the root. Reads sample the
@@ -790,8 +811,12 @@ export class ConnectedPlans implements PlanningFeed {
 	}
 
 	/** Checks the root's exact saved enrollment. Never resends the goal. */
-	async checkNew(): Promise<PlanOutcome> {
-		const r = await call<{ missionId: string; page: PlanPage | null } | null>(this.#window, "day.plan.checkNew", {});
+	async checkNew(operationId?: string): Promise<PlanOutcome> {
+		const r = await call<{ missionId: string; page: PlanPage | null } | null>(
+			this.#window,
+			"day.plan.checkNew",
+			operationId ? { operationId } : {},
+		);
 		if (!r.ok) return this.#refused(r.refusal, null);
 		if (r.outcome?.status === "accepted" || r.outcome?.status === "rejected") this.#newUnknown = false;
 		const made = r.snapshot;
@@ -998,6 +1023,12 @@ export class ConnectedPlans implements PlanningFeed {
 	/** Applies the exact revision the user opened, by its id and digest. A changed revision is refused. */
 	async confirmRevision(intent: { missionId: string; revisionId: string; digest: string }): Promise<PlanOutcome> {
 		return this.#planWrite(intent.missionId, "day.plan.confirmRevision", { ...intent });
+	}
+	async pauseRevision(intent: { missionId: string; revisionId: string; digest: string }): Promise<PlanOutcome> {
+		return this.#planWrite(intent.missionId, "day.plan.pauseRevision", { ...intent });
+	}
+	async resumeRevision(intent: { missionId: string; pauseOperationId: string }): Promise<PlanOutcome> {
+		return this.#planWrite(intent.missionId, "day.plan.resumeRevision", { ...intent });
 	}
 
 	/** Looks up a Revisit write whose answer was lost. It never sends again. */

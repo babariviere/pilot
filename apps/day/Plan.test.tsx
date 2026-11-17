@@ -154,6 +154,26 @@ test("switching suggestions keeps the text, and drafts come back after leaving",
 	expect(app.value("id:answer-what")).toBe("Skip images");
 });
 
+test("Decide later keeps a decision open and preserves its draft", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:plan-export");
+	await write(app, "what", "My partial scope note");
+	await app.press("id:decide-later");
+	await app.waitFor("id:deferred-note");
+	await app.press("id:goto-review");
+	expect(app.shows("Decide later. Draft kept; decision still open.")).toBe(true);
+	expect(app.enabled(SUBMIT)).toBe(false);
+	await app.press("role:button[Back to Today]");
+	await app.press("id:plan-export");
+	await goTo(app, "what");
+	await app.waitFor("Decide later. Your draft stays; choose or edit an answer when ready.");
+	expect(app.value("id:answer-what")).toBe("My partial scope note");
+	await app.clear("id:answer-what");
+	await write(app, "what", "Keep my custom export scope");
+	expect(app.shows("id:deferred-note")).toBe(false);
+	expect(app.value("id:answer-what")).toBe("Keep my custom export scope");
+});
+
 test("typing keeps its focus and text while answers save", async () => {
 	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:plan-export");

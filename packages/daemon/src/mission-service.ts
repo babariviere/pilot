@@ -312,8 +312,7 @@ export class MissionService {
 			},
 			missionResumeAuthorized: (sessionId, operationId) => this.controls.resumeAuthorized(sessionId, operationId),
 			missionAdmissionHeld: (sessionId) => {
-				const member = store.membership(sessionId);
-				return member ? store.controls.fenceCurrent(member.missionId).held : false;
+				return this.controls.fence(sessionId)?.held ?? false;
 			},
 			coordinatorSourceMembers: (sessionId) => {
 				const member = store.membership(sessionId);

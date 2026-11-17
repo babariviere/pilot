@@ -33,6 +33,31 @@ fn pending(ops: &[Value]) -> bool {
     crate::plan_host::unsettled_operation(ops).is_some()
 }
 
+fn checkpoint_current(r: &Value, checkpoint: &Value) -> bool {
+    checkpoint["state"] == "paused"
+        && checkpoint["fence"]["pauseGeneration"] == r["control"]["pauseGeneration"]
+        && checkpoint["fence"]["stopGeneration"] == r["control"]["stopGeneration"]
+        && checkpoint["fence"]["pauseGeneration"].is_u64()
+        && checkpoint["fence"]["stopGeneration"].is_u64()
+        && checkpoint["members"].is_array()
+        && arr(&checkpoint["members"])
+            .iter()
+            .all(|m| matches!(m["state"].as_str(), Some("paused" | "held")))
+}
+
+fn checkpoint_for(r: &Value, proposal: &Value, checkpoint: &Value) -> bool {
+    checkpoint_current(r, checkpoint)
+        && checkpoint["proposalId"] == proposal["id"]
+        && checkpoint["digest"] == proposal["digest"]
+        && checkpoint["source"] == proposal["source"]
+        && checkpoint["source"] == r["source"]
+        && arr(&r["affectedSessions"]).iter().all(|owner| {
+            arr(&checkpoint["members"])
+                .iter()
+                .any(|m| m["sessionId"] == *owner)
+        })
+}
+
 /// Whether a revision only adds tasks. That changes nothing a working chat uses, so
 /// the daemon applies it without Pause.
 fn adds_only(d: &Value) -> bool {
@@ -58,6 +83,10 @@ pub fn view(read: &Value, ops: &[Value]) -> Revisit {
     let decisions = arr(&r["decisions"]);
     let finished = |t: &&Value| matches!(t["status"].as_str(), Some("done" | "dropped"));
     let paused = r["control"]["state"] == "paused" && r["control"]["held"] == true;
+    let scoped_paused = arr(&r["workPauses"])
+        .iter()
+        .any(|v| checkpoint_for(r, p, v));
+    let selective = r["affectedSessions"].is_array() && r["workPauses"].is_array();
     let repreview = p.is_object() && r["pending"]["current"] == false && paused;
     let revision = p.is_object().then(|| {
         let d = &p["delta"];
@@ -65,13 +94,26 @@ pub fn view(read: &Value, ops: &[Value]) -> Revisit {
         let unknown = ops.iter().any(|op| {
             matches!(
                 op["kind"].as_str(),
-                Some("revision-confirm" | "revision-preview" | "plan-revisit")
+                Some(
+                    "revision-confirm"
+                        | "revision-preview"
+                        | "plan-revisit"
+                        | "revision-pause"
+                        | "revision-resume"
+                )
             ) && !matches!(
                 op["state"].as_str(),
                 Some("accepted" | "rejected" | "not-sent")
             )
         });
         Revision {
+            selective_pause: selective,
+            affected_work: arr(&r["affectedSessions"]).len() as u32,
+            affected_tasks: tasks
+                .iter()
+                .filter(|t| arr(&r["affectedTasks"]).contains(&t["id"]))
+                .map(|t| format!("#{} {}", t["number"], s(&t["title"])))
+                .collect(),
             id: s(&p["id"]),
             digest: s(&p["digest"]),
             summary: s(&p["summary"]),
@@ -164,9 +206,9 @@ pub fn view(read: &Value, ops: &[Value]) -> Revisit {
                     text: s(&c["text"]),
                 })
                 .collect(),
-            pause: if paused {
+            pause: if paused || scoped_paused {
                 PauseNeed::Paused
-            } else if adds_only {
+            } else if adds_only || (selective && arr(&r["affectedSessions"]).is_empty()) {
                 PauseNeed::None
             } else {
                 PauseNeed::Needed
@@ -181,6 +223,26 @@ pub fn view(read: &Value, ops: &[Value]) -> Revisit {
     let questions = read["view"]["interview"]["kind"] == "revisit"
         && read["view"]["interview"]["submission"].is_null();
     Revisit {
+        paused_work: arr(&r["workPauses"])
+            .iter()
+            .find(|v| {
+                v["state"] != "resumed"
+                    && (!arr(&v["members"]).is_empty() || !arr(&v["taskIds"]).is_empty())
+            })
+            .map(|v| crate::plan::RevisionPause {
+                operation_id: s(&v["operationId"]),
+                state: if !checkpoint_current(r, v)
+                    || ops.iter().any(|o| {
+                        o["kind"] == "revision-resume"
+                            && o["pauseOperationId"] == v["operationId"]
+                            && matches!(o["state"].as_str(), Some("pending" | "unknown"))
+                    }) {
+                    "unknown".into()
+                } else {
+                    s(&v["state"])
+                },
+                members: arr(&v["members"]).len() as u32,
+            }),
         available: true,
         reason: s(&read["revisit"]["reason"]),
         stage: if revision.is_some() {
@@ -214,6 +276,41 @@ pub fn view(read: &Value, ops: &[Value]) -> Revisit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selective_pause_is_an_exact_step_and_domain_unknown_never_authorizes_apply() {
+        let mut r = read();
+        r["revision"]["affectedSessions"] = json!(["worker"]);
+        r["revision"]["workPauses"] = json!([]);
+        let intent = ConfirmRevisionIntent {
+            mission_id: "mission".into(),
+            revision_id: "proposal".into(),
+            digest: "c".repeat(64),
+        };
+        assert_eq!(view(&r, &[]).revision.unwrap().pause, PauseNeed::Needed);
+        assert_eq!(pause(&r, &intent).unwrap().1["purpose"], "revision-pause");
+        assert!(confirm(&r, &intent).is_err());
+        r["revision"]["workPauses"] =
+            json!([{"proposalId":"proposal","digest":"c".repeat(64),"state":"unknown"}]);
+        assert!(confirm(&r, &intent).is_err());
+        r["revision"]["workPauses"][0]["state"] = json!("paused");
+        r["revision"]["control"]["pauseGeneration"] = json!(0);
+        r["revision"]["control"]["stopGeneration"] = json!(0);
+        r["revision"]["pending"]["proposal"]["source"] = r["revision"]["source"].clone();
+        r["revision"]["workPauses"][0]["source"] = r["revision"]["source"].clone();
+        r["revision"]["workPauses"][0]["fence"] = json!({"pauseGeneration":0,"stopGeneration":0});
+        r["revision"]["workPauses"][0]["members"] =
+            json!([{"sessionId":"worker","state":"paused"}]);
+        assert!(confirm(&r, &intent).is_ok());
+        r["revision"]["control"]["stopGeneration"] = json!(1);
+        assert!(
+            confirm(&r, &intent).is_err(),
+            "Stop invalidates the checkpoint proof"
+        );
+        assert_eq!(view(&r, &[]).revision.unwrap().pause, PauseNeed::Needed);
+        r["revision"]["control"]["stopGeneration"] = json!(0);
+        r["revision"]["pending"]["proposal"]["digest"] = json!("d".repeat(64));
+        assert!(confirm(&r, &intent).is_err());
+    }
 
     fn read() -> Value {
         json!({"fresh":true,"missionId":"mission","revisit":{"available":true,"source":"a".repeat(64),"contextDigest":"b".repeat(64)},"revision":{"source":"a".repeat(64),"mission":{"goal":"Old"},"brief":{"markdown":"Agreed"},"tasks":[{"id":"open","number":1,"title":"Open","body":"Before","status":"todo"},{"id":"done","status":"done"}],"decisions":[{"id":"decision","number":1,"text":"Current guidance"}],"control":{"state":"running","held":false},"pending":{"current":true,"proposal":{"id":"proposal","digest":"c".repeat(64),"summary":"New goal","delta":{"goal":"New","tasks":[{"id":"open","body":"After","dependsOn":[]}],"decisions":[{"id":"decision","action":"withdraw","reason":"Changed need"}],"corrections":[{"kind":"permission","text":"Unapplied"}]}}}}})
@@ -345,12 +442,19 @@ pub fn confirm(read: &Value, intent: &ConfirmRevisionIntent) -> Result<(String, 
     let r = &read["revision"];
     let p = &r["pending"]["proposal"];
     let paused = r["control"]["state"] == "paused" && r["control"]["held"] == true;
+    let selective = r["affectedSessions"].is_array() && r["workPauses"].is_array();
+    let scoped_paused = arr(&r["workPauses"])
+        .iter()
+        .any(|v| checkpoint_for(r, p, v));
     if read["fresh"] != true
         || read["missionId"] != intent.mission_id
         || r["pending"]["current"] != true
         || p["id"] != intent.revision_id
         || p["digest"] != intent.digest
-        || !(paused || adds_only(&p["delta"]))
+        || !(paused
+            || scoped_paused
+            || adds_only(&p["delta"])
+            || (selective && arr(&r["affectedSessions"]).is_empty()))
     {
         return Err((
             OutcomeStatus::Rejected,
@@ -360,5 +464,50 @@ pub fn confirm(read: &Value, intent: &ConfirmRevisionIntent) -> Result<(String, 
     Ok((
         s(&r["source"]),
         json!({"purpose":"revision-confirm", "proposalId":p["id"], "digest":p["digest"], "source":r["source"]}),
+    ))
+}
+
+/// Prepare the exact affected-work checkpoint, not a mission-wide Pause.
+pub fn pause(read: &Value, intent: &ConfirmRevisionIntent) -> Result<(String, Value), Refusal> {
+    let r = &read["revision"];
+    let p = &r["pending"]["proposal"];
+    if read["fresh"] != true
+        || read["missionId"] != intent.mission_id
+        || r["pending"]["current"] != true
+        || p["id"] != intent.revision_id
+        || p["digest"] != intent.digest
+        || !r["workPauses"].is_array()
+        || !r["affectedSessions"].is_array()
+    {
+        return Err((
+            OutcomeStatus::Stale,
+            "Read the exact affected-work revision again. Nothing was sent.",
+        ));
+    }
+    Ok((
+        s(&r["source"]),
+        json!({"purpose":"revision-pause","proposalId":p["id"],"digest":p["digest"],"source":r["source"]}),
+    ))
+}
+
+pub fn resume(
+    read: &Value,
+    intent: &crate::plan::ResumeRevisionIntent,
+) -> Result<(String, Value), Refusal> {
+    let r = &read["revision"];
+    if read["fresh"] != true
+        || read["missionId"] != intent.mission_id
+        || !arr(&r["workPauses"])
+            .iter()
+            .any(|v| v["operationId"] == intent.pause_operation_id && checkpoint_current(r, v))
+    {
+        return Err((
+            OutcomeStatus::Stale,
+            "Read the exact paused work again. Nothing was sent.",
+        ));
+    }
+    Ok((
+        s(&r["source"]),
+        json!({"purpose":"revision-resume","pauseOperationId":intent.pause_operation_id,"source":r["source"]}),
     ))
 }

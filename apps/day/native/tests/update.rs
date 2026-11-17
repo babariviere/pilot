@@ -13,6 +13,8 @@ use pilot_day_native::{
 
 fn view() -> SavedView {
     SavedView {
+        deferred_questions: vec![],
+        replanning_from: None,
         place: PlaceKind::Plan,
         id: "export".into(),
         update: true,
@@ -156,6 +158,19 @@ fn connection_setup_draft_round_trips_and_older_windows_still_open() {
     json.as_object_mut().unwrap().remove("connectionSettings");
     let old: SavedView = nsh_core::element::from_json(&json).unwrap();
     assert!(old.connection_settings.is_empty());
+}
+
+#[test]
+fn deferred_question_disclosure_round_trips_without_becoming_an_answer() {
+    let mut original = view();
+    original.deferred_questions = vec![r#"["round/question","exact-digest"]"#.into()];
+    let mut json = serde_json::to_value(&original).unwrap();
+    let restored: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert_eq!(restored.deferred_questions, original.deferred_questions);
+    assert!(restored.text_bytes() >= original.deferred_questions[0].len());
+    json.as_object_mut().unwrap().remove("deferredQuestions");
+    let legacy: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert!(legacy.deferred_questions.is_empty());
 }
 
 #[test]

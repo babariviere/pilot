@@ -225,6 +225,11 @@ async fn run(
     call.command
         .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
     shared.open()?;
+    if let Command::Migration(request) = &call.command {
+        let snapshot =
+            super::migration::handle(t, journal, shared, epoch, request, &call.gate).await?;
+        return Ok(json!({"snapshot":snapshot,"outcome":null}));
+    }
     if let Command::TodayScope(request) = &call.command {
         let snapshot = super::today_scope::read(root, journal, shared, request, &call.gate).await?;
         return Ok(json!({"snapshot":snapshot,"outcome":null}));
@@ -538,6 +543,7 @@ async fn run(
             unreachable!("handled mission thread command")
         }
         Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot => None,
+        Command::Migration(_) => unreachable!("handled migration command"),
         Command::PlanChat { .. }
         | Command::PlanChatSnapshot(_)
         | Command::PlanLeave { .. }
@@ -613,6 +619,16 @@ async fn run(
                 crate::plan_revision_host::confirm(read, intent)
             })?)
         }
+        Command::PauseRevision(intent) => {
+            Some(planning_request(host, &intent.mission_id, |read| {
+                crate::plan_revision_host::pause(read, intent)
+            })?)
+        }
+        Command::ResumeRevision(intent) => {
+            Some(planning_request(host, &intent.mission_id, |read| {
+                crate::plan_revision_host::resume(read, intent)
+            })?)
+        }
         Command::CheckRevision(r) => {
             let id = host
                 .planning_operations(&r.mission_id)
@@ -620,7 +636,13 @@ async fn run(
                 .find(|o| {
                     matches!(
                         o["kind"].as_str(),
-                        Some("plan-revisit" | "revision-preview" | "revision-confirm")
+                        Some(
+                            "plan-revisit"
+                                | "revision-preview"
+                                | "revision-confirm"
+                                | "revision-pause"
+                                | "revision-resume"
+                        )
                     ) && matches!(o["state"].as_str(), Some("pending" | "unknown"))
                         && (r.revision_id.is_empty() || o["proposalId"] == r.revision_id)
                 })
@@ -648,11 +670,14 @@ async fn run(
                 .ok_or(Error::Unknown)?;
             Some(Work::CheckPlanning(id))
         }
-        Command::CheckNew => {
+        Command::CheckNew(operation) => {
             let record = host
                 .planning_enrollments()
                 .into_iter()
-                .find(|r| matches!(r["state"].as_str(), Some("pending" | "unknown")))
+                .find(|r| {
+                    matches!(r["state"].as_str(), Some("pending" | "unknown"))
+                        && operation.as_ref().is_none_or(|id| r["operationId"] == *id)
+                })
                 .ok_or(Error::Unknown)?;
             let id = record["operationId"]
                 .as_str()
@@ -808,6 +833,8 @@ async fn run(
         | Command::RepairApply(crate::plan::RepairApplyIntent { mission_id: id, .. })
         | Command::Revisit(id)
         | Command::ConfirmRevision(crate::plan::ConfirmRevisionIntent { mission_id: id, .. })
+        | Command::PauseRevision(crate::plan::ConfirmRevisionIntent { mission_id: id, .. })
+        | Command::ResumeRevision(crate::plan::ResumeRevisionIntent { mission_id: id, .. })
         | Command::CheckRevision(crate::plan::RevisionRef { mission_id: id, .. })
         | Command::CheckWork(id) => {
             // Losing a newer read cannot erase an entered write's exact outcome.
@@ -820,13 +847,13 @@ async fn run(
         Command::PlanCheck { mission, .. } => {
             value = planning(host, mission).unwrap_or(Value::Null)
         }
-        Command::Create(_) | Command::CheckNew => {
+        Command::Create(_) | Command::CheckNew(_) => {
             let record = host
                 .planning_enrollments()
                 .into_iter()
                 .find(|r| match &call.command {
                     Command::Create(intent) => r["setupDigest"] == intent.setup,
-                    Command::CheckNew => enrollment
+                    Command::CheckNew(_) => enrollment
                         .as_ref()
                         .is_some_and(|id| r["operationId"] == *id),
                     _ => false,
@@ -840,7 +867,7 @@ async fn run(
                 // Create already read its mission after the ACK. CheckNew
                 // must select the receipt's mission, not its enrollment ID.
                 // A confirmed receipt survives a failed passive refresh.
-                if matches!(&call.command, Command::CheckNew) {
+                if matches!(&call.command, Command::CheckNew(_)) {
                     let current = shared.epoch.load(Ordering::SeqCst);
                     let _ = super::read_planning(t, shared, current, mission).await;
                 }

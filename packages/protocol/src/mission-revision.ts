@@ -52,3 +52,18 @@ export interface MissionRevisionProposal {
 	repreviewOf?: { id: string; digest: string };
 	confirmation?: { by: "user"; at: number; humanSource: string };
 }
+
+/** Native /api/operations, targetId=mission, bindingId=source, bindingGeneration=1. */
+export interface MissionRevisionPauseIntent {
+	purpose: "revision-pause";
+	proposalId: string;
+	digest: string;
+	source: string;
+}
+
+/** Separate explicit release; confirmation never resumes work. */
+export interface MissionRevisionResumeIntent {
+	purpose: "revision-resume";
+	pauseOperationId: string;
+	source: string;
+}

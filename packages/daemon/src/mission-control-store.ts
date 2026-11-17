@@ -3,9 +3,20 @@ import type { MissionControl, MissionControlOperation, MissionReport } from "@pi
 import { Conflict } from "./errors.ts";
 import type { MissionContinuation } from "./mission-continuation.ts";
 import { canonicalJSON } from "./operation-journal.ts";
+import type { RevisionWorkPause } from "./revision-work-pause.ts";
 
 export const MISSION_CONTROL_SCHEMA = `
 CREATE TABLE IF NOT EXISTS mission_controls (mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE, record TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS mission_revision_pauses (operation_id TEXT PRIMARY KEY, mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE, record TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS mission_revision_pauses_active ON mission_revision_pauses(mission_id,json_extract(record,'$.state'));
+-- Pause ownership ignores intentional content edits but must detect assignment/status ABA.
+CREATE TABLE IF NOT EXISTS task_pause_ownership (task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE, revision INTEGER NOT NULL);
+INSERT OR IGNORE INTO task_pause_ownership SELECT id,1 FROM tasks;
+CREATE TRIGGER IF NOT EXISTS task_pause_ownership_insert AFTER INSERT ON tasks BEGIN
+ INSERT INTO task_pause_ownership VALUES(NEW.id,1); END;
+CREATE TRIGGER IF NOT EXISTS task_pause_ownership_update AFTER UPDATE OF session_id,status,assignment ON tasks
+WHEN OLD.session_id IS NOT NEW.session_id OR OLD.status IS NOT NEW.status OR OLD.assignment IS NOT NEW.assignment
+BEGIN UPDATE task_pause_ownership SET revision=revision+1 WHERE task_id=NEW.id; END;
 CREATE TABLE IF NOT EXISTS mission_control_operations (operation_id TEXT PRIMARY KEY, record TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS mission_reports (report_id TEXT PRIMARY KEY, mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE, task_id TEXT NOT NULL, record TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS mission_report_scope ON mission_reports(mission_id,task_id);
@@ -66,6 +77,30 @@ export class MissionControlStore {
 		return row
 			? JSON.parse(String(row.record))
 			: { version: 1, missionId, revision: 0, pauseGeneration: 0, stopGeneration: 0, held: false, state: "running" };
+	}
+	revisionPause(operationId: string): RevisionWorkPause | undefined {
+		const row = this.port.one("SELECT record FROM mission_revision_pauses WHERE operation_id=?", operationId);
+		return row ? JSON.parse(String(row.record)) : undefined;
+	}
+	revisionPauses(missionId: string): RevisionWorkPause[] {
+		return this.port
+			.all(
+				"SELECT record FROM mission_revision_pauses WHERE mission_id=? AND json_extract(record,'$.state')<>'resumed' ORDER BY rowid",
+				missionId,
+			)
+			.map((row) => JSON.parse(String(row.record)));
+	}
+	writeRevisionPause(record: RevisionWorkPause): Promise<void> {
+		this.port.run(
+			"INSERT INTO mission_revision_pauses VALUES(?,?,?) ON CONFLICT(operation_id) DO UPDATE SET record=excluded.record",
+			record.operationId,
+			record.missionId,
+			canonicalJSON(record),
+		);
+		this.flush(record.missionId);
+		this.port.changed(record.missionId);
+		// Await this exact write's fence, not a second replica waiter that may settle first.
+		return this.flushing.get(record.missionId) ?? this.port.durable();
 	}
 	operation(id: string): MissionControlOperation | undefined {
 		const row = this.port.one("SELECT record FROM mission_control_operations WHERE operation_id=?", id);

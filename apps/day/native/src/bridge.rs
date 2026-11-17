@@ -108,6 +108,9 @@ pub const METHODS: &[&str] = &[
     "day.plan.repairApply",
     "day.plan.revisit",
     "day.plan.confirmRevision",
+    "day.plan.pauseRevision",
+    "day.plan.resumeRevision",
+    "day.mission.migration",
     "day.plan.checkRevision",
     "day.plan.checkWork",
     "day.plan.check",
@@ -371,13 +374,16 @@ pub(crate) enum Command {
     Revisit(String),
     /// Apply the exact revision the user confirmed (revision-confirm).
     ConfirmRevision(crate::plan::ConfirmRevisionIntent),
+    PauseRevision(crate::plan::ConfirmRevisionIntent),
+    ResumeRevision(crate::plan::ResumeRevisionIntent),
+    Migration(crate::host::migration::Request),
     /// Look up a Revisit write whose answer was lost. Never resends.
     CheckRevision(crate::plan::RevisionRef),
     PlanCheck {
         mission: String,
         interview: String,
     },
-    CheckNew,
+    CheckNew(Option<String>),
     DismissNew,
     Attention,
     Reply(crate::model::ReplyIntent),
@@ -909,7 +915,6 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
         | "day.window.read"
         | "day.plan.prepare"
         | "day.attention.read"
-        | "day.plan.checkNew"
         | "day.plan.dismissNew"
         | "day.plan.inventory"
         | "day.plan.inventorySnapshot"
@@ -923,7 +928,6 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 "day.today.read" => C::Today,
                 "day.window.read" => C::WindowRead,
                 "day.plan.prepare" => C::Prepare,
-                "day.plan.checkNew" => C::CheckNew,
                 "day.plan.dismissNew" => C::DismissNew,
                 "day.plan.inventory" => C::PlanningInventory,
                 "day.plan.inventorySnapshot" => C::PlanningInventorySnapshot,
@@ -1062,11 +1066,26 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             mission(&r.mission_id)?;
             C::Revisit(r.mission_id)
         }
-        "day.plan.confirmRevision" => {
+        "day.plan.confirmRevision" | "day.plan.pauseRevision" => {
             let r: crate::plan::ConfirmRevisionIntent = decode(&args)?;
             mission(&r.mission_id)?;
             id(&r.revision_id)?;
-            C::ConfirmRevision(r)
+            if name == "day.plan.pauseRevision" {
+                C::PauseRevision(r)
+            } else {
+                C::ConfirmRevision(r)
+            }
+        }
+        "day.plan.resumeRevision" => {
+            let r: crate::plan::ResumeRevisionIntent = decode(&args)?;
+            mission(&r.mission_id)?;
+            id(&r.pause_operation_id)?;
+            C::ResumeRevision(r)
+        }
+        "day.mission.migration" => {
+            let r: crate::host::migration::Request = exact(args)?;
+            r.validate()?;
+            C::Migration(r)
         }
         "day.plan.checkRevision" => {
             let r: crate::plan::RevisionRef = decode(&args)?;
@@ -1104,6 +1123,18 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: crate::model::RenameIntent = decode(&args)?;
             mission(&r.mission_id)?;
             C::Rename(r)
+        }
+        "day.plan.checkNew" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Lookup {
+                operation_id: Option<String>,
+            }
+            let lookup: Lookup = exact(args)?;
+            if let Some(ref operation) = lookup.operation_id {
+                mission(operation)?;
+            }
+            C::CheckNew(lookup.operation_id)
         }
         "day.plan.create" => C::Create(decode(&args)?),
         "day.plan.startWork" => {

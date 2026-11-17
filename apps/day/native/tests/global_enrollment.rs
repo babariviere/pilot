@@ -251,3 +251,61 @@ fn a_dismissed_unconfirmed_creation_sends_nothing_and_lets_a_new_one_start() {
     f.stats("close");
     assert!(f.child.wait().unwrap().success());
 }
+
+#[test]
+fn similar_uncertain_creations_require_an_explicit_new_request_and_keep_exact_lookup() {
+    let mut f = Fixture::with_daemon("day-planning-enrollment.ts");
+    command(&mut f, "quiet", true);
+    let (host, b) = global(&f);
+    choose(&f, &b);
+    let setup = prepare(&f, &b)["value"]["snapshot"].clone();
+    command(&mut f, "lost", true);
+    let first = f.call(
+        &b,
+        "day.plan.create",
+        json!({"setup":setup["digest"],"goal":"Export a chat"}),
+    );
+    assert_eq!(first["value"]["outcome"]["status"], "unknown", "{first}");
+    let fresh = prepare(&f, &b)["value"]["snapshot"].clone();
+    assert_eq!(fresh["creations"].as_array().unwrap().len(), 1);
+    let original = fresh["creations"][0]["operationId"].clone();
+    let posts = f.stats("stats")["posts"].clone();
+    let duplicate = f.call(
+        &b,
+        "day.plan.create",
+        json!({"setup":fresh["digest"],"goal":"  export   A CHAT "}),
+    );
+    assert_eq!(
+        duplicate["value"]["outcome"]["status"], "unknown",
+        "{duplicate}"
+    );
+    assert_eq!(
+        f.stats("stats")["posts"],
+        posts,
+        "similar intent sends nothing"
+    );
+    command(&mut f, "lost", false);
+    let another = f.call(
+        &b,
+        "day.plan.create",
+        json!({"setup":fresh["digest"],"goal":"Export a chat","createAnother":true}),
+    );
+    assert_eq!(
+        another["value"]["outcome"]["status"], "accepted",
+        "{another}"
+    );
+    assert_eq!(host.planning_enrollments().len(), 2);
+    let retained = prepare(&f, &b)["value"]["snapshot"].clone();
+    assert_eq!(retained["creations"][0]["operationId"], original);
+    let before_check = f.stats("stats")["posts"].clone();
+    let check = f.call(&b, "day.plan.checkNew", json!({"operationId":original}));
+    assert_eq!(check["value"]["outcome"]["status"], "accepted", "{check}");
+    assert_eq!(
+        f.stats("stats")["posts"],
+        before_check,
+        "lookup never recreates"
+    );
+    close(b);
+    f.stats("close");
+    assert!(f.child.wait().unwrap().success());
+}

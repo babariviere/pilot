@@ -66,6 +66,9 @@ impl PlanningRecord {
                         | "plan-repair-start"
                         | "revision-preview"
                         | "revision-confirm"
+                        | "revision-pause"
+                        | "revision-resume"
+                        | "mission-replan-finish"
                         | "intake-triage"
                         | "intake-start"
                         | "native-chat-create"
@@ -150,6 +153,7 @@ impl PlanningRecord {
             .unwrap_or(Value::Null);
         json!({"operationId":self.id(), "missionId":if enrollment {self.receipt.as_ref().map(|r| r["result"]["missionId"].clone()).unwrap_or(Value::Null)} else {json!(self.mission())},
             "proposalId":request["proposalId"],
+            "pauseOperationId":request["pauseOperationId"],
             "enrollmentId":if enrollment {json!(self.mission())} else {Value::Null}, "setupDigest":self.setup_digest,
             "kind":self.operation["kind"],
             "state": if self.not_sent {"not-sent"} else if self.dismissed {"dismissed"} else {self.receipt.as_ref().and_then(|r| r["state"].as_str()).unwrap_or("unknown")},
@@ -204,6 +208,9 @@ fn record_pinned(
                     | "plan-repair-start"
                     | "revision-preview"
                     | "revision-confirm"
+                    | "revision-pause"
+                    | "revision-resume"
+                    | "mission-replan-finish"
                     | "intake-triage"
                     | "intake-start"
                     | "native-chat-create"
@@ -250,6 +257,9 @@ fn record_pinned(
                     | "thread-reference"
                     | "thread-send"
                     | "chat-continue"
+                    | "revision-pause"
+                    | "revision-resume"
+                    | "mission-replan-finish"
             )
         ) && request["expected"]["fence"]["missionId"] != mission)
     {
@@ -312,6 +322,46 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
         && r["result"]["admissionId"] != op["operationId"]
     {
         return Err(Error::Unknown);
+    }
+    if matches!(
+        op["kind"].as_str(),
+        Some("revision-pause" | "revision-resume")
+    ) && r["state"] == "accepted"
+    {
+        let p: Value = serde_json::from_str(op["payload"].as_str().ok_or(Error::Unknown)?)
+            .map_err(|_| Error::Unknown)?;
+        let result = &r["result"];
+        if result["missionId"] != op["targetId"]
+            || (op["kind"] == "revision-pause"
+                && (result["operationId"] != op["operationId"]
+                    || result["proposalId"] != p["proposalId"]
+                    || result["digest"] != p["digest"]
+                    || result["source"] != p["source"]
+                    || result["state"] != "paused"))
+            || (op["kind"] == "revision-resume"
+                && (result["operationId"] != p["pauseOperationId"]
+                    || result["resumeOperationId"] != op["operationId"]
+                    || result["state"] != "resumed"))
+        {
+            return Err(Error::Unknown);
+        }
+    }
+    if op["kind"] == "mission-replan-finish" && r["state"] == "accepted" {
+        let p: Value = serde_json::from_str(op["payload"].as_str().ok_or(Error::Unknown)?)
+            .map_err(|_| Error::Unknown)?;
+        let mut expected = p;
+        expected
+            .as_object_mut()
+            .ok_or(Error::Unknown)?
+            .remove("purpose");
+        expected["operationId"] = op["operationId"].clone();
+        if r["result"]["version"] != 1
+            || r["result"]["oldMissionId"] != op["targetId"]
+            || r["result"]["input"] != expected
+            || !r["result"]["finishedAt"].is_u64()
+        {
+            return Err(Error::Unknown);
+        }
     }
     if matches!(
         op["kind"].as_str(),
@@ -424,6 +474,32 @@ pub(super) fn enrollment_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selective_checkpoint_needs_exact_domain_completion_not_outer_acceptance() {
+        let op = json!({"kind":"revision-pause","operationId":"pause","payloadHash":"hash","destination":{},"targetId":"m", "payload":json!({"proposalId":"p","digest":"d","source":"s"}).to_string()});
+        let mut receipt = json!({"operationId":"pause","payloadHash":"hash","destination":{},"targetId":"m","state":"accepted","result":{"operationId":"pause","missionId":"m","proposalId":"p","digest":"d","source":"s","state":"paused"}});
+        assert!(exact(receipt.clone(), &op).is_ok());
+        for state in ["unknown", "entered", "resuming"] {
+            receipt["result"]["state"] = json!(state);
+            assert_eq!(exact(receipt.clone(), &op).err(), Some(Error::Unknown));
+        }
+        receipt["result"]["state"] = json!("paused");
+        receipt["result"]["digest"] = json!("other");
+        assert_eq!(exact(receipt, &op).err(), Some(Error::Unknown));
+    }
+
+    #[test]
+    fn migration_receipt_binds_exact_old_new_and_no_transfer() {
+        let p = json!({"purpose":"mission-replan-finish","newMissionId":"new","projectId":"project","oldSource":"old-source","newSource":"new-source","transferLinear":false});
+        let op = json!({"kind":"mission-replan-finish","operationId":"finish","payloadHash":"hash","destination":{},"targetId":"old", "payload":p.to_string()});
+        let mut input = p;
+        input.as_object_mut().unwrap().remove("purpose");
+        input["operationId"] = json!("finish");
+        let mut receipt = json!({"operationId":"finish","payloadHash":"hash","destination":{},"targetId":"old","state":"accepted","result":{"version":1,"oldMissionId":"old","input":input,"finishedAt":123}});
+        assert!(exact(receipt.clone(), &op).is_ok());
+        receipt["result"]["input"]["transferLinear"] = json!(true);
+        assert_eq!(exact(receipt, &op).err(), Some(Error::Unknown));
+    }
     #[test]
     fn start_ack_requires_exact_kernel_admission_and_worker_identity() {
         let op = json!({"kind":"plan-start", "operationId":"start", "payloadHash":"digest", "destination":{"home":"one"}, "targetId":"mission"});

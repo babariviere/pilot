@@ -126,6 +126,7 @@ impl Prepared {
         .map_err(|_| Error::Invalid)?;
         Ok(Self {
             setup: Setup {
+                creations: vec![],
                 allowance_micros: profile["allowanceMicros"].as_u64(),
                 allowance_required: profile.get("allowanceMicros").is_some(),
                 project: "Selected project".into(),
@@ -237,6 +238,23 @@ pub(super) async fn prepare(
             && r.operation["kind"] == "planning-enroll"
             && r.pending()
     });
+    let creations = journal
+        .planning
+        .values()
+        .filter(|r| {
+            planning::in_scope(&r.source, &t.source)
+                && r.operation["kind"] == "planning-enroll"
+                && r.pending()
+        })
+        .filter_map(|r| {
+            let p: Value = serde_json::from_str(r.operation["payload"].as_str()?).ok()?;
+            Some(crate::plan::NewCreation {
+                operation_id: r.id().into(),
+                goal: p["goal"].as_str()?.into(),
+                project_id: p["projectId"].as_str()?.into(),
+            })
+        })
+        .collect::<Vec<_>>();
     shared.current(epoch)?;
     let choice = shared
         .chat_choice
@@ -267,12 +285,14 @@ pub(super) async fn prepare(
     }) {
         s.epoch = Some(epoch);
         s.prepared.setup.unconfirmed = unconfirmed;
+        s.prepared.setup.creations = creations;
     } else {
         let mut prepared = Prepared::new(&transport.source, model, profile)?;
         prepared.setup.project = choice
             .as_ref()
             .map_or_else(|| "Selected project".into(), |c| c.project_path.clone());
         prepared.setup.unconfirmed = unconfirmed;
+        prepared.setup.creations = creations;
         prepared.choice = choice;
         *slot = Some(Selection {
             epoch: Some(epoch),
@@ -405,6 +425,28 @@ pub(super) async fn send(
         selected.prepared.clone()
     };
     let mut record = prepared.record(&t.source, &intent)?;
+    // Exact setup retries above are lookup-only. A fresh setup cannot silently
+    // duplicate a similar uncertain goal, even after a restart or UI bypass.
+    if !intent.create_another
+        && journal.planning.values().any(|r| {
+            if !planning::in_scope(&r.source, &t.source)
+                || r.operation["kind"] != "planning-enroll"
+                || !r.pending()
+            {
+                return false;
+            }
+            let Ok(p) =
+                serde_json::from_str::<Value>(r.operation["payload"].as_str().unwrap_or(""))
+            else {
+                return false;
+            };
+            p["projectId"] == prepared.profile["projectId"]
+                && similar_goal(p["goal"].as_str().unwrap_or(""), &intent.goal)
+        })
+    {
+        return Ok(shared.outcome(crate::model::OutcomeStatus::Unknown,
+            "A similar creation is not confirmed. Check status, or explicitly create another. Nothing was sent."));
+    }
     if let Err(error) = qualify(t, shared, epoch, &prepared).await {
         if let Some(selection) = shared
             .enrollment
@@ -468,6 +510,16 @@ pub(super) async fn send(
     }
 }
 
+fn similar_goal(a: &str, b: &str) -> bool {
+    let words = |s: &str| {
+        s.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    words(a) == words(b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,6 +542,7 @@ mod tests {
             "profile":{"version":1,"id":"native-mission-planning","source":"skills","commit":"a".repeat(40)}});
         let prepared = Prepared::new(&source, "faux/faux-1", profile).unwrap();
         let intent = |replaces: Option<&str>| NewIntent {
+            create_another: false,
             allowance_micros: None,
             goal: "Re-plan the docs".into(),
             setup: prepared.setup.digest.clone(),

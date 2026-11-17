@@ -112,7 +112,7 @@ import {
 	reviewReferences,
 	reviewResultWrite,
 } from "./mission-review-contract.ts";
-import { MISSION_REVISION_SCHEMA, MissionRevisions, revisionText } from "./mission-revisions.ts";
+import { MISSION_REVISION_SCHEMA, MissionRevisions, revisionDigest, revisionText } from "./mission-revisions.ts";
 import { MISSION_THREAD_SCHEMA, MissionThreadStore } from "./mission-thread-store.ts";
 import { nativeReviewProfile, nativeReviewRecord } from "./native-review-records.ts";
 import { reasonLine } from "./needs-you-reason.ts";
@@ -176,6 +176,7 @@ CREATE TABLE IF NOT EXISTS mission_successors (
 	updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS mission_successors_by_new ON mission_successors(new_mission_id);
+CREATE TABLE IF NOT EXISTS mission_successor_finishes (operation_id TEXT PRIMARY KEY, record TEXT NOT NULL);
 `;
 
 const SCHEMA = `
@@ -1569,6 +1570,22 @@ export class MissionStore {
 	sharedDefinitionRevision(taskId: string): number {
 		return Number(this.one("SELECT revision FROM shared_task_definitions WHERE id=?", taskId)?.revision ?? 0);
 	}
+	/** Narrow Pause binding: full content can change intentionally, writer ownership cannot. */
+	pauseTaskOwnership(missionId: string, owners: string[]) {
+		return this.all(
+			`SELECT t.id,t.session_id,t.status,t.assignment,p.revision FROM tasks t
+			JOIN task_pause_ownership p ON p.task_id=t.id WHERE t.mission_id=?
+			AND t.status NOT IN ('done','dropped') AND t.session_id IN (SELECT value FROM json_each(?)) ORDER BY t.id`,
+			missionId,
+			JSON.stringify(owners),
+		).map((row) => ({
+			id: str(row.id!),
+			sessionId: str(row.session_id!),
+			status: str(row.status!),
+			assignment: row.assignment === null ? null : JSON.parse(str(row.assignment!)),
+			revision: num(row.revision!),
+		}));
+	}
 	/** Read only report fences in one query, without task bodies, phase projection or per-row lookups. */
 	reportSourceTasks(missionId: string): Map<
 		string,
@@ -2594,6 +2611,149 @@ export class MissionStore {
 		return link;
 	}
 
+	/** Read-only exact migration comparison. The ticket stays with the old mission unless separately transferred. */
+	successorPreview(
+		oldMissionId: string,
+		keptChats: import("../../protocol/src/mission-migration.ts").MissionMigrationChat[] = [],
+	) {
+		const old = this.require(oldMissionId),
+			link = this.successor(oldMissionId);
+		if (!link || link.state !== "planning") throw new Conflict("No open re-planning link");
+		const next = this.require(link.missionId),
+			plan = this.plans.get(next.id);
+		if (
+			old.status !== "active" ||
+			old.planningVersion !== undefined ||
+			next.status !== "active" ||
+			next.projectId !== old.projectId ||
+			!plan?.publication ||
+			plan.publication.briefRevision !== this.brief(next.id)?.revision ||
+			plan.publication.submissionDigest !== this.interviews.latest(next.id)?.submission?.digest
+		)
+			throw new Conflict("An active old mission and published successor are required");
+		const resources = this.all("SELECT * FROM resources WHERE mission_id=? ORDER BY id", old.id);
+		const oldBrief = this.brief(old.id) ?? null,
+			newBrief = this.brief(next.id)!,
+			oldTasks = this.tasks(old.id),
+			newTasks = this.tasks(next.id);
+		return {
+			version: 1 as const,
+			oldMissionId: old.id,
+			newMissionId: next.id,
+			projectId: old.projectId,
+			oldSource: revisionDigest({
+				source: this.revisions.source(old.id),
+				resources,
+				keptChats,
+				oldBrief,
+				oldTasks,
+				link: this.one("SELECT * FROM mission_successors WHERE old_mission_id=?", old.id),
+			}),
+			newSource: revisionDigest({
+				source: this.revisions.source(next.id),
+				newBrief,
+				newTasks,
+				publication: plan.publication,
+			}),
+			publication: plan.publication,
+			oldMission: old,
+			newMission: next,
+			oldBrief,
+			newBrief,
+			oldTasks,
+			newTasks,
+			keptChats,
+			members: this.members(old.id),
+			managedLinear: resources.filter((r) => r.linear_role === "managed").map(resourceFrom),
+			transferLinear: false as const,
+		};
+	}
+
+	/** Passive archive plus link and receipt commit together. No worker, chat, task or permission mutation. */
+	async finishSuccessor(
+		oldMissionId: string,
+		input: {
+			operationId: string;
+			newMissionId: string;
+			projectId: string;
+			oldSource: string;
+			newSource: string;
+			transferLinear: false;
+		},
+		keptChats: () => import("../../protocol/src/mission-migration.ts").MissionMigrationChat[] = () => [],
+	) {
+		const prior = this.successorFinishLookup(input.operationId);
+		if (prior) {
+			if (prior.oldMissionId !== oldMissionId || revisionDigest(prior.input) !== revisionDigest(input))
+				throw new Conflict("Migration identity changed");
+			await this.durable();
+			return prior;
+		}
+		const result = this.transaction(() => {
+			const preview = this.successorPreview(oldMissionId, keptChats());
+			if (
+				input.transferLinear !== false ||
+				input.newMissionId !== preview.newMissionId ||
+				input.projectId !== preview.projectId ||
+				input.oldSource !== preview.oldSource ||
+				input.newSource !== preview.newSource
+			)
+				throw new Conflict("Migration preview changed; review exact old and published new sources");
+			const ownedOpen = this.tasks(oldMissionId).filter(
+				(t) => t.status !== "done" && t.status !== "dropped" && t.sessionId,
+			);
+			if (this.members(oldMissionId).length || ownedOpen.length) {
+				if (
+					!this.safelyPaused(oldMissionId, [
+						...new Set([
+							...this.members(oldMissionId),
+							...ownedOpen.flatMap((t) => (t.sessionId ? [t.sessionId] : [])),
+						]),
+					])
+				)
+					throw new Conflict("Old work requires an exact acknowledged safe Pause before migration");
+			}
+			const now = Date.now();
+			this.run(
+				"UPDATE missions SET status='archived',passive_lifecycle=1,updated_at=?,archived_at=? WHERE id=?",
+				now,
+				now,
+				oldMissionId,
+			);
+			this.run(
+				"UPDATE mission_successors SET state='finished',updated_at=? WHERE old_mission_id=?",
+				now,
+				oldMissionId,
+			);
+			this.event(oldMissionId, "status", "Mission migration finished; history and chats kept", USER, { at: now });
+			const receipt = { version: 1 as const, oldMissionId, input: structuredClone(input), finishedAt: now };
+			this.run("INSERT INTO mission_successor_finishes VALUES(?,?)", input.operationId, JSON.stringify(receipt));
+			return receipt;
+		}, true);
+		await this.durable();
+		this.changed(oldMissionId, [], true);
+		this.changed(input.newMissionId, [], true);
+		return result;
+	}
+	successorFinishLookup(operationId: string):
+		| {
+				version: 1;
+				oldMissionId: string;
+				input: {
+					operationId: string;
+					newMissionId: string;
+					projectId: string;
+					oldSource: string;
+					newSource: string;
+					transferLinear: false;
+				};
+				finishedAt: number;
+		  }
+		| undefined {
+		const row = this.one("SELECT record FROM mission_successor_finishes WHERE operation_id=?", operationId);
+		return row ? JSON.parse(String(row.record)) : undefined;
+	}
+
 	/** Inventory candidates only. Read one sentinel beyond the limit; never claim a partial list is complete. */
 	planningCandidates(projectId: string, limit: number): string[] {
 		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Conflict("Invalid planning limit");
@@ -3327,6 +3487,69 @@ export class MissionStore {
 		});
 	}
 
+	/** Changed task definitions also affect their transitive dependents, not independent owners. */
+	revisionAffectedTasks(id: string, delta: MissionRevisionDelta): string[] {
+		if (delta.goal !== undefined || delta.markdown !== undefined || delta.decisions?.length)
+			return this.tasks(id)
+				.filter((t) => t.status !== "done" && t.status !== "dropped")
+				.map((t) => t.id)
+				.sort();
+		const affected = new Set((delta.tasks ?? []).map((edit) => this.resolveTask(id, edit.id).id));
+		const tasks = this.tasks(id);
+		let changed = true;
+		while (changed) {
+			changed = false;
+			for (const task of tasks)
+				if (!affected.has(task.id) && task.dependsOn?.some((ref) => affected.has(ref))) {
+					affected.add(task.id);
+					changed = true;
+				}
+		}
+		return [...affected].sort();
+	}
+	revisionAffectedSessions(id: string, delta: MissionRevisionDelta): string[] {
+		const affected = new Set(this.revisionAffectedTasks(id, delta));
+		return [
+			...new Set(
+				this.tasks(id)
+					.filter((t) => affected.has(t.id) && t.status !== "done" && t.status !== "dropped")
+					.flatMap((t) => (t.sessionId ? [t.sessionId] : []))
+					.concat(
+						delta.goal !== undefined || delta.markdown !== undefined || delta.decisions?.length
+							? this.members(id)
+							: [],
+					),
+			),
+		].sort();
+	}
+	/** Claim and Start use the saved scope even after confirmation changed definitions. */
+	revisionTaskHeld(id: string, taskId: string): boolean {
+		return this.controls.revisionPauses(id).some((p) => {
+			const delta = this.revisions.get(id, p.proposalId).delta;
+			return (
+				delta.goal !== undefined ||
+				delta.markdown !== undefined ||
+				!!delta.decisions?.length ||
+				p.taskIds.includes(taskId)
+			);
+		});
+	}
+	private safelyPaused(id: string, owners: string[]): boolean {
+		const control = this.controls.fenceCurrent(id);
+		const pause = control.pauseOperationId ? this.controls.operation(control.pauseOperationId) : undefined;
+		return !!(
+			control.held &&
+			control.state === "paused" &&
+			pause?.missionId === id &&
+			pause.state === "acknowledged" &&
+			pause.command.action === "pause" &&
+			pause.control.pauseGeneration === control.pauseGeneration &&
+			pause.control.stopGeneration === control.stopGeneration &&
+			pause.members.every((m) => ["paused", "held"].includes(m.state)) &&
+			owners.every((owner) => pause.members.some((m) => m.sessionId === owner))
+		);
+	}
+
 	private applyRevision(id: string, proposal: MissionRevisionProposal, humanSource: string): void {
 		const mission = this.require(id);
 		if (mission.status !== "active") throw new Conflict("Mission is inactive");
@@ -3345,8 +3568,20 @@ export class MissionStore {
 				))
 		) {
 			const control = this.controls.fenceCurrent(id);
-			if (!control.held || control.state !== "paused")
-				throw new Conflict("Pause mission work safely before applying a revision");
+			const affected = this.revisionAffectedSessions(id, delta);
+			const selective = this.controls
+				.revisionPauses(id)
+				.find((p) => p.proposalId === proposal.id && p.digest === proposal.digest && p.source === proposal.source);
+			const safelySelected =
+				selective?.state === "paused" &&
+				selective.fence.stopGeneration === control.stopGeneration &&
+				selective.fence.pauseGeneration === control.pauseGeneration &&
+				affected.every((owner) =>
+					selective.members.some((m) => m.sessionId === owner && ["paused", "held"].includes(m.state)),
+				) &&
+				selective.members.every((m) => ["paused", "held"].includes(m.state));
+			if (affected.length && !this.safelyPaused(id, affected) && !safelySelected)
+				throw new Conflict("Pause affected mission work safely before applying a revision");
 		}
 		if (this.referenceBatch) throw new Conflict("A mission batch is already active");
 		this.referenceBatch = id;
@@ -5497,6 +5732,8 @@ export class MissionStore {
 		const reasons: string[] = [];
 		for (const task of tasks) {
 			this.insights.assertOrdinaryTask(task.id);
+			if (this.revisionTaskHeld(id, task.id))
+				reasons.push(`Task #${task.number} is held by an exact revision Pause`);
 			if (this.sharedAllocation(task.id))
 				reasons.push(`Task #${task.number} has an occupied remote execution grant`);
 			if (starting?.has(`${id}:${task.id}`))
@@ -5554,6 +5791,7 @@ export class MissionStore {
 		this.assertMember(id, sessionId);
 		const task = this.transaction(() => {
 			const task = this.resolveTask(id, taskId);
+			if (this.revisionTaskHeld(id, task.id)) throw new Conflict("Task is held by an exact revision Pause");
 			return this.takeTask(id, task, sessionId, actor);
 		});
 		this.changed(id, [sessionId]);

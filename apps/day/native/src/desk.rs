@@ -1744,6 +1744,7 @@ mod tests {
         let mut desk = Desk::new(Scenario::Decisions);
         let docs = desk.mission("docs").unwrap();
         let search = MissionLink {
+            state: "planning".into(),
             mission_id: "search".into(),
             title: "Faster search".into(),
         };

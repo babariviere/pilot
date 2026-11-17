@@ -772,6 +772,9 @@ pub struct MissionPage {
     /// is filled with to re-plan it. Empty for planned missions or when the
     /// detail could not be read.
     pub replan_draft: String,
+    /// Optional context offered before opening a replacement planning draft.
+    #[prop(default)]
+    pub replan_context: Vec<ReplanContext>,
     /// Whether "Re-plan as a new mission" is offered: an old mission, a
     /// service that links re-plans, and no re-plan already open.
     pub can_replan: bool,
@@ -781,10 +784,21 @@ pub struct MissionPage {
     pub replaces: Option<MissionLink>,
 }
 
+/// One read-only legacy context section. Selection grants no execution authority.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplanContext {
+    pub title: String,
+    pub text: String,
+}
+
 /// Another mission a mission page names.
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MissionLink {
+    /// planning or finished. Finished replacements keep a read-only history link.
+    #[prop(default)]
+    pub state: String,
     /// The mission.
     pub mission_id: String,
     /// Its title. Empty when this read does not list it.

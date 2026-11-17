@@ -163,6 +163,7 @@ impl RevisitDesk {
 
     pub(crate) fn view(&self) -> Revisit {
         Revisit {
+            paused_work: None,
             available: true,
             reason: String::new(),
             stage: self.stage,
@@ -245,6 +246,9 @@ impl RevisitDesk {
             .collect();
         let active = now.decisions.iter().filter(|d| d.active).count();
         Revision {
+            selective_pause: false,
+            affected_work: 0,
+            affected_tasks: vec![],
             id: p.id.clone(),
             digest: p.digest(),
             summary: p.summary.clone(),
