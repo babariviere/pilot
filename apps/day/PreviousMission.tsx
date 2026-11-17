@@ -3,7 +3,8 @@ import { signal, Text, View } from "nsh";
 import { openChat } from "./chatView";
 import type { DayFeed } from "./feeds";
 import type { MigrationView } from "./migration";
-import { Action, RowLink } from "./ui";
+import { OpenChatAction } from "./OpenChatAction";
+import { Action } from "./ui";
 
 export function PreviousMission(props: {
 	source: Pick<DayFeed, "migration">;
@@ -72,10 +73,9 @@ export function PreviousMission(props: {
 									<Text class="text-sm text-foreground">{`#${t().number} ${t().title} (${t().status})`}</Text>
 									<Text class="text-sm text-muted-foreground">{t().body ?? ""}</Text>
 									<If when={t().sessionId && props.canReadChats}>
-										<RowLink
+										<OpenChatAction
 											testID={`previous-chat-${t().id}`}
 											accessibilityLabel={`Read the saved chat for #${t().number} ${t().title}. This starts nothing.`}
-											title="Read its chat"
 											onPress={() =>
 												openChat(t().sessionId ?? "", history()?.oldTitle ?? "Previous mission")
 											}

@@ -304,6 +304,7 @@ fn overview(
         reports,
         controls,
         mission_agents: None,
+        working_now: None,
     }
 }
 

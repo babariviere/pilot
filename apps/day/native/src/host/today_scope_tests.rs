@@ -24,6 +24,7 @@ fn overview() -> DayOverview {
         reports: Vec::new(),
         controls: Vec::new(),
         mission_agents: None,
+        working_now: None,
     }
 }
 
@@ -281,6 +282,7 @@ impl Peer {
                         };
                         let mut value = serde_json::to_value(v).unwrap();
                         value["dashboard"]["projectId"] = json!(project);
+                        value["workingNow"] = json!([{"sessionId":format!("chat-{project}"),"title":"Working chat","missionId":null,"missionTitle":null,"purpose":null,"status":"working"}]);
                         value
                     } else if route.ends_with("/intake") {
                         status = 503;
@@ -347,6 +349,9 @@ async fn scope_read_checks_configured_access_and_never_sends_work_or_changes_sou
     assert_eq!(projects[0]["results"]["complete"], true);
     assert_eq!(projects[0]["results"]["baseline"]["mode"], "start_fresh");
     assert_eq!(projects[0]["errors"]["intake"], "Unavailable");
+    assert_eq!(projects[0]["working"]["state"], "live");
+    assert_eq!(projects[0]["working"]["items"][0]["sessionId"], "chat-one");
+    assert!(projects[1]["working"].is_null());
     assert_eq!(peer.transport.source, source);
     assert_eq!(
         std::fs::metadata(peer.path.join("journal")).unwrap().len(),
@@ -383,6 +388,8 @@ async fn scope_read_checks_configured_access_and_never_sends_work_or_changes_sou
     .await
     .unwrap();
     assert!(offline["outsideNeedsYou"]["count"].is_null());
+    assert_eq!(offline["projects"][0]["working"]["state"], "disconnected");
+    assert_eq!(offline["projects"][0]["working"]["items"], json!([]));
     let before = peer.calls.lock().unwrap().len();
     assert_eq!(
         read_projects(
@@ -538,6 +545,6 @@ async fn denied_project_and_changed_catalog_never_publish_earlier_rows_as_curren
             ()
         ))
         .await,
-        Err(Error::Stale)
+        Err(Error::Identity)
     );
 }

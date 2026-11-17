@@ -65,6 +65,10 @@ affected work (global agreement changes can affect everyone). Old missions can f
 to their published successor after a safe Pause. History, chats and unpublished work stay;
 Linear management does not transfer automatically. The successor keeps Read previous mission,
 a read-only view of the old agreement, decisions, tasks, saved links and recent activity.
+Today also shows Working now below Needs you: active mission and standalone chats across the projects you can
+access. Each row names its project and current task, or says the purpose is unavailable. Chat bubbles open the
+exact chat without sending anything; Back keeps your Today draft and place. Show all reveals rows beyond four.
+Queued, waiting, held and finished chats stay out of this list. Earlier or unavailable reads never claim live work.
 A mission's overview leads with its work: Now shows current work (working, in review, held or waiting
 for you), Next lists the plan's queue in order, and Blockers shows tasks that wait for earlier work,
 a Pause and decisions for you. Queued in plan is not a start: Pilot still checks permission, limits and holds.

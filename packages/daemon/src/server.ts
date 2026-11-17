@@ -70,6 +70,7 @@ import { CONNECTION_CONTROLS } from "./connection-controls.ts";
 import type { DaemonServices } from "./daemon-services.ts";
 import { DatabaseSettingsError } from "./databases.ts";
 import { dayMissionAgents } from "./day-mission-agents.ts";
+import { dayWorking } from "./day-working.ts";
 import { awaitDiagnosticRead } from "./diagnostic-context.ts";
 import { DIAGNOSTICS_CONTROLS, isDiagnosticsRevocation, validateDiagnosticsIntent } from "./diagnostics-controls.ts";
 import { EnvironmentApprovalRequired } from "./environment-profile.ts";
@@ -2902,6 +2903,13 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				},
 				reports: list.flatMap((mission) => missions.service.reports.viewsNow(mission.id, observedAt)),
 				controls: list.map((mission) => missions.store.controls.current(mission.id)),
+				workingNow: dayWorking(
+					projectId,
+					sessions.list({ projectId }),
+					list,
+					list.filter((m) => m.status === "active").flatMap((m) => missions.store.tasks(m.id)),
+					new Set(list.filter((m) => missions.store.controls.current(m.id).held).map((m) => m.id)),
+				),
 				missionAgents: dayMissionAgents(
 					projectId,
 					new Set(dashboard.missions.items.map((mission) => mission.id)),

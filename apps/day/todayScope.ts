@@ -30,6 +30,17 @@ export const todayProject = signal<string>("all");
 /** A count Pilot may not know. Null with complete false is unknown, never zero. */
 export type ScopeCount = { count: number | null; complete: boolean };
 
+/** Activity is authored by the host, not inferred from mission reports. */
+export type WorkingChat = {
+	sessionId: string;
+	title: string;
+	missionId: string | null;
+	missionTitle: string | null;
+	purpose: string | null;
+	status: "working";
+};
+export type WorkingRead = { state: "live" | "stale" | "disconnected" | "failed" | "unavailable"; items: WorkingChat[] };
+
 /** One project in a scope read. Only selected projects carry their sections. */
 export type ScopeProject = {
 	id: string;
@@ -43,6 +54,7 @@ export type ScopeProject = {
 	results?: ScopeResults | null;
 	/** Why a section of this project could not be read, by section. */
 	errors: Record<string, string>;
+	working?: WorkingRead | null;
 };
 
 /** One scope read, as the root answered it. */
@@ -164,6 +176,7 @@ export function scopeOf(x: unknown): ScopeSnapshot | null {
 			today,
 			planning: raw.selected ? planningOf(raw.planning) : null,
 			results: raw.selected ? resultsOf(raw.results, raw.id) : null,
+			working: raw.selected ? workingOf(raw.working) : null,
 			errors,
 		});
 	}
@@ -176,6 +189,27 @@ export function scopeOf(x: unknown): ScopeSnapshot | null {
 		projects,
 		outsideNeedsYou: outside,
 	};
+}
+
+function workingOf(x: unknown): WorkingRead | null {
+	const w = x as WorkingRead | null;
+	if (!w || !["live", "stale", "disconnected", "failed", "unavailable"].includes(w.state) || !Array.isArray(w.items))
+		return null;
+	const seen = new Set<string>();
+	for (const r of w.items) {
+		if (
+			!r ||
+			typeof r.sessionId !== "string" ||
+			!r.sessionId ||
+			typeof r.title !== "string" ||
+			r.status !== "working" ||
+			![r.missionId, r.missionTitle, r.purpose].every((v) => v === null || typeof v === "string")
+		)
+			return null;
+		if (seen.has(r.sessionId)) return null;
+		seen.add(r.sessionId);
+	}
+	return w;
 }
 
 function resultsOf(x: unknown, project: string): ScopeResults | null {
@@ -213,6 +247,10 @@ export class ConnectedScope implements ScopeSource {
 /** Today's scope reads, mirrored in one signal. Only the newest read counts. */
 export type ScopeMirror = {
 	view: Signal<ScopeView>;
+	/** Activity never stays live across an invalidation or failed read. */
+	activity: Signal<"reading" | "live" | "stale" | "disconnected" | "failed">;
+	/** A newer event ages entered reads; completed same-scope reads still advance as earlier. */
+	invalidate: () => void;
 	/** The projects the last complete project list named, kept across scope changes. */
 	catalog: Signal<{ id: string; name: string }[]>;
 	/** Reads `scope` again. Passive; an older answer never replaces a newer one. */
@@ -226,24 +264,44 @@ let generation = Date.now();
 /** Mirrors `source` for one window. */
 export function mirrorScope(source: ScopeSource): ScopeMirror {
 	const view = signal<ScopeView>({ state: "reading", reason: "", snapshot: null });
+	const activity = signal<"reading" | "live" | "stale" | "disconnected" | "failed">("reading");
 	const catalog = signal<{ id: string; name: string }[]>([]);
 	let newest = 0;
+	let invalidated = 0;
 	// What the shown snapshot and catalog hold, without the generation: an
 	// unchanged answer does not set the view again, so nothing redraws.
 	let shown = "";
 	let listed = "";
 	const read = async (scope: string) => {
 		const mine = ++generation;
+		const epoch = invalidated;
 		newest = mine;
+		activity.set(
+			view().snapshot?.scope === scope && activity() !== "failed" && activity() !== "disconnected"
+				? "stale"
+				: "reading",
+		);
 		// Another scope's rows never show while this one is read.
 		if (view().snapshot?.scope !== scope) view.set({ state: "reading", reason: "", snapshot: null });
-		const r = await source.read(scope, mine);
+		const r = await source.read(scope, mine).catch(() => ({ ok: false as const, refusal: "invalid" as Refusal }));
 		// A newer read was asked for: this answer means nothing now.
 		if (mine !== newest) return;
 		if (!r.ok) {
+			activity.set(
+				r.refusal === "offline"
+					? "disconnected"
+					: r.refusal === "stale" || r.refusal === "busy"
+						? "stale"
+						: "failed",
+			);
 			const earlier = view().snapshot;
 			// An earlier read of the same scope stays, said to be earlier. Another scope's never shows.
-			const keep = earlier && earlier.scope === scope ? earlier : null;
+			const denied = r.refusal === "identity" || r.refusal === "denied";
+			const keep = !denied && earlier && earlier.scope === scope ? earlier : null;
+			if (denied) {
+				catalog.set([]);
+				listed = "";
+			}
 			// A read that changed or waited meanwhile keeps the earlier rows quietly: the next read follows.
 			if (keep && (r.refusal === "stale" || r.refusal === "busy")) {
 				if (view().state !== "live" || view().reason !== "")
@@ -259,6 +317,7 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 		}
 		const snapshot = scopeOf(r.snapshot);
 		if (!snapshot || snapshot.scope !== scope || snapshot.generation !== mine) {
+			activity.set("failed");
 			view.set({ state: "unavailable", reason: scopeReason("invalid"), snapshot: null });
 			return;
 		}
@@ -276,6 +335,18 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 				catalog.set(projects);
 			}
 		}
+		// Continuous streaming must not starve starts/stops/task changes. A
+		// read crossed by an event advances rows as earlier, never as live.
+		activity.set(epoch === invalidated ? "live" : "stale");
 	};
-	return { view, catalog, read };
+	return {
+		view,
+		activity,
+		catalog,
+		read,
+		invalidate: () => {
+			invalidated++;
+			if (activity() === "live") activity.set("stale");
+		},
+	};
 }

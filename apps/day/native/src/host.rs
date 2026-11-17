@@ -1187,6 +1187,7 @@ fn restore_project(journal: &Journal, shared: &Shared, source: &Source) -> Resul
 }
 
 fn fail(shared: &Shared, error: Error) {
+    let chat_denied = error == Error::Identity && session_chat::deny(shared);
     if error != Error::Stale {
         crate::day_log::event(
             "read.failed",
@@ -1233,7 +1234,7 @@ fn fail(shared: &Shared, error: Error) {
     // A failure notice makes the window read its scope again. Repeating the
     // same notice would turn that failed read into an endless refresh loop.
     // The authority fence above still advances for every failed read.
-    if freshness.state != state || freshness.reason != reason {
+    if chat_denied || freshness.state != state || freshness.reason != reason {
         shared.change(|desk| desk.lose_read(state, reason));
     }
 }

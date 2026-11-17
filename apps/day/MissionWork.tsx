@@ -12,6 +12,7 @@ import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { restoreScroll, scrollOf } from "./kept";
 import { goHome } from "./nav";
+import { OpenChatAction } from "./OpenChatAction";
 import { Action, Disclosure, ExpandableRow, glide, Mark, Panel, SectionTitle } from "./ui";
 import { focused, focusFront, todayPlace } from "./view";
 import { provenance, stateOf, taskWord, type WorkState, workMark, workWord } from "./words";
@@ -219,9 +220,7 @@ function ChatLink(props: { day: Day; page: MissionPage; task: TaskLine; lane: La
 	return (
 		<If when={props.task.sessionId && props.day.chat}>
 			<View class="flex-row pt-1">
-				<Action
-					variant="outline"
-					label="Open its chat"
+				<OpenChatAction
 					testID={`${props.lane}-chat-${props.task.id}`}
 					accessibilityLabel={`Open the chat of #${props.task.number} ${props.task.title}, read only. Opening it sends nothing.`}
 					onPress={() => openMemberChat(props.page, props.task.sessionId ?? "")}
@@ -466,8 +465,7 @@ export function MissionWork(props: { day: Day; page: MissionPage; anchor?: Conte
 										<Text class="flex-1 text-sm text-foreground">{c().title}</Text>
 										<Text class="text-xs text-faint">{`since ${c().since}`}</Text>
 										<If when={props.day.chat}>
-											<Action
-												label="Open its chat"
+											<OpenChatAction
 												testID={`mission-chat-${c().id}`}
 												accessibilityLabel={`Open the chat “${c().title}”, read only. Opening it sends nothing.`}
 												onPress={() => openMemberChat(props.page, c().id)}

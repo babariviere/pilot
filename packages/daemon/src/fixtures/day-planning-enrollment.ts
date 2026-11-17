@@ -14,11 +14,13 @@ import { planningWorkerFixture } from "../planning-workers.fixture.ts";
 const f = await planningWorkerFixture(undefined, { journey: process.argv.includes("--journey") });
 // Hold the actual first provider response, not a fabricated admission receipt.
 const releaseFile = join(f.root, "release-generation");
+const buildReleaseFile = join(f.root, "release-working-task");
+const holdWorkingTask = process.argv.includes("--working-journey");
 const extension = join(f.root, "agent", "offline.ts");
 const waitCode = `
 import { watch, existsSync } from 'node:fs';
-const waitForGeneration = signal => new Promise((resolve, reject) => {
- const file=${JSON.stringify(releaseFile)};
+const waitForGeneration = (signal,build) => new Promise((resolve, reject) => {
+ const file=build && ${holdWorkingTask} ? ${JSON.stringify(buildReleaseFile)} : ${JSON.stringify(releaseFile)};
  if (existsSync(file)) return resolve();
  const finish = error => { watcher.close(); signal?.removeEventListener('abort', abort); error ? reject(error) : resolve(); };
  const abort = () => finish(new Error('Fixture generation cancelled'));
@@ -32,7 +34,10 @@ await writeFile(
 	waitCode +
 		(await readFile(extension, "utf8"))
 			.replace("async transcript =>", "async (transcript, options) =>")
-			.replace("{ appendFileSync(", "{ if(n===0) await waitForGeneration(options?.signal); appendFileSync("),
+			.replace(
+				"{ appendFileSync(",
+				"{ if(n===0) await waitForGeneration(options?.signal, JSON.stringify(transcript.messages).includes('Work on mission task')); appendFileSync(",
+			),
 );
 const ledger = join(f.home, "commands.jsonl");
 let posts = 0,
@@ -239,7 +244,12 @@ try {
 			release = undefined;
 		}
 		if (command.action === "generate") await writeFile(releaseFile, "go");
+		if (command.action === "build-generate") await writeFile(buildReleaseFile, "go");
 		const id = missionId;
+		if (command.action === "change-working-task" && id) {
+			const task = f.store.tasks(id)[0]!;
+			f.store.updateTask(id, task.id, { title: "Updated importer task" });
+		}
 		const owner = id && f.store.planningWorkers.get(id)?.binding.ownerSessionId;
 		if (command.action === "held")
 			await f.changed(
@@ -293,6 +303,7 @@ try {
 				goal: enrollment && JSON.parse(enrollment.payload).goal,
 				tasks: id ? f.store.tasks(id).length : 0,
 				workers: f.specs.length,
+				workingSession: id ? f.store.planningWorkers.get(id)?.start?.sessionId : null,
 			}),
 		);
 	}

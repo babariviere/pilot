@@ -59,9 +59,19 @@ fn entry() -> PathBuf {
         if (name.ends_with(".ts") || name.ends_with(".tsx") || name == "theme.json")
             && !name.ends_with(".test.tsx")
         {
-            std::fs::copy(&path, dir.join(&name)).unwrap();
+            // Relocate the one shared, Node-free leaf with the fixture sources.
+            let source = std::fs::read_to_string(&path).unwrap().replace(
+                "../../packages/kernel/src/feedback-paths",
+                "./feedback-paths",
+            );
+            std::fs::write(dir.join(&name), source).unwrap();
         }
     }
+    std::fs::copy(
+        app.join("../../packages/kernel/src/feedback-paths.ts"),
+        dir.join("feedback-paths.ts"),
+    )
+    .unwrap();
     // The component library lives in ui/; screens import it as "./ui".
     std::fs::create_dir(dir.join("ui")).unwrap();
     for file in std::fs::read_dir(app.join("ui")).unwrap() {
@@ -390,6 +400,8 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
     // The overview leads to the same planning too.
     wait(&mut app, &format!("id:mission-{mission}"));
     app.press(&format!("id:mission-{mission}")).unwrap();
+    wait(&mut app, "id:mission-section-map");
+    app.press("id:mission-section-map").unwrap();
     wait(&mut app, "id:open-plan");
     app.press("id:open-plan").unwrap();
     wait(&mut app, "id:interview");
@@ -458,7 +470,7 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
 /// the fixture supplies only faux responses and explicit completion barriers.
 #[test]
 fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
-    let mut f = Fixture::with_args(&["--journey"]);
+    let mut f = Fixture::with_args(&["--journey", "--working-journey"]);
     let entry = entry();
     let (host, bridge) = f.bridge();
     let mut app = open(&entry, &bridge);
@@ -596,7 +608,38 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
     f.cmd("lost", true);
     app.press("role:button[Start task]").unwrap();
     wait(&mut app, "role:button[Check Start]");
+    let working = f.cmd("stats", false)["workingSession"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    app.press("label:Pilot. Go to Today").unwrap();
+    wait(&mut app, &format!("id:working-{working}"));
+    let before_open = f.cmd("stats", false)["posts"].clone();
+    f.cmd("change-working-task", true);
+    app.wait_until("updated working task", WAIT, |s| {
+        s.texts()
+            .iter()
+            .any(|v| v.contains("Updated importer task"))
+    })
+    .unwrap();
+    app.press(&format!("id:working-open-{working}")).unwrap();
+    wait(
+        &mut app,
+        "Read only. Reading it sends nothing and changes nothing.",
+    );
+    app.press_key("escape").unwrap();
+    wait(&mut app, &format!("id:working-{working}"));
+    assert_eq!(
+        f.cmd("stats", false)["posts"],
+        before_open,
+        "viewing activity and chat sends nothing"
+    );
+    f.cmd("build-generate", true);
     assert_eq!(f.cmd("reported", false)["workers"], 2);
+    app.wait_until("finished chat leaves Working now", WAIT, |s| {
+        !s.shows(&format!("id:working-{working}"))
+    })
+    .unwrap();
     close(app, bridge);
 
     // Lost ACK stays lookup-only across reopen, despite an existing report.
@@ -607,6 +650,8 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
     wait(&mut app, &format!("id:mission-{mission}"));
     app.press(&format!("id:mission-{mission}")).unwrap();
     wait(&mut app, "Offline background worker reported");
+    wait(&mut app, "id:mission-section-map");
+    app.press("id:mission-section-map").unwrap();
     wait(&mut app, "id:open-plan");
     app.press("id:open-plan").unwrap();
     wait(&mut app, "role:button[Check Start]");
@@ -672,7 +717,7 @@ fn a_lost_new_creation_is_checked_after_reopen_and_never_adopts_the_previous_mis
     .unwrap();
     f.cmd("lost", true);
     app.press("role:button[Plan a mission]").unwrap();
-    wait(&mut app, "role:button[Check creation]");
+    wait(&mut app, "role:button[Check status]");
     let before = f.cmd("held", false);
     let second = before["mission"].as_str().unwrap().to_owned();
     assert_ne!(first, second);
@@ -683,9 +728,9 @@ fn a_lost_new_creation_is_checked_after_reopen_and_never_adopts_the_previous_mis
     let mut app = open(&entry, &bridge);
     wait(&mut app, "role:button[New]");
     app.press("role:button[New]").unwrap();
-    wait(&mut app, "role:button[Check creation]");
+    wait(&mut app, "role:button[Check status]");
     assert_eq!(f.cmd("stats", false)["posts"], before["posts"]);
-    app.press("role:button[Check creation]").unwrap();
+    app.press("role:button[Check status]").unwrap();
     wait(&mut app, "id:interview");
     wait(&mut app, "A different exact goal");
     let after = f.cmd("stats", false);

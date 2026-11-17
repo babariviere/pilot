@@ -34,8 +34,9 @@ import {
 	stepsOf,
 } from "./feedbackSteps";
 import { closeFeedback, feedbackProject, setAnswerDraft, setStepMessage, stepMessages } from "./feedbackView";
+import { OpenChatAction } from "./OpenChatAction";
 import { goalDraft, openNew } from "./planView";
-import { Action, glide, type Mark, MarkLine, Panel, Picker, RowLink } from "./ui";
+import { Action, glide, type Mark, MarkLine, Panel, Picker } from "./ui";
 import { openMission } from "./view";
 
 /**
@@ -55,9 +56,8 @@ function ChatLink(props: { day: Day; item: FeedbackItem; step: ChatStep }) {
 			}
 		>
 			<View class="flex-row">
-				<RowLink
+				<OpenChatAction
 					testID={`feedback-open-${kind()}-${props.item.id}`}
-					title={label()}
 					accessibilityLabel={`${label()}, read only. Opening it sends nothing.`}
 					onPress={() => openChat(props.step.sessionId, "Feedback")}
 				/>

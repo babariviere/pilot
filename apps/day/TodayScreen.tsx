@@ -52,6 +52,7 @@ import {
 	Track,
 } from "./ui";
 import { focused, focusFront, front, type Item, move, openMission, placeRow, queue, todayPlace } from "./view";
+import { WorkingNow } from "./WorkingNow";
 import { freshnessLine, provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
 
 function actionFor(decision: Decision | undefined): string {
@@ -595,9 +596,9 @@ function ComingUp(props: { day: Day }) {
 }
 
 /** Today while it shows only another project: its rows, read only here. */
-function OtherProject(props: { ctx: TodayScope }) {
+function OtherProject(props: { day: Day; ctx: TodayScope }) {
 	return (
-		<If when={props.ctx.others().length > 0}>
+		<If when={props.ctx.others().length > 0} else={<WorkingNow day={props.day} ctx={props.ctx} />}>
 			<View class="gap-12">
 				<If when={otherNewShown(props.ctx)}>
 					<View class="gap-1">
@@ -611,6 +612,7 @@ function OtherProject(props: { ctx: TodayScope }) {
 					<OtherToCheck ctx={props.ctx} nested />
 				</View>
 				<OtherNotShown ctx={props.ctx} />
+				<WorkingNow day={props.day} ctx={props.ctx} />
 				<If when={props.ctx.others().some((p) => (p.planning?.plans.length ?? 0) > 0 || p.errors.planning)}>
 					<View class="gap-1">
 						<SectionTitle title="Planning" />
@@ -651,6 +653,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 	});
 	return (
 		<Scroll
+			testID="today-page"
 			ref={(node) => scroller.set(node)}
 			class="flex-1 bg-background"
 			contentOffset={{ y: todayPlace.y }}
@@ -682,7 +685,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 							</If>
 						</View>
 
-						<If when={ctx.showsOwn()} else={<OtherProject ctx={ctx} />}>
+						<If when={ctx.showsOwn()} else={<OtherProject day={props.day} ctx={ctx} />}>
 							<View class="gap-12">
 								<Incoming day={props.day} />
 								<If when={otherNewShown(ctx)}>
@@ -697,6 +700,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 									known={today().problemsKnown}
 									earlier={today().freshness.state !== "live"}
 								/>
+								<WorkingNow day={props.day} ctx={ctx} />
 								<If when={ctx.tagged()}>
 									<OtherNotShown ctx={ctx} />
 								</If>

@@ -11,6 +11,7 @@ import {
 	safeCollector,
 } from "./diagnosisDraft";
 import { keepField } from "./kept";
+import { OpenChatAction } from "./OpenChatAction";
 import { utf8Bytes } from "./preferencesFeed";
 import { Action, Field, Panel, Picker, SectionTitle, TextField } from "./ui";
 
@@ -347,7 +348,10 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 						<View class="flex-row items-baseline gap-3 border-t border-border py-2">
 							<Text class="flex-1 text-sm text-foreground">{chat().title || "Pilot diagnostics"}</Text>
 							<Text class="text-xs text-muted-foreground">{chat().status}</Text>
-							<Action label="Open diagnosis" onPress={() => openChat(chat().sessionId, "Settings")} />
+							<OpenChatAction
+								accessibilityLabel="Open diagnosis chat"
+								onPress={() => openChat(chat().sessionId, "Settings")}
+							/>
 						</View>
 					)}
 				</Each>

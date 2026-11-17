@@ -18,6 +18,7 @@ import { openFeedback } from "./feedbackView";
 import { keepScroll, restoreScroll, scrollOf } from "./kept";
 import { MigrationControls } from "./MigrationControls";
 import { forgetWorkFocus, limited, MissionWork, MoreRows, openMemberChat } from "./MissionWork";
+import { OpenChatAction } from "./OpenChatAction";
 import { pageScroll, scrolled } from "./onScreen";
 import { mapSummary, stageMark, stageWord } from "./PlanScreen";
 import { PreviousMission } from "./PreviousMission";
@@ -508,7 +509,6 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine; place?: "res
 	const open = signal(false);
 	const folded = () => props.task.status === "done" && !open();
 	const foldable = () => props.task.status === "done" && (!!props.task.report || props.task.outputs.length > 0);
-	const working = () => stateOf(props.task) === "working";
 	// The native read's work state when it has one, else the status the mission records.
 	const word = () => (stateOf(props.task) === "unknown" ? taskWord(props.task.status) : workWord(stateOf(props.task)));
 	const check = () => {
@@ -580,9 +580,8 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine; place?: "res
 			</If>
 			<If when={props.task.sessionId && props.day.chat}>
 				<View class="flex-row pl-10 pt-1">
-					<RowLink
+					<OpenChatAction
 						testID={id(`task-chat-${props.task.id}`)}
-						title={working() ? "Open its chat · working now" : "Open its chat"}
 						accessibilityLabel={`Open the chat of #${props.task.number} ${props.task.title}, read only. Opening it sends nothing.`}
 						onPress={() => openMemberChat(props.page, props.task.sessionId ?? "")}
 					/>
@@ -955,9 +954,8 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf;
 				<ArchiveConfirm day={props.day} page={props.page} />
 				<If when={props.page.coordinatorSessionId && props.day.chat}>
 					<View class="flex-row">
-						<RowLink
+						<OpenChatAction
 							testID="mission-coordinator-chat"
-							title="Open the coordinator's chat"
 							accessibilityLabel="Open the mission coordinator's chat, read only. Opening it sends nothing."
 							onPress={() => openMemberChat(props.page, props.page.coordinatorSessionId ?? "")}
 						/>

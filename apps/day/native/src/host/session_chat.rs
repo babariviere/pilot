@@ -63,6 +63,25 @@ impl ChatState {
     }
 }
 
+/// Authoritative profile access loss can happen before the selected project's
+/// refresh reaches this chat. Purge it independently, and notify only once.
+pub(super) fn deny(shared: &Shared) -> bool {
+    let mut chat = shared
+        .session_chat
+        .lock()
+        .expect("native session chat poisoned");
+    let Some(state) = chat.as_mut() else {
+        return false;
+    };
+    let mut unavailable = ChatState::new(&state.session);
+    unavailable.reason = "Chat not available. Nothing was sent.".into();
+    if *state == unavailable {
+        return false;
+    }
+    *state = unavailable;
+    true
+}
+
 fn one_line(value: &Value, max: usize) -> Option<String> {
     let line = value
         .as_str()?
@@ -431,6 +450,11 @@ async fn read_chat(
                     (state.state, state.state_reason) = status(&read.session);
                     state.reason.clear();
                 }
+                Err(Error::Identity | Error::Unavailable) => {
+                    // Access/identity loss cannot leave the prior project's text visible.
+                    *state = ChatState::new(session);
+                    state.reason = "Chat not available. Nothing was sent.".into();
+                }
                 Err(_) => {
                     state.reason = if state.pages.rows.is_empty() {
                         "Pilot could not read this chat. Nothing was sent.".into()
@@ -451,15 +475,14 @@ struct Read {
     project: Option<Value>,
 }
 
-/// A global window reads a chat through the chat's own project, as it reads
-/// a mission's planning; a project window reads through its project.
+/// Every window reads through the chat's accessible project. Opening never
+/// retargets the window's project or opens a worker subscription.
 async fn fetch(
     t: &Transport,
     session: &str,
     before: Option<u64>,
-    known: Option<Value>,
+    _known: Option<Value>,
 ) -> Result<Read, Error> {
-    let global = t.source.project.is_none() || t.focused;
     let path = format!("/api/sessions/{session}");
     t.profile_gate().await?;
     let meta = t.get(&path).await?;
@@ -494,12 +517,8 @@ async fn fetch(
             project: None,
         });
     }
-    let (selected, project) = if !global {
-        (None, None)
-    } else if let Some(project) = known {
-        (Some(t.for_project(&project)?), Some(project))
-    } else {
-        let catalog = super::new_chat::inventory(t).await?;
+    let catalog = super::new_chat::inventory(t).await?;
+    let (selected, project) = {
         let meta = t.get(&path).await?;
         let project = catalog["projects"]
             .as_array()
@@ -514,11 +533,13 @@ async fn fetch(
     t.gate(false).await?;
     let meta = t.get(&path).await?;
     if meta["id"] != session
-        || !meta["title"].is_string()
         || project
             .as_ref()
             .is_some_and(|p| p["projectId"] != meta["projectId"])
     {
+        return Err(Error::Identity);
+    }
+    if !meta["title"].is_string() {
         return Err(Error::Invalid);
     }
     let cursor = before.unwrap_or(NEWEST);
@@ -531,8 +552,15 @@ async fn fetch(
         before.is_none(),
     )?;
     t.gate(false).await?;
+    let current = t.get(&path).await?;
+    if current["id"] != session
+        || current["projectId"] != meta["projectId"]
+        || super::new_chat::inventory(t).await? != catalog
+    {
+        return Err(Error::Identity);
+    }
     Ok(Read {
-        session: meta,
+        session: current,
         page,
         project,
     })

@@ -21,6 +21,7 @@ import type { Day } from "./day";
 import { fundingAmount } from "./FundingSettings";
 import { keepField, keepScroll } from "./kept";
 import { newFundingDraft } from "./modelSettingsDraft";
+import { OpenChatAction } from "./OpenChatAction";
 import { stageMark, stageWord } from "./PlanScreen";
 import { checkCreation, planMission } from "./planCommands";
 import type { Plans } from "./planning";
@@ -479,15 +480,14 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 										</View>
 									}
 								>
-									<View class="py-1.5">
-										<RowLink
+									<View class="flex-row items-center gap-3 py-1.5">
+										<Text class="flex-1 text-sm text-foreground">{`A chat in ${projectName(chatView(), o().projectId)}`}</Text>
+										<Text class="text-xs text-faint">Works on its own</Text>
+										<OpenChatAction
 											testID={`new-started-${o().operationId}`}
-											title={`A chat in ${projectName(chatView(), o().projectId)}`}
 											accessibilityLabel="Open this chat, read only. Opening it sends nothing."
 											onPress={() => openChat(o().sessionId ?? "", "New")}
-										>
-											<Text class="text-xs text-faint">Works on its own</Text>
-										</RowLink>
+										/>
 									</View>
 								</If>
 							)}

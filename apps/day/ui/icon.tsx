@@ -5,6 +5,7 @@ import { Image } from "nsh";
 import archive from "../icons/archive.svg";
 import back from "../icons/back.svg";
 import changes from "../icons/changes.svg";
+import chat from "../icons/chat.svg";
 import document from "../icons/document.svg";
 import fullscreen from "../icons/fullscreen.svg";
 import fullscreenExit from "../icons/fullscreen-exit.svg";
@@ -24,6 +25,7 @@ const ICONS = {
 	archive,
 	back,
 	changes,
+	chat,
 	document,
 	fullscreen,
 	fullscreenExit,

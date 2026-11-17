@@ -1,7 +1,7 @@
 /** Isolated native bridge fixture. No credentials, sources or providers outside its temp home. */
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { chmod, readFile } from "node:fs/promises";
+import { chmod, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -60,6 +60,29 @@ const proxy = createServer(async (req, res) => {
 		const chunks = [];
 		for await (const c of req) chunks.push(c);
 		const bytes = Buffer.concat(chunks);
+		// Passive synthetic chat histories for native cross-project navigation checks.
+		if (req.method === "GET" && req.url?.startsWith("/api/sessions/working-")) {
+			const id = req.url.split("/")[3]!;
+			const project = id === "working-two" ? f.other : f.project;
+			res.writeHead(200, { "content-type": "application/json" }).end(
+				JSON.stringify(
+					req.url.includes("/history")
+						? {
+								entries: [{ id: 1, kind: "pi.user", model: [{ role: "user", content: `Saved words ${id}` }] }],
+								more: false,
+							}
+						: {
+								id,
+								title: `Exact ${id}`,
+								projectId: project.id,
+								cwd: project.path,
+								state: "working",
+								working: true,
+							},
+				),
+			);
+			return;
+		}
 		if (
 			req.url?.includes("native-projects") ||
 			req.url?.includes("chat-profile") ||
@@ -198,6 +221,10 @@ for await (const line of createInterface({ input: process.stdin })) {
 	if (c.action === "fail-save") failSave = true;
 	if (c.action === "restore-ledger") await chmod(ledger, 0o600);
 	if (c.action === "deny") denied = true;
+	if (c.action === "revoke-capability") {
+		await rm(join(f.home, "github-app-capability"));
+		for (const client of wss.clients) client.send(JSON.stringify({ type: "projects", projects: [] }));
+	}
 	if (c.action === "offline") offline = true;
 	if (c.action.startsWith("hello-")) helloMode = c.action;
 	if (c.action === "allow") {

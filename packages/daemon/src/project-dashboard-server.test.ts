@@ -179,6 +179,48 @@ test("Day returns complete existing projections without inferring progress from 
 	assert.equal(f.store.controls.current(id).revision, 0);
 });
 
+test("Today working chats include exact mission tasks and standalone chats, never held or finished activity", async (t) => {
+	const f = await fixture(t);
+	const mission = f.store.create({ projectId: f.project.id, title: "Native work" });
+	f.store.join("builder", mission.id);
+	const task = f.store.addTask(mission.id, { title: "Read activity", status: "in_progress", sessionId: "builder" });
+	f.put({ id: "builder", title: "Activity builder", missionId: mission.id, working: true, state: "working" });
+	f.put({ id: "solo", title: "Standalone", working: true, state: "working" });
+	for (const chat of [
+		{ id: "queued", state: "starting", working: false },
+		{ id: "idle", state: "idle", working: false },
+		{ id: "paused", working: true, sleepPaused: true },
+		{ id: "waiting", working: true, attentionReason: { kind: "asks" } },
+		{ id: "archived", working: true, archivedAt: 1 },
+		{ id: "foreign", working: true, projectId: "other" },
+	] as const)
+		f.put(chat);
+	const read = async () =>
+		(await (await f.api(`/projects/${f.project.id}/day`)).json()) as import("@pilot/protocol").DayOverview;
+	const first = await read();
+	assert.deepEqual(first.workingNow, [
+		{
+			sessionId: "builder",
+			title: "Activity builder",
+			missionId: mission.id,
+			missionTitle: "Native work",
+			purpose: "Read activity",
+			status: "working",
+		},
+		{ sessionId: "solo", title: "Standalone", missionId: null, missionTitle: null, purpose: null, status: "working" },
+	]);
+	f.store.updateTask(mission.id, task.id, { title: "Changed task" });
+	assert.equal((await read()).workingNow?.[0]?.purpose, "Changed task");
+	f.store.updateTask(mission.id, task.id, { status: "in_review" });
+	assert.equal((await read()).workingNow?.[0]?.purpose, "Changed task");
+	f.put({ id: "builder", missionId: mission.id, working: false });
+	assert.deepEqual(
+		(await read()).workingNow?.map((r) => r.sessionId),
+		["solo"],
+	);
+	assert.equal(f.store.controls.current(mission.id).revision, 0);
+});
+
 test("Day mission owners expose live work and exact holds without admitting work", async (t) => {
 	const f = await fixture(t);
 	const mission = f.store.create({ projectId: f.project.id, title: "Read owner state" });

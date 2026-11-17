@@ -73,6 +73,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Mission Pause/Resume and versioned agent reports](mission-controls-reports.md)
 - [Mission results and failure visibility audit](day-results-visibility.md)
 - [Native Today qualification and ownership boundaries](day-today-qualification.md)
+- [Working chats on Today and native qualification](day-working-now.md)
 - [Proposed mission interview and approval contract](mission-interview-approval.md)
 - [Day interview and agreement backend (host-only)](day-mission-agreements.md)
 - [Shared interview tool, standalone rounds and nonblocking questions](shared-interviews.md)

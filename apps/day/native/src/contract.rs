@@ -32,6 +32,21 @@ pub struct DayOverview {
     /// Missing on older services: owner holds and identity are unavailable.
     #[serde(default)]
     pub mission_agents: Option<Vec<MissionAgent>>,
+    /// Absent on older services: unknown activity, not an empty list.
+    #[serde(default)]
+    pub working_now: Option<Vec<WorkingChat>>,
+}
+
+/// Host-authored activity. No admission or lifecycle authority.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkingChat {
+    pub session_id: String,
+    pub title: String,
+    pub mission_id: Option<String>,
+    pub mission_title: Option<String>,
+    pub purpose: Option<String>,
+    pub status: String,
 }
 
 /// Passive, project-scoped session facts. Never an execution grant.

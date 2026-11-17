@@ -86,6 +86,18 @@ export interface DayOverview {
 	controls: MissionControl[];
 	/** Passive task-owner activity and holds for active missions. Absent means unavailable, not no holds. */
 	missionAgents?: DayMissionAgent[];
+	/** Authoritative working chats, including standalone chats. Absent on older services means unknown. */
+	workingNow?: DayWorkingChat[];
+}
+
+/** Passive activity, never permission to execute. A missing purpose stays explicit. */
+export interface DayWorkingChat {
+	sessionId: string;
+	title: string;
+	missionId: string | null;
+	missionTitle: string | null;
+	purpose: string | null;
+	status: "working";
 }
 
 /** Existing session state only. No admission, capacity or permission to start is implied. */

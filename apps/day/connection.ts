@@ -148,6 +148,8 @@ class OpeningFeeds {
 
 /** Coalesce stream invalidations. No timer or service polling. */
 async function refreshScope() {
+	const open = connection();
+	if (open.state === "open") open.day.scope?.invalidate();
 	scopeAgain = true;
 	if (scopeReading) return;
 	scopeReading = true;

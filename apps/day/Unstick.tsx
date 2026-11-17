@@ -8,6 +8,7 @@ import type { PlanPage } from "pilot-day/native";
 import { openChat } from "./chatView";
 import { errorText, logEvent } from "./dayLog";
 import { openFeedbackWith } from "./feedbackView";
+import { OpenChatAction } from "./OpenChatAction";
 import type { Plans } from "./planning";
 import { Action, MarkLine, Panel, TextField } from "./ui";
 
@@ -168,7 +169,10 @@ function RepairAgent(props: {
 					<Text testID="repair-looking" class="flex-1 text-sm text-muted-foreground">
 						An agent is looking. This takes about a minute.
 					</Text>
-					<Action label="Open its chat" onPress={() => openChat(r()?.chatId ?? "", "Plan")} />
+					<OpenChatAction
+						accessibilityLabel="Open planning repair chat"
+						onPress={() => openChat(r()?.chatId ?? "", "Plan")}
+					/>
 				</View>
 			</If>
 			<If when={r()?.state === "failed"}>
@@ -215,7 +219,10 @@ function RepairAgent(props: {
 							<Action testID="repair-report" label="Report with Feedback" onPress={report} />
 						</If>
 						<Action label="Not now" disabled={props.busy} onPress={props.hide} />
-						<Action label="Open its chat" onPress={() => openChat(r()?.chatId ?? "", "Plan")} />
+						<OpenChatAction
+							accessibilityLabel="Open planning repair chat"
+							onPress={() => openChat(r()?.chatId ?? "", "Plan")}
+						/>
 					</View>
 				</View>
 			</If>

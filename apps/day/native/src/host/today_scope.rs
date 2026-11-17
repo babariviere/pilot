@@ -435,7 +435,7 @@ async fn read_projects(
         let mut row = json!({"id":project["projectId"],"name":project["name"],"selected":selected,
             "currentness":if n.is_some() {"live"} else if !live && overview.is_ok() {"stale"} else {"unavailable"},
             "observedAt":overview.as_ref().ok().map(|v| v.observed_at),"needsYou":needs(n),
-            "today":null,"planning":null,"intake":null,"results":null,
+            "today":null,"planning":null,"intake":null,"results":null,"working":null,
             "canAct":false,"errors":{}});
         if let Err(error) = &overview {
             row["errors"]["today"] = json!(error.to_string());
@@ -450,6 +450,7 @@ async fn read_projects(
             || matches!(attention, Err(Error::Identity))
             || matches!(planning, Err(Error::Identity));
         if selected && !denied {
+            row["working"] = working(overview.as_ref().ok(), live);
             row["today"] = serde_json::to_value(today).map_err(|_| Error::Invalid)?;
             match planning {
                 Ok(v) => row["planning"] = serde_json::to_value(v).map_err(|_| Error::Invalid)?,
@@ -477,13 +478,36 @@ async fn read_projects(
     // Project removal/configuration/permission changes during I/O cannot publish
     // the earlier selection. Inventory never selects models or creates a chat.
     if new_chat::inventory(t).await? != catalog {
-        return Err(Error::Stale);
+        // This may be access removal, not just a harmless activity race.
+        return Err(Error::Identity);
     }
     check()?;
     Ok(
         json!({"version":1,"scope":request.scope,"generation":request.generation,
         "catalogComplete":true,"complete":false,"outsideNeedsYou":outside(&rows),"projects":rows}),
     )
+}
+
+/// Project/identity checks happened on the enclosing overview. No per-chat reads or subscriptions.
+fn working(overview: Option<&DayOverview>, live: bool) -> Value {
+    let Some(o) = overview else {
+        return json!({"state":"failed","items":[]});
+    };
+    let Some(items) = &o.working_now else {
+        return json!({"state":"unavailable","items":[]});
+    };
+    let mut seen = std::collections::HashSet::new();
+    if !o.complete
+        || items.iter().any(|r| {
+            !valid_id(&r.session_id) || r.status != "working" || !seen.insert(&r.session_id)
+        })
+    {
+        return json!({"state":"failed","items":[]});
+    }
+    if !live {
+        return json!({"state":"disconnected","items":[]});
+    }
+    json!({"state":"live","items":items})
 }
 
 #[cfg(test)]
