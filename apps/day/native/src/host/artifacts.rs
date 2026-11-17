@@ -285,10 +285,12 @@ mod tests {
     fn a_reported_screen_folds_into_one_row_at_its_pinned_revisions() {
         assert_eq!(pairs().len(), 1, "a pair that is off is left out");
         assert!(screen_pairs(&json!({"error":"Not found"})).is_empty());
-        let row = |id: &str, revision: u64| {
-            json!({"sessionId":"s","artifactId":id,"title":id,"kind":"image","revision":revision,"updatedAt":1})
-        };
-        let rows = fold_pairs(vec![row(AFTER, 3), row(OTHER, 1), row(BEFORE, 1)], &pairs(), None);
+        let row = |id: &str, revision: u64| json!({"sessionId":"s","artifactId":id,"title":id,"kind":"image","revision":revision,"updatedAt":1});
+        let rows = fold_pairs(
+            vec![row(AFTER, 3), row(OTHER, 1), row(BEFORE, 1)],
+            &pairs(),
+            None,
+        );
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["revision"], 2, "the pinned After, not the newest");
         assert_eq!(rows[0]["pair"]["before"]["artifactId"], BEFORE);
@@ -299,7 +301,10 @@ mod tests {
         // Another chat's artifact with the same ID does not fold.
         let mut theirs = row(BEFORE, 1);
         theirs["sessionId"] = json!("other");
-        assert_eq!(fold_pairs(vec![row(AFTER, 2), theirs], &pairs(), None).len(), 2);
+        assert_eq!(
+            fold_pairs(vec![row(AFTER, 2), theirs], &pairs(), None).len(),
+            2
+        );
     }
 
     #[test]
@@ -308,21 +313,40 @@ mod tests {
             json!({"sessionId":"s","artifactId":id,"title":id,"kind":"image","revision":revision,
                 "pinned":true,"taskId":task,"updatedAt":1})
         };
-        let rows = fold_pairs(vec![link(AFTER, "t", 2), link(BEFORE, "t", 1)], &pairs(), Some("m"));
+        let rows = fold_pairs(
+            vec![link(AFTER, "t", 2), link(BEFORE, "t", 1)],
+            &pairs(),
+            Some("m"),
+        );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["pair"]["before"]["revision"], 1);
         assert_eq!(
-            fold_pairs(vec![link(AFTER, "t", 2), link(BEFORE, "t", 1)], &pairs(), Some("n")).len(),
+            fold_pairs(
+                vec![link(AFTER, "t", 2), link(BEFORE, "t", 1)],
+                &pairs(),
+                Some("n")
+            )
+            .len(),
             2,
             "another mission's page"
         );
         assert_eq!(
-            fold_pairs(vec![link(AFTER, "t", 1), link(BEFORE, "t", 1)], &pairs(), Some("m")).len(),
+            fold_pairs(
+                vec![link(AFTER, "t", 1), link(BEFORE, "t", 1)],
+                &pairs(),
+                Some("m")
+            )
+            .len(),
             2,
             "an older link of the After"
         );
         assert_eq!(
-            fold_pairs(vec![link(AFTER, "other", 2), link(BEFORE, "t", 1)], &pairs(), Some("m")).len(),
+            fold_pairs(
+                vec![link(AFTER, "other", 2), link(BEFORE, "t", 1)],
+                &pairs(),
+                Some("m")
+            )
+            .len(),
             2,
             "a link on another task"
         );

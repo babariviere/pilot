@@ -122,7 +122,13 @@ function threadChats(t: TestContext, f: Awaited<ReturnType<typeof fixture>>) {
 	t.mock.method(
 		f.sessions,
 		"spawn",
-		async (request: SpawnRequest, _coordinator: boolean, _task: unknown, admission: unknown) => {
+		async (
+			request: SpawnRequest,
+			_coordinator: boolean,
+			_task: unknown,
+			admission: { guard?(): void } | undefined,
+		) => {
+			admission?.guard?.();
 			const id = `chat-${live.size + 1}`;
 			const session = {
 				id,
@@ -134,7 +140,8 @@ function threadChats(t: TestContext, f: Awaited<ReturnType<typeof fixture>>) {
 			} as unknown as SessionSummary;
 			live.set(id, session);
 			f.store.join(id, f.missionId, undefined, "explorer");
-			spawned.push({ request, admission });
+			const { guard: _guard, ...metadata } = admission ?? {};
+			spawned.push({ request, admission: metadata });
 			sent.push({ id, text: request.message });
 			return session;
 		},
@@ -215,12 +222,130 @@ test("a refused thread chat start leaves no chat, and Check starts it once Pilot
 	assert.equal((await f.threads.lookup(op))?.state, "pending", "still refused");
 	refuse = false;
 	const receipt = await f.threads.lookup(op);
+	assert.ok(receipt);
 	assert.equal(receipt?.state, "accepted");
-	assert.deepEqual((receipt?.result as { chat: unknown }).chat, { sessionId: "chat-1" });
+	assert.deepEqual((receipt.result as { chat: unknown }).chat, { sessionId: "chat-1" });
 	assert.equal(c.spawned.length, 1);
 	assert.equal(c.spawned[0]!.request.message, "Hello");
 	assert.equal((await f.threads.lookup(op))?.state, "accepted");
 	assert.equal(c.spawned.length, 1, "started once");
+});
+
+test("a known refusal cannot borrow changed owner authority on Check", async (t) => {
+	const f = await fixture(t);
+	const c = threadChats(t, f);
+	const spawn = t.mock.method(f.sessions, "spawn", async () => {
+		throw new Conflict("Paused before admission");
+	});
+	const op = await f.request({ purpose: "thread-send", text: "Discuss this" });
+	assert.equal((await f.execute(op)).state, "pending");
+	spawn.mock.restore();
+	const identity = f.sessions.planningIdentity.bind(f.sessions);
+	t.mock.method(f.sessions, "planningIdentity", (id: string) => ({
+		previousIdentity: identity(id),
+		inputGeneration: 99,
+	}));
+	assert.equal((await f.threads.lookup(op))?.state, "pending");
+	assert.equal(c.spawned.length, 0);
+	const fresh = await f.request({ purpose: "thread-send", text: "Discuss with the current scope" });
+	assert.equal((await f.execute(fresh)).state, "accepted");
+	assert.equal(c.spawned.length, 1);
+});
+
+test("a refused-start Check keeps its authority through asynchronous model selection", async (t) => {
+	const f = await fixture(t);
+	const c = threadChats(t, f);
+	const spawn = t.mock.method(f.sessions, "spawn", async () => {
+		throw new Conflict("Paused before admission");
+	});
+	const op = await f.request({ purpose: "thread-send", text: "Discuss this" });
+	assert.equal((await f.execute(op)).state, "pending");
+	spawn.mock.restore();
+	const select = f.sessions.selectTaskModel.bind(f.sessions);
+	t.mock.method(f.sessions, "selectTaskModel", async (...args: Parameters<typeof select>) => {
+		const selected = await select(...args);
+		t.mock.method(f.sessions, "planningIdentity", () => ({ inputGeneration: 99 }));
+		return selected;
+	});
+	assert.equal((await f.threads.lookup(op))?.state, "pending");
+	assert.equal(c.spawned.length, 0);
+});
+
+test("Interrupt stops the existing discussion before sending; ordinary comments do not", async (t) => {
+	const f = await fixture(t);
+	const c = threadChats(t, f);
+	await f.execute(await f.request({ purpose: "thread-send", text: "Start this topic" }));
+	const effects: string[] = [];
+	t.mock.method(f.sessions, "stop", async (id: string) => {
+		effects.push("stop");
+		const chat = c.live.get(id)!;
+		c.live.set(id, { ...chat, inputGeneration: (chat.inputGeneration ?? 0) + 1 });
+		return { ok: true as const };
+	});
+	t.mock.method(
+		f.sessions,
+		"sendDurable",
+		async (...[_id, _text, _mode, _operation, options]: Parameters<typeof f.sessions.sendDurable>) => {
+			options?.admissionGuard?.();
+			effects.push("send");
+		},
+	);
+	await f.execute(await f.request({ purpose: "thread-send", text: "A normal comment" }));
+	assert.deepEqual(effects, []);
+	const interrupt = await f.request({ purpose: "thread-send", text: "Address this now", interrupt: true });
+	assert.equal((await f.execute(interrupt)).state, "accepted");
+	assert.equal((await f.execute(interrupt)).state, "accepted");
+	assert.deepEqual(effects, ["stop", "send"]);
+	assert.equal(c.spawned.length, 1, "Interrupt never starts another agent");
+});
+
+test("lost Interrupt acknowledgement is lookup only, even when no accepted input is found", async (t) => {
+	const f = await fixture(t);
+	const c = threadChats(t, f);
+	await f.execute(await f.request({ purpose: "thread-send", text: "Start this topic" }));
+	const stop = t.mock.method(f.sessions, "stop", async () => {
+		throw new Error("lost stop reply");
+	});
+	const lookup = t.mock.method(f.sessions, "lookupNativeAttentionInput", async () => false);
+	const op = await f.request({ purpose: "thread-send", text: "Address this now", interrupt: true });
+	assert.equal((await f.execute(op)).state, "pending");
+	assert.equal((await f.execute(op)).state, "pending");
+	assert.equal(stop.mock.calls.length, 1);
+	assert.equal(lookup.mock.calls.length, 1);
+	assert.equal(c.spawned.length, 1);
+	assert.equal(c.sent.length, 1);
+});
+
+test("legacy lost sends read the chat pinned by their immutable receipt, never today's chat", async (t) => {
+	const f = await fixture(t);
+	const c = threadChats(t, f);
+	await f.execute(await f.request({ purpose: "thread-send", text: "Start this topic" }));
+	const op = await f.request({ purpose: "thread-send", text: "Legacy message" });
+	const saved = f.store.threads.get(f.missionId, f.topicId);
+	f.store.threads.write(op, () => ({
+		...saved,
+		inputs: [...saved.inputs, { sessionId: f.owner, operationId: op.operationId }],
+	}));
+	assert.equal(
+		(
+			await f.journal.execute(op, async () => {
+				throw new Error("Lost legacy send ACK");
+			})
+		).state,
+		"pending",
+	);
+	f.store.threads.amend(f.missionId, f.topicId, (topic) => {
+		topic.chat = { operationId: randomUUID(), sessionId: "new-chat" };
+	});
+	const lookup = t.mock.method(f.sessions, "lookupNativeAttentionInput", async (id: string, requestId: string) => {
+		assert.equal(id, "chat-1");
+		assert.equal(requestId, op.operationId);
+		return true;
+	});
+	assert.equal((await f.execute(op)).state, "accepted");
+	assert.equal(lookup.mock.calls.length, 1);
+	assert.equal(c.spawned.length, 1);
+	assert.equal(c.sent.length, 1);
 });
 
 test("Discard closes the thread chat; after Reopen a message starts a new one", async (t) => {

@@ -9,7 +9,8 @@
 // cannot take one, the page says why and nothing is sent. A sent message is
 // not the coordinator's answer. A lost answer stays Unknown: Check only
 // reads it, and the words stay until the service accepted them.
-import { cleanup, effect, keymap, Scroll, type ScrollRef, signal, Text, View, type ViewRef } from "nsh";
+import { cleanup, effect, keymap, Scroll, type ScrollRef, type Signal, signal, Text, View, type ViewRef } from "nsh";
+import { Dialog } from "nsh/base";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
 import { keepField, keepScroll, restoreScroll, scrollOf } from "./kept";
@@ -1288,7 +1289,14 @@ function WaitingMessages(props: { messages: WaitingMessage[] }) {
 }
 
 /** The reply box. Only Send sends, once; the words stay until the service accepted them. */
-function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topic; m: MissionThreads }) {
+function Composer(props: {
+	mirror: ThreadsMirror;
+	missionId: string;
+	topic: Topic;
+	m: MissionThreads;
+	interrupting: Signal<boolean>;
+}) {
+	const interrupting = props.interrupting;
 	const key = () => draftKey(props.missionId, props.topic.id);
 	const text = () => threadDrafts()[key()] ?? "";
 	const field = keepField(
@@ -1309,16 +1317,22 @@ function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 		return "";
 	};
 	const canSend = () => !why() && !props.m.writing && text().trim() !== "" && !tooLong();
-	const go = async () => {
+	const go = async (interrupt = false) => {
 		if (!canSend()) return;
 		const r = await send(
 			props.mirror,
 			props.missionId,
 			key(),
-			{ purpose: "thread-send", topicId: props.topic.id, text: text() },
+			{
+				purpose: "thread-send",
+				topicId: props.topic.id,
+				text: text(),
+				...(interrupt ? { interrupt: true as const } : {}),
+			},
 			key(),
 		);
 		if (r?.status === "accepted") void props.mirror.source.history(props.missionId, props.topic.id);
+		interrupting.set(false);
 	};
 	// Not while an input method composes here: see the Escape binding in ThreadScreen.
 	keymap.bind(
@@ -1367,6 +1381,14 @@ function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 					accessibilityLabel="Send this message once. The thread chat answers; it does not start or approve work."
 					onPress={() => void go()}
 				/>
+				<If when={props.topic.chatSessionId}>
+					<Action
+						label="Interrupt…"
+						testID="thread-interrupt"
+						disabled={!canSend()}
+						onPress={() => interrupting.set(true)}
+					/>
+				</If>
 				<View class="flex-1" />
 				<Action
 					label="Later"
@@ -1399,6 +1421,28 @@ function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 					}
 				/>
 			</View>
+			<If when={interrupting()}>
+				<Dialog
+					accessibilityLabel="Interrupt this discussion?"
+					closeOnEscape={false}
+					onOpenChange={(e) => {
+						if (!e.open) interrupting.set(false);
+					}}
+					class="absolute inset-0 items-center justify-center bg-background/90 p-6"
+				>
+					<View testID="thread-interrupt-confirm" class="gap-3 rounded-lg border border-border p-4">
+						<Text class="text-sm font-medium text-foreground">Interrupt this discussion?</Text>
+						<Text class="text-sm text-muted-foreground">
+							Save and stop its current response, then send your message now. This does not pause coding agents
+							or clear the mission's other holds.
+						</Text>
+						<View class="flex-row gap-2">
+							<Action label="Cancel" onPress={() => interrupting.set(false)} />
+							<Action label="Interrupt" disabled={!canSend()} onPress={() => void go(true)} />
+						</View>
+					</View>
+				</Dialog>
+			</If>
 		</View>
 	);
 }
@@ -1446,6 +1490,7 @@ function Absent(props: { mirror: ThreadsMirror; missionId: string; m: MissionThr
 
 /** A thread's page over its mission. Opening it only reads. */
 export function ThreadScreen(props: { day: Day; missionId: string; topicId: string }) {
+	const interrupting = signal(false);
 	const mirror = props.day.threads as ThreadsMirror;
 	const m = () => mirror.mission(props.missionId);
 	void mirror.source.read(props.missionId);
@@ -1462,7 +1507,8 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 	keymap.bind(
 		"escape",
 		() => {
-			if (linkOpen()[key()]) {
+			if (interrupting()) interrupting.set(false);
+			else if (linkOpen()[key()]) {
 				glide();
 				linkOpen.update((all) => ({ ...all, [key()]: false }));
 			} else closeThread();
@@ -1617,7 +1663,13 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 								/>
 								<ActivityToggle mirror={mirror} missionId={props.missionId} topic={t()} canLink={canWrite()} />
 								<If when={t().disposition === "open"}>
-									<Composer mirror={mirror} missionId={props.missionId} topic={t()} m={m()} />
+									<Composer
+										mirror={mirror}
+										missionId={props.missionId}
+										topic={t()}
+										m={m()}
+										interrupting={interrupting}
+									/>
 								</If>
 								<If when={threadMessages()[key()]}>
 									<Text testID="thread-message" class="text-xs text-muted-foreground">

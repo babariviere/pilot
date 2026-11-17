@@ -39,12 +39,14 @@ export interface MissionThread {
 	createdBy: { kind: "user"; operationId: string; host: OperationHost };
 	references: MissionThreadReference[];
 	/** Saved input intents, not admission proof. Look up the exact operation receipt. */
-	inputs: { operationId: string; sessionId: string; at?: number }[];
+	inputs: { operationId: string; sessionId: string; deliverySessionId?: string; at?: number }[];
 	/**
 	 * The thread chat: a read-only chat that discusses this thread with the user. The operation that started it, and
 	 * its session once started. A closed (resolved or discarded) thread's chat is archived; reopening starts a new one.
 	 */
 	chat?: { operationId: string; sessionId?: string };
+	/** Exact known pre-effect refusal. Missing chat metadata alone never permits replay. */
+	chatStartRefusal?: { operationId: string; authority: string };
 	/** Original dedicated chats, including closed chats. Links only, never copied messages. */
 	chats?: Array<{ operationId: string; sessionId: string }>;
 	/** The latest handoff to the planner. */
@@ -58,7 +60,7 @@ export type MissionThreadWrite = { source: string; topicId: string } & (
 	| { purpose: "thread-create"; title: string }
 	| { purpose: "thread-disposition"; disposition: "open" | "later" | "discarded" }
 	| { purpose: "thread-reference"; reference: MissionThreadReference }
-	| { purpose: "thread-send"; text: string }
+	| { purpose: "thread-send"; text: string; interrupt?: true }
 );
 export interface MissionThreadsView {
 	version: 1;

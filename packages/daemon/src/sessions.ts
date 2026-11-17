@@ -102,7 +102,7 @@ import {
 import { DiagnosticLogReader, type DiagnosticLogReaderOptions } from "./diagnostic-logs.ts";
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { DiagnosticRepairProjectStore, diagnosticRepairTitle, repairHost } from "./diagnostic-repair-project.ts";
-import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
+import { Conflict, NotFound, PublishedStartRefused, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import {
 	type FlowState,
@@ -140,7 +140,7 @@ import { ModelCatalog } from "./models.ts";
 import { NativeDiagnosticsStore } from "./native-diagnostics.ts";
 import { NativeReviewReader, NoRetainedBinding } from "./native-review.ts";
 import { reasonLine, stuckPullRequestReason } from "./needs-you-reason.ts";
-import { canonicalJSON, payloadHash } from "./operation-journal.ts";
+import { canonicalJSON, OperationRejected, payloadHash } from "./operation-journal.ts";
 import { PiReload } from "./pi-reload.ts";
 import {
 	AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT,
@@ -245,6 +245,8 @@ export interface PullRequestBinding {
 
 /** Internal mission start selection, passed separately from untrusted request fields. */
 export interface MissionSpawnAdmission {
+	/** Host-owned resource fence, checked before saving and after asynchronous admission. */
+	guard?(): void;
 	role?: import("@pilot/protocol").MissionWorkerRole;
 	/** Existing durable intent being admitted, never caller-supplied request authority. */
 	continuationOperationId?: string;
@@ -256,6 +258,8 @@ export interface MissionSpawnAdmission {
 
 /** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */
 export interface SessionMissionBridge {
+	/** Occupied task owners and uncertain starts, including identities without readable metadata. */
+	codingReservations?(): Array<{ sessionId: string; projectId: string; files?: string[] }>;
 	continuationInputAllowed?(sessionId: string, operationId: string): boolean;
 	/** Current durable mission controls for upgrade recovery; null means no current membership.
 	 * Mission Pause owns this state and all mission-wide work. Install before enabling those controls.
@@ -353,6 +357,7 @@ export interface WorkerOptions {
 export interface SessionWorker {
 	readonly ready: Promise<void>;
 	modelConfiguration?: 1;
+	questionClarification?: 1;
 	/** Includes outstanding acknowledgements and accepted input not yet observed in the event stream. */
 	readonly busy?: boolean;
 	state: SessionState;
@@ -921,6 +926,7 @@ class WorkerPool {
 
 export class Worker implements SessionWorker {
 	modelConfiguration?: 1;
+	questionClarification?: 1;
 	private exited = false;
 	private initialized = false;
 	readonly child: ChildProcess;
@@ -1017,6 +1023,7 @@ export class Worker implements SessionWorker {
 			}
 			if (packet.type === "ready") {
 				this.modelConfiguration = packet.modelConfiguration;
+				this.questionClarification = packet.questionClarification;
 				clearTimeout(this.startupTimer);
 				this.usage = packet.usage;
 				this.toolsRunning = packet.toolsRunning;
@@ -1321,6 +1328,7 @@ export class SessionManager {
 	};
 	private readonly planningCalls = new Set<Promise<unknown>>();
 	private readonly planningGuards = new Map<string, { worker: SessionWorker; guard(): void }>();
+	private readonly clarificationGuards = new Map<string, { worker: SessionWorker; guard(): void }>();
 	private readonly planningIdleWaiters = new Map<string, Set<() => void>>();
 	setPlanningBridge(bridge: NonNullable<SessionManager["planningBridge"]>): () => void {
 		if (this.planningBridge) throw new Conflict("Planning worker bridge already configured");
@@ -1376,8 +1384,11 @@ export class SessionManager {
 		const end = this.updateGate.begin();
 		const id = identity.sessionId;
 		let worker: SessionWorker | undefined;
+		let creationEntered = false;
 		const check = () => {
 			guard(true);
+			const capacity = this.codingCapacityReason(request.projectId, id);
+			if (capacity) throw new Conflict(capacity);
 			this.assertPlanningOpen(id);
 			const meta = this.require(id);
 			if (
@@ -1390,6 +1401,10 @@ export class SessionManager {
 		};
 		try {
 			guard(false);
+			if (request.projectId) {
+				const reason = this.codingCapacityReason(request.projectId, id);
+				if (reason) throw new PublishedStartRefused(reason);
+			}
 			await this.spawnAdmitted(
 				request,
 				false,
@@ -1402,7 +1417,16 @@ export class SessionManager {
 				undefined,
 				undefined,
 				() => guard(false),
-				{ permission: this.require(identity.ownerSessionId).executionPermission },
+				{
+					permission: this.require(identity.ownerSessionId).executionPermission,
+					enter: () => {
+						if (request.projectId) {
+							const reason = this.codingCapacityReason(request.projectId, id);
+							if (reason) throw new PublishedStartRefused(reason);
+						}
+						creationEntered = true;
+					},
+				},
 			);
 			check();
 			// Reuse normal workspace preparation, initialization and lifecycle gates, with no input outbox.
@@ -1415,6 +1439,9 @@ export class SessionManager {
 			this.planningGuards.set(identity.operationId, { worker, guard: check });
 			await worker.request({ type: "plan.start", requestId: identity.operationId, content: request.message });
 			return { admissionId: identity.operationId, sessionId: id };
+		} catch (error) {
+			if (!creationEntered) throw new PublishedStartRefused(error instanceof Error ? error.message : String(error));
+			throw error;
 		} finally {
 			this.planningGuards.delete(identity.operationId);
 			end();
@@ -3829,6 +3856,8 @@ ${run.excerpt}`,
 	private maintenanceLoaded = false;
 
 	async load(maintenance = false): Promise<void> {
+		for (const project of this.projects.list())
+			this.codingProjectPaths.set(project.id, await realpath(project.path).catch(() => project.path));
 		const end = maintenance ? () => {} : this.updateGate.begin();
 		try {
 			await this.loadAdmitted();
@@ -8196,6 +8225,108 @@ ${run.excerpt}`,
 		}
 	>();
 	private readonly newSessionAdmissions = new Set<string>();
+	private readonly codingAdmissions = new Set<string>();
+	private readonly codingProjectPaths = new Map<string, string>();
+	private readonly codingQueue = new Map<string, string>();
+	private codingWakeScheduled = false;
+	private readonly codingOccupancy = new Map<string, string>();
+	private codingReservationSignature?: string;
+	private readonly codingCapacityListeners = new Set<() => void>();
+	onCodingCapacityChange(listener: () => void): () => void {
+		this.codingCapacityListeners.add(listener);
+		return () => this.codingCapacityListeners.delete(listener);
+	}
+
+	/** Synchronous final-admission check. A missing receipt or stopped unfinished task does not free its slot. */
+	codingCapacityReason(projectId?: string, excludeId?: string, requestedFiles?: string[]): string | undefined {
+		const occupied = new Map<string, string>();
+		const reservations = this.missions?.codingReservations?.() ?? [];
+		for (const entry of reservations) occupied.set(entry.sessionId, entry.projectId);
+		const files = requestedFiles ?? reservations.find((r) => r.sessionId === excludeId)?.files;
+		for (const meta of this.metas.values()) {
+			const worker = this.workers.get(meta.id);
+			if (
+				meta.archivedAt === undefined &&
+				!meta.continuedTo &&
+				meta.mode !== "ask" &&
+				!meta.planning &&
+				!meta.coordinatorView &&
+				(this.codingAdmissions.has(meta.id) ||
+					meta.working ||
+					worker?.state === "working" ||
+					this.backgroundWorking(meta, worker)) &&
+				!this.isMissionCoordinator(meta.id)
+			)
+				occupied.set(meta.id, meta.projectId ?? `cwd:${meta.cwd}`);
+		}
+		if (excludeId) occupied.delete(excludeId);
+		const path = (id: string) => this.codingProjectPaths.get(id) ?? this.projects.get(id)?.path ?? id;
+		const count = [...occupied.values()].filter((id) => projectId && path(id) === path(projectId)).length;
+		const project = projectId ? this.projects.require(projectId) : undefined;
+		// User-agreed coding concurrency: four app-wide, two isolated copies, one direct-folder writer.
+		const limit = !project ? 4 : project.sourceCopy === "folder" || project.workspace === "direct" ? 1 : 2;
+		if (count >= limit)
+			return limit === 1
+				? "Waiting for one writer in the user's folder (1 of 1 occupied)."
+				: "Waiting for a project coding slot (2 of 2 occupied).";
+		if (occupied.size >= 4) return "Waiting for a Pilot coding slot (4 of 4 occupied).";
+		if (
+			count > 0 &&
+			(project?.sourceCopy || files?.length || reservations.some((r) => path(r.projectId) === path(projectId ?? "")))
+		) {
+			const key = (path: string) => path.normalize("NFC").toLowerCase().replace(/\/$/, "");
+			for (const [id, ownerProject] of occupied) {
+				if (!projectId || path(ownerProject) !== path(projectId)) continue;
+				const owned = reservations.find((r) => r.sessionId === id)?.files;
+				if (
+					!files?.length ||
+					!owned?.length ||
+					files.some((a) =>
+						owned.some(
+							(b) => key(a) === key(b) || key(a).startsWith(`${key(b)}/`) || key(b).startsWith(`${key(a)}/`),
+						),
+					)
+				)
+					return "Waiting for shared-file ownership. Unknown scopes take turns; shared changes need combined checks before dependent work.";
+			}
+		}
+		return undefined;
+	}
+	private wakeCodingQueue(): void {
+		if (this.codingWakeScheduled || this.closing || this.updateGate.paused || !this.codingQueue.size) return;
+		this.codingWakeScheduled = true;
+		queueMicrotask(() => {
+			this.codingWakeScheduled = false;
+			for (const id of this.codingQueue.keys()) {
+				const meta = this.metas.get(id);
+				if (!meta || !meta.pending?.length || meta.cancelled || meta.archivedAt !== undefined) {
+					this.codingQueue.delete(id);
+					continue;
+				}
+				if (!this.codingCapacityReason(meta.projectId, id)) {
+					try {
+						void this.start(id).catch((error: unknown) =>
+							console.warn(`pilotd: queued coding start failed: ${error}`),
+						);
+					} catch {
+						/* A synchronous maintenance fence won. Keep the durable input queued. */
+					}
+				}
+			}
+		});
+	}
+
+	codingCapacityChanged(): void {
+		// Compare only for wakeups, never for admission. Every admission still reads current authority.
+		const signature = canonicalJSON(this.missions?.codingReservations?.() ?? []);
+		if (signature === this.codingReservationSignature) return;
+		this.codingReservationSignature = signature;
+		this.notifyCodingCapacityChanged();
+	}
+	private notifyCodingCapacityChanged(): void {
+		this.wakeCodingQueue();
+		for (const listener of this.codingCapacityListeners) listener();
+	}
 
 	/** Called only after durable operation reservation. Crash recovery uses this exact target/input ID. */
 	async spawnDurable(
@@ -8398,6 +8529,7 @@ ${run.excerpt}`,
 			gate();
 			actions?.();
 			this.piReload.wakeAll();
+			if (!this.updateGate.paused) this.notifyCodingCapacityChanged();
 		};
 	}
 
@@ -9327,6 +9459,7 @@ ${run.excerpt}`,
 		this.updatePausing.clear();
 		this.updateGate.release();
 		this.actionRunner?.setUpdatePaused(false);
+		this.notifyCodingCapacityChanged();
 		this.piReload.wakeAll();
 		this.pumpMainRefreshes();
 		this.resumeFlows();
@@ -9620,7 +9753,7 @@ ${run.excerpt}`,
 		ownerExecution?: Pick<import("./insights-owner-store.ts").InsightsOwnerExecution, "authority" | "binding">,
 		planning?: import("@pilot/kernel").PlanningWorkerBinding,
 		planningGuard?: () => void,
-		publishedStart?: { permission?: ExecutionPermission },
+		publishedStart?: { permission?: ExecutionPermission; enter: () => void },
 		dispatchGuard?: () => void,
 		feedbackImages?: string[],
 		job?: ChatJob,
@@ -9665,6 +9798,7 @@ ${run.excerpt}`,
 		)
 			throw new Conflict("Invalid owner creation");
 		const assertOwnerCreate = () => {
+			missionAdmission?.guard?.();
 			planningGuard?.();
 			if (!ownerExecution) return;
 			this.insightsOwnerLease(ownerExecution.authority).revalidate();
@@ -9747,6 +9881,7 @@ ${run.excerpt}`,
 			projectId = missionProject;
 		}
 		const project = projectId ? this.projects.require(projectId) : undefined;
+		if (project) this.codingProjectPaths.set(project.id, await realpath(project.path));
 		if (project?.sourceCopy) {
 			if (request.cwd !== undefined)
 				throw new Conflict("Local projects use the source copy selected during setup, not a cwd override");
@@ -9831,6 +9966,7 @@ ${run.excerpt}`,
 		try {
 			if (insightsGrant) this.assertInsightsBinding(insightsGrant);
 			assertOwnerCreate();
+			publishedStart?.enter();
 			await mkdir(this.dir(id), { recursive: true, mode: 0o700 });
 		} catch (error) {
 			this.newSessionAdmissions.delete(folded);
@@ -9961,6 +10097,7 @@ ${run.excerpt}`,
 				await this.save(meta, undefined, undefined, true, dispatchGuard);
 				dispatchGuard?.();
 			}
+			missionAdmission?.guard?.();
 		} catch (error) {
 			// Admission may lose a coordinator/task claim or race a closed mission.
 			if (insightsGrant) {
@@ -12222,6 +12359,55 @@ ${run.excerpt}`,
 	}
 
 	/** Passive exact accepted-input lookup. Missing or uncertain receipts never admit work. */
+	async lookupQuestionClarification(id: string, operationId: string) {
+		this.require(id);
+		return this.coldReader.readClarification(join(this.dir(id), "durable"), operationId);
+	}
+
+	/** Same worker and question, no input outbox or new session. */
+	async clarifyQuestion(id: string, operationId: string, questionId: number, question: string, guard: () => void) {
+		const end = this.updateGate.begin();
+		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+		const check = () => {
+			this.assertPlanningOpen(id);
+			const meta = this.require(id);
+			const visible = this.summary(meta);
+			if (
+				visible.sleepPaused ||
+				visible.offlinePaused ||
+				visible.subscriptionPause ||
+				meta.pending?.length ||
+				this.archiveTransitions.has(id) ||
+				(this.sending.get(id) ?? 0) > 1
+			)
+				throw new Conflict("Question work is held or another input is entering");
+			guard();
+		};
+		try {
+			check();
+			if (!this.fundingRequired(id) && (await this.funding?.enabled()) !== false)
+				throw new OperationRejected("Clarification requires this chat's configured allowance controls");
+			check();
+			await this.unparked(id);
+			const worker = await this.ensureWorker(id);
+			await worker.ready;
+			check();
+			if (worker.questionClarification !== 1) throw new Conflict("Original worker does not support clarification");
+			this.clarificationGuards.set(operationId, { worker, guard: check });
+			await worker.request({ type: "question.clarify", requestId: operationId, questionId, question });
+			const saved = await this.lookupQuestionClarification(id, operationId);
+			if (!saved || saved.questionId !== questionId || saved.question !== question)
+				throw new Error("Clarification receipt unavailable; inspect the original attempt");
+			return saved;
+		} finally {
+			this.clarificationGuards.delete(operationId);
+			const count = (this.sending.get(id) ?? 1) - 1;
+			if (count) this.sending.set(id, count);
+			else this.sending.delete(id);
+			end();
+		}
+	}
+
 	async lookupNativeAttentionInput(id: string, operationId: string): Promise<boolean> {
 		const meta = this.require(id);
 		return this.coldReader.readAcceptedInput(join(this.dir(meta.id), "durable"), operationId);
@@ -12609,8 +12795,25 @@ ${run.excerpt}`,
 			return Promise.resolve(new Map());
 		if (this.closing || this.sleepPause || meta.failure || this.heldUpdateRecovery(meta) || meta.recoveryStopped)
 			return Promise.resolve(new Map());
-		// An existing drain owns its admission. Do not recheck its gate after any await.
+		// An existing drain owns its update admission. Reserve a coding slot before the first await.
 		if (!admitted && !this.workers.has(id)) this.updateGate.assertOpen();
+		const coding = meta.mode !== "ask" && !meta.planning && !meta.coordinatorView && !this.isMissionCoordinator(id);
+		const alreadyOccupied =
+			meta.working ||
+			this.workers.get(id)?.state === "working" ||
+			this.backgroundWorking(meta, this.workers.get(id));
+		if (coding && !alreadyOccupied && meta.pending?.[0]?.type !== "abort") {
+			const reason = this.codingCapacityReason(meta.projectId, id);
+			if (reason) {
+				if (this.codingQueue.get(id) !== reason) {
+					this.codingQueue.set(id, reason);
+					this.emit(meta);
+				}
+				return Promise.resolve(new Map());
+			}
+			this.codingQueue.delete(id);
+			this.codingAdmissions.add(id);
+		}
 		const rejected = new Map<string, Error>();
 		const run = async () => {
 			try {
@@ -12908,6 +13111,7 @@ ${run.excerpt}`,
 			.then(() => rejected)
 			.finally(() => {
 				this.starting.delete(id);
+				this.codingAdmissions.delete(id);
 				this.lifecycleResuming.delete(id);
 				this.emit(meta);
 				void this.archiveMissionCoordinator(meta);
@@ -13279,6 +13483,19 @@ ${run.excerpt}`,
 	}
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
+		if (packet.type === "question.guard") {
+			let error: string | undefined;
+			try {
+				const entry = this.clarificationGuards.get(packet.requestId);
+				if (!entry || entry.worker !== worker || this.workers.get(meta.id) !== worker || this.parked.has(worker))
+					throw new Conflict("No exact clarification admission");
+				entry.guard();
+			} catch (e) {
+				error = e instanceof Error ? e.message : "Clarification refused";
+			}
+			worker.send({ type: "question.guard.result", callId: packet.callId, ...(error ? { error } : {}) });
+			return;
+		}
 		if (packet.type === "planning.guard") {
 			let error: string | undefined;
 			try {
@@ -14633,6 +14850,7 @@ ${run.excerpt}`,
 					(meta.workspace?.base.startsWith("origin/") ? meta.workspace.base.slice("origin/".length) : undefined));
 		return {
 			id: meta.id,
+			...(this.codingQueue.has(meta.id) ? { codingQueueReason: this.codingQueue.get(meta.id)! } : {}),
 			inputGeneration: meta.inputGeneration ?? 0,
 			...(meta.control ? { control: true } : {}),
 			...(meta.role ? { role: meta.role } : {}),
@@ -15562,6 +15780,22 @@ ${run.excerpt}`,
 		)
 			this.toolStallWatchdog.remove(meta.id);
 		const summary = this.summary(meta, worker ?? this.workers.get(meta.id));
+		const occupied =
+			meta.archivedAt === undefined &&
+			!meta.continuedTo &&
+			meta.mode !== "ask" &&
+			!meta.planning &&
+			!meta.coordinatorView &&
+			!this.isMissionCoordinator(meta.id) &&
+			(this.codingAdmissions.has(meta.id) ||
+				meta.working ||
+				activeWorker?.state === "working" ||
+				this.backgroundWorking(meta, activeWorker));
+		const signature = occupied ? (meta.projectId ?? `cwd:${meta.cwd}`) : undefined;
+		const previous = this.codingOccupancy.get(meta.id);
+		if (signature) this.codingOccupancy.set(meta.id, signature);
+		else this.codingOccupancy.delete(meta.id);
+		if (previous !== signature) this.notifyCodingCapacityChanged();
 		if (!this.closing) {
 			this.observeLifecycle(meta, summary);
 			if (!passive) {

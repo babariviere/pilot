@@ -65,6 +65,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Focused mission discussion API and history](mission-threads.md)
 - [Thread chats: a read-only chat per thread, interview, handoff](thread-chats.md)
 - [Authorized work continuation and current-policy source](mission-continuation.md)
+- [Native dependency-ready execution, queues and controls](day-execution-controls.md)
 - [Mission Unstick: repair agent (plan)](mission-unstick-repair.md)
 - [Mission prototypes: prototype chats (plan)](mission-prototypes.md)
 - [Planning limits: what each protects and why](planning-limits.md)

@@ -543,6 +543,7 @@ fn proposal(plan: &Value) -> Option<Proposal> {
         slices: slices
             .iter()
             .map(|x| Slice {
+                files: arr(&x["files"]).iter().map(s).collect(),
                 id: s(&x["id"]),
                 title: s(&x["title"]),
                 outcome: s(&x["outcome"]),

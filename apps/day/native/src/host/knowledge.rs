@@ -188,7 +188,8 @@ pub(super) async fn read(
                 .values()
                 .filter(|r| r.source == t.source
                     && (r.state == State::Pending
-                        || (r.state == State::Saved && Some(&r.id) == id.as_ref()
+                        || (r.state == State::Saved
+                            && Some(&r.id) == id.as_ref()
                             && Some(r.expected_revision) == *expected_revision)))
                 .map(|r| json!({"operationId":r.knowledge_operation,"id":r.id}))
                 .collect::<Vec<_>>()

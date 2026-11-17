@@ -28,7 +28,7 @@ export interface NativeAttentionRead {
 	projectId: string;
 	questions: NativeAttentionQuestion[];
 	actions: Array<{ record: HumanActionRecord; authorityDigest: string }>;
-	capabilities: { help: "unavailable" | 1; continuation: "unavailable" };
+	capabilities: { help: "unavailable" | 1; clarification?: 1; continuation: "unavailable" };
 }
 export type NativeAttentionRequest = NativeAttentionEnvelope &
 	(

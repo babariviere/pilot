@@ -113,6 +113,8 @@ pub(crate) struct Intent {
     reference: Option<Value>,
     #[serde(default)]
     text: Option<String>,
+    #[serde(default)]
+    interrupt: Option<bool>,
 }
 impl Intent {
     pub(crate) fn validate(&self) -> Result<(), Error> {
@@ -125,6 +127,8 @@ impl Intent {
         };
         let ok = valid_id(&self.mission_id)
             && is_source(&self.source)
+            && (self.interrupt.is_none()
+                || (self.purpose == "thread-send" && self.interrupt == Some(true)))
             && match self.purpose.as_str() {
                 "thread-create" => {
                     self.topic_id.is_none()
@@ -169,6 +173,9 @@ impl Intent {
         if let Some(v) = &self.text {
             r["text"] = json!(v);
         }
+        if self.interrupt == Some(true) {
+            r["interrupt"] = json!(true);
+        }
         r
     }
 }
@@ -198,7 +205,14 @@ pub(super) fn validate_record(op: &Value) -> Result<(), Error> {
         "thread-send" => p[f].as_str().is_some_and(valid_text),
         _ => false,
     };
-    if p.as_object().is_none_or(|o| o.len() != 4)
+    if p.as_object().is_none_or(|o| {
+        o.len()
+            != if kind == "thread-send" && p["interrupt"] == true {
+                5
+            } else {
+                4
+            }
+    }) || (p.get("interrupt").is_some() && !(kind == "thread-send" && p["interrupt"] == true))
         || p["purpose"] != op["kind"]
         || p["source"] != op["bindingId"]
         || !p["source"].as_str().is_some_and(is_source)
@@ -910,6 +924,7 @@ mod tests {
             json!({"purpose":"thread-reference","topicId":"t","reference":{"kind":"task","id":"x"}}),
             json!({"purpose":"thread-reference","topicId":"t","reference":{"kind":"history","sessionId":"s","entryId":7}}),
             json!({"purpose":"thread-send","topicId":"t","text":"  Exact words 🙂\n"}),
+            json!({"purpose":"thread-send","topicId":"t","text":"Now","interrupt":true}),
         ] {
             assert!(intent(with(ok.clone())).is_ok(), "{ok}");
         }
@@ -924,6 +939,8 @@ mod tests {
             json!({"purpose":"thread-send","topicId":"t","text":"   "}),
             json!({"purpose":"thread-send","topicId":"t","text":"x".repeat(MAX_TEXT + 1)}),
             json!({"purpose":"thread-send","text":"no topic"}),
+            json!({"purpose":"thread-send","topicId":"t","text":"Now","interrupt":false}),
+            json!({"purpose":"thread-create","title":"Topic","interrupt":true}),
             json!({"purpose":"plan-start","topicId":"t"}),
         ] {
             assert!(intent(with(bad.clone())).is_err(), "{bad}");

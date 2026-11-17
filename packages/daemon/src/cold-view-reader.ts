@@ -3,6 +3,7 @@ import { Worker } from "node:worker_threads";
 import {
 	type EarlierEntriesRead,
 	type PersistedSessionView,
+	type QuestionClarification,
 	type SubagentTranscriptRead,
 	snapshotWorkerEntry,
 } from "@pilot/kernel";
@@ -30,6 +31,7 @@ type Job = {
 	diagnosticHistory?: { target: DiagnosticTargetReference; before?: number; limit: number };
 	todoCount?: boolean;
 	inputReceipt?: string;
+	clarification?: string;
 	inputCausality?: { entryIds: number[]; requestIds: string[] };
 	resolve(view: SizedSessionView): void;
 	reject(error: Error): void;
@@ -91,6 +93,35 @@ export class ColdViewReader {
 			const accepted = (view as unknown as { acceptedInput?: unknown }).acceptedInput;
 			if (typeof accepted !== "boolean") throw new Error("Invalid input receipt read");
 			return accepted;
+		});
+	}
+
+	readClarification(directory: string, operationId: string): Promise<QuestionClarification | undefined> {
+		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
+		if (this.waiting.length >= MAX_QUEUED_READS)
+			return Promise.reject(new ServiceUnavailable("Session history is busy"));
+		return new Promise<SizedSessionView>((resolve, reject) => {
+			this.waiting.push({
+				directory,
+				cwd: directory,
+				includeTodos: false,
+				clarification: operationId,
+				resolve,
+				reject,
+			});
+			this.drain();
+		}).then((view) => {
+			const saved = (view as unknown as { clarification?: QuestionClarification | null }).clarification;
+			if (saved === null) return undefined;
+			if (
+				!saved ||
+				saved.operationId !== operationId ||
+				!Number.isSafeInteger(saved.questionId) ||
+				typeof saved.question !== "string" ||
+				typeof saved.answer !== "string"
+			)
+				throw new Error("Invalid clarification receipt read");
+			return saved;
 		});
 	}
 
@@ -231,6 +262,7 @@ export class ColdViewReader {
 						...(job.diagnosticHistory === undefined ? {} : { diagnosticHistory: job.diagnosticHistory }),
 						...(job.todoCount ? { todoCount: true } : {}),
 						...(job.inputReceipt === undefined ? {} : { inputReceipt: job.inputReceipt }),
+						...(job.clarification === undefined ? {} : { clarification: job.clarification }),
 						...(job.inputCausality === undefined ? {} : { inputCausality: job.inputCausality }),
 					},
 					execArgv: [],

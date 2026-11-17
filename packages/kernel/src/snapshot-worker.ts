@@ -2,6 +2,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import {
 	readAcceptedInput,
+	readClarificationReceipt,
 	readDiagnosticHistoryPage,
 	readEarlierEntries,
 	readInputCausality,
@@ -21,6 +22,7 @@ const {
 	todoCount,
 	recent,
 	inputReceipt,
+	clarification,
 	inputCausality,
 } = workerData as {
 	directory: string;
@@ -38,28 +40,37 @@ const {
 	};
 	todoCount?: boolean;
 	inputReceipt?: string;
+	clarification?: string;
 	inputCausality?: { entryIds: number[]; requestIds: string[] };
 };
 try {
 	const view =
-		inputCausality !== undefined
-			? { inputCausality: await readInputCausality(directory, inputCausality.entryIds, inputCausality.requestIds) }
-			: inputReceipt !== undefined
-				? { acceptedInput: await readAcceptedInput(directory, inputReceipt) }
-				: todoCount
-					? { openCount: await readSessionTodoCount(directory) }
-					: diagnosticHistory !== undefined
-						? await readDiagnosticHistoryPage(
-								directory,
-								diagnosticHistory.target,
-								diagnosticHistory.before,
-								diagnosticHistory.limit,
-							)
-						: earlier !== undefined
-							? await readEarlierEntries(directory, earlier.before, earlier.limit, earlier.view)
-							: subagentConversation === undefined
-								? await readSessionSnapshot(directory, cwd, includeTodos, recent)
-								: await readSubagentTranscript(directory, subagentConversation, after);
+		clarification !== undefined
+			? { clarification: await readClarificationReceipt(directory, clarification) }
+			: inputCausality !== undefined
+				? {
+						inputCausality: await readInputCausality(
+							directory,
+							inputCausality.entryIds,
+							inputCausality.requestIds,
+						),
+					}
+				: inputReceipt !== undefined
+					? { acceptedInput: await readAcceptedInput(directory, inputReceipt) }
+					: todoCount
+						? { openCount: await readSessionTodoCount(directory) }
+						: diagnosticHistory !== undefined
+							? await readDiagnosticHistoryPage(
+									directory,
+									diagnosticHistory.target,
+									diagnosticHistory.before,
+									diagnosticHistory.limit,
+								)
+							: earlier !== undefined
+								? await readEarlierEntries(directory, earlier.before, earlier.limit, earlier.view)
+								: subagentConversation === undefined
+									? await readSessionSnapshot(directory, cwd, includeTodos, recent)
+									: await readSubagentTranscript(directory, subagentConversation, after);
 	parentPort?.postMessage({ view, bytes: Buffer.byteLength(JSON.stringify(view)) });
 } catch (error) {
 	parentPort?.postMessage({ error: error instanceof Error ? error.message : String(error) });

@@ -432,6 +432,7 @@ fn detail(
     tasks: Vec<Task>,
 ) -> MissionDetail {
     MissionDetail {
+        execution: None,
         mission: MissionHead {
             id: s(id),
             title: s(title),
@@ -479,7 +480,7 @@ fn docs_detail() -> MissionDetail {
 }
 
 fn search_detail() -> MissionDetail {
-    detail(
+    let mut page = detail(
         "search",
         "Faster search",
         "Show search results in under 200 ms for large workspaces.",
@@ -508,7 +509,18 @@ fn search_detail() -> MissionDetail {
                 None,
             ),
         ],
-    )
+    );
+    page.execution = Some(crate::contract::ExecutionQueue {
+        version: 1,
+        started: true,
+        total: 1,
+        queue: vec![crate::contract::ExecutionWait {
+            task_id: s("search-4"),
+            title: s("Release pull request"),
+            reason: s("Waiting for #3. Combined integration checks must pass first."),
+        }],
+    });
+    page
 }
 
 fn native_detail() -> MissionDetail {
@@ -1022,6 +1034,8 @@ fn asks() -> World {
     let mut world = quiet();
     world.today.headline = s("Two questions need you.");
     let first = Decision {
+        request_session_id: s("w-native"),
+        can_clarify: true,
         title: s("Which package should go to the store?"),
         reason: s("Asks for your answer"),
         context: s("The reviewed zip is ready. A rebuild would change its bytes."),

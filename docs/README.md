@@ -33,6 +33,14 @@ between mockups: you check it, and what the worker
 asks its coordinator shows on that page. Answer with Send back or a thread.
 After your first Start work, marking a task's result done finishes the task, and Pilot starts the next
 tasks that are ready, within the worker limit, Pause and Stop. A merged pull request of a task finishes it too.
+Coding work has two slots per isolated-copy project and four across Pilot. A project using your folder has
+one writer. Waiting shows dependency, capacity and uncertain-start reasons. An uncertain start keeps its slot;
+Pilot checks the original attempt instead of starting it again. Reviewed file scopes can run independently;
+shared or undeclared scopes take turns. Check combined changes before marking the result done.
+Pause blocks new starts while agents save and stop. Pausing stays visible until confirmed.
+An agent's question offers Open discussion: recent context from that same agent, with the same reply and draft.
+Opening it creates no agent or second request. Ordinary thread comments queue; Interrupt… asks first, then
+stops the existing discussion's response and sends your message. It does not pause the mission's coding agents.
 To add work to a published plan, discuss it in a thread or use Revisit: the planner proposes new tasks, and they
 join the plan only when you confirm that revision. Adding tasks alone needs no Pause; they start like the others.
 Each screen task gets a prototype you choose during planning, and its worker builds what you chose. A screen task

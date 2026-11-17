@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
+import { PublishedStartRefused } from "./errors.ts";
 import { interviewDigest } from "./mission-interview-contract.ts";
 import { canonicalJSON, OperationJournal, payloadHash } from "./operation-journal.ts";
 import { planningWorkerFixture } from "./planning-workers.fixture.ts";
@@ -126,6 +127,36 @@ test("unavailable model authority leaves Start unavailable with no new worker", 
 	assert.equal((await f.read(f.missionId)).start.available, false);
 	assert.equal((await f.post(f.op)).state, "rejected");
 	assert.equal(f.specs.length, 1);
+});
+
+test("a proven pre-effect refusal releases the user Start and never authorizes continuation", {
+	timeout: 60000,
+}, async (t) => {
+	const f = await published(t);
+	const admission = t.mock.method(f.sessions, "admitPublishedTask", async () => {
+		throw new PublishedStartRefused("Waiting for a coding slot");
+	});
+	assert.equal((await f.post(f.op)).state, "rejected");
+	assert.equal(f.store.planningWorkers.get(f.missionId)!.start, undefined);
+	const task = f.store.task(f.missionId, JSON.parse(f.op.payload).taskId);
+	f.store.updateTask(f.missionId, task.id, { body: task.body });
+	await f.read(f.missionId);
+	assert.equal(f.specs.length, 1, "the refused Start grants no automatic task admission");
+	assert.equal(admission.mock.calls.length, 1);
+	admission.mock.restore();
+	const read = await f.read(f.missionId);
+	assert.equal(read.start.available, true);
+	const fresh = f.operation(
+		f.missionId,
+		{
+			purpose: "plan-start",
+			expectedRevision: read.start.revision,
+			planDigest: read.start.digest,
+			taskId: read.start.taskId,
+		} as { purpose: string },
+		read.start.contextDigest,
+	);
+	assert.equal((await f.post(fresh)).state, "accepted");
 });
 
 test("stale plan and modified published task refuse without admission", { timeout: 60000 }, async (t) => {

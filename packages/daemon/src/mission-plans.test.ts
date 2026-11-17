@@ -120,6 +120,24 @@ const slices = (): PlanSlice[] => [
 		owners: ["sol-backend"],
 	},
 ];
+
+test("owned write paths are exact declarations, never traversal or globs", async (t) => {
+	const f = await fixture(t);
+	await f.map([], []);
+	for (const path of ["../secret", "/etc", "src/*", "src/../secret", "src//file", "src\\file", ""]) {
+		const proposed = slices();
+		proposed[0]!.files = [path];
+		assert.equal(
+			(await f.write({ purpose: "plan-propose", spec: spec(), slices: proposed })).receipt.state,
+			"rejected",
+			path,
+		);
+	}
+	const proposed = slices();
+	proposed[0]!.files = ["src/search/", "tests/search.test.ts"];
+	assert.equal((await f.write({ purpose: "plan-propose", spec: spec(), slices: proposed })).receipt.state, "accepted");
+	assert.deepEqual(f.plan.slices[0]!.files, proposed[0]!.files);
+});
 async function fixture(t: TestContext, disk = false) {
 	const home = await mkdtemp(join(tmpdir(), "mission-plan-")),
 		file = disk ? join(home, "missions.sqlite") : ":memory:";

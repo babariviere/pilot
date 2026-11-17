@@ -69,6 +69,8 @@ export interface PlanSlice {
 	dependsOn: string[];
 	/** Mixed slices keep substantive UI and backend ownership explicit. */
 	owners: ("opus-ui" | "sol-backend")[];
+	/** Exact repository-relative files or directory prefixes. Omitted scope takes the whole project's writer slot. */
+	files?: string[];
 	/**
 	 * UI prototype questions the user settled for this slice. Its task names them, so the worker builds what the
 	 * user chose. Omitted: no chosen prototype, and a worker on screen work shows a mockup before building.

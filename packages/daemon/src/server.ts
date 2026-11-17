@@ -4117,7 +4117,8 @@ async function missionRoute(
 	}
 	if (!id) return false;
 	if (parts.length === 3) {
-		if (method === "GET") return (json(res, 200, store.detail(id)), true);
+		if (method === "GET")
+			return (json(res, 200, { ...store.detail(id), execution: service.executionView?.(id) }), true);
 		if (method === "PATCH")
 			return (json(res, 200, store.update(id, await readJson<UpdateMissionRequest>(req))), true);
 		if (method === "DELETE") {

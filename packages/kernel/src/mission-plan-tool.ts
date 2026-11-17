@@ -109,6 +109,12 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 			storyIds: Type.Array(key),
 			dependsOn: Type.Array(key),
 			owners: Type.Array(Type.Union([Type.Literal("opus-ui"), Type.Literal("sol-backend")])),
+			files: Type.Optional(
+				Type.Array(Type.String(), {
+					description:
+						"Owned repository-relative files or directory prefixes, no globs. Disjoint declared scopes can run in parallel. Omit to serialize unknown scope. Shared-file tasks take turns and verify combined changes before dependent work.",
+				}),
+			),
 			prototypes: Type.Optional(
 				Type.Array(key, {
 					description:

@@ -27,6 +27,23 @@ async function thread() {
 
 const counts = (app: { texts(): string[] }) => app.texts().find((t) => t.startsWith("Writes:"));
 
+test("Interrupt asks first; Escape keeps the draft and the discussion open", async () => {
+	const app = await thread();
+	await app.press("Hand off");
+	await app.waitFor("Thread chat");
+	await app.type("id:thread-reply", "Address this now");
+	await app.press("id:thread-interrupt");
+	await app.waitFor("id:thread-interrupt-confirm");
+	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
+	await app.keyboard.press("escape");
+	expect(app.shows("id:thread-interrupt-confirm")).toBe(false);
+	expect(app.value("id:thread-reply")).toBe("Address this now");
+	await app.press("id:thread-interrupt");
+	await app.press("role:button[Interrupt]");
+	await app.waitFor("Writes: 1 · Sends: 1 · Checks: 0");
+	expect(app.value("id:thread-reply")).toBe("");
+});
+
 test("a mission lists its threads; opening one shows its links and its whole own conversation, sending nothing", async () => {
 	const app = await mission();
 	expect(app.shows("Which file types are in scope?")).toBe(true);

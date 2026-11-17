@@ -976,6 +976,23 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf;
 
 			<ToCheck day={props.day} missionId={row().id} />
 
+			<If when={(props.page.executionQueue ?? []).length > 0}>
+				<View testID="execution-queue" class="gap-3">
+					<SectionTitle title="Waiting" />
+					<Each of={props.page.executionQueue ?? []} key={(w) => w.taskId}>
+						{(w) => (
+							<View class="gap-1 border-b border-border py-3">
+								<Text class="text-sm font-medium text-foreground">{w().title}</Text>
+								<Text class="text-sm text-muted-foreground">{w().reason}</Text>
+							</View>
+						)}
+					</Each>
+					<If when={(props.page.executionWaiting ?? 0) > (props.page.executionQueue ?? []).length}>
+						<Text class="text-xs text-muted-foreground">{`${props.page.executionWaiting} tasks waiting. Showing the first 40.`}</Text>
+					</If>
+				</View>
+			</If>
+
 			<View ref={report.ref} onLayout={report.onLayout} class="gap-3">
 				<SectionTitle title="Latest report" />
 				<If when={row().report} else={<Text class="text-sm text-muted-foreground">{rowLine(row())}</Text>}>

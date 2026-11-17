@@ -461,6 +461,8 @@ pub enum MemberState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MissionDetail {
+    #[serde(default, deserialize_with = "read_execution")]
+    pub execution: Option<ExecutionQueue>,
     pub mission: MissionHead,
     pub tasks: Vec<Task>,
     /// Names for canonical earlier-phase blockers.
@@ -484,6 +486,35 @@ pub struct MissionDetail {
 pub struct MissionPhase {
     pub id: String,
     pub name: String,
+}
+
+/// Passive service queue. It is not start authority or proof of an admitted input.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionQueue {
+    pub version: u32,
+    pub started: bool,
+    pub total: u32,
+    pub queue: Vec<ExecutionWait>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionWait {
+    pub task_id: String,
+    pub title: String,
+    pub reason: String,
+}
+
+fn read_execution<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ExecutionQueue>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(if value["version"] == 1 {
+        serde_json::from_value(value).ok()
+    } else {
+        None
+    })
 }
 
 /// `MissionBrief`: the brief's markdown.

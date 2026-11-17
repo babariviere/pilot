@@ -410,6 +410,12 @@ pub struct AttentionInterviewQuestion {
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Decision {
+    /// Exact original agent for this request. Opening its discussion only reads.
+    #[prop(default)]
+    pub request_session_id: String,
+    /// A tool-free clarification keeps the original question pending.
+    #[prop(default)]
+    pub can_clarify: bool,
     /// Stable for the decision's life.
     pub id: String,
     /// Changes whenever the decision changes. Intents name the revision
@@ -806,6 +812,11 @@ pub struct ChatLine {
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MissionPage {
+    /// Service-reported waits, not inferred from chat activity.
+    #[prop(default)]
+    pub execution_queue: Vec<ExecutionWait>,
+    #[prop(default)]
+    pub execution_waiting: u32,
     /// The same row Today shows.
     pub row: MissionRow,
     /// What the mission is for. Empty when unknown.
@@ -842,6 +853,15 @@ pub struct MissionPage {
     pub replanning_as: Option<MissionLink>,
     /// The old mission this new one re-plans, while re-planning is open.
     pub replaces: Option<MissionLink>,
+}
+
+/// One dependency, capacity or uncertain-start wait.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionWait {
+    pub task_id: String,
+    pub title: String,
+    pub reason: String,
 }
 
 /// One read-only legacy context section. Selection grants no execution authority.

@@ -3768,6 +3768,7 @@ async function fixture(
 	usageSource?: SubscriptionUsageSource,
 	deliverySnapshots?: Pick<ReviewSnapshotStore, "get">,
 	reviewProducerObserver?: (sessionId: string, request: ReviewResultWrite) => Promise<ReviewProducer>,
+	options: { realCodingCapacity?: true } = {},
 ) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-missions-"));
 	const projectDir = join(home, "project");
@@ -3821,6 +3822,9 @@ async function fixture(
 		thinking: thinking ?? "medium",
 	}));
 	const service = new MissionService(store, sessions, projects, deliverySnapshots, reviewProducerObserver);
+	// These legacy metadata fixtures create arbitrary never-finished fake chats, not coding allocations.
+	// Real coding admission is covered in sessions.test.ts and planning-execution.test.ts.
+	if (!options.realCodingCapacity) t.mock.method(sessions, "codingCapacityReason", () => undefined);
 	service.setContinuationPolicySource({
 		current: (record) => ({
 			version: 1,
@@ -3853,6 +3857,82 @@ async function fixture(
 	};
 	return { home, projects, project, other, sessions, store, service, workers, spawn };
 }
+
+test("real mission admission counts owned work and uncertain starts, not the coordinator or read-only review", async (t) => {
+	const f = await fixture(t, undefined, undefined, undefined, undefined, { realCodingCapacity: true });
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Take turns", startCoordinator: true });
+	const review = await f.sessions.spawn({ projectId: f.project.id, mode: "ask", message: "Read-only review" });
+	f.store.join(review.id, mission.id);
+	f.store.addTask(mission.id, { title: "Read-only review", sessionId: review.id });
+	assert.equal(f.sessions.codingCapacityReason(f.project.id), undefined);
+	const task = f.store.addTask(mission.id, { title: "First writer" });
+	const writer = await f.service.startTask(mission.id, task.id);
+	const next = f.store.addTask(mission.id, { title: "Second writer" });
+	await assert.rejects(f.service.startTask(mission.id, next.id), /one writer|1 of 1/);
+	assert.equal(f.store.task(mission.id, next.id).sessionId, undefined);
+	assert.ok(f.sessions.get(review.id));
+	await f.sessions.stop(writer.id);
+	assert.match(f.sessions.codingCapacityReason(f.project.id)!, /1 of 1/, "stopping does not release open owned work");
+	f.store.updateTask(mission.id, task.id, { status: "done" });
+	assert.equal(f.sessions.codingCapacityReason(f.project.id), undefined);
+	const unknown = {
+		operationId: randomUUID(),
+		missionId: mission.id,
+		targetId: randomUUID(),
+		version: 1 as const,
+		source: "fixture",
+		hostFence: "fixture",
+		stopGeneration: 0,
+		coordinatorId: mission.coordinatorSessionId!,
+		taskIds: [next.id],
+		request: {},
+		coordinatorFence: "fixture",
+		requestDigest: "fixture",
+		scopeDigest: "fixture",
+		pauseGeneration: 0,
+		state: "unknown" as const,
+		reason: "Lost acknowledgement",
+	};
+	f.store.controls.saveContinuation(unknown);
+	assert.match(
+		f.sessions.codingCapacityReason(f.project.id)!,
+		/1 of 1/,
+		"missing target metadata never frees uncertain continuation",
+	);
+	f.store.controls.saveContinuation({ ...unknown, request: { mode: "ask" } });
+	assert.equal(
+		f.sessions.codingCapacityReason(f.project.id),
+		undefined,
+		"an uncertain Ask start is not a coding allocation",
+	);
+});
+
+test("host-owned spawn fences are rechecked after durable mission admission before a worker starts", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Fenced discussion",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const before = f.sessions.list().length;
+	let current = true;
+	f.sessions["missions"]!.whenDurable = async () => {
+		current = false;
+	};
+	await assert.rejects(
+		f.sessions.spawn({ missionId: mission.id, mode: "ask", message: "Read-only discussion" }, false, undefined, {
+			actorSessionId: lead.id,
+			guard: () => {
+				if (!current) throw new Conflict("Permission changed during admission");
+			},
+		}),
+		/Permission changed/,
+	);
+	assert.equal(f.sessions.list().length, before);
+	assert.deepEqual(f.store.members(mission.id), [lead.id]);
+});
 
 test("new mission starts a coordinator with the draft request and user context before its first turn", async (t) => {
 	const f = await fixture(t);

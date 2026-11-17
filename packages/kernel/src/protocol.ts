@@ -212,6 +212,8 @@ export interface KernelTelemetryConfiguration {
 }
 
 export type KernelCommand =
+	| { type: "question.clarify"; requestId: string; questionId: number; question: string }
+	| { type: "question.guard.result"; callId: string; error?: string }
 	| { type: "planning.input"; requestId: string; input: import("./planning-worker.ts").PlanningInput }
 	| { type: "plan.start"; requestId: string; content: string }
 	| {
@@ -366,6 +368,7 @@ export type KernelCommand =
 	| { type: "shutdown" };
 
 export type KernelPacket =
+	| { type: "question.guard"; callId: string; requestId: string }
 	| { type: "planning.call"; callId: string; request: import("./planning-worker.ts").PlanningWorkerRequest }
 	| { type: "planning.guard"; callId: string; operationId: string }
 	| { type: "model.configuration.guard"; callId: string; requestId: string }
@@ -377,6 +380,7 @@ export type KernelPacket =
 			type: "ready";
 			/** Provider-free model configuration command and host-boundary guard handshake. */
 			modelConfiguration?: 1;
+			questionClarification?: 1;
 			toolsRunning?: boolean;
 			execution?: ExecutionEvidence;
 			model: string;

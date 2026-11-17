@@ -32,13 +32,93 @@ import { BUILDING_SKILL_PATHS } from "./mission-building-skills.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { PerformanceRecord } from "./performance.ts";
 import { PosthorseDoc } from "./posthorse.ts";
+import { QUESTION_ENTRY } from "./question-entry.ts";
 import { queueGuardToken } from "./queue.ts";
 import { KernelSession } from "./session.ts";
-import { readSessionSnapshot } from "./snapshot.ts";
+import { readClarificationReceipt, readSessionSnapshot } from "./snapshot.ts";
 import { TOOL_ACTIVITY_FILE } from "./tool-activity.ts";
 import type { KernelUsage } from "./usage.ts";
 
 const context = BACKGROUND_CONTEXT;
+
+test("same-kernel clarification answers once without a run, tools, input or releasing the original question", async (t) => {
+	let extensionRequests = 0;
+	const f = await fixture(t, [
+		(pi) => {
+			pi.on("before_provider_request", () => {
+				extensionRequests++;
+			});
+		},
+	]);
+	const session = await f.open();
+	const id = session.conversation.id;
+	const questionId = await session.harness.commit(async (tx) => {
+		(await tx.doc(HeldInputsDoc, id)).questionPending = true;
+		return Number(
+			(await tx.appendEntry(id, { kind: QUESTION_ENTRY, data: { question: "Keep the old API?" }, model: [] })).id,
+		);
+	}, context);
+	const before = await session.harness.snapshot(HeldInputsDoc, id, context);
+	f.a.setResponses([fauxAssistantMessage("It avoids breaking existing callers.")]);
+	const request = { operationId: randomUUID(), questionId, question: "Why keep it?" };
+	let guards = 0;
+	await session.clarifyQuestion(request, async () => {
+		guards++;
+	});
+	assert.ok(guards >= 2);
+	assert.equal(f.a.state.callCount, 1);
+	assert.equal(extensionRequests, 0);
+	assert.equal((await session.harness.snapshot(LiveDoc, id, context))?.run, undefined);
+	assert.deepEqual((await session.harness.snapshot(InboxDoc, id, context))?.items, []);
+	assert.deepEqual(await session.harness.snapshot(HeldInputsDoc, id, context), before);
+	const saved = await readClarificationReceipt(f.spec.storageDir, request.operationId);
+	assert.equal(saved?.answer, "It avoids breaking existing callers.");
+	await session.clarifyQuestion(request, async () => {
+		assert.fail("exact retry must only read");
+	});
+	assert.equal(f.a.state.callCount, 1);
+});
+
+test("Stop joins a clarification and never resumes it or spends again", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	const id = session.conversation.id;
+	const questionId = await session.harness.commit(async (tx) => {
+		(await tx.doc(HeldInputsDoc, id)).questionPending = true;
+		return Number(
+			(await tx.appendEntry(id, { kind: QUESTION_ENTRY, data: { question: "Keep the API?" }, model: [] })).id,
+		);
+	}, context);
+	const entered = deferred<void>();
+	const response = deferred<ReturnType<typeof fauxAssistantMessage>>();
+	f.a.setResponses([
+		() => {
+			entered.resolve();
+			return response.promise;
+		},
+	]);
+	const request = { operationId: randomUUID(), questionId, question: "Why keep it?" };
+	const reply = session.clarifyQuestion(request, async (signal) => signal.throwIfAborted());
+	const failed = assert.rejects(reply, /cancel|abort/i);
+	await entered.promise;
+	await assert.rejects(session.changeModel(second), ConversationBusy);
+	let stopped = false;
+	const stopping = session.abort().then(() => {
+		stopped = true;
+	});
+	await Promise.resolve();
+	assert.equal(stopped, false, "Stop joins the physical request, not just its abort signal");
+	response.resolve(fauxAssistantMessage("Late reply"));
+	await failed;
+	await stopping;
+	assert.equal(await readClarificationReceipt(f.spec.storageDir, request.operationId), null);
+	assert.equal((await session.harness.snapshot(HeldInputsDoc, id, context))!.stopped, true);
+	await assert.rejects(
+		session.clarifyQuestion(request, async () => {}),
+		/Unknown|inspect/,
+	);
+	assert.equal(f.a.state.callCount, 1);
+});
 
 test("pi reload preserves history, model and host tools, and fences new input through lifecycle replacement", async (t) => {
 	const events: string[] = [];

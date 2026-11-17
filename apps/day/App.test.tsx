@@ -11,6 +11,13 @@ const PAUSE = "id:pause >> role:button[Pause]";
 /** A mission that runs normally offers Pause at its top and shows no control panel. */
 const RUNNING = "role:button[Pause mission]";
 
+test("the mission shows the service's execution wait without starting work", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:mission-search");
+	await app.waitFor("id:execution-queue");
+	expect(app.shows("Waiting for #3. Combined integration checks must pass first.")).toBe(true);
+});
+
 test("Today shows decisions first, then moving and waiting missions", async () => {
 	const app = await open("./MockApp.tsx", desktop);
 	await app.waitFor("Three short things need you.");

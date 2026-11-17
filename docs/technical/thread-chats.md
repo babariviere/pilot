@@ -14,11 +14,12 @@ Each open mission thread has its own **thread chat**. It replaces sending thread
 
 1. **Discuss.** The first `thread-send` of an open thread starts its chat: an Ask chat (role `explorer`, the
    project's read-only main view) that joins the mission. Later messages go to the same chat with the operation ID
-   as request ID, so a retry never repeats one. The chat answers while the planning agent works or is held. The
+   as request ID. Unknown sends only look up the exact saved target and receipt; they never resend. The chat answers while the planning agent works or is held. The
    thread's history reads this chat (`scope: "thread-chat"`).
    As an Ask chat, it needs no worker slot and takes none. If Pilot refuses the start (for example, a paused
-   mission), no chat exists, so the message stays Unknown and Check starts the chat once Pilot can. A start lost
-   in a crash stays Unknown and is never started again.
+   mission), the host saves an exact refusal marker. Check can start it later only under the same project and
+   owner authority. Missing chat metadata alone is not permission to retry. A start lost in a crash stays Unknown
+   and is never started again.
 2. **Read like the coordinator.** Its mission tool (`THREAD_ACTIONS`) has the coordinator's reads: `get` with
    members, needs-you and PRs, `status`, tasks, brief, decisions (coordinator audience too), comments, activity,
    links, artifacts, map, answers and replaced. It has no write action. `thread` reads its own thread, including
@@ -37,6 +38,14 @@ Each open mission thread has its own **thread chat**. It replaces sending thread
    thread once it is idle. Reopening the thread starts a new chat at the next message.
 
 ## Limits
+
+`thread-send` optionally takes `interrupt: true`. It requires an existing live discussion and an unpaused mission.
+The host saves its intent before stopping that chat, then checks the exact Stop generation before sending the
+new input. A later Stop or mission Pause wins. Lost acknowledgement never repeats Stop or input. Older sends
+without an exact saved delivery target or an immutable original-chat receipt stay Unknown. Ordinary sends remain
+queued follow-ups, not Interrupt.
+Focused context opened from an agent's Needs you request is different: it reads the asking agent and reuses
+the original question and reply. It creates neither a thread chat nor another attention request.
 
 A handoff lists at most 20 tasks, each with at most 20 acceptance lines and 20 dependencies. A thread is one topic,
 and the planner reads the whole handoff in one turn; a refusal names the limit. Thread chats need native planning:

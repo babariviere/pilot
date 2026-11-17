@@ -43,6 +43,7 @@ import { type LinearClosingGuard, linearPrGuidance, unavailableClosingGuard } fr
 import type { NonCodeAcceptanceState } from "./mission-non-code-acceptance.ts";
 import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
 import { MissionNotices } from "./mission-notices.ts";
+import { publishedDefinition, sliceTaskBody } from "./mission-plan-store.ts";
 import { MissionPlanReader } from "./mission-plans.ts";
 import { MissionReports } from "./mission-reports.ts";
 import {
@@ -348,6 +349,38 @@ export class MissionService {
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 				return mission.projectId;
 			},
+			codingReservations: () => {
+				const entries = new Map<string, { sessionId: string; projectId: string; files?: string[] }>();
+				for (const mission of store.list()) {
+					const add = (sessionId: string, taskId?: string) => {
+						const chat = sessions.get(sessionId);
+						// Known read-only/coordinator owners consume no coding slot. Missing metadata stays uncertain.
+						if (chat && (chat.mode === "ask" || chat.missionCoordinator || chat.role || chat.control)) return;
+						const files = taskId ? this.codingFiles(mission.id, taskId) : undefined;
+						const prior = entries.get(sessionId);
+						entries.set(sessionId, {
+							sessionId,
+							projectId: mission.projectId,
+							files: prior ? (prior.files && files ? [...prior.files, ...files] : undefined) : files,
+						});
+					};
+					for (const task of store.tasks(mission.id)) {
+						if (task.sessionId && isOpen(task) && !store.retiredMember(task.sessionId))
+							add(task.sessionId, task.id);
+					}
+					const state = store.planningWorkers.get(mission.id);
+					if (state?.start && !state.start.admitted) add(state.start.sessionId, state.start.taskId);
+					for (const start of state?.autoStarts ?? [])
+						if (start.state === "starting") add(start.sessionId, start.taskId);
+					for (const start of store.controls.continuations(mission.id, true))
+						if (
+							(start.state === "entered" || start.state === "unknown") &&
+							store.startChangesCode(mission.id, start.request)
+						)
+							add(start.targetId);
+				}
+				return [...entries.values()];
+			},
 			joinSpawn: (sessionId, missionId, coordinator, taskId, admission) => {
 				this.controls.assertOpen(missionId);
 				const mission = store.require(missionId);
@@ -355,6 +388,10 @@ export class MissionService {
 				if (coordinator && mission.coordinatorSessionId)
 					throw new Conflict("The mission already has a coordinator");
 				this.assertSameProject(sessionId, missionId);
+				if (!coordinator && this.session(sessionId).mode !== "ask") {
+					const capacity = sessions.codingCapacityReason(mission.projectId, sessionId);
+					if (capacity) throw new Conflict(capacity);
+				}
 				this.assertStartActor(
 					missionId,
 					admission?.actorSessionId,
@@ -492,6 +529,7 @@ export class MissionService {
 		this.subscriptions.push(
 			store.onChange((missionId, passive, preferenceOnly, readModelOnly) => {
 				if (preferenceOnly || readModelOnly) return;
+				sessions.codingCapacityChanged();
 				operations.time("missions.context.publish", () => {
 					if (!store.get(missionId)) return;
 					if (!passive) {
@@ -511,6 +549,64 @@ export class MissionService {
 	}
 
 	/** Synchronous admission/commit excludes a previously admitted chat-archive write. */
+	private codingFiles(missionId: string, taskId: string): string[] | undefined {
+		const plan = this.store.plans.get(missionId);
+		const entry = plan?.publication?.tasks.find((t) => t.taskId === taskId);
+		const slice = plan?.slices.find((s) => s.id === entry?.sliceId);
+		if (!plan?.publication || !entry || !slice?.files?.length) return undefined;
+		const task = this.store.task(missionId, taskId);
+		if (
+			entry.definition !== undefined
+				? publishedDefinition(task) !== entry.definition
+				: task.body !== sliceTaskBody(plan, slice, plan.publication.briefRevision)
+		)
+			return undefined;
+		return slice.files;
+	}
+
+	executionView(missionId: string): import("@pilot/protocol").MissionExecutionView | undefined {
+		const state = this.store.planningWorkers.get(missionId);
+		if (!state?.start) return undefined;
+		const tasks = this.store.tasks(missionId);
+		const tasksById = new Map(tasks.map((task) => [task.id, task]));
+		const starts = new Map<string, NonNullable<typeof state.autoStarts>[number]>();
+		for (const start of state.autoStarts ?? []) if (!starts.has(start.taskId)) starts.set(start.taskId, start);
+		let capacityRead = false;
+		let capacity: string | undefined;
+		const capacityReason = () => {
+			if (!capacityRead) {
+				capacity = this.sessions.codingCapacityReason(this.store.require(missionId).projectId);
+				capacityRead = true;
+			}
+			return capacity;
+		};
+		const held = this.store.controls.current(missionId).held;
+		const published = new Set(this.store.plans.get(missionId)?.publication?.tasks.map((t) => t.taskId));
+		const queue = tasks.flatMap((task) => {
+			if (!published.has(task.id) || !isOpen(task)) return [];
+			const start = starts.get(task.id);
+			const unknown = (state.start?.taskId === task.id && !state.start.admitted) || start?.state === "starting";
+			const session = task.sessionId ? this.sessions.get(task.sessionId) : undefined;
+			if (task.sessionId && !unknown && !session?.codingQueueReason) return [];
+			const dependencies = (task.dependsOn ?? []).flatMap((id) => {
+				const dep = tasksById.get(id);
+				return dep?.status === "done" ? [] : [`#${dep?.number ?? "?"}`];
+			});
+			const reason = unknown
+				? "Start outcome unknown. Checking the original attempt only; its coding slot stays reserved."
+				: held
+					? "Mission paused. New starts are blocked."
+					: (session?.codingQueueReason ??
+						(dependencies.length
+							? `Waiting for ${dependencies.join(", ")}.`
+							: start?.state === "failed"
+								? (start.reason ?? "Start needs inspection. No replacement will start.")
+								: (capacityReason() ?? "Ready. Waiting for current start checks.")));
+			return [{ taskId: task.id, title: task.title, reason }];
+		});
+		return { version: 1, started: state.start.admitted, total: queue.length, queue: queue.slice(0, 40) };
+	}
+
 	lifecycle(id: string, write: MissionLifecycleRequest) {
 		this.sessions.assertPassiveLifecycleReady(this.store.members(id));
 		return this.store.lifecycle(id, write.projectId, write.expectedStatus, write.action);

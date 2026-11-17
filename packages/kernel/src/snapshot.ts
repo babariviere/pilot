@@ -27,6 +27,7 @@ import { GitHubActionsDoc } from "./github-actions.ts";
 import { HeldInputsDoc } from "./held-inputs.ts";
 import { InputOrigins } from "./input-origin.ts";
 import { readQuestionBoundary, readRecentEntries, readTranscriptPage } from "./paged-history.ts";
+import { readQuestionClarification } from "./question-clarifications.ts";
 import { queueUpdate, queueUpdateForDisplay } from "./queue.ts";
 import { findInputReceipt, openSessionReader } from "./storage.ts";
 import { TodoProgressDoc, todosUpdate } from "./todos.ts";
@@ -39,6 +40,16 @@ export interface PersistedSessionView {
 }
 
 const context = BACKGROUND_CONTEXT;
+
+export async function readClarificationReceipt(directory: string, operationId: string) {
+	const storage = await openSessionReader(directory);
+	if (!storage) return null;
+	try {
+		return (await readQuestionClarification(storage, operationId)) ?? null;
+	} finally {
+		await storage.close(context);
+	}
+}
 
 /** Exact committed request lookup, with no agent, initialization or filesystem write. */
 export async function readAcceptedInput(directory: string, requestId: string): Promise<boolean> {

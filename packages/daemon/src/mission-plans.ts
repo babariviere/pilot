@@ -445,12 +445,40 @@ export class MissionPlans extends MissionPlanReader {
 					"storyIds",
 					"dependsOn",
 					"owners",
+					...(Object.hasOwn(slice, "files") ? ["files"] : []),
 					...(Object.hasOwn(slice, "prototypes") ? ["prototypes"] : []),
 				]);
 				text(slice.title, 200);
 				text(slice.outcome, 2000);
 				strings(slice.acceptance);
 				strings(slice.storyIds);
+				if (slice.files !== undefined) {
+					// Cap repeated stored/model context at 51,200 path characters per slice.
+					if (!Array.isArray(slice.files)) throw new Conflict("Owned files must be a list of paths");
+					if (slice.files.length < 1 || slice.files.length > 100)
+						throw new Conflict(
+							`Owned files hold 1 to 100 paths; got ${slice.files.length}. Use directory prefixes for large scopes.`,
+						);
+					for (const path of slice.files)
+						if (typeof path === "string" && path.length > 512)
+							throw new Conflict(
+								`Owned paths hold at most 512 characters; got ${path.length}. Use a shorter directory prefix.`,
+							);
+					if (
+						slice.files.some(
+							(p) =>
+								typeof p !== "string" ||
+								!p ||
+								p.length > 512 ||
+								p.startsWith("/") ||
+								/[\\\u0000*?[\]{}]/.test(p) ||
+								p.split("/").some((s, i, all) => s === "." || s === ".." || (!s && i !== all.length - 1)),
+						)
+					)
+						throw new Conflict(
+							"Owned files need exact relative paths or directory prefixes, without traversal or globs",
+						);
+				}
 				if (
 					!slice.acceptance.length ||
 					!slice.storyIds.length ||

@@ -352,9 +352,21 @@ export class UsageCapture {
 
 	/** Explicit provider-neutral context rebuilds run outside a Harness task. */
 	async compaction<T>(conversationId: Runtime["conversationId"], work: () => Promise<T>): Promise<T> {
+		return this.outsideTask(conversationId, "pi.compaction", work);
+	}
+
+	async clarification<T>(conversationId: Runtime["conversationId"], work: () => Promise<T>): Promise<T> {
+		return this.outsideTask(conversationId, "pilot.question-clarification", work);
+	}
+
+	private async outsideTask<T>(
+		conversationId: Runtime["conversationId"],
+		kind: string,
+		work: () => Promise<T>,
+	): Promise<T> {
 		if (!this.harness) return work();
 		const scope: CaptureScope = {
-			task: { kind: "pi.compaction" },
+			task: { kind },
 			context: BACKGROUND_CONTEXT,
 			runtime: { conversationId, snapshot: this.harness.snapshot.bind(this.harness) },
 			operations: [],

@@ -69,6 +69,16 @@ export class MissionThreads {
 			}),
 		);
 	}
+	private chatStartAuthority(id: string): string {
+		const pin = this.scope(id);
+		return payloadHash(
+			canonicalJSON({
+				project: pin.project,
+				owner: pin.owner,
+				identity: this.deps.sessions.planningIdentity(pin.owner),
+			}),
+		);
+	}
 	async read(projectId: string, id: string): Promise<MissionThreadsView> {
 		await this.deps.store.durable();
 		this.scope(id, projectId);
@@ -379,7 +389,13 @@ export class MissionThreads {
 						: op.kind === "thread-reference"
 							? "reference"
 							: "text";
-			interviewExact(request, ["purpose", "source", "topicId", field!]);
+			interviewExact(request, [
+				"purpose",
+				"source",
+				"topicId",
+				field!,
+				...(op.kind === "thread-send" && Object.hasOwn(request, "interrupt") ? ["interrupt"] : []),
+			]);
 			interviewId(request.topicId);
 			if (
 				request.purpose !== op.kind ||
@@ -406,6 +422,10 @@ export class MissionThreads {
 					await this.reference(op.targetId, topic, request.reference);
 				}
 				if (request.purpose === "thread-send") {
+					if (request.interrupt !== undefined && request.interrupt !== true)
+						throw new Error("Invalid Interrupt confirmation");
+					if (request.interrupt && (!this.liveChat(topic) || store.controls.current(op.targetId).held))
+						throw new Conflict("Interrupt needs an existing discussion and an unpaused mission");
 					if (typeof request.text !== "string" || !request.text.trim() || Buffer.byteLength(request.text) > 32000)
 						throw new Error("Topic input must contain 1 to 32000 bytes");
 					if (
@@ -452,7 +472,12 @@ export class MissionThreads {
 			)
 				next.references.push(request.reference);
 			if (request.purpose === "thread-send")
-				next.inputs.push({ sessionId: next.ownerSessionId, operationId: op.operationId, at: Date.now() });
+				next.inputs.push({
+					sessionId: next.ownerSessionId,
+					deliverySessionId: this.liveChat(next),
+					operationId: op.operationId,
+					at: Date.now(),
+				});
 			return next;
 		});
 		const source = this.source(op.targetId);
@@ -460,16 +485,46 @@ export class MissionThreads {
 		check(source);
 		if (request.purpose === "thread-disposition" && request.disposition === "discarded") await this.closeChat(result);
 		if (request.purpose !== "thread-send") return { topic: result };
-		return { topic: result, chat: await this.chatSend(op, result, request.text) };
+		return { topic: result, chat: await this.chatSend(op, result, request.text, request.interrupt) };
 	}
 	/**
 	 * Sends a thread message to the thread's chat, starting the chat with it when the thread has none open. The chat's
 	 * start is saved before it starts, so a crash in between stays Unknown instead of starting a second chat.
 	 */
-	private async chatSend(op: DurableOperation, topic: MissionThread, text: string): Promise<{ sessionId: string }> {
+	private async chatSend(
+		op: DurableOperation,
+		topic: MissionThread,
+		text: string,
+		interrupt = false,
+		expectedAuthority?: string,
+	): Promise<{ sessionId: string }> {
 		const { store, sessions, projects } = this.deps;
+		const authority = expectedAuthority ?? this.chatStartAuthority(op.targetId);
+		const guard = () => {
+			if (this.chatStartAuthority(op.targetId) !== authority) throw new Conflict("Thread start authority changed");
+		};
+		guard();
 		const live = this.liveChat(topic);
 		if (live) {
+			if (interrupt) {
+				const generation = sessions.get(live)?.inputGeneration ?? 0;
+				await sessions.stop(live);
+				const guard = () => {
+					this.scope(op.targetId);
+					if (
+						store.controls.current(op.targetId).held ||
+						this.liveChat(store.threads.get(op.targetId, topic.id)) !== live ||
+						sessions.get(live)?.inputGeneration !== generation + 1
+					)
+						throw new Conflict("Discussion or Stop changed during Interrupt; inspect before sending again");
+				};
+				guard();
+				await sessions.sendDurable(live, text, "followUp", op.operationId, {
+					inputGeneration: generation + 1,
+					admissionGuard: guard,
+				});
+				return { sessionId: live };
+			}
 			await sessions.send(live, text, "followUp", op.operationId);
 			return { sessionId: live };
 		}
@@ -486,6 +541,7 @@ export class MissionThreads {
 			if (t.chat?.sessionId && !t.chats?.some((c) => c.sessionId === t.chat!.sessionId))
 				t.chats = [...(t.chats ?? []), { operationId: t.chat.operationId, sessionId: t.chat.sessionId }];
 			t.chat = { operationId: op.operationId };
+			delete t.chatStartRefusal;
 			if (earlier && t.earlier === undefined) t.earlier = earlier;
 		});
 		await store.durable();
@@ -505,13 +561,16 @@ export class MissionThreads {
 				},
 				false,
 				undefined,
-				{ role: "explorer", actorSessionId: scope.owner, mainView: true },
+				{ role: "explorer", actorSessionId: scope.owner, mainView: true, guard },
 			);
 		} catch (error) {
 			// Spawn admission refused it and removed the new chat, so none exists: Check may start it later.
 			if (error instanceof Conflict) {
 				store.threads.amend(op.targetId, topic.id, (t) => {
-					if (t.chat?.operationId === op.operationId && !t.chat.sessionId) delete t.chat;
+					if (t.chat?.operationId === op.operationId && !t.chat.sessionId) {
+						delete t.chat;
+						t.chatStartRefusal = { operationId: op.operationId, authority };
+					}
 				});
 				await store.durable();
 			}
@@ -588,20 +647,25 @@ export class MissionThreads {
 		}
 		return out;
 	}
-	/** After a restart: the message reached the chat it names, or it sends again with the same request ID. */
+	/** After a restart, only inspect the exact original effect. Never resend or choose today's chat. */
 	private async chatRecover(op: DurableOperation, saved: MissionThread): Promise<{ sessionId: string }> {
 		const topic = this.deps.store.threads.get(op.targetId, saved.id);
 		if (topic.chat?.operationId === op.operationId) {
 			if (!topic.chat.sessionId) throw new Error("Unknown thread chat start; no replay");
 			return { sessionId: topic.chat.sessionId };
 		}
-		// Its chat start was refused before a chat existed: start it now, saved first as in a first send.
-		if (!topic.chat && topic.disposition === "open") return this.chatSend(op, topic, JSON.parse(op.payload).text);
-		const live = this.liveChat(topic);
-		if (!live) throw new Error("Unknown thread message; its chat is closed");
-		// The chat takes one input per request ID, so sending again cannot repeat the message.
-		await this.deps.sessions.send(live, JSON.parse(op.payload).text, "followUp", op.operationId);
-		return { sessionId: live };
+		// Retry only this exact saved pre-effect refusal, never infer it from an absent chat.
+		if (!topic.chat && topic.disposition === "open" && topic.chatStartRefusal?.operationId === op.operationId) {
+			if (topic.chatStartRefusal.authority !== this.chatStartAuthority(op.targetId))
+				throw new Error("Refused thread start authority changed; read it and send a fresh request");
+			return this.chatSend(op, topic, JSON.parse(op.payload).text, false, topic.chatStartRefusal.authority);
+		}
+		// The immutable legacy topic receipt also pins its then-current chat, not today's chat.
+		const target =
+			saved.inputs.find((i) => i.operationId === op.operationId)?.deliverySessionId ?? saved.chat?.sessionId;
+		if (!target || !(await this.deps.sessions.lookupNativeAttentionInput(target, op.operationId)))
+			throw new Error("Unknown thread message; checking the original input only, never resend");
+		return { sessionId: target };
 	}
 	/** The thread's chat session when it exists and is not archived. */
 	private liveChat(topic: MissionThread): string | undefined {

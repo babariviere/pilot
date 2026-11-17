@@ -430,6 +430,7 @@ fn export_spec(extra: Option<&str>) -> Spec {
 fn export_slices() -> Vec<Slice> {
     vec![
         Slice {
+            files: Vec::new(),
             id: s("writer"),
             title: s("Markdown writer"),
             outcome: s("A chat becomes one Markdown file, without tool output."),
@@ -442,6 +443,7 @@ fn export_slices() -> Vec<Slice> {
             owners: vec![SliceOwner::Backend],
         },
         Slice {
+            files: Vec::new(),
             id: s("command"),
             title: s("Export command and save panel"),
             outcome: s("Export in the chat menu writes the file where you choose."),
@@ -454,6 +456,7 @@ fn export_slices() -> Vec<Slice> {
             owners: vec![SliceOwner::Ui, SliceOwner::Backend],
         },
         Slice {
+            files: Vec::new(),
             id: s("long"),
             title: s("Fold long tool results"),
             outcome: s("Long tool results show as one summary line."),
@@ -557,6 +560,7 @@ fn search_review() -> Plan {
             exclusions: strings(&["Searching inside binary files"]),
         },
         vec![Slice {
+            files: Vec::new(),
             id: s("index"),
             title: s("Workspace index"),
             outcome: s("Search reads the index first."),
@@ -586,6 +590,7 @@ pub(crate) fn amend_during_review(plan: &mut Plan) {
         "Rebuild the index in the background after a branch switch",
     ));
     proposal.slices.push(Slice {
+        files: Vec::new(),
         id: s("rebuild"),
         title: s("Rebuild after branch switch"),
         outcome: s("Search stays right after switching branches."),

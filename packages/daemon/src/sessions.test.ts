@@ -1390,6 +1390,78 @@ async function fixture(t: TestContext) {
 	return { root, home, source, projects, project, workers, workerFactory, manager, stored };
 }
 
+test("a local folder project queues a second writer until the first run finishes", async (t) => {
+	const f = await fixture(t);
+	const preview = await f.projects.previewLocal(f.source);
+	const project = await f.projects.createLocal(f.source, preview.digest);
+	const sessions = await f.manager();
+	const first = await sessions.spawn({ projectId: project.id, message: "first writer" });
+	await until(() => sessions.get(first.id)?.state === "working");
+	const second = await sessions.spawn({ projectId: project.id, message: "second writer" });
+	await sessions["starting"].get(second.id);
+	assert.match(sessions.get(second.id)?.codingQueueReason ?? "", /one writer|1 of 1/i);
+	assert.equal(f.workers.length, 1);
+	assert.equal((await f.stored(second.id)).pending.length, 1, "queued input stays durable");
+	await Promise.resolve();
+	const capacity = t.mock.method(sessions, "codingCapacityReason");
+	const before = capacity.mock.calls.length;
+	for (let i = 0; i < 100; i++) sessions["emit"](sessions["require"](first.id), undefined, true);
+	await Promise.resolve();
+	assert.equal(capacity.mock.calls.length, before, "streaming updates do not rescan mission reservations");
+	await sessions.stop(first.id);
+	await until(() => f.workers.length === 2);
+	assert.equal(sessions.get(second.id)?.codingQueueReason, undefined);
+});
+
+test("clarification does not give a legacy unmetered chat new allowance authority", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({ workspace: async (_source, path) => ({ path, base: "HEAD", jj: false }) });
+	const chat = await sessions.spawn({ projectId: f.project.id, message: "Original work" });
+	await until(() => f.workers.length === 1);
+	await sessions["starting"].get(chat.id);
+	const before = f.workers[0]!.requests.length;
+	await assert.rejects(
+		sessions.clarifyQuestion(chat.id, randomUUID(), 1, "Why?", () => {}),
+		/configured allowance/,
+	);
+	assert.equal(f.workers[0]!.requests.length, before);
+});
+
+test("local coding queues enforce four slots across projects and reserve simultaneous starts", async (t) => {
+	const f = await fixture(t);
+	const projects = [];
+	for (let i = 0; i < 5; i++) {
+		const path = join(f.root, `project-${i}`);
+		await mkdir(path);
+		const preview = await f.projects.previewLocal(path);
+		projects.push(await f.projects.createLocal(path, preview.digest));
+	}
+	const sessions = await f.manager();
+	const chats = await Promise.all(projects.map((p) => sessions.spawn({ projectId: p.id, message: "write" })));
+	await Promise.all([...sessions["starting"].values()]);
+	const queued = chats.filter((c) => sessions.get(c.id)?.codingQueueReason);
+	assert.equal(queued.length, 1);
+	assert.match(sessions.get(queued[0]!.id)?.codingQueueReason ?? "", /4 of 4/);
+	assert.equal(f.workers.length, 4);
+	const working = chats.find((c) => c.id !== queued[0]!.id)!;
+	await sessions.stop(working.id);
+	await until(() => f.workers.length === 5);
+	assert.equal(sessions.get(queued[0]!.id)?.codingQueueReason, undefined);
+});
+
+test("isolated copies allow two coding agents and queue the third", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({ workspace: async (_source, path) => ({ path, base: "HEAD", jj: false }) });
+	const chats = await Promise.all(
+		[1, 2, 3].map((i) => sessions.spawn({ projectId: f.project.id, message: `writer ${i}` })),
+	);
+	await Promise.all([...sessions["starting"].values()]);
+	assert.equal(f.workers.length, 2);
+	const queued = chats.filter((c) => sessions.get(c.id)?.codingQueueReason);
+	assert.equal(queued.length, 1);
+	assert.match(sessions.get(queued[0]!.id)?.codingQueueReason ?? "", /2 of 2/);
+});
+
 async function insightsFixture(t: TestContext, factories: SessionFactories = {}, backlog?: MissionStore) {
 	const f = await fixture(t);
 	const missionId = backlog?.create({ title: "Review backlog", projectId: f.project.id }).id ?? "backlog";
@@ -4652,6 +4724,7 @@ test("large restart recovery keeps the daemon responsive and bounds cold starts 
 		worker.open();
 		await until(() => worker.requests.length === 1);
 		assert.equal(worker.requests[0]!.requestId, `input:${worker.spec.sessionId}`);
+		await sessions.stop(worker.spec.sessionId); // Finish each run before admitting more than four coding agents.
 	}
 	await Promise.all(sessions["starting"].values());
 	assert.equal(f.workers.length, ids.length);
@@ -4890,6 +4963,7 @@ test("direct projects and cwd overrides return before worker readiness without c
 		worker.open();
 		await until(() => sessions.get(created.id)?.state === "working");
 		assert.equal(worker.requests[0]!.requestId, meta.pending[0]!.requestId);
+		await sessions.stop(created.id); // Direct-folder writers take turns under the coding limit.
 	}
 });
 
@@ -5016,6 +5090,7 @@ for (const workspace of ["clone", "direct"] as const) {
 		const required = await sessions.spawn({ projectId: f.project.id, message: "default policy" });
 		await until(() => sessions.get(required.id)?.state === "working");
 		assert.equal(f.workers[0]!.spec.pilot?.requirePullRequest, true);
+		if (workspace === "direct") await sessions.stop(required.id);
 		await f.projects.update(f.project.id, { requirePullRequest: false });
 		const direct = await sessions.spawn({ projectId: f.project.id, message: "direct push allowed" });
 		await until(() => sessions.get(direct.id)?.state === "working");

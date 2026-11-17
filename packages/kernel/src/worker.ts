@@ -175,6 +175,7 @@ export function runKernelWorker(): void {
 		});
 	/** Subagent commands may wait on a child worker; they never block session commands. */
 	const subagentCommands = new Set<Promise<void>>();
+	const clarificationCommands = new Set<Promise<void>>();
 	let exiting = false;
 	const sender = new IpcSender(
 		{
@@ -279,6 +280,8 @@ export function runKernelWorker(): void {
 		try {
 			await initialization?.catch(() => undefined);
 			await commands;
+			await session?.stopQuestionClarifications();
+			await Promise.allSettled(clarificationCommands);
 			await Promise.allSettled(subagentCommands);
 			await session?.close();
 			await nodeTelemetry().shutdown();
@@ -474,6 +477,7 @@ export function runKernelWorker(): void {
 		if (
 			command.type === "planning.result" ||
 			command.type === "planning.guard.result" ||
+			command.type === "question.guard.result" ||
 			command.type === "model.configuration.result" ||
 			command.type === "mission.result" ||
 			command.type === "publication.source.result" ||
@@ -634,6 +638,7 @@ export function runKernelWorker(): void {
 				await send({
 					type: "ready",
 					modelConfiguration: 1,
+					questionClarification: 1,
 					toolsRunning: session.toolsRunning,
 					model: session.model,
 					thinking: session.thinkingLevel,
@@ -693,6 +698,29 @@ export function runKernelWorker(): void {
 			})().catch((error) =>
 				send({ type: "error", requestId: command.requestId, message: errorText(error) }).catch(() => undefined),
 			);
+			return;
+		}
+		if (command.type === "question.clarify") {
+			const before = commands;
+			// Provider waits must not sit in front of Stop/Pause on the command queue.
+			const running = (async () => {
+				await initialization;
+				await before;
+				if (!session) throw new Error("Kernel has not started");
+				await session.clarifyQuestion(
+					{ operationId: command.requestId, questionId: command.questionId, question: command.question },
+					(signal) =>
+						callDaemon<void>(
+							(callId) => ({ type: "question.guard", callId, requestId: command.requestId }),
+							signal,
+						),
+				);
+				await send({ type: "accepted", requestId: command.requestId });
+			})().catch((error) =>
+				send({ type: "error", requestId: command.requestId, message: errorText(error) }).catch(() => undefined),
+			);
+			clarificationCommands.add(running);
+			void running.finally(() => clarificationCommands.delete(running));
 			return;
 		}
 		if (command.type === "subagent") {

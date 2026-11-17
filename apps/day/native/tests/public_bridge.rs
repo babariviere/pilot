@@ -647,3 +647,27 @@ fn json_projections_round_trip_through_the_existing_exact_js_types() {
     let decoded: pilot_day_native::plan::Planning = nsh_core::element::from_json(&value).unwrap();
     assert_eq!(decoded, model);
 }
+
+#[test]
+fn execution_fields_read_legacy_native_json_without_inventing_queue_or_request_identity() {
+    let desk = pilot_day_native::desk::Desk::new(pilot_day_native::Scenario::Decisions);
+    let mut today = serde_json::to_value(desk.today()).unwrap();
+    for decision in today["decisions"].as_array_mut().unwrap() {
+        decision.as_object_mut().unwrap().remove("requestSessionId");
+    }
+    let decoded: pilot_day_native::Today = nsh_core::element::from_json(&today).unwrap();
+    assert!(
+        decoded
+            .decisions
+            .iter()
+            .all(|d| d.request_session_id.is_empty())
+    );
+    let page = desk.mission("search").unwrap();
+    assert_eq!(page.execution_queue.len(), 1);
+    let mut legacy = serde_json::to_value(&page).unwrap();
+    legacy.as_object_mut().unwrap().remove("executionQueue");
+    legacy.as_object_mut().unwrap().remove("executionWaiting");
+    let decoded: pilot_day_native::MissionPage = nsh_core::element::from_json(&legacy).unwrap();
+    assert!(decoded.execution_queue.is_empty());
+    assert_eq!(decoded.execution_waiting, 0);
+}

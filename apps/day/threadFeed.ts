@@ -208,7 +208,7 @@ export type ThreadWrite =
 	| { purpose: "thread-create"; title: string }
 	| { purpose: "thread-disposition"; topicId: string; disposition: Disposition }
 	| { purpose: "thread-reference"; topicId: string; reference: ThreadReference }
-	| { purpose: "thread-send"; topicId: string; text: string };
+	| { purpose: "thread-send"; topicId: string; text: string; interrupt?: true };
 
 /** What a write or a Check did, for the user. */
 export type WriteResult = {

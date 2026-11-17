@@ -27,7 +27,7 @@ function stateLine(chat: SessionChat | null): { mark: MarkKind; text: string } |
 		case "stopped":
 			return { mark: "still", text: chat?.stateReason ? `Stopped: ${chat.stateReason}` : "Stopped." };
 		case "idle":
-			return { mark: "still", text: "Not working now." };
+			return { mark: "still", text: chat?.stateReason || "Not working now." };
 		default:
 			return null;
 	}

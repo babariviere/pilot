@@ -33,6 +33,7 @@ export type {
 	KernelUsage,
 	NextAppLogOmissions,
 } from "./protocol.ts";
+export type { QuestionClarification } from "./question-clarifications.ts";
 export type { EarlierEntriesRead, PersistedSessionView, SubagentTranscriptRead } from "./snapshot.ts";
 export { subagentStorageSignature } from "./subagent-watch.ts";
 export type { ToolActivityRecord } from "./tool-activity.ts";

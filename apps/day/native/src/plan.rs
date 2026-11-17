@@ -585,6 +585,9 @@ pub enum SliceOwner {
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Slice {
+    /// Declared write scope. Missing declarations serialize this project's writers.
+    #[prop(default)]
+    pub files: Vec<String>,
     /// Stable within the proposal.
     pub id: String,
     /// A short title.

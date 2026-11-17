@@ -15,6 +15,8 @@ export async function publishedPlanningFixture(
 		published?: boolean;
 		knowledge?: boolean;
 		twoSlices?: boolean;
+		files?: [string[], string[]];
+		independentSlices?: boolean;
 		/** A fake request source for the project, given to the planning workers. */
 		tracking?: (projectId: string) => { tracking: unknown };
 	} = {},
@@ -52,6 +54,7 @@ export async function publishedPlanningFixture(
 					storyIds: ["one"],
 					dependsOn: [],
 					owners: ["sol-backend"],
+					...(options.files ? { files: options.files[0] } : {}),
 				},
 				...(options.twoSlices
 					? [
@@ -61,8 +64,9 @@ export async function publishedPlanningFixture(
 								outcome: "Write archive",
 								acceptance: ["Same bytes"],
 								storyIds: ["one"],
-								dependsOn: ["one"],
+								dependsOn: options.independentSlices ? [] : ["one"],
 								owners: ["sol-backend"],
+								...(options.files ? { files: options.files[1] } : {}),
 							},
 						]
 					: []),

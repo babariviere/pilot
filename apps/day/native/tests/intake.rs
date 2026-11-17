@@ -17,8 +17,8 @@ fn compiled_native_intake_and_linear_reads_reach_authenticated_project_routes() 
     }
     // Revoke the real local credential rather than a route-specific proxy mode.
     use std::os::unix::fs::PermissionsExt;
-    let capability = PathBuf::from(f.info["source"]["profile"].as_str().unwrap())
-        .join("github-app-capability");
+    let capability =
+        PathBuf::from(f.info["source"]["profile"].as_str().unwrap()).join("github-app-capability");
     std::fs::set_permissions(&capability, std::fs::Permissions::from_mode(0o644)).unwrap();
     for method in ["day.intake.read", "day.linear.read"] {
         let result = f.call(&bridge, method, json!({}));

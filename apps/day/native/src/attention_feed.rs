@@ -490,6 +490,16 @@ impl Native {
 
     /// Asks a help question, only when the daemon has a help producer.
     pub async fn ask(&self, id: &str, revision: u32, question: &str) -> IntentOutcome {
+        if self.host.attention_operations().iter().any(|op| {
+            op["state"] == "unknown"
+                && op["request"]["clarification"] == true
+                && ah::question_id(&json!({"scope":op["request"]["scope"]})).as_deref() == Some(id)
+        }) {
+            return self.outcome(
+                OutcomeStatus::Unknown,
+                "Check the earlier clarification first. It will not be sent again.",
+            );
+        }
         let read = match self.shown() {
             Ok(read) => read,
             Err(outcome) => return outcome,

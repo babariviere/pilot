@@ -226,9 +226,20 @@ fn library_search_edit_and_lost_reply_recovery_use_exact_revisions_without_resen
     let mut invalid = edit.clone();
     invalid["body"] = json!("No required headings");
     let rejected = f.call(&bridge, "day.knowledge.save", invalid);
-    assert_eq!(rejected["value"]["snapshot"]["state"], "rejected", "{rejected}");
-    let prior = f.call(&bridge, "day.knowledge.read", json!({"kind":"pending","id":f.info["knowledge"],"expectedRevision":1}));
-    assert_eq!(prior["value"]["snapshot"]["data"], json!([]), "old rejected attempts cannot stand in for a newer submitted draft");
+    assert_eq!(
+        rejected["value"]["snapshot"]["state"], "rejected",
+        "{rejected}"
+    );
+    let prior = f.call(
+        &bridge,
+        "day.knowledge.read",
+        json!({"kind":"pending","id":f.info["knowledge"],"expectedRevision":1}),
+    );
+    assert_eq!(
+        prior["value"]["snapshot"]["data"],
+        json!([]),
+        "old rejected attempts cannot stand in for a newer submitted draft"
+    );
     f.command("race", "lose-knowledge");
     let lost = f.call(&bridge, "day.knowledge.save", edit.clone());
     assert_eq!(lost["value"]["snapshot"]["state"], "unknown", "{lost}");

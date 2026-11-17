@@ -655,6 +655,24 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
         .filter(|d| d.mission.planning_version.is_none())
         .map_or_else(Vec::new, |d| replan_parts(d, &problems));
     Some(MissionPage {
+        execution_queue: detail
+            .and_then(|d| d.execution.as_ref())
+            .filter(|e| e.version == 1)
+            .map_or_else(Vec::new, |e| {
+                e.queue
+                    .iter()
+                    .take(40)
+                    .map(|w| crate::model::ExecutionWait {
+                        task_id: w.task_id.clone(),
+                        title: w.title.clone(),
+                        reason: w.reason.clone(),
+                    })
+                    .collect()
+            }),
+        execution_waiting: detail
+            .and_then(|d| d.execution.as_ref())
+            .filter(|e| e.version == 1)
+            .map_or(0, |e| e.total),
         row,
         goal: detail.map_or_else(String::new, |d| d.mission.goal.clone()),
         brief: detail

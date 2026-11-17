@@ -171,6 +171,45 @@ test("Mission overview in light, dark and a narrow window", async () => {
 	}
 });
 
+test("execution controls: clarification and original request capture", async () => {
+	const app = await open("./Asks.tsx", { platform: "macos", width: 1100, height: 1200 });
+	await app.waitFor("Which package should go to the store?");
+	if (app.shows("Ask a question")) {
+		await app.press("Ask a question");
+		await app.type("id:question", "Why not rebuild?");
+		await app.press("role:button[Ask]");
+		await app.waitFor("Pilot will answer from the mission's history.");
+	}
+	await app.wait(400);
+	await app.screenshot("output/execution-clarification.png");
+});
+
+test("execution controls: standalone queue capture", async () => {
+	const app = await open("./QueuedChatFixture.tsx", { platform: "macos", width: 1100, height: 900 });
+	await app.waitFor("Waiting for a Pilot coding slot (4 of 4 occupied).");
+	await app.wait(400);
+	await app.screenshot("output/execution-standalone-queue.png");
+});
+
+test("execution controls: mission queue capture", async () => {
+	const app = await open("./MockApp.tsx", { platform: "macos", width: 1100, height: 1100 });
+	await app.press("id:mission-search");
+	await app.waitFor("Faster search");
+	await app.screenshot("output/execution-controls.png");
+});
+
+test("execution controls: interrupt confirmation capture", async () => {
+	const app = await open("./ThreadFixture.tsx", { platform: "macos", width: 1100, height: 1600 });
+	await app.press("id:mission-search");
+	if (app.shows("Discussions")) await app.press("Discussions");
+	await app.press("id:thread-search-scope");
+	await app.press("Hand off");
+	await app.type("id:thread-reply", "Address this now");
+	if (app.shows("id:thread-interrupt")) await app.press("id:thread-interrupt");
+	await app.wait(400);
+	await app.screenshot("output/execution-interrupt.png");
+});
+
 // Run with `--filter 'delivery screens'`. The first runs on older revisions too, for a Before.
 
 // One window per test: run each with its own `--filter`, such as `--filter 'mission overview work, light 1100'`.

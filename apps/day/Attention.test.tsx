@@ -12,6 +12,8 @@ const HELP = "Simpler words, charts and questions are not available here yet.";
 test("help Pilot cannot write is said once and its keys ask nothing", async () => {
 	const app = await open("./Asks.tsx", desktop);
 	await app.waitFor("Which package should go to the store?");
+	await app.press("Later");
+	await app.waitFor("Which checks should run before the upload?");
 	expect(app.shows(HELP)).toBe(true);
 	expect(app.shows("Say it simpler")).toBe(false);
 	expect(app.shows("Ask a question")).toBe(false);
@@ -21,6 +23,37 @@ test("help Pilot cannot write is said once and its keys ask nothing", async () =
 	await app.keyboard.press("v");
 	expect(app.shows("Ask about this decision")).toBe(false);
 	expect(app.shows("Sending your answer…")).toBe(false);
+});
+
+test("clarification keeps one request and the explicit reply draft", async () => {
+	const app = await open("./Asks.tsx", desktop);
+	await app.type("id:reply", "Use the reviewed package");
+	await app.press("Ask a question");
+	await app.type("id:question", "Why not rebuild?");
+	await app.press("role:button[Ask]");
+	await app.waitFor("Pilot will answer from the mission's history.");
+	expect(app.shows("Which package should go to the store?")).toBe(true);
+	expect(app.value("id:reply")).toBe("Use the reviewed package");
+	expect(app.shows("has your answer")).toBe(false);
+	expect(
+		app.shows(
+			"Clarification keeps this request open until you answer. It uses the same agent and cost controls, with no tools or work continuation.",
+		),
+	).toBe(true);
+});
+
+test("a focused discussion reads the same asking agent and keeps one request and draft", async () => {
+	const app = await open("./Asks.tsx", desktop);
+	await app.type("id:reply", "Why not rebuild?");
+	await app.press("id:question-open-discussion");
+	await app.waitFor("id:question-discussion");
+	await app.waitFor("The task is done.");
+	expect(app.value("id:reply")).toBe("Why not rebuild?");
+	expect(app.shows("Which package should go to the store?")).toBe(true);
+	expect(app.shows("has your answer")).toBe(false);
+	await app.press("id:question-open-discussion");
+	expect(app.shows("id:question-discussion")).toBe(false);
+	expect(app.value("id:reply")).toBe("Why not rebuild?");
 });
 
 test("a suggestion is not an answer until picked, and 0 opens the user's own words", async () => {

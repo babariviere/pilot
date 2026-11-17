@@ -191,7 +191,11 @@ export async function checkAnswer(day: Day, decision: Decision, answer: Answer) 
  * Help Pilot cannot write here stays closed; nothing is asked for it.
  */
 export function toggleHelp(decision: Decision, kind: Help) {
-	if (decision.helpUnavailable && (kind === "simpler" || kind === "visual" || kind === "ask")) return;
+	if (
+		decision.helpUnavailable &&
+		(kind === "simpler" || kind === "visual" || (kind === "ask" && !decision.canClarify))
+	)
+		return;
 	if (kind === "more" && decision.more.length === 0) return;
 	const open = !helpOpen(decision.id, kind);
 	setHelp(decision.id, kind, open);

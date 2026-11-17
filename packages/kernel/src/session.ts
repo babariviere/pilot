@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { ToolDrain } from "@babariviere/pi-extensions/tool-drain";
 import type { Context } from "@earendil-works/chord/context";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
@@ -112,6 +112,7 @@ import type { WorkspaceContext } from "./policy.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
 import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
+import { type ClarificationRequest, QuestionClarifications } from "./question-clarifications.ts";
 import { createQuestionTool, type PublishQuestion } from "./question-tool.ts";
 import {
 	editQueuedMessage,
@@ -260,6 +261,7 @@ export class KernelSession {
 	#toolDrain!: ToolDrain;
 	#releaseStoppedRequests?: () => void;
 	#changingModel = false;
+	#clarifications?: QuestionClarifications;
 	#admissions = 0;
 	/** Retry, edit, restore or an attempt switch is stopping work and moving the session to another conversation. */
 	#switching = false;
@@ -1195,6 +1197,7 @@ export class KernelSession {
 	async pauseForUpdate(): Promise<void> {
 		const revision = ++this.#updateRevision;
 		this.#updateToolsPaused = true;
+		await this.#clarifications?.stop();
 		await this.#toolDrain.pause(this.harness, context);
 		if (revision === this.#updateRevision) await this.subagents.lifecycle("quiesce");
 	}
@@ -1250,7 +1253,7 @@ export class KernelSession {
 		thinking?: string,
 		configuration?: { revalidate(): Promise<void> },
 	): Promise<{ switched: true; attempts?: SessionAttempt[] } | undefined> {
-		if (this.#closing || this.#changingModel || this.#admissions || this.#moving)
+		if (this.#closing || this.#changingModel || this.#admissions || this.#clarifications || this.#moving)
 			throw new ConversationBusy(this.conversation.id);
 		if (typeof model !== "string" || !model.trim()) throw new Error("model is required");
 		this.#changingModel = true;
@@ -1329,28 +1332,7 @@ export class KernelSession {
 							? this.#usageCapture.compaction(this.conversation.id, request)
 							: request());
 						// Like ordinary compaction, every response costs usage, even if rebuilding later fails.
-						await this.harness.commit(async (tx) => {
-							const models = (await tx.doc(UsageDoc, this.conversation.id)).models;
-							const key = `${answer.provider}/${answer.model}`;
-							const total = Object.hasOwn(models, key) ? models[key] : undefined;
-							if (!total) models[key] = JSON.parse(JSON.stringify(answer.usage));
-							else {
-								for (const field of [
-									"input",
-									"output",
-									"cacheRead",
-									"cacheWrite",
-									"totalTokens",
-									"reasoning",
-									"cacheWrite1h",
-								] as const) {
-									if (answer.usage[field] !== undefined)
-										total[field] = (total[field] ?? 0) + answer.usage[field];
-								}
-								for (const field of ["input", "output", "cacheRead", "cacheWrite", "total"] as const)
-									total.cost[field] += answer.usage.cost[field];
-							}
-						}, context);
+						await this.recordModelUsage(answer);
 						if (answer.stopReason !== "stop" || answer.content.some((part) => part.type === "toolCall"))
 							throw new Error(`Could not rebuild conversation: ${answer.errorMessage ?? answer.stopReason}`);
 						return answer.content
@@ -1557,6 +1539,90 @@ export class KernelSession {
 		}
 	}
 
+	/** Does not enter the inbox, create a run, release the hold or start another worker. */
+	async stopQuestionClarifications(): Promise<void> {
+		await this.#clarifications?.stop();
+	}
+
+	async clarifyQuestion(
+		request: ClarificationRequest,
+		revalidate: (signal: AbortSignal) => Promise<void>,
+	): Promise<void> {
+		if (this.#clarifications) throw new ConversationBusy(this.conversation.id);
+		const check = () => {
+			if (this.#closing || this.#changingModel || this.#moving || this.#updateToolsPaused || this.#admissions)
+				throw new ConversationBusy(this.conversation.id);
+		};
+		check();
+		const clarification = new QuestionClarifications(
+			this.harness,
+			this.conversation.id,
+			async (source, signal) => {
+				const view = await this.conversation.context(context);
+				// Whole messages only. Keep the request bounded without clipping quoted evidence.
+				const recent: Array<(typeof view.messages)[number]> = [];
+				let bytes = Buffer.byteLength(JSON.stringify(source.previous));
+				// Eight recent whole messages give local context; history shares the 16 KiB discretionary budget.
+				for (const message of [...view.messages].reverse().slice(0, 8)) {
+					const size = Buffer.byteLength(JSON.stringify(message));
+					if (bytes + size > 16384) break;
+					recent.unshift(message);
+					bytes += size;
+				}
+				// Two minutes limits the lifetime of this explicit side reply, not the original question.
+				const work = () =>
+					this.adapter.clarifyQuestion(
+						JSON.stringify({ ...source, recent, contextLimited: true }),
+						AbortSignal.any([signal, AbortSignal.timeout(120000)]),
+						async () => {
+							check();
+							await revalidate(signal);
+							check();
+						},
+					);
+				const answer = await (this.#usageCapture
+					? this.#usageCapture.clarification(this.conversation.id, work)
+					: work());
+				await this.recordModelUsage(answer);
+				await revalidate(signal);
+				check();
+				if (answer.stopReason !== "stop" || answer.content.some((part) => part.type !== "text"))
+					throw new Error(answer.errorMessage ?? "Clarification did not return a complete text reply");
+				return answer.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+			},
+			check,
+		);
+		this.#clarifications = clarification;
+		try {
+			await clarification.request(request);
+		} finally {
+			if (this.#clarifications === clarification) this.#clarifications = undefined;
+		}
+	}
+
+	private async recordModelUsage(answer: AssistantMessage): Promise<void> {
+		await this.harness.commit(async (tx) => {
+			const models = (await tx.doc(UsageDoc, this.conversation.id)).models;
+			const key = `${answer.provider}/${answer.model}`;
+			const total = Object.hasOwn(models, key) ? models[key] : undefined;
+			if (!total) models[key] = structuredClone(answer.usage);
+			else {
+				for (const field of [
+					"input",
+					"output",
+					"cacheRead",
+					"cacheWrite",
+					"totalTokens",
+					"reasoning",
+					"cacheWrite1h",
+				] as const)
+					if (answer.usage[field] !== undefined) total[field] = (total[field] ?? 0) + answer.usage[field];
+				for (const field of ["input", "output", "cacheRead", "cacheWrite", "total"] as const)
+					total.cost[field] += answer.usage.cost[field];
+			}
+		}, context);
+	}
+
 	/** Durable admission. Retrying the same requestId returns the existing submission. */
 	async submitPlanning(input: PlanningInput): Promise<void> {
 		if (
@@ -1603,8 +1669,10 @@ export class KernelSession {
 		if (this.#closing || this.#changingModel || this.#moving || (onlyIfIdle && this.#admissions))
 			return Promise.reject(new ConversationBusy(this.conversation.id));
 		this.#admissions++;
-		return this.serializeInput(() =>
-			this.submitInput(
+		const stopped = this.#clarifications?.stop();
+		return this.serializeInput(async () => {
+			if (stopped) await stopped;
+			return this.submitInput(
 				requestId,
 				content,
 				mode,
@@ -1617,8 +1685,8 @@ export class KernelSession {
 				questionReplyId,
 				dedupeOnly,
 				interviewReply,
-			),
-		);
+			);
+		});
 	}
 
 	private async submitInput(
@@ -1761,7 +1829,7 @@ export class KernelSession {
 
 	/** Reload only a truly idle runtime. Never abort a run, a job or a child to apply configuration. */
 	async reloadPi(): Promise<void> {
-		if (this.#closing || this.#changingModel || this.#admissions || this.#moving)
+		if (this.#closing || this.#changingModel || this.#admissions || this.#clarifications || this.#moving)
 			throw new ConversationBusy(this.conversation.id);
 		this.#changingModel = true;
 		try {
@@ -1823,7 +1891,11 @@ export class KernelSession {
 	 * messages so Stop can restore them to the composer.
 	 */
 	abort(): Promise<WithdrawnMessage[]> {
-		return this.serializeInput(() => this.abortInput());
+		const stopped = this.#clarifications?.stop();
+		return this.serializeInput(async () => {
+			await stopped;
+			return this.abortInput();
+		});
 	}
 
 	private async abortInput(): Promise<WithdrawnMessage[]> {
@@ -1859,7 +1931,11 @@ export class KernelSession {
 	}
 
 	pauseInputs(revision?: number): Promise<void> {
-		return this.serializeInput(() => pauseInputs(this.harness, this.conversation.id, context, revision));
+		const stopped = this.#clarifications?.stop();
+		return this.serializeInput(async () => {
+			await stopped;
+			return pauseInputs(this.harness, this.conversation.id, context, revision);
+		});
 	}
 
 	resumeInputs(revision?: number): Promise<void> {
@@ -1993,7 +2069,7 @@ export class KernelSession {
 	async #move<T extends object>(
 		change: () => Promise<T>,
 	): Promise<T & { attempts?: SessionAttempt[]; switched: boolean }> {
-		if (this.#closing || this.#changingModel || this.#admissions || this.#moving)
+		if (this.#closing || this.#changingModel || this.#admissions || this.#clarifications || this.#moving)
 			throw new ConversationBusy(this.conversation.id);
 		this.#switching = true;
 		try {
@@ -2179,6 +2255,7 @@ export class KernelSession {
 
 	#close(beforeAdapterClose?: () => Promise<void>): Promise<void> {
 		this.#closing ??= (async () => {
+			await this.#clarifications?.stop();
 			clearTimeout(this.#decisionTimer);
 			await this.inputOperations;
 			this.#modelChangeAbort?.abort(new Error("Session is closing"));

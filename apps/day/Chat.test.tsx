@@ -6,6 +6,13 @@ import { expect, open, test } from "nsh/test";
 const desktop = { platform: "macos", width: 1100, height: 1200 } as const;
 const COUNTS = (s: number, n: number, c: number) => `Selects: ${s} · Sends: ${n} · Checks: ${c}`;
 
+test("a standalone coding queue shows its service reason without offering Continue", async () => {
+	const app = await open("./QueuedChatFixture.tsx", desktop);
+	await app.waitFor("Waiting for a Pilot coding slot (4 of 4 occupied).");
+	expect(app.shows("id:chat-continue")).toBe(false);
+	expect(app.shows("Not working now.")).toBe(false);
+});
+
 async function ready() {
 	const app = await open("./ChatFixture.tsx", desktop);
 	await app.waitFor("What do you want done?");

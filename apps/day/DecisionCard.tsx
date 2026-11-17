@@ -27,6 +27,8 @@ import type { Day } from "./day";
 import { InterviewCard } from "./InterviewCard";
 import { keepField } from "./kept";
 import { QuestionArtifacts } from "./QuestionArtifacts";
+import { QuestionDiscussion } from "./QuestionDiscussion";
+import type { SessionChatMirror } from "./sessionChat";
 import {
 	Action,
 	Bars,
@@ -149,6 +151,7 @@ function pickedLine(decision: Decision): string {
 function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: number; count: number; later: boolean }) {
 	const d = () => props.decision;
 	const id = props.decision.id;
+	const discussion = signal(false);
 	const idle = () => d().delivery === "idle";
 	const radios = new Map<string, ViewRef>();
 	let firstChip: ViewRef | undefined;
@@ -322,9 +325,22 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 					</View>
 				}
 			>
-				<Text testID="help-unavailable" class="text-xs text-faint">
-					{d().helpUnavailable ?? ""}
-				</Text>
+				<If
+					when={d().canClarify}
+					else={
+						<Text testID="help-unavailable" class="text-xs text-faint">
+							{d().helpUnavailable ?? ""}
+						</Text>
+					}
+				>
+					<View class="flex-row">
+						<ToggleChip
+							label="Ask a question"
+							pressed={helpOpen(id, "ask")}
+							onChange={() => toggleHelp(d(), "ask")}
+						/>
+					</View>
+				</If>
 			</If>
 
 			<If when={helpOpen(id, "more")}>
@@ -349,7 +365,7 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 				</Panel>
 			</If>
 
-			<If when={helpOpen(id, "ask") && !d().helpUnavailable}>
+			<If when={helpOpen(id, "ask") && (!d().helpUnavailable || d().canClarify)}>
 				<Panel class="gap-3">
 					<Each of={d().answers} key={(a) => a.id}>
 						{(a) => <AnswerLine day={props.day} decision={d()} answer={a()} />}
@@ -381,7 +397,11 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 							onPress={() => void ask(props.day, d())}
 						/>
 					</View>
-					<Text class="text-xs text-faint">Questions help you decide. They never answer for you.</Text>
+					<Text class="text-xs text-faint">
+						{d().canClarify
+							? "Clarification keeps this request open until you answer. It uses the same agent and cost controls, with no tools or work continuation."
+							: "Questions help you decide. They never answer for you."}
+					</Text>
 				</Panel>
 			</If>
 
@@ -435,6 +455,23 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 			</If>
 
 			<If when={d().reply}>
+				<If when={props.day.chat && d().requestSessionId}>
+					<View class="flex-row">
+						<Action
+							label={discussion() ? "Hide discussion" : "Open discussion"}
+							testID="question-open-discussion"
+							onPress={() => {
+								discussion.set(!discussion());
+							}}
+						/>
+					</View>
+					<If when={discussion()}>
+						<QuestionDiscussion
+							mirror={props.day.chat as SessionChatMirror}
+							sessionId={d().requestSessionId ?? ""}
+						/>
+					</If>
+				</If>
 				<TextField
 					testID="reply"
 					ref={replyField.ref}

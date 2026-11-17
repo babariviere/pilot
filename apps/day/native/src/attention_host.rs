@@ -301,6 +301,7 @@ pub fn pending_answer<'a>(ops: &'a [Value], id: &str) -> Option<&'a Value> {
     ops.iter().find(|op| {
         op["state"] == "unknown"
             && op["request"]["kind"] == "answer"
+            && op["request"]["clarification"] != true
             && request_question(&op["request"]).as_deref() == Some(id)
     })
 }
@@ -318,6 +319,7 @@ fn answered(ops: &[Value], scope: &Value) -> bool {
     ops.iter().any(|op| {
         op["state"] == "acknowledged"
             && op["request"]["kind"] == "answer"
+            && op["request"]["clarification"] != true
             && op["request"]["scope"] == *scope
             && op["receipt"]["ok"] == true
             && op["receipt"]["value"]["state"] == "accepted"
@@ -401,17 +403,27 @@ fn help_answers(ops: &[Value], id: &str, local: &Local) -> Vec<Answer> {
         .iter()
         .filter(|op| {
             op["state"] != "not-sent"
-                && op["request"]["kind"] == "help"
-                && op["request"]["request"]["kind"] == "question"
+                && (op["request"]["clarification"] == true && op["request"]["kind"] == "answer"
+                    || op["request"]["kind"] == "help"
+                        && op["request"]["request"]["kind"] == "question")
                 && request_question(&op["request"]).as_deref() == Some(id)
         })
         .map(|op| {
             let receipt = &op["receipt"];
+            let clarification = op["request"]["clarification"] == true;
             let op_id = s(&op["id"]);
             let (state, answer) = if local.checking.contains(&op_id) {
                 (AnswerState::Checking, String::new())
             } else if op["state"] == "unknown" {
                 (AnswerState::Unknown, String::new())
+            } else if clarification
+                && receipt["ok"] == true
+                && receipt["value"]["state"] == "accepted"
+            {
+                (
+                    AnswerState::Ready,
+                    s(&receipt["value"]["result"]["clarification"]["answer"]),
+                )
             } else if receipt["ok"] == true && receipt["value"]["state"] == "ready" {
                 (AnswerState::Ready, s(&receipt["value"]["output"]["answer"]))
             } else if receipt["ok"] == true && receipt["value"]["state"] == "entered" {
@@ -424,7 +436,11 @@ fn help_answers(ops: &[Value], id: &str, local: &Local) -> Vec<Answer> {
             };
             Answer {
                 id: op_id,
-                question: s(&op["request"]["request"]["question"]),
+                question: s(if clarification {
+                    &op["request"]["message"]
+                } else {
+                    &op["request"]["request"]["question"]
+                }),
                 answer,
                 state,
                 earlier: false,
@@ -547,6 +563,8 @@ pub fn project(
             Delivery::Idle
         };
         decisions.push(Decision {
+			request_session_id: s(&q["session"]["id"]),
+            can_clarify: read["capabilities"]["clarification"] == 1 && data["interview"].is_null(),
             revision: 1,
             kind: DecisionKind::Choice,
             title: s(&data["question"]),
@@ -817,6 +835,17 @@ pub fn answer_request(
 /// reports a help producer.
 pub fn help_request(read: &Value, id: &str, question: &str) -> Result<Value, Refusal> {
     let q = find_question(read, id).ok_or(GONE)?;
+    if read["capabilities"]["clarification"] == 1 && q["question"]["interview"].is_null() {
+        if question.trim().is_empty() || question.len() > 8000 {
+            return Err(Refusal {
+                status: OutcomeStatus::Rejected,
+                message: "Write a short clarification question first.",
+            });
+        }
+        return Ok(
+            json!({ "kind": "answer", "clarification": true, "scope": q["scope"], "message": question }),
+        );
+    }
     if read["capabilities"]["help"] != 1 {
         return Err(Refusal {
             status: OutcomeStatus::Rejected,
@@ -924,6 +953,39 @@ pub fn draft_key(read: &Value, id: &str, revision: u32) -> Result<DraftKey, Refu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clarification_keeps_one_question_and_an_explicit_answer_still_closes_it() {
+        let mut r = read();
+        r["capabilities"]["clarification"] = json!(1);
+        let id = "question-s1-12";
+        let request = help_request(&r, id, "Why keep it?").unwrap();
+        assert_eq!(request["clarification"], true);
+        let mut ops = vec![json!({"id":"clarify", "state":"unknown", "request":request,
+            "receipt":{"ok":true,"value":{"state":"pending"}}})];
+        assert!(pending_answer(&ops, id).is_none());
+        let view = project(Some(&r), &ops, &[], &[], &Local::default());
+        assert_eq!(view.decisions.len(), 1);
+        assert_eq!(view.decisions[0].delivery, Delivery::Idle);
+        assert_eq!(view.decisions[0].answers[0].state, AnswerState::Unknown);
+        ops[0]["state"] = json!("acknowledged");
+        ops[0]["receipt"] = json!({"ok":true,"value":{"state":"accepted","result":{
+            "clarification":{"answer":"It avoids breaking callers."}}}});
+        let view = project(Some(&r), &ops, &[], &[], &Local::default());
+        assert!(view.decisions[0].can_clarify);
+        assert_eq!(
+            view.decisions[0].answers[0].answer,
+            "It avoids breaking callers."
+        );
+        assert_eq!(view.decisions[0].delivery, Delivery::Idle);
+        ops.push(json!({"id":"answer", "state":"acknowledged", "request":answer_request(&r,id,&[],"Keep it").unwrap(),
+            "receipt":{"ok":true,"value":{"state":"accepted"}}}));
+        assert!(
+            project(Some(&r), &ops, &[], &[], &Local::default())
+                .decisions
+                .is_empty()
+        );
+    }
 
     #[test]
     fn a_question_shows_the_artifacts_its_chat_still_has() {

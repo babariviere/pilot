@@ -8,6 +8,8 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession } from "@earendil-works/pi-durable";
+import { HeldInputsDoc } from "../../kernel/src/held-inputs-doc.ts";
+import { QuestionClarifications } from "../../kernel/src/question-clarifications.ts";
 import { openSessionStorage } from "../../kernel/src/storage.ts";
 import { TodoProgressDoc } from "../../kernel/src/todos.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
@@ -58,6 +60,41 @@ test("input receipt reads exact committed IDs across detached conversations, wit
 	assert.equal(await reader.readAcceptedInput(directory, "exact-operation"), true);
 	assert.equal(await reader.readAcceptedInput(directory, "Exact-operation"), false);
 	assert.equal(await reader.readAcceptedInput(join(directory, "unopened"), "exact-operation"), false);
+});
+
+test("clarification result reads are exact, fresh and passive under the live writer lease", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "pilot-clarification-receipt-"));
+	const reader = new ColdViewReader();
+	const owned = await openSessionStorage(directory);
+	const session = createSession(owned.storage);
+	t.after(async () => {
+		await reader.close();
+		await session.close(context);
+		owned.release();
+		await rm(directory, { recursive: true, force: true });
+	});
+	const pin = await session.commit(async (tx) => {
+		const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
+		(await tx.doc(HeldInputsDoc, conversation.id)).questionPending = true;
+		const question = await tx.appendEntry(conversation.id, {
+			kind: "pilot.question",
+			data: { question: "Keep it?" },
+			model: [],
+		});
+		return { conversationId: conversation.id, questionId: Number(question.id) };
+	}, context);
+	let calls = 0;
+	const requests = new QuestionClarifications(session, pin.conversationId, async () => {
+		calls++;
+		return "It avoids a breaking change.";
+	});
+	assert.equal(await reader.readClarification(directory, "exact"), undefined);
+	const saved = await requests.request({ operationId: "exact", questionId: pin.questionId, question: "Why?" });
+	assert.deepEqual(await reader.readClarification(directory, "exact"), saved);
+	assert.deepEqual(await reader.readClarification(directory, "exact"), saved);
+	assert.equal(await reader.readClarification(directory, "Exact"), undefined);
+	assert.equal(await reader.readClarification(join(directory, "unopened"), "exact"), undefined);
+	assert.equal(calls, 1);
 });
 
 test("a watch-mode notice never consumes the one real read result", async (t) => {

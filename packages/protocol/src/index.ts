@@ -358,6 +358,8 @@ export interface FailedModelResponse extends FailedModelRequest {
 }
 
 export interface SessionSummary {
+	/** Saved input is waiting for a coding slot, not a failed or admitted run. */
+	codingQueueReason?: string;
 	/** Monotonic explicit-Stop fence for opt-in durable native sends. */
 	inputGeneration?: number;
 	/** Passive progress for manually started sequential chat flows. */
@@ -1453,6 +1455,8 @@ export interface MissionEvent {
 
 /** GET /api/missions/:id, and the payload of WS `mission`. Member sessions come from the session list. */
 export interface MissionDetail {
+	/** Passive execution queue. Absent on older services, never start authority. */
+	execution?: MissionExecutionView;
 	mission: Mission;
 	brief?: MissionBrief;
 	decisions: MissionDecision[];
@@ -1465,6 +1469,13 @@ export interface MissionDetail {
 	resources: MissionResource[];
 	/** Most recent first, bounded. Older entries: GET /api/missions/:id/events?before=<id>. */
 	events: MissionEvent[];
+}
+
+export interface MissionExecutionView {
+	version: 1;
+	started: boolean;
+	total: number;
+	queue: Array<{ taskId: string; title: string; reason: string }>;
 }
 
 /** POST /api/missions. */

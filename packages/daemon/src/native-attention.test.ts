@@ -9,6 +9,72 @@ import { nativeAttentionFixture } from "./native-attention.fixture.ts";
 import { payloadHash } from "./operation-journal.ts";
 
 const ref = ({ id, revision, digest }: HumanActionRecord) => ({ id, revision, digest });
+
+test("clarification uses the original question without delivering an answer; lost ACKs only read", async (t) => {
+	const f = await nativeAttentionFixture();
+	t.after(() => f.close());
+	const q = (await f.read()).questions[0]!;
+	let calls = 0;
+	const requestId = randomUUID();
+	const saved = {
+		operationId: requestId,
+		questionId: 12,
+		question: "Why this package?",
+		answer: "Its bytes were reviewed.",
+	};
+	t.mock.method(
+		f.sessions,
+		"clarifyQuestion",
+		async (session: string, operation: string, question: number, text: string, guard: () => void) => {
+			assert.equal(session, f.owner);
+			assert.equal(operation, requestId);
+			assert.equal(question, 12);
+			assert.equal(text, saved.question);
+			guard();
+			calls++;
+			throw new Error("Lost reply after the kernel saved its result");
+		},
+	);
+	t.mock.method(f.sessions, "lookupQuestionClarification", async () => saved);
+	const payload = JSON.stringify({
+		projectId: f.project.id,
+		scope: q.scope,
+		message: saved.question,
+		clarification: true,
+	});
+	const op: DurableOperation = {
+		schemaVersion: 1,
+		operationId: requestId,
+		producerId: randomUUID(),
+		sequence: 1,
+		origin: { ...f.host, hostId: "local" },
+		destination: f.host,
+		kind: "attention-answer",
+		targetId: f.owner,
+		payload,
+		payloadHash: payloadHash(payload),
+		bindingId: attentionDigest(q.scope),
+		bindingGeneration: 1,
+	};
+	const post = async () =>
+		(
+			await fetch(`${f.root}/api/operations`, {
+				method: "POST",
+				headers: { "content-type": "application/json", "x-pilot-github-capability": f.capability },
+				body: JSON.stringify(op),
+			})
+		).json();
+	assert.equal((await post()).state, "pending");
+	assert.equal(calls, 1);
+	assert.equal(f.sends, 0);
+	await f.restart();
+	const recovered = await post();
+	assert.equal(recovered.state, "accepted");
+	assert.deepEqual(recovered.result.clarification, saved);
+	assert.equal(calls, 1);
+	assert.equal(f.sends, 0);
+	assert.equal((await f.read()).questions[0]!.scope.subject.kind, "question");
+});
 const error = (r: { ok: boolean; error?: { code: string } }, code: string) => {
 	assert.equal(r.ok, false, JSON.stringify(r));
 	assert.equal(r.error?.code, code);

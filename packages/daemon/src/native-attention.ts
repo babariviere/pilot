@@ -132,6 +132,8 @@ export class NativeAttention {
 				projectId: s.projectId,
 				cwd: s.cwd,
 				mode: s.mode ?? "build",
+				model: s.model,
+				thinking: s.thinking ?? null,
 				inputGeneration: s.inputGeneration ?? 0,
 				missionId: s.missionId ?? null,
 				sleepPaused: s.sleepPaused ?? false,
@@ -386,6 +388,7 @@ export class NativeAttention {
 			questions,
 			actions,
 			capabilities: {
+				clarification: 1,
 				help:
 					this.deps.executor instanceof ReadOnlyAttentionExecutor && this.deps.executor.available(projectId)
 						? 1
@@ -473,10 +476,18 @@ export class NativeAttention {
 			projectId: string;
 			scope: AssistanceRequest["scope"];
 			message?: string;
+			clarification?: true;
 			interview?: import("@pilot/protocol").StandaloneInterviewReply;
 		};
 		const interview = Object.hasOwn(payload, "interview");
-		keys(payload, ["projectId", "scope", interview ? "interview" : "message"]);
+		keys(payload, [
+			"projectId",
+			"scope",
+			interview ? "interview" : "message",
+			...(Object.hasOwn(payload, "clarification") ? ["clarification"] : []),
+		]);
+		if (Object.hasOwn(payload, "clarification") && (payload.clarification !== true || interview))
+			throw new OperationRejected("Clarification requires an ordinary question");
 		if (this.session(payload.projectId, op.targetId).session.mode === "ask" && !interview)
 			throw new OperationRejected("Ask chats require a saved interview submission");
 		if (
@@ -504,6 +515,17 @@ export class NativeAttention {
 	async answer(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
 		const p = this.answerEnvelope(op);
 		if (!firstEntry) {
+			if (p.clarification) {
+				const saved = await this.deps.sessions.lookupQuestionClarification(op.targetId, op.operationId);
+				if (
+					saved &&
+					p.scope.subject.kind === "question" &&
+					saved.questionId === p.scope.subject.entryId &&
+					saved.question === p.message
+				)
+					return { sessionId: op.targetId, clarification: saved };
+				throw new Error("Exact clarification acknowledgement unavailable; never replay");
+			}
 			if (await this.deps.sessions.lookupNativeAttentionInput(op.targetId, op.operationId))
 				return { sessionId: op.targetId };
 			throw new Error("Exact input acknowledgement unavailable; never replay");
@@ -530,6 +552,21 @@ export class NativeAttention {
 			(session.missionId && this.deps.store.controls.fenceCurrent(session.missionId).held)
 		)
 			throw new OperationRejected("Question work is currently held");
+		if (p.clarification) {
+			if (q.question.interview || p.scope.subject.kind !== "question")
+				throw new OperationRejected("Clarification requires an ordinary question");
+			const saved = await this.deps.sessions.clarifyQuestion(
+				op.targetId,
+				op.operationId,
+				p.scope.subject.entryId,
+				p.message!,
+				() => {
+					if (p.scope.authorityDigest !== this.authority(p.projectId, op.targetId))
+						throw new OperationRejected("Question authority changed");
+				},
+			);
+			return { sessionId: op.targetId, clarification: saved };
+		}
 		await this.deps.sessions.sendDurable(
 			op.targetId,
 			p.message ?? "The user submitted the saved interview answers.",

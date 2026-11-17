@@ -153,6 +153,11 @@ function ProposalView(props: { proposal: Proposal }) {
 								<Text class="text-xs text-faint">{s().owners.map(owner).join(" · ")}</Text>
 							</View>
 							<Text class="text-sm text-muted-foreground">{s().outcome}</Text>
+							<Text class="text-xs text-muted-foreground">
+								{(s().files ?? []).length
+									? `Owned files: ${(s().files ?? []).join(", ")}. Check combined changes before dependent work.`
+									: "Write scope not declared. Takes turns with this project's other writers."}
+							</Text>
 							<Each of={s().acceptance} key={(a) => a}>
 								{(a) => <Text class="text-xs text-foreground">{`✓ ${a()}`}</Text>}
 							</Each>

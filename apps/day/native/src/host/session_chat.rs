@@ -331,6 +331,10 @@ pub(crate) fn status(session: &Value) -> (&'static str, String) {
             },
         );
     }
+    let queued = reason("codingQueueReason");
+    if !queued.is_empty() {
+        return ("idle", queued);
+    }
     match session["outcome"].as_str() {
         Some("failed") => ("failed", reason("outcomeReason")),
         Some("question") => ("question", String::new()),
@@ -696,5 +700,14 @@ mod tests {
             "question"
         );
         assert_eq!(status(&json!({"state":"parked"})).0, "idle");
+        assert_eq!(
+            status(
+                &json!({"state":"idle","outcome":"done","codingQueueReason":"Waiting for a Pilot coding slot (4 of 4 occupied)."})
+            ),
+            (
+                "idle",
+                "Waiting for a Pilot coding slot (4 of 4 occupied).".into()
+            )
+        );
     }
 }

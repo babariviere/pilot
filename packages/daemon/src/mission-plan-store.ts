@@ -8,7 +8,10 @@ import { canonicalJSON, payloadHash } from "./operation-journal.ts";
  * use this one function. Chosen prototypes are listed only when the slice names some: older tasks keep their body.
  */
 export function sliceTaskBody(plan: MissionPlan, slice: PlanSlice, briefRevision: number): string {
-	const body = `${slice.outcome}\n\nSpec revision: ${briefRevision}\nStories: ${slice.storyIds.join(", ")}\nOwnership: ${slice.owners.join(", ")}\n\nAcceptance:\n${slice.acceptance.map((s) => `- ${s}`).join("\n")}`;
+	const files = slice.files
+		? `\n\nOwned files (repository-relative): ${slice.files.join(", ")}. Take turns on shared files. Check the combined changes before reporting ready; dependent work waits for the user's checked result.`
+		: "";
+	const body = `${slice.outcome}\n\nSpec revision: ${briefRevision}\nStories: ${slice.storyIds.join(", ")}\nOwnership: ${slice.owners.join(", ")}\n\nAcceptance:\n${slice.acceptance.map((s) => `- ${s}`).join("\n")}${files}`;
 	const chosen = (slice.prototypes ?? []).map((id) => {
 		const q = plan.questions.find((q) => q.id === id)!;
 		const a = q.prototypeResult!.artifact;

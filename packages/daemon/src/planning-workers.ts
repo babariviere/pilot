@@ -11,7 +11,7 @@ import {
 	type PlanningWorkerRequest,
 } from "@pilot/kernel";
 import type { DurableOperation, MissionPlan, MissionTask, OperationReceipt, PlanQuestion } from "@pilot/protocol";
-import { Conflict } from "./errors.ts";
+import { Conflict, PublishedStartRefused } from "./errors.ts";
 import { interviewDigest, interviewExact, interviewId, interviewText } from "./mission-interview-contract.ts";
 import { MissionInterviews } from "./mission-interviews.ts";
 import { PLAN_STATE_LIMIT, publishedDefinition, sliceTaskBody } from "./mission-plan-store.ts";
@@ -320,6 +320,7 @@ export class PlanningWorkers {
 	private readonly startingPrototypes = new Set<string>();
 	/** Per mission: no start by rule before this time, after one was refused. */
 	private readonly executionRetryAt = new Map<string, number>();
+	private readonly enteringStarts = new Set<string>();
 	/** Per mission: why Pilot could not start the next ready task by rule, until a later try starts one or none is ready. */
 	private readonly executionWaits = new Map<string, string>();
 	/** Submitted rounds Pilot is sending by itself, or stopped trying because the map changed. */
@@ -1730,20 +1731,53 @@ export class PlanningWorkers {
 			off: () => {},
 		};
 		this.research = research;
-		const offStore = this.deps.store.onChange((missionId) => {
+		const wakeExecution = () => {
+			for (const id of this.deps.store.planningWorkers.missionIds())
+				if (this.deps.store.planningWorkers.get(id)?.start) this.scheduleResearch(id);
+		};
+		const offStore = this.deps.store.onChange((missionId, _passive, preferenceOnly, readModelOnly) => {
 			if (this.deps.store.planningWorkers.get(missionId)) this.scheduleResearch(missionId);
+			if (!this.deps.sessions.onCodingCapacityChange && !preferenceOnly && !readModelOnly) wakeExecution();
+		});
+		const occupancy = new Map<string, string>();
+		const offCapacity = this.deps.sessions.onCodingCapacityChange?.(() => {
+			this.executionRetryAt.clear();
+			wakeExecution();
 		});
 		const offSessions = this.deps.sessions.onChange((session) => {
+			if (
+				!offCapacity &&
+				session.mode !== "ask" &&
+				!session.missionCoordinator &&
+				!session.role &&
+				!session.control
+			) {
+				const signature = canonicalJSON([
+					session.projectId,
+					session.working,
+					session.state,
+					session.archivedAt,
+					session.runningJobs?.length ?? 0,
+				]);
+				if (occupancy.get(session.id) !== signature) {
+					if (session.archivedAt !== undefined) occupancy.delete(session.id);
+					else occupancy.set(session.id, signature);
+					this.executionRetryAt.clear();
+					wakeExecution();
+				}
+			}
 			const missionId = this.deps.store.missionOf(session.id) ?? this.repairChats.get(session.id);
 			if (missionId && this.deps.store.planningWorkers.get(missionId)) this.scheduleResearch(missionId);
 		});
 		// Tasks Pilot could not start while work was paused for sleep start once it ends. Test doubles may not have it.
 		const offResume = this.deps.sessions.onPowerResume?.(() => {
+			this.executionRetryAt.clear();
 			for (const id of this.deps.store.planningWorkers.missionIds()) this.scheduleResearch(id);
 		});
 		research.off = () => {
 			offStore();
 			offSessions();
+			offCapacity?.();
 			offResume?.();
 		};
 		for (const id of this.deps.store.planningWorkers.missionIds()) {
@@ -2795,13 +2829,16 @@ export class PlanningWorkers {
 				operationId: state.start.operation.operationId,
 				sessionId: state.start.sessionId,
 				taskId: state.start.taskId,
-				reason: state.start.admitted
-					? this.executionWaits.has(missionId)
-						? `Work started. Pilot could not start the next ready task: ${this.executionWaits.get(missionId)} It tries again on the next change.`
-						: worker?.working
-							? "Work started. When you mark a task's result done, Pilot starts the next ready tasks."
-							: "Work started. When you mark a task's result done, Pilot starts the next ready tasks. Read the reports."
-					: "Start is not confirmed. Check only; do not start again.",
+				reason:
+					state.start.admitted && state.autoStarts?.some((s) => s.state === "starting")
+						? "A task start is not confirmed. Its outcome is unknown; checking the original attempt only. Independent ready work may continue within capacity."
+						: state.start.admitted
+							? this.executionWaits.has(missionId)
+								? `Work started. Pilot could not start the next ready task: ${this.executionWaits.get(missionId)} It tries again on the next change.`
+								: worker?.working
+									? "Work started. When you mark a task's result done, Pilot starts the next ready tasks."
+									: "Work started. When you mark a task's result done, Pilot starts the next ready tasks. Read the reports."
+							: "Start is not confirmed. Check only; do not start again.",
 			};
 		try {
 			const { pin, task, selection } = await this.nextStart(missionId);
@@ -2829,16 +2866,33 @@ export class PlanningWorkers {
 	/** The first published task that is ready to start, with its pin and model. Throws when none is. */
 	private async nextStart(missionId: string) {
 		const pin = this.startPin(missionId);
-		const task = pin.plan
+		const ready = pin.plan
 			.publication!.tasks.map(({ taskId }) => pin.tasks.find((t) => t.id === taskId)!)
-			.find(
+			.filter(
 				(t) =>
 					t?.status === "todo" &&
 					!this.deps.store.revisionTaskHeld(missionId, t.id) &&
 					!t.sessionId &&
+					!(
+						this.deps.store.planningWorkers.get(missionId)?.start?.taskId === t.id &&
+						!this.deps.store.planningWorkers.get(missionId)?.start?.admitted
+					) &&
+					!this.deps.store.planningWorkers.get(missionId)?.autoStarts?.some((s) => s.taskId === t.id) &&
+					(this.executionRetryAt.get(`${missionId}/${t.id}`) ?? 0) <= Date.now() &&
 					!(t.dependsOn ?? []).some((id) => pin.tasks.find((d) => d.id === id)?.status !== "done"),
 			);
-		if (!task) throw new NoTaskReady();
+		if (!ready.length) throw new NoTaskReady();
+		let wait: string | undefined;
+		const task = ready.find((candidate, index) => {
+			if (index && this.deps.store.controls.orderPinned(missionId)) return false;
+			const slice = pin.plan.slices.find((s) =>
+				pin.plan.publication!.tasks.some((p) => p.sliceId === s.id && p.taskId === candidate.id),
+			);
+			const capacity = this.deps.sessions.codingCapacityReason(pin.project.id, undefined, slice?.files);
+			wait ??= capacity;
+			return !capacity;
+		});
+		if (!task) throw new Conflict(wait ?? "Waiting for a coding slot");
 		const entry = pin.plan.publication!.tasks.find((p) => p.taskId === task.id)!;
 		if (entry.definition !== undefined) {
 			// A confirmed revision published this definition; any later change outside a revision shows here.
@@ -2882,19 +2936,27 @@ export class PlanningWorkers {
 	private async reconcileExecution(missionId: string): Promise<void> {
 		const { store, sessions } = this.deps;
 		const state = store.planningWorkers.get(missionId);
-		if (!state?.start?.admitted || !store.plannedWithoutCoordinator(missionId)) return;
+		if (!state?.start || this.enteringStarts.has(missionId) || !store.plannedWithoutCoordinator(missionId)) return;
+		if (
+			!state.start.admitted &&
+			(await sessions
+				.lookupPublishedTask(state.start.sessionId, state.start.operation.operationId)
+				.catch(() => false))
+		) {
+			store.planningWorkers.change(missionId, state.revision, (s) => {
+				s.start!.admitted = true;
+			});
+			await store.durable();
+		}
 		// A start this host entered but did not finish is lookup-only, like the user's Start.
 		for (const s of state.autoStarts ?? []) {
 			if (s.state !== "starting") continue;
-			const admitted = await sessions.lookupPublishedTask(s.sessionId, s.operationId);
-			this.changeAutoStart(
-				missionId,
-				s.operationId,
-				admitted ? "admitted" : sessions.get(s.sessionId) ? "failed" : null,
-			);
-			await store.durable();
+			const admitted = await sessions.lookupPublishedTask(s.sessionId, s.operationId).catch(() => false);
+			if (admitted) {
+				this.changeAutoStart(missionId, s.operationId, "admitted");
+				await store.durable();
+			}
 		}
-		if ((this.executionRetryAt.get(missionId) ?? 0) > Date.now()) return;
 		const tried = new Set<string>();
 		for (;;) {
 			let next: Awaited<ReturnType<PlanningWorkers["nextStart"]>>;
@@ -2902,10 +2964,11 @@ export class PlanningWorkers {
 				next = await this.nextStart(missionId);
 			} catch (error) {
 				// Nothing ready, held, or the published agreement changed. Only a ready task that cannot start is shown.
-				this.executionWait(
-					missionId,
-					error instanceof NoTaskReady || !this.hasReadyTask(missionId) ? undefined : String(error),
-				);
+				if (!(error instanceof NoTaskReady && this.hasReadyTask(missionId)))
+					this.executionWait(
+						missionId,
+						error instanceof NoTaskReady || !this.hasReadyTask(missionId) ? undefined : String(error),
+					);
 				return;
 			}
 			if (tried.has(next.task.id)) return;
@@ -2995,11 +3058,13 @@ export class PlanningWorkers {
 			);
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
-			this.changeAutoStart(missionId, operationId, sessions.get(sessionId) ? "failed" : null, reason);
+			// Only a trusted pre-effect refusal can free this identity. Missing metadata is not proof.
+			if (error instanceof PublishedStartRefused) this.changeAutoStart(missionId, operationId, null);
 			await store.durable();
-			this.executionRetryAt.set(missionId, Date.now() + EXECUTION_RETRY_MS);
+			if (error instanceof PublishedStartRefused)
+				this.executionRetryAt.set(`${missionId}/${task.id}`, Date.now() + EXECUTION_RETRY_MS);
 			this.executionWait(missionId, reason);
-			return false;
+			return !(error instanceof PublishedStartRefused);
 		}
 		this.changeAutoStart(missionId, operationId, "admitted");
 		await store.durable();
@@ -3085,9 +3150,20 @@ export class PlanningWorkers {
 	/** Only an authenticated, explicit native Start enters this method. No submission calls it. */
 	start(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
 		if (this.closing.signal.aborted) return Promise.reject(new Error("Planning host is closing; lookup unavailable"));
+		if (firstEntry && this.enteringStarts.has(op.targetId))
+			return Promise.reject(new OperationRejected("Start is already entering"));
+		if (firstEntry) this.enteringStarts.add(op.targetId);
 		const work = this.startEntered(op, firstEntry);
 		this.tasks.add(work);
-		void work.finally(() => this.tasks.delete(work)).catch(() => {});
+		void work
+			.finally(() => {
+				this.tasks.delete(work);
+				if (firstEntry) {
+					this.enteringStarts.delete(op.targetId);
+					this.scheduleResearch(op.targetId);
+				}
+			})
+			.catch(() => {});
 		return work;
 	}
 	private async startEntered(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
@@ -3150,18 +3226,35 @@ export class PlanningWorkers {
 		}
 		await store.durable(); // Reservation and immutable identity precede every worker effect.
 		check(false);
-		const result = await sessions.admitPublishedTask(
-			{
-				projectId: pin.project.id,
-				missionId: op.targetId,
-				message: taskMessage([task]),
-				title: task.title,
-				mode: "build",
-				...selection,
-			},
-			{ sessionId, taskId, operationId: op.operationId, ownerSessionId: pin.binding.ownerSessionId },
-			check,
-		);
+		let result: { admissionId: string; sessionId: string };
+		try {
+			result = await sessions.admitPublishedTask(
+				{
+					projectId: pin.project.id,
+					missionId: op.targetId,
+					message: taskMessage([task]),
+					title: task.title,
+					mode: "build",
+					...selection,
+				},
+				{ sessionId, taskId, operationId: op.operationId, ownerSessionId: pin.binding.ownerSessionId },
+				check,
+			);
+		} catch (error) {
+			if (!(error instanceof PublishedStartRefused)) throw error;
+			const current = store.planningWorkers.get(op.targetId)!;
+			if (
+				current.start?.sessionId !== sessionId ||
+				current.start.operation.operationId !== op.operationId ||
+				current.start.admitted
+			)
+				throw new Error("Start refusal identity changed; inspect the original attempt");
+			store.planningWorkers.change(op.targetId, current.revision, (s) => {
+				delete s.start;
+			});
+			await store.durable();
+			throw new OperationRejected(error.message);
+		}
 		const state = store.planningWorkers.get(op.targetId)!;
 		store.planningWorkers.change(op.targetId, state.revision, (s) => {
 			s.start!.admitted = true;

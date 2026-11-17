@@ -193,6 +193,19 @@ fn exact(request: &Value, reply: &Value) -> Result<(), Error> {
         Some("help") if value["request"] == request["request"] => (),
         Some("answer") => {
             super::planning::exact(value.clone(), &request["operation"])?;
+            if request["clarification"] == true && value["state"] == "accepted" {
+                let saved = &value["result"]["clarification"];
+                if value["result"]["sessionId"] != request["operation"]["targetId"]
+                    || saved["operationId"] != request["operation"]["operationId"]
+                    || saved["questionId"] != request["scope"]["subject"]["entryId"]
+                    || saved["question"] != request["message"]
+                    || !saved["answer"]
+                        .as_str()
+                        .is_some_and(|s| !s.trim().is_empty() && s.len() <= 16000)
+                {
+                    return Err(Error::Unknown);
+                }
+            }
         }
         Some("resource")
             if value["expected"] == request["expected"]
@@ -495,6 +508,9 @@ pub(super) async fn handle(
                         payload["interview"] = interview.clone();
                     } else {
                         payload["message"] = request["message"].clone();
+                        if request["clarification"] == true {
+                            payload["clarification"] = json!(true);
+                        }
                     }
                     let payload = serde_json::to_string(&payload).map_err(|_| Error::Invalid)?;
                     // bindingId uses canonical sorted JSON, not feature-dependent serde map order.
