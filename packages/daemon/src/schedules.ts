@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
 	DashboardScheduledItem,
 	InsightsReviewDispatch,
@@ -13,7 +13,7 @@ import type {
 	ScheduleTarget,
 	SpawnRequest,
 } from "@pilot/protocol";
-import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
+import { Conflict, NotFound, ScheduleInputHeld, ServiceUnavailable } from "./errors.ts";
 import { INSIGHTS_INITIAL_DEFAULTS } from "./insights-defaults.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON } from "./operation-journal.ts";
@@ -51,16 +51,63 @@ const clock: ScheduleClock = {
 		return () => clearTimeout(timer);
 	},
 };
+function companionReceipt(run: ScheduleRun, due: number, count = run.count): ScheduleRun {
+	const admission = run.admission;
+	return {
+		...run,
+		due,
+		late: (run.admittedAt ?? run.at) - due > 300000 ? true : undefined,
+		count,
+		admission: admission
+			? {
+					inputHash: admission.inputHash,
+					requestId: admission.requestId,
+					sessionId: admission.sessionId,
+					definitionHash: admission.definitionHash,
+				}
+			: undefined,
+	};
+}
+export interface ScheduleInputGate {
+	check(
+		sessionId: string,
+		requestId: string,
+		content: string,
+	): "ready" | "held" | "expired" | "invalid" | "stale_input";
+	denied(
+		sessionId: string,
+		requestId: string,
+		reason: "expired" | "invalid" | "unknown" | "stale_input",
+	): Promise<void>;
+	accepted(sessionId: string, requestId: string, at: number): Promise<void>;
+	acceptedAt(sessionId: string, requestId: string, content?: string): number | undefined;
+	now(): number;
+}
 export interface ScheduleDispatch {
+	setScheduleAdmission?(gate: ScheduleInputGate): void;
+	resumeScheduled?(): void | Promise<void>;
+	pendingScheduled?(): boolean;
+	uncertainScheduled?(id: string, requestId: string): boolean;
+	sendScheduled?(sessionId: string, message: string, requestId: string): Promise<void>;
+	spawnScheduled?(request: SpawnRequest, sessionId: string, requestId: string): Promise<{ id: string }>;
 	spawn(
 		request: SpawnRequest,
-		coordinator?: boolean,
+		activeMissionCoordinator?: boolean,
 		taskId?: undefined,
 		missionAdmission?: undefined,
 		job?: import("./chat-report.ts").ChatJob,
 	): Promise<{ id: string }>;
 	send(id: string, message: string, mode: "followUp", requestId: string): Promise<void>;
-	get(id: string): { projectId?: string; working?: boolean; missionId?: string } | undefined;
+	get(id: string):
+		| {
+				projectId?: string;
+				working?: boolean;
+				missionId?: string;
+				activeMissionCoordinator?: boolean;
+				archivedAt?: number;
+				role?: string;
+		  }
+		| undefined;
 	insightsStatus?(id: string): InsightsStatus | undefined;
 	insightsOwnerStatus?(
 		id: string,
@@ -119,12 +166,370 @@ export class ScheduleService {
 	private recoveryPending = true;
 	private cancelTimer?: () => void;
 	private disposers: Array<() => void> = [];
+	private acknowledgements = new Map<string, { id: string; at: number }>();
 	readonly store: ScheduleStore;
 	private readonly deps: ScheduleServiceDeps;
 	constructor(store: ScheduleStore, deps: ScheduleServiceDeps) {
 		this.store = store;
 		this.deps = deps;
 		this.time = deps.clock ?? clock;
+		deps.sessions.setScheduleAdmission?.({
+			check: (id, req, content) => this.inputAdmission(id, req, content),
+			denied: (id, req, reason) => this.inputDenied(id, req, reason),
+			accepted: (id, req, at) => this.inputAccepted(id, req, at),
+			acceptedAt: (id, req, content) => this.acceptedAt(id, req, content),
+			now: () => this.time.now(),
+		});
+	}
+	private acceptedAt(id: string, requestId: string, content?: string): number | undefined {
+		const key = /^schedule:([^:]+)(?::\d+)?$/.exec(requestId)?.[1];
+		if (!key) return;
+		let row: ScheduledItem;
+		try {
+			row = this.store.require(key);
+		} catch {
+			return;
+		}
+		const at = row.runs?.find(
+			(r) =>
+				r.admission?.requestId === requestId &&
+				r.admission.sessionId === id &&
+				(content === undefined || r.admission.inputHash === this.inputHash(content)),
+		)?.admittedAt;
+		return typeof at === "number" && Number.isFinite(at) ? at : undefined;
+	}
+	private async inputAccepted(id: string, requestId: string, at: number): Promise<void> {
+		this.assertOpen();
+		const key = /^schedule:([^:]+)(?::\d+)?$/.exec(requestId)?.[1];
+		if (!key) return;
+		let row: ScheduledItem;
+		try {
+			row = this.store.require(key);
+		} catch {
+			return;
+		}
+		if (row.state === "dispatching" && row.admission?.requestId === requestId && row.admission.sessionId === id) {
+			// The original dispatcher will persist this observation with its result.
+			this.acknowledgements.set(requestId, { id, at });
+			return;
+		}
+		await this.runtime.run("dispatch", async () => {
+			const previous = row.runs?.find((r) => r.admission?.requestId === requestId && r.admission.sessionId === id);
+			if (!previous) return;
+			const run: ScheduleRun = {
+				...previous,
+				admittedAt: at,
+				...(at - previous.due > 300000 ? { late: true } : {}),
+			};
+			if (previous.admittedAt !== at)
+				row = await this.store.replace(row, {
+					...row,
+					runs: row.runs!.map((r) => (r === previous ? run : r)),
+					...(run.late ? { notice: run } : {}),
+					updatedAt: this.time.now(),
+				});
+			for (const ref of run.admission?.companions ?? []) {
+				let related: ScheduledItem;
+				try {
+					related = this.store.require(ref.id);
+				} catch {
+					continue;
+				}
+				const prior = related.runs?.find((r) => r.admission?.requestId === requestId);
+				if (!prior || prior.admittedAt === at) continue;
+				const next = companionReceipt(
+					{ ...prior, admittedAt: at, ...(at - prior.due > 300000 ? { late: true } : {}) },
+					prior.due,
+				);
+				await this.store.replace(related, {
+					...related,
+					runs: related.runs!.map((r) => (r === prior ? next : r)),
+					...(next.late ? { notice: next } : {}),
+					updatedAt: this.time.now(),
+				});
+			}
+		});
+	}
+	private requestFor(item: ScheduledItem, due?: number): string {
+		return `schedule:${item.id}${due === undefined ? "" : `:${due}`}`;
+	}
+	private chatFor(requestId: string): string {
+		const h = createHash("sha256").update(requestId).digest("hex");
+		return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+	}
+	private definitionHash(row: ScheduledItem): string {
+		return createHash("sha256")
+			.update(
+				canonicalJSON({
+					title: row.title,
+					projectId: row.projectId,
+					target: row.target,
+					recurrence: row.recurrence ?? null,
+					expiresAt: row.expiresAt ?? null,
+					missionCheckIn: row.missionCheckIn ?? null,
+				}),
+			)
+			.digest("hex");
+	}
+	private admissionFor(row: ScheduledItem, due?: number, companions: ScheduledItem[] = []) {
+		const requestId = this.requestFor(row, due);
+		return {
+			inputHash: this.inputHash(
+				[row, ...companions]
+					.map((r) => (r.target.kind === "message" ? r.target.message : r.target.spawn.message))
+					.join("\n\n"),
+			),
+			requestId,
+			sessionId: row.target.kind === "message" ? row.target.sessionId : this.chatFor(requestId),
+			definitionHash: this.definitionHash(row),
+			...(companions.length
+				? { companions: companions.map((r) => ({ id: r.id, definitionHash: this.definitionHash(r) })) }
+				: {}),
+		};
+	}
+	private inputHash(content: string): string {
+		return createHash("sha256").update(content).digest("hex");
+	}
+	private inputAdmission(
+		sessionId: string,
+		requestId: string,
+		content: string,
+	): "ready" | "held" | "expired" | "invalid" | "stale_input" {
+		if (!this.inventoryLoaded || this.stopped || this.runtime.frozen) return "held";
+		const parts = /^schedule:([^:]+)(?::(\d+))?$/.exec(requestId);
+		if (!parts) return "invalid";
+		let row: ScheduledItem;
+		try {
+			row = this.store.require(parts[1]!);
+		} catch {
+			return "invalid";
+		}
+		const admission =
+			row.admission?.requestId === requestId
+				? row.admission
+				: row.runs?.find((r) => r.admission?.requestId === requestId)?.admission;
+		if (!admission || admission.sessionId !== sessionId || admission.definitionHash !== this.definitionHash(row))
+			return "invalid";
+		if (admission.inputHash !== this.inputHash(content)) return "stale_input";
+		for (const ref of admission.companions ?? []) {
+			let related: ScheduledItem;
+			try {
+				related = this.store.require(ref.id);
+			} catch {
+				return "invalid";
+			}
+			if (
+				!["dispatching", "fired"].includes(related.state) ||
+				ref.definitionHash !== this.definitionHash(related) ||
+				!this.validCheckIn(related)
+			)
+				return "invalid";
+			if (related.expiresAt !== undefined && related.expiresAt <= this.time.now()) return "expired";
+		}
+		if (row.target.kind === "message" ? row.target.sessionId !== sessionId : this.chatFor(requestId) !== sessionId)
+			return "invalid";
+		const target = this.deps.sessions.get(sessionId);
+		if (target && (target.projectId !== row.projectId || target.role !== undefined)) return "invalid";
+		try {
+			this.deps.projects.require(row.projectId!);
+		} catch {
+			return "invalid";
+		}
+		if (!this.validCheckIn(row) || target?.archivedAt !== undefined) return "invalid";
+		if (row.trigger === "at") {
+			if (parts[2] || !["dispatching", "fired"].includes(row.state)) return "invalid";
+			if (row.expiresAt !== undefined && row.expiresAt <= this.time.now()) return "expired";
+		} else if (row.trigger === "recurring") {
+			const due = Number(parts[2]);
+			if (!Number.isSafeInteger(due) || !["dispatching", "pending"].includes(row.state) || row.handledThrough! < due)
+				return "invalid";
+			if (this.time.now() >= new RecurrenceCalendar(row.recurrence!).periodEnd(due)) return "expired";
+			if (
+				row.runs?.some(
+					(r) => r.due === due && ["failed", "missed", "skipped_running", "unknown"].includes(r.outcome),
+				)
+			)
+				return "invalid";
+		} else return "invalid";
+		if (
+			row.paused ||
+			this.missionHeld(row) ||
+			this.unavailable() ||
+			!this.online ||
+			this.deps.automationsEnabled?.() === false
+		)
+			return "held";
+		return "ready";
+	}
+	private inputDenied(
+		sessionId: string,
+		requestId: string,
+		reason: "expired" | "invalid" | "unknown" | "stale_input",
+	): Promise<void> {
+		this.assertOpen();
+		return this.runtime.run("dispatch", () => this.recordInputDenied(sessionId, requestId, reason));
+	}
+	private async recordInputDenied(
+		_sessionId: string,
+		requestId: string,
+		reason: "expired" | "invalid" | "unknown" | "stale_input",
+	): Promise<void> {
+		const parts = /^schedule:([^:]+)(?::(\d+))?$/.exec(requestId);
+		if (!parts) return;
+		let row: ScheduledItem;
+		try {
+			row = this.store.require(parts[1]!);
+		} catch {
+			return;
+		}
+		if (reason === "unknown" && this.acceptedAt(_sessionId, requestId) !== undefined) return;
+		const error =
+			reason === "unknown"
+				? "Earlier input admission is unknown; nothing was resent. Inspect the target chat before replacing work."
+				: reason === "stale_input"
+					? "Saved input no longer matches this occurrence"
+					: reason === "expired"
+						? "Expired before input admission"
+						: "Schedule agreement or target changed before input admission";
+		const due = parts[2] === undefined ? row.at! : Number(parts[2]);
+		const run: ScheduleRun = {
+			due,
+			at: this.time.now(),
+			outcome: reason === "unknown" ? "unknown" : "missed",
+			error,
+		};
+		const admission =
+			row.admission?.requestId === requestId
+				? row.admission
+				: row.runs?.find((r) => r.admission?.requestId === requestId)?.admission;
+		run.admission = admission;
+		if (
+			reason !== "unknown" &&
+			admission &&
+			(admission.companions?.length || reason === "stale_input") &&
+			row.trigger === "at"
+		) {
+			// This combined input was definitively refused before entry. Keep each
+			// still-valid reminder, not the rejected combination, for re-coalescing.
+			const refs = [{ id: row.id, definitionHash: admission.definitionHash }, ...(admission.companions ?? [])];
+			for (const ref of refs) {
+				let current: ScheduledItem;
+				try {
+					current = this.store.require(ref.id);
+				} catch {
+					continue;
+				}
+				if (
+					current.trigger !== "at" ||
+					!["dispatching", "fired"].includes(current.state) ||
+					this.definitionHash(current) !== ref.definitionHash
+				)
+					continue;
+				const target =
+					current.target.kind === "message" ? this.deps.sessions.get(current.target.sessionId) : undefined;
+				const expired = current.expiresAt !== undefined && current.expiresAt <= this.time.now();
+				let project = true;
+				try {
+					this.deps.projects.require(current.projectId!);
+				} catch {
+					project = false;
+				}
+				if (
+					!expired &&
+					project &&
+					target &&
+					target.projectId === current.projectId &&
+					target.role === undefined &&
+					target.archivedAt === undefined &&
+					this.validCheckIn(current)
+				) {
+					await this.store.replace(current, {
+						...current,
+						state: "pending",
+						admission: undefined,
+						claimedAt: undefined,
+						firedAt: undefined,
+						runs: undefined,
+						notice: undefined,
+						error: undefined,
+						updatedAt: this.time.now(),
+					});
+				} else {
+					const missed = companionReceipt(
+						{
+							...run,
+							admission: undefined,
+							error: expired
+								? "Expired before input admission"
+								: "Check-in agreement or target changed before input admission",
+						},
+						current.at!,
+					);
+					await this.store.replace(current, {
+						...current,
+						state: "failed",
+						error: missed.error,
+						runs: [missed],
+						notice: missed,
+						updatedAt: this.time.now(),
+					});
+				}
+			}
+			return;
+		}
+		const alreadyUnknown =
+			reason === "unknown" && row.runs?.some((r) => r.outcome === "unknown" && r.admission?.requestId === requestId);
+		if (!alreadyUnknown) {
+			if (row.trigger === "recurring") {
+				if (row.state === "dispatching" && row.handledThrough === due)
+					await this.finishOccurrence(row, run, reason === "unknown");
+				else if (row.runs?.some((r) => r.due === due))
+					await this.store.replace(row, {
+						...row,
+						runs: row.runs.map((r) => (r.due === due ? run : r)),
+						notice: run,
+						updatedAt: this.time.now(),
+						...(reason === "unknown" ? { paused: true as const } : {}),
+					});
+			} else if (
+				row.trigger === "at" &&
+				["dispatching", "fired", ...(reason === "unknown" ? ["failed"] : [])].includes(row.state)
+			)
+				await this.store.replace(row, {
+					...row,
+					state: "failed",
+					error,
+					runs: [run],
+					notice: run,
+					updatedAt: this.time.now(),
+				});
+		}
+		for (const ref of admission?.companions ?? []) {
+			let related: ScheduledItem;
+			try {
+				related = this.store.require(ref.id);
+			} catch {
+				continue;
+			}
+			if (
+				reason === "unknown" &&
+				related.runs?.some((r) => r.outcome === "unknown" && r.admission?.requestId === requestId)
+			)
+				continue;
+			if (
+				related.trigger === "at" &&
+				["dispatching", "fired", ...(reason === "unknown" ? ["failed"] : [])].includes(related.state) &&
+				this.definitionHash(related) === ref.definitionHash
+			)
+				await this.store.replace(related, {
+					...related,
+					state: "failed",
+					error,
+					runs: [companionReceipt(run, related.at!)],
+					notice: companionReceipt(run, related.at!),
+					updatedAt: this.time.now(),
+				});
+		}
 	}
 	async load(): Promise<void> {
 		await this.store.load(this.time.now());
@@ -201,9 +606,7 @@ export class ScheduleService {
 		return this.store
 			.pendingItems()
 			.filter(
-				(item) =>
-					(item.trigger === "at" || this.deps.automationsEnabled?.()) &&
-					!this.missionHeld(this.store.require(item.id)),
+				(item) => (this.deps.automationsEnabled?.() ?? true) && !this.missionHeld(this.store.require(item.id)),
 			);
 	}
 	private missionId(item: ScheduledItem): string | undefined {
@@ -214,6 +617,25 @@ export class ScheduleService {
 	private missionHeld(item: ScheduledItem): boolean {
 		const id = this.missionId(item);
 		return !!id && !!this.deps.missions?.controls?.current(id).held;
+	}
+	private validCheckIn(item: ScheduledItem): boolean {
+		const owner = item.missionCheckIn;
+		if (!owner) return true;
+		try {
+			const mission = this.deps.missions!.require(owner.missionId);
+			const session = this.deps.sessions.get(owner.coordinatorSessionId);
+			return (
+				mission.status === "active" &&
+				mission.coordinatorSessionId === owner.coordinatorSessionId &&
+				mission.briefRevision === owner.briefRevision &&
+				session?.missionId === owner.missionId &&
+				session.projectId === item.projectId &&
+				item.target.kind === "message" &&
+				item.target.sessionId === owner.coordinatorSessionId
+			);
+		} catch {
+			return false;
+		}
 	}
 	/** Join already-entered dispatches. Pending rules keep their revisions and user holds. */
 	async drainMission(missionId: string): Promise<void> {
@@ -231,6 +653,12 @@ export class ScheduleService {
 		// Passive terminal lookup also runs while dispatch is paused/offline/disabled.
 		await this.reconcileReviews(this.recoveryPending);
 		this.recoveryPending = false;
+		for (const expiry of this.store.expiringItems()) {
+			if (expiry.expiresAt! <= this.time.now()) {
+				const item = this.store.require(expiry.id);
+				await this.expire(item);
+			}
+		}
 		const pending = this.activeItems();
 		this.deps.triggers?.setCalendarActive?.(pending.length > 0);
 		if (this.unavailable()) {
@@ -238,7 +666,7 @@ export class ScheduleService {
 			return;
 		}
 		// Evaluate expiry even offline. Refresh once per sweep, only if an occurrence could run.
-		let needsNetwork = false;
+		let needsNetwork = this.deps.sessions.pendingScheduled?.() ?? false;
 		for (const item of pending) {
 			if (item.at! > this.time.now()) continue;
 			const row = this.store.require(item.id);
@@ -260,6 +688,7 @@ export class ScheduleService {
 			needsNetwork = true;
 		}
 		if (needsNetwork && this.deps.triggers?.refreshOnline) this.online = await this.deps.triggers.refreshOnline();
+		if (this.online) await this.deps.sessions.resumeScheduled?.();
 		for (const item of pending) {
 			if (this.unavailable() || !this.online) break;
 			if (item.at! > this.time.now()) continue;
@@ -268,7 +697,47 @@ export class ScheduleService {
 				if (current.state !== "pending" || current.paused || current.revision !== item.revision) continue;
 				if (current.trigger === "recurring") {
 					if (this.deps.automationsEnabled?.()) await this.fireRecurring(current);
-				} else await this.fire(current);
+				} else {
+					const target = current.target;
+					const session = target.kind === "message" ? this.deps.sessions.get(target.sessionId) : undefined;
+					const others =
+						session?.activeMissionCoordinator && session.missionId && target.kind === "message"
+							? pending
+									.filter((p) => p.id !== current.id && p.trigger === "at" && p.at! <= this.time.now())
+									.map((p) => this.store.require(p.id))
+									.filter(
+										(p) =>
+											p.state === "pending" &&
+											this.validCheckIn(p) &&
+											!p.paused &&
+											p.target.kind === "message" &&
+											p.target.sessionId === target.sessionId &&
+											(p.expiresAt === undefined || p.expiresAt > this.time.now()),
+									)
+							: [];
+					// 32 KiB fits about four full native-editor messages in one model turn.
+					// Count without allocating a joined prompt. Oversized groups stay held,
+					// not split into an automatic burst of turns.
+					const group = [current, ...others];
+					const bytes = others.length
+						? group.reduce(
+								(sum, r, i) =>
+									sum + (r.target.kind === "message" ? Buffer.byteLength(r.target.message) : 0) + (i ? 2 : 0),
+								0,
+							)
+						: 0;
+					if (bytes > 32 * 1024) {
+						for (const row of group)
+							await this.store.replace(row, {
+								...row,
+								paused: true,
+								error: `Combined check-ins use ${bytes} bytes; the limit is 32 KiB (32768 bytes). Shorten messages or resume selected check-ins separately.`,
+								updatedAt: this.time.now(),
+							});
+						continue;
+					}
+					await this.fire(current, others);
+				}
 			} catch (error) {
 				if (!(error instanceof NotFound)) throw error;
 			}
@@ -281,16 +750,20 @@ export class ScheduleService {
 		const pending = this.activeItems(),
 			now = this.time.now();
 		this.deps.triggers?.setCalendarActive?.(!this.stopped && pending.length > 0);
-		const waiting = !this.unavailable() && pending.some((item) => item.at! <= now);
+		const waiting =
+			!this.unavailable() &&
+			(pending.some((item) => item.at! <= now) ||
+				(!!this.deps.automationsEnabled?.() && !!this.deps.sessions.pendingScheduled?.()));
 		this.deps.triggers?.setActive?.(waiting && !this.online);
-		if (this.unavailable()) return;
+		if (this.stopped || this.runtime.frozen) return;
 		// Offline due rules also need a period-expiry timer, not an immediate retry loop.
-		const deadlines = pending.map((item) => {
+		const deadlines = (this.unavailable() ? [] : pending).map((item) => {
 			if (item.at! > now) return item.at!;
 			if (item.trigger === "recurring")
 				return new RecurrenceCalendar(this.store.require(item.id).recurrence!).periodEnd(now);
 			return Infinity;
 		});
+		for (const item of this.store.expiringItems()) deadlines.push(item.expiresAt!);
 		const next = Math.min(...deadlines);
 		if (Number.isFinite(next))
 			this.cancelTimer = this.time.setTimeout(
@@ -307,6 +780,7 @@ export class ScheduleService {
 			);
 	}
 	private async finishOccurrence(item: ScheduledItem, run: ScheduleRun, paused = false): Promise<void> {
+		run = { ...run, ...(item.admission ? { admission: item.admission } : {}) };
 		const noteworthy = run.late || !["started", "sent"].includes(run.outcome);
 		await this.store.replace(item, {
 			...item,
@@ -315,6 +789,7 @@ export class ScheduleService {
 			at: new RecurrenceCalendar(item.recurrence!).next(run.due),
 			claimedAt: undefined,
 			insightsReview: undefined,
+			admission: undefined,
 			updatedAt: this.time.now(),
 			runs: [...(item.runs ?? []), run].slice(-10),
 			notice: noteworthy ? run : undefined,
@@ -330,6 +805,14 @@ export class ScheduleService {
 		const due = calendar.latest(this.time.now());
 		if (due <= item.handledThrough!) return;
 		const count = calendar.count(item.handledThrough!, due);
+		if (!this.validCheckIn(item)) {
+			await this.finishOccurrence(
+				item,
+				{ due, at: this.time.now(), outcome: "missed", error: "Check-in agreement or coordinator changed" },
+				true,
+			);
+			return;
+		}
 		if (this.time.now() >= calendar.periodEnd(due)) {
 			await this.finishOccurrence(item, { due, at: this.time.now(), outcome: "missed", count });
 			return;
@@ -398,10 +881,25 @@ export class ScheduleService {
 				updatedAt: this.time.now(),
 				insightsReview: review,
 				insightsDestination: destination,
+				...(!review ? { admission: this.admissionFor(item, due) } : {}),
+				...(item.target.kind === "chat" ? { sessionId: this.chatFor(this.requestFor(item, due)) } : {}),
 			});
 		} catch (error) {
 			if (error instanceof Conflict || error instanceof NotFound) return;
 			throw error;
+		}
+		if (!review && (this.unavailable() || this.missionHeld(claimed) || !this.deps.automationsEnabled?.())) {
+			// No effect entered: keep the overdue occurrence available for a later resume.
+			await this.store.replace(claimed, { ...item, updatedAt: this.time.now() });
+			return;
+		}
+		if (!this.validCheckIn(claimed)) {
+			await this.finishOccurrence(
+				claimed,
+				{ due, at: this.time.now(), outcome: "missed", error: "Check-in agreement or coordinator changed" },
+				true,
+			);
+			return;
 		}
 		const run: ScheduleRun = {
 			due,
@@ -429,7 +927,7 @@ export class ScheduleService {
 			const priorId =
 				claimed.target.kind === "message"
 					? claimed.target.sessionId
-					: (claimed.runs?.findLast((run) => !!run.sessionId)?.sessionId ?? claimed.sessionId);
+					: (item.runs?.findLast((run) => !!run.sessionId)?.sessionId ?? item.sessionId);
 			const previous = priorId ? this.deps.sessions.get(priorId) : undefined;
 			if (claimed.target.kind === "message" && !previous) {
 				permanentlyMissing = true;
@@ -443,21 +941,44 @@ export class ScheduleService {
 				run.at = this.time.now();
 				const late = run.at - due > 300_000;
 				const prefix = late ? lateScheduleLine(claimed.title, due, run.at, calendar) + "\n" : "";
+				if (!review && claimed.admission && prefix) {
+					const content =
+						prefix + (claimed.target.kind === "message" ? claimed.target.message : claimed.target.spawn.message);
+					claimed = await this.store.replace(claimed, {
+						...claimed,
+						admission: { ...claimed.admission, inputHash: this.inputHash(content) },
+						updatedAt: this.time.now(),
+					});
+				}
 				if (claimed.target.kind === "chat") {
 					const date = new Date(calendar.day(due)).toISOString().slice(0, 10);
-					run.sessionId = (
-						await this.deps.sessions.spawn(
-							{
-								...claimed.target.spawn,
-								title: `${claimed.title} · ${date}`,
-								message: prefix + claimed.target.spawn.message,
-							},
-							false,
-							undefined,
-							undefined,
-							"schedule",
-						)
-					).id;
+					if (this.deps.sessions.spawnScheduled) {
+						run.sessionId = (
+							await this.deps.sessions.spawnScheduled(
+								{
+									...claimed.target.spawn,
+									title: `${claimed.title} · ${date}`,
+									message: prefix + claimed.target.spawn.message,
+								},
+								claimed.sessionId!,
+								this.requestFor(claimed, due),
+							)
+						).id;
+					} else {
+						run.sessionId = (
+							await this.deps.sessions.spawn(
+								{
+									...claimed.target.spawn,
+									title: `${claimed.title} · ${date}`,
+									message: prefix + claimed.target.spawn.message,
+								},
+								false,
+								undefined,
+								undefined,
+								"schedule",
+							)
+						).id;
+					}
 					run.outcome = "started";
 				} else {
 					run.sessionId = claimed.target.sessionId;
@@ -493,23 +1014,61 @@ export class ScheduleService {
 							this.applyReviewStatus(run, status);
 						}
 					} else {
-						await this.deps.sessions.send(
-							run.sessionId,
-							prefix + claimed.target.message,
-							"followUp",
-							`schedule:${claimed.id}:${due}`,
-						);
+						if (this.deps.sessions.sendScheduled)
+							await this.deps.sessions.sendScheduled(
+								run.sessionId,
+								prefix + claimed.target.message,
+								this.requestFor(claimed, due),
+							);
+						else
+							await this.deps.sessions.send(
+								run.sessionId,
+								prefix + claimed.target.message,
+								"followUp",
+								`schedule:${claimed.id}:${due}`,
+							);
 						run.outcome = "sent";
 					}
 				}
 				if (late) run.late = true;
 			}
 		} catch (error) {
+			if (error instanceof ScheduleInputHeld) {
+				await this.store.replace(claimed, { ...item, updatedAt: this.time.now() });
+				return;
+			}
 			run.error = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
+			if (error instanceof Error && "code" in error && error.code === "busy") {
+				run.outcome = "skipped_running";
+				delete run.error;
+			}
+			if (
+				this.deps.sessions.uncertainScheduled?.(
+					run.sessionId ?? claimed.sessionId ?? "",
+					this.requestFor(claimed, due),
+				)
+			) {
+				run.outcome = "unknown";
+				run.error = `Input admission is unknown; nothing will be resent. ${run.error ?? ""}`.slice(0, 1000);
+			}
 			// A lost dispatch ACK is lookup-only. Never call dispatch again for this occurrence.
 			if (run.insightsReview) await this.lookupReview(run);
 		}
-		await this.finishOccurrence(claimed, run, permanentlyMissing);
+		const acknowledged = this.acknowledgements.get(this.requestFor(claimed, due));
+		if (acknowledged) {
+			run.admittedAt = acknowledged.at;
+			if (acknowledged.at - due > 300000) run.late = true;
+			if (run.outcome === "unknown") {
+				run.outcome = claimed.target.kind === "chat" ? "started" : "sent";
+				run.error = "Input acknowledged; schedule bookkeeping needs inspection";
+			}
+		}
+		const current = this.store.require(claimed.id);
+		if (current.state === "dispatching" && current.admission?.requestId === claimed.admission?.requestId)
+			claimed = current;
+		if (this.store.require(claimed.id).revision === claimed.revision)
+			await this.finishOccurrence(claimed, run, permanentlyMissing || run.outcome === "unknown");
+		this.acknowledgements.delete(this.requestFor(claimed, due));
 	}
 	private applyReviewStatus(run: ScheduleRun, status: InsightsReviewRun | null): void {
 		if (!run.insightsReview) return;
@@ -577,13 +1136,37 @@ export class ScheduleService {
 			}
 		}
 	}
-	private async fire(item: ScheduledItem): Promise<void> {
-		if (this.stopped || this.missionHeld(item)) return;
+	private expire(item: ScheduledItem): Promise<ScheduledItem> {
+		return this.store.replace(item, {
+			...item,
+			state: "failed",
+			updatedAt: this.time.now(),
+			error: "Expired before starting",
+			notice: { due: item.at!, at: this.time.now(), outcome: "missed", error: "Expired before starting" },
+		});
+	}
+	private async fire(item: ScheduledItem, coalesced: ScheduledItem[] = []): Promise<void> {
+		if (this.unavailable() || this.missionHeld(item) || this.deps.automationsEnabled?.() === false) return;
+		if (!this.validCheckIn(item)) {
+			await this.store.replace(item, {
+				...item,
+				state: "failed",
+				error: "Check-in agreement or coordinator changed",
+				updatedAt: this.time.now(),
+			});
+			return;
+		}
+		if (item.expiresAt !== undefined && item.expiresAt <= this.time.now()) {
+			await this.expire(item);
+			return;
+		}
 		let claimed: ScheduledItem;
 		try {
 			claimed = await this.store.replace(item, {
 				...item,
 				state: "dispatching",
+				admission: this.admissionFor(item, undefined, coalesced),
+				...(item.target.kind === "chat" ? { sessionId: this.chatFor(this.requestFor(item)) } : {}),
 				claimedAt: this.time.now(),
 				updatedAt: this.time.now(),
 			});
@@ -593,36 +1176,299 @@ export class ScheduleService {
 		}
 		let next: ScheduledItem;
 		let sessionId: string | undefined;
+		let entered = false;
+		const group: ScheduledItem[] = [];
 		try {
+			for (const row of coalesced)
+				group.push(
+					await this.store.replace(row, {
+						...row,
+						state: "dispatching",
+						claimedAt: this.time.now(),
+						updatedAt: this.time.now(),
+					}),
+				);
+			const settleGroup = async () => {
+				// Remove invalid companions once, rechecking after persistence waits before the send.
+				while (group.length) {
+					const row = group.find(
+						(r) => !this.validCheckIn(r) || (r.expiresAt !== undefined && r.expiresAt <= this.time.now()),
+					);
+					if (!row) break;
+					if (!this.validCheckIn(row))
+						await this.store.replace(row, {
+							...row,
+							state: "failed",
+							error: "Check-in agreement or coordinator changed",
+							updatedAt: this.time.now(),
+						});
+					else await this.expire(row);
+					group.splice(group.indexOf(row), 1);
+				}
+				if ((claimed.admission?.companions?.length ?? 0) !== group.length)
+					claimed = await this.store.replace(claimed, {
+						...claimed,
+						admission: this.admissionFor(claimed, undefined, group),
+					});
+			};
+			await settleGroup();
+			const expireClaim = async () => {
+				for (const row of group)
+					await this.store.replace(row, {
+						...row,
+						state: "pending",
+						claimedAt: undefined,
+						updatedAt: this.time.now(),
+					});
+				await this.expire(claimed);
+			};
+			const guard = () => {
+				if (this.unavailable() || this.missionHeld(claimed) || this.deps.automationsEnabled?.() === false)
+					throw new Conflict("Scheduled work held before admission");
+				if (!this.validCheckIn(claimed)) throw new Conflict("Check-in agreement or coordinator changed");
+			};
+			guard();
 			if (claimed.target.kind === "chat") {
 				// Recheck the local ticket's project binding before admission.
 				await this.validateTrackedItem(claimed.target.trackedItemId, claimed.projectId);
-				if (this.missionHeld(claimed)) throw new Conflict("Mission dispatch paused before admission");
-				sessionId = (await this.deps.sessions.spawn(claimed.target.spawn, false, undefined, undefined, "schedule"))
-					.id;
+				guard();
+				if (claimed.expiresAt !== undefined && claimed.expiresAt <= this.time.now()) {
+					await expireClaim();
+					return;
+				}
+				entered = true;
+				sessionId = this.deps.sessions.spawnScheduled
+					? (
+							await this.deps.sessions.spawnScheduled(
+								claimed.target.spawn,
+								claimed.sessionId!,
+								this.requestFor(claimed),
+							)
+						).id
+					: (await this.deps.sessions.spawn(claimed.target.spawn, false, undefined, undefined, "schedule")).id;
 				if (claimed.target.trackedItemId)
 					await this.deps.trackedItems!.patch(claimed.target.trackedItemId, { sessionId, start: true });
 			} else {
 				sessionId = claimed.target.sessionId;
-				if (this.missionHeld(claimed)) throw new Conflict("Mission dispatch paused before admission");
+				await settleGroup();
+				guard();
 				if (!this.deps.sessions.get(sessionId)) throw new NotFound("Target chat was deleted");
-				await this.deps.sessions.send(sessionId, claimed.target.message, "followUp", `schedule:${claimed.id}`);
+				if (claimed.expiresAt !== undefined && claimed.expiresAt <= this.time.now()) {
+					await expireClaim();
+					return;
+				}
+				entered = true;
+				const messages = [claimed, ...group].map((r) => (r.target.kind === "message" ? r.target.message : ""));
+				if (this.deps.sessions.sendScheduled)
+					await this.deps.sessions.sendScheduled(sessionId, messages.join("\n\n"), this.requestFor(claimed));
+				else await this.deps.sessions.send(sessionId, messages.join("\n\n"), "followUp", `schedule:${claimed.id}`);
 			}
-			next = { ...claimed, sessionId, state: "fired", firedAt: this.time.now(), updatedAt: this.time.now() };
-		} catch (error) {
+			const run: ScheduleRun = {
+				admission: claimed.admission,
+				due: claimed.at!,
+				at: this.time.now(),
+				outcome: claimed.target.kind === "chat" ? "started" : "sent",
+				sessionId,
+				...(this.time.now() - claimed.at! > 300_000 ? { late: true } : {}),
+			};
 			next = {
 				...claimed,
 				sessionId,
+				state: "fired",
+				firedAt: this.time.now(),
+				updatedAt: this.time.now(),
+				runs: [run],
+				notice: run.late ? run : undefined,
+			};
+		} catch (error) {
+			if (
+				error instanceof ScheduleInputHeld ||
+				(!entered &&
+					error instanceof Conflict &&
+					(this.unavailable() || this.missionHeld(claimed) || this.deps.automationsEnabled?.() === false))
+			) {
+				await this.store.replace(claimed, {
+					...claimed,
+					state: "pending",
+					claimedAt: undefined,
+					updatedAt: this.time.now(),
+				});
+				for (const row of group)
+					await this.store.replace(row, {
+						...row,
+						state: "pending",
+						claimedAt: undefined,
+						updatedAt: this.time.now(),
+					});
+				return;
+			}
+			const uncertain = this.deps.sessions.uncertainScheduled?.(
+				sessionId ?? claimed.sessionId ?? (claimed.target.kind === "message" ? claimed.target.sessionId : ""),
+				this.requestFor(claimed),
+			);
+			const failure = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
+			next = {
+				...claimed,
+				sessionId: sessionId ?? claimed.sessionId,
 				state: "failed",
-				error: (error instanceof Error ? error.message : String(error)).slice(0, 1000),
+				error: uncertain ? `Input admission is unknown; nothing will be resent. ${failure}` : failure,
+				...(uncertain
+					? {
+							runs: [
+								{
+									admission: claimed.admission,
+									due: claimed.at!,
+									at: this.time.now(),
+									outcome: "unknown" as const,
+									error: "Input admission is unknown; nothing will be resent.",
+								},
+							],
+							notice: {
+								admission: claimed.admission,
+								due: claimed.at!,
+								at: this.time.now(),
+								outcome: "unknown" as const,
+								error: "Input admission is unknown; nothing will be resent.",
+							},
+						}
+					: {}),
 				updatedAt: this.time.now(),
 			};
 		}
 		// A persistence failure leaves the durable claim intact. Never redispatch automatically.
+		const acknowledged = this.acknowledgements.get(this.requestFor(claimed));
+		if (acknowledged) {
+			const run: ScheduleRun = {
+				admission: claimed.admission,
+				due: claimed.at!,
+				at: next.runs?.[0]?.at ?? this.time.now(),
+				admittedAt: acknowledged.at,
+				outcome: claimed.target.kind === "chat" ? "started" : "sent",
+				sessionId: sessionId ?? claimed.sessionId,
+				...(acknowledged.at - claimed.at! > 300000 ? { late: true } : {}),
+				...(next.error ? { error: next.error } : {}),
+			};
+			if (next.error?.startsWith("Input admission is unknown")) {
+				run.error = "Input acknowledged; schedule bookkeeping needs inspection";
+				next.error = run.error;
+			}
+			next = { ...next, runs: [run], notice: run.late || run.error ? run : undefined };
+		}
+		const current = this.store.require(claimed.id);
+		if (current.state === "dispatching" && current.admission?.requestId === claimed.admission?.requestId) {
+			claimed = current;
+			next = { ...next, revision: current.revision };
+		}
+		if (this.store.require(claimed.id).revision !== claimed.revision) {
+			this.acknowledgements.delete(this.requestFor(claimed));
+			return;
+		}
 		await this.store.replace(claimed, next);
+		for (const row of group) {
+			if (row.expiresAt !== undefined && row.expiresAt <= this.time.now() && !entered) {
+				await this.expire(row);
+				continue;
+			}
+			const receipts = next.runs?.map((run) => companionReceipt(run, row.at!, group.length + 1));
+			const notice = next.notice
+				? companionReceipt(next.notice, row.at!, group.length + 1)
+				: receipts?.find((run) => run.late);
+			await this.store.replace(row, {
+				...row,
+				state: next.state,
+				sessionId: next.sessionId,
+				firedAt: next.firedAt,
+				updatedAt: next.updatedAt,
+				error: next.error,
+				runs: receipts,
+				notice,
+			});
+		}
+		this.acknowledgements.delete(this.requestFor(claimed));
 	}
 	create(request: ScheduleRequest): Promise<ScheduledItem> {
 		return this.runtime.run("create", () => this.createAdmitted(request));
+	}
+	/** Current coordinator only, called through authenticated mission IPC. Definitions/history survive cancellation. */
+	async checkIn(sessionId: string, missionId: string, request: Record<string, unknown>) {
+		return this.runtime.run("create", () => this.checkInAdmitted(sessionId, missionId, request));
+	}
+	private async checkInAdmitted(sessionId: string, missionId: string, request: Record<string, unknown>) {
+		this.assertOpen();
+		const guard = () => {
+			const mission = this.deps.missions?.require(missionId);
+			const session = this.deps.sessions.get(sessionId);
+			if (
+				mission?.status !== "active" ||
+				mission.coordinatorSessionId !== sessionId ||
+				session?.missionId !== missionId ||
+				session.projectId !== mission.projectId
+			)
+				throw new Conflict("Current same-mission coordinator required");
+			return mission;
+		};
+		const mission = guard();
+		const own = (row: ScheduledItem) =>
+			row.missionCheckIn?.missionId === missionId && row.missionCheckIn.coordinatorSessionId === sessionId;
+		if (request.operation === "list") return this.store.list(mission.projectId).filter(own);
+		if (request.operation === "cancel") {
+			const row = this.store.require(String(request.id));
+			if (!own(row) || row.state !== "pending" || row.revision !== request.expectedRevision)
+				throw new Conflict("Only your unchanged pending check-ins can be cancelled");
+			await this.store.replace(row, { ...row, state: "cancelled", updatedAt: this.time.now() });
+			return this.store.require(row.id);
+		}
+		if (
+			request.operation !== "save" ||
+			request.expectedBriefRevision !== mission.briefRevision ||
+			typeof request.requestId !== "string" ||
+			!/^[A-Za-z0-9_-]{1,128}$/.test(request.requestId)
+		)
+			throw new Conflict("Save requires requestId and the current agreed brief revision");
+		const data = await this.validate({
+			title: request.title as string | undefined,
+			trigger: request.recurrence ? "recurring" : "at",
+			at: request.at as number | undefined,
+			recurrence: request.recurrence as ScheduleRecurrence | undefined,
+			expiresAt: request.expiresAt as number | undefined,
+			target: { kind: "message", sessionId, message: request.message as string },
+		});
+		const current = guard();
+		if (current.briefRevision !== mission.briefRevision)
+			throw new Conflict("Agreement changed before saving check-in");
+		const id = createHash("sha256")
+			.update(canonicalJSON([missionId, sessionId, request.requestId]))
+			.digest("hex");
+		const previous = this.store.list(mission.projectId).find((r) => r.id === id);
+		const owner = {
+			missionId,
+			coordinatorSessionId: sessionId,
+			briefRevision: mission.briefRevision,
+			requestId: request.requestId,
+		};
+		if (previous) {
+			if (
+				canonicalJSON(previous.missionCheckIn) !== canonicalJSON(owner) ||
+				canonicalJSON(previous.target) !== canonicalJSON(data.target) ||
+				previous.title !== data.title ||
+				canonicalJSON(previous.recurrence ?? null) !== canonicalJSON(data.recurrence ?? null) ||
+				previous.expiresAt !== data.expiresAt ||
+				(data.trigger === "at" && previous.at !== data.at)
+			)
+				throw new Conflict("Check-in requestId already used for different content");
+			return previous;
+		}
+		const now = this.time.now();
+		return this.store.create({
+			...data,
+			id,
+			revision: 1,
+			state: "pending",
+			missionCheckIn: owner,
+			createdAt: now,
+			updatedAt: now,
+			...(data.trigger === "recurring" ? { handledThrough: now, runs: [] } : {}),
+		});
 	}
 	private async createAdmitted(request: ScheduleRequest): Promise<ScheduledItem> {
 		this.assertOpen();
@@ -654,6 +1500,7 @@ export class ScheduleService {
 			if (!data.insightsDestination || data.trigger !== "recurring")
 				throw new Conflict("Insights schedule requires admitted fixed chat");
 			this.checkHome(request.expectedHome, true);
+			if (!this.deps.automationsEnabled?.()) throw new ServiceUnavailable("Automations are disabled");
 			revalidate();
 			const now = this.time.now();
 			return this.store.create({
@@ -682,6 +1529,7 @@ export class ScheduleService {
 			this.assertOpen();
 			const data = await this.validate(request, owner);
 			this.checkHome(request.expectedHome, true);
+			if (!this.deps.automationsEnabled?.()) throw new ServiceUnavailable("Automations are disabled");
 			revalidate();
 			if (
 				data.trigger !== "recurring" ||
@@ -710,6 +1558,7 @@ export class ScheduleService {
 
 	insightsEnableAvailable(expectedHome: ScheduleHome): void {
 		this.assertOpen();
+		if (!this.deps.automationsEnabled?.()) throw new ServiceUnavailable("Automations are disabled");
 		this.checkHome(expectedHome, true);
 	}
 	/** Fresh native Apply re-arms one exact cancelled row, preserving occurrence history. */
@@ -850,6 +1699,8 @@ export class ScheduleService {
 		if ("networkNames" in patch) throw new Error("Wi-Fi triggers were removed");
 		for (const key of [
 			"title",
+			"expiresAt",
+			"timeZone",
 			"trigger",
 			"at",
 			"target",
@@ -875,8 +1726,7 @@ export class ScheduleService {
 			throw new Error("expectedRevision is required");
 		this.checkHome(patch.expectedHome, old.trigger === "recurring" || trigger === "recurring");
 		if (old.trigger !== trigger) throw new Error("Schedule trigger cannot be changed");
-		if (patch.paused !== undefined && (trigger !== "recurring" || typeof patch.paused !== "boolean"))
-			throw new Error("paused requires a recurring rule and boolean");
+		if (patch.paused !== undefined && typeof patch.paused !== "boolean") throw new Error("paused must be a boolean");
 		if (trigger === "recurring" && patch.at !== undefined) throw new Error("at is daemon-owned");
 		if (patch.dismissNotice !== undefined && (patch.dismissNotice !== true || trigger !== "recurring"))
 			throw new Error("dismissNotice must be true on a recurring rule");
@@ -886,6 +1736,8 @@ export class ScheduleService {
 		)
 			return this.store.replace(old, { ...old, notice: undefined, updatedAt: this.time.now() });
 		const data = await this.validate({
+			expiresAt: patch.expiresAt ?? old.expiresAt,
+			timeZone: patch.timeZone ?? old.timeZone,
 			recurrence: patch.recurrence ?? old.recurrence,
 			expectedHome: patch.expectedHome,
 			title: patch.title ?? old.title,
@@ -894,6 +1746,7 @@ export class ScheduleService {
 			target: patch.target ?? old.target,
 		});
 		if (data.target.kind === "message") this.deps.sessions.insightsReplacementTarget?.(data.target.sessionId);
+		const recurrenceChanged = canonicalJSON(data.recurrence ?? null) !== canonicalJSON(old.recurrence ?? null);
 		return this.store.replace(old, {
 			...old,
 			...data,
@@ -905,20 +1758,16 @@ export class ScheduleService {
 					? (old.insightsDestination ?? data.insightsDestination)
 					: data.insightsDestination,
 			at: data.at,
+			paused: (patch.paused ?? old.paused) ? true : undefined,
 			...(patch.dismissNotice ? { notice: undefined } : {}),
 			projectId: data.projectId,
 			sessionId: data.sessionId,
 			...(trigger === "recurring"
 				? {
 						paused: (patch.paused ?? old.paused) ? true : undefined,
-						handledThrough:
-							patch.recurrence !== undefined || (old.paused && patch.paused === false)
-								? this.time.now()
-								: old.handledThrough,
+						handledThrough: recurrenceChanged ? this.time.now() : old.handledThrough,
 						at: new RecurrenceCalendar(data.recurrence!).next(
-							patch.recurrence !== undefined || (old.paused && patch.paused === false)
-								? this.time.now()
-								: old.handledThrough!,
+							recurrenceChanged ? this.time.now() : old.handledThrough!,
 						),
 					}
 				: {}),
@@ -953,11 +1802,20 @@ export class ScheduleService {
 	require(id: string): ScheduledItem {
 		return this.store.require(id);
 	}
+	controls(): { enabled: boolean; paused: boolean } {
+		return { enabled: this.deps.automationsEnabled?.() ?? true, paused: this.unavailable() };
+	}
+	controlPage(page: number) {
+		return this.store.controlPage(page, (item) => this.held(item));
+	}
+	held(item: ScheduledItem): boolean {
+		return !!item.paused || this.missionHeld(item) || !this.controls().enabled || this.unavailable();
+	}
 	onChange(listener: () => void): () => void {
 		return this.store.onChange(listener);
 	}
 	dashboard(projectId: string): DashboardScheduledItem[] {
-		return this.store.dashboard(projectId);
+		return this.store.dashboard(projectId, (item) => this.held(item));
 	}
 	noticeProjects(): string[] {
 		return this.store.noticeProjects();
@@ -978,6 +1836,8 @@ export class ScheduleService {
 	}
 	private rejectOwned(value: object): void {
 		for (const key of [
+			"admission",
+			"missionCheckIn",
 			"handledThrough",
 			"runs",
 			"notice",
@@ -999,7 +1859,6 @@ export class ScheduleService {
 			if (key in value) throw new Error(`${key} is daemon-owned`);
 	}
 	private checkHome(expected: ScheduleHome | undefined, recurring: boolean): void {
-		if (recurring && !this.deps.automationsEnabled?.()) throw new ServiceUnavailable("Automations are disabled");
 		if (recurring && !expected) throw new Error("expectedHome is required");
 		if (
 			expected &&
@@ -1023,7 +1882,16 @@ export class ScheduleService {
 	): Promise<
 		Pick<
 			ScheduledItem,
-			"title" | "trigger" | "at" | "target" | "projectId" | "sessionId" | "recurrence" | "insightsDestination"
+			| "title"
+			| "trigger"
+			| "at"
+			| "target"
+			| "projectId"
+			| "sessionId"
+			| "recurrence"
+			| "insightsDestination"
+			| "expiresAt"
+			| "timeZone"
 		>
 	> {
 		if (!request || typeof request !== "object" || Array.isArray(request))
@@ -1040,6 +1908,23 @@ export class ScheduleService {
 			(typeof request.at !== "number" || !Number.isSafeInteger(request.at) || request.at < 0 || request.at > 8.64e15)
 		)
 			throw new Error("at must be epoch milliseconds");
+		if (
+			request.expiresAt !== undefined &&
+			(trigger !== "at" ||
+				!Number.isSafeInteger(request.expiresAt) ||
+				request.expiresAt <= request.at! ||
+				request.expiresAt > 8.64e15)
+		)
+			throw new Error("expiresAt must be after a one-shot deadline");
+		if (request.timeZone !== undefined) {
+			if (trigger !== "at" || typeof request.timeZone !== "string" || request.timeZone.length > 100)
+				throw new Error("Invalid one-shot time zone");
+			try {
+				new Intl.DateTimeFormat("en", { timeZone: request.timeZone }).format();
+			} catch {
+				throw new Error("Invalid one-shot time zone");
+			}
+		}
 		if (
 			request.title !== undefined &&
 			(typeof request.title !== "string" || !request.title.trim() || request.title.length > 200)
@@ -1140,6 +2025,8 @@ export class ScheduleService {
 				(target.kind === "chat" ? target.spawn.title?.trim().slice(0, 200) : undefined) ??
 				message.trim().split("\n")[0].slice(0, 200),
 			trigger,
+			expiresAt: request.expiresAt,
+			timeZone: request.timeZone,
 			at: recurrence ? new RecurrenceCalendar(recurrence).next(this.time.now()) : request.at,
 			recurrence,
 			target,

@@ -300,6 +300,7 @@ fn overview(
                 items: working,
             },
             tracked: Vec::new(),
+            scheduled: None,
         },
         reports,
         controls,
@@ -645,6 +646,7 @@ fn day(today: Today, part: DayPart, visit: Visit) -> Today {
 
 fn scheduled(id: &str, text: &str, when: &str, note: Option<&str>) -> Scheduled {
     Scheduled {
+        at: None,
         id: s(id),
         text: s(text),
         when: s(when),

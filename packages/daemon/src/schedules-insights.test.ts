@@ -393,7 +393,7 @@ test("coalesced weeks produce one bounded review with count and late visibility,
 	assert.equal(f.calls[0].windowStart, "2026-11-09T09:00:00.000Z");
 });
 
-test("busy review skips; pause/resume skips paused time; late and missed occurrences remain visible", async (t) => {
+test("busy review skips; resume catches up latest valid occurrence; late and missed remain visible", async (t) => {
 	const f = await fixture(t);
 	f.working(true);
 	await f.due();
@@ -413,14 +413,16 @@ test("busy review skips; pause/resume skips paused time; late and missed occurre
 		expectedRevision: f.service.require(f.row.id).revision,
 	});
 	await f.settle();
-	assert.equal(f.calls.length, 0);
+	assert.equal(f.calls.length, 1);
+	assert.equal(f.service.require(f.row.id).at, ms("2026-11-16T09:00Z"));
+	await f.change("partial");
 	await f.due("2026-11-16T14:00Z");
 	assert.equal(f.service.require(f.row.id).notice?.late, true);
-	assert.equal(f.calls.length, 1);
+	assert.equal(f.calls.length, 2);
 	await f.change("partial");
 	await f.due("2026-11-30T08:00Z"); // Prior weekly period ended, next occurrence is not yet due.
 	assert.equal(f.service.require(f.row.id).notice?.outcome, "missed");
-	assert.equal(f.calls.length, 1);
+	assert.equal(f.calls.length, 2);
 });
 
 test("caller-supplied review identity is rejected and dismissed failures do not resurrect", async (t) => {

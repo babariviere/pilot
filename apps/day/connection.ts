@@ -27,6 +27,7 @@ import { connectedPower } from "./power";
 import { ConnectedPreferences, mirrorPreferences } from "./preferencesFeed";
 import { settingsOpen } from "./preferencesView";
 import { mirrorRituals, type Rituals, rootRecap } from "./ritualFeed";
+import { connectedScheduleControls } from "./scheduleControls";
 import { ConnectedSessionChat, mirrorSessionChat } from "./sessionChat";
 import { connectedSlackControls } from "./slackControls";
 import { ConnectedThreads, mirrorThreads } from "./threadFeed";
@@ -351,6 +352,7 @@ async function connect() {
 		// New's projects are read when New opens; reading sends nothing.
 		day.models = connectedModelControls(window);
 		day.diagnosis = connectedDiagnosisControls(window);
+		day.schedules = connectedScheduleControls(window);
 		day.connections = connectedConnectionControls(window);
 		day.databases = connectedDatabaseControls(window);
 		void day.databases.refresh();

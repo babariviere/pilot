@@ -77,6 +77,20 @@ pub struct Dashboard {
     /// only a preview of its rows; `total` counts them all.
     #[serde(default)]
     pub tracked: Vec<TrackedSource>,
+    /// Passive schedule preview; absent on older services is unknown.
+    #[serde(default)]
+    pub scheduled: Option<Section<ScheduleSummary>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleSummary {
+    pub id: String,
+    pub title: String,
+    pub at: Option<u64>,
+    pub state: String,
+    pub paused: Option<bool>,
+    pub held: Option<bool>,
 }
 
 /// The fields of `DashboardNeedsYouItem` needed for passive problem rows.

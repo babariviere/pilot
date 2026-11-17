@@ -194,6 +194,10 @@ function taskModelChoice(
 }
 
 export class MissionService {
+	private schedules?: import("./schedules.ts").ScheduleService;
+	setSchedules(schedules: import("./schedules.ts").ScheduleService): void {
+		this.schedules = schedules;
+	}
 	private readonly subscriptions: (() => void)[] = [];
 	dispose(): void {
 		for (const stop of this.subscriptions.splice(0)) stop();
@@ -2121,6 +2125,7 @@ export class MissionService {
 		if (
 			([
 				"complete",
+				"checkIn",
 				"revision-source",
 				"revision-propose",
 				"revision",
@@ -2165,6 +2170,13 @@ export class MissionService {
 				throw new Conflict("Mission revision reader changed");
 		};
 		switch (action) {
+			case "checkIn": {
+				assertRevisionContext();
+				if (!this.schedules) throw new Conflict("Check-in scheduling is unavailable");
+				if (!args.schedule || typeof args.schedule !== "object" || Array.isArray(args.schedule))
+					throw new Error("schedule is required");
+				return this.schedules.checkIn(sessionId, missionId, args.schedule as Record<string, unknown>);
+			}
 			case "thread": {
 				const topic = this.store.threads.get(missionId, thread!.id);
 				return {

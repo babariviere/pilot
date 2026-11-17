@@ -164,6 +164,12 @@ impl Desk {
 
     /// Projects missions and freshness from the reads into the read model.
     fn project(&mut self) {
+        if self.native {
+            self.today.coming_up = self
+                .overview
+                .as_ref()
+                .map_or_else(Vec::new, |o| project::scheduled(o, self.now));
+        }
         self.today.problems_known = self.overview.as_ref().is_some_and(|o| {
             o.dashboard
                 .needs_you

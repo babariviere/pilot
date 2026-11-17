@@ -13,6 +13,8 @@ import type { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
+import { ScheduleStore } from "./schedule-store.ts";
+import { ScheduleService } from "./schedules.ts";
 import { SessionManager } from "./sessions.ts";
 import { SourceRegistry } from "./sources.ts";
 import { TerminalManager } from "./terminals.ts";
@@ -20,7 +22,7 @@ import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemo
 import { TrackedItemStore } from "./tracked-items.ts";
 
 export async function nativeIntakeFixture(
-	options: { tracking?: boolean; nativeAuth?: boolean; projectSetup?: boolean } = {},
+	options: { tracking?: boolean; nativeAuth?: boolean; projectSetup?: boolean; schedules?: boolean } = {},
 ) {
 	const home = await mkdtemp(join(tmpdir(), "native-intake-http-"));
 	const projects = new ProjectStore(home);
@@ -96,6 +98,12 @@ export async function nativeIntakeFixture(
 	args.hello = hello;
 	args.githubSetup = options.nativeAuth === false ? undefined : native;
 	args.nativeAuthority = args.githubSetup?.nativeAuthority;
+	const scheduleStore = options.schedules ? new ScheduleStore(join(home, "schedules.sqlite")) : undefined;
+	const schedules = scheduleStore
+		? new ScheduleService(scheduleStore, { sessions, projects, home: host, automationsEnabled: () => false })
+		: undefined;
+	await schedules?.load();
+	args.schedules = schedules;
 	const imports = options.projectSetup ? new GitHubImportService(native, projects) : undefined;
 	args.githubImport = imports;
 	const server = createDaemonServer(args);
@@ -116,12 +124,15 @@ export async function nativeIntakeFixture(
 		hello,
 		host,
 		root,
+		schedules,
 		capability,
 		stats: () => ({ external, sessions: sessions.list().length }),
 		async close() {
+			await schedules?.stop();
 			server.closeAllConnections();
 			await new Promise<void>((r) => server.close(() => r()));
 			await server.closeServices();
+			await scheduleStore?.close();
 			await tracking.stop();
 			await sessions.shutdown();
 			terminals.shutdown();

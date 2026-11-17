@@ -976,6 +976,9 @@ pub struct Scheduled {
     pub when: String,
     /// Who set it and why, when Pilot set it.
     pub note: Option<String>,
+    /// Sort key from the service. Missing in old fixtures, never a generated deadline.
+    #[prop(default)]
+    pub at: Option<u64>,
 }
 
 /// Where a request came in.

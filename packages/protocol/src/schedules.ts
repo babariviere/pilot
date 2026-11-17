@@ -12,15 +12,26 @@ export interface ScheduleRecurrence {
 	dayOfMonth?: number;
 }
 export interface ScheduleRun {
+	/** Host input-entry time, saved only after the kernel acknowledges that input. Not completion. */
+	admittedAt?: number;
+	/** Host-only input provenance. Rechecked at the final kernel input boundary. */
+	admission?: ScheduleInputAdmission;
 	due: number;
 	at: number;
-	outcome: "started" | "sent" | "skipped_running" | "missed" | "failed";
+	outcome: "started" | "sent" | "skipped_running" | "missed" | "failed" | "unknown";
 	late?: true;
 	sessionId?: string;
 	count?: number;
 	error?: string;
 	/** Exact host-reserved review identity. Sent is placement, partial is bounded persistence only. */
 	insightsReview?: { runId: string; state: InsightsReviewRun["state"] | "unresolved" };
+}
+export interface ScheduleInputAdmission {
+	inputHash: string;
+	requestId: string;
+	sessionId: string;
+	definitionHash: string;
+	companions?: { id: string; definitionHash: string }[];
 }
 export interface ScheduleHome {
 	daemonId: string;
@@ -42,6 +53,10 @@ export interface ScheduleRequest {
 	trigger: ScheduleTrigger;
 	/** Epoch milliseconds. Overdue times fire when online. */
 	at?: number;
+	/** One-shot validity deadline. Never dispatch at or after this instant. */
+	expiresAt?: number;
+	/** Display zone for a one-shot. Recurring rules carry their own zone. */
+	timeZone?: string;
 	recurrence?: ScheduleRecurrence;
 	expectedHome?: ScheduleHome;
 	target: ScheduleTarget;
@@ -51,6 +66,8 @@ export interface SchedulePatch {
 	title?: string;
 	trigger?: ScheduleTrigger;
 	at?: number;
+	expiresAt?: number;
+	timeZone?: string;
 	target?: ScheduleTarget;
 	recurrence?: ScheduleRecurrence;
 	paused?: boolean;
@@ -60,6 +77,8 @@ export interface SchedulePatch {
 	expectedRevision?: number;
 }
 export interface ScheduledItem {
+	/** Saved before enqueueing a scheduled input, then kept with its occurrence receipt. */
+	admission?: ScheduleInputAdmission;
 	id: string;
 	revision: number;
 	title: string;
@@ -67,11 +86,15 @@ export interface ScheduledItem {
 	/** Removed triggers are a non-executable tombstone on cancelled records. */
 	trigger: ScheduleTrigger | "removed";
 	at?: number;
+	expiresAt?: number;
+	timeZone?: string;
 	recurrence?: ScheduleRecurrence;
 	handledThrough?: number;
 	runs?: ScheduleRun[];
 	notice?: ScheduleRun;
 	paused?: true;
+	/** Host-bound coordinator check-in for one agreed brief, never a generic worker start. */
+	missionCheckIn?: { missionId: string; coordinatorSessionId: string; briefRevision: number; requestId: string };
 	target: ScheduleTarget;
 	state: ScheduleState;
 	createdAt: number;

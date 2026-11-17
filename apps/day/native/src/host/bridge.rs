@@ -329,6 +329,12 @@ async fn run(
     }
     if matches!(
         call.command,
+        Command::SchedulesRead(_) | Command::SchedulesWrite(_) | Command::SchedulesCheck(_)
+    ) {
+        return super::schedules::handle(root, journal, shared, &call.command, &call.gate).await;
+    }
+    if matches!(
+        call.command,
         Command::DiagnosisRead | Command::DiagnosisWrite(_) | Command::DiagnosisCheck(_)
     ) {
         return super::diagnosis::handle(root, journal, shared, &call.command, &call.gate).await;
@@ -838,6 +844,9 @@ async fn run(
         | Command::SlackCheck(_)
         | Command::SlackSetAside(_) => {
             unreachable!("handled Slack command")
+        }
+        Command::SchedulesRead(_) | Command::SchedulesWrite(_) | Command::SchedulesCheck(_) => {
+            unreachable!("handled schedule command")
         }
         Command::DiagnosisRead | Command::DiagnosisWrite(_) | Command::DiagnosisCheck(_) => {
             unreachable!("handled diagnosis command")

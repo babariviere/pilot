@@ -43,6 +43,29 @@ async function drain(sessions: SessionManager) {
 	}
 	assert.fail("flow did not settle");
 }
+test("native flow accounting is passive, keeps definitions/visits, and labels unfinished held work", async (t) => {
+	let enabled = true;
+	const f = await fixture(t, { automationsEnabled: () => enabled });
+	await f.projects.updateAutomations(f.project.id, { expectedRevision: 0, items: [], flows: [definition] });
+	const request = { requestId: randomUUID(), expectedRevision: 1, flowId: definition.id, message: "Fix deployment" };
+	const root = await f.sessions.startFlow(f.project.id, request);
+	await drain(f.sessions);
+	enabled = false;
+	const stored = await f.stored(root.id);
+	const inputs = f.workers.flatMap((w) => w.requests).length;
+	const row = f.sessions.automationHistory().items.find((r) => r.sessionId === root.id)!;
+	assert.equal(row.flowAccounting?.state, "held");
+	assert.equal(row.flowAccounting?.unfinishedVisits, 1);
+	assert.deepEqual(row.flow?.definition, definition);
+	assert.deepEqual(row.flow?.visits, stored.flow?.visits);
+	assert.equal(f.workers.flatMap((w) => w.requests).length, inputs);
+	assert.deepEqual((await f.stored(root.id)).flow, stored.flow);
+	row.flow!.definition.name = "Client edit";
+	assert.equal(
+		f.sessions.automationHistory().items.find((r) => r.sessionId === root.id)!.flow?.definition.name,
+		definition.name,
+	);
+});
 
 for (const final of ["approved", "changes_requested"])
 	test(`worker/reviewer loop ends on ${final}, reuses worker, and respects its limit`, async (t) => {

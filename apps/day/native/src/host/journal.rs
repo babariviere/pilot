@@ -375,6 +375,7 @@ impl Journal {
                             || prior.operation != record.operation
                             || prior.setup_digest != record.setup_digest
                             || prior.verification_pin != record.verification_pin
+                            || prior.schedule_predecessor != record.schedule_predecessor
                             || (prior.not_sent && !record.not_sent)
                             || (prior
                                 .receipt
@@ -588,6 +589,13 @@ impl Journal {
 
     pub fn save_planning(&mut self, record: PlanningRecord) -> Result<(), Error> {
         record.validate()?;
+        if self
+            .planning
+            .get(record.id())
+            .is_some_and(|old| old.schedule_predecessor != record.schedule_predecessor)
+        {
+            return Err(Error::Stale);
+        }
         if !self.planning.contains_key(record.id()) && self.count() >= MAX_OPERATIONS {
             return Err(Error::Storage);
         }

@@ -16,6 +16,7 @@ import {
 	goMission,
 	goNew,
 	goPlan,
+	goSchedules,
 	goSettings,
 	type Places,
 	shown,
@@ -83,6 +84,7 @@ function entries(places: Places): Entry[] {
 	place("linear", "Linear issues", !!day.linear, goLinear, { keywords: ["tickets", "cycle"], here: at === "linear" });
 	place("artifacts", "Artifacts", !!day.artifacts, goArtifacts, { here: at === "artifacts" });
 	place("feedback", "Feedback", !!day.feedback, goFeedback, { keywords: ["bug", "idea"], here: at === "feedback" });
+	place("schedules", "Schedules", !!day.schedules, goSchedules, { keywords: ["automation", "check-ins", "repair"] });
 	place("settings", "Settings", !!day.preferences, goSettings, {
 		keywords: ["preferences"],
 		shortcut: "mod+,",

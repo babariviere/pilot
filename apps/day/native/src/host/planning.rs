@@ -25,6 +25,10 @@ pub(super) struct PlanningRecord {
     pub setup_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_pin: Option<super::delivery::Pin>,
+    /// A saved schedule editor replaced by this intent. Denial-only local metadata,
+    /// never daemon authority or part of the submitted operation payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_predecessor: Option<String>,
     /// The user dismissed this unconfirmed record on New. Nothing was sent;
     /// it is no longer pending.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -47,6 +51,11 @@ impl PlanningRecord {
     }
     pub fn validate(&self) -> Result<(), Error> {
         let o = &self.operation;
+        if self.schedule_predecessor.as_ref().is_some_and(|id| {
+            o["kind"] != super::schedules::KIND || uuid::Uuid::parse_str(id).is_err()
+        }) {
+            return Err(Error::Storage);
+        }
         if self.version != 1
             || !valid_id(self.id())
             || !valid_id(self.mission())
@@ -75,6 +84,7 @@ impl PlanningRecord {
                         | "native-project-action"
                         | "user-verification"
                         | "project-preferences-update"
+                        | "schedule-controls"
                         | "diagnostics-controls"
                         | "model-controls"
                         | "connection-controls"
@@ -120,6 +130,9 @@ impl PlanningRecord {
         }
         if o["kind"] == super::preferences::KIND {
             super::preferences::validate_record(&self.source, o)?;
+        }
+        if o["kind"] == super::schedules::KIND {
+            super::schedules::validate_record(o)?;
         }
         if o["kind"] == super::diagnosis::KIND {
             super::diagnosis::validate_record(o)?;
@@ -222,6 +235,7 @@ fn record_pinned(
                     | "native-project-action"
                     | "user-verification"
                     | "project-preferences-update"
+                    | "schedule-controls"
                     | "diagnostics-controls"
                     | "model-controls"
                     | "connection-controls"
@@ -253,6 +267,7 @@ fn record_pinned(
                     | "native-project-action"
                     | "user-verification"
                     | "project-preferences-update"
+                    | "schedule-controls"
                     | "diagnostics-controls"
                     | "model-controls"
                     | "connection-controls"
@@ -283,6 +298,7 @@ fn record_pinned(
         not_sent: false,
         setup_digest: None,
         verification_pin,
+        schedule_predecessor: None,
         dismissed: false,
         operation: json!({"schemaVersion":1,"operationId":id,"producerId":uuid::Uuid::new_v4().to_string(),"sequence":1,
             "origin":home(source,"local"),"destination":home(source,"daemon"),"kind":request["purpose"],
@@ -428,6 +444,9 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
     if op["kind"] == super::preferences::KIND && r["state"] == "accepted" {
         super::preferences::exact_result(op, &r)?;
     }
+    if op["kind"] == super::schedules::KIND && r["state"] == "accepted" {
+        super::schedules::exact_result(op, &r)?;
+    }
     if op["kind"] == super::diagnosis::KIND && r["state"] == "accepted" {
         super::diagnosis::exact_result(op, &r)?;
     }
@@ -473,6 +492,7 @@ pub(super) fn enrollment_record(
         not_sent: false,
         setup_digest: Some(setup.into()),
         verification_pin: None,
+        schedule_predecessor: None,
         dismissed: false,
         operation: json!({"schemaVersion":1,"operationId":uuid::Uuid::new_v4().to_string(),
             "producerId":uuid::Uuid::new_v4().to_string(),"sequence":1,"origin":home(source,"local"),

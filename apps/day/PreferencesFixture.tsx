@@ -8,11 +8,12 @@ import { MockDayScreen, openDay } from "./mockFeeds";
 import { type PreferencesDemoNext, ScriptedPreferences } from "./preferencesDemo";
 import { mirrorPreferences } from "./preferencesFeed";
 import { preferencesDraft } from "./preferencesView";
+import { scriptedSchedules } from "./schedulesDemo";
 import { Action } from "./ui";
 import { captureView, restoreView, startFresh } from "./windowState";
 
 const preferences = new ScriptedPreferences();
-const day = { ...openDay(), preferences: mirrorPreferences(preferences) };
+const day = { ...openDay(), preferences: mirrorPreferences(preferences), schedules: scriptedSchedules().controls };
 
 const NEXT: PreferencesDemoNext[] = ["stale", "unknown", "reject"];
 

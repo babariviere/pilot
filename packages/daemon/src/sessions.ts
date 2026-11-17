@@ -103,7 +103,7 @@ import { DiagnosticLogReader, type DiagnosticLogReaderOptions } from "./diagnost
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { DiagnosticRepairProjectStore, diagnosticRepairTitle, repairHost } from "./diagnostic-repair-project.ts";
 import { discardDirectory } from "./discard-directory.ts";
-import { Conflict, NotFound, PublishedStartRefused, ServiceUnavailable } from "./errors.ts";
+import { Conflict, NotFound, PublishedStartRefused, ScheduleInputHeld, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import {
 	type FlowState,
@@ -169,6 +169,7 @@ import {
 import { RecoveryStops } from "./recovery-stops.ts";
 import { ReviewSnapshotStore } from "./review-snapshots.ts";
 import { type RunBoundary, type RunFinished, readRunFiles, runChangedFiles, runSnapshot } from "./run-finished.ts";
+import type { ScheduleInputGate } from "./schedules.ts";
 import { continuationAnswer, continuationHandoff, continuationQueuedInputs } from "./session-continuation.ts";
 import { readSessionDiagnostics } from "./session-diagnostics.ts";
 import {
@@ -227,7 +228,9 @@ import {
 
 export { NotFound } from "./errors.ts";
 
-type PendingCommand = Extract<KernelCommand, { type: "input" | "abort" | "pauseInputs" | "resumeInputs" }>;
+type PendingCommand = Extract<KernelCommand, { type: "input" | "abort" | "pauseInputs" | "resumeInputs" }> & {
+	scheduleEntry?: true;
+};
 type WorkerSpec = Extract<KernelCommand, { type: "start" }>["spec"];
 type MissionCallPacket = Extract<KernelPacket, { type: "mission.call" }>;
 
@@ -344,6 +347,7 @@ export class CommandRejected extends Error {
 
 /** Transport loss is uncertain admission, never an explicit durable rejection. */
 export class WorkerUnavailable extends Error {}
+/** A known pre-entry hold, not transport uncertainty. Keep the saved schedule input. */
 
 export interface WorkerOptions {
 	/** Startup channel check cadence. A connected, live worker is allowed to be slow. Defaults to two minutes. */
@@ -2780,6 +2784,180 @@ export class SessionManager {
 				);
 				if (current && input && this.flowInputAllowed(current, input.requestId)) void this.start(current.id);
 			}
+	}
+	private scheduleAdmission?: ScheduleInputGate;
+	/** Host-only scheduling fence. The saved request ID pins provenance across restart. */
+	setScheduleAdmission(gate: ScheduleInputGate): void {
+		this.scheduleAdmission = gate;
+	}
+	private async assertScheduledInput(id: string, requestId: string, content: string): Promise<void> {
+		if (!requestId.startsWith("schedule:")) return;
+		const state = this.scheduleAdmission?.check(id, requestId, content) ?? "held";
+		if (state === "ready") return;
+		if (state === "held") throw new ScheduleInputHeld("Scheduled input is held before admission");
+		await this.scheduleAdmission?.denied(id, requestId, state);
+		throw new CommandRejected(`Scheduled input ${state}; nothing replayed`, "stopped");
+	}
+	private assertScheduledInputNow(id: string, requestId: string, content: string): void {
+		if (!requestId.startsWith("schedule:")) return;
+		const state = this.scheduleAdmission?.check(id, requestId, content) ?? "held";
+		if (state === "held") throw new ScheduleInputHeld("Scheduled input is held before admission");
+		if (state !== "ready") throw new CommandRejected(`Scheduled input ${state}; nothing replayed`, "stopped");
+	}
+	private async scheduledHeadReady(meta: SessionMeta, rejected: Map<string, Error>): Promise<boolean> {
+		const command = meta.pending?.[0];
+		if (command?.type !== "input" || !command.requestId.startsWith("schedule:")) return true;
+		if (command.scheduleEntry) {
+			const at = this.scheduleAdmission?.acceptedAt(meta.id, command.requestId, command.content);
+			if (at !== undefined) {
+				await this.scheduleAdmission?.accepted(meta.id, command.requestId, at);
+				meta.pending = meta.pending?.filter((c) => c !== command);
+				delete meta.inputError;
+				delete meta.initializing;
+				await this.save(meta, undefined, undefined, true);
+				this.emit(meta);
+				return (!!meta.pending?.length || !!meta.working) && this.scheduledHeadReady(meta, rejected);
+			}
+			const message =
+				"Earlier scheduled input admission is unknown; nothing was resent. Inspect this chat or Stop it before replacing work.";
+			await this.scheduleAdmission?.denied(meta.id, command.requestId, "unknown");
+			meta.inputError = message;
+			delete meta.initializing;
+			await this.save(meta, undefined, undefined, true);
+			this.emit(meta);
+			rejected.set(command.requestId, new WorkerUnavailable(message));
+			return false;
+		}
+		try {
+			await this.assertScheduledInput(meta.id, command.requestId, command.content);
+			return true;
+		} catch (error) {
+			if (error instanceof ScheduleInputHeld) return false;
+			if (!(error instanceof CommandRejected)) throw error;
+			rejected.set(command.requestId, error);
+			meta.pending = meta.pending?.filter((c) => c !== command);
+			delete meta.initializing;
+			await this.save(meta, undefined, undefined, true);
+			this.emit(meta);
+			return !!meta.pending?.length && this.scheduledHeadReady(meta, rejected);
+		}
+	}
+	/** Policy events may resume an existing saved input, never mint another request ID. */
+	async resumeScheduled(): Promise<void> {
+		for (const meta of this.metas.values()) {
+			const command = meta.pending?.[0];
+			if (command?.type !== "input" || !command.requestId.startsWith("schedule:")) continue;
+			const state = this.scheduleAdmission?.check(meta.id, command.requestId, command.content) ?? "held";
+			if (state === "held") continue;
+			try {
+				const started = this.start(meta.id).catch(() => {});
+				if (state === "expired" || state === "invalid" || state === "stale_input") await started;
+			} catch {
+				/* Maintenance owns admission. */
+			}
+		}
+	}
+	pendingScheduled(): boolean {
+		for (const m of this.metas.values())
+			if (m.pending?.some((c) => c.type === "input" && !c.scheduleEntry && c.requestId.startsWith("schedule:")))
+				return true;
+		return false;
+	}
+	uncertainScheduled(id: string, requestId: string): boolean {
+		return this.metas.get(id)?.pending?.some((c) => c.requestId === requestId && c.scheduleEntry === true) ?? false;
+	}
+	async sendScheduled(id: string, message: string, requestId: string): Promise<void> {
+		try {
+			await this.sendDurable(id, message, "followUp", requestId, {
+				inputGeneration: this.require(id).inputGeneration ?? 0,
+				onlyIfIdle: requestId.split(":").length === 3,
+				admissionGuard: () => this.assertScheduledInputNow(id, requestId, message),
+			});
+		} catch (error) {
+			if (!(error instanceof ScheduleInputHeld) || !this.require(id).pending?.some((c) => c.requestId === requestId))
+				throw error;
+		}
+	}
+	async spawnScheduled(request: SpawnRequest, id: string, requestId: string): Promise<{ id: string }> {
+		let result: SessionSummary;
+		try {
+			result = await this.spawnDurable(
+				request,
+				id,
+				requestId,
+				() => this.assertScheduledInputNow(id, requestId, request.message),
+				undefined,
+				undefined,
+				"schedule",
+				true,
+				true,
+			);
+		} catch (error) {
+			if (!(error instanceof ScheduleInputHeld)) throw error;
+			// A hold after creation may keep the original durable input. Do not create a
+			// replacement chat or infer durability from an in-memory metadata row.
+			let saved: SessionMeta;
+			try {
+				saved = JSON.parse(await readFile(join(this.dir(id), "meta.json"), "utf8"));
+			} catch {
+				throw error;
+			}
+			if (
+				saved.createOperationId !== requestId ||
+				!saved.pending?.some((c) => c.type === "input" && c.requestId === requestId)
+			)
+				throw error;
+			return { id };
+		}
+		const rejected = await this.start(id, true);
+		if (rejected.has(requestId)) throw rejected.get(requestId);
+		if (this.require(id).failure) throw new Error(this.require(id).failure);
+		return { id: result.id };
+	}
+	/** Passive, paged automation evidence. Never wakes a worker or advances an old flow. */
+	automationHistory(page = 0) {
+		const rows = [...this.metas.values()].filter(
+			(m) => m.automation?.runs.length || m.automation?.followUps || m.flow || m.invalidFlow,
+		);
+		const accounting = (m: SessionMeta) => {
+			if (!m.flow) return undefined;
+			const flow = m.flow,
+				current = this.metas.get(flow.progress.sessionId);
+			const state = !flowActive(flow)
+				? flow.progress.state
+				: !current
+					? "unknown"
+					: !this.automationsEnabled() || this.runFinishedPaused(current)
+						? "held"
+						: this.workers.has(current.id) && (current.working || this.backgroundWorking(current))
+							? "working"
+							: ["stopped", "failed"].includes(current.outcome ?? "")
+								? "interrupted"
+								: "waiting_for_existing_owner";
+			return {
+				state,
+				currentSessionId: flow.progress.sessionId,
+				unfinishedVisits: flow.visits.filter((v) => !v.outcome).length,
+				source: "saved_flow_and_current_owner",
+			};
+		};
+		return {
+			more: rows.length > (page + 1) * 20,
+			items: structuredClone(
+				rows.slice(page * 20, (page + 1) * 20).map((m) => ({
+					sessionId: m.id,
+					title: m.title,
+					projectId: m.projectId,
+					attempts: m.automation?.followUps?.attempts ?? 0,
+					attention: m.automation?.attention?.detail,
+					stopped: !!m.automation?.stopped,
+					runs: m.automation?.runs.slice(-10),
+					flow: m.flow,
+					flowAccounting: accounting(m),
+					invalidFlow: m.invalidFlow ? true : undefined,
+				})),
+			),
+		};
 	}
 
 	private flowRoot(meta: SessionMeta): SessionMeta | undefined {
@@ -10084,6 +10262,7 @@ ${run.excerpt}`,
 								requestId: admission?.operationId ?? randomUUID(),
 								content: request.message,
 								mode: "followUp",
+								...(job === "schedule" ? { inputGeneration: 0 } : {}),
 							},
 						],
 			createdAt: now,
@@ -10612,6 +10791,7 @@ ${run.excerpt}`,
 		operationId: string,
 		options: {
 			resumeHeld?: boolean;
+			onlyIfIdle?: boolean;
 			explicitModelRecovery?: boolean;
 			trace?: TraceCarrier;
 			event?: import("@pilot/protocol").ChatEventSummary;
@@ -10640,6 +10820,7 @@ ${run.excerpt}`,
 				options.inputGeneration,
 				options.admissionGuard,
 				options.interviewReply,
+				options.onlyIfIdle,
 			);
 		} finally {
 			end();
@@ -10662,6 +10843,7 @@ ${run.excerpt}`,
 		inputGeneration?: number,
 		admissionGuard?: () => void,
 		interviewReply?: import("@pilot/protocol").StandaloneInterviewReply,
+		onlyIfIdle = false,
 	): Promise<void> {
 		const meta = this.require(id);
 		this.assertSlackReply(id, requestId);
@@ -10795,6 +10977,7 @@ ${run.excerpt}`,
 					requestId,
 					content: message,
 					mode,
+					...(onlyIfIdle ? { onlyIfIdle: true } : {}),
 					...(report ? { reportDelivery: true } : {}),
 					...(resumeHeld ? { resumeHeld: true } : {}),
 					...(answerQuestionId !== undefined ? { answerQuestionId } : {}),
@@ -11293,6 +11476,7 @@ ${run.excerpt}`,
 		let settled = false;
 		try {
 			await this.captureRunBoundary(this.require(id), command.requestId);
+			this.assertScheduledInputNow(id, command.requestId, command.content);
 			if (this.closing || this.sleepPause) throw new WorkerUnavailable("Input admission paused");
 			if (
 				command.requestId.startsWith("automation:flow:") &&
@@ -11328,17 +11512,51 @@ ${run.excerpt}`,
 				insights.revalidate();
 				assertReview();
 			}
+			if (command.requestId.startsWith("schedule:")) {
+				// A crash after this write is Unknown, even if IPC was not entered yet.
+				// Never redispatch this input automatically on a later policy event.
+				command.scheduleEntry = true;
+				await this.save(meta, undefined, undefined, true);
+			}
+			if (command.requestId.startsWith("schedule:") && meta.pending?.[0] !== command)
+				throw new CommandRejected("Scheduled input withdrawn before entry", "stopped");
+			if (
+				command.requestId.startsWith("schedule:") &&
+				command.inputGeneration !== undefined &&
+				command.inputGeneration !== (meta.inputGeneration ?? 0)
+			)
+				throw new CommandRejected("Scheduled input stopped before admission", "stopped");
 			const dedupeOnly =
 				command.inputGeneration !== undefined && command.inputGeneration !== (meta.inputGeneration ?? 0);
 			this.assertMissionWorkOpen(id);
 			this.assertSlackReply(id, command.requestId);
 			const slackReply = this.slackReplyGuards.get(command.requestId);
 			if (slackReply) slackReply.attempted = true;
-			await worker.request({ ...command, ...(trace ? { trace } : {}), ...(dedupeOnly ? { dedupeOnly: true } : {}) });
+			this.assertScheduledInputNow(id, command.requestId, command.content);
+			const outgoing = { ...command };
+			delete outgoing.scheduleEntry;
+			const entryAt = this.scheduleAdmission?.now() ?? Date.now();
+			await worker.request({
+				...outgoing,
+				...(trace ? { trace } : {}),
+				...(dedupeOnly ? { dedupeOnly: true } : {}),
+			});
 			if (slackReply) slackReply.delivered = !dedupeOnly;
 			settled = true;
+			if (command.requestId.startsWith("schedule:"))
+				await this.scheduleAdmission?.accepted(id, command.requestId, entryAt);
 		} catch (error) {
-			settled = error instanceof CommandRejected;
+			settled = error instanceof CommandRejected || error instanceof ScheduleInputHeld;
+			const meta = this.require(id);
+			if (
+				settled &&
+				command.requestId.startsWith("schedule:") &&
+				(command.scheduleEntry || meta.automation?.boundary?.id === command.requestId)
+			) {
+				delete command.scheduleEntry;
+				if (meta.automation?.boundary?.id === command.requestId) delete meta.automation.boundary;
+				await this.save(meta, undefined, undefined, true);
+			}
 			throw error;
 		} finally {
 			if (settled) {
@@ -13082,6 +13300,7 @@ ${run.excerpt}`,
 				}
 				for (const command of meta.pending ?? [])
 					if (command.type === "input") this.assertSlackReply(id, command.requestId);
+				if (!(await this.scheduledHeadReady(meta, rejected))) return;
 				this.validateMode(meta);
 				if (meta.preparing) {
 					const plan = meta.preparing;
@@ -13185,6 +13404,7 @@ ${run.excerpt}`,
 				if (this.globalUpdatePreparing) return;
 				for (const command of meta.pending ?? [])
 					if (command.type === "input") this.assertSlackReply(id, command.requestId);
+				if (!(await this.scheduledHeadReady(meta, rejected))) return;
 				const worker = await this.ensureWorker(id);
 				await worker.ready;
 				this.missionResumeGuards.get(id)?.();
@@ -13236,7 +13456,8 @@ ${run.excerpt}`,
 									: command.requestId.startsWith("automation:")
 										? !this.automationsEnabled() ||
 											meta.automation?.followUps?.requestId !== command.requestId
-										: !command.requestId.startsWith("insights-review:") &&
+										: !command.requestId.startsWith("schedule:") &&
+											!command.requestId.startsWith("insights-review:") &&
 											meta.prFollowUp?.requestId !== command.requestId) ||
 								meta.pending.some((pending) => pending !== command))
 						) {
@@ -13287,6 +13508,21 @@ ${run.excerpt}`,
 							if (command.type === "input") delete meta.inputError;
 						} catch (error) {
 							if (this.closing || this.sleepPause) return;
+							if (error instanceof ScheduleInputHeld) {
+								delete meta.inputError;
+								await this.save(meta, undefined, undefined, true);
+								this.emit(meta);
+								return;
+							}
+							if (
+								error instanceof CommandRejected &&
+								command.type === "input" &&
+								command.requestId.startsWith("schedule:")
+							) {
+								const state = this.scheduleAdmission?.check(id, command.requestId, command.content);
+								if (state === "invalid" || state === "expired" || state === "stale_input")
+									await this.scheduleAdmission?.denied(id, command.requestId, state);
+							}
 							const failure = error instanceof Error ? error : new Error(String(error));
 							rejected.set(command.requestId, failure);
 							if (

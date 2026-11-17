@@ -1747,6 +1747,8 @@ export interface DashboardScheduledItem {
 	state: "pending" | "failed" | "dispatching";
 	recurrence?: import("./schedules.ts").ScheduleRecurrence;
 	paused?: true;
+	/** Effective mission, host or global hold, observed without starting work. */
+	held?: true;
 	notice?: import("./schedules.ts").ScheduleRun;
 	/** Why it could not start. */
 	error?: string;

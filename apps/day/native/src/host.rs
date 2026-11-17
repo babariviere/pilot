@@ -35,6 +35,7 @@ pub(crate) mod preferences;
 pub(crate) mod projects;
 pub(crate) mod result_review;
 pub mod ritual;
+pub(crate) mod schedules;
 mod session_chat;
 pub(crate) mod slack_controls;
 pub(crate) mod threads;
@@ -136,6 +137,7 @@ struct Shared {
     feedback: Mutex<Option<Result<serde_json::Value, Error>>>,
     saved_window: Mutex<Option<window::SavedWindow>>,
     chat_choice: Mutex<Option<crate::new_chat::ChatChoice>>,
+    schedule_choice: Mutex<Option<String>>,
     updates: Mutex<crate::update::ServiceView>,
     // Held by the root after the worker joins, through process exit. Dropping
     // a COMMIT-uncertain controller never grants a second launch or send.
@@ -469,6 +471,7 @@ impl NativeHost {
             feedback: Mutex::new(None),
             saved_window: Mutex::new(None),
             chat_choice: Mutex::new(None),
+            schedule_choice: Mutex::new(None),
             updates: Mutex::new(updates::State::new(None).snapshot()),
             app_controller: Mutex::new(None),
             startup_ready: AtomicBool::new(false),

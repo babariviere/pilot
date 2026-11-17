@@ -41,7 +41,9 @@ import {
 	revisionQuote,
 	sourceLine,
 } from "./preferencesView";
+import { SchedulesScreen } from "./SchedulesScreen";
 import { SlackSettings } from "./SlackSettings";
+import { schedulesOpen } from "./scheduleDraft";
 import { Action, ExpandableRow, glide, Notice, Page, PageTitle, SectionTitle, TextField } from "./ui";
 
 /** The new row that takes the keyboard focus once. */
@@ -515,7 +517,10 @@ function History(props: { mirror: PreferencesMirror }) {
 export function SettingsScreen(props: { day: Day }) {
 	const mirror = props.day.preferences as PreferencesMirror;
 	void mirror.source.read();
-	keymap.bind("escape", closeSettings);
+	keymap.bind("escape", () => {
+		if (schedulesOpen()) schedulesOpen.set(false);
+		else closeSettings();
+	});
 	const scroll = keepScroll("settings");
 	// A restored offset waits for the rows it scrolled through.
 	let waiting = scroll.contentOffset.y > 0 ? scroll.contentOffset.y : null;
@@ -528,30 +533,46 @@ export function SettingsScreen(props: { day: Day }) {
 		node.scrollTo({ y, animated: false });
 	});
 	return (
-		<Scroll
-			ref={(node) => scroller.set(node)}
-			class="flex-1 bg-background"
-			contentOffset={scroll.contentOffset}
-			scrollEventThrottle={100}
-			onScroll={(e) => {
-				if (waiting === null) scroll.onScroll(e);
-			}}
+		<If
+			when={schedulesOpen() && props.day.schedules}
+			else={
+				<Scroll
+					ref={(node) => scroller.set(node)}
+					class="flex-1 bg-background"
+					contentOffset={scroll.contentOffset}
+					scrollEventThrottle={100}
+					onScroll={(e) => {
+						if (waiting === null) scroll.onScroll(e);
+					}}
+				>
+					<Page testID="settings" gap={10}>
+						<PageTitle title="Settings" />
+						<If when={props.day.schedules}>
+							<View class="flex-row">
+								<Action
+									label="Schedules…"
+									testID="settings-schedules"
+									onPress={() => schedulesOpen.set(true)}
+								/>
+							</View>
+						</If>
+						<If when={props.day.models}>{(controls) => <ModelSettingsSection controls={controls()} />}</If>
+						<If when={props.day.connections}>{(controls) => <ConnectionSettings controls={controls()} />}</If>
+						<If when={props.day.databases}>{(controls) => <DatabaseSettings controls={controls()} />}</If>
+						<If when={props.day.slack}>{(controls) => <SlackSettings controls={controls()} />}</If>
+						<If when={props.day.diagnosis}>{(controls) => <DiagnosisSettings controls={controls()} />}</If>
+						<Preferences mirror={mirror} />
+						<KnowledgeSection projectId={mirror.view().projectId} />
+						<ProjectsSection />
+						<History mirror={mirror} />
+						<Text class="border-t border-border pt-5 text-xs text-faint">
+							Preferences are what you chose. Pilot's approvals, Stop and spending limits still apply.
+						</Text>
+					</Page>
+				</Scroll>
+			}
 		>
-			<Page testID="settings" gap={10}>
-				<PageTitle title="Settings" />
-				<If when={props.day.models}>{(controls) => <ModelSettingsSection controls={controls()} />}</If>
-				<If when={props.day.connections}>{(controls) => <ConnectionSettings controls={controls()} />}</If>
-				<If when={props.day.databases}>{(controls) => <DatabaseSettings controls={controls()} />}</If>
-				<If when={props.day.slack}>{(controls) => <SlackSettings controls={controls()} />}</If>
-				<If when={props.day.diagnosis}>{(controls) => <DiagnosisSettings controls={controls()} />}</If>
-				<Preferences mirror={mirror} />
-				<KnowledgeSection projectId={mirror.view().projectId} />
-				<ProjectsSection />
-				<History mirror={mirror} />
-				<Text class="border-t border-border pt-5 text-xs text-faint">
-					Preferences are what you chose. Pilot's approvals, Stop and spending limits still apply.
-				</Text>
-			</Page>
-		</Scroll>
+			<SchedulesScreen controls={props.day.schedules!} />
+		</If>
 	);
 }

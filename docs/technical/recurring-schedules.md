@@ -94,8 +94,9 @@ export interface ScheduledItem {
 - A recurring row stays `pending` while active. `dispatching` is the claim for one occurrence, after which the
   row returns to `pending` with the next `at`. Delete cancels it like a one-shot item (`cancelled`).
 - `handledThrough` is the durable "last occurrence handled". Creation sets it to the creation time, so a new
-  rule never catches up times before it existed. An edit to `recurrence` sets it to the edit time. Resume after
-  pause sets it to the resume time: paused time is not caught up.
+  rule never catches up times before it existed. A changed `recurrence` sets it to the edit time. Resume keeps
+  the cursor: only the latest still-relevant overdue occurrence can run. Saving an unchanged recurrence does not
+  reset the cursor or shift the next scheduled time.
 - Recurring chat targets need a `projectId` (no `cwd`-only, `missionId` or `trackedItemId` targets). Message
   targets keep the target chat's project, as today.
 - Limits: at most 50 active recurring rules per host, inside the store's existing 1,000-row and payload limits.

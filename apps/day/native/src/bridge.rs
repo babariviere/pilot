@@ -37,6 +37,9 @@ pub const METHODS: &[&str] = &[
     "day.knowledge.read",
     "day.knowledge.save",
     "day.knowledge.check",
+    "day.schedules.read",
+    "day.schedules.write",
+    "day.schedules.check",
     "day.diagnosis.read",
     "day.diagnosis.write",
     "day.diagnosis.check",
@@ -279,6 +282,9 @@ pub(crate) enum Command {
     KnowledgeRead(crate::host::knowledge::Read),
     KnowledgeSave(crate::host::knowledge::Edit),
     KnowledgeCheck(String),
+    SchedulesRead(crate::host::schedules::Read),
+    SchedulesWrite(crate::host::schedules::Intent),
+    SchedulesCheck(String),
     DiagnosisRead,
     DiagnosisWrite(crate::host::diagnosis::Intent),
     DiagnosisCheck(String),
@@ -629,6 +635,26 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 return Err(Error::Invalid);
             }
             C::PreferencesRead
+        }
+        "day.schedules.read" => {
+            let r: crate::host::schedules::Read = exact(args)?;
+            r.validate()?;
+            C::SchedulesRead(r)
+        }
+        "day.schedules.write" => {
+            let r: crate::host::schedules::Intent = exact(args)?;
+            r.validate()?;
+            C::SchedulesWrite(r)
+        }
+        "day.schedules.check" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Lookup {
+                operation_id: String,
+            }
+            let r: Lookup = exact(args)?;
+            mission(&r.operation_id)?;
+            C::SchedulesCheck(r.operation_id)
         }
         "day.diagnosis.read" => {
             if args != json!({}) {
@@ -1330,6 +1356,7 @@ impl Command {
                     | Self::LinearRead
                     | Self::PreferencesRead
                     | Self::KnowledgeRead(_)
+                    | Self::SchedulesRead(_)
                     | Self::DiagnosisRead
                     | Self::ModelsRead
                     | Self::ConnectionsRead

@@ -21,6 +21,8 @@ settings, not committed to the repository.
 
 Checks and todo continuation share a three-message automatic follow-up limit.
 No progress or an exhausted limit raises **Needs you**. A user message resets it.
+In Day, **Settings → Schedules…** shows saved results, repair attempts and earlier
+flow accounting. Opening it does not execute hooks or transfer old flows.
 
 Hook results appear in the chat timeline and on the Automations page. **Stop**
 cancels setup/checks and holds queued automatic inputs. Disabling automations

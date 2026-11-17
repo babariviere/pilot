@@ -35,6 +35,7 @@ const MEMBER_ACTIONS = [
 ] as const;
 export const MISSION_ACTIONS = [
 	...MEMBER_ACTIONS,
+	"checkIn",
 	"complete",
 	"revision-source",
 	"revision-propose",
@@ -128,6 +129,7 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 - archiveWorker / restoreWorker (coordinator only): targetSessionId in this mission/project. First establish that assigned work is delivered or explicitly resolved (tasks done/dropped); idle is not completion. Refuses unfinished assignments, assistance, queued inputs and live work. Archive preserves the workspace from automatic pruning/reclamation, history and artifacts; it does not approve completion or authorize deletion. Restore is passive; send/start a separately authorized follow-up explicitly. Repeats are harmless; returns committed archivedAt (null when restored). status includes archived workers. User archive/cleanup controls remain separate.
 - requestReview / retireReview (coordinator only): request supplies an exact optional retained-change suggestion or retires your own suggestion. Same-mission/project member custody only. Never requires human approval, resolves threads or waives gates. Reuse operationId and exact payload after a lost reply; retry returns the original effect, not current state.
 - status (coordinator only): summarize members: state, outcome, branch, compact PR states, tasks and finishedWithoutPR (idle claimed work lacking open/draft/merged PR). targetSessionId returns one member plus lastAssistantReply (1500 chars) and pendingQuestion (questionId, question, context/options, or null). Never starts workers. Status/start return chatUrl (pilot://chat/<id>); use [chat name](chatUrl) when referencing a chat to the user. They also include cached read-only subscriptionUsage per provider (window percent/reset; stale or unknown labelled).
+- checkIn (coordinator only): schedule.operation list, save or cancel, only your agreed mission check-ins. Save needs a stable requestId, expectedBriefRevision and message, with at (epoch milliseconds, optional expiresAt) or recurrence. Exact requestId retries reuse the saved definition; changed content needs a new requestId. Cancel names id and expectedRevision. To replace, cancel the old check-in before saving a new one. Holds delay starts; changed agreement/coordinator invalidates them. Never schedule worker starts or widen agreed scope.
 - bindPr (coordinator only): bind url to targetSessionId, optional taskId to disambiguate. Transfers sole PR-head ownership and unfinished ownership links. Returns {changed, previousOwner, taskLinkRemoved}; references never grant ownership.
 - unbindPr (coordinator only): detach url from targetSessionId, stopping tracking/pushes/follow-ups and removing unfinished ownership links. References/branches stay. Returns {changed, previousOwner, taskLinkRemoved}.`
 				: ""
@@ -137,6 +139,33 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 		annotations: { openWorldHint: false, destructiveHint: coordinator },
 		parameters: Type.Object({
 			action: StringEnum(coordinator ? MISSION_ACTIONS : MEMBER_ACTIONS),
+			...(coordinator
+				? {
+						schedule: Type.Optional(
+							Type.Object({
+								operation: StringEnum(["list", "save", "cancel"] as const),
+								id: Type.Optional(Type.String({ maxLength: 128 })),
+								requestId: Type.Optional(Type.String({ maxLength: 128 })),
+								expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
+								expectedBriefRevision: Type.Optional(Type.Integer({ minimum: 0 })),
+								title: Type.Optional(Type.String({ maxLength: 200 })),
+								message: Type.Optional(Type.String({ maxLength: 8000 })),
+								at: Type.Optional(Type.Number()),
+								expiresAt: Type.Optional(Type.Number()),
+								recurrence: Type.Optional(
+									Type.Object({
+										every: StringEnum(["day", "week", "month"] as const),
+										time: Type.String(),
+										timeZone: Type.String(),
+										weekday: Type.Optional(Type.Integer()),
+										weekdays: Type.Optional(Type.Array(Type.Integer())),
+										dayOfMonth: Type.Optional(Type.Integer()),
+									}),
+								),
+							}),
+						),
+					}
+				: {}),
 			...(coordinator
 				? {
 						source: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),

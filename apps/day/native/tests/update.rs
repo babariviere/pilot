@@ -43,6 +43,7 @@ fn view() -> SavedView {
         today_project: "project".into(),
         model_settings: String::new(),
         diagnosis: String::new(),
+        schedule_settings: String::new(),
         connection_settings: String::new(),
         slack_settings: String::new(),
         database_settings: String::new(),
@@ -216,6 +217,19 @@ fn slack_draft_round_trips_and_legacy_windows_default_empty() {
     json.as_object_mut().unwrap().remove("slackSettings");
     let old: SavedView = nsh_core::element::from_json(&json).unwrap();
     assert!(old.slack_settings.is_empty());
+}
+
+#[test]
+fn schedule_drafts_round_trip_and_old_windows_default_empty() {
+    let mut original = view();
+    original.schedule_settings = r#"{"open":true,"draft":{"message":"Check deployment"}}"#.into();
+    let mut json = serde_json::to_value(&original).unwrap();
+    let restored: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert_eq!(restored.schedule_settings, original.schedule_settings);
+    assert!(restored.text_bytes() >= restored.schedule_settings.len());
+    json.as_object_mut().unwrap().remove("scheduleSettings");
+    let old: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert!(old.schedule_settings.is_empty());
 }
 
 #[test]

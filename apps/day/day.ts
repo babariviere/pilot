@@ -14,6 +14,7 @@ import type { LinearMirror } from "./linearFeed";
 import type { ModelControls } from "./modelControls";
 import type { PowerControls } from "./power";
 import type { PreferencesMirror } from "./preferencesFeed";
+import type { ScheduleControls } from "./scheduleControls";
 import type { SessionChatMirror } from "./sessionChat";
 import type { SlackControls } from "./slackControls";
 import type { ThreadsMirror } from "./threadFeed";
@@ -25,6 +26,7 @@ export type Day = {
 	/** Native AI settings; absent from mock worlds unless explicitly supplied. */
 	models?: ModelControls;
 	diagnosis?: DiagnosisControls;
+	schedules?: ScheduleControls;
 	connections?: ConnectionControls;
 	databases?: DatabaseControls;
 	slack?: SlackControls;

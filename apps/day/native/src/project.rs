@@ -18,6 +18,55 @@ use crate::{
 /// One minute, in epoch milliseconds.
 pub const MINUTE: u64 = 60_000;
 
+/// A quiet preview only. Hold labels are host facts, never permission to resume.
+pub fn scheduled(overview: &c::DayOverview, now: u64) -> Vec<crate::model::Scheduled> {
+    let Some(section) = &overview.dashboard.scheduled else {
+        return Vec::new();
+    };
+    let mut rows: Vec<_> = section
+        .items
+        .iter()
+        .filter(|r| r.state == "pending")
+        .collect();
+    rows.sort_by_key(|r| r.at.unwrap_or(u64::MAX));
+    let mut result: Vec<_> = rows
+        .into_iter()
+        .take(5)
+        .map(|r| crate::model::Scheduled {
+            id: r.id.clone(),
+            text: r.title.clone(),
+            at: r.at,
+            when: r.at.map_or_else(
+                || "Time unavailable".into(),
+                |at| {
+                    if at <= now {
+                        "Overdue".into()
+                    } else {
+                        format!("in {} min", (at - now).div_ceil(MINUTE))
+                    }
+                },
+            ),
+            note: if r.paused == Some(true) {
+                Some("Paused by you".into())
+            } else if r.held == Some(true) {
+                Some("Held".into())
+            } else {
+                None
+            },
+        })
+        .collect();
+    if section.total as usize != section.items.len() {
+        result.push(crate::model::Scheduled {
+            id: "schedule-coverage".into(),
+            text: "Schedule coverage is incomplete".into(),
+            when: String::new(),
+            note: Some("Open Schedules to read the saved definitions.".into()),
+            at: None,
+        });
+    }
+    result
+}
+
 /// How long ago `then` was at `now`, as the user reads it.
 pub fn ago(now: u64, then: u64) -> String {
     let minutes = now.saturating_sub(then) / MINUTE;
@@ -1506,6 +1555,50 @@ mod tests {
         assert!(state.contains("Checks failed: unit, native, last checked 59 min ago"));
         assert!(!state.contains("released"));
         assert_eq!(pull_request_state(None, 0), "Pilot has not checked it yet");
+    }
+
+    #[test]
+    fn scheduled_preview_uses_host_holds_orders_due_work_and_discloses_partial_reads() {
+        let mut overview = crate::fixture::world(crate::model::Scenario::Decisions)
+            .overview
+            .unwrap();
+        overview.dashboard.scheduled = Some(c::Section {
+            total: 4,
+            items: vec![
+                c::ScheduleSummary {
+                    id: "future".into(),
+                    title: "Check launch".into(),
+                    at: Some(180_000),
+                    state: "pending".into(),
+                    held: Some(true),
+                    ..Default::default()
+                },
+                c::ScheduleSummary {
+                    id: "overdue".into(),
+                    title: "Check deployment".into(),
+                    at: Some(30_000),
+                    state: "pending".into(),
+                    paused: Some(true),
+                    ..Default::default()
+                },
+                c::ScheduleSummary {
+                    id: "failure".into(),
+                    title: "Failed schedule".into(),
+                    state: "failed".into(),
+                    ..Default::default()
+                },
+            ],
+        });
+        let rows = scheduled(&overview, 60_000);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].id, "overdue");
+        assert_eq!(rows[0].when, "Overdue");
+        assert_eq!(rows[0].note.as_deref(), Some("Paused by you"));
+        assert_eq!(rows[1].note.as_deref(), Some("Held"));
+        assert_eq!(rows[2].id, "schedule-coverage");
+        let mut desk = crate::desk::Desk::native();
+        desk.native_read(overview, Vec::new());
+        assert_eq!(desk.today().coming_up[0].id, "overdue");
     }
 
     #[test]

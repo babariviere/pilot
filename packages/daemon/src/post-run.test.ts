@@ -111,6 +111,17 @@ test("matching checks aggregate one durable follow-up; next unchanged run stops 
 	assert.equal(f.sessions.get(f.chat.id)?.attentionReason?.kind, "automation");
 	assert.match(f.sessions.get(f.chat.id)?.attentionReason?.detail ?? "", /no matching changes/);
 });
+test("unconditional failing checks stop after an unchanged repair instead of consuming all three attempts", async (t) => {
+	const hook = check("lint");
+	delete hook.when;
+	const f = await setup(t, [hook]);
+	await f.change("first edit");
+	await f.finish();
+	assert.equal(f.inputs().length, 1);
+	await f.finish();
+	assert.equal(f.inputs().length, 1);
+	assert.match(f.sessions.get(f.chat.id)?.attentionReason?.detail ?? "", /no matching changes/);
+});
 
 test("three changed retries exhaust the shared limit; one user request resets it once", async (t) => {
 	const f = await setup(t);

@@ -45,6 +45,7 @@ import { restoreProjectSetup, savedProjectSetup } from "./projectSetup";
 import { restoreQuestionHelp, savedQuestionHelp } from "./QuestionHelp";
 import { restoreRecoveryNotes, savedRecoveryNotes } from "./recoveryDraft";
 import { captureRitualView, resetRitualView, restoreRitualView, ritualRoute } from "./ritualView";
+import { restoreSchedules, savedSchedules } from "./scheduleDraft";
 import { restoreSlackDraft, savedSlackDraft } from "./slackDraft";
 import { captureThreadView, forgetThreads, restoreThreadView, threadRoute } from "./threadView";
 import { restoreTodayScope, todayProject } from "./todayScope";
@@ -122,6 +123,7 @@ export function captureView(today?: Today): SavedView {
 		projectSetup: savedProjectSetup(),
 		modelSettings: savedModelDraft(),
 		diagnosis: savedDiagnosis(),
+		scheduleSettings: savedSchedules(),
 		connectionSettings: savedConnectionDraft(),
 		slackSettings: savedSlackDraft(),
 		databaseSettings: savedDatabaseDraft(),
@@ -201,6 +203,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	restoreProjectSetup(view.projectSetup ?? []);
 	restoreModelDraft(view.modelSettings ?? "");
 	restoreDiagnosis(view.diagnosis ?? "");
+	restoreSchedules(view.scheduleSettings ?? "");
 	restoreConnectionDraft(view.connectionSettings ?? "");
 	restoreSlackDraft(view.slackSettings ?? "");
 	restoreDatabaseDraft(view.databaseSettings ?? "");

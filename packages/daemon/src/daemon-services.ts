@@ -53,6 +53,7 @@ import { optionalReviewRequests, retainedFeedbackReader } from "./review-request
 import { ReviewStore } from "./reviews.ts";
 import type { RuntimeContributor } from "./runtime-admission.ts";
 import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
+import { SCHEDULE_CONTROLS, ScheduleControls } from "./schedule-controls.ts";
 import type { ScheduleService } from "./schedules.ts";
 import { CommandRejected, type SessionManager } from "./sessions.ts";
 import type { SetupService } from "./setup.ts";
@@ -668,6 +669,9 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 				})
 			: undefined;
 	const connectionControls = new ConnectionControls(mcpSetup, mcp, _config.mcpSetupReadOnly);
+	const scheduleControls =
+		schedules && journal ? new ScheduleControls(schedules, sessions, projects, journal.destination) : undefined;
+	if (schedules) missions?.service.setSchedules?.(schedules);
 	const slackControls = tracking ? new SlackControls(projects, tracking) : undefined;
 	const databaseControls = new DatabaseControls(sessions);
 	const modelControls = new ModelControls(models, projects, setup, sessions, _config.modelScopeReadOnly);
@@ -700,6 +704,7 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		if (op.kind === SLACK_CONTROLS) throw new Error("Slack outcome unknown; lookup only");
 		if (op.kind === DATABASE_CONTROLS) throw new Error("Database outcome unknown; lookup only");
 		if (op.kind === DIAGNOSTICS_CONTROLS) throw new Error("Diagnostics outcome unknown; lookup only");
+		if (op.kind === SCHEDULE_CONTROLS) throw new Error("Schedule outcome unknown; lookup only");
 		if (op.kind === MODEL_CONTROLS) throw new Error("Model settings outcome unknown; lookup only");
 		if (isThreadOperation(op.kind)) {
 			if (!missionThreads) throw new Error("Topic lookup unavailable");
@@ -913,6 +918,7 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		databaseControls,
 		modelControls,
 		diagnosticsControls,
+		scheduleControls,
 		close,
 	};
 }

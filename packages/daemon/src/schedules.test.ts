@@ -84,8 +84,11 @@ async function fixture(t: TestContext, initialOnline = false) {
 		requestId?: string;
 		mode?: string;
 	}> = [];
-	const chats = new Map<string, { projectId: string; missionId?: string }>([["existing", { projectId: "p" }]]);
+	const chats = new Map<string, { projectId: string; missionId?: string; activeMissionCoordinator?: boolean }>([
+		["existing", { projectId: "p" }],
+	]);
 	let failure: Error | undefined;
+	let enabled = true;
 	const sessions = {
 		get: (id: string) => chats.get(id),
 		spawn: async (spawn: SpawnRequest) => {
@@ -99,6 +102,7 @@ async function fixture(t: TestContext, initialOnline = false) {
 		},
 	};
 	const deps = {
+		automationsEnabled: () => enabled,
 		missions,
 		trackedItems,
 		clock,
@@ -125,6 +129,9 @@ async function fixture(t: TestContext, initialOnline = false) {
 		await rm(home, { recursive: true, force: true });
 	});
 	return {
+		enable: (value: boolean) => {
+			enabled = value;
+		},
 		missions,
 		clock,
 		triggers,
@@ -160,6 +167,223 @@ async function fixture(t: TestContext, initialOnline = false) {
 		},
 	};
 }
+test("automation off holds overdue one-shots until enabled without consuming their claim", async (t) => {
+	const f = await fixture(t, true);
+	f.enable(false);
+	const row = await f.service.create({
+		trigger: "at",
+		at: 2000,
+		target: { kind: "message", sessionId: "existing", message: "Check progress" },
+	});
+	f.clock.advance(5000);
+	await f.settle();
+	assert.equal(f.calls.length, 0);
+	assert.equal(f.service.require(row.id).state, "pending");
+	f.enable(true);
+	await f.settle();
+	assert.equal(f.calls.length, 1);
+	assert.equal(f.service.require(row.id).state, "fired");
+});
+test("ordinary recurring input held during claim keeps its occurrence for resume", async (t) => {
+	const f = await fixture(t, true),
+		home = { daemonId: "d", lineageId: "l" };
+	Object.assign(f.deps, { home });
+	f.clock.time = Date.UTC(2026, 10, 18, 9);
+	const row = await f.service.create({
+		trigger: "recurring",
+		expectedHome: home,
+		recurrence: { every: "day", time: "09:01", timeZone: "UTC" },
+		target: { kind: "message", sessionId: "existing", message: "Check work" },
+	});
+	await f.settle();
+	const before = f.service.require(row.id).handledThrough,
+		replace = f.store.replace.bind(f.store);
+	let once = true;
+	t.mock.method(f.store, "replace", async (...args: Parameters<typeof replace>) => {
+		const saved = await replace(...args);
+		if (once && args[1].state === "dispatching") {
+			once = false;
+			f.enable(false);
+		}
+		return saved;
+	});
+	f.clock.advance(row.at! - f.clock.now());
+	await f.settle();
+	assert.equal(f.calls.length, 0);
+	assert.equal(f.service.require(row.id).handledThrough, before);
+	assert.equal(f.service.require(row.id).state, "pending");
+	f.enable(true);
+	await f.settle();
+	assert.equal(f.calls.length, 1);
+});
+test("one-shot expiry is durable while automation is off and never dispatches after resume", async (t) => {
+	const f = await fixture(t, true);
+	f.enable(false);
+	const row = await f.service.create({
+		trigger: "at",
+		at: 2000,
+		expiresAt: 3000,
+		target: { kind: "message", sessionId: "existing", message: "Check progress" },
+	});
+	f.clock.advance(3000);
+	await f.settle();
+	assert.equal(f.service.require(row.id).notice?.outcome, "missed");
+	assert.match(f.service.require(row.id).error!, /Expired/);
+	await f.restart();
+	f.enable(true);
+	await f.settle();
+	assert.equal(f.calls.length, 0);
+	assert.equal(f.service.require(row.id).notice?.outcome, "missed");
+});
+test("overdue coordinator check-ins coalesce once while definitions and history remain", async (t) => {
+	const f = await fixture(t, true);
+	f.chats.set("existing", { projectId: "p", missionId: "mission", activeMissionCoordinator: true });
+	f.enable(false);
+	const rows = [];
+	for (const message of ["Check deployment", "Check remaining blockers"])
+		rows.push(
+			await f.service.create({
+				trigger: "at",
+				at: 2000,
+				target: { kind: "message", sessionId: "existing", message },
+			}),
+		);
+	f.clock.advance(5000);
+	await f.settle();
+	f.enable(true);
+	await f.settle();
+	assert.equal(f.calls.length, 1);
+	assert.match(f.calls[0]!.message!, /Check deployment/);
+	assert.match(f.calls[0]!.message!, /Check remaining blockers/);
+	for (const row of rows) {
+		assert.deepEqual(f.service.require(row.id).target, row.target);
+		assert.equal(f.service.require(row.id).state, "fired");
+	}
+	await f.restart();
+	assert.equal(f.calls.length, 1);
+});
+test("coalesced receipts and native reads stay linear at the 1000-rule store capacity", async (t) => {
+	const f = await fixture(t, true);
+	f.enable(false);
+	f.chats.set("existing", { projectId: "p", missionId: "mission", activeMissionCoordinator: true });
+	for (let i = 0; i < 1000; i++)
+		await f.service.create({
+			trigger: "at",
+			at: 2000,
+			target: { kind: "message", sessionId: "existing", message: `Check ${i}` },
+		});
+	await f.settle();
+	const read = () => {
+		const start = performance.now();
+		for (let i = 0; i < 10; i++) f.service.controlPage(0);
+		return (performance.now() - start) / 10;
+	};
+	const beforeRead = read();
+	global.gc?.();
+	const before = process.memoryUsage();
+	f.clock.advance(1000);
+	f.enable(true);
+	const start = performance.now();
+	await f.settle();
+	const dispatch = performance.now() - start;
+	const afterRead = read();
+	global.gc?.();
+	const after = process.memoryUsage();
+	const bytes = Buffer.byteLength(await f.service.snapshot());
+	assert.equal(f.calls.length, 1);
+	assert.equal(f.service.list().filter((r) => r.state === "fired").length, 1000);
+	assert.ok(bytes < 2 * 1024 * 1024, `linear saved history, got ${bytes} bytes`);
+	assert.equal(f.clock.timers.size, 0);
+	t.diagnostic(
+		JSON.stringify({
+			rules: 1000,
+			snapshotBytes: bytes,
+			nativeReadMsBefore: beforeRead,
+			nativeReadMsAfter: afterRead,
+			dispatchMs: dispatch,
+			rssDeltaBytes: after.rss - before.rss,
+			heapDeltaBytes: after.heapUsed - before.heapUsed,
+			gc: !!global.gc,
+		}),
+	);
+});
+test("coordinator check-ins dedupe request IDs and stop when their agreed brief changes", async (t) => {
+	const f = await fixture(t, true);
+	const mission = f.missions.create({ projectId: "p", title: "Agreed work" });
+	f.missions.join("existing", mission.id);
+	f.missions.update(mission.id, { coordinatorSessionId: "existing" });
+	f.missions.writeBrief(mission.id, "Check the deployment", 0);
+	f.chats.set("existing", { projectId: "p", missionId: mission.id, activeMissionCoordinator: true });
+	const request = {
+		operation: "save",
+		requestId: "deployment",
+		expectedBriefRevision: 1,
+		at: 2000,
+		message: "Check deployment progress",
+	};
+	const row = await f.service.checkIn("existing", mission.id, request);
+	assert.ok(!Array.isArray(row));
+	const replay = await f.service.checkIn("existing", mission.id, request);
+	assert.deepEqual(replay, row);
+	await assert.rejects(
+		f.service.checkIn("existing", mission.id, { operation: "cancel", id: row.id, expectedRevision: 0 }),
+		/unchanged/,
+	);
+	const release = f.service.runtime.freezeAdmissions();
+	await assert.rejects(f.service.checkIn("existing", mission.id, { ...request, requestId: "frozen" }), /maintenance/);
+	await assert.rejects(
+		f.service.checkIn("existing", mission.id, { operation: "cancel", id: row.id, expectedRevision: row.revision }),
+		/maintenance/,
+	);
+	release();
+	await assert.rejects(
+		f.service.checkIn("existing", mission.id, { ...request, message: "Different work" }),
+		/different content/,
+	);
+	await assert.rejects(f.service.checkIn("other", mission.id, request), /coordinator required/);
+	f.missions.writeBrief(mission.id, "Different agreed deployment", 1);
+	f.clock.advance(3000);
+	await f.settle();
+	assert.equal(f.calls.length, 0);
+	assert.equal(f.service.require(row.id).state, "failed");
+	assert.match(f.service.require(row.id).error!, /agreement/);
+	await f.service.stop();
+	await assert.rejects(f.service.checkIn("existing", mission.id, { ...request, requestId: "stopped" }), /stopped/);
+});
+test("a coalesced check-in losing agreement during claim cannot enter the valid primary send", async (t) => {
+	const f = await fixture(t, true);
+	const mission = f.missions.create({ projectId: "p", title: "Deployment" });
+	f.missions.join("existing", mission.id);
+	f.missions.update(mission.id, { coordinatorSessionId: "existing" });
+	f.missions.writeBrief(mission.id, "Check deployment", 0);
+	f.chats.set("existing", { projectId: "p", missionId: mission.id, activeMissionCoordinator: true });
+	const primary = await f.service.create({
+		trigger: "at",
+		at: 2000,
+		target: { kind: "message", sessionId: "existing", message: "User reminder" },
+	});
+	const secondary = await f.service.checkIn("existing", mission.id, {
+		operation: "save",
+		requestId: "secondary",
+		expectedBriefRevision: 1,
+		at: 2000,
+		message: "Obsolete check-in",
+	});
+	assert.ok(!Array.isArray(secondary));
+	const replace = f.store.replace.bind(f.store);
+	t.mock.method(f.store, "replace", async (...args: Parameters<typeof replace>) => {
+		const result = await replace(...args);
+		if (args[0].id === secondary.id && args[1].state === "dispatching")
+			f.missions.writeBrief(mission.id, "New deployment agreement", 1);
+		return result;
+	});
+	f.clock.advance(5000);
+	await f.settle();
+	assert.equal(f.calls.length, 1);
+	assert.equal(f.calls[0]!.message, "User reminder");
+	assert.equal(f.service.require(primary.id).state, "fired");
+	assert.equal(f.service.require(secondary.id).state, "failed");
+});
 test("mission fence holds pending message/chat schedules without changing user revisions", async (t) => {
 	const f = await fixture(t, true);
 	const mission = f.missions.create({ projectId: "p", title: "Synthetic" });

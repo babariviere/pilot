@@ -879,6 +879,7 @@ async fn continue_investigation(
         not_sent: false,
         setup_digest: None,
         verification_pin: None,
+        schedule_predecessor: None,
         dismissed: false,
     };
     send_record(t, journal, check, record).await

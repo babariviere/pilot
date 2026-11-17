@@ -56,6 +56,15 @@ export class ScheduleStore {
 	list(projectId?: string): ScheduledItem[] {
 		return structuredClone([...this.items.values()].filter((item) => !projectId || item.projectId === projectId));
 	}
+	/** Native pages copy only shown prompts; the CAS index stays small for large histories. */
+	controlPage(page: number, held: (item: ScheduledItem) => boolean) {
+		const rows = [...this.items.values()];
+		return {
+			total: rows.length,
+			items: structuredClone(rows.slice(page * 20, (page + 1) * 20)),
+			index: rows.map((r) => ({ id: r.id, revision: r.revision, held: held(r) })),
+		};
+	}
 	hasReportOrRule(reportId: string, ruleId: string): boolean {
 		for (const item of this.items.values())
 			if (item.id === ruleId || (item.target.kind === "message" && item.target.sessionId === reportId)) return true;
@@ -113,6 +122,12 @@ export class ScheduleStore {
 				at,
 			}));
 	}
+	/** Expiry remains observable during a user/global hold without copying saved prompts. */
+	expiringItems(): Array<Pick<ScheduledItem, "id" | "revision" | "expiresAt">> {
+		return [...this.items.values()]
+			.filter((item) => item.state === "pending" && item.trigger === "at" && item.expiresAt !== undefined)
+			.map(({ id, revision, expiresAt }) => ({ id, revision, expiresAt }));
+	}
 	/** Copy only rows needing passive review reconciliation, not every saved prompt on session events. */
 	reviewItems(includeUnresolved = false): ScheduledItem[] {
 		return [...this.items.values()]
@@ -127,7 +142,7 @@ export class ScheduleStore {
 			.map((item) => structuredClone(item));
 	}
 	/** Lightweight projection: dashboard builds never copy stored prompt payloads. */
-	dashboard(projectId: string): DashboardScheduledItem[] {
+	dashboard(projectId: string, held?: (item: ScheduledItem) => boolean): DashboardScheduledItem[] {
 		return [...this.items.values()]
 			.filter(
 				(item) =>
@@ -144,6 +159,7 @@ export class ScheduleStore {
 				state: item.state as "pending" | "failed" | "dispatching",
 				...(item.recurrence ? { recurrence: structuredClone(item.recurrence) } : {}),
 				...(item.paused ? { paused: true as const } : {}),
+				...(held?.(item) ? { held: true as const } : {}),
 				...(item.notice ? { notice: structuredClone(item.notice) } : {}),
 				error: item.error,
 				sessionId: item.sessionId,

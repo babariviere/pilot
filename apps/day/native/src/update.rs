@@ -359,6 +359,9 @@ pub struct SavedView {
     /// Unsent privacy and diagnosis drafts. Restore sends nothing.
     #[prop(default)]
     pub diagnosis: String,
+    /// Unsent schedule definition. Restoring never saves or dispatches.
+    #[prop(default)]
+    pub schedule_settings: String,
     /// Unsent connection setup, never authentication responses. Restore sends nothing.
     #[prop(default)]
     pub connection_settings: String,
@@ -458,6 +461,7 @@ impl SavedView {
             + self.today_project.len()
             + self.model_settings.len()
             + self.diagnosis.len()
+            + self.schedule_settings.len()
             + self.connection_settings.len()
             + self.slack_settings.len()
             + self.database_settings.len()

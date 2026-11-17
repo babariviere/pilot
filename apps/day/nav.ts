@@ -19,6 +19,7 @@ import { type Plans, planningListShape } from "./planning";
 import { closePlanning, openNew, openPlan, planRoute } from "./planView";
 import { closeSettings, openSettings, settingsOpen } from "./preferencesView";
 import { backFromStandup, closeRitual, ritualRoute } from "./ritualView";
+import { schedulesOpen } from "./scheduleDraft";
 import { closeThread, threadRoute } from "./threadView";
 import { glide } from "./ui";
 import { closeUpdate, updateEntry, updateOpen } from "./updateView";
@@ -119,6 +120,7 @@ export function backTarget(places: Places): Back | null {
 			// A chat lies over the screen it was opened from.
 			return to(chatRoute()?.from || "Today", closeChat);
 		case "settings":
+			if (schedulesOpen()) return to("Settings", () => schedulesOpen.set(false));
 			return to("Today", closeSettings);
 		case "feedback": {
 			// Feedback lies over the mission it was opened from, or over Today.
@@ -165,6 +167,7 @@ export function backTarget(places: Places): Back | null {
  */
 export function goHome() {
 	closeSlack();
+	schedulesOpen.set(false);
 	closeUpdate();
 	closeRitual();
 	closeChat();
@@ -228,4 +231,11 @@ export function goMission(id: string) {
 export function goPlan(id: string) {
 	goHome();
 	openPlan(id);
+}
+
+/** Opens scheduled work without starting it. */
+export function goSchedules() {
+	goHome();
+	openSettings();
+	schedulesOpen.set(true);
 }

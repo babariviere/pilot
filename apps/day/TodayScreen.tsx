@@ -13,6 +13,7 @@ import type { Day } from "./day";
 import { FeedbackIncoming, feedbackFocus, incomingFeedback, newFeedback } from "./FeedbackIncoming";
 import { Incoming } from "./Incoming";
 import { todayScrollTo } from "./kept";
+import { goSchedules } from "./nav";
 import { stageMark, stageWord } from "./PlanScreen";
 import { Problems } from "./Problems";
 import type { Plans } from "./planning";
@@ -586,26 +587,45 @@ function DoneSince(props: { day: Day; ctx: TodayScope }) {
 	);
 }
 
-function ComingUp(props: { day: Day }) {
+function ComingUp(props: { day: Day; ctx: TodayScope }) {
+	const rows = () =>
+		[
+			...(props.ctx.showsOwn()
+				? props.day.today().comingUp.map((row) => ({ row, project: props.ctx.name(props.ctx.own() ?? "") }))
+				: []),
+			...props.ctx.others().flatMap((p) => (p.today?.comingUp ?? []).map((row) => ({ row, project: p.name }))),
+		]
+			.sort((a, b) => (a.row.at ?? Infinity) - (b.row.at ?? Infinity))
+			.slice(0, 5);
 	return (
-		<View class="gap-1">
-			<View class="pb-2">
-				<SectionTitle title="Coming up" />
-			</View>
-			<Each of={props.day.today().comingUp} key={(s) => s.id}>
-				{(s) => (
-					<View class="flex-row gap-3 py-2">
-						<View class="flex-1 gap-0.5">
-							<Text class="text-sm text-foreground">{s().text}</Text>
-							<If when={s().note}>
-								<Text class="text-xs text-faint">{s().note ?? ""}</Text>
-							</If>
-						</View>
-						<Text class="text-xs text-faint">{s().when}</Text>
+		<If when={rows().length > 0}>
+			<View class="gap-1">
+				<View class="flex-row items-center gap-2 pb-2">
+					<View class="flex-1">
+						<SectionTitle title="Coming up" />
 					</View>
-				)}
-			</Each>
-		</View>
+					<If when={props.day.schedules}>
+						<Action label="Schedules…" onPress={goSchedules} />
+					</If>
+				</View>
+				<Each of={rows()} key={(s) => s.row.id}>
+					{(s) => (
+						<View class="flex-row gap-3 py-2">
+							<View class="flex-1 gap-0.5">
+								<Text class="text-sm text-foreground">{s().row.text}</Text>
+								<If when={props.ctx.tagged()}>
+									<ProjectLabel name={s().project} />
+								</If>
+								<If when={s().row.note}>
+									<Text class="text-xs text-faint">{s().row.note ?? ""}</Text>
+								</If>
+							</View>
+							<Text class="text-xs text-faint">{s().row.when}</Text>
+						</View>
+					)}
+				</Each>
+			</View>
+		</If>
 	);
 }
 
@@ -723,7 +743,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 								</If>
 								<Missions day={props.day} ctx={ctx} plans={plans} />
 								<DoneSince day={props.day} ctx={ctx} />
-								<ComingUp day={props.day} />
+								<ComingUp day={props.day} ctx={ctx} />
 
 								<Text class="border-t border-border pt-5 text-xs text-faint">
 									{today().attention.state !== "live" || !today().problemsKnown
