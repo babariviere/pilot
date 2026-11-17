@@ -114,3 +114,39 @@ test("a builder's task prototype runs once, links its mockup to the task and rea
 	assert.equal(spawned.length, 2);
 	assert.match(spawned[1]!.message, /artifact layouts, revision 2, of chat proto-1/);
 });
+
+test("builders waiting for their task prototypes leave worker slots for the prototype chats", async (t) => {
+	const f = await fixture(t, { twoSlices: true });
+	const tasks = f.store.tasks(f.missionId);
+	const builders = ["builder-1", "builder-2"];
+	const chats = new Map<string, Partial<SessionSummary>>();
+	for (const [i, id] of builders.entries()) {
+		chats.set(id, { id, projectId: f.project.id, state: "idle", working: false, inputGeneration: 0 });
+		f.store.join(id, f.missionId, { sessionId: f.owner }, "builder");
+		f.store.updateTask(f.missionId, tasks[i]!.id, { sessionId: id }, { sessionId: f.owner });
+	}
+	const get = f.sessions.get.bind(f.sessions);
+	t.mock.method(f.sessions, "get", (id: string) =>
+		chats.has(id) ? ({ ...chats.get(id) } as SessionSummary) : get(id),
+	);
+	const service = new MissionService(f.store, f.sessions, f.projects);
+	const occupied = async () =>
+		((await service.call(f.owner, "get", {})) as { continuation: { occupiedWorkers: number } }).continuation
+			.occupiedWorkers;
+	assert.equal(await occupied(), 2, "idle builders with open tasks hold their slots");
+
+	const ask = (i: number) =>
+		service.call(builders[i]!, "prototype", {
+			taskId: tasks[i]!.id,
+			requestId: `layouts-${i}`,
+			question: "Compare layouts",
+			prototypeModel: "faux/opus",
+		});
+	await ask(0);
+	assert.equal(await occupied(), 1, "a builder waiting for its prototype frees its slot");
+	await ask(1);
+	assert.equal(await occupied(), 0);
+
+	chats.set(builders[0]!, { ...chats.get(builders[0]!), state: "working", working: true });
+	assert.equal(await occupied(), 1, "a working builder still holds a slot");
+});

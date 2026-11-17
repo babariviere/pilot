@@ -1855,19 +1855,21 @@ export class MissionService {
 	private occupiedWorkers(missionId: string, excludeId?: string): number {
 		const coordinator = this.store.require(missionId).coordinatorSessionId;
 		const tasks = this.store.tasks(missionId);
+		// A builder idle until its task prototype comes back holds no slot, so the prototype chat can start.
+		const prototypes = Object.values(this.store.planningWorkers.get(missionId)?.taskPrototypes ?? {});
+		const awaitingPrototype = (id: string) =>
+			prototypes.some((p) => p.builderSessionId === id && p.state !== "reported" && p.state !== "failed");
 		return (
 			[...new Set([...this.store.members(missionId), ...this.sessions.missionWorkSessions(missionId)])].filter(
 				(id) => {
 					if (id === coordinator || id === excludeId) return false;
 					const chat = this.sessions.get(id);
+					if (!chat || chat.archivedAt !== undefined) return false;
+					if (chat.working || chat.state === "working" || chat.state === "starting" || chat.runningJobs?.length)
+						return true;
 					return (
-						!!chat &&
-						chat.archivedAt === undefined &&
-						(chat.working ||
-							chat.state === "working" ||
-							chat.state === "starting" ||
-							chat.runningJobs?.length ||
-							tasks.some((task) => task.sessionId === id && isOpen(task) && !this.store.retiredMember(id)))
+						!awaitingPrototype(id) &&
+						tasks.some((task) => task.sessionId === id && isOpen(task) && !this.store.retiredMember(id))
 					);
 				},
 			).length + (this.sharing?.remoteOccupied(missionId) ? 2 : 0)
