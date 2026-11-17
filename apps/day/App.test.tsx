@@ -247,14 +247,14 @@ test("a mission without a current report is not counted as not moving", async ()
 test("a mission opens with its report, tasks and working chats, and Escape goes back", async () => {
 	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-search");
-	await app.waitFor("Show search results in under 200 ms for large workspaces.");
+	await app.waitFor("Latest report");
 	for (const text of [
-		"Latest report",
 		"Next: Fix anything that fails, then open the release pull request.",
 		"Agent report · 12 min ago · references not checked by Pilot",
+		"id:now-search-3",
 		"Integration tests on Linux",
-		"In progress",
-		"Open its chat · working now",
+		"Working",
+		"id:now-chat-search-3",
 		RUNNING,
 	]) {
 		expect(app.shows(text)).toBe(true);
@@ -272,9 +272,9 @@ test("a mission's coordinator, task and working chats open read only, and Back r
 	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-search");
 	await app.waitFor("id:mission-coordinator-chat");
-	// Task 3's chat links from its task, also while it works, and only there.
+	// Task 3's chat links from its card in Now while it works, not again as another working chat.
 	expect(app.shows("id:mission-chat-w-search")).toBe(false);
-	expect(app.shows("id:task-chat-search-3")).toBe(true);
+	expect(app.shows("id:now-chat-search-3")).toBe(true);
 	expect(app.shows("id:task-chat-search-1")).toBe(false);
 	await app.press("id:mission-coordinator-chat");
 	await app.waitFor("I am checking the open tasks.");
@@ -285,11 +285,17 @@ test("a mission's coordinator, task and working chats open read only, and Back r
 	await app.press("role:button[Back to Faster search]");
 	await app.waitFor("id:mission-coordinator-chat");
 	expect(app.shows("id:chat")).toBe(false);
-	await app.press("id:task-chat-search-3");
+	await app.press("id:now-chat-search-3");
 	await app.waitFor("The task is done.");
 	await app.press("id:back");
 	await app.waitFor("id:mission-coordinator-chat");
-	expect(app.shows("Show search results in under 200 ms for large workspaces.")).toBe(true);
+	// The full task list, one press away, links the same chat.
+	await app.press("id:mission-section-tasks");
+	await app.waitFor("id:task-chat-search-3");
+	await app.press("id:task-chat-search-3");
+	await app.waitFor("The task is done.");
+	await app.press("id:back");
+	await app.waitFor("id:task-chat-search-3");
 });
 
 test("an old mission offers a re-plan: New opens with a draft from it and nothing is sent", async () => {
@@ -350,7 +356,7 @@ test("an old mission being re-planned names the new mission, and Stop re-plannin
 	await app.keyboard.press("escape");
 	await app.waitFor("Three short things need you.");
 	await app.press("id:mission-search");
-	await app.waitFor("id:mission-plan");
+	await app.waitFor("id:mission-section-map");
 	expect(app.shows("Replaces “Docs refresh”")).toBe(false);
 });
 
@@ -492,7 +498,7 @@ test("a lost rename answer offers only Check, which reads the title again", asyn
 test("a planned mission shows its plan, not a re-plan", async () => {
 	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-search");
-	await app.waitFor("id:mission-plan");
+	await app.waitFor("id:mission-section-map");
 	expect(app.shows("· Old plan")).toBe(false);
 	expect(app.shows("Re-plan as a new mission")).toBe(false);
 	expect(app.shows("Replaces “Docs refresh”")).toBe(true);
@@ -501,6 +507,8 @@ test("a planned mission shows its plan, not a re-plan", async () => {
 test("a mission's overview leads to its interview and plan, which says when there is none", async () => {
 	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-search");
+	// The interview and plan are one press away, in their row.
+	await app.press("id:mission-section-map");
 	await app.waitFor("id:mission-plan");
 	expect(app.shows("Interview and plan")).toBe(true);
 	await app.press("id:open-plan");
@@ -726,6 +734,7 @@ test("without a request source Today shows no New section", async () => {
 test("a mission's tasks show what their agents linked, and merged is not released", async () => {
 	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-native");
+	await app.press("id:mission-section-tasks");
 	await app.waitFor("id:outputs-native-4");
 	// A done task folds its report and outputs until Show.
 	expect(app.shows("PR #412 · Native chat view")).toBe(false);

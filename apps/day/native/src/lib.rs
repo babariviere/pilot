@@ -46,6 +46,7 @@ pub mod macos_artifact;
 mod macos_capture;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
 pub mod macos_host;
+mod mission_work;
 pub mod model;
 pub mod new_chat;
 pub mod plan;

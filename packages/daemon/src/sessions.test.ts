@@ -2998,12 +2998,14 @@ test("Stop reopens a parked input-paused chat instead of incorrectly reporting a
 	await sessions["starting"].get(created.id);
 	// A legacy persisted pause remains stoppable after the producer is removed.
 	sessions["metas"].get(created.id)!.inputsPaused = true;
+	assert.ok(sessions.get(created.id)?.workHolds?.includes("Input paused"));
 	f.workers[0]!.finish();
 	sessions["workers"].delete(created.id);
 	await sessions.stop(created.id);
 	await sessions["starting"].get(created.id);
 	assert.equal(f.workers.at(-1)!.requests[0]?.type, "abort");
 	assert.equal(sessions["metas"].get(created.id)!.inputsPaused, undefined);
+	assert.equal(sessions.get(created.id)?.workHolds?.includes("Input paused") ?? false, false);
 });
 
 test("Stop reaches a parked pending question instead of reporting an idle no-op", async (t) => {
@@ -5413,6 +5415,7 @@ test("Stop cancels failed child recovery without credentials and stays stopped a
 	assert.equal(stopped.working, false);
 	assert.equal(stopped.error, undefined);
 	assert.equal(stopped.outcome, undefined);
+	assert.ok(stopped.workHolds?.includes("Recovery stopped"));
 	assert.equal(sessions["require"](created.id).recoveryStopped, true);
 	assert.deepEqual(
 		(await f.stored(created.id)).pending.map((command) => command.type),

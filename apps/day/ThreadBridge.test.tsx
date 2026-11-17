@@ -78,6 +78,7 @@ async function openThread(world: World, height: number) {
 		},
 	});
 	await app.press("id:mission-search");
+	await app.press("id:mission-section-discussions");
 	await app.press("id:thread-t1");
 	return app;
 }

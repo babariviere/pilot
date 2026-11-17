@@ -29,6 +29,21 @@ pub struct DayOverview {
     pub reports: Vec<ReportView>,
     /// One control per mission.
     pub controls: Vec<Control>,
+    /// Missing on older services: owner holds and identity are unavailable.
+    #[serde(default)]
+    pub mission_agents: Option<Vec<MissionAgent>>,
+}
+
+/// Passive, project-scoped session facts. Never an execution grant.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionAgent {
+    pub session_id: String,
+    pub mission_id: String,
+    pub title: String,
+    pub working: bool,
+    pub waiting_for_user: bool,
+    pub holds: Vec<String>,
 }
 
 /// The parts of `ProjectDashboard` Today reads.
@@ -314,6 +329,8 @@ pub struct ReportWrite {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportDelivery {
+    /// No-code delivery omits the commit in the canonical protocol.
+    #[serde(default)]
     pub commit: String,
     pub checks: String,
     pub issues: String,
@@ -446,6 +463,9 @@ pub enum MemberState {
 pub struct MissionDetail {
     pub mission: MissionHead,
     pub tasks: Vec<Task>,
+    /// Names for canonical earlier-phase blockers.
+    #[serde(default)]
+    pub phases: Vec<MissionPhase>,
     /// Artifacts linked to the mission or one of its tasks.
     #[serde(default)]
     pub artifacts: Vec<ArtifactLink>,
@@ -458,6 +478,12 @@ pub struct MissionDetail {
     /// Every decision, replaced and withdrawn ones too.
     #[serde(default)]
     pub decisions: Vec<MissionDecision>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MissionPhase {
+    pub id: String,
+    pub name: String,
 }
 
 /// `MissionBrief`: the brief's markdown.
@@ -606,6 +632,14 @@ pub struct Task {
     pub session_id: Option<String>,
     #[serde(default)]
     pub order: f64,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub blocked_by_phases: Vec<String>,
+    #[serde(default)]
+    pub delegated_to: Option<String>,
 }
 
 /// `MissionTaskStatus`.
@@ -726,6 +760,18 @@ mod tests {
         assert_eq!(overview.reports[0].provenance, Provenance::AgentReport);
         assert_eq!(overview.controls[0].state, ControlState::Running);
         assert_eq!(overview.controls[0].revision, 3);
+    }
+
+    #[test]
+    fn no_code_delivery_keeps_the_overview_readable() {
+        let mut value: serde_json::Value = serde_json::from_str(OVERVIEW).unwrap();
+        value["reports"][0]["report"]["write"]["delivery"] = serde_json::json!({
+            "checks": "User selected the layout.", "issues": ""
+        });
+        let overview = read_overview(&value.to_string()).unwrap();
+        let delivery = overview.reports[0].report.write.delivery.as_ref().unwrap();
+        assert!(delivery.commit.is_empty());
+        assert_eq!(delivery.checks, "User selected the layout.");
     }
 
     #[test]

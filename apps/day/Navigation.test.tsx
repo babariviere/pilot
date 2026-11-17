@@ -13,6 +13,7 @@ type App = Awaited<ReturnType<typeof open>>;
 /** Opens Faster search's interview and plan from its overview, as a user does. */
 async function openSearchPlan(app: App) {
 	await app.press("id:mission-search");
+	await app.press("id:mission-section-map");
 	await app.waitFor("id:mission-plan");
 	await app.press("id:open-plan");
 	await app.waitFor("This mission is not in planning.");
@@ -26,6 +27,7 @@ test("Today, mission, interview and plan: one Back goes up one level at a time",
 	expect(app.shows("id:back")).toBe(false);
 
 	await app.press("id:mission-search");
+	await app.press("id:mission-section-map");
 	await app.waitFor("id:mission-plan");
 	expect(app.shows("role:button[Back to Today]")).toBe(true);
 

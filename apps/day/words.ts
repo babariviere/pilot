@@ -1,6 +1,15 @@
 // Words and marks for missions, reports and controls. One place, so Today
 // and the mission overview say the same thing about the same state.
-import type { ControlView, Freshness, MemberState, MissionRow, ReportLine, TaskStatus } from "pilot-day/native";
+import type {
+	ControlView,
+	Freshness,
+	MemberState,
+	MissionRow,
+	ReportLine,
+	TaskLine,
+	TaskStatus,
+	TaskWorkState,
+} from "pilot-day/native";
 import type { MarkKind } from "./ui";
 
 /** The words beside a mission's mark. */
@@ -135,6 +144,63 @@ export function taskWord(status: TaskStatus): string {
 			return "Done";
 		case "unknown":
 			return "Status unknown";
+	}
+}
+
+/** A task's work state as the native read derives it. */
+export type WorkState = TaskWorkState;
+
+/** A task's work state. An older read without one is unknown: nothing is inferred from its status. */
+export function stateOf(task: Pick<TaskLine, "workState">): WorkState {
+	return task.workState ?? "unknown";
+}
+
+/**
+ * A task's work state, in words. Queued is the plan's own queue: it never
+ * says the task was admitted to run or that a chat is free for it.
+ */
+export function workWord(state: WorkState): string {
+	switch (state) {
+		case "working":
+			return "Working";
+		case "queued":
+			return "Queued in plan";
+		case "dependencyBlocked":
+			return "Waits for earlier work";
+		case "blocked":
+			return "Blocked";
+		case "waitingForUser":
+			return "Waiting for you";
+		case "held":
+			return "Held";
+		case "completed":
+			return "Done";
+		case "review":
+			return "In review";
+		case "delegated":
+			return "Delegated";
+		case "assigned":
+			return "Assigned";
+		case "unknown":
+			return "Work state unknown";
+	}
+}
+
+/** A task's mark for its work state. Words beside it carry the meaning. */
+export function workMark(state: WorkState): MarkKind {
+	switch (state) {
+		case "working":
+			return "moving";
+		case "waitingForUser":
+			return "needs";
+		case "held":
+			return "paused";
+		case "completed":
+			return "done";
+		case "unknown":
+			return "unreported";
+		default:
+			return "still";
 	}
 }
 

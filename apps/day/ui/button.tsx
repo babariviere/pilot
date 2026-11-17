@@ -199,6 +199,9 @@ export function Pressable(props: {
 	expanded?: boolean;
 	/** Hears the target's view, to give it the keyboard focus. */
 	anchor?: (node: ViewRef) => void;
+	/** It took or lost the keyboard focus. Only a disclosure's trigger (`expanded` set) reports it. */
+	onFocus?: () => void;
+	onBlur?: () => void;
 	/** Layout and frame classes; the focus ring is added. */
 	class?: string;
 	classList?: Record<string, boolean>;
@@ -236,6 +239,8 @@ export function Pressable(props: {
 				accessibilityState={{ expanded: props.expanded === true, disabled: props.disabled === true }}
 				tooltip={props.tooltip}
 				onPress={props.disabled ? undefined : props.onPress}
+				onFocus={props.onFocus}
+				onBlur={props.onBlur}
 				class={look()}
 				classList={props.classList}
 				style={props.style}

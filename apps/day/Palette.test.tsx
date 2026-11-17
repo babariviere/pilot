@@ -28,7 +28,7 @@ test("Command+K finds a mission by name, and Return opens its overview", async (
 	expect(app.shows("role:option[Faster search]")).toBe(true);
 	expect(app.shows("role:option[Settings]")).toBe(false);
 	await app.keyboard.press("enter");
-	await app.waitFor("id:mission-plan");
+	await app.waitFor("id:mission-section-map");
 	expect(app.shows(SEARCH)).toBe(false);
 	expect(app.shows("role:button[Back to Today]")).toBe(true);
 });
@@ -49,7 +49,7 @@ test("Down moves through the places, and New opens with no project chosen", asyn
 test("Escape clears the search, then closes the palette and stays on the page", async () => {
 	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-search");
-	await app.waitFor("id:mission-plan");
+	await app.waitFor("id:mission-section-map");
 	await openPalette(app);
 	await app.type(SEARCH, "zzz");
 	await app.waitFor("id:palette-empty");
@@ -60,7 +60,7 @@ test("Escape clears the search, then closes the palette and stays on the page", 
 	await app.keyboard.press("escape");
 	expect(app.shows(SEARCH)).toBe(false);
 	// The page under it did not go back.
-	expect(app.shows("id:mission-plan")).toBe(true);
+	expect(app.shows("id:mission-section-map")).toBe(true);
 	expect(app.shows("role:button[Back to Today]")).toBe(true);
 });
 

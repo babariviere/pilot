@@ -7265,6 +7265,7 @@ test("a released user-stopped task cannot be revived by a fresh coordinator star
 	const member = await f.service.startTask(mission.id, "1");
 	await until(() => f.workers.get(member.id) && !f.sessions["starting"].has(member.id));
 	await f.sessions.stop(member.id);
+	assert.ok(f.sessions.get(member.id)?.workHolds?.includes("User Stop hold"));
 	f.store.releaseTask(mission.id, "1");
 	await f.store.durable();
 	const queued = (await f.service.call(lead.id, "start", { id: "1", operationId: "not-a-stop-override" })) as {

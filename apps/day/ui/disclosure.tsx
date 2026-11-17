@@ -9,6 +9,12 @@ export function Disclosure(props: {
 	label: string;
 	open: boolean;
 	testID?: string;
+	accessibilityLabel?: string;
+	/** Hears the trigger's view, to give it the keyboard focus. */
+	anchor?: (node: ViewRef) => void;
+	/** The trigger took or lost the keyboard focus. */
+	onFocus?: () => void;
+	onBlur?: () => void;
 	onToggle: () => void;
 	children?: JSX.Element;
 }) {
@@ -16,6 +22,10 @@ export function Disclosure(props: {
 		<Collapsible open={props.open} class="gap-1" content={props.children}>
 			<Pressable
 				testID={props.testID}
+				accessibilityLabel={props.accessibilityLabel}
+				anchor={props.anchor}
+				onFocus={props.onFocus}
+				onBlur={props.onBlur}
 				expanded={props.open}
 				onPress={props.onToggle}
 				class="flex-row items-baseline gap-2 self-start rounded-md"
@@ -55,6 +65,9 @@ export function ExpandableRow(props: {
 	accessibilityLabel?: string;
 	/** Hears the summary's view, to give it the keyboard focus. */
 	anchor?: (node: ViewRef) => void;
+	/** The summary took or lost the keyboard focus. */
+	onFocus?: () => void;
+	onBlur?: () => void;
 	onToggle: () => void;
 	/** Layout classes of the row, such as its padding. */
 	class?: string;
@@ -67,6 +80,8 @@ export function ExpandableRow(props: {
 		<DividedRow open={props.open} class={props.class} content={props.content}>
 			<Pressable
 				anchor={props.anchor}
+				onFocus={props.onFocus}
+				onBlur={props.onBlur}
 				testID={props.testID}
 				accessibilityLabel={props.accessibilityLabel}
 				expanded={props.open}

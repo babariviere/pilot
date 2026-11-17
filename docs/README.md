@@ -57,6 +57,10 @@ affected work (global agreement changes can affect everyone). Old missions can f
 to their published successor after a safe Pause. History, chats and unpublished work stay;
 Linear management does not transfer automatically. The successor keeps Read previous mission,
 a read-only view of the old agreement, decisions, tasks, saved links and recent activity.
+A mission's overview leads with its work: Now shows current work (working, in review, held or waiting
+for you), Next lists the plan's queue in order, and Blockers shows tasks that wait for earlier work,
+a Pause and decisions for you. Queued in plan is not a start: Pilot still checks permission, limits and holds.
+Goal and spec, Tasks, Discussions, Results and evidence, and the map, interview and plan open in place below.
 A mission's overview lists its threads, one subject each. Start one by writing its first message; its
 first sentence becomes the title. Each thread has its own read-only chat: it answers at once, reads the
 mission like the coordinator, asks one question at a time about work you suggest, and shows mockups for

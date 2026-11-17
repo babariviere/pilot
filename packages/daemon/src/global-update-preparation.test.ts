@@ -115,6 +115,7 @@ test("global preparation interrupts broken real IPC peers alongside healthy work
 	const before = Date.now();
 	const result = await f.preparation.prepare(op);
 	assert.equal(result.state, "accepted");
+	assert.ok(f.sessions.get(f.chats[0]!.id)?.workHolds?.includes("Update hold"));
 	assert.ok(Date.now() - before < 6_000, "bounded host preparation does not wait for a model/IPC reply");
 	assert.equal(
 		f.children.every((c) => c.exitCode === 0),

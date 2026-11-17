@@ -395,6 +395,8 @@ export interface SessionSummary {
 	trackedSource?: SessionTrackedSource;
 	/** Durable work paused by the Mac sleep policy, awaiting a later full wake with connectivity. */
 	sleepPaused?: boolean;
+	/** Point-in-time host holds, not inferred outcomes. Refresh after global update changes; never start eligibility. */
+	workHolds?: string[];
 	/** Durable model work waiting for confirmed internet connectivity. */
 	offlinePaused?: boolean;
 	/** Omitted by older daemons, meaning Build. */

@@ -336,7 +336,8 @@ function TopicRow(props: { missionId: string; topic: Topic; ops: ThreadOp[] }) {
  * The mission overview's threads: open ones first, then Later; discarded
  * ones on request. Reading them sends nothing.
  */
-export function MissionThreadsSection(props: { day: Day; missionId: string }) {
+/** A mission's threads. `heading={false}` leaves out the title where the row that holds it names it. */
+export function MissionThreadsSection(props: { day: Day; missionId: string; heading?: boolean }) {
 	const mirror = props.day.threads as ThreadsMirror;
 	const m = () => mirror.mission(props.missionId);
 	if (m().availability !== "live") void mirror.source.read(props.missionId);
@@ -353,7 +354,9 @@ export function MissionThreadsSection(props: { day: Day; missionId: string }) {
 	const discarded = () => topics().filter((t) => t.disposition === "resolved" || t.disposition === "discarded").length;
 	return (
 		<View testID="mission-threads" class="gap-2">
-			<SectionTitle title="Threads with the coordinator" count={topics().length} />
+			<If when={props.heading !== false}>
+				<SectionTitle title="Threads with the coordinator" count={topics().length} />
+			</If>
 			<Text class="text-sm text-muted-foreground">
 				Talk through one subject at a time. Talking here never starts, approves or stops work.
 			</Text>

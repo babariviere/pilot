@@ -204,11 +204,29 @@ fn real_reads_exact_detail_and_selective_pause_resume_preserve_other_holds() {
     let page = host.mission(&f.mission()).unwrap();
     assert!(page.tasks_known);
     assert_eq!(page.tasks.len(), 1);
+    assert_eq!(
+        page.tasks[0].work_state,
+        pilot_day_native::model::TaskWorkState::Queued
+    );
+    assert!(
+        !page.tasks[0].owner_title.is_empty(),
+        "the actual owning chat is named"
+    );
+    assert!(page.tasks[0].work_reason.contains("permission"));
+    assert_eq!(
+        f.cmd("stats", true)["posts"],
+        0,
+        "opening the overview admits no control or execution"
+    );
     let pause = reply(host.pause(f.mission(), row(&ready(&host)).control.revision)).unwrap();
     assert_eq!(pause.status, OutcomeStatus::Accepted);
     let paused = ready(&host);
     let control = &row(&paused).control;
     assert_eq!(control.state, pilot_day_native::model::ControlState::Paused);
+    assert_eq!(
+        host.mission(&f.mission()).unwrap().tasks[0].work_state,
+        pilot_day_native::model::TaskWorkState::Held
+    );
     let pause_id = control.pause_operation_id.clone().unwrap();
     f.cmd("holdResume", true);
     let resumed = reply(host.resume(f.mission(), control.revision, pause_id.clone())).unwrap();

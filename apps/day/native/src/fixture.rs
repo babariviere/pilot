@@ -303,6 +303,7 @@ fn overview(
         },
         reports,
         controls,
+        mission_agents: None,
     }
 }
 
@@ -416,6 +417,10 @@ fn task(id: &str, number: u32, title: &str, status: TaskStatus, session: Option<
         status,
         session_id: session.map(s),
         order: f64::from(number),
+        body: String::new(),
+        depends_on: Vec::new(),
+        blocked_by_phases: Vec::new(),
+        delegated_to: None,
     }
 }
 
@@ -441,6 +446,7 @@ fn detail(
             planning_version: Some(1),
         },
         tasks,
+        phases: Vec::new(),
         artifacts: Vec::new(),
         resources: Vec::new(),
         brief: None,

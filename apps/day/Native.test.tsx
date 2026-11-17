@@ -173,6 +173,104 @@ test("Mission overview in light, dark and a narrow window", async () => {
 
 // Run with `--filter 'delivery screens'`. The first runs on older revisions too, for a Before.
 
+// One window per test: run each with its own `--filter`, such as `--filter 'mission overview work, light 1100'`.
+// They use only what older revisions also have, so a Before captures the old overview of the same mock mission;
+// the open rows exist only after.
+for (const [colorScheme, width] of [
+	["light", 1100],
+	["dark", 1100],
+	["light", 480],
+] as const) {
+	test(`mission overview work, ${colorScheme} ${width}, captured`, async () => {
+		// 900 points tall: a taller window than the display draws black below it.
+		const app = await open("./MockApp.tsx", { platform: "macos", width, height: 900, colorScheme });
+		await app.press("id:mission-search");
+		await app.waitFor("Latest report");
+		await app.wait(400);
+		await app.screenshot(`output/mission-work-${colorScheme}-${width}.png`);
+		if (app.shows("id:mission-section-tasks")) {
+			// Down to the rows, then open two of them in place.
+			await app.scroll("id:mission-page", 2000);
+			await app.press("id:mission-section-goal");
+			await app.press("id:mission-section-tasks");
+			await app.scroll("id:mission-page", 300);
+			await app.wait(400);
+			await app.screenshot(`output/mission-work-open-${colorScheme}-${width}.png`);
+		}
+	});
+}
+
+test("mission work states over the overview fixture, captured: paused, waiting and an older service", async () => {
+	const app = await open("./MissionOverviewFixture.tsx", { platform: "macos", width: 1100, height: 900 });
+	await app.waitFor("id:now-search-3");
+	for (const name of ["running", "paused", "waiting", "older"]) {
+		await app.press(`id:situation-${name}`);
+		await app.waitFor(`${name} · update 0`);
+		await app.wait(400);
+		await app.screenshot(`output/mission-state-${name}-1100.png`);
+	}
+});
+
+test("mission rows by keyboard on a real platform: names, focus and Space", async () => {
+	const app = await open("./MissionOverviewFixture.tsx", { platform: "macos", width: 1100, height: 900 });
+	await app.waitFor("id:now-search-3");
+	expect(app.shows("label:Goal and spec. Show it.")).toBe(true);
+	// The rows are below the work: scroll to them so the click lands on the screen.
+	await app.scroll("id:mission-page", 2000);
+	await app.wait(300);
+	await app.press("id:mission-section-goal");
+	await app.waitFor("id:mission-goal");
+	expect(app.shows("label:Goal and spec. Hide it.")).toBe(true);
+	// The row keeps the focus after a press, so Space closes it again.
+	await app.keyboard.press("space");
+	await app.waitUntil(() => !app.shows("id:mission-goal"));
+	// A task that moves from Next to Now in a live update keeps its details open and the focus.
+	await app.scroll("id:mission-page", -2000);
+	await app.wait(300);
+	await app.press("id:next-search-4");
+	await app.keyboard.press("mod+shift+u");
+	await app.waitFor("id:now-search-4");
+	await app.wait(400);
+	await app.screenshot("output/mission-work-moved-focus-1100.png");
+	await app.keyboard.press("space");
+	await app.waitUntil(() => !app.shows("Open the release pull request with the benchmark chart."));
+});
+
+test("mission rows on a real platform: a task the focus left does not take it back when it moves", async () => {
+	const app = await open("./MissionOverviewFixture.tsx", { platform: "macos", width: 1100, height: 900 });
+	await app.waitFor("id:now-search-3");
+	await app.press("id:next-search-4");
+	await app.waitFor("Open the release pull request with the benchmark chart.");
+	// Tab moves the focus to another control; the task's row no longer has it.
+	await app.keyboard.press("tab");
+	await app.keyboard.press("mod+shift+u");
+	await app.waitFor("id:now-search-4");
+	// Space acts on the control that has the focus, not on the task that moved: its details stay open.
+	await app.keyboard.press("space");
+	await app.wait(300);
+	expect(app.shows("id:now-search-4 >> text:Open the release pull request with the benchmark chart.")).toBe(true);
+});
+
+test("mission task chats open again and again with real clicks: Now card and Next row", async () => {
+	const app = await open("./MissionOverviewFixture.tsx", { platform: "macos", width: 1100, height: 900 });
+	await app.waitFor("id:now-search-3");
+	for (let round = 0; round < 2; round++) {
+		await app.press("id:now-chat-search-3");
+		await app.waitFor("Read only. Reading it sends nothing and changes nothing.");
+		await app.press("id:back");
+		await app.waitFor("id:now-chat-search-3");
+	}
+	await app.press("id:situation-paused");
+	await app.waitFor("paused · update 0");
+	await app.press("id:next-search-4");
+	for (let round = 0; round < 2; round++) {
+		await app.press("id:next-chat-search-4");
+		await app.waitFor("Read only. Reading it sends nothing and changes nothing.");
+		await app.press("id:back");
+		await app.waitFor("id:next-chat-search-4");
+	}
+});
+
 // Run with `--filter 'artifacts screen pair'`: the gallery with a reported screen, closed and open.
 test("artifacts screen pair: the gallery, captured", async () => {
 	const app = await open("./ArtifactsFixture.tsx", { platform: "macos", width: 1100, height: 760 });
@@ -225,3 +323,45 @@ test("Today offline and unreadable", async () => {
 	await unreadable.waitFor("Today could not be read.");
 	await unreadable.screenshot("output/today-unreadable-dark-480.png");
 });
+
+// The page keeps what the user reads in place: a card that arrives in Now above the screen changes the offset,
+// not the place on screen of the section at the top of the screen. The captures show it at the same height.
+test("mission page scroll on a real platform: what is at the top of the screen stays when a card arrives above it, captured", async () => {
+	const app = await open("./MissionOverviewFixture.tsx", { platform: "macos", width: 1100, height: 500 });
+	await app.waitFor("id:now-search-3");
+	type Span = { top: number; bottom: number };
+	const read = async () => {
+		await app.press("id:where");
+		await app.waitUntil(() => app.texts().some((t) => t.startsWith("Scroll: ")));
+		const line = app.texts().find((t) => t.startsWith("Scroll: ")) ?? "";
+		const m = /^Scroll: (\d+) · next (none|-?\d+\.\.-?\d+) · report (none|-?\d+\.\.-?\d+)$/.exec(line);
+		const span = (v: string | undefined): Span | null => {
+			if (!v || v === "none") return null;
+			const [top, bottom] = v.split("..").map(Number);
+			return { top, bottom };
+		};
+		return { scroll: Number(m?.[1] ?? -1), next: span(m?.[2]), report: span(m?.[3]) };
+	};
+	let before = await read();
+	// Drag by what is left to the Next list's top: large steps first, then a small exact one, so a few real drags do.
+	for (let i = 0; i < 12 && before.next && before.next.top > 0; i++) {
+		await app.scroll("id:mission-page", Math.min(200, Math.max(10, before.next.top + 5)));
+		// A real scroll can coast on: read once it rests.
+		await app.wait(300);
+		before = await read();
+	}
+	expect(!!before.next && before.next.top <= 0 && !!before.report).toBe(true);
+	// The section the user reads: Next when it holds the top of the screen, else the latest report below or at it.
+	const name = before.next && before.next.bottom > 0 ? "next" : "report";
+	await app.screenshot("output/mission-scroll-before-update.png");
+	await app.keyboard.press("mod+shift+u");
+	await app.waitFor("id:now-search-4");
+	await app.wait(300);
+	const after = await read();
+	const was = before[name] as Span;
+	const now = after[name];
+	expect(!!now && Math.abs(now.top - was.top) <= 1).toBe(true);
+	expect(after.scroll > before.scroll).toBe(true);
+	await app.screenshot("output/mission-scroll-after-update.png");
+	// Each real drag and read is a round trip to the macOS driver; the page itself waits on nothing.
+}, 60_000);

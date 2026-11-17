@@ -4102,6 +4102,15 @@ export class MissionStore {
 		);
 	}
 
+	/** Passive owner lookup without loading every task body or archived session summary. */
+	activeTaskOwnerIds(projectId: string): string[] {
+		return this.all(
+			`SELECT DISTINCT t.session_id FROM tasks t JOIN missions m ON m.id = t.mission_id
+			 WHERE m.project_id = ? AND m.status = 'active' AND t.status != 'dropped' AND t.session_id IS NOT NULL`,
+			projectId,
+		).map((row) => str(row.session_id));
+	}
+
 	task(id: string, taskId: string): MissionTask {
 		const row = this.one("SELECT * FROM tasks WHERE mission_id = ? AND id = ?", id, taskId);
 		if (!row) throw new NotFound(`Unknown task: ${taskId}`);

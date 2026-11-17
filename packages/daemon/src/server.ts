@@ -69,6 +69,7 @@ import { ChatStreams } from "./chat-streams.ts";
 import { CONNECTION_CONTROLS } from "./connection-controls.ts";
 import type { DaemonServices } from "./daemon-services.ts";
 import { DatabaseSettingsError } from "./databases.ts";
+import { dayMissionAgents } from "./day-mission-agents.ts";
 import { awaitDiagnosticRead } from "./diagnostic-context.ts";
 import { DIAGNOSTICS_CONTROLS, isDiagnosticsRevocation, validateDiagnosticsIntent } from "./diagnostics-controls.ts";
 import { EnvironmentApprovalRequired } from "./environment-profile.ts";
@@ -2901,6 +2902,14 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				},
 				reports: list.flatMap((mission) => missions.service.reports.viewsNow(mission.id, observedAt)),
 				controls: list.map((mission) => missions.store.controls.current(mission.id)),
+				missionAgents: dayMissionAgents(
+					projectId,
+					new Set(dashboard.missions.items.map((mission) => mission.id)),
+					missions.store.activeTaskOwnerIds(projectId).flatMap((id) => {
+						const owner = sessions.get(id);
+						return owner ? [owner] : [];
+					}),
+				),
 			};
 			return json(res, 200, overview);
 		}

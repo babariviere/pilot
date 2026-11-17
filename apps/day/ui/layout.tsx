@@ -54,18 +54,28 @@ export function SectionTitle(props: { title: string; count?: number | null; chil
 }
 
 const PANEL: Record<"sm" | "md" | "lg", string> = {
-	sm: "rounded-lg bg-muted px-3 py-2",
-	md: "rounded-xl bg-muted px-4 py-3",
-	lg: "rounded-xl bg-muted p-4",
+	sm: "rounded-lg px-3 py-2",
+	md: "rounded-xl px-4 py-3",
+	lg: "rounded-xl p-4",
+};
+
+/**
+ * The panel's surface. `muted` (the default) sets a quote or confirmation apart; `card` frames one piece of
+ * work that stands on its own, such as a task working now, with a border on the page's card colour.
+ */
+const PANEL_TONE: Record<"muted" | "card", string> = {
+	muted: "bg-muted",
+	card: "border border-border bg-card",
 };
 
 /**
  * A quiet muted panel that sets one thing apart: a confirmation, a quote, a report. `sm` frames a short quote,
- * `md` (the default) a block, `lg` a block with more room.
+ * `md` (the default) a block, `lg` a block with more room. `tone="card"` frames one piece of work instead.
  */
 export function Panel(props: {
 	testID?: string;
 	size?: "sm" | "md" | "lg";
+	tone?: "muted" | "card";
 	/** Lets the user select and copy what it holds. */
 	selectable?: boolean;
 	/** Layout classes only, such as `gap-2` or `flex-row items-center`. */
@@ -76,7 +86,7 @@ export function Panel(props: {
 		<View
 			testID={props.testID}
 			selectable={props.selectable}
-			class={`${PANEL[props.size ?? "md"]} ${props.class ?? ""}`}
+			class={`${PANEL[props.size ?? "md"]} ${PANEL_TONE[props.tone ?? "muted"]} ${props.class ?? ""}`}
 		>
 			{props.children}
 		</View>

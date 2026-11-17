@@ -681,6 +681,60 @@ pub struct TaskLine {
     pub outputs: Vec<Output>,
     /// The chat that owns it, when one does. Opening it only reads.
     pub session_id: Option<String>,
+    /// Host-derived activity, separate from the task's recorded status.
+    #[prop(default)]
+    pub work_state: TaskWorkState,
+    /// Why it waits, or what has not been checked. Never admission authority.
+    #[prop(default)]
+    pub work_reason: String,
+    /// Owning chat or explicit delegated owner. Empty when unknown.
+    #[prop(default)]
+    pub owner_title: String,
+    /// Task details, read only.
+    #[prop(default)]
+    pub body: String,
+    /// Unfinished actual dependencies. Unknown/missing prerequisites stay visible.
+    #[prop(default)]
+    pub prerequisites: Vec<TaskPrerequisite>,
+}
+
+/// Work facts for the overview, not a scheduler or permission to start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskWorkState {
+    /// Activity/holds could not be determined.
+    #[default]
+    Unknown,
+    /// The owner is doing work, including live jobs.
+    Working,
+    /// Queued in the plan only. Admission, capacity and holds are not cleared.
+    Queued,
+    /// An actual prerequisite is incomplete.
+    DependencyBlocked,
+    /// The task is marked blocked without a recorded prerequisite.
+    Blocked,
+    /// A current owner question waits for the user.
+    WaitingForUser,
+    /// A factual mission or owner hold prevents new work.
+    Held,
+    /// The task's canonical status is done. Not human acceptance.
+    Completed,
+    /// Canonical task status is in review.
+    Review,
+    /// Someone else owns the work.
+    Delegated,
+    /// Assigned, but the owner is not observed working.
+    Assigned,
+}
+
+/// One unresolved task dependency. Number zero means the target is unavailable.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskPrerequisite {
+    pub id: String,
+    pub number: u32,
+    pub title: String,
+    pub status: TaskStatus,
 }
 
 /// What an output is.
@@ -756,6 +810,12 @@ pub struct MissionPage {
     pub row: MissionRow,
     /// What the mission is for. Empty when unknown.
     pub goal: String,
+    /// Current saved specification. Reading it applies nothing.
+    #[prop(default)]
+    pub brief: String,
+    /// Active saved decisions, not inferred consent.
+    #[prop(default)]
+    pub decisions: Vec<String>,
     /// Whether the task list could be read.
     pub tasks_known: bool,
     /// Its tasks in order, dropped tasks left out.

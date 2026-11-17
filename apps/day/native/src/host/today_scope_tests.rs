@@ -23,6 +23,7 @@ fn overview() -> DayOverview {
         },
         reports: Vec::new(),
         controls: Vec::new(),
+        mission_agents: None,
     }
 }
 

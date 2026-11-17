@@ -13,6 +13,7 @@ const desktop = {
 async function mission() {
 	const app = await open("./ThreadFixture.tsx", desktop);
 	await app.press("id:mission-search");
+	await app.press("id:mission-section-discussions");
 	await app.waitFor("id:thread-search-scope");
 	return app;
 }
@@ -307,6 +308,7 @@ test("an earlier read and a live read in flight together both land, in order, an
 test("earlier messages keep the message on screen where it was; hiding the activity keeps its button on screen", async () => {
 	const app = await open("./ThreadFixture.tsx", { platform: "macos", width: 1100, height: 1000 });
 	await app.press("id:mission-search");
+	await app.press("id:mission-section-discussions");
 	await app.press("id:thread-search-scope");
 	await app.waitFor("id:message-s-coordinator:11");
 	await app.press("Where");
@@ -331,6 +333,7 @@ test("earlier messages keep the message on screen where it was; hiding the activ
 test("a live update that removes old words and status lines above the screen keeps the message being read exactly in place", async () => {
 	const app = await open("./ThreadFixture.tsx", { platform: "macos", width: 1100, height: 1000 });
 	await app.press("id:mission-search");
+	await app.press("id:mission-section-discussions");
 	await app.press("id:thread-search-scope");
 	await app.waitFor("id:message-s-coordinator:11");
 	// The service reports old words it cannot place, and does not know yet which turns answered your messages.
@@ -547,6 +550,7 @@ test("unreadable threads are not shown as none", async () => {
 	const app = await open("./ThreadFixture.tsx", desktop);
 	await app.press("Unreadable");
 	await app.press("id:mission-search");
+	await app.press("id:mission-section-discussions");
 	await app.waitFor("id:threads-off");
 	expect(app.shows("id:threads-empty")).toBe(false);
 	expect(app.texts().some((t) => t.includes("this is not the same as having none"))).toBe(true);

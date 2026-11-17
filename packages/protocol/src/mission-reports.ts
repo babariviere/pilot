@@ -84,4 +84,17 @@ export interface DayOverview {
 	dashboard: ProjectDashboard;
 	reports: MissionReportView[];
 	controls: MissionControl[];
+	/** Passive task-owner activity and holds for active missions. Absent means unavailable, not no holds. */
+	missionAgents?: DayMissionAgent[];
+}
+
+/** Existing session state only. No admission, capacity or permission to start is implied. */
+export interface DayMissionAgent {
+	sessionId: string;
+	missionId: string;
+	title: string;
+	working: boolean;
+	waitingForUser: boolean;
+	/** Known holds only. An empty list is not proof of execution eligibility. */
+	holds: string[];
 }

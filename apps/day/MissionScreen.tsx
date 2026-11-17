@@ -1,22 +1,23 @@
-// One mission in full. The top says what it is, how it stands and what it
-// waits for; then what its agents report, its interview and plan, its tasks
-// and the chats working on it now. Chats are supporting detail; the
-// coordinator's chat, a task's chat and a working chat open read only. Reports are
-// agent words, never verified progress. Pause and Resume are intents: Rust
-// builds and fences the command; this screen names only the mission, the
-// revision it showed and, for Resume, the Pause it showed.
-import { computed, keymap, Scroll, signal, Text, View } from "nsh";
-import type { Decision, MissionPage, MissionRow, PlanPage, PlanRow, ReportLine, TaskLine } from "pilot-day/native";
+// One mission in full, work first. The top says how it stands; then the work
+// on it now, what is next in the plan and what blocks it (MissionWork.tsx);
+// then the latest report; then rows that open in place for the goal and
+// spec, every task, discussions, results and evidence, and the map,
+// interview and plan. The coordinator's chat, a task's chat and a working
+// chat open read only. Reports are agent words, never verified progress.
+// Pause and Resume are intents: Rust builds and fences the command; this
+// screen names only the mission, the revision it showed and, for Resume, the
+// Pause it showed.
+import { computed, effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, View, type ViewRef } from "nsh";
+import type { MissionPage, MissionRow, PlanPage, PlanRow, ReportLine, TaskLine } from "pilot-day/native";
 import { createShelf, MissionArtifacts, type Shelf } from "./ArtifactShelf";
 import { dropChoice } from "./chatCommands";
-import { openChat } from "./chatView";
-import { decisionMark } from "./DecisionCard";
+import { type ContentAnchor, createContentAnchor } from "./contentAnchor";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
 import { openFeedback } from "./feedbackView";
 import { keepScroll, restoreScroll, scrollOf } from "./kept";
 import { MigrationControls } from "./MigrationControls";
-import { goHome } from "./nav";
+import { forgetWorkFocus, limited, MissionWork, MoreRows, openMemberChat } from "./MissionWork";
 import { pageScroll, scrolled } from "./onScreen";
 import { mapSummary, stageMark, stageWord } from "./PlanScreen";
 import { PreviousMission } from "./PreviousMission";
@@ -32,6 +33,7 @@ import {
 	Action,
 	CheckboxRow,
 	EvidenceList,
+	ExpandableRow,
 	glide,
 	Mark,
 	Page,
@@ -47,17 +49,14 @@ import {
 	closeMission,
 	confirming,
 	controlMessages,
-	focused,
-	focusFront,
 	type Lifecycle,
 	lifecycles,
 	openMission,
 	renames,
 	setFor,
 	setRename,
-	todayPlace,
 } from "./view";
-import { controlLine, memberWord, provenance, rowLine, taskWord } from "./words";
+import { controlLine, memberWord, provenance, rowLine, stateOf, taskWord, workWord } from "./words";
 
 function total(row: MissionRow): number {
 	const p = row.progress;
@@ -257,6 +256,7 @@ function RenameButton(props: { page: MissionPage }) {
 				testID="mission-rename"
 				onPress={() => {
 					glide();
+					forgetWorkFocus();
 					confirming.set(null);
 					archiving.set(null);
 					setRename(row().id, { draft: row().title, state: "editing", message: "" });
@@ -495,53 +495,22 @@ function Control(props: { day: Day; page: MissionPage }) {
 	);
 }
 
-/** What the mission waits for from the user, and the one way to it: its card on Today. */
-function Waiting(props: { day: Day; row: MissionRow }) {
-	const decision = (): Decision | undefined => props.day.today().decisions.find((d) => d.id === props.row.decisionId);
-	const verb = (d: Decision) => {
-		if (d.kind === "review") return "Review it on Today";
-		if (d.kind === "unknown" || d.delivery === "unknown") return "Check it on Today";
-		return "Decide on Today";
-	};
-	return (
-		<Each of={decision() ? [decision() as Decision] : []} key={(d) => d.id}>
-			{(d) => (
-				<Panel testID="mission-waiting" class="flex-row flex-wrap items-center gap-x-3 gap-y-2">
-					<Mark kind={decisionMark(d())} />
-					<View class="min-w-48 flex-1 gap-0.5">
-						<Text class="text-xs text-needs-ink">Waiting for you</Text>
-						<Text class="text-sm font-medium text-foreground">{d().title}</Text>
-					</View>
-					<Action
-						variant="primary"
-						label={verb(d())}
-						accessibilityLabel={`${verb(d())}: ${d().title}`}
-						onPress={() => {
-							// The card takes the keyboard focus on Today, not the mission's row.
-							todayPlace.row = null;
-							focused.set(d().id);
-							focusFront.set(true);
-							goHome();
-						}}
-					/>
-				</Panel>
-			)}
-		</Each>
-	);
-}
-
 /**
  * One task. A task its agent finished or put in review offers its result
- * to check; opening that page reads it and records nothing.
+ * to check; opening that page reads it and records nothing. `place` names
+ * the row's section, so the same task in Results has its own test IDs.
  */
-function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
+function Task(props: { day: Day; page: MissionPage; task: TaskLine; place?: "result" }) {
+	const id = (what: string) => (props.place ? `${props.place}-${what}` : what);
 	const project = () => props.day.delivery?.view().projectId ?? "";
 	const checkable = () => !!project() && (props.task.status === "done" || props.task.status === "inReview");
 	// A done task folds its report and outputs: the list stays short, and Show brings them back.
 	const open = signal(false);
 	const folded = () => props.task.status === "done" && !open();
 	const foldable = () => props.task.status === "done" && (!!props.task.report || props.task.outputs.length > 0);
-	const working = () => props.page.chats.some((c) => c.id === props.task.sessionId);
+	const working = () => stateOf(props.task) === "working";
+	// The native read's work state when it has one, else the status the mission records.
+	const word = () => (stateOf(props.task) === "unknown" ? taskWord(props.task.status) : workWord(stateOf(props.task)));
 	const check = () => {
 		const missionId = props.page.row.id;
 		// Coming back keeps this page where it was.
@@ -556,7 +525,7 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
 			<View class="flex-row items-baseline gap-3">
 				<Text class="w-7 text-xs text-faint">{`#${props.task.number}`}</Text>
 				<Text class="flex-1 text-sm text-foreground">{props.task.title}</Text>
-				<Text class="text-xs text-muted-foreground">{taskWord(props.task.status)}</Text>
+				<Text class="text-xs text-muted-foreground">{word()}</Text>
 			</View>
 			<If when={props.task.report && !folded()}>
 				<View selectable class="gap-0.5 pl-10">
@@ -564,14 +533,14 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
 					<If when={props.task.report?.nextStep}>
 						<Text class="text-sm text-muted-foreground">{`Next: ${props.task.report?.nextStep}`}</Text>
 					</If>
-					<EvidenceList items={props.task.report?.evidence ?? []} testID={`task-evidence-${props.task.id}`} />
+					<EvidenceList items={props.task.report?.evidence ?? []} testID={id(`task-evidence-${props.task.id}`)} />
 					<Text class="text-xs text-faint">{props.task.report ? provenance(props.task.report) : ""}</Text>
 					<Text class="text-xs text-faint">Agent assessment, not verified progress or acceptance.</Text>
 					<ReportedOutput report={props.task.report as ReportLine} />
 				</View>
 			</If>
 			<If when={props.task.outputs.length > 0 && !folded()}>
-				<View testID={`outputs-${props.task.id}`} class="gap-1 pl-10 pt-1">
+				<View testID={id(`outputs-${props.task.id}`)} class="gap-1 pl-10 pt-1">
 					<Text class="text-xs text-faint">Outputs, as linked by its agents</Text>
 					<Each of={props.task.outputs} key={(o) => o.id}>
 						{(o) => (
@@ -593,7 +562,7 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
 				<View class="flex-row pl-8">
 					<If when={checkable()}>
 						<Action
-							testID={`check-result-${props.task.id}`}
+							testID={id(`check-result-${props.task.id}`)}
 							label="Check the result"
 							accessibilityLabel={`Check the result of #${props.task.number} ${props.task.title}. Opening it records nothing.`}
 							onPress={check}
@@ -601,7 +570,7 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
 					</If>
 					<If when={foldable()}>
 						<Action
-							testID={`task-more-${props.task.id}`}
+							testID={id(`task-more-${props.task.id}`)}
 							label={open() ? "Hide report" : "Show report"}
 							accessibilityLabel={`${open() ? "Hide" : "Show"} the report and outputs of #${props.task.number} ${props.task.title}.`}
 							onPress={() => open.set(!open())}
@@ -609,11 +578,10 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
 					</If>
 				</View>
 			</If>
-			{/* A task's chat has its one link here, also while it works; Working now lists the other chats. */}
 			<If when={props.task.sessionId && props.day.chat}>
 				<View class="flex-row pl-10 pt-1">
 					<RowLink
-						testID={`task-chat-${props.task.id}`}
+						testID={id(`task-chat-${props.task.id}`)}
 						title={working() ? "Open its chat · working now" : "Open its chat"}
 						accessibilityLabel={`Open the chat of #${props.task.number} ${props.task.title}, read only. Opening it sends nothing.`}
 						onPress={() => openMemberChat(props.page, props.task.sessionId ?? "")}
@@ -808,7 +776,6 @@ function PlanLink(props: { plans: Plans; missionId: string }) {
 	};
 	return (
 		<View testID="mission-plan" class="gap-2">
-			<SectionTitle title="Plan" />
 			<RowLink
 				testID="open-plan"
 				title={title()}
@@ -852,15 +819,91 @@ function PlanLink(props: { plans: Plans; missionId: string }) {
 	);
 }
 
-// The overview is a column of independent sections, each reading only
-// `MissionPage`. Later mission detail (planning, Fog of war) adds a field to
-// `MissionPage` in Rust and its own section here; nothing else changes.
-function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf }) {
-	const row = () => props.page.row;
-	// A task's chat links from its task; Working now lists the mission's other working chats.
-	const others = () => props.page.chats.filter((c) => !props.page.tasks.some((t) => t.sessionId === c.id));
+// The overview reads only `MissionPage`. Work comes first (MissionWork.tsx);
+// the mission's other parts are rows that open in place, kept open across
+// updates and Back. Later mission detail adds a field to `MissionPage` in
+// Rust and a row here.
+type Section = "goal" | "tasks" | "discussions" | "results" | "map";
+
+/** Task rows shown in Tasks and in Results before "Show more": a large plan never mounts every row at once. */
+const TASKS_SHOWN = 50;
+
+/** Which rows of each mission are open. Opening one only shows what is already read. */
+const openSections = signal<Record<string, Partial<Record<Section, boolean>>>>({});
+
+function toggleSection(missionId: string, section: Section) {
+	glide();
+	forgetWorkFocus();
+	openSections.update((all) => {
+		const mine = all[missionId] ?? {};
+		return { ...all, [missionId]: { ...mine, [section]: !mine[section] } };
+	});
+}
+
+/** One row of "In this mission": its title, then what it holds while open. */
+function SectionRow(props: { missionId: string; section: Section; title: string; content: JSX.Element }) {
+	const open = () => !!openSections()[props.missionId]?.[props.section];
+	let row: ViewRef | null = null;
 	return (
-		<View class="gap-10">
+		<ExpandableRow
+			open={open()}
+			anchor={(node) => {
+				row = node;
+			}}
+			testID={`mission-section-${props.section}`}
+			accessibilityLabel={`${props.title}. ${open() ? "Hide" : "Show"} it.`}
+			onToggle={() => {
+				toggleSection(props.missionId, props.section);
+				// A press gives the row the keyboard focus, so Space and Return work on it next.
+				row?.focus();
+			}}
+			summaryClass="flex-row items-center gap-2 px-2 py-2.5 hover:bg-accent"
+			content={<View class="gap-3 px-2 pb-5 pt-1">{props.content}</View>}
+		>
+			<Text class="text-xs text-muted-foreground">{open() ? "▾" : "▸"}</Text>
+			<Text class="flex-1 text-sm font-medium text-foreground">{props.title}</Text>
+			<Text class="text-xs text-muted-foreground">{open() ? "Hide" : "Show"}</Text>
+		</ExpandableRow>
+	);
+}
+
+/** What the mission is for, its spec and the decisions it agreed. Agreement here is never approval to act. */
+function GoalAndSpec(props: { page: MissionPage }) {
+	return (
+		<View testID="mission-goal" selectable class="gap-4">
+			<Text class="text-base leading-relaxed text-foreground">
+				{props.page.goal || "This read records no goal for the mission."}
+			</Text>
+			<If when={props.page.brief ?? ""}>
+				<View class="gap-1">
+					<Text class="text-xs font-semibold text-muted-foreground">Spec</Text>
+					<Text testID="mission-brief" class="text-sm leading-relaxed text-foreground">
+						{props.page.brief ?? ""}
+					</Text>
+				</View>
+			</If>
+			<If when={(props.page.decisions ?? []).length > 0}>
+				<View testID="mission-decisions" class="gap-1">
+					<Text class="text-xs font-semibold text-muted-foreground">Agreed decisions</Text>
+					<Each of={props.page.decisions ?? []} key="index">
+						{(d) => <Text class="text-sm text-foreground">{`· ${d()}`}</Text>}
+					</Each>
+					<Text class="text-xs text-faint">What the mission agreed. They guide the work and approve nothing.</Text>
+				</View>
+			</If>
+		</View>
+	);
+}
+
+function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf; anchor: ContentAnchor }) {
+	// Views that keep what the user reads in place when a live update changes the work above it.
+	const report = props.anchor.part("report");
+	const sections = props.anchor.part("sections");
+	const row = () => props.page.row;
+	const finished = () => props.page.tasks.filter((t) => stateOf(t) === "completed" || t.status === "done");
+	const planned = () => !props.page.replanDraft;
+	return (
+		<View ref={props.anchor.root} class="gap-10">
 			<View class="gap-3">
 				<View class="flex-row items-start gap-4">
 					<View class="flex-1 gap-2">
@@ -883,9 +926,10 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 						<ArchiveButton page={props.page} />
 					</View>
 				</View>
-				<If when={props.page.goal}>
-					<Text class="text-base leading-relaxed text-muted-foreground">{props.page.goal}</Text>
-				</If>
+				<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
+					<Track progress={row().progress} />
+					<Text class="text-xs text-faint">{`${row().progress.done} of ${total(row())} tasks done`}</Text>
+				</View>
 				<If when={props.page.replaces}>
 					<If
 						when={props.page.replaces?.state === "finished"}
@@ -909,7 +953,6 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 				<FreshnessNote day={props.day} />
 				<Control day={props.day} page={props.page} />
 				<ArchiveConfirm day={props.day} page={props.page} />
-				<Waiting day={props.day} row={row()} />
 				<If when={props.page.coordinatorSessionId && props.day.chat}>
 					<View class="flex-row">
 						<RowLink
@@ -929,86 +972,104 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf 
 				earlier={props.page.freshness.state !== "live"}
 			/>
 
+			<MissionWork day={props.day} page={props.page} anchor={props.anchor} />
+
 			<ToCheck day={props.day} missionId={row().id} />
 
-			<View class="gap-3">
+			<View ref={report.ref} onLayout={report.onLayout} class="gap-3">
 				<SectionTitle title="Latest report" />
 				<If when={row().report} else={<Text class="text-sm text-muted-foreground">{rowLine(row())}</Text>}>
 					<Report report={row().report as ReportLine} />
 				</If>
-				<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1 pt-1">
-					<Track progress={row().progress} />
-					<Text class="text-xs text-faint">{`${row().progress.done} of ${total(row())} tasks done`}</Text>
-				</View>
 			</View>
 
-			<If
-				when={props.page.replanDraft}
-				else={
-					<View class="gap-10">
-						<If when={props.plans}>
-							<PlanLink plans={props.plans as Plans} missionId={row().id} />
-						</If>
-						<If when={props.day.threads}>
-							<MissionThreadsSection day={props.day} missionId={row().id} />
-						</If>
-					</View>
-				}
-			>
+			<If when={!planned()}>
 				<Replan day={props.day} page={props.page} />
 			</If>
 
-			<View class="gap-1">
+			<View ref={sections.ref} onLayout={sections.onLayout} testID="mission-sections" class="gap-1">
 				<View class="pb-2">
-					<SectionTitle title="Tasks" count={props.page.tasks.length} />
+					<SectionTitle title="In this mission" />
 				</View>
-				<If when={!props.page.tasksKnown}>
-					<Text class="text-sm text-muted-foreground">The task list is not available here yet.</Text>
-				</If>
-				<Each of={props.page.tasks} key={(t) => t.id}>
-					{(t) => <Task day={props.day} page={props.page} task={t()} />}
-				</Each>
-			</View>
-
-			<If when={props.day.artifacts}>
-				<MissionArtifacts
-					source={props.day.artifacts as NonNullable<Day["artifacts"]>}
-					shelf={props.shelf}
+				<SectionRow
 					missionId={row().id}
+					section="goal"
+					title="Goal and spec"
+					content={<GoalAndSpec page={props.page} />}
 				/>
-			</If>
-
-			<If when={others().length > 0}>
-				<View class="gap-1">
-					<View class="pb-2">
-						<SectionTitle title="Working now" count={others().length} />
-					</View>
-					<Each of={others()} key={(c) => c.id}>
-						{(c) => (
-							<If
-								when={props.day.chat}
-								else={
-									<View class="flex-row items-baseline gap-3 py-1.5">
-										<Text class="flex-1 text-sm text-foreground">{c().title}</Text>
-										<Text class="text-xs text-faint">{`since ${c().since}`}</Text>
-									</View>
-								}
-							>
-								<View class="py-1.5">
-									<RowLink
-										testID={`mission-chat-${c().id}`}
-										title={c().title}
-										accessibilityLabel={`Open the chat “${c().title}”, read only. Opening it sends nothing.`}
-										onPress={() => openMemberChat(props.page, c().id)}
-									>
-										<Text class="text-xs text-faint">{`since ${c().since}`}</Text>
-									</RowLink>
-								</View>
+				<SectionRow
+					missionId={row().id}
+					section="tasks"
+					title={props.page.tasksKnown ? `Tasks · ${props.page.tasks.length}` : "Tasks"}
+					content={
+						<View>
+							<If when={!props.page.tasksKnown}>
+								<Text class="text-sm text-muted-foreground">The task list is not available here yet.</Text>
 							</If>
-						)}
-					</Each>
-				</View>
-			</If>
+							<If when={props.page.tasksKnown && props.page.tasks.length === 0}>
+								<Text class="text-sm text-muted-foreground">No tasks yet.</Text>
+							</If>
+							<Each of={limited(`${row().id}/tasks`, props.page.tasks, TASKS_SHOWN)} key={(t) => t.id}>
+								{(t) => <Task day={props.day} page={props.page} task={t()} />}
+							</Each>
+							<MoreRows
+								listKey={`${row().id}/tasks`}
+								total={props.page.tasks.length}
+								first={TASKS_SHOWN}
+								step={TASKS_SHOWN}
+								testID="tasks-limit"
+							/>
+						</View>
+					}
+				/>
+				<If when={planned() && props.day.threads}>
+					<SectionRow
+						missionId={row().id}
+						section="discussions"
+						title="Discussions"
+						content={<MissionThreadsSection day={props.day} missionId={row().id} heading={false} />}
+					/>
+				</If>
+				<SectionRow
+					missionId={row().id}
+					section="results"
+					title={`Results and evidence · ${finished().length}`}
+					content={
+						<View class="gap-6">
+							<View>
+								<If when={finished().length === 0}>
+									<Text class="text-sm text-muted-foreground">No task has finished yet.</Text>
+								</If>
+								<Each of={limited(`${row().id}/results`, finished(), TASKS_SHOWN)} key={(t) => t.id}>
+									{(t) => <Task day={props.day} page={props.page} task={t()} place="result" />}
+								</Each>
+								<MoreRows
+									listKey={`${row().id}/results`}
+									total={finished().length}
+									first={TASKS_SHOWN}
+									step={TASKS_SHOWN}
+									testID="results-limit"
+								/>
+							</View>
+							<If when={props.day.artifacts}>
+								<MissionArtifacts
+									source={props.day.artifacts as NonNullable<Day["artifacts"]>}
+									shelf={props.shelf}
+									missionId={row().id}
+								/>
+							</If>
+						</View>
+					}
+				/>
+				<If when={planned() && props.plans}>
+					<SectionRow
+						missionId={row().id}
+						section="map"
+						title="Map, interview and plan"
+						content={<PlanLink plans={props.plans as Plans} missionId={row().id} />}
+					/>
+				</If>
+			</View>
 
 			<If when={props.day.feedback}>
 				<View class="flex-row items-center gap-3 border-t border-border pt-4">
@@ -1068,14 +1129,22 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 	// Which project this window's results belong to, for Check the result. Passive.
 	if (props.day.delivery && !props.day.delivery.view().projectId) void props.day.delivery.source.readSaved();
 	const scroll = keepScroll(`mission/${props.missionId}`);
+	const anchor = createContentAnchor(scroll.contentOffset.y);
+	effect(() => () => anchor.dispose());
 	return (
 		<Scroll
+			testID="mission-page"
 			class="flex-1 bg-background"
 			contentOffset={scroll.contentOffset}
 			scrollEventThrottle={100}
-			ref={pageScroll}
+			ref={(node: ScrollRef) => {
+				pageScroll(node);
+				anchor.scroll(node);
+			}}
+			onScrollDragStart={(e) => anchor.dragged(e.offset.y)}
 			onScroll={(e) => {
 				scroll.onScroll(e);
+				anchor.scrolled(e.offset.y);
 				scrolled();
 			}}
 		>
@@ -1099,7 +1168,7 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 							}
 						>
 							<Each of={page() ? [page() as MissionPage] : []} key={(p) => p.row.id}>
-								{(p) => <Body day={props.day} plans={props.plans} page={p()} shelf={shelf} />}
+								{(p) => <Body day={props.day} plans={props.plans} page={p()} shelf={shelf} anchor={anchor} />}
 							</Each>
 						</If>
 					}
@@ -1109,10 +1178,4 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 			</Page>
 		</Scroll>
 	);
-}
-/** Opens one of the mission's chats, read only. Back returns to this page where it was. */
-function openMemberChat(page: MissionPage, sessionId: string) {
-	const missionId = page.row.id;
-	restoreScroll(`mission/${missionId}`, scrollOf(`mission/${missionId}`));
-	openChat(sessionId, page.row.title || "Mission overview");
 }

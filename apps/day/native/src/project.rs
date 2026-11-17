@@ -428,7 +428,7 @@ fn with_tasks(mut rows: Vec<Problem>, detail: Option<&c::MissionDetail>) -> Vec<
     rows
 }
 
-fn task_status(status: c::TaskStatus) -> Option<TaskStatus> {
+pub(crate) fn task_status(status: c::TaskStatus) -> Option<TaskStatus> {
     Some(match status {
         c::TaskStatus::Todo => TaskStatus::Todo,
         c::TaskStatus::InProgress => TaskStatus::InProgress,
@@ -594,6 +594,7 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
     let reports = index.reports.get(mission_id).unwrap_or(&none);
     let mut tasks: Vec<&c::Task> = detail.map(|d| d.tasks.iter().collect()).unwrap_or_default();
     tasks.sort_by(|a, b| a.order.total_cmp(&b.order).then(a.number.cmp(&b.number)));
+    let work = crate::mission_work::MissionWork::new(inputs, mission_id, detail);
     let tasks = tasks
         .into_iter()
         .filter_map(|task| {
@@ -603,15 +604,10 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
                 .filter(|v| v.report.write.task_id == task.id)
                 .max_by_key(|v| v.report.reported_at)
                 .map(|v| report_line(v, inputs.now));
-            Some(TaskLine {
-                id: task.id.clone(),
-                number: task.number,
-                title: task.title.clone(),
-                status,
-                report,
-                outputs: detail.map_or_else(Vec::new, |d| outputs(d, &task.id, inputs.now)),
-                session_id: task.session_id.clone(),
-            })
+            let mut line = work.line(task, status);
+            line.report = report;
+            line.outputs = detail.map_or_else(Vec::new, |d| outputs(d, &task.id, inputs.now));
+            Some(line)
         })
         .collect();
     let chats = inputs
@@ -661,6 +657,15 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
     Some(MissionPage {
         row,
         goal: detail.map_or_else(String::new, |d| d.mission.goal.clone()),
+        brief: detail
+            .and_then(|d| d.brief.as_ref())
+            .map_or_else(String::new, |b| b.markdown.clone()),
+        decisions: detail
+            .into_iter()
+            .flat_map(|d| &d.decisions)
+            .filter(|d| d.replacement.is_none() && d.withdrawn.is_none())
+            .map(|d| format!("D{}: {}", d.number, d.text))
+            .collect(),
         tasks_known: detail.is_some(),
         tasks,
         chats,
@@ -843,6 +848,321 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mission_overview_work_distinguishes_activity_from_assignment() {
+        use crate::{fixture, model::Scenario};
+        let world = fixture::world(Scenario::Decisions);
+        let page = page(
+            &Inputs {
+                overview: world.overview.as_ref().unwrap(),
+                details: &world.details,
+                decisions: &world.today.decisions,
+                local: &[],
+                live: true,
+                now: fixture::NOW,
+            },
+            "search",
+            Freshness::default(),
+        )
+        .unwrap();
+        let tasks = serde_json::to_value(&page.tasks).unwrap();
+        assert_eq!(
+            tasks[2]["workState"], "working",
+            "dashboard activity, not a claim or report"
+        );
+        assert_eq!(
+            tasks[3]["workState"], "queued",
+            "plan position is not execution admission"
+        );
+        assert_eq!(tasks[0]["workState"], "completed");
+    }
+
+    #[test]
+    fn legacy_mission_read_defaults_new_work_fields_to_unknown() {
+        use crate::{
+            desk::Desk,
+            model::{Scenario, TaskWorkState},
+        };
+        let mut legacy =
+            serde_json::to_value(Desk::new(Scenario::Decisions).mission("search").unwrap())
+                .unwrap();
+        let page = legacy.as_object_mut().unwrap();
+        page.remove("brief");
+        page.remove("decisions");
+        for task in page["tasks"].as_array_mut().unwrap() {
+            for key in [
+                "workState",
+                "workReason",
+                "ownerTitle",
+                "body",
+                "prerequisites",
+            ] {
+                task.as_object_mut().unwrap().remove(key);
+            }
+        }
+        let page: MissionPage = nsh_core::element::from_json(&legacy).unwrap();
+        assert!(page.brief.is_empty() && page.decisions.is_empty());
+        assert!(
+            page.tasks
+                .iter()
+                .all(|t| t.work_state == TaskWorkState::Unknown)
+        );
+        assert!(
+            page.tasks
+                .iter()
+                .all(|t| t.work_reason.is_empty() && t.prerequisites.is_empty())
+        );
+    }
+
+    #[test]
+    fn mission_overview_work_tracks_real_edges_holds_questions_and_late_activity() {
+        use crate::{
+            fixture,
+            model::{Scenario, TaskWorkState as W},
+        };
+        let world = fixture::world(Scenario::Decisions);
+        let mut overview = world.overview.unwrap();
+        let mut detail = world
+            .details
+            .into_iter()
+            .find(|d| d.mission.id == "search")
+            .unwrap();
+        detail.tasks = serde_json::from_value(serde_json::json!([
+            {"id":"next","number":2,"title":"Next","status":"todo","order":2,"dependsOn":["done"]},
+            {"id":"done","number":1,"title":"First","status":"done","order":1},
+            {"id":"missing","number":3,"title":"Missing target","status":"todo","order":3,"dependsOn":["gone"]},
+            {"id":"dropped","number":4,"title":"Dropped","status":"dropped","order":4},
+            {"id":"needs-dropped","number":5,"title":"Needs dropped","status":"todo","order":5,"dependsOn":["dropped"]},
+            {"id":"owned","number":6,"title":"Assigned","status":"in_progress","order":6,"sessionId":"owner","body":"Exact task details"},
+            {"id":"blocked","number":7,"title":"Unknown blocker","status":"blocked","order":7},
+            {"id":"review","number":8,"title":"Review","status":"in_review","order":8},
+            {"id":"phase","number":9,"title":"Old phase gate","status":"blocked","order":9,"blockedByPhases":["previous-phase"]}
+        ])).unwrap();
+        overview.mission_agents = Some(vec![c::MissionAgent {
+            session_id: "owner".into(),
+            mission_id: "search".into(),
+            title: "Named owner".into(),
+            working: false,
+            waiting_for_user: false,
+            holds: vec!["User Stop hold".into()],
+        }]);
+        let read = |overview: &c::DayOverview, detail: &c::MissionDetail| {
+            page(
+                &Inputs {
+                    overview,
+                    details: std::slice::from_ref(detail),
+                    decisions: &[],
+                    local: &[],
+                    live: true,
+                    now: fixture::NOW,
+                },
+                "search",
+                Freshness::default(),
+            )
+            .unwrap()
+        };
+        let first = read(&overview, &detail);
+        assert_eq!(
+            first
+                .tasks
+                .iter()
+                .map(|t| (t.number, t.work_state))
+                .collect::<Vec<_>>(),
+            [
+                (1, W::Completed),
+                (2, W::Queued),
+                (3, W::DependencyBlocked),
+                (5, W::DependencyBlocked),
+                (6, W::Held),
+                (7, W::Blocked),
+                (8, W::Review),
+                (9, W::DependencyBlocked)
+            ]
+        );
+        assert_eq!(first.tasks[2].prerequisites[0].id, "gone");
+        assert_eq!(first.tasks[2].prerequisites[0].status, TaskStatus::Unknown);
+        assert_eq!(
+            first.tasks[3].prerequisites[0].id, "dropped",
+            "dropped never means prerequisite satisfied"
+        );
+        assert_eq!(first.tasks[4].body, "Exact task details");
+        assert_eq!(first.tasks[4].owner_title, "Named owner");
+        assert!(first.tasks[4].work_reason.contains("User Stop"));
+        assert!(
+            first.tasks[7]
+                .work_reason
+                .contains("phase details unavailable")
+        );
+        assert!(
+            first.tasks[3]
+                .work_reason
+                .contains("was dropped, not completed")
+        );
+        assert!(
+            first.tasks[1].work_reason.contains("permission"),
+            "planned order is not admission"
+        );
+
+        let owner = &mut overview.mission_agents.as_mut().unwrap()[0];
+        owner.working = true;
+        let working = read(&overview, &detail);
+        assert_eq!(working.tasks[4].work_state, W::Working);
+        assert!(
+            working.tasks[4].work_reason.contains("User Stop"),
+            "a hold cannot conceal late running work"
+        );
+        overview.mission_agents.as_mut().unwrap()[0].waiting_for_user = true;
+        let simultaneous = read(&overview, &detail);
+        assert_eq!(simultaneous.tasks[4].work_state, W::Working);
+        assert!(
+            simultaneous.tasks[4]
+                .work_reason
+                .contains("question for you"),
+            "live work cannot hide a pending question"
+        );
+        let owner = &mut overview.mission_agents.as_mut().unwrap()[0];
+        owner.working = false;
+        owner.waiting_for_user = true;
+        assert_eq!(
+            read(&overview, &detail).tasks[4].work_state,
+            W::WaitingForUser
+        );
+        let owner = &mut overview.mission_agents.as_mut().unwrap()[0];
+        owner.waiting_for_user = false;
+        owner.holds.clear();
+        assert_eq!(
+            read(&overview, &detail).tasks[4].work_state,
+            W::Assigned,
+            "clearing a hold never fabricates work"
+        );
+
+        detail
+            .tasks
+            .iter_mut()
+            .find(|t| t.id == "done")
+            .unwrap()
+            .status = c::TaskStatus::Todo;
+        assert_eq!(
+            read(&overview, &detail).tasks[1].work_state,
+            W::DependencyBlocked
+        );
+        detail
+            .tasks
+            .iter_mut()
+            .find(|t| t.id == "done")
+            .unwrap()
+            .status = c::TaskStatus::Done;
+        assert_eq!(read(&overview, &detail).tasks[1].work_state, W::Queued);
+        let control = overview
+            .controls
+            .iter_mut()
+            .find(|c| c.mission_id == "search")
+            .unwrap();
+        control.state = c::ControlState::Paused;
+        control.held = true;
+        let paused = read(&overview, &detail);
+        assert_eq!(paused.tasks[0].work_state, W::Completed);
+        assert!(paused.tasks[0].work_reason.is_empty());
+        assert_eq!(paused.tasks[6].work_state, W::Review);
+        assert_eq!(paused.tasks[1].work_state, W::Held);
+        assert!(
+            paused.tasks[2].work_reason.contains("gone"),
+            "pause never hides unresolved dependencies"
+        );
+        detail.phases = vec![c::MissionPhase {
+            id: "previous-phase".into(),
+            name: "Prepare the copy".into(),
+        }];
+        assert!(
+            read(&overview, &detail).tasks[7]
+                .work_reason
+                .contains("Prepare the copy")
+        );
+        let next = detail.tasks.iter_mut().find(|t| t.id == "next").unwrap();
+        next.depends_on = vec!["next".into(), "next".into()];
+        let invalid = read(&overview, &detail);
+        assert_eq!(invalid.tasks[1].prerequisites.len(), 1);
+        assert!(invalid.tasks[1].work_reason.contains("depends on itself"));
+    }
+
+    #[test]
+    fn mission_overview_large_plan_keeps_order_during_owner_updates() {
+        use crate::{
+            fixture,
+            model::{Scenario, TaskWorkState},
+        };
+        let world = fixture::world(Scenario::Decisions);
+        let mut overview = world.overview.unwrap();
+        let mut detail = world
+            .details
+            .into_iter()
+            .find(|d| d.mission.id == "search")
+            .unwrap();
+        // Thousands of tasks expose accidental per-task owner scans on live refresh.
+        detail.tasks = (1..=2_000)
+            .map(|n| c::Task {
+                id: format!("task-{n}"),
+                number: n,
+                title: format!("Task {n}"),
+                status: c::TaskStatus::Todo,
+                order: f64::from(n),
+                session_id: Some(format!("owner-{n}")),
+                body: String::new(),
+                depends_on: if n == 1 {
+                    vec![]
+                } else {
+                    vec![format!("task-{}", n - 1)]
+                },
+                blocked_by_phases: vec![],
+                delegated_to: None,
+            })
+            .collect();
+        overview.mission_agents = Some(
+            (1..=2_000)
+                .map(|n| c::MissionAgent {
+                    session_id: format!("owner-{n}"),
+                    mission_id: "search".into(),
+                    title: format!("Owner {n}"),
+                    working: false,
+                    waiting_for_user: false,
+                    holds: vec![],
+                })
+                .collect(),
+        );
+        let started = std::time::Instant::now();
+        for working in [true, false, true, false] {
+            overview.mission_agents.as_mut().unwrap()[1_999].working = working;
+            let page = page(
+                &Inputs {
+                    overview: &overview,
+                    details: std::slice::from_ref(&detail),
+                    decisions: &[],
+                    local: &[],
+                    live: true,
+                    now: fixture::NOW,
+                },
+                "search",
+                Freshness::default(),
+            )
+            .unwrap();
+            assert_eq!(page.tasks.len(), 2_000);
+            assert_eq!(page.tasks[1_999].number, 2_000);
+            assert_eq!(
+                page.tasks[1_999].work_state,
+                if working {
+                    TaskWorkState::Working
+                } else {
+                    TaskWorkState::DependencyBlocked
+                }
+            );
+            assert_eq!(page.tasks[1_999].prerequisites[0].number, 1_999);
+        }
+        eprintln!(
+            "four 2,000-task overview projections: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
     fn ages_read_naturally() {
         let now = 10 * 1440 * MINUTE;
         assert_eq!(ago(now, now), "just now");
@@ -964,6 +1284,10 @@ mod tests {
             status: c::TaskStatus::Blocked,
             session_id: chat.map(str::to_owned),
             order: 0.0,
+            body: String::new(),
+            depends_on: Vec::new(),
+            blocked_by_phases: Vec::new(),
+            delegated_to: None,
         };
         let detail: c::MissionDetail = serde_json::from_value(serde_json::json!({
             "mission": {"id":"m","projectId":"p","title":"M","goal":"","status":"active"},

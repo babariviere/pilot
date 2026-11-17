@@ -13,6 +13,7 @@ const CONFIRMED =
 test("an older mission offers Revisit; asking opens new questions only and changes nothing", async () => {
 	const app = await open("./Revisit.tsx", desktop);
 	await app.press("id:mission-notify");
+	await app.press("id:mission-section-map");
 	await app.waitFor("id:mission-revisit");
 	await app.press("id:mission-revisit");
 	await app.waitFor("Revisit questions");

@@ -179,6 +179,52 @@ test("Day returns complete existing projections without inferring progress from 
 	assert.equal(f.store.controls.current(id).revision, 0);
 });
 
+test("Day mission owners expose live work and exact holds without admitting work", async (t) => {
+	const f = await fixture(t);
+	const mission = f.store.create({ projectId: f.project.id, title: "Read owner state" });
+	for (const id of ["jobs", "held", "question", "foreign", "archived", "gone", "failed"]) {
+		f.store.join(id, mission.id);
+		f.store.addTask(mission.id, { title: id, sessionId: id });
+	}
+	f.put({ id: "jobs", missionId: mission.id, state: "idle", working: true });
+	f.put({
+		id: "held",
+		missionId: mission.id,
+		sleepPaused: true,
+		offlinePaused: true,
+		subscriptionPause: { windows: [{ provider: "openai", label: "Week", usedPercent: 99 }] },
+	});
+	f.put({ id: "question", missionId: mission.id, outcome: "question", outcomeReason: "Which target?" });
+	f.put({ id: "foreign", projectId: "other", missionId: mission.id, state: "working" });
+	f.put({ id: "standalone", state: "working" });
+	f.put({ id: "archived", missionId: mission.id, archivedAt: 1, outcome: "question" });
+	f.put({ id: "failed", missionId: mission.id, state: "failed", outcome: "failed" });
+	const earlier = f.store.create({ projectId: f.project.id, title: "Archived mission" });
+	f.store.join("old-owner", earlier.id);
+	f.store.addTask(earlier.id, { title: "Old owner", sessionId: "old-owner" });
+	f.put({ id: "old-owner", missionId: earlier.id, archivedAt: 1 });
+	f.store.update(earlier.id, { status: "archived" });
+	const read = async () =>
+		(await (await f.api(`/projects/${f.project.id}/day`)).json()) as import("@pilot/protocol").DayOverview;
+	const first = await read();
+	assert.deepEqual(
+		first.missionAgents
+			?.map((a) => [a.sessionId, a.working, a.holds, a.waitingForUser])
+			.sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+		[
+			["archived", false, ["Owner chat archived"], false],
+			["failed", false, ["Owner failed. Open its chat for the saved failure."], false],
+			["held", false, ["Sleep hold", "Offline hold", "Usage limit hold"], false],
+			["jobs", true, [], false],
+			["question", false, [], true],
+		],
+	);
+	f.put({ id: "held", missionId: mission.id, subscriptionPause: { windows: [], forced: true } });
+	const next = await read();
+	assert.deepEqual(next.missionAgents?.find((a) => a.sessionId === "held")?.holds, []);
+	assert.equal(f.store.controls.current(mission.id).revision, 0, "reads never change control authority");
+});
+
 test("GET /api/projects/:id/dashboard aggregates the project and rejects unknown ones", async (t) => {
 	const f = await fixture(t);
 	const mission = f.store.create({ projectId: f.project.id, title: "API v2", goal: "" });

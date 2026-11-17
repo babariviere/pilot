@@ -8,6 +8,7 @@ const counts = (app: { texts(): string[] }) => app.texts().find((t) => t.startsW
 async function thread() {
 	const app = await open("./ThreadFixture.tsx", { platform: "macos", width: 1100, height: 1000 });
 	await app.press("id:mission-search");
+	await app.press("id:mission-section-discussions");
 	await app.press("id:thread-search-scope");
 	await app.waitFor("id:message-s-coordinator:11");
 	return app;

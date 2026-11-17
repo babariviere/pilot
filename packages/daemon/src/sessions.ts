@@ -14613,6 +14613,14 @@ ${run.excerpt}`,
 			quotaPaused &&
 			!working &&
 			(mainBusy || (childrenWorking && !questionWaits));
+		const workHolds: string[] = [];
+		if (meta.missionUserStopGeneration !== undefined) workHolds.push("User Stop hold");
+		if (meta.inputsPaused) workHolds.push("Input paused");
+		if (meta.recoveryStopped) workHolds.push("Recovery stopped");
+		if (meta.delegationFenced) workHolds.push("Execution ownership transferred");
+		if (meta.updatePaused || this.updateGate.paused || this.updateGate.frozen || this.heldUpdateRecovery(meta))
+			workHolds.push("Update hold");
+		if (meta.kernelRestartPending) workHolds.push("Kernel recovery pending");
 		const state = heldAtQuota && kernelState !== "failed" ? "working" : kernelState;
 		const longJob = meta.archivedAt === undefined ? longJobAttention(worker?.runningJobs ?? []) : undefined;
 		const mcpAttention =
@@ -14663,6 +14671,7 @@ ${run.excerpt}`,
 			...(meta.workspaceReclaimedAt !== undefined ? { workspaceReclaimedAt: meta.workspaceReclaimedAt } : {}),
 			...(meta.workspaceCleanupError ? { workspaceCleanupError: meta.workspaceCleanupError } : {}),
 			...(paused ? { sleepPaused: true } : {}),
+			...(workHolds.length ? { workHolds } : {}),
 			...(offlinePaused ? { offlinePaused: true } : {}),
 			state,
 			working,
