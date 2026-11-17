@@ -7,6 +7,7 @@ import type {
 	MissionResource,
 	OperationReceipt,
 } from "./index.ts";
+import type { MissionDeliveryScreens } from "./mission-reports.ts";
 
 /** Explicit native user assessment only. Never task status or execution authority. */
 export type VerificationSubject =
@@ -92,6 +93,11 @@ export interface DeliveredWork {
 	};
 	/** In the same missions: open comments the task's worker addressed to the coordinator. Newest first, at most 10. */
 	coordinatorRequests?: Array<{ id: string; text: string; at: number }>;
+	/**
+	 * A task's screens from its current worker's latest report that names them: captures of the real app, or why
+	 * there are none. The worker's account; each ID matches one of `artifacts` while it stays linked and pinned.
+	 */
+	screens?: MissionDeliveryScreens & { reportId: string; reportedAt: number };
 	/** The report a job chat (started from Slack, Linear or a schedule) saved with `chat_report` in its latest run. */
 	chatReport?: ChatReport;
 	pullRequests: MissionResource[];

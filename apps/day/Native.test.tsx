@@ -171,6 +171,26 @@ test("Mission overview in light, dark and a narrow window", async () => {
 	}
 });
 
+// Run with `--filter 'delivery screens'`. The first runs on older revisions too, for a Before.
+test("delivery screens: a worker's result page, captured", async () => {
+	const app = await open("./DeliveryFixture.tsx", { platform: "macos", width: 1100, height: 1200 });
+	await app.waitFor("id:to-check");
+	await app.press("id:check-task.mock-project.native.native-5");
+	await app.waitFor("id:your-check");
+	await app.wait(600);
+	await app.screenshot("output/delivery-screens-page.png");
+});
+
+test("delivery screens: the first screen's Before, captured", async () => {
+	const app = await open("./DeliveryFixture.tsx", { platform: "macos", width: 1100, height: 1200 });
+	await app.waitFor("id:to-check");
+	await app.press("id:check-task.mock-project.native.native-5");
+	await app.waitFor("id:screens-comparison");
+	await app.press("id:screens-tab-before");
+	await app.wait(600);
+	await app.screenshot("output/delivery-screens-before-tab.png");
+});
+
 test("Today offline and unreadable", async () => {
 	const offline = await open("./Offline.tsx", { platform: "macos", width: 1100, height: 900 });
 	await offline.waitFor("Offline. Pilot's service is not answering. Showing what Pilot read 6 min ago.");

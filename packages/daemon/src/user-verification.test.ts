@@ -512,6 +512,53 @@ test("a planned mission with no execution coordinator shows the worker's deliver
 	assert.equal(f.store.task(f.mission.id, f.task.id).status, "in_progress");
 });
 
+test("a task's result shows the worker's latest named screens, and naming new ones is a new delivery", async (t) => {
+	const f = await fixture(t);
+	t.mock.method(f.store, "plannedWithoutCoordinator", () => true);
+	await f.service.list(f.project.id);
+	for (const id of ["before", "after"])
+		f.store.linkArtifact(f.mission.id, {
+			sessionId: "worker",
+			artifactId: id,
+			title: id,
+			kind: "image",
+			revision: 1,
+			taskId: f.task.id,
+		});
+	const reports = new MissionReports(f.store);
+	const report = async (reportId: string, delivery?: object) => {
+		const source = reports.source(f.mission.id, "worker", f.task.id);
+		await reports.write(f.mission.id, "worker", {
+			version: 1,
+			reportId,
+			taskId: f.task.id,
+			source: source.source,
+			expectedPreviousId: source.expectedPreviousId,
+			movement: "moving",
+			summary: "Shown",
+			nextStep: "Check it",
+			evidence: [],
+			...(delivery ? { delivery } : {}),
+		} as never);
+	};
+	const facts = { commit: "b".repeat(40), checks: "Pass", issues: "" };
+	await report("plain", facts);
+	const plain = await f.service.read(f.subject);
+	assert.equal(plain.screens, undefined);
+	await report("named", { ...facts, screens: { pairs: [{ before: "before", after: "after" }] } });
+	const named = await f.service.read(f.subject);
+	assert.deepEqual(named.screens, {
+		pairs: [{ before: "before", after: "after" }],
+		reportId: "named",
+		reportedAt: named.screens!.reportedAt,
+	});
+	assert.equal("screens" in named.workerDelivery!, false, "screens show once, not inside the worker's facts");
+	assert.notEqual(named.deliveryId, plain.deliveryId);
+	// A later progress report without screens does not hide them.
+	await report("progress");
+	assert.equal((await f.service.read(f.subject)).screens?.reportId, "named");
+});
+
 test("task status and PR merge observations never turn into verification or production", async (t) => {
 	const f = await fixture(t);
 	f.deliver();

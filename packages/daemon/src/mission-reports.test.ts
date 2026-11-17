@@ -212,6 +212,65 @@ test("delivery validation cannot smuggle task status or acceptance into facts", 
 	assert.deepEqual(f.reports.latest(f.mission.id), []);
 });
 
+test("delivery screens pair pinned image artifacts the worker attached to the task, or give a reason", async (t) => {
+	const f = fixture(t);
+	const facts = { commit: "a".repeat(40), checks: "Pass", issues: "" };
+	const link = (
+		artifactId: string,
+		kind: "image" | "nsh",
+		sessionId = "worker",
+		taskId: string | null = f.task.id,
+		revision: number | null = 1,
+	) =>
+		f.store.linkArtifact(f.mission.id, {
+			sessionId,
+			artifactId,
+			title: artifactId,
+			kind,
+			...(taskId ? { taskId } : {}),
+			...(revision ? { revision } : {}),
+		});
+	f.store.join("other", f.mission.id);
+	link("before", "image");
+	link("after", "image");
+	link("mockup", "nsh");
+	link("theirs", "image", "other");
+	link("mission-level", "image", "worker", null);
+	link("unpinned", "image", "worker", f.task.id, null);
+	for (const screens of [
+		{},
+		{ pairs: [] },
+		{ pairs: [{ before: "before" }] },
+		{ pairs: [{ before: "after", after: "after" }] },
+		{ pairs: [{ after: "after" }, { after: "after" }] },
+		{ pairs: [{ after: "after", label: "extra" }] },
+		{ pairs: [{ after: "after" }], none: "both" },
+		{ none: "" },
+		{ none: "x".repeat(501) },
+	])
+		await assert.rejects(
+			f.reports.write(f.mission.id, "worker", { ...f.write(), delivery: { ...facts, screens } as never }),
+			/delivery screens/,
+		);
+	for (const id of ["mockup", "theirs", "mission-level", "unpinned", "missing"])
+		await assert.rejects(
+			f.reports.write(f.mission.id, "worker", {
+				...f.write(),
+				delivery: { ...facts, screens: { pairs: [{ before: "before", after: id }] } },
+			}),
+			/must be an image artifact you attached/,
+		);
+	const write = { ...f.write(), delivery: { ...facts, screens: { pairs: [{ before: "before", after: "after" }] } } };
+	assert.deepEqual((await f.reports.write(f.mission.id, "worker", write)).write, write);
+	// An exact retry keeps its receipt after the artifact is unlinked.
+	f.store.unlinkArtifact(f.mission.id, "after", { sessionId: "worker" }, f.task.id);
+	assert.deepEqual((await f.reports.write(f.mission.id, "worker", write)).write, write);
+	const added = { ...f.write(), delivery: { ...facts, screens: { pairs: [{ after: "before" }] } } };
+	assert.deepEqual((await f.reports.write(f.mission.id, "worker", added)).write, added);
+	const none = { ...f.write(), delivery: { ...facts, screens: { none: "No visible change" } } };
+	assert.deepEqual((await f.reports.write(f.mission.id, "worker", none)).write, none);
+});
+
 test("legacy reports saved after task closure remain historical, never current", async (t) => {
 	const f = fixture(t);
 	f.store.updateTask(f.mission.id, f.task.id, { status: "done" });

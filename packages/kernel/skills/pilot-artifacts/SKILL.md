@@ -58,3 +58,18 @@ await tools.artifact({
 There is no artifact screenshot preview host. Publication compiles NSH source and checks image bytes; it is not a
 visual fidelity check. Use actual app fixtures for application fidelity checks when authorized. Never compile generated
 Swift/Rust or use a browser as an artifact fallback. Say when visual verification was not performed.
+
+## Before and after of the real app
+
+A mockup shows a design before you build it. After a change users can see lands, show the real app instead:
+
+1. Capture each changed screen twice with the project's documented capture method (its README or AGENTS.md):
+   Before at the parent of the landed commit, After at the landed commit. Use the same window size and data.
+2. `create` one image artifact per capture. Title it with the screen and side, for example
+   "Today: mission row (Before)".
+3. In a mission, `attach` each artifact to your task with its `artifactRevision`, then pair them in the report's
+   `delivery.screens`: `{ pairs: [{ before, after }] }`. Leave out `before` for a new screen. When you could not
+   capture, send `{ none: "<reason>" }` and say so in your reply. The result page shows each pair with Before and
+   After tabs.
+
+Say which data the captures show (fixture data, not real user data).

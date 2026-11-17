@@ -75,6 +75,20 @@ apps/day/nsh.sh test App.test.tsx
 Run the matching `*.test.tsx` file for the feature you change. Headless tests
 check behavior, not native appearance, keyboard input or IME support.
 
+### Before and after captures
+
+For a change users can see, capture the real views before and after it. Write or reuse a capture test that calls
+`app.screenshot("output/<name>.png")` on a fixture (see `Native.test.tsx`), then run:
+
+```sh
+apps/day/scripts/before-after.sh -r <landed revision> --filter '<test name>' Native.test.tsx
+```
+
+It runs that test from the landed revision in two temporary jj workspaces, at the revision and at its parent
+(`--before` picks another base), with the macOS host. It prints each pair of PNGs, or `new` when a screen
+has no Before. A Before run that fails part way keeps the PNGs it wrote. It opens windows on this Mac and builds
+the native crate in each workspace. Captures show fixture data only.
+
 ## Development
 
 - [AGENTS.md](AGENTS.md) has the shared development rules.

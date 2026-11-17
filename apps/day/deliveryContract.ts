@@ -75,6 +75,11 @@ export interface DeliveredWork {
 	};
 	/** In the same missions: open comments the worker addressed to the coordinator, newest first. */
 	coordinatorRequests?: Array<{ id: string; text: string; at: number }>;
+	/** The worker's captures of the real app (image artifact IDs of `artifacts`), or why it has none. Its account. */
+	screens?: ({ pairs: Array<{ before?: string; after: string }> } | { none: string }) & {
+		reportId: string;
+		reportedAt: number;
+	};
 	/** A job chat's own report from its latest run. Its words, not Pilot's check. */
 	chatReport?: {
 		answer: string;

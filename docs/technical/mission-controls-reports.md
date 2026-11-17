@@ -31,7 +31,11 @@ This is daemon projection evidence, not a native UI or live streaming benchmark.
 ## Worker facts and coordinator status
 
 Workers use `report` for current-assignment progress, blockers, checks and scoped delivery facts. Optional
-`delivery: {commit, checks, issues}` keeps the exact worker claim alongside its source token and report ID.
+`delivery: {commit, checks, issues, screens?}` keeps the exact worker claim alongside its source token and report ID.
+For a change users can see, `screens` is `{pairs: [{before?, after}]}` (1 to 8 screens captured from the real app,
+each ID an image artifact the worker attached to the task with a pinned revision) or `{none: reason}`. The daemon
+checks the links, kinds and pins for new reports, not what the images show. A task's result shows the current
+worker's latest named screens as `DeliveredWork.screens`; its report ID is part of the delivery identity.
 The daemon validates shape, not whether the commit exists, landed or satisfies the whole task. A delivered
 increment does not close broader work, retire a worker or establish user acceptance. `log` keeps extra
 context and `comment` asks for action. Neither changes status. This ownership applies to legacy missions

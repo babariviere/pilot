@@ -105,7 +105,7 @@ Keep routine directions in existing task updates or log context, without duplica
 - ticket: read limited, untrusted Linear context using resourceId from links. No Linear writes.
 - prGuidance: taskId returns live, per-ticket PR wording. Earlier contributors use Related to; only final contributors (every other contributor Done) use Closes, subject to live terminal/manual-pause safeguards. Recheck before creating/editing PRs and after task/link changes. Never silently edit unsafe PRs.
 - unlink: remove url at taskId (omitted: mission-level), own links only unless coordinator; prefers reference. Absent returns removed:false.
-- report: taskId alone reads your current task-owner source token and expectedPreviousId. Submit report with those exact fields, version 1, unique reportId, taskId, movement moving|not_moving|unknown, summary, nextStep and evidence strings. Optional delivery {commit, checks, issues} records scoped delivery facts, not completion. Reports notify the coordinator durably, never change task status or user acceptance. Reuse exact reportId and bytes after a lost ACK; new stale-source writes reject. reportId alone reads that historical receipt. get(id) includes currentness and 16 recent reports; use reportId from activity for older receipts.
+- report: taskId alone reads your current task-owner source token and expectedPreviousId. Submit report with those exact fields, version 1, unique reportId, taskId, movement moving|not_moving|unknown, summary, nextStep and evidence strings. Optional delivery {commit, checks, issues, screens?} records scoped delivery facts, not completion. For a change users can see, screens is {pairs: [{before?, after}]} of image artifact IDs captured from the real app and attached to the task with artifactRevision (no before: a new screen), or {none: reason}. Reports notify the coordinator durably, never change task status or user acceptance. Reuse exact reportId and bytes after a lost ACK; new stale-source writes reject. reportId alone reads that historical receipt. get(id) includes currentness and 16 recent reports; use reportId from activity for older receipts.
 - log: add context not already captured by task changes, or kind "handoff" for what the next chat needs to continue (optional health).${
 			coordinator
 				? `
@@ -159,6 +159,20 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 							commit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
 							checks: Type.String({ minLength: 1, maxLength: 2000 }),
 							issues: Type.String({ maxLength: 1000 }),
+							screens: Type.Optional(
+								Type.Union([
+									Type.Object({
+										pairs: Type.Array(
+											Type.Object({
+												before: Type.Optional(Type.String({ maxLength: 128 })),
+												after: Type.String({ maxLength: 128 }),
+											}),
+											{ minItems: 1, maxItems: 8 },
+										),
+									}),
+									Type.Object({ none: Type.String({ minLength: 1, maxLength: 500 }) }),
+								]),
+							),
 						}),
 					),
 				}),

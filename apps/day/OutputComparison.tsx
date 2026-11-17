@@ -3,12 +3,15 @@
 // pane of a fixed height, After first; each side reads its pin once and
 // switching reads nothing. A changed result, pin or freshness starts over, and
 // a full window opened from here closes with it. Looking records nothing.
-import { cleanup, effect, keymap, signal, Text, View } from "nsh";
+// With `pair`, the sides are the worker's named screen captures instead of a choice:
+// each side reads its own pin once, when it shows.
+import { cleanup, effect, keymap, signal, Text, untracked, View } from "nsh";
 import { savedTitle } from "./ArtifactExport";
 import { ArtifactBody, ArtifactTools, closeFullFor, InFullNote, inFull, openFull, paneLine } from "./ArtifactViewer";
 import type { Shown } from "./artifactReads";
 import { artifactSelection } from "./deliveryArtifact";
 import type { ArtifactLink, DeliveredWork, DeliverySource } from "./deliveryFeed";
+import type { ScreenPair } from "./deliveryScreens";
 import { Picker, TabItem, TabRow } from "./ui";
 
 type Side = "Before" | "After";
@@ -20,12 +23,17 @@ export function OutputComparison(props: {
 	fresh: boolean;
 	resultKey: string;
 	onClose: () => void;
+	/** Fixed sides: one screen the worker captured. */
+	pair?: ScreenPair;
+	/** Prefix of its test IDs (default `outputs`). */
+	testID?: string;
 }) {
 	const side = signal<Side>("After");
 	const selected = signal<Record<string, string>>({});
 	const shown = signal<Record<string, Shown>>({});
 	let generation = 0;
-	const fullId = `outputs:${props.resultKey}`;
+	const tid = props.testID ?? "outputs";
+	const fullId = `${tid}:${props.resultKey}`;
 	const id = (a: ArtifactLink) => `${a.sessionId}/${a.artifactId}/${a.revision}`;
 	const links = () => props.work.artifacts.filter((a) => artifactSelection(props.work, a));
 	const reset = () => {
@@ -76,6 +84,21 @@ export function OutputComparison(props: {
 		}));
 	};
 	const current = () => shown()[side()] ?? null;
+	// A pair reads the side shown, once; a reset reads it again.
+	effect(() => {
+		const pair = props.pair;
+		const s = side();
+		const link = s === "Before" ? pair?.before : pair?.after;
+		if (!link || selected()[s]) return;
+		untracked(() => void choose(s, id(link)));
+	});
+	const missing = () => {
+		const pair = props.pair;
+		if (!pair) return `Choose which saved output is ${side()}.`;
+		if (side() === "After") return pair.after ? "" : "The After capture is no longer linked to this result.";
+		if (pair.before === undefined) return "This screen is new. It has no Before.";
+		return pair.before ? "" : "The Before capture is no longer linked to this result.";
+	};
 	const full = (back: () => void) => {
 		const s = side();
 		const value = selected()[s];
@@ -93,7 +116,7 @@ export function OutputComparison(props: {
 		});
 	};
 	return (
-		<View testID="outputs-comparison" class="gap-2 rounded-xl border border-border p-3">
+		<View testID={`${tid}-comparison`} class="gap-2 rounded-xl border border-border p-3">
 			{/* The tabs keep their own width; when the row is narrow, the icons wrap below them, never under them. */}
 			<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
 				<View class="flex-row">
@@ -101,42 +124,41 @@ export function OutputComparison(props: {
 						<TabItem
 							label="Before"
 							selected={side() === "Before"}
-							testID="outputs-tab-before"
+							testID={`${tid}-tab-before`}
 							onPress={() => side.set("Before")}
 						/>
 						<TabItem
 							label="After"
 							selected={side() === "After"}
-							testID="outputs-tab-after"
+							testID={`${tid}-tab-after`}
 							onPress={() => side.set("After")}
 						/>
 					</TabRow>
 				</View>
 				<If when={current()}>
 					<View class="ml-auto">
-						<ArtifactTools shown={current() as Shown} testID="outputs" onFull={full} />
+						<ArtifactTools shown={current() as Shown} testID={tid} onFull={full} />
 					</View>
 				</If>
 			</View>
-			<View class="flex-row">
-				<Picker
-					label={`${side()} output`}
-					testID={`outputs-${side().toLowerCase()}`}
-					placeholder={`Choose the ${side()} output`}
-					items={links().map((a) => ({
-						value: id(a),
-						title: `${a.title || "Artifact"} · revision ${a.revision}`,
-					}))}
-					value={selected()[side()] ?? null}
-					onChange={(value) => void choose(side(), value)}
-				/>
-			</View>
-			<If
-				when={current()}
-				else={<Text class="text-sm text-muted-foreground">{`Choose which saved output is ${side()}.`}</Text>}
-			>
+			<If when={!props.pair}>
+				<View class="flex-row">
+					<Picker
+						label={`${side()} output`}
+						testID={`${tid}-${side().toLowerCase()}`}
+						placeholder={`Choose the ${side()} output`}
+						items={links().map((a) => ({
+							value: id(a),
+							title: `${a.title || "Artifact"} · revision ${a.revision}`,
+						}))}
+						value={selected()[side()] ?? null}
+						onChange={(value) => void choose(side(), value)}
+					/>
+				</View>
+			</If>
+			<If when={current()} else={<Text class="text-sm text-muted-foreground">{missing()}</Text>}>
 				<View class="flex-row flex-wrap items-baseline gap-x-2">
-					<Text testID="outputs-title" class="text-sm font-medium text-foreground">
+					<Text testID={`${tid}-title`} class="text-sm font-medium text-foreground">
 						{savedTitle(current() as Shown)}
 					</Text>
 					<Text class="text-xs text-faint">{paneLine(current() as Shown)}</Text>
@@ -148,7 +170,9 @@ export function OutputComparison(props: {
 				</If>
 			</If>
 			<Text class="text-xs text-faint">
-				Before and After are saved outputs of this result. Looking records nothing.
+				{props.pair
+					? "The agent captured these from the app, without its change and with it. Looking records nothing."
+					: "Before and After are saved outputs of this result. Looking records nothing."}
 			</Text>
 		</View>
 	);

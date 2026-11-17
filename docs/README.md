@@ -32,6 +32,8 @@ To add work to a published plan, discuss it in a thread or use Revisit: the plan
 join the plan only when you confirm that revision. Adding tasks alone needs no Pause; they start like the others.
 Each screen task gets a prototype you choose during planning, and its worker builds what you chose. A screen task
 without one starts with a mockup in its chat, and the worker builds only after you agree.
+When a change you can see lands, its chat captures the real app before and after the change. The result page shows
+each screen under Screens, with Before and After tabs, or the chat's reason for having no captures.
 On a mission page, a done task folds its report until Show report, and each task links its own chat.
 A request in New (a Linear issue or a Slack message) can also become a mission: Plan a mission… opens New
 with its title and link. Your Plan takes it out of New and links it to the mission, without changing

@@ -373,6 +373,10 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 			"- Publish artifacts you need to keep with the artifact tool, rather than leaving loose files under Pilot's data directory.",
 			"- When a diagram would make an explanation of architecture, workflows or relationships clearer, publish one with the artifact tool without being asked: a simple FlowDiagram or SequenceDiagram in an NSH artifact, with a short explanation. Skip it for simple answers, when the user wants text only, or when the tool does not accept kind nsh.",
 		);
+		if (!context.ask && !coordinator)
+			lines.push(
+				"- When you finish a change users can see, show it in the real app, not a mockup. Capture each changed screen before (parent of the landed commit) and after (the landed commit) with the project's documented capture method, and publish each capture as an image artifact (read the pilot-artifacts skill). In a mission, attach them to your task and pair them in report delivery.screens. If you cannot capture, say why.",
+			);
 	}
 	if (context.projectMemory && !context.ask) {
 		lines.push(

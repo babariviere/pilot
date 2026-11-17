@@ -128,6 +128,7 @@ export class UserVerifications {
 			| "submission"
 			| "workerDelivery"
 			| "coordinatorRequests"
+			| "screens"
 		> = { pullRequests: [], artifacts: [] };
 		if (subject.kind === "task") {
 			const mission = this.deps.store.require(subject.missionId);
@@ -135,6 +136,17 @@ export class UserVerifications {
 			const task = this.deps.store.task(subject.missionId, subject.taskId);
 			ownerSessionId = task.sessionId ?? null;
 			outputs = this.deps.store.taskOutputs(subject.missionId, subject.taskId);
+			// The current worker's latest named screens. A later report without them does not hide them.
+			const screensReport = task.sessionId
+				? this.deps.store.controls.latestScreensReport(subject.missionId, subject.taskId, task.sessionId)
+				: undefined;
+			if (screensReport?.write.delivery?.screens)
+				outputs.screens = {
+					...screensReport.write.delivery.screens,
+					reportId: screensReport.write.reportId,
+					reportedAt: screensReport.reportedAt,
+				};
+			const screens = outputs.screens ? { screens: outputs.screens.reportId } : {};
 			const submission = this.deps.store
 				.currentDeliveryEvidence(subject.missionId, subject.taskId)
 				.find((r) => r.type === "submission");
@@ -157,6 +169,7 @@ export class UserVerifications {
 					// Pins change delivery identity; PR tracking state is separate and must not imply production.
 					artifacts: outputs.artifacts.map((a) => [a.sessionId, a.artifactId, a.revision ?? null]),
 					pullRequests: outputs.pullRequests.map((r) => r.id),
+					...screens,
 				};
 			// A planned mission whose coordinator is its planning chat has no one to complete tasks or read workers'
 			// requests. The current worker's latest delivery report is then the result, and its requests are shown.
@@ -164,19 +177,21 @@ export class UserVerifications {
 				const report = this.deps.store.controls.latestReport(subject.missionId, subject.taskId);
 				const delivery = report?.write.delivery;
 				if (!identity && report && delivery && report.sessionId === task.sessionId) {
+					const { screens: _named, ...facts } = delivery;
 					outputs.workerDelivery = {
 						reportId: report.write.reportId,
 						reportedAt: report.reportedAt,
 						summary: report.write.summary,
 						nextStep: report.write.nextStep,
 						evidence: report.write.evidence,
-						...delivery,
+						...facts,
 					};
 					identity = {
 						workerReport: report.write.reportId,
 						definition: { title: task.title, body: task.body, assignment: task.assignment ?? null },
 						artifacts: outputs.artifacts.map((a) => [a.sessionId, a.artifactId, a.revision ?? null]),
 						pullRequests: outputs.pullRequests.map((r) => r.id),
+						...screens,
 					};
 				}
 				const requests = task.sessionId

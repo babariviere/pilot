@@ -29,6 +29,7 @@ import {
 	type OutputLink,
 	webLink,
 } from "./deliveryFeed";
+import { noScreens, screenIds, screenLine, screenPairs } from "./deliveryScreens";
 import {
 	type Attempt,
 	agentLine,
@@ -78,6 +79,7 @@ import { pageScroll, scrolled } from "./onScreen";
 import {
 	Action,
 	CheckboxRow,
+	ExpandableRow,
 	glide,
 	Mark,
 	Notice,
@@ -212,6 +214,61 @@ function Report(props: { work: DeliveredWork }) {
 			</If>
 			<Text class="text-xs text-faint">This is the agent's account. It is not done until you say so.</Text>
 		</Panel>
+	);
+}
+
+/**
+ * The worker's captures of the app, one row per screen. A row opens Before and After under it, reading the side
+ * shown once. The first opens with the page; one opens at a time.
+ */
+function Screens(props: { mirror: DeliveryMirror; work: DeliveredWork; fresh: boolean; resultKey: string }) {
+	const pairs = () => screenPairs(props.work);
+	const open = signal<string | null>(untracked(() => pairs()[0]?.key ?? null));
+	const rows = new Map<string, ViewRef>();
+	const close = (key: string) => {
+		open.set(null);
+		rows.get(key)?.focus();
+	};
+	return (
+		<If when={props.work.screens}>
+			<View testID="delivery-screens" class="gap-1">
+				<View class="pb-1">
+					<SectionTitle title="Screens" count={pairs().length} />
+				</View>
+				<Said label="It has no captures" text={noScreens(props.work)} />
+				<Each of={pairs()} key={(p) => p.key}>
+					{(p) => (
+						<ExpandableRow
+							open={open() === p().key}
+							testID={`screen-${p().key}`}
+							accessibilityLabel={`${p().title}: ${screenLine(p())}`}
+							anchor={(node) => rows.set(p().key, node)}
+							onToggle={() => open.set(open() === p().key ? null : p().key)}
+							class="py-2.5"
+							summaryClass="flex-row items-baseline gap-3"
+							content={
+								<If when={open() === p().key}>
+									<View class="pt-2">
+										<OutputComparison
+											work={props.work}
+											source={props.mirror.source}
+											fresh={props.fresh}
+											resultKey={`${props.resultKey}#screen-${p().key}`}
+											pair={p()}
+											testID="screens"
+											onClose={() => close(p().key)}
+										/>
+									</View>
+								</If>
+							}
+						>
+							<Text class="flex-1 text-sm font-medium text-foreground group-hover:underline">{p().title}</Text>
+							<Text class="text-xs text-muted-foreground">{screenLine(p())}</Text>
+						</ExpandableRow>
+					)}
+				</Each>
+			</View>
+		</If>
 	);
 }
 
@@ -1016,9 +1073,14 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 		const w = work();
 		if (!w?.deliveryId || !fresh() || w.deliveryId === previewed) return;
 		previewed = w.deliveryId;
+		// Screens opens its own first pair; the same capture does not open twice.
+		const screens = screenIds(w);
 		const shown = w.artifacts
 			.filter(
-				(a) => (a.kind === "image" || (a.kind === "nsh" && artifactPreviewsAvailable())) && artifactSelection(w, a),
+				(a) =>
+					(a.kind === "image" || (a.kind === "nsh" && artifactPreviewsAvailable())) &&
+					!screens.has(a.artifactId) &&
+					artifactSelection(w, a),
 			)
 			.slice(0, 1);
 		untracked(() => {
@@ -1086,6 +1148,7 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 						{(w) => (
 							<View class="gap-10">
 								<Report work={w()} />
+								<Screens mirror={mirror} work={w()} fresh={fresh()} resultKey={props.place.key} />
 								<Outputs mirror={mirror} place={props.place} work={w()} fresh={fresh()} anchors={anchors} />
 								<If when={w().deliveryId}>
 									<AgentWorkPanel mirror={mirror} place={props.place} work={w()} fresh={fresh()} />

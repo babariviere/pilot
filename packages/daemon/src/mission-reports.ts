@@ -1,7 +1,39 @@
-import type { MissionReport, MissionReportView, MissionReportWrite } from "@pilot/protocol";
+import type { MissionDeliveryScreens, MissionReport, MissionReportView, MissionReportWrite } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
+
+/** Shape only: 1 to 8 pairs of distinct artifact IDs, each with an After, or a short reason for no captures. */
+function checkScreenShape(screens: unknown, text: (value: unknown, max: number) => boolean): void {
+	if (!screens || typeof screens !== "object" || Array.isArray(screens)) throw new Error("Invalid delivery screens");
+	const keys = Object.keys(screens).join();
+	if (keys === "none" && text((screens as { none: unknown }).none, 500)) return;
+	const pairs = (screens as { pairs?: unknown }).pairs;
+	if (
+		keys !== "pairs" ||
+		!Array.isArray(pairs) ||
+		pairs.length < 1 ||
+		pairs.length > 8 ||
+		pairs.some(
+			(pair) =>
+				!pair ||
+				typeof pair !== "object" ||
+				Array.isArray(pair) ||
+				Object.keys(pair).some((key) => key !== "before" && key !== "after") ||
+				!text(pair.after, 128) ||
+				("before" in pair && !text(pair.before, 128)),
+		)
+	)
+		throw new Error("Invalid delivery screens");
+	const ids = screenIds(screens as MissionDeliveryScreens);
+	if (new Set(ids).size !== ids.length) throw new Error("Invalid delivery screens");
+}
+
+function screenIds(screens: MissionDeliveryScreens): string[] {
+	return "pairs" in screens
+		? screens.pairs.flatMap((pair) => (pair.before ? [pair.before, pair.after] : [pair.after]))
+		: [];
+}
 
 /** Reports describe an agent's assessment, never observed progress or accepted delivery. */
 export class MissionReports {
@@ -74,7 +106,10 @@ export class MissionReports {
 				!delivery ||
 				typeof delivery !== "object" ||
 				Array.isArray(delivery) ||
-				Object.keys(delivery).sort().join() !== "checks,commit,issues" ||
+				Object.keys(delivery)
+					.filter((key) => key !== "screens")
+					.sort()
+					.join() !== "checks,commit,issues" ||
 				!text(delivery.commit, 40) ||
 				!/^[a-f0-9]{40}$/.test(delivery.commit) ||
 				!text(delivery.checks, 2000) ||
@@ -82,6 +117,7 @@ export class MissionReports {
 				delivery.issues.length > 1000
 			)
 				throw new Error("Invalid scoped delivery facts");
+			if ("screens" in delivery) checkScreenShape(delivery.screens, text);
 		}
 		const retry = () => {
 			authorize();
@@ -113,6 +149,8 @@ export class MissionReports {
 		if (current.source !== write.source || current.expectedPreviousId !== write.expectedPreviousId)
 			throw new Conflict("Report source or predecessor changed");
 		if (this.store.controls.current(missionId).held) throw new Conflict("Mission work is paused");
+		// Checked for new reports only: an exact retry keeps its receipt after a later unlink.
+		if (write.delivery?.screens) this.checkScreens(missionId, sessionId, write.taskId, write.delivery.screens);
 		const mission = this.store.require(missionId),
 			reportedAt = Date.now();
 		const report: MissionReport = {
@@ -128,6 +166,25 @@ export class MissionReports {
 		this.store.controls.insertReport(report);
 		await this.store.durable();
 		return retry()!;
+	}
+	/** Screens name image artifacts this worker attached to this task, pinned so the result page can read them. */
+	private checkScreens(missionId: string, sessionId: string, taskId: string, screens: MissionDeliveryScreens): void {
+		const task = this.store.resolveTask(missionId, taskId).id;
+		for (const id of screenIds(screens)) {
+			const attached = this.store
+				.artifactReferences(missionId, id)
+				.some(
+					(link) =>
+						link.taskId === task &&
+						link.sessionId === sessionId &&
+						link.kind === "image" &&
+						link.revision !== undefined,
+				);
+			if (!attached)
+				throw new Error(
+					`Delivery screen ${id} must be an image artifact you attached to this task with artifactRevision`,
+				);
+		}
 	}
 	latest(missionId: string): MissionReport[] {
 		return [

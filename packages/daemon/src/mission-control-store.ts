@@ -139,6 +139,16 @@ export class MissionControlStore {
 			)
 			.map((row) => JSON.parse(String(row.record)));
 	}
+	/** The newest report from `sessionId` on this task that names delivery screens. One row parsed. */
+	latestScreensReport(missionId: string, taskId: string, sessionId: string): MissionReport | undefined {
+		const row = this.port.one(
+			"SELECT record FROM mission_reports WHERE mission_id=? AND task_id=? AND json_extract(record,'$.sessionId')=? AND json_extract(record,'$.write.delivery.screens') IS NOT NULL ORDER BY rowid DESC LIMIT 1",
+			missionId,
+			taskId,
+			sessionId,
+		);
+		return row ? JSON.parse(String(row.record)) : undefined;
+	}
 	insertReport(report: MissionReport): void {
 		this.port.transaction(() => {
 			if (Number(this.port.one("SELECT COUNT(*) n FROM mission_reports")!.n) >= 16384)

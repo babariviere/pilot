@@ -4,6 +4,8 @@
 import { expect, open, test } from "nsh/test";
 import { type ArtifactSelection, capturedOf } from "./deliveryArtifact";
 import type { DeliveredWork } from "./deliveryContract";
+import { DEMO_SCREENS } from "./deliveryDemo";
+import { noScreens, screenIds, screenLine, screenPairs } from "./deliveryScreens";
 import {
 	agentLine,
 	attemptOutcome,
@@ -285,6 +287,80 @@ test("a planned mission's worker delivery report shows as the result, with what 
 	expect(app.shows("Answer with Send back, or in a thread with the mission.")).toBe(true);
 	expect(app.shows("Commit 5c0ffee10000")).toBe(true);
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
+test("a worker's screens show Before and After from their pins, reading each side once", async () => {
+	const app = await ready();
+	await pressCheck(app, "id:check-task.mock-project.native.native-5");
+	await app.waitFor("id:delivery-screens");
+	expect(app.shows("Today: mission rows")).toBe(true);
+	expect(app.shows("Before and After")).toBe(true);
+	expect(app.shows("New screen")).toBe(true);
+	// The first screen opens with the page, on After. Outputs does not open the same capture again.
+	await app.waitFor("id:screens-comparison");
+	await app.waitUntil(() => reads(app) === `Source reads: [${DEMO_SCREENS.after}@1]`);
+	expect(app.count("id:artifact-pane")).toBe(1);
+	await pressCheck(app, "id:screens-tab-before");
+	await app.waitUntil(() => reads(app) === `Source reads: [${DEMO_SCREENS.after}@1 ${DEMO_SCREENS.before}@1]`);
+	// Switching back reads nothing again.
+	await pressCheck(app, "id:screens-tab-after");
+	expect(reads(app)).toBe(`Source reads: [${DEMO_SCREENS.after}@1 ${DEMO_SCREENS.before}@1]`);
+	// One screen opens at a time. A new screen has no Before.
+	await pressCheck(app, `id:screen-${DEMO_SCREENS.added}`);
+	await app.waitUntil(() => reads(app).includes(DEMO_SCREENS.added));
+	expect(app.count("id:screens-comparison")).toBe(1);
+	await pressCheck(app, "id:screens-tab-before");
+	expect(app.shows("This screen is new. It has no Before.")).toBe(true);
+	await app.keyboard.press("escape");
+	expect(app.shows("id:screens-comparison")).toBe(false);
+	expect(app.shows("id:delivery")).toBe(true);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
+test("screen pairs name pinned image links only, and a reason shows instead of captures", () => {
+	const link = (artifactId: string, kind = "image", revision: number | null = 1) => ({
+		artifactId,
+		sessionId: "w",
+		title: `${artifactId} (After)`,
+		kind,
+		linkedAt: 1,
+		...(revision ? { revision } : {}),
+	});
+	const work: DeliveredWork = {
+		version: 1,
+		subject: { kind: "task", projectId: "p", missionId: "m", taskId: "t" },
+		deliveryId: "a".repeat(64),
+		targetId: "target",
+		ownerSessionId: "w",
+		pullRequests: [],
+		artifacts: [link("a"), link("b"), link("nsh", "nsh"), link("loose", "image", null)],
+		screens: {
+			pairs: [{ before: "b", after: "a" }, { after: "nsh" }, { before: "gone", after: "b" }, { after: "loose" }],
+			reportId: "r",
+			reportedAt: 1,
+		},
+		production: "not_tracked",
+		verification: null,
+		verificationCurrent: false,
+		verificationReceiptState: "unknown",
+		verificationRevision: 0,
+		pendingOperationId: null,
+	};
+	const pairs = screenPairs(work);
+	expect(pairs.map((p) => p.title)).toEqual(["a", "Screen", "b", "Screen"]);
+	expect(pairs.map(screenLine)).toEqual([
+		"Before and After",
+		"Not linked to this result now",
+		"After only: Before is not linked now",
+		"Not linked to this result now",
+	]);
+	expect([...screenIds(work)]).toEqual(["b", "a", "nsh", "gone", "loose"]);
+	expect(noScreens(work)).toBe("");
+	const none: DeliveredWork = { ...work, screens: { none: "No visible change", reportId: "r", reportedAt: 1 } };
+	expect(screenPairs(none)).toEqual([]);
+	expect(noScreens(none)).toBe("No visible change");
+	// Without a delivery there is no pin to read.
+	expect(screenPairs({ ...work, deliveryId: null })[0]?.after).toBe(null);
 });
 
 test("rapid presses while an answer is on its way send once", async () => {
