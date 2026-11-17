@@ -118,7 +118,8 @@ fn arr(v: &Value) -> &[Value] {
     v.as_array().map_or(&[], Vec::as_slice)
 }
 
-/// The artifacts a question names that its chat still has, as the service read them. At most 3.
+/// The artifacts a question names, as the service read them: the chat's own, or another chat's (`sessionId`)
+/// linked to its mission, such as a prototype's mockup. At most 3.
 fn question_artifacts(q: &Value) -> Vec<DecisionArtifact> {
     let session = s(&q["session"]["id"]);
     arr(&q["artifacts"])
@@ -126,7 +127,10 @@ fn question_artifacts(q: &Value) -> Vec<DecisionArtifact> {
         .take(3)
         .filter_map(|a| {
             Some(DecisionArtifact {
-                session_id: session.clone(),
+                session_id: a["sessionId"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .map_or_else(|| session.clone(), str::to_owned),
                 artifact_id: a["id"].as_str().filter(|id| !id.is_empty())?.to_owned(),
                 title: s(&a["title"]),
                 kind: s(&a["kind"]),
@@ -932,12 +936,19 @@ mod tests {
         ]});
         let shown = question_artifacts(&q);
         assert_eq!(
-            shown.iter().map(|a| a.artifact_id.as_str()).collect::<Vec<_>>(),
+            shown
+                .iter()
+                .map(|a| a.artifact_id.as_str())
+                .collect::<Vec<_>>(),
             ["mock", "b"]
         );
         assert_eq!(shown[0].session_id, "chat");
         assert_eq!(shown[0].revision, 2);
         assert!(question_artifacts(&json!({"session":{"id":"chat"}})).is_empty());
+        let linked = json!({"session":{"id":"builder"},"artifacts":[
+            {"id":"layouts","title":"Layouts","kind":"nsh","revision":3,"sessionId":"prototype"}
+        ]});
+        assert_eq!(question_artifacts(&linked)[0].session_id, "prototype");
     }
 
     fn words(pick: Option<&str>, text: &str, question: &str) -> Value {

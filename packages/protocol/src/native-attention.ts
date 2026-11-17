@@ -17,8 +17,11 @@ export interface NativeAttentionQuestion {
 	scope: AssistanceScope;
 	question: AgentQuestion;
 	session: Pick<SessionSummary, "id" | "title" | "missionId" | "inputGeneration">;
-	/** The question's artifacts the chat still has, at their latest revision. Unknown IDs are left out. */
-	artifacts?: Array<Pick<ArtifactSummary, "id" | "title" | "kind" | "revision">>;
+	/**
+	 * The question's artifacts at their latest revision: the chat's own, or another chat's artifact linked to the
+	 * chat's mission (then `sessionId` names that chat). Unknown IDs are left out.
+	 */
+	artifacts?: Array<Pick<ArtifactSummary, "id" | "title" | "kind" | "revision"> & { sessionId?: string }>;
 }
 export interface NativeAttentionRead {
 	version: 1;

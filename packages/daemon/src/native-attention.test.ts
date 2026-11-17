@@ -69,6 +69,38 @@ test("a question's artifacts show with their titles, and IDs the chat does not h
 	]);
 });
 
+test("a builder's question shows the prototype mockup another chat linked to its mission", async (t) => {
+	const f = await nativeAttentionFixture();
+	t.after(() => f.close());
+	const made = (sessionId: string, id: string, revision: number) => ({
+		id,
+		sessionId,
+		title: `${id} by ${sessionId}`,
+		kind: "nsh" as const,
+		revision,
+		createdAt: 1,
+		updatedAt: 2,
+	});
+	const saved = new Map([
+		["prototype-chat", [made("prototype-chat", "layouts", 3), made("prototype-chat", "unlinked", 1)]],
+	]);
+	t.mock.method(f.sessions, "artifacts", async (id: string) => saved.get(id) ?? []);
+	f.store.join("prototype-chat", f.mission.id);
+	f.store.linkArtifact(f.mission.id, {
+		sessionId: "prototype-chat",
+		artifactId: "layouts",
+		title: "Layouts",
+		kind: "nsh",
+		revision: 1,
+	});
+	f.question = { ...f.question, data: { ...f.question.data, artifacts: ["layouts", "unlinked"] } };
+	assert.deepEqual(
+		(await f.read()).questions[0]!.artifacts,
+		[{ id: "layouts", title: "layouts by prototype-chat", kind: "nsh", revision: 3, sessionId: "prototype-chat" }],
+		"only artifacts linked to the mission, at their latest revision; others stay hidden",
+	);
+});
+
 test("progress, Later and opening permission never complete; changed permissions reject shown intent", async (t) => {
 	const f = await nativeAttentionFixture();
 	t.after(() => f.close());

@@ -1,6 +1,7 @@
 /** Native capability ingress. Reuses attention receipts and ordinary input admission, never auto-resumes. */
-import { completeAnswers, interviewDigest, validateAnswers, validateQuestions } from "@pilot/kernel/interview-round";
+
 import { createHash } from "node:crypto";
+import { completeAnswers, interviewDigest, validateAnswers, validateQuestions } from "@pilot/kernel/interview-round";
 import type {
 	AgentQuestion,
 	AssistanceRequest,
@@ -295,12 +296,30 @@ export class NativeAttention {
 			}
 		} else if (s.mode === "ask") return undefined;
 		// The question names artifacts by ID; the card needs their titles. IDs the chat no longer has are left out.
+		// A builder may name its prototype's mockup: another chat saved it, and Pilot linked it to their mission.
 		const named = Array.isArray(data.artifacts) ? data.artifacts.slice(0, 3) : [];
 		const saved = named.length ? await this.deps.sessions.artifacts(sessionId).catch(() => []) : [];
-		const artifacts = named.flatMap((id) => {
-			const a = saved.find((x) => x.id === id);
-			return a ? [{ id: a.id, title: a.title, kind: a.kind, revision: a.revision }] : [];
-		});
+		const artifacts: NonNullable<NativeAttentionQuestion["artifacts"]> = [];
+		for (const id of named) {
+			const own = saved.find((x) => x.id === id);
+			if (own) {
+				artifacts.push({ id, title: own.title, kind: own.kind, revision: own.revision });
+				continue;
+			}
+			const link = s.missionId
+				? this.deps.store.artifactReferences(s.missionId, id).find((l) => l.sessionId !== sessionId)
+				: undefined;
+			if (!link) continue;
+			const theirs = (await this.deps.sessions.artifacts(link.sessionId).catch(() => [])).find((x) => x.id === id);
+			if (theirs)
+				artifacts.push({
+					id,
+					title: theirs.title,
+					kind: theirs.kind,
+					revision: theirs.revision,
+					sessionId: link.sessionId,
+				});
+		}
 		return {
 			scope: {
 				subject: { kind: "question", sessionId, entryId: q.id },
