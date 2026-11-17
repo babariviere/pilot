@@ -307,6 +307,17 @@ test("KernelSession admits subagent answers as durable input and bridges subagen
 	assert.equal((commands[1] as { followUp: boolean }).followUp, true);
 	assert.deepEqual(commands[2], { requestId: "r3", action: "stop", name: "review" });
 	assert.equal(commands.length, 3);
+	// Stop holds subagent answers, so it also stops subagents still working.
+	await session.abort();
+	assert.equal(commands.length, 4);
+	assert.deepEqual(
+		{ ...(commands[3] as object), requestId: undefined },
+		{
+			requestId: undefined,
+			action: "stop",
+			name: "review",
+		},
+	);
 });
 
 test("the bridge rejects commands before the extension reports and when the extension refuses", async () => {

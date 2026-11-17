@@ -79,6 +79,20 @@ export function applyFailure(meta: OutcomeMeta, reason: string, now: number): bo
 }
 
 /**
+ * Stop withdrew the chat's unanswered question, so it no longer waits on the user. A newer version than the
+ * question's, so the kernel's saved question completion cannot return.
+ */
+export function applyQuestionStopped(meta: OutcomeMeta, now: number): boolean {
+	if (meta.outcome !== "question" || meta.working) return false;
+	meta.lastCompletionAt ??= meta.outcomeAt ?? -1;
+	meta.outcome = "stopped";
+	meta.outcomeAt = Math.max(now, Math.max(meta.lastOutcomeAt ?? -1, meta.outcomeAt ?? -1) + 1);
+	meta.lastOutcomeAt = meta.outcomeAt;
+	delete meta.outcomeReason;
+	return true;
+}
+
+/**
  * The session moved to another conversation attempt, whose own completions follow. Keeps the version high-water
  * marks, so the left attempt's outcome cannot return and attention versions stay monotonic.
  */

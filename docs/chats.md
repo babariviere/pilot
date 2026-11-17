@@ -22,7 +22,9 @@ When an agent asks a question, choose a suggested answer or write your own.
 Automatic inputs wait while it is open. Database approvals require the explicit
 [approval control](databases.md), not a typed reply.
 
-**Stop** ends the current run and holds automatic follow-ups. Send another message
+**Stop** ends the current run, stops working subagents and holds automatic follow-ups. Background
+jobs keep running, but their results wait with the other held inputs, so the chat shows as stopped,
+not working. Stop also withdraws an open question. Send another message
 or explicitly send held inputs to continue. Stop does not undo changes already made.
 On macOS, **⌘.** stops the open chat's working agent.
 In Day, a stopped chat shows **Continue**, which sends one fixed follow-up (native operation

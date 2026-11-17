@@ -173,6 +173,7 @@ import { readSessionDiagnostics } from "./session-diagnostics.ts";
 import {
 	applyActivity,
 	applyFailure,
+	applyQuestionStopped,
 	clearOutcome,
 	normalizeLegacyOutcome,
 	type OutcomeMeta,
@@ -377,6 +378,8 @@ export interface SessionWorker {
 	awaitedQuestion?: { text: string; at: number };
 	/** Live-worker work continues between the last job ending and its result turn completing. */
 	awaitingJobFollowUp?: boolean;
+	/** Stop holds automatic follow-ups (job and subagent results) until the next run starts. */
+	followUpsHeld?: boolean;
 	/** A compaction is summarizing the conversation. Shown as work without starting a turn. */
 	compacting?: boolean;
 }
@@ -933,6 +936,7 @@ export class Worker implements SessionWorker {
 	toolStallKey?: string;
 	openTodoCount?: number;
 	awaitingJobFollowUp?: boolean;
+	followUpsHeld?: boolean;
 	awaitedQuestion?: { text: string; at: number };
 	compacting = false;
 	private readonly pending = new Map<
@@ -10860,6 +10864,14 @@ ${run.excerpt}`,
 			const meta = this.require(id);
 			const generation = meta.inputGeneration ?? 0;
 			await worker.request(command);
+			if (command.type === "abort" && (meta.inputGeneration ?? 0) === generation) {
+				// The kernel now holds job and subagent results until the user writes again: no result turn follows.
+				worker.followUpsHeld = true;
+				worker.awaitingJobFollowUp = false;
+				// Stop withdrew an unanswered question; the chat no longer needs the user.
+				if (applyQuestionStopped(meta, Date.now())) await this.save(meta);
+				this.emit(meta, worker);
+			}
 			if (
 				command.type === "abort" &&
 				meta.lifecycleCheckpoint?.phase === "stopped" &&
@@ -14290,7 +14302,8 @@ ${run.excerpt}`,
 		if (packet.type === "jobs.changed") {
 			if (this.workers.get(meta.id) !== worker) return;
 			worker.runningJobs = packet.jobs;
-			if (packet.jobs.length) {
+			// After Stop, the kernel holds the jobs' results: no result turn comes, so do not wait for one.
+			if (packet.jobs.length && !worker.followUpsHeld) {
 				worker.awaitingJobFollowUp = true;
 				if (applyActivity(meta, Boolean(meta.working), undefined, true)) void this.save(meta);
 			}
@@ -14366,6 +14379,8 @@ ${run.excerpt}`,
 				this.generateTitle(meta);
 			}
 			const wasWorking = Boolean(meta.working);
+			// A new run means the user wrote again, which releases what Stop held.
+			if (packet.working) worker.followUpsHeld = false;
 			if (
 				!packet.working &&
 				!worker.runningJobs?.length &&

@@ -1836,6 +1836,16 @@ export class KernelSession {
 		await this.publishSystemMessageStates();
 		await this.conversation.abort(context, { background: true });
 		await finishQuestionReply(this.harness, this.conversation.id, context);
+		// Stop holds the subagents' answers, so stop their work too instead of letting it run unseen.
+		await Promise.all(
+			this.subagents.current
+				.filter((agent) => agent.state === "working")
+				.map((agent) =>
+					this.subagents
+						.command({ action: "stop", name: agent.name })
+						.catch((error: unknown) => console.warn(`pilot: could not stop subagent ${agent.name}`, error)),
+				),
+		);
 		if (this.#releaseStoppedRequests) {
 			if (!this.#updateToolsPaused) this.#toolDrain.resume();
 			this.#releaseStoppedRequests();

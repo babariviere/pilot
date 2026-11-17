@@ -3018,6 +3018,43 @@ test("Stop reaches a parked pending question instead of reporting an idle no-op"
 	assert.equal(f.workers.at(-1)!.requests[0]?.type, "abort");
 });
 
+test("Stop withdraws a pending question, so the chat no longer waits on the user", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
+	await sessions["starting"].get(created.id);
+	f.workers[0]!.finish({ outcome: "question", outcomeAt: 42, outcomeReason: "Which?" });
+	await until(() => sessions.get(created.id)?.outcome === "question");
+	await sessions.stop(created.id);
+	await until(() => sessions.get(created.id)?.outcome === "stopped");
+	assert.equal(sessions.get(created.id)?.outcomeReason, undefined);
+	assert.ok((sessions.get(created.id)?.outcomeAt ?? 0) > 42);
+	assert.equal(sessions["metas"].get(created.id)?.outcome, "stopped");
+});
+
+test("after Stop, jobs that end leave no result turn to wait for", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "work" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	await sessions.stop(created.id);
+	const worker = f.workers[0]!;
+	const meta = sessions["metas"].get(created.id)!;
+	const jobs = [
+		{ id: "tests", name: "Tests", state: "running" as const, startedAt: Date.now(), outputPath: "/tmp/tests.log" },
+	];
+	sessions["onPacket"](meta, worker, { type: "jobs.changed", jobs });
+	assert.equal(sessions.get(created.id)?.working, true, "a running job is still work");
+	sessions["onPacket"](meta, worker, { type: "jobs.changed", jobs: [] });
+	assert.equal(sessions.get(created.id)?.working, false, "the kernel holds the job's result after Stop");
+	// The user's next message starts a run, and jobs from then on get their result turn again.
+	sessions["onPacket"](meta, worker, { type: "working", working: true });
+	sessions["onPacket"](meta, worker, { type: "jobs.changed", jobs });
+	sessions["onPacket"](meta, worker, { type: "working", working: false });
+	sessions["onPacket"](meta, worker, { type: "jobs.changed", jobs: [] });
+	assert.equal(sessions.get(created.id)?.working, true, "the job's result turn is still to come");
+});
+
 test("diagnostics reads a parked session without opening its worker or transcript", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager(
@@ -5901,8 +5938,10 @@ test("reported running jobs prevent parking even when process inspection misses 
 	const sessions = await f.manager({}, { idleParkMs: 60_000 });
 	const created = await sessions.spawn({ cwd: f.source, message: "work" });
 	await until(() => sessions.get(created.id)?.state === "working");
-	await sessions.stop(created.id);
+	await sessions["starting"].get(created.id);
 	const worker = f.workers[0]!;
+	worker.finish({ outcome: "done", outcomeAt: Date.now() });
+	await until(() => sessions.get(created.id)?.working === false);
 	const meta = sessions["metas"].get(created.id)!;
 	const jobs = [
 		{ id: "tests", name: "Tests", state: "running" as const, startedAt: Date.now(), outputPath: "/tmp/tests.log" },
