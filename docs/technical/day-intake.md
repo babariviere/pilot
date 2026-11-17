@@ -41,6 +41,34 @@ The screen reads again after opening, on Read again, after a write whose reply
 held no fresh read, and when the root's cached Today preview of requests
 changes. An invalidation alone does not read the service.
 
+## Slack report history and explicit edits
+
+`day.slack.read {offset?: number}` reads saved report history through
+`GET /api/slack-controls?projectId=…&offset=…`. The native owner supplies the
+project and credentials. Each page reuses the tracking worker's 100-row lists
+for non-dismissed and dismissed reports, limiting the bridge payload and kept UI
+data to 200 rows. Previous/Next reach older rows. The report digest includes the
+page offset, rows, groups and group revision; the project binding is separate.
+
+`day.slack.write` keeps journal-before-send and lookup-only recovery for report
+corrections, tackled/open status and group rename/merge/split. Each edit names the
+shown digest and offset. Source-message opening is a separate branch: it rereads
+the exact saved item twice, checks the selected project and safe Slack URL, then
+calls the native opener without starting work or recording completion.
+
+Reports reuse the existing explicit intake start controls. For a Slack report
+outside Today's first 100 rows, native intake reads `/api/tracked-items/:id`,
+checks its project, kind, revision, open status and latest links, and rereads the
+current project context. The daemon's atomic intake CAS still checks active
+membership, full link history and the one-use Start claim. Reading another page
+or opening Start never creates a chat; only the explicit Start dispatch does.
+
+Report drafts are saved in `SavedView.slackReports`. Restore sends nothing and
+keeps unfinished text even when it is not valid for submission. Old window JSON
+defaults to no report view. Existing automatic-done evidence stays readable,
+but new PR merges, mission completions, reactions and agent reports cannot mark
+a report tackled.
+
 ## Saved Linear browsing read
 
 `day.linear.read {}` uses the same selected-project native owner and authenticated

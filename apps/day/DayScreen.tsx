@@ -17,6 +17,7 @@ import type { Day } from "./day";
 import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
 import { FeedbackScreen } from "./FeedbackScreen";
 import { LinearScreen } from "./LinearScreen";
+import { SlackReportsScreen } from "./SlackReportsScreen";
 import { MissionScreen } from "./MissionScreen";
 import { NewScreen } from "./NewScreen";
 import { animatePlanningList, type Shown, shown } from "./nav";
@@ -173,6 +174,16 @@ function Screens(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; 
 }
 
 function Results(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
+	return (
+		<If when={props.at === "slack"} else={<OtherResults {...props} />}>
+			<Arrive class="flex-1">
+				<SlackReportsScreen day={props.day} />
+			</Arrive>
+		</If>
+	);
+}
+
+function OtherResults(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
 	return (
 		<If
 			when={props.at === "delivery"}

@@ -333,6 +333,9 @@ pub struct SavedView {
     /// again only reads, and shows nothing for another project.
     #[prop(default)]
     pub linear: String,
+    /// Slack report place and unsent corrections. Restoring never sends an action.
+    #[prop(default)]
+    pub slack_reports: String,
     /// The project Today shows, by project ID, or empty for All projects.
     /// The window's own choice: showing it again only reads, and moves no
     /// draft or chat.
@@ -458,6 +461,7 @@ impl SavedView {
             + self.connection_settings.len()
             + self.slack_settings.len()
             + self.database_settings.len()
+            + self.slack_reports.len()
             + self.knowledge.len()
             + self.thread.len()
             + self.feedback.len()

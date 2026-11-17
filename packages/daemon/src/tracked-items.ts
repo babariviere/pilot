@@ -180,6 +180,15 @@ export class TrackedItemStore {
 	commonCases(projectId: string, now = Date.now()): Promise<import("@pilot/protocol").SlackCommonCaseList> {
 		return this.rpc("commonCases", { projectId, now });
 	}
+	slackReports(
+		projectId: string,
+		offset = 0,
+	): Promise<ReturnType<typeof import("./slack-reports-disk.ts").readSlackReports>> {
+		return this.rpc("slackReports", { projectId, offset });
+	}
+	editSlackReport(projectId: string, digest: string, action: string, value: unknown): Promise<void> {
+		return this.rpc("editSlackReport", { projectId, digest, action, value });
+	}
 	saveCases(projectId: string, input: CaseInput, groups: CaseGroup[], now: number): Promise<void> {
 		return this.rpc("saveCases", { projectId, input, groups, now });
 	}

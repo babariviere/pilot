@@ -73,7 +73,7 @@ export interface SlackAgentStatusResult {
 type SlackWaiting = { since: number; reason?: string; afterTs?: string; checkedAt?: number };
 /** What a chat's agent may set with slack_status. */
 export type SlackAgentStatus = "waiting" | "in_progress" | "done";
-const SLACK_AGENT_STATUSES: readonly string[] = ["waiting", "in_progress", "done"];
+const SLACK_AGENT_STATUSES: readonly string[] = ["waiting", "in_progress"];
 
 export type TrackedInput = Pick<TrackedItem, "externalId" | "title" | "url" | "status" | "metadata" | "updatedAt"> & {
 	/** Slack only: the thread's text, kept locally for search and never returned to clients. */
@@ -173,8 +173,6 @@ const INTAKE_OPEN = `active=1 AND dismissed=0 AND session_id IS NULL AND mission
 	AND NOT EXISTS (SELECT 1 FROM tracked_item_links l WHERE l.item_id=tracked_items.id)
 	AND ((kind='slack' AND slack_status='open') OR
 	(kind='linear' AND coalesce(json_extract(metadata, '$.statusType'), '') NOT IN ('completed','canceled')))`;
-/** Statuses whose work is unfinished: a ✅ in Slack, a merged PR or a completed mission marks them Done. */
-const SLACK_UNFINISHED = ["open", "in_progress", "waiting"];
 /** The effective label: a user override (an explicit null clears it) wins over the classifier's. */
 const SLACK_LABEL =
 	"CASE WHEN json_type(slack_overrides, '$.label') IS NOT NULL THEN json_extract(slack_overrides, '$.label') ELSE json_extract(metadata, '$.label') END";
@@ -182,7 +180,6 @@ const SLACK_LABEL =
 const SLACK_HIDDEN = `(coalesce(json_extract(metadata, '$.mentionQualified'), 0) != 1 AND EXISTS (SELECT 1 FROM json_each(?) AS hidden WHERE json_extract(hidden.value, '$[0]') = project_id AND json_extract(hidden.value, '$[1]') = ${SLACK_LABEL}))`;
 const IN_PROJECTS = "project_id IN (SELECT value FROM json_each(?))";
 /** Labels in the bound JSON array. A missing label never matches (configured names are never empty). */
-const SLACK_LABEL_IN = `coalesce(${SLACK_LABEL}, '') IN (SELECT value FROM json_each(?))`;
 
 export class TrackedItemDisk {
 	private readonly db: DatabaseSync;
@@ -190,8 +187,6 @@ export class TrackedItemDisk {
 	readonly sizes: LinearSizeDisk;
 	readonly cases: SlackCaseDisk;
 	private readonly listeners = new Set<(projectId: string) => void>();
-	/** Each project's close labels, as last set by the daemon. A project without an entry is never reconciled. */
-	private readonly closeLabels = new Map<string, string>();
 	constructor(path: string) {
 		this.db = new DatabaseSync(path);
 		this.db.exec(`
@@ -446,10 +441,7 @@ export class TrackedItemDisk {
 			ON CONFLICT(handle) DO UPDATE SET id=excluded.id, checked_at=excluded.checked_at`)
 			.run(handle, id, now);
 	}
-	/**
-	 * Sets a project's close labels and applies them to every stored Slack message. Returns whether a row changed.
-	 * Called at startup and on settings changes, so effects edited while pilotd was stopped still apply.
-	 */
+	/** Accept legacy label settings without rewriting stored status or closure evidence. */
 	slackLabelEffects(projectId: string, close: string[]): boolean {
 		if (
 			typeof projectId !== "string" ||
@@ -459,51 +451,9 @@ export class TrackedItemDisk {
 			close.some((label) => typeof label !== "string" || !label || label.length > 80)
 		)
 			throw new Error("Invalid Slack label effects");
-		this.closeLabels.set(projectId, JSON.stringify(close));
-		this.db.exec("BEGIN");
-		try {
-			const changed = this.reconcile(projectId, "", []);
-			this.db.exec("COMMIT");
-			if (changed) this.emit(projectId);
-			return changed;
-		} catch (error) {
-			this.db.exec("ROLLBACK");
-			throw error;
-		}
+		return false;
 	}
-	/**
-	 * Applies close labels to a project's Slack rows, optionally narrowed by an extra condition. Idempotent:
-	 * - a label-closed row whose effective label no longer closes reopens (it was open before Pilot closed it);
-	 * - a label-closed row relabelled to another close label keeps closed, under the new label;
-	 * - an open row with a close label and no status of the user's is dismissed, naming the label.
-	 * Rows whose status the user set (overrides.status) are never touched. Call inside a transaction.
-	 */
-	private reconcile(projectId: string, scope: string, scopeArgs: string[]): boolean {
-		const close = this.closeLabels.get(projectId);
-		if (close === undefined) return false;
-		const base = `project_id=? AND kind='slack'${scope}`;
-		let changes = 0;
-		for (const [set, where] of [
-			[
-				"slack_status='open', dismissed=0, closed_by_label=NULL",
-				`closed_by_label IS NOT NULL AND (NOT ${SLACK_LABEL_IN} OR json_extract(metadata, '$.mentionQualified') IS 1)`,
-			],
-			[
-				`closed_by_label=${SLACK_LABEL}`,
-				`closed_by_label IS NOT NULL AND closed_by_label != ${SLACK_LABEL} AND ${SLACK_LABEL_IN}`,
-			],
-			[
-				`slack_status='dismissed', dismissed=1, closed_by_label=${SLACK_LABEL}`,
-				`closed_by_label IS NULL AND slack_status='open' AND dismissed=0 AND json_type(slack_overrides, '$.status') IS NULL AND coalesce(json_extract(metadata, '$.mentionQualified'), 0) != 1 AND ${SLACK_LABEL_IN}`,
-			],
-		] as const)
-			changes += Number(
-				this.db
-					.prepare(`UPDATE tracked_items SET ${set} WHERE ${base} AND ${where}`)
-					.run(projectId, ...scopeArgs, close).changes,
-			);
-		return changes > 0;
-	}
+
 	onChange(listener: (projectId: string) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
@@ -810,12 +760,7 @@ export class TrackedItemDisk {
 						AND external_id ${operator} (SELECT value FROM json_each(?))`)
 							.run(next, projectId, kind, previous, ids).changes || changed;
 			}
-			// A new or reclassified message takes its label's effect at once.
-			if (kind === "slack" && items.length)
-				changed =
-					this.reconcile(projectId, " AND external_id IN (SELECT value FROM json_each(?))", [
-						JSON.stringify(items.map((item) => item.externalId)),
-					]) || changed;
+
 			if (checkpoint)
 				this.db
 					.prepare(
@@ -908,53 +853,19 @@ export class TrackedItemDisk {
 		}
 	}
 
-	/** A user's reopen fences in-flight reads. Counts/users changing do not turn the same emoji into a new event. */
+	/** Keep legacy reaction evidence readable without treating emoji as user intent. */
 	recordSlackReaction(id: string, present: boolean, version: number): void {
-		this.db.exec("BEGIN IMMEDIATE");
-		let projectId: string | undefined;
-		try {
-			const row = this.db.prepare("SELECT * FROM tracked_items WHERE id=?").get(id) as Row | undefined;
-			if (row?.kind === "slack") {
-				if (present || (row.slack_status_version === version && SLACK_UNFINISHED.includes(row.slack_status)))
-					this.db.prepare("UPDATE tracked_items SET slack_reaction_seen=? WHERE id=?").run(present ? 1 : 0, id);
-				if (
-					present &&
-					!row.slack_reaction_seen &&
-					row.slack_status_version === version &&
-					row.active &&
-					!row.dismissed &&
-					SLACK_UNFINISHED.includes(row.slack_status)
-				) {
-					const completion = {
-						...JSON.parse(row.slack_completion),
-						reason: "Done · ✅ in Slack",
-						reactionDone: { at: Date.now() },
-					};
-					this.db
-						.prepare(
-							"UPDATE tracked_items SET slack_status='done', closed_by_label=NULL, slack_completion=? WHERE id=?",
-						)
-						.run(JSON.stringify(completion), id);
-					projectId = row.project_id;
-				}
-			}
-			this.db.exec("COMMIT");
-		} catch (error) {
-			this.db.exec("ROLLBACK");
-			throw error;
-		}
-		if (projectId) this.emit(projectId);
+		this.db
+			.prepare(`UPDATE tracked_items SET slack_reaction_seen=? WHERE id=? AND kind='slack'
+			AND (slack_status_version=? OR ?=1)`)
+			.run(present ? 1 : 0, id, version, present ? 1 : 0);
 	}
 
-	/**
-	 * The agent of a chat reports its Slack messages as waiting for a reply, back in progress, or done. Only messages
-	 * whose latest chat is this one, and only while they are In progress or Waiting: Open, Done and Dismissed are the
-	 * user's (a message the agent finished is reopened by the user, never by the agent). Done keeps the reason, shown
-	 * as "Done · reason", and follows the same completion path as any other Done.
-	 */
+	/** Agents may wait or continue. Only the user marks a report tackled. */
 	agentSlackStatus(sessionId: string, status: SlackAgentStatus, reason?: string): SlackAgentStatusResult {
 		if (typeof sessionId !== "string" || !sessionId || sessionId.length > 200) throw new Error("Invalid chat");
-		if (!SLACK_AGENT_STATUSES.includes(status)) throw new Error('status must be "waiting", "in_progress" or "done"');
+		if (!SLACK_AGENT_STATUSES.includes(status))
+			throw new Error('Only the user marks a report tackled; status must be "waiting" or "in_progress"');
 		if (reason !== undefined && (typeof reason !== "string" || reason.length > 200))
 			throw new Error("reason must be at most 200 characters");
 		const text = reason
@@ -966,31 +877,27 @@ export class TrackedItemDisk {
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
 			const rows = this.db
-				.prepare(`SELECT i.id, i.project_id, i.title, i.slack_status
+				.prepare(`SELECT i.id, i.project_id, i.title, i.slack_status, i.slack_waiting
 				FROM tracked_item_links l CROSS JOIN tracked_items i ON i.id=l.item_id
 				WHERE l.kind='sessions' AND l.target=? AND i.kind='slack' AND i.session_id=? ORDER BY i.id LIMIT ?`)
-				.all(sessionId, sessionId, LINK_LIMIT) as Pick<Row, "id" | "project_id" | "title" | "slack_status">[];
+				.all(sessionId, sessionId, LINK_LIMIT) as Pick<
+				Row,
+				"id" | "project_id" | "title" | "slack_status" | "slack_waiting"
+			>[];
 			for (const row of rows) {
 				if (row.slack_status !== "in_progress" && row.slack_status !== "waiting") {
 					result.unchanged.push({ title: row.title, status: row.slack_status });
 					continue;
 				}
-				if (status === "done") {
-					const done = text ? `Done · ${text}` : null;
-					this.db
-						.prepare(`UPDATE tracked_items SET slack_status='done', closed_by_label=NULL,
-						slack_completion=CASE WHEN ? IS NULL THEN json_remove(slack_completion, '$.reason')
-						ELSE json_set(slack_completion, '$.reason', ?) END WHERE id=?`)
-						.run(done, done, row.id);
-				} else {
-					const waiting: SlackWaiting | null =
-						status === "waiting" ? { since: Date.now(), ...(text ? { reason: text } : {}) } : null;
-					this.db
-						.prepare(
-							"UPDATE tracked_items SET slack_status=?, slack_waiting=coalesce(?, slack_waiting) WHERE id=?",
-						)
-						.run(status, waiting && JSON.stringify(waiting), row.id);
-				}
+				const previousSince = row.slack_waiting ? (JSON.parse(row.slack_waiting) as SlackWaiting).since : 0;
+				const waiting: SlackWaiting | null =
+					status === "waiting"
+						? { since: Math.max(Date.now(), previousSince + 1), ...(text ? { reason: text } : {}) }
+						: null;
+				this.db
+					.prepare("UPDATE tracked_items SET slack_status=?, slack_waiting=coalesce(?, slack_waiting) WHERE id=?")
+					.run(status, waiting && JSON.stringify(waiting), row.id);
+
 				result.updated.push({ title: row.title, status });
 				projects.add(row.project_id);
 			}
@@ -1109,8 +1016,8 @@ export class TrackedItemDisk {
 	}
 
 	/**
-	 * Applies a reply check to a message still waiting since `since`: a new reply ends the wait (In progress once its
-	 * chat was resumed, else Open), and the user's own replies only move afterTs. Returns whether it applied.
+	 * Applies a reply check to the same wait. Only successful delivery ends the wait;
+	 * the user's own replies only move afterTs. Returns whether it applied.
 	 */
 	slackWaitingResult(
 		id: string,
@@ -1135,19 +1042,9 @@ export class TrackedItemDisk {
 	}
 
 	/** Durable once-per-item admission. Reopen never schedules a reaction or clears the outcome. */
-	reserveSlackDone(projectId: string): TrackedItem | undefined {
-		const row = this.db
-			.prepare(`SELECT * FROM tracked_items WHERE project_id=? AND kind='slack' AND active=1
-			AND slack_status='done' AND slack_done IS NULL AND json_extract(slack_start, '$.outcome')='reacted'
-			ORDER BY id LIMIT 1`)
-			.get(projectId) as Row | undefined;
-		if (!row) return;
-		const admitted = this.db
-			.prepare("UPDATE tracked_items SET slack_done=? WHERE id=? AND slack_done IS NULL")
-			.run(JSON.stringify({ attemptedAt: Date.now(), eyesRemoval: { attemptedAt: Date.now() } }), row.id);
-		if (!admitted.changes) return;
-		this.emit(projectId);
-		return this.require(row.id);
+	reserveSlackDone(_projectId: string): TrackedItem | undefined {
+		// Completion is local user intent, never a Slack write. Do not mutate legacy outcomes.
+		return undefined;
 	}
 	slackDoneResult(id: string, outcome: "reacted" | "skipped" | "error"): void {
 		if (!["reacted", "skipped", "error"].includes(outcome)) throw new Error("Invalid Slack done outcome");
@@ -1196,14 +1093,11 @@ export class TrackedItemDisk {
 		this.emit(row.project_id);
 	}
 
-	/** Fresh observations and the status change share one transaction. Initial terminal observations are silent. */
+	/** Keep PR observations as evidence without changing report status. */
 	observeSlackPullRequests(observation: SlackPullRequestObservation): void {
-		const { projectId, sessionId, prs, pending } = observation;
+		const { sessionId, prs } = observation;
 		this.db.exec("BEGIN IMMEDIATE");
-		let changed = false;
 		try {
-			const transitioned: SessionPullRequest[] = [];
-			let stale = false;
 			for (const pr of prs) {
 				const url = pr.url.toLowerCase();
 				const previous = this.db
@@ -1213,11 +1107,9 @@ export class TrackedItemDisk {
 					previous &&
 					(Number(previous.checked_at) > pr.checkedAt || (previous.merge_seen === 1 && pr.state !== "merged"))
 				) {
-					stale = true;
 					continue;
 				}
 				const merged = pr.state === "merged";
-				if (merged && previous && previous.state !== "merged" && !previous.merge_seen) transitioned.push(pr);
 				if (!previous || previous.state !== pr.state || Number(previous.checked_at) < pr.checkedAt)
 					this.db
 						.prepare(`INSERT INTO slack_pr_observations VALUES (?, ?, ?, ?, ?)
@@ -1225,63 +1117,16 @@ export class TrackedItemDisk {
 						merge_seen=max(merge_seen,excluded.merge_seen)`)
 						.run(sessionId, url, pr.state, pr.checkedAt, merged ? 1 : 0);
 			}
-			if (!stale && !pending && prs.length && prs.every((pr) => pr.state === "merged") && transitioned.length) {
-				const pr = transitioned.toSorted((a, b) => (b.mergedAt ?? b.checkedAt) - (a.mergedAt ?? a.checkedAt))[0]!;
-				changed = this.finishLinkedSlack(projectId, "sessions", sessionId, `pr:${pr.url.toLowerCase()}`, {
-					reason: `Done · PR #${pr.number} merged`,
-					mergeDone: { pr: pr.url, at: Date.now() },
-				});
-			}
+
 			this.db.exec("COMMIT");
 		} catch (error) {
 			this.db.exec("ROLLBACK");
 			throw error;
 		}
-		if (changed) this.emit(projectId);
 	}
 
-	completeSlackMission(projectId: string, missionId: string, completedAt: number): void {
-		this.db.exec("BEGIN IMMEDIATE");
-		let changed = false;
-		try {
-			changed = this.finishLinkedSlack(projectId, "missions", missionId, `mission:${missionId}:${completedAt}`, {
-				reason: "Done · Mission completed",
-				missionDone: { id: missionId, at: completedAt },
-			});
-			this.db.exec("COMMIT");
-		} catch (error) {
-			this.db.exec("ROLLBACK");
-			throw error;
-		}
-		if (changed) this.emit(projectId);
-	}
-
-	/** Runs off the event loop, reading only indexed links for this chat or mission. */
-	private finishLinkedSlack(
-		projectId: string,
-		kind: "sessions" | "missions",
-		id: string,
-		event: string,
-		completion: Record<string, TrackingJson>,
-	): boolean {
-		// CROSS JOIN keeps the tiny target-link set outermost; without statistics SQLite otherwise scans a project.
-		const rows = this.db
-			.prepare(`SELECT i.id, i.slack_status, i.dismissed, i.slack_completion
-				FROM tracked_item_links l CROSS JOIN tracked_items i ON i.id=l.item_id
-				WHERE l.kind=? AND l.target=? AND i.project_id=? AND i.kind='slack'`)
-			.iterate(kind, id, projectId) as Iterable<Pick<Row, "id" | "slack_status" | "dismissed" | "slack_completion">>;
-		let changed = false;
-		for (const row of rows) {
-			const admitted = this.db.prepare("INSERT OR IGNORE INTO slack_done_events VALUES (?, ?)").run(row.id, event);
-			if (!admitted.changes || !SLACK_UNFINISHED.includes(row.slack_status) || row.dismissed) continue;
-			this.db
-				.prepare(
-					"UPDATE tracked_items SET slack_status='done', closed_by_label=NULL, slack_completion=? WHERE id=?",
-				)
-				.run(JSON.stringify({ ...JSON.parse(row.slack_completion), ...completion }), row.id);
-			changed = true;
-		}
-		return changed;
+	completeSlackMission(_projectId: string, _missionId: string, _completedAt: number): void {
+		// Mission completion is evidence, not the user's tackled decision.
 	}
 
 	patch(id: string, patch: TrackedItemPatch, intakeOperationId?: string): TrackedItem {
@@ -1322,7 +1167,11 @@ export class TrackedItemDisk {
 		}
 		const sessions = bind(item.sessionIds ?? [], patch.sessionId),
 			missions = bind(item.missionIds ?? [], patch.missionId);
-		const overrides: SlackOverrides = { ...item.slack?.overrides, ...patch.slack };
+		const overrides: SlackOverrides = {
+			...item.slack?.overrides,
+			...patch.slack,
+			...(patch.slack?.details ? { details: { ...item.slack?.overrides.details, ...patch.slack.details } } : {}),
+		};
 		let status = item.slack?.status ?? "open";
 		// Linking occurs on confirmed send/create, never on prefill. Local only.
 		const started =
@@ -1344,7 +1193,11 @@ export class TrackedItemDisk {
 			(patch.dismissed !== undefined && patch.dismissed !== item.dismissed && item.kind === "slack") ||
 			(patch.slack &&
 				Object.keys(patch.slack).some(
-					(key) => patch.slack![key as keyof SlackOverrides] !== item.slack?.[key as keyof SlackOverrides],
+					(key) =>
+						patch.slack![key as keyof SlackOverrides] !==
+						(key === "details"
+							? (item.slack?.overrides.details ?? item.metadata.details)
+							: item.slack?.[key as Exclude<keyof SlackOverrides, "details">]),
 				));
 		if (
 			dismissed === item.dismissed &&
@@ -1363,10 +1216,16 @@ export class TrackedItemDisk {
 					slack_reaction_seen=CASE WHEN ? IN ('open','in_progress','waiting') THEN 1 ELSE slack_reaction_seen END WHERE id=?`)
 					.run(patch.dismissed !== undefined || patch.slack?.status !== undefined ? status : "", id);
 			// A wait the user starts has no reason; replies after it resume work like an agent's wait.
-			if (status === "waiting" && item.slack?.status !== "waiting")
-				this.db
-					.prepare("UPDATE tracked_items SET slack_waiting=? WHERE id=?")
-					.run(JSON.stringify({ since: Date.now() } satisfies SlackWaiting), id);
+			if (
+				status === "waiting" &&
+				(item.slack?.status !== "waiting" || (patch.sessionId !== undefined && patch.sessionId !== item.sessionId))
+			)
+				this.db.prepare("UPDATE tracked_items SET slack_waiting=? WHERE id=?").run(
+					JSON.stringify({
+						since: Math.max(Date.now(), (item.slack?.waitingSince ?? 0) + 1),
+					} satisfies SlackWaiting),
+					id,
+				);
 			if (userStatus)
 				this.db
 					.prepare(
@@ -1394,8 +1253,6 @@ export class TrackedItemDisk {
 			] as const)
 				for (const target of targets)
 					this.db.prepare("INSERT INTO tracked_item_links VALUES (?, ?, ?)").run(id, kind, target);
-			// A label the user picks takes its effect, and leaving a close label reopens what it closed.
-			if (item.kind === "slack") this.reconcile(item.projectId, " AND id = ?", [id]);
 			if (correction) {
 				// The outcome after the label's effect, so the classifier learns what the user ended with. A reopened
 				// label-closed message records its label with an open status.
@@ -1408,6 +1265,9 @@ export class TrackedItemDisk {
 						type: after.type,
 						label: after.label,
 						severity: after.severity,
+						...((after.overrides.details ?? item.metadata.details) !== undefined
+							? { details: (after.overrides.details ?? item.metadata.details) as SlackOverrides["details"] }
+							: {}),
 						status: after.status,
 					},
 				};

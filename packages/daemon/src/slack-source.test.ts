@@ -64,6 +64,70 @@ function standalone(channel = "C000000001", count = 1, body = "A crash") {
 		pagination_info: "There are no more messages available.\n",
 	};
 }
+test("poll saves evidenced report details separately from Slack author, including cached results", async (t) => {
+	const f = await fixture(t);
+	const body = "For Acme, Zoë reported export fails.";
+	const details = {
+		client: { value: "Acme", evidence: "For Acme" },
+		issue: { value: "export fails", evidence: "export fails." },
+		reporter: { value: "Zoë", evidence: "Zoë reported" },
+	};
+	let calls = 0;
+	const poll = createSlackPoller(
+		f.store,
+		{
+			classifySlack: async () => {
+				calls++;
+				return { ...bug, details };
+			},
+		},
+		() => now,
+	);
+	const context = { ...f.context, call: async () => standalone("C000000001", 1, body) };
+	const first = await poll(context);
+	assert.deepEqual(first.items[0]!.metadata.details, details);
+	assert.equal(first.items[0]!.metadata.author, "Reporter");
+	await f.store.commit(f.project.id, "slack", first.items);
+	const again = await poll(context);
+	assert.deepEqual(again.items[0]!.metadata.details, details);
+	assert.equal(calls, 1);
+	const saved = (await f.store.list({ projectId: f.project.id })).items[0]!;
+	assert.deepEqual(saved.metadata.details, details);
+});
+
+test("source rejects invented quotes, including text beyond the classified prefix", async (t) => {
+	const f = await fixture(t);
+	const poll = createSlackPoller(
+		f.store,
+		{
+			classifySlack: async () => ({
+				...bug,
+				details: { client: { value: "Acme", evidence: "For Acme" }, issue: null, reporter: null },
+			}),
+		},
+		() => now,
+	);
+	const result = await poll({
+		...f.context,
+		call: async () => standalone("C000000001", 1, `${"x".repeat(12_001)}For Acme`),
+	});
+	assert.equal(result.items.length, 0);
+	assert.equal(result.issue, "slack_classification");
+});
+
+test("manual Slack imports persist thread evidence and parent author without inferring reporter", async (t) => {
+	const f = await fixture(t);
+	const details = {
+		client: null,
+		issue: { value: "Large files fail", evidence: "Small files work; large files fail." },
+		reporter: null,
+	};
+	const add = createSlackAdder(f.store, { classifySlack: async () => ({ ...bug, details }) });
+	const item = await add(f.context, { channel: "C000000001", ts: "1791885305.000001", threadTs: "1791885305.000001" });
+	assert.deepEqual(item.metadata.details, details);
+	assert.equal(item.metadata.author, "Reporter");
+});
+
 test("poller passes only the project's configured labels and recent corrections to the classifier", async (t) => {
 	const f = await fixture(t);
 	await f.store.commit(f.project.id, "slack", [

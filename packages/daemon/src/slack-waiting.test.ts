@@ -129,30 +129,14 @@ test("a chat lists the Slack messages whose latest chat it is, dismissed ones to
 	await assert.rejects(f.items.list({ projectId: f.project.id, sessionId: "" }), /Invalid chat/);
 });
 
-test("a chat's agent marks its message done with an outcome, and only the user reopens it", async (t) => {
+test("only the user marks a report tackled, never the agent", async (t) => {
 	const f = await fixture(t);
 	await f.items.patch(f.item.id, { sessionId: "chat-1", start: true });
 	await f.items.agentSlackStatus("chat-1", "waiting", "CSM");
-	assert.deepEqual(await f.items.agentSlackStatus("chat-1", "done", "Answered\nin thread"), {
-		updated: [{ title: "Invented question", status: "done" }],
-		unchanged: [],
-	});
-	const done = await f.items.require(f.item.id);
-	assert.equal(done.slack?.status, "done");
-	assert.equal(done.slack?.doneReason, "Done · Answered in thread");
-	// Done is final for the agent.
-	assert.deepEqual(await f.items.agentSlackStatus("chat-1", "in_progress"), {
-		updated: [],
-		unchanged: [{ title: "Invented question", status: "done" }],
-	});
-	// The user reopens it; the agent can then finish it again, without a reason this time.
-	await f.items.patch(f.item.id, { slack: { status: "in_progress" } });
-	assert.equal((await f.items.require(f.item.id)).slack?.doneReason, undefined);
-	await f.items.agentSlackStatus("chat-1", "done");
-	const again = await f.items.require(f.item.id);
-	assert.equal(again.slack?.status, "done");
-	assert.equal(again.slack?.doneReason, undefined);
-	await assert.rejects(f.items.agentSlackStatus("chat-1", "open" as never), /status must be/);
+	await assert.rejects(f.items.agentSlackStatus("chat-1", "done", "Answered"), /user|status must be/);
+	assert.equal((await f.items.require(f.item.id)).slack?.status, "waiting");
+	await f.items.patch(f.item.id, { slack: { status: "done" } });
+	assert.equal((await f.items.require(f.item.id)).slack?.status, "done");
 });
 
 test("a reply from someone else resumes the waiting chat; the user's own replies do not", async (t) => {
@@ -196,7 +180,7 @@ test("a reply from someone else resumes the waiting chat; the user's own replies
 	assert.equal((await f.items.require(f.item.id)).slack?.status, "in_progress");
 });
 
-test("a reply to a message without a chat to resume reopens it", async (t) => {
+test("a reply without an eligible chat keeps the message waiting", async (t) => {
 	const f = await fixture(t);
 	await f.items.patch(f.item.id, { slack: { status: "waiting" } });
 	const waiting = await f.items.require(f.item.id);
@@ -210,17 +194,17 @@ test("a reply to a message without a chat to resume reopens it", async (t) => {
 		() => Date.now() + 3_600_000,
 	);
 	await watch(f.context);
-	assert.equal((await f.items.require(f.item.id)).slack?.status, "open");
+	assert.equal((await f.items.require(f.item.id)).slack?.status, "waiting");
 });
 
-test("a check in Slack still finishes a waiting message", async (t) => {
+test("a check in Slack never finishes a waiting message", async (t) => {
 	const f = await fixture(t);
 	await f.items.patch(f.item.id, { sessionId: "chat-1", start: true });
 	await f.items.agentSlackStatus("chat-1", "waiting");
 	const { reads } = await f.items.reserveSlackReactions(f.project.id, Date.now());
 	assert.equal(reads.length, 1);
 	await f.items.recordSlackReaction(f.item.id, true, reads[0]!.version);
-	assert.equal((await f.items.require(f.item.id)).slack?.status, "done");
+	assert.equal((await f.items.require(f.item.id)).slack?.status, "waiting");
 });
 
 test("ordinary and forced waiting reads have no hourly cap and keep recheck limits", async (t) => {
@@ -241,4 +225,82 @@ test("ordinary and forced waiting reads have no hourly cap and keep recheck limi
 	);
 
 	assert.equal((await f.items.reserveSlackWaiting(f.project.id, clock, true)).reads.length, 0);
+});
+
+test("a user action while reading a thread prevents stale resume", async (t) => {
+	const f = await fixture(t);
+	await f.items.patch(f.item.id, { sessionId: "chat-1", start: true });
+	await f.items.agentSlackStatus("chat-1", "waiting");
+	const since = (await f.items.require(f.item.id)).slack!.waitingSince!;
+	const original = f.context.call;
+	f.context.call = async (tool, args) => {
+		if (tool === "thread") {
+			await f.items.patch(f.item.id, { slack: { status: "done" } });
+			return thread(reply(1, 1, "Reporter (UREPORTER)", `${Math.floor(since / 1000) + 3}.000000`, "Answer"));
+		}
+		return original(tool, args);
+	};
+	let resumed = 0;
+	await createSlackWaitingWatcher(
+		f.items,
+		async () => {
+			resumed++;
+			return true;
+		},
+		() => Date.now() + 3_600_000,
+	)(f.context);
+	assert.equal(resumed, 0);
+	assert.equal((await f.items.require(f.item.id)).slack?.status, "done");
+});
+
+test("held linked work stays waiting and retries the same reply on a later check", async (t) => {
+	const f = await fixture(t);
+	await f.items.patch(f.item.id, { sessionId: "chat-1", start: true });
+	await f.items.agentSlackStatus("chat-1", "waiting");
+	const since = (await f.items.require(f.item.id)).slack!.waitingSince!;
+	f.reply(thread(reply(1, 1, "Reporter (UREPORTER)", `${Math.floor(since / 1000) + 3}.000000`, "Answer")));
+	const requests: string[] = [];
+	let clock = Date.now() + 3_600_000;
+	const watch = createSlackWaitingWatcher(
+		f.items,
+		async (_session, _message, request, guard) => {
+			guard();
+			requests.push(request);
+			return false;
+		},
+		() => clock,
+	);
+	await watch(f.context);
+	clock += 11 * 60_000;
+	await watch({ ...f.context, force: true });
+	assert.equal((await f.items.require(f.item.id)).slack?.status, "waiting");
+	assert.equal(requests.length, 2);
+	assert.equal(requests[0], requests[1]);
+});
+
+test("relinking a waiting report fences a reply check from the previous chat", async (t) => {
+	const f = await fixture(t);
+	await f.items.patch(f.item.id, { sessionId: "chat-1", start: true });
+	await f.items.agentSlackStatus("chat-1", "waiting");
+	const since = (await f.items.require(f.item.id)).slack!.waitingSince!;
+	const original = f.context.call;
+	f.context.call = async (tool, args) => {
+		if (tool === "thread") {
+			await f.items.patch(f.item.id, { sessionId: "chat-2" });
+			return thread(reply(1, 1, "Reporter (UREPORTER)", `${Math.floor(since / 1000) + 3}.000000`, "Answer"));
+		}
+		return original(tool, args);
+	};
+	let resumed = 0;
+	await createSlackWaitingWatcher(
+		f.items,
+		async () => {
+			resumed++;
+			return true;
+		},
+		() => Date.now() + 3_600_000,
+	)(f.context);
+	assert.equal(resumed, 0);
+	assert.equal(await f.items.slackWaitingResult(f.item.id, since, { status: "in_progress" }), false);
+	assert.equal((await f.items.require(f.item.id)).slack?.status, "waiting");
 });

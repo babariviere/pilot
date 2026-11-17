@@ -300,7 +300,7 @@ async fn run(
     }
     if matches!(
         call.command,
-        Command::SlackRead
+        Command::SlackRead(_)
             | Command::SlackWrite(_)
             | Command::SlackCheck(_)
             | Command::SlackSetAside(_)
@@ -833,7 +833,7 @@ async fn run(
         | Command::ConnectionsCheck(_)
         | Command::ConnectionsProbe => unreachable!("handled connection command"),
         Command::PowerRead | Command::PowerResume => unreachable!("handled power command"),
-        Command::SlackRead
+        Command::SlackRead(_)
         | Command::SlackWrite(_)
         | Command::SlackCheck(_)
         | Command::SlackSetAside(_) => {

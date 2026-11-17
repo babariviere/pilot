@@ -269,7 +269,34 @@ pub(super) async fn handle(
                 .iter()
                 .flat_map(|s| s["items"].as_array().into_iter().flatten())
                 .find(|i| i["id"] == intent.item_id)
-                .ok_or(Error::Stale)?;
+                .cloned();
+            // Reports have their own saved-history pages. A row outside Today's first
+            // page still needs exact project/revision authority, never a fabricated intake row.
+            let item = if let Some(item) = item {
+                item
+            } else {
+                t.gate(false).await?;
+                let item = t
+                    .get(&format!("/api/tracked-items/{}", intent.item_id))
+                    .await?;
+                check()?;
+                if item["id"] != intent.item_id
+                    || item["kind"] != "slack"
+                    || item["projectId"] != t.source.project()?.project_id
+                    || item["dismissed"] != false
+                    || item["slack"]["status"] != "open"
+                    || !item["sessionId"].is_null()
+                    || !item["missionId"].is_null()
+                {
+                    return Err(Error::Stale);
+                }
+                let current = read(t).await?;
+                check()?;
+                if current["contextDigest"] != intent.context_digest {
+                    return Err(Error::Stale);
+                }
+                item
+            };
             if item["revision"] != intent.revision || !item["startOperationId"].is_null() {
                 return Err(Error::Stale);
             }

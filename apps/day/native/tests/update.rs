@@ -39,6 +39,7 @@ fn view() -> SavedView {
         notes: vec!["task/project/export/t1\n  Exact note 👩🏽‍💻\n".into()],
         reminders: vec![format!("task/project/export/t1#{}\nreport", "a".repeat(64))],
         linear: "project/ln-219".into(),
+        slack_reports: String::new(),
         today_project: "project".into(),
         model_settings: String::new(),
         diagnosis: String::new(),
@@ -75,6 +76,19 @@ fn view() -> SavedView {
         recovery_notes: vec!["chat-1\n  Corrected scope 日本語\nKeep the copy. ".into()],
         feedback_answers: vec!["triage-1/42\n1,2\n  Exact answer 👩🏽‍💻\nsecond line ".into()],
     }
+}
+
+#[test]
+fn slack_reports_keep_drafts_and_legacy_windows_default_to_none() {
+    let mut original = view();
+    original.slack_reports =
+        r#"{"open":true,"project":"project","edit":{"text":"Exact correction 日本語"}}"#.into();
+    let mut json = serde_json::to_value(&original).unwrap();
+    let restored: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert_eq!(restored.slack_reports, original.slack_reports);
+    json.as_object_mut().unwrap().remove("slackReports");
+    let legacy: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert!(legacy.slack_reports.is_empty());
 }
 
 #[test]

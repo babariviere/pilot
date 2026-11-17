@@ -84,9 +84,54 @@ impl Intent {
                 self.value.as_object().is_some_and(|o| o.len() == 1)
                     && self.value["url"].as_str().is_some_and(safe_link)
             }
+            "open" => {
+                self.value.as_object().is_some_and(|o| {
+                    (o.len() == 2 || o.len() == 3)
+                        && o.keys()
+                            .all(|k| ["itemId", "digest", "offset"].contains(&k.as_str()))
+                }) && self.value["itemId"].as_str().is_some_and(super::valid_id)
+                    && self.value["digest"]
+                        .as_str()
+                        .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            }
+            "report" | "group" => {
+                // Closed, size-limited JSON only. The worker enforces exact shown-row/group CAS.
+                self.value.as_object().is_some_and(|o| {
+                    (o.len() == 3 || o.len() == 4)
+                        && o.keys().all(|k| {
+                            if self.action == "report" {
+                                ["itemId", "patch", "digest", "offset"].contains(&k.as_str())
+                            } else {
+                                ["caseId", "edit", "digest", "offset"].contains(&k.as_str())
+                            }
+                        })
+                        && self.value["digest"].as_str().is_some_and(|s| {
+                            s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+                        })
+                        && if self.action == "report" {
+                            self.value["itemId"].as_str().is_some_and(super::valid_id)
+                                && self.value["patch"].as_object().is_some_and(|p| {
+                                    !p.is_empty()
+                                        && p.keys().all(|k| {
+                                            ["details", "type", "label", "severity", "status"]
+                                                .contains(&k.as_str())
+                                        })
+                                })
+                        } else {
+                            self.value["caseId"].as_str().is_some_and(super::valid_id)
+                                && self.value["edit"].is_object()
+                        }
+                }) && serde_json::to_vec(&self.value).is_ok_and(|v| v.len() <= 16_384)
+            }
             _ => false,
         };
-        if valid && self.binding.len() == 64 && self.binding.bytes().all(|b| b.is_ascii_hexdigit())
+        if valid
+            && (self.value.get("offset").is_none()
+                || self.value["offset"]
+                    .as_u64()
+                    .is_some_and(|n| n <= 1_000_000))
+            && self.binding.len() == 64
+            && self.binding.bytes().all(|b| b.is_ascii_hexdigit())
         {
             Ok(())
         } else {
@@ -127,11 +172,13 @@ pub(super) fn exact_result(op: &Value, receipt: &Value) -> Result<(), Error> {
         Err(Error::Unknown)
     }
 }
-async fn read(t: &Transport) -> Result<Value, Error> {
+async fn read_page(t: &Transport, offset: u32) -> Result<Value, Error> {
     let project = &t.source.project()?.project_id;
     t.gate(false).await?;
     let v = t
-        .get(&format!("/api/slack-controls?projectId={project}"))
+        .get(&format!(
+            "/api/slack-controls?projectId={project}&offset={offset}"
+        ))
         .await?;
     if v["version"] != 1
         || v["projectId"] != *project
@@ -165,14 +212,56 @@ pub(super) async fn handle(
         command.admit(&gate.lock().expect("bridge gate poisoned"))
     };
     let mut outcome = Value::Null;
+    let offset = match command {
+        Command::SlackRead(n) => *n,
+        Command::SlackWrite(i) => i.value["offset"].as_u64().unwrap_or(0) as u32,
+        _ => 0,
+    };
     match command {
-        Command::SlackRead => {}
+        Command::SlackRead(_) => {}
         Command::SlackWrite(i) => {
             i.validate()?;
+            if i.action == "open" {
+                let opener = shared.url_opener.as_ref().ok_or(Error::Unavailable)?;
+                let qualify = |snapshot: &Value| -> Result<String, Error> {
+                    if snapshot["binding"] != i.binding
+                        || snapshot["reports"]["digest"] != i.value["digest"]
+                    {
+                        return Err(Error::Stale);
+                    }
+                    let item = snapshot["reports"]["items"]
+                        .as_array()
+                        .ok_or(Error::Invalid)?
+                        .iter()
+                        .find(|r| r["id"] == i.value["itemId"])
+                        .ok_or(Error::Stale)?;
+                    let url = item["url"].as_str().ok_or(Error::Invalid)?;
+                    let mut checked = reqwest::Url::parse(url).map_err(|_| Error::Invalid)?;
+                    if checked.host_str() == Some("slack.com") {
+                        checked
+                            .set_host(Some("source.slack.com"))
+                            .map_err(|_| Error::Invalid)?;
+                    }
+                    if !safe_link(checked.as_str()) {
+                        return Err(Error::Invalid);
+                    }
+                    Ok(url.to_owned())
+                };
+                let url = qualify(&read_page(t, offset).await?)?;
+                if qualify(&read_page(t, offset).await?)? != url {
+                    return Err(Error::Stale);
+                }
+                t.local()?;
+                let guard = gate.lock().expect("bridge gate poisoned");
+                shared.open()?;
+                command.admit(&guard)?;
+                opener(&url).map_err(|_| Error::Unknown)?;
+                return Ok(json!({"outcome":{"state":"opened"},"operations":summaries(t,j)}));
+            }
             if !summaries(t, j).is_empty() {
                 return Err(Error::Unknown);
             }
-            let current = read(t).await?;
+            let current = read_page(t, offset).await?;
             check()?;
             if current["binding"] != i.binding {
                 return Err(Error::Stale);
@@ -231,8 +320,11 @@ pub(super) async fn handle(
         }
         _ => return Err(Error::Invalid),
     }
-    let snapshot = read(t).await;
-    if matches!(command, Command::SlackRead) {
+    let snapshot = read_page(t, offset).await.map(|mut v| {
+        v["canOpenUrl"] = json!(shared.url_opener.is_some());
+        v
+    });
+    if matches!(command, Command::SlackRead(_)) {
         check()?;
         return Ok(json!({"snapshot":snapshot?,"operations":summaries(t,j)}));
     }

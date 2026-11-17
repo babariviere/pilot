@@ -1,4 +1,4 @@
-import type { SlackMessageType, SlackProjectLabel, SlackCorrection } from "@pilot/protocol";
+import type { SlackMessageType, SlackProjectLabel, SlackCorrection, SlackReportDetails } from "@pilot/protocol";
 
 export interface SlackClassifierContext {
 	labels: SlackProjectLabel[];
@@ -13,6 +13,7 @@ export interface SlackClassification {
 	confidence: number;
 	severity: "low" | "medium" | "high" | "critical";
 	summary: string;
+	details?: SlackReportDetails;
 }
 export class SlackModelUnavailable extends Error {
 	constructor() {
@@ -22,11 +23,31 @@ export class SlackModelUnavailable extends Error {
 	}
 }
 
+const DETAIL_SCHEMA = {
+	anyOf: [
+		{ type: "null" },
+		{
+			type: "object",
+			additionalProperties: false,
+			required: ["value", "evidence"],
+			properties: {
+				value: { type: "string", minLength: 1, maxLength: 240 },
+				evidence: { type: "string", minLength: 1, maxLength: 500 },
+			},
+		},
+	],
+} as const;
 export const SLACK_CLASSIFICATION_SCHEMA = {
 	type: "object",
 	additionalProperties: false,
-	required: ["type", "label", "confidence", "severity", "summary"],
+	required: ["type", "label", "confidence", "severity", "summary", "details"],
 	properties: {
+		details: {
+			type: "object",
+			additionalProperties: false,
+			required: ["client", "issue", "reporter"],
+			properties: { client: DETAIL_SCHEMA, issue: DETAIL_SCHEMA, reporter: DETAIL_SCHEMA },
+		},
 		type: { type: "string", enum: ["bug", "question", "request", "unknown"] },
 		label: { type: ["string", "null"], maxLength: 80 },
 		confidence: { type: "number", minimum: 0, maximum: 1 },
@@ -36,9 +57,13 @@ export const SLACK_CLASSIFICATION_SCHEMA = {
 } as const;
 
 /** No markdown stripping, coercion, extraction from prose, or repair of malformed model output. */
-export function parseSlackClassification(text: string, labels?: SlackProjectLabel[]): SlackClassification {
+export function parseSlackClassification(
+	text: string,
+	labels?: SlackProjectLabel[],
+	sourceText?: string,
+): SlackClassification {
 	const invalid = () => new Error("Invalid Slack classification");
-	if (Buffer.byteLength(text) > 4096) throw invalid();
+	if (Buffer.byteLength(text) > 16384) throw invalid();
 	let value: SlackClassification;
 	try {
 		value = JSON.parse(text);
@@ -49,7 +74,9 @@ export function parseSlackClassification(text: string, labels?: SlackProjectLabe
 		!value ||
 		typeof value !== "object" ||
 		Array.isArray(value) ||
-		Object.keys(value).sort().join(",") !== "confidence,label,severity,summary,type" ||
+		!["confidence,label,severity,summary,type", "confidence,details,label,severity,summary,type"].includes(
+			Object.keys(value).sort().join(","),
+		) ||
 		!["bug", "question", "request", "unknown"].includes(value.type) ||
 		typeof value.confidence !== "number" ||
 		!Number.isFinite(value.confidence) ||
@@ -68,5 +95,35 @@ export function parseSlackClassification(text: string, labels?: SlackProjectLabe
 				(labels !== undefined && !labels.some((label) => label.name === value.label))))
 	)
 		throw invalid();
+	if (value.details !== undefined) {
+		if (
+			!value.details ||
+			typeof value.details !== "object" ||
+			Array.isArray(value.details) ||
+			Object.keys(value.details).sort().join(",") !== "client,issue,reporter"
+		)
+			throw invalid();
+		for (const detail of Object.values(value.details)) {
+			if (detail === null) continue;
+			if (
+				!detail ||
+				typeof detail !== "object" ||
+				Array.isArray(detail) ||
+				Object.keys(detail).sort().join(",") !== "evidence,value" ||
+				typeof detail.value !== "string" ||
+				!detail.value.trim() ||
+				detail.value.length > 240 ||
+				/[\x00-\x1f\x7f]/.test(detail.value) ||
+				typeof detail.evidence !== "string" ||
+				!detail.evidence.trim() ||
+				detail.evidence.length > 500 ||
+				/[\x00-\x08\x0b-\x1f\x7f]/.test(detail.evidence) ||
+				(sourceText !== undefined && !sourceText.includes(detail.evidence))
+			)
+				throw invalid();
+		}
+		const reporter = value.details.reporter;
+		if (reporter !== null && !reporter.evidence.includes(reporter.value)) throw invalid();
+	}
 	return { ...value, summary: value.summary.trim() };
 }

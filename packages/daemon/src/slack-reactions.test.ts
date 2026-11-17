@@ -7,8 +7,7 @@ import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { TrackedItem } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
-import { removeSlackEyes } from "./slack-reactions.ts";
-import { decodeMcpResult, dedicatedSourceTool, SlackRemovalError, validSourceArguments } from "./source-tool-rules.ts";
+import { decodeMcpResult, dedicatedSourceTool, validSourceArguments } from "./source-tool-rules.ts";
 import { type SourcePoller, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
@@ -27,13 +26,6 @@ const checked = (count = 1): Response => ({
 });
 const outcome = (item: TrackedItem) =>
 	(item.metadata.slackDone as { outcome?: string; error?: string } | undefined)?.outcome;
-async function until(check: () => boolean | Promise<boolean>) {
-	const deadline = performance.now() + 10_000;
-	while (!(await check())) {
-		assert.ok(performance.now() < deadline, "fixture did not settle");
-		await delay(1);
-	}
-}
 function gate() {
 	let release!: () => void;
 	const promise = new Promise<void>((resolve) => {
@@ -133,131 +125,42 @@ async function fixture(t: TestContext, adapter: SourcePoller = async () => ({ it
 				recordOwner ? { userId: "UPILOT", channel: "CEXAMPLE", messageTs: parent } : undefined,
 			);
 		},
-		drain: () => until(() => registry["doneRuns"].size === 0 && registry["doneDue"].size === 0),
+		drain: async () => {
+			await delay(10);
+		},
 	};
 }
 
-test("all Done routes add one check and remove eyes on the parent only after a successful eyes outcome", async (t) => {
-	for (const route of ["manual", "merge", "mission", "reaction"]) {
-		const f = await fixture(t);
-		await f.eyes();
-		if (route === "manual") await f.registry.patch(f.item.id, { slack: { status: "done" } });
-		if (route === "reaction") {
-			f.read(checked());
-			await f.poll();
-		}
-		if (route === "merge") {
-			await f.items.patch(f.item.id, { sessionId: "chat" });
-			const pr = {
-				number: 42,
-				url: "https://github.com/example/sample/pull/42",
-				title: "Invented",
-				state: "open" as const,
-				checkedAt: 10,
-			};
-			await f.items.observeSlackPullRequests({
-				projectId: f.project.id,
-				sessionId: "chat",
-				prs: [pr],
-				pending: false,
-			});
-			await f.items.observeSlackPullRequests({
-				projectId: f.project.id,
-				sessionId: "chat",
-				prs: [{ ...pr, state: "merged", checkedAt: 20 }],
-				pending: false,
-			});
-		}
-		if (route === "mission") {
-			await f.items.patch(f.item.id, { missionId: "example-work" });
-			await f.items.completeSlackMission(f.project.id, "example-work", 20);
-		}
-		await until(async () => outcome(await f.items.require(f.item.id)) === "reacted");
-		assert.equal((await f.items.require(f.item.id)).slack?.status, "done");
-		assert.equal((await f.items.require(f.item.id)).updatedAt, 1);
-		assert.equal(
-			(await f.items.require(f.item.id)).metadata.slackStart &&
-				((await f.items.require(f.item.id)).metadata.slackStart as { outcome: string }).outcome,
-			"reacted",
-		);
-		await f.drain();
-		await f.poll();
-		await f.drain();
-		assert.equal(f.calls.filter((call) => call.tool === "doneSlack").length, 1);
-		assert.equal(f.calls.filter((call) => call.tool === "removeSlackEyes").length, 1);
-		const callsBeforeInspection = f.calls.length;
-		const health = f.registry.refreshHealth({ projectId: f.project.id, kind: "slack" });
-		const done = health.sources[0]!.jobs.find((job) => job.job === "slack_done_write");
-		assert.ok(done?.observation?.recent?.some((entry) => entry.writeCalls === 2 && entry.outcome === "success"));
-		assert.match(done!.quota, /not_local_source_read_budget/);
-		assert.equal(f.calls.length, callsBeforeInspection);
-		assert.ok(
-			f.calls.every((call) => ["doneSlack", "removeSlackEyes", "reactions"].includes(call.tool)),
-			"no messages or fallback tool",
-		);
-	}
-});
-
-test("failed removal keeps Done and the check successful, persists its own failure, and never retries", async (t) => {
-	for (const error of ["no_reaction", "not authorized", "unconfigured", "unreachable"]) {
-		const f = await fixture(t);
-		await f.eyes();
-		f.removal(
-			["unconfigured", "unreachable"].includes(error)
-				? new Error(`${error}: private fixture detail`)
-				: { isError: true, content: [{ type: "text", text: `${error}: private fixture detail` }] },
-		);
-		await f.registry.patch(f.item.id, { slack: { status: "done" } });
-		await f.drain();
-		const saved = await f.items.require(f.item.id);
-		assert.equal(outcome(saved), "reacted");
-		assert.equal((saved.metadata.slackEyesRemoval as { outcome: string }).outcome, "error");
-		assert.equal(saved.slack?.status, "done");
-		await f.poll();
-		await f.registry.patch(f.item.id, { slack: { status: "open" } });
-		await f.registry.patch(f.item.id, { slack: { status: "done" } });
-		await f.drain();
-		assert.equal(f.calls.filter((call) => call.tool === "removeSlackEyes").length, 1);
-		const reopened = new TrackedItemStore(f.path);
-		try {
-			assert.equal(await reopened.reserveSlackDone(f.project.id), undefined);
-		} finally {
-			await reopened.close();
-		}
-	}
-});
-
-test("missing, failed and pending eyes outcomes never remove any reaction", async (t) => {
-	for (const start of ["missing", "pending", "error"]) {
-		const f = await fixture(t);
-		if (start !== "missing") await f.items.reserveSlackStart(f.item.id);
-		if (start === "error") await f.items.slackStartResult(f.item.id, "error");
-		await f.registry.patch(f.item.id, { slack: { status: "done" } });
-		await f.drain();
-		assert.equal(f.calls.filter((call) => call.tool !== "reactions").length, 0);
-	}
-});
-
-test("a cancelled removal never turns an already persisted check into an error", async (t) => {
-	const f = await fixture(t),
-		entered = gate();
+test("only Start writes a reaction; tackling and completion evidence never write or remove reactions", async (t) => {
+	const f = await fixture(t);
+	await f.items.patch(f.item.id, { sessionId: "chat", start: true });
 	await f.eyes();
-	f.beforeRemoval(async (signal) => {
-		entered.release();
-		await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
-	});
-	await f.registry.patch(f.item.id, { slack: { status: "done" } });
-	await entered.promise;
-	assert.equal(outcome(await f.items.require(f.item.id)), "reacted");
-	await f.registry.stop();
-	assert.equal(
-		(await f.items.require(f.item.id)).metadata.slackEyesRemoval &&
-			((await f.items.require(f.item.id)).metadata.slackEyesRemoval as { outcome: string }).outcome,
-		"error",
-	);
-	assert.equal(outcome(await f.items.require(f.item.id)), "reacted");
-	assert.equal((await f.items.require(f.item.id)).slack?.status, "done");
+	f.calls.length = 0;
+	await f.items.observeSlackPullRequests({ projectId: f.project.id, sessionId: "chat", prs: [], pending: false });
+	await f.items.completeSlackMission(f.project.id, "mission", 1);
+	await assert.rejects(f.items.agentSlackStatus("chat", "done"), /Only the user/);
+	await f.items.patch(f.item.id, { slack: { status: "done" } });
+	await f.drain();
 	assert.equal(await f.items.reserveSlackDone(f.project.id), undefined);
+	assert.equal((await f.items.require(f.item.id)).slack?.status, "done");
+	assert.equal(outcome(await f.items.require(f.item.id)), undefined);
+	assert.deepEqual(f.calls, []);
+});
+
+test("emoji changes never complete open or in-progress reports", async (t) => {
+	const f = await fixture(t);
+	for (const status of ["open", "in_progress", "waiting"] as const) {
+		await f.items.patch(f.item.id, { slack: { status } });
+		f.read(checked());
+		await f.poll();
+		assert.equal((await f.items.require(f.item.id)).slack?.status, status);
+		f.read({ structuredContent: { reactions: [] } });
+		await f.poll();
+		f.read(checked(3));
+		await f.poll();
+		assert.equal((await f.items.require(f.item.id)).slack?.status, status);
+	}
+	assert.equal(f.calls.filter((call) => call.tool !== "reactions").length, 0);
 });
 
 test("normal source reads cannot invoke the configured removal write", async (t) => {
@@ -270,35 +173,6 @@ test("normal source reads cannot invoke the configured removal write", async (t)
 	});
 	await f.poll();
 	assert.equal(f.calls.filter((call) => call.tool === "removeSlackEyes").length, 0);
-});
-
-test("anyone's check closes Open/In progress, but not Done/Dismissed; reopen survives counts and refresh", async (t) => {
-	const f = await fixture(t);
-	f.read(checked());
-	await f.poll();
-	let saved = await f.items.require(f.item.id);
-	assert.equal(saved.slack?.doneReason, "Done · ✅ in Slack");
-	assert.ok(saved.metadata.reactionDone);
-	assert.equal(f.calls.filter((call) => call.tool === "doneSlack").length, 0, "no eyes outcome, no write");
-	await f.items.patch(f.item.id, { slack: { status: "open" } });
-	f.read(checked(3));
-	await f.poll();
-	assert.equal((await f.items.require(f.item.id)).slack?.status, "open");
-	f.read({ structuredContent: { reactions: [] } });
-	await f.poll();
-	f.read(checked());
-	await f.poll();
-	assert.equal(
-		(await f.items.require(f.item.id)).slack?.status,
-		"done",
-		"observed removal then re-add is a new reaction",
-	);
-	await f.items.patch(f.item.id, { dismissed: true });
-	const reads = f.calls.length;
-	await f.poll();
-	assert.equal(f.calls.length, reads, "Done/Dismissed rows are not read");
-	saved = await f.items.require(f.item.id);
-	assert.equal(saved.slack?.status, "dismissed");
 });
 
 test("a user reopen fences an in-flight check and later seeing the same reaction does not close it", async (t) => {
@@ -320,87 +194,6 @@ test("a user reopen fences an in-flight check and later seeing the same reaction
 	assert.equal((await f.items.require(f.item.id)).slack?.status, "open");
 	await f.poll();
 	assert.equal((await f.items.require(f.item.id)).slack?.status, "open");
-});
-
-test("a check written on manual Done does not undo reopening, and starting work does not consume a new check", async (t) => {
-	const f = await fixture(t);
-	await f.eyes();
-	await f.items.patch(f.item.id, { sessionId: "new-chat", start: true });
-	f.read(checked());
-	await f.poll();
-	assert.equal((await f.items.require(f.item.id)).slack?.status, "done", "In progress can close on a new check");
-	await until(async () => outcome(await f.items.require(f.item.id)) === "reacted");
-	await f.drain();
-	await f.items.patch(f.item.id, { slack: { status: "open" } });
-	await f.poll();
-	assert.equal((await f.items.require(f.item.id)).slack?.status, "open");
-	await f.items.patch(f.item.id, { slack: { status: "done" } });
-	await f.items.patch(f.item.id, { slack: { status: "open" } });
-	await f.poll();
-	await f.drain();
-	assert.equal((await f.items.require(f.item.id)).slack?.status, "open");
-	assert.equal(f.calls.filter((call) => call.tool === "doneSlack").length, 1);
-});
-
-test("legacy hourly usage does not block reaction checks, discovery or Done writes", async (t) => {
-	const f = await fixture(t);
-	await f.eyes();
-	for (let i = 0; i < 100; i++) await f.items.reserveSlackReactions(f.project.id, Date.now(), 0);
-	const reads = f.calls.filter((call) => call.tool === "reactions").length;
-	await f.poll();
-	assert.equal(f.registry.require(`${f.project.id}:slack`).status, "ok");
-	assert.equal(f.calls.filter((call) => call.tool === "reactions").length, reads + 1);
-	await f.items.patch(f.item.id, { slack: { status: "done" } });
-	await until(async () => outcome(await f.items.require(f.item.id)) === "reacted");
-});
-
-test("interrupted Done admissions recover as quiet errors without retrying", async (t) => {
-	const f = await fixture(t);
-	await f.registry.stop();
-	await f.eyes();
-	await f.items.patch(f.item.id, { slack: { status: "done" } });
-	assert.ok(await f.items.reserveSlackDone(f.project.id));
-	assert.equal(await f.items.reserveSlackDone(f.project.id), undefined);
-	const reopened = new TrackedItemStore(f.path);
-	try {
-		const saved = await reopened.require(f.item.id);
-		assert.equal(outcome(saved), "error");
-		assert.equal((saved.metadata.slackEyesRemoval as { outcome: string }).outcome, "error");
-		assert.equal(saved.slack?.status, "done");
-		assert.equal(await reopened.reserveSlackDone(f.project.id), undefined);
-	} finally {
-		await reopened.close();
-	}
-});
-
-test("write failure is quiet, once-only and durable; already_reacted succeeds and source refresh preserves outcomes", async (t) => {
-	for (const [response, expected] of [
-		[{ isError: true, content: [{ type: "text", text: "missing_scope: invented private error" }] }, "error"],
-		[{ isError: true, structuredContent: { error: "already_reacted" } }, "reacted"],
-	] satisfies [Response, string][]) {
-		const f = await fixture(t);
-		await f.eyes();
-		f.write(response);
-		await f.items.patch(f.item.id, { slack: { status: "done" } });
-		await until(async () => outcome(await f.items.require(f.item.id)) === expected);
-		await f.drain();
-		const saved = await f.items.require(f.item.id);
-		assert.equal(saved.slack?.status, "done");
-		assert.ok(!JSON.stringify(saved).includes("invented private"));
-		await f.items.commit(f.project.id, "slack", [{ ...input, updatedAt: 2 }]);
-		await f.items.patch(f.item.id, { slack: { status: "open" } });
-		await f.poll();
-		await f.drain();
-		assert.equal(f.calls.filter((call) => call.tool === "doneSlack").length, 1);
-		const reopened = new TrackedItemStore(f.path);
-		try {
-			assert.equal(outcome(await reopened.require(f.item.id)), expected);
-			await reopened.patch(f.item.id, { slack: { status: "done" } });
-			assert.equal(await reopened.reserveSlackDone(f.project.id), undefined);
-		} finally {
-			await reopened.close();
-		}
-	}
 });
 
 test("reaction reads keep batch, fairness and recheck limits without an hourly cap", async () => {
@@ -430,194 +223,5 @@ test("reaction reads keep batch, fairness and recheck limits without an hourly c
 		assert.equal((await items.reserveSlackReactions("p", t + 3_600_000 + 1_000)).reads.length, 8);
 	} finally {
 		await items.close();
-	}
-});
-
-test("channel removal, reopen and shutdown cancel pending writes without retrying or overriding local status", async (t) => {
-	for (const action of ["remove", "reopen", "stop"]) {
-		const f = await fixture(t),
-			entered = gate();
-		await f.eyes();
-		f.beforeWrite(async (signal) => {
-			entered.release();
-			await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
-		});
-		await f.items.patch(f.item.id, { slack: { status: "done" } });
-		await entered.promise;
-		if (action === "remove") await f.projects.update(f.project.id, { tracking: { slackChannels: [] } });
-		else if (action === "reopen") await f.registry.patch(f.item.id, { slack: { status: "open" } });
-		else await f.registry.stop();
-		await until(async () => outcome(await f.items.require(f.item.id)) === "error");
-		assert.equal((await f.items.require(f.item.id)).slack?.status, action === "reopen" ? "open" : "done");
-		assert.equal(f.calls.filter((call) => call.tool === "doneSlack").length, 1);
-	}
-});
-
-test("Done writes wait for admission and share the global two-slot bound with normal polls", async (t) => {
-	const f = await fixture(t);
-	await f.eyes();
-	await f.drain();
-	const linearEntered = gate(),
-		slackEntered = gate(),
-		releaseLinear = gate(),
-		releaseSlack = gate();
-	t.after(() => {
-		releaseLinear.release();
-		releaseSlack.release();
-	});
-	await f.projects.update(f.project.id, { tracking: { linearTeam: "EXAMPLE", slackChannels: ["CEXAMPLE"] } });
-	f.registry.register("linear", async () => {
-		linearEntered.release();
-		await releaseLinear.promise;
-		return { items: [] };
-	});
-	f.beforeRead(async () => {
-		slackEntered.release();
-		await releaseSlack.promise;
-	});
-	const linear = f.registry.poll(`${f.project.id}:linear`);
-	await linearEntered.promise;
-	const slack = f.poll();
-	await slackEntered.promise;
-	await f.registry.patch(f.item.id, { slack: { status: "done" } });
-	assert.equal(f.calls.filter((call) => call.tool === "doneSlack").length, 0);
-	assert.equal(f.registry["busy"](), 2);
-	releaseSlack.release();
-	await slack;
-	await until(async () => outcome(await f.items.require(f.item.id)) === "reacted");
-	assert.ok(f.registry["busy"]() <= 2);
-	releaseLinear.release();
-	await linear;
-	await f.drain();
-	assert.equal(f.calls.filter((call) => call.tool === "doneSlack").length, 1);
-});
-
-// All writes below are synthetic; no original chat, account or thread is read or replayed.
-test("manual and tool Done from In progress or Waiting remove only the recorded owner's eyes", async (t) => {
-	for (const status of ["in_progress", "waiting"] as const) {
-		for (const route of ["manual", "tool"]) {
-			const f = await fixture(t);
-			await f.eyes();
-			await f.items.patch(f.item.id, { sessionId: "fixture-chat", start: true });
-			if (status === "waiting") await f.items.agentSlackStatus("fixture-chat", "waiting", "fixture reason");
-			assert.equal((await f.items.require(f.item.id)).slack?.status, status);
-			const users = new Set(["UPILOT", "UOTHER"]);
-			f.beforeRemoval(async () => {
-				users.delete("UPILOT");
-			});
-			if (route === "manual") await f.registry.patch(f.item.id, { slack: { status: "done" } });
-			else await f.items.agentSlackStatus("fixture-chat", "done", "fixture resolved");
-			await f.drain();
-			const saved = await f.items.require(f.item.id);
-			assert.equal(saved.slack?.status, "done");
-			assert.equal(outcome(saved), "reacted");
-			assert.equal((saved.metadata.slackEyesRemoval as { outcome: string }).outcome, "removed");
-			assert.deepEqual([...users], ["UOTHER"]);
-			assert.deepEqual(f.calls.find((c) => c.tool === "removeSlackEyes")?.args, {
-				channel_id: "CEXAMPLE",
-				message_ts: parent,
-				emoji: "eyes",
-				user_id: "UPILOT",
-			});
-		}
-	}
-});
-
-test("already absent is successful independently of adding the completion reaction", async (t) => {
-	for (const addFails of [false, true]) {
-		const f = await fixture(t);
-		await f.eyes();
-		f.removal({ isError: true, structuredContent: { ok: false, error: "no_reaction" } });
-		if (addFails) f.write({ isError: true, structuredContent: { error: "missing_scope" } });
-		await f.registry.patch(f.item.id, { slack: { status: "done" } });
-		await f.drain();
-		const saved = await f.items.require(f.item.id);
-		assert.equal(outcome(saved), addFails ? "error" : "reacted");
-		assert.equal((saved.metadata.slackEyesRemoval as { outcome: string }).outcome, "absent");
-		assert.equal(saved.slack?.status, "done");
-		const reopened = new TrackedItemStore(f.path);
-		try {
-			assert.deepEqual(
-				(await reopened.require(f.item.id)).metadata.slackEyesRemoval,
-				saved.metadata.slackEyesRemoval,
-			);
-			assert.equal(await reopened.reserveSlackDone(f.project.id), undefined);
-		} finally {
-			await reopened.close();
-		}
-	}
-});
-
-test("legacy unknown ownership is visible without attempting removal or replaying old Done items", async (t) => {
-	const f = await fixture(t);
-	await f.eyes(false);
-	await f.registry.patch(f.item.id, { slack: { status: "done" } });
-	await f.drain();
-	const saved = await f.items.require(f.item.id);
-	assert.equal(outcome(saved), "reacted");
-	assert.deepEqual(saved.metadata.slackEyesRemoval, {
-		outcome: "error",
-		reason: "identity_unverified",
-		error: "Couldn't remove eyes reaction in Slack.",
-		attemptedAt: (saved.metadata.slackEyesRemoval as { attemptedAt: number }).attemptedAt,
-	});
-	assert.equal(f.calls.filter((c) => c.tool === "removeSlackEyes").length, 0);
-	await f.poll();
-	await f.drain();
-	assert.equal(f.calls.filter((c) => c.tool === "doneSlack").length, 1);
-});
-
-test("a changed parent cannot redirect removal from the original recorded message", async (t) => {
-	const f = await fixture(t);
-	await f.eyes();
-	const saved = await f.items.require(f.item.id);
-	let writes = 0;
-	await assert.rejects(
-		removeSlackEyes(
-			{
-				project: f.project,
-				config: f.project.tracking!,
-				signal: new AbortController().signal,
-				call: async () => {
-					writes++;
-					return { ok: true };
-				},
-			},
-			{
-				...saved,
-				slack: { ...saved.slack!, status: "done" },
-				metadata: { ...saved.metadata, thread_ts: "1780000999.123456" },
-			},
-		),
-		(error: unknown) => error instanceof SlackRemovalError && error.reason === "identity_mismatch",
-	);
-	assert.equal(writes, 0);
-});
-
-test("permission and identity failures are independent durable outcomes in the triage list", async (t) => {
-	for (const reason of ["access_denied", "identity_mismatch"] as const) {
-		const f = await fixture(t);
-		await f.eyes();
-		f.removal(new SlackRemovalError(reason));
-		await f.registry.patch(f.item.id, { slack: { status: "done" } });
-		await f.drain();
-		const saved = await f.items.require(f.item.id);
-		assert.equal(outcome(saved), "reacted");
-		assert.equal((saved.metadata.slackEyesRemoval as { reason: string }).reason, reason);
-		assert.equal(saved.slack?.status, "done");
-		assert.deepEqual(
-			(await f.items.list({ projectId: f.project.id })).items[0]?.metadata.slackEyesRemoval,
-			saved.metadata.slackEyesRemoval,
-		);
-		const reopened = new TrackedItemStore(f.path);
-		try {
-			assert.deepEqual(
-				(await reopened.require(f.item.id)).metadata.slackEyesRemoval,
-				saved.metadata.slackEyesRemoval,
-			);
-			assert.equal(await reopened.reserveSlackDone(f.project.id), undefined);
-		} finally {
-			await reopened.close();
-		}
 	}
 });

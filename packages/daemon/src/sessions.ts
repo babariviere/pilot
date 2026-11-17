@@ -654,6 +654,8 @@ interface SessionMeta extends OutcomeMeta {
 	recoveryStopped?: boolean;
 	/** A recoverable input/admission error, not a failed worker initialization. */
 	inputError?: string;
+	/** Slack input may have been accepted. Only fresh user input resolves this durable automatic-reply hold. */
+	slackReplyAdmission?: string;
 	failure?: string;
 	pullRequest?: SessionPullRequest;
 	pullRequestError?: string;
@@ -10511,6 +10513,96 @@ ${run.excerpt}`,
 		return this.databases.updateSettings(project.path, input);
 	}
 
+	/** A Slack reply can only reach the exact live worker that was eligible at admission. */
+	private readonly slackReplyGuards = new Map<
+		string,
+		{
+			worker: SessionWorker;
+			attempted: boolean;
+			delivered: boolean;
+			guard(): void;
+		}
+	>();
+
+	async resumeSlackReply(id: string, message: string, requestId: string, itemGuard: () => void): Promise<boolean> {
+		const meta = this.metas.get(id);
+		const worker = this.workers.get(id);
+		if (!meta || !worker || meta.slackReplyAdmission || !this.canSendNotice(id, requestId)) return false;
+		if (!requestId.startsWith("slack-reply:")) throw new Error("Invalid Slack reply request");
+		let fence: string;
+		const guard = () => {
+			itemGuard();
+			this.assertPlanningOpen(id);
+			if (this.missionDispatchFence(id) !== fence)
+				throw new CommandRejected("Slack reply execution approval changed", "busy");
+			const current = this.require(id);
+			if (
+				this.workers.get(id) !== worker ||
+				worker.state !== "idle" ||
+				worker.busy ||
+				worker.followUpsHeld ||
+				worker.awaitedQuestion ||
+				worker.compacting ||
+				worker.toolsRunning ||
+				worker.awaitingJobFollowUp ||
+				this.missionWorkHeld(id) ||
+				this.updateGate.paused ||
+				this.globalUpdatePreparing ||
+				this.heldUpdateRecovery(current) ||
+				this.subscriptionPolicyFailures.has(worker) ||
+				this.updatePausing.has(worker) ||
+				current.nextAttemptModel ||
+				current.kernelRestartPending ||
+				current.failure ||
+				current.inputError ||
+				(current.slackReplyAdmission && current.slackReplyAdmission !== requestId) ||
+				current.working ||
+				current.preparing ||
+				current.workspaceRecovery ||
+				current.continuationPending ||
+				this.workspaceMaintenance.has(id) ||
+				this.parking.has(id) ||
+				this.archiveTransitions.has(id) ||
+				current.pending?.some((command) => command.requestId !== requestId)
+			)
+				throw new CommandRejected("Slack reply work is held or no longer live", "busy");
+		};
+		try {
+			fence = this.missionDispatchFence(id);
+			guard();
+			if (this.slackReplyGuards.has(requestId)) return false;
+			const entry = { worker, guard, attempted: false, delivered: false };
+			this.slackReplyGuards.set(requestId, entry);
+			await this.sendDurable(id, message, "followUp", requestId, {
+				inputGeneration: meta.inputGeneration ?? 0,
+				admissionGuard: guard,
+			});
+			if (!entry.delivered) {
+				meta.pending = meta.pending?.filter((command) => command.requestId !== requestId);
+			}
+			if ((entry.delivered || !entry.attempted) && meta.slackReplyAdmission === requestId)
+				delete meta.slackReplyAdmission;
+			await this.save(meta, undefined, undefined, true);
+			return entry.delivered;
+		} catch (error) {
+			if (error instanceof Conflict || error instanceof CommandRejected || error instanceof NotFound) return false;
+			throw error;
+		} finally {
+			this.slackReplyGuards.delete(requestId);
+		}
+	}
+	private assertSlackReply(id: string, requestId: string): void {
+		if (!requestId.startsWith("slack-reply:")) return;
+		const entry = this.slackReplyGuards.get(requestId);
+		if (!entry || this.workers.get(id) !== entry.worker)
+			throw new CommandRejected("Slack reply requires its original live worker", "busy");
+		try {
+			entry.guard();
+		} catch {
+			throw new CommandRejected("Slack wait or execution eligibility changed", "busy");
+		}
+	}
+
 	async sendDurable(
 		id: string,
 		message: string,
@@ -10570,6 +10662,7 @@ ${run.excerpt}`,
 		interviewReply?: import("@pilot/protocol").StandaloneInterviewReply,
 	): Promise<void> {
 		const meta = this.require(id);
+		this.assertSlackReply(id, requestId);
 		if (meta.planning) throw new Conflict("Planning chats use saved interviews, not ordinary messages");
 		this.assertMissionWorkOpen(id);
 		this.assertHistoryWritable(meta);
@@ -10610,6 +10703,7 @@ ${run.excerpt}`,
 			flowRoot?.flow &&
 			flowActive(flowRoot.flow) &&
 			!inputOrigin(requestId) &&
+			!requestId.startsWith("slack-reply:") &&
 			answerQuestionId === undefined &&
 			this.summary(meta).outcome !== "question" &&
 			this.summary(meta).attentionReason?.kind !== "asks"
@@ -10671,11 +10765,17 @@ ${run.excerpt}`,
 				);
 			if (meta.recoveryStopped && (report || inputOrigin(requestId)))
 				throw new CommandRejected("Chat recovery is stopped. Send a new message to continue.", "stopped");
+			this.assertSlackReply(id, requestId);
 			admissionGuard?.();
-			if (inputGeneration === undefined || inputGeneration === (meta.inputGeneration ?? 0)) {
-				if (!report && !inputOrigin(requestId)) delete meta.missionUserStopGeneration;
+			if (
+				!requestId.startsWith("slack-reply:") &&
+				(inputGeneration === undefined || inputGeneration === (meta.inputGeneration ?? 0))
+			) {
+				if (!report && !inputOrigin(requestId) && !requestId.startsWith("slack-reply:"))
+					delete meta.missionUserStopGeneration;
 				delete meta.cancelled;
 				delete meta.recoveryStopped;
+				if (!report && !inputOrigin(requestId)) delete meta.slackReplyAdmission;
 				if (
 					meta.lifecycleCheckpoint?.phase === "stopped" &&
 					!report &&
@@ -10702,10 +10802,10 @@ ${run.excerpt}`,
 				});
 			}
 			meta.updatedAt = Date.now();
-			meta.lastUserMessageAt = meta.updatedAt;
+			if (!requestId.startsWith("slack-reply:")) meta.lastUserMessageAt = meta.updatedAt;
 			// The user saw the chat; a server it could not reach stays in Settings › Connections.
-			this.mcpAttention?.clear(meta.id);
-			if (!meta.prFollowUpResetRequests?.includes(requestId)) {
+			if (!requestId.startsWith("slack-reply:")) this.mcpAttention?.clear(meta.id);
+			if (!requestId.startsWith("slack-reply:") && !meta.prFollowUpResetRequests?.includes(requestId)) {
 				meta.prFollowUpResetRequests ??= [];
 				meta.prFollowUpResetRequests.push(requestId);
 				if (!inputOrigin(requestId) && meta.automation) {
@@ -10719,7 +10819,10 @@ ${run.excerpt}`,
 				}
 				meta.prFollowUp = { attempts: 0, nextAttemptAt: 0, generation: (meta.prFollowUp?.generation ?? 0) + 1 };
 			}
+			// Persist the hold before dispatch, so a daemon crash cannot turn unknown admission into new work.
+			if (requestId.startsWith("slack-reply:")) meta.slackReplyAdmission = requestId;
 			await this.save(meta, undefined, undefined, durable);
+			this.assertSlackReply(id, requestId);
 			if (resumesStoppedRecovery && !this.workers.has(id)) this.nextWorkerLaunchReason.set(id, "user_resume");
 			observe(() => admissionSpan?.progress());
 			observe(() => admissionSpan?.end());
@@ -10753,6 +10856,13 @@ ${run.excerpt}`,
 				if (meta.failure) throw new Error(meta.failure);
 			}
 		} catch (error) {
+			if (requestId.startsWith("slack-reply:")) {
+				const entry = this.slackReplyGuards.get(requestId);
+				if (entry?.attempted && !(error instanceof CommandRejected)) meta.slackReplyAdmission = requestId;
+				else if (meta.slackReplyAdmission === requestId) delete meta.slackReplyAdmission;
+				meta.pending = meta.pending?.filter((command) => command.requestId !== requestId);
+				await this.save(meta, undefined, undefined, true);
+			}
 			if (!admissionFinished) observe(() => admissionSpan?.finish("failed"));
 			throw error;
 		} finally {
@@ -11218,7 +11328,11 @@ ${run.excerpt}`,
 			const dedupeOnly =
 				command.inputGeneration !== undefined && command.inputGeneration !== (meta.inputGeneration ?? 0);
 			this.assertMissionWorkOpen(id);
+			this.assertSlackReply(id, command.requestId);
+			const slackReply = this.slackReplyGuards.get(command.requestId);
+			if (slackReply) slackReply.attempted = true;
 			await worker.request({ ...command, ...(trace ? { trace } : {}), ...(dedupeOnly ? { dedupeOnly: true } : {}) });
+			if (slackReply) slackReply.delivered = !dedupeOnly;
 			settled = true;
 		} catch (error) {
 			settled = error instanceof CommandRejected;
@@ -12949,6 +13063,22 @@ ${run.excerpt}`,
 		const rejected = new Map<string, Error>();
 		const run = async () => {
 			try {
+				const staleSlack = meta.pending?.filter(
+					(command) =>
+						command.type === "input" &&
+						command.requestId.startsWith("slack-reply:") &&
+						!this.slackReplyGuards.has(command.requestId),
+				);
+				if (staleSlack?.length) {
+					meta.slackReplyAdmission ??= staleSlack[0]!.requestId;
+					for (const command of staleSlack)
+						rejected.set(command.requestId, new CommandRejected("Slack reply is no longer live", "busy"));
+					meta.pending = meta.pending?.filter((command) => !staleSlack.includes(command));
+					await this.save(meta);
+					if (!meta.pending?.length && !this.workers.has(id)) return;
+				}
+				for (const command of meta.pending ?? [])
+					if (command.type === "input") this.assertSlackReply(id, command.requestId);
 				this.validateMode(meta);
 				if (meta.preparing) {
 					const plan = meta.preparing;
@@ -13050,6 +13180,8 @@ ${run.excerpt}`,
 					}
 				}
 				if (this.globalUpdatePreparing) return;
+				for (const command of meta.pending ?? [])
+					if (command.type === "input") this.assertSlackReply(id, command.requestId);
 				const worker = await this.ensureWorker(id);
 				await worker.ready;
 				this.missionResumeGuards.get(id)?.();
@@ -13156,7 +13288,7 @@ ${run.excerpt}`,
 							rejected.set(command.requestId, failure);
 							if (
 								command.type === "input" &&
-								command.onlyIfIdle &&
+								(command.onlyIfIdle || command.requestId.startsWith("slack-reply:")) &&
 								error instanceof CommandRejected &&
 								error.code === "busy"
 							) {
@@ -13203,6 +13335,16 @@ ${run.excerpt}`,
 					return;
 				}
 			} catch (error) {
+				if (
+					error instanceof CommandRejected &&
+					meta.pending?.some((command) => command.requestId.startsWith("slack-reply:"))
+				) {
+					for (const command of meta.pending.filter((command) => command.requestId.startsWith("slack-reply:")))
+						rejected.set(command.requestId, error);
+					meta.pending = meta.pending.filter((command) => !command.requestId.startsWith("slack-reply:"));
+					await this.save(meta);
+					return;
+				}
 				if (meta.lifecycleCheckpoint?.phase === "resume-admitted") {
 					meta.lifecycleCheckpoint.phase = "unknown";
 					await this.save(meta, undefined, undefined, true);

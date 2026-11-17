@@ -14,6 +14,7 @@ import type { Day } from "./day";
 import { closeDelivery, deliveryRoute, hideInspection } from "./deliveryView";
 import { closeFeedback, feedbackOpen, openFeedback } from "./feedbackView";
 import { closeLinear, linearOpen, openLinear } from "./linearView";
+import { closeSlack, slackOpen } from "./slackView";
 import { type Plans, planningListShape } from "./planning";
 import { closePlanning, openNew, openPlan, planRoute } from "./planView";
 import { closeSettings, openSettings, settingsOpen } from "./preferencesView";
@@ -60,6 +61,7 @@ export type Shown =
 	| "feedback"
 	| "delivery"
 	| "linear"
+	| "slack"
 	| "artifacts"
 	| "change"
 	| "changes"
@@ -88,6 +90,7 @@ export function shown(places: Places): Shown {
 	if (places.day.feedback && feedbackOpen()) return "feedback";
 	if (places.day.delivery && deliveryRoute()) return "delivery";
 	if (places.day.linear && linearOpen()) return "linear";
+	if (places.day.slack && slackOpen()) return "slack";
 	if (places.day.artifacts && artifactsOpen()) return "artifacts";
 	const change = places.changes ? changesRoute() : null;
 	if (change) return change.kind === "change" ? "change" : "changes";
@@ -131,6 +134,8 @@ export function backTarget(places: Places): Back | null {
 		}
 		case "linear":
 			return to("Today", closeLinear);
+		case "slack":
+			return to("Today", closeSlack);
 		case "artifacts":
 			return to("Today", closeArtifacts);
 		case "change":
@@ -159,6 +164,7 @@ export function backTarget(places: Places): Back | null {
  * and Today's place stay; an open confirmation is put away, not answered.
  */
 export function goHome() {
+	closeSlack();
 	closeUpdate();
 	closeRitual();
 	closeChat();

@@ -11,6 +11,7 @@ import type { MissionRow, Request, Today } from "pilot-day/native";
 import type { Day } from "./day";
 import type { IntakeMirror, IntakeOp, IntakeResult, IntakeRow, IntakeView, Triage } from "./intakeFeed";
 import { openLinear } from "./linearView";
+import { openSlack } from "./slackView";
 import { goalDraft, openNew, replacesDraft, requestDraft } from "./planView";
 import {
 	Action,
@@ -240,7 +241,14 @@ function planFrom(row: IntakeRow) {
 	openNew();
 }
 
-function NewControls(props: { mirror: IntakeMirror; row: IntakeRow; missions: MissionRow[]; busy: boolean }) {
+export function IntakeWorkControls(props: {
+	mirror: IntakeMirror;
+	row: IntakeRow;
+	missions: MissionRow[];
+	busy: boolean;
+	workOnly?: boolean;
+	onStarted?: () => void;
+}) {
 	const id = () => props.row.request.id;
 	const route = () => routes()[id()] ?? "";
 	const offered = () => route() === "" || props.missions.some((m) => m.id === route());
@@ -291,6 +299,7 @@ function NewControls(props: { mirror: IntakeMirror; row: IntakeRow; missions: Mi
 			(r) => {
 				confirming.set(null);
 				if (r.status === "accepted") focusRow.set(next);
+				if (r.status === "accepted") props.onStarted?.();
 			},
 		);
 	};
@@ -339,24 +348,26 @@ function NewControls(props: { mirror: IntakeMirror; row: IntakeRow; missions: Mi
 								})
 							}
 						/>
-						<Action
-							label="Later"
-							testID={`later-${id()}`}
-							disabled={props.busy}
-							onPress={() => void triage(props.mirror, props.row, "later", props.mirror.view().fresh)}
-						/>
-						<Action
-							label="Plan a mission…"
-							testID={`plan-${id()}`}
-							disabled={props.busy}
-							onPress={() => planFrom(props.row)}
-						/>
-						<Action
-							label="Discard"
-							testID={`discard-${id()}`}
-							disabled={props.busy}
-							onPress={() => void triage(props.mirror, props.row, "discarded", props.mirror.view().fresh)}
-						/>
+						<If when={!props.workOnly}>
+							<Action
+								label="Later"
+								testID={`later-${id()}`}
+								disabled={props.busy}
+								onPress={() => void triage(props.mirror, props.row, "later", props.mirror.view().fresh)}
+							/>
+							<Action
+								label="Plan a mission…"
+								testID={`plan-${id()}`}
+								disabled={props.busy}
+								onPress={() => planFrom(props.row)}
+							/>
+							<Action
+								label="Discard"
+								testID={`discard-${id()}`}
+								disabled={props.busy}
+								onPress={() => void triage(props.mirror, props.row, "discarded", props.mirror.view().fresh)}
+							/>
+						</If>
 					</View>
 				}
 			>
@@ -407,7 +418,12 @@ function NewRow(props: { mirror: IntakeMirror; row: IntakeRow; missions: Mission
 						<If when={props.busy}>
 							<Text class="text-sm text-muted-foreground">Waiting for Pilot's answer about this request.</Text>
 						</If>
-						<NewControls mirror={props.mirror} row={props.row} missions={props.missions} busy={props.busy} />
+						<IntakeWorkControls
+							mirror={props.mirror}
+							row={props.row}
+							missions={props.missions}
+							busy={props.busy}
+						/>
 					</View>
 				</View>
 			}
@@ -517,11 +533,12 @@ function LiveIncoming(props: { day: Day; mirror: IntakeMirror }) {
 			.filter((n) => n.text)
 			.slice(-3);
 	const visible = () =>
+		!!props.day.slack ||
 		v().intake.watched ||
 		v().availability !== "live" ||
 		v().unsettled.length + v().later.length + v().discarded.length > 0;
 	const empty = () =>
-		v().intake.trouble.length > 0 || v().intake.more
+		v().intake.sources.length === 0 || v().intake.trouble.length > 0 || v().intake.more
 			? "No new requests in what Pilot read."
 			: `No new requests. ${joined(v().intake.sources)} ${v().intake.sources.length === 1 ? "is" : "are"} quiet.`;
 	const reading = signal(false);
@@ -543,6 +560,9 @@ function LiveIncoming(props: { day: Day; mirror: IntakeMirror }) {
 							<Text class="text-xs text-faint">{`From ${joined(v().intake.sources)}`}</Text>
 						</If>
 						<LinearEntry day={props.day} sources={v().intake.sources} />
+						<If when={props.day.slack}>
+							<Action label="Slack reports" testID="slack-reports-open" onPress={openSlack} />
+						</If>
 					</SectionTitle>
 				</View>
 				<If when={v().reason}>

@@ -15,12 +15,17 @@ const REPLY_CHARS = 8_000;
  * Sends a Slack reply notice to a chat as a follow-up. The request ID is stable per reply, so a retry after a crash is
  * deduplicated. Resolves false when the chat can't take it (deleted, archived or failed); throws when it may later.
  */
-export type ResumeChat = (sessionId: string, message: string, requestId: string) => Promise<boolean>;
+export type ResumeChat = (
+	sessionId: string,
+	message: string,
+	requestId: string,
+	admissionGuard: () => void,
+) => Promise<boolean>;
 /** One bounded pass over a project's waiting messages. The boolean is kept for older callers. */
 export type SlackWaitingWatcher = (context: SourcePollContext) => Promise<boolean>;
 
 export function createSlackWaitingWatcher(
-	store: Pick<TrackedItemStore, "reserveSlackWaiting" | "slackWaitingResult">,
+	store: Pick<TrackedItemStore, "reserveSlackWaiting" | "slackWaitingResult" | "require" | "onChange">,
 	resume: ResumeChat,
 	now = Date.now,
 ): SlackWaitingWatcher {
@@ -78,21 +83,41 @@ export function createSlackWaitingWatcher(
 				await store.slackWaitingResult(item.id, since, { afterTs: latest });
 				continue;
 			}
-			let delivered = false;
-			if (item.sessionId)
-				try {
-					delivered = await resume(
-						item.sessionId,
-						replyNotice(item, fresh, me, thread.more),
-						`slack-reply:${item.id}:${latest}`,
-					);
-				} catch (error) {
-					// Busy for now (an update, shutdown): keep waiting and deliver on a later check.
-					console.warn(`pilotd: could not resume a chat with Slack replies: ${error}`);
-					context.observe?.({ stage: "waiting_replies", phase: "partial", reason: "delivery_deferred" });
+			let changed = false;
+			const stop = store.onChange((projectId) => {
+				if (projectId === item.projectId) changed = true;
+			});
+			try {
+				const current = await store.require(item.id);
+				if (
+					changed ||
+					current.slack?.status !== "waiting" ||
+					current.slack.waitingSince !== since ||
+					current.sessionId !== item.sessionId ||
+					current.dismissed ||
+					!current.sessionId ||
+					current.triageState === "discarded" ||
+					!slackStartAllowed(context.config.slackChannels, current)
+				)
 					continue;
-				}
-			await store.slackWaitingResult(item.id, since, { status: delivered ? "in_progress" : "open" });
+				const guard = () => {
+					context.signal.throwIfAborted();
+					if (changed) throw new Error("Slack wait changed before reply admission");
+				};
+				const delivered = await resume(
+					current.sessionId,
+					replyNotice(current, fresh, me, thread.more),
+					`slack-reply:${item.id}:${latest}`,
+					guard,
+				);
+				if (delivered && !changed) await store.slackWaitingResult(item.id, since, { status: "in_progress" });
+			} catch (error) {
+				// Held, parked or changed work stays waiting. Never open or spawn it.
+				console.warn(`pilotd: could not resume a chat with Slack replies: ${error}`);
+				context.observe?.({ stage: "waiting_replies", phase: "partial", reason: "delivery_deferred" });
+			} finally {
+				stop();
+			}
 		}
 		context.observe?.({
 			stage: "waiting_replies",

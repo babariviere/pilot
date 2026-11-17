@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Real Day captures of one change: Before at the parent revision, After at the revision.
-# Runs the same capture test (from After) in two temporary jj workspaces with the macOS host, then
+# Runs the same capture test (from After) in temporary jj workspaces with the macOS host, then
 # copies the PNGs it writes to output/ into <out>/before and <out>/after. Fixture data only.
 set -euo pipefail
 # jj revisions such as @ belong to the workspace this script is in.
@@ -8,21 +8,23 @@ cd "$(dirname "$0")/../../.."
 
 usage() {
 	cat >&2 <<'EOF'
-Usage: apps/day/scripts/before-after.sh [-r REV] [--before REV] [--filter NAME] [--out DIR] TEST_FILE
+Usage: apps/day/scripts/before-after.sh [-r REV] [--before REV] [--new-screen] [--filter NAME] [--out DIR] TEST_FILE
   TEST_FILE      capture test, relative to apps/day (for example Native.test.tsx)
   -r REV         After revision (default @)
   --before REV   Before revision (default: the parent of REV)
+  --new-screen   capture only After when the screen has no Before
   --filter NAME  run only tests whose name contains NAME
   --out DIR      where to put before/ and after/ (default: a new directory under TMPDIR)
 EOF
 	exit 2
 }
 
-after_rev=@ before_rev='' filter='' out='' test_file=''
+after_rev=@ before_rev='' filter='' out='' test_file='' new_screen=0
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		-r) after_rev="${2:?}"; shift 2 ;;
 		--before) before_rev="${2:?}"; shift 2 ;;
+		--new-screen) new_screen=1; shift ;;
 		--filter) filter="${2:?}"; shift 2 ;;
 		--out) out="${2:?}"; shift 2 ;;
 		-*) usage ;;
@@ -42,7 +44,8 @@ commit() {
 	printf '%s' "$ids"
 }
 after="$(commit "$after_rev")"
-before="$(commit "$before_rev")"
+before=''
+if [[ "$new_screen" == 0 ]]; then before="$(commit "$before_rev")"; fi
 
 out="${out:-$(mktemp -d "${TMPDIR:-/tmp}/pilot-before-after.XXXXXX")}"
 mkdir -p "$out/before" "$out/after"
@@ -75,15 +78,17 @@ capture() { # side
 
 checkout after "$after"
 [[ -f "$work/after/apps/day/$test_file" ]] || { echo "before-after: no apps/day/$test_file at $after_rev" >&2; exit 2; }
-checkout before "$before"
-# The same capture steps on both sides, so a new or changed test still compares like with like.
-cp "$work/after/apps/day/$test_file" "$work/before/apps/day/$test_file"
+if [[ "$new_screen" == 0 ]]; then
+	checkout before "$before"
+	# The same capture steps on both sides, so a new or changed test still compares like with like.
+	cp "$work/after/apps/day/$test_file" "$work/before/apps/day/$test_file"
+fi
 
 capture after
 before_ok=1
-capture before || before_ok=0
+if [[ "$new_screen" == 0 ]]; then capture before || before_ok=0; fi
 
-echo "Before: $before"
+echo "Before: ${before:-none (new screen)}"
 echo "After:  $after"
 found=0
 for png in "$out/after"/*.png; do

@@ -1,5 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { TrackedItemDisk } from "./tracked-items-disk.ts";
+import { readSlackReports, editSlackReport } from "./slack-reports-disk.ts";
 
 const disk = new TrackedItemDisk(workerData.path);
 let changed = false;
@@ -15,6 +16,14 @@ parentPort!.on("message", ({ id, method, args }) => {
 		emitted.clear();
 		let value: unknown, projectId: string | undefined, projectIds: string[] | undefined;
 		switch (method) {
+			case "slackReports":
+				value = readSlackReports(disk, args.projectId, args.offset);
+				break;
+			case "editSlackReport":
+				value = editSlackReport(disk, args.projectId, args.digest, args.action, args.value);
+				changed = true;
+				projectId = args.projectId;
+				break;
 			case "triageContext":
 				value = disk.triage.context(args.projectId, args.kind);
 				break;

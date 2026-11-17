@@ -25,8 +25,27 @@ reads its receipt and never sends it again.
 If it stays Unknown, **Set aside Unknown** checks once more and unlocks Settings.
 It does not cancel or retry the action, which may already have saved a message.
 
-The remaining sections describe the existing desktop triage, not additional Day
-controls.
+## Reports in Day
+
+Open **Today → New → Slack reports** for the window's project. Each report has
+separate client organization, Slack author, original reporter and issue fields.
+Missing information says **Not identified**. Evidence appears below each extracted
+field; **Source message** opens the exact saved Slack link. **Correct details…**
+saves project-local corrections. It does not rename or move a manual group.
+
+**Edit group…** supports rename, merge and split. These manual choices stay put as
+suggestions improve. Labels organize or hide reports, never complete them.
+**Show hidden labels** and **Show tackled** include those reports again. The list
+shows at most 200 saved reports per page. **Previous reports** and **Next reports**
+reach older saved reports without keeping the entire history on screen.
+
+**Start work…** opens the existing explicit start controls for that report. It never marks a
+report tackled. **Mark tackled** is a separate user action; **Mark open** reverses
+it. Only the start reaction is sent to Slack. Older automatic done records remain
+readable as **Previously marked done**, not as your tackled decision.
+
+The remaining sections describe the existing desktop triage. Its local status
+names differ from Day, but the same user-only completion rules apply.
 
 ## Triage a report
 
@@ -49,16 +68,16 @@ triage** for a project: Pilot reads and sorts the message, then selects it. Past
 alone never adds anything.
 
 Waiting items stay outside the Inbox. On refresh, a reply from someone other than
-you can resume the linked chat or reopen the item. Your own replies do not end a wait.
-Attached chats can report Waiting or Done, but only you reopen closed items.
-
-Merged linked PRs, a completed linked mission, or a detected ✅ reaction can mark
-an item Done. Reopening is respected. Completing an item may add ✅; removing
-Pilot's eyes reaction needs a separate opt-in configuration.
+you can resume only still-approved waiting work with a live eligible agent and no
+other hold. The item keeps waiting when work is held or no live agent is available.
+Your own replies do not end a wait. Attached agents can report Waiting or In progress,
+but only you mark tackled. PR merges, mission completion and Slack reactions never do.
+Pilot sends no completion reaction and does not remove the start reaction.
 
 ## Labels and refresh limits
 
-Labels can hide or locally close reports. Use **Show hidden** or **Show dismissed**
+Labels can organize or hide reports. Older close-label settings now hide only.
+Use **Show hidden** or **Show dismissed**
 (the **Filters** menu in Pilot Next) to include them.
 Corrections help future classification. Common cases group related reports so you
 can review recurring problems together.

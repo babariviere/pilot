@@ -42,7 +42,7 @@ function observe(store: TrackedItemStore, prs: SessionPullRequest[], pending = f
 	return store.observeSlackPullRequests({ projectId: "p", sessionId: "chat", prs, pending });
 }
 
-test("a single observed merge marks linked Slack work Done locally and publishes the reason", async () => {
+test("an observed PR merge never marks linked Slack work tackled", async () => {
 	const store = new TrackedItemStore(":memory:");
 	try {
 		await store.load(["p"]);
@@ -57,27 +57,27 @@ test("a single observed merge marks linked Slack work Done locally and publishes
 		store.onChange(() => changes++);
 		await observe(store, [pr(42, "merged")]);
 		const done = await store.require(id);
-		assert.equal(done.slack?.status, "done");
-		assert.equal(done.slack?.doneReason, "Done · PR #42 merged");
+		assert.equal(done.slack?.status, "in_progress");
+		assert.equal(done.slack?.doneReason, undefined);
 		assert.equal(done.updatedAt, 10, "PR sync is not message activity");
 		assert.equal(done.dismissed, false);
 		assert.deepEqual(done.metadata.slackStart, startOutcome, "completion preserves the existing eyes outcome");
-		assert.equal(changes, 1);
-		assert.equal((done.metadata.mergeDone as { pr: string }).pr, pr().url);
+		assert.equal(changes, 0);
+		assert.equal(done.metadata.mergeDone, undefined);
 		assert.equal((await store.require(foreign)).slack?.status, "in_progress");
 		assert.equal((await store.require(linear)).status, "open");
 		assert.equal(
 			(await store.inbox({ linear: [], slack: [{ projectId: "p", hidden: [] }], limit: 5 })).slack.total,
-			0,
+			1,
 		);
 		await observe(store, [pr(42, "merged", 30)]);
-		assert.equal(changes, 1, "a fresh timestamp is not another merge");
+		assert.equal(changes, 0, "PR evidence never changes report status");
 	} finally {
 		await store.close();
 	}
 });
 
-test("all PRs must merge, including earlier heads, and a closed unmerged PR prevents Done", async () => {
+test("merged and closed PRs never decide report status", async () => {
 	for (const finalState of ["merged", "closed"] as const) {
 		const store = new TrackedItemStore(":memory:");
 		try {
@@ -86,11 +86,8 @@ test("all PRs must merge, including earlier heads, and a closed unmerged PR prev
 			await observe(store, [pr(41, "merged"), pr(42)]);
 			assert.equal((await store.require(id)).slack?.status, "in_progress");
 			await observe(store, [pr(41, "merged"), pr(42, finalState, 30)]);
-			assert.equal((await store.require(id)).slack?.status, finalState === "merged" ? "done" : "in_progress");
-			assert.equal(
-				(await store.require(id)).slack?.doneReason,
-				finalState === "merged" ? "Done · PR #42 merged" : undefined,
-			);
+			assert.equal((await store.require(id)).slack?.status, "in_progress");
+			assert.equal((await store.require(id)).slack?.doneReason, undefined);
 		} finally {
 			await store.close();
 		}
@@ -159,7 +156,7 @@ test("a first terminal observation is a silent baseline, even without a merge ti
 	}
 });
 
-test("migration indexes both legacy and historical links; persisted open observations recover a saved merge", async () => {
+test("migration keeps legacy and historical links without completing reports", async () => {
 	const home = await mkdtemp(join(tmpdir(), "slack-completion-migration-"));
 	const path = join(home, "items.sqlite");
 	const legacy = new DatabaseSync(path);
@@ -179,7 +176,7 @@ test("migration indexes both legacy and historical links; persisted open observa
 		await store.close();
 		store = new TrackedItemStore(path);
 		await observe(store, [pr(42, "merged")]);
-		for (const id of ["legacy", "history"]) assert.equal((await store.require(id)).slack?.status, "done");
+		for (const id of ["legacy", "history"]) assert.equal((await store.require(id)).slack?.status, "in_progress");
 		await store.patch("history", { slack: { status: "open" }, sessionId: null });
 		await observe(store, [pr(43)]);
 		await observe(store, [pr(43, "merged")]);
@@ -190,7 +187,7 @@ test("migration indexes both legacy and historical links; persisted open observa
 	}
 });
 
-test("the committed mission completion event closes historical links once, not member PRs or unrelated updates", async () => {
+test("mission completion never marks reports tackled, including historical links", async () => {
 	const missions = new MissionStore(":memory:");
 	const store = new TrackedItemStore(":memory:");
 	const writes: Promise<void>[] = [];
@@ -210,7 +207,8 @@ test("the committed mission completion event closes historical links once, not m
 		assert.equal(writes.length, 0);
 		missions.update(mission.id, { status: "done" });
 		await Promise.all(writes);
-		assert.equal((await store.require(id)).slack?.doneReason, "Done · Mission completed");
+		assert.equal((await store.require(id)).slack?.doneReason, undefined);
+		assert.equal((await store.require(id)).slack?.status, "in_progress");
 		await store.patch(id, { slack: { status: "open" } });
 		missions.update(mission.id, { title: "Rename again", status: "done" });
 		assert.equal(writes.length, 1);
@@ -220,5 +218,43 @@ test("the committed mission completion event closes historical links once, not m
 		off();
 		await store.close();
 		missions.close();
+	}
+});
+
+test("legacy completion and label closure evidence remains readable without migration or replay", async () => {
+	const home = await mkdtemp(join(tmpdir(), "slack-legacy-evidence-"));
+	const path = join(home, "items.sqlite");
+	let store = new TrackedItemStore(path);
+	try {
+		const id = await linked(store);
+		const labelId = await linked(store, "legacy-label");
+		await store.close();
+		const db = new DatabaseSync(path);
+		const done = { attemptedAt: 10, outcome: "reacted", eyesRemoval: { outcome: "removed" } };
+		const completion = { reason: "Done · PR #42 merged", mergeDone: { pr: pr().url, at: 20 } };
+		db.prepare("UPDATE tracked_items SET slack_status='done', slack_done=?, slack_completion=? WHERE id=?").run(
+			JSON.stringify(done),
+			JSON.stringify(completion),
+			id,
+		);
+		db.prepare(
+			"UPDATE tracked_items SET slack_status='dismissed', dismissed=1, closed_by_label='Product' WHERE id=?",
+		).run(labelId);
+		db.close();
+		store = new TrackedItemStore(path);
+		const saved = await store.require(id);
+		assert.equal(saved.slack?.status, "done");
+		assert.equal(saved.slack?.doneReason, completion.reason);
+		assert.deepEqual(saved.metadata.slackDone, done);
+		assert.deepEqual(saved.metadata.mergeDone, completion.mergeDone);
+		assert.equal(await store.reserveSlackDone("p"), undefined);
+		const labelSaved = await store.require(labelId);
+		assert.equal(labelSaved.slack?.closedByLabel, "Product");
+		await store.slackLabelEffects([{ projectId: "p", close: ["Product"] }]);
+		assert.deepEqual(await store.require(id), saved);
+		assert.deepEqual(await store.require(labelId), labelSaved);
+	} finally {
+		await store.close();
+		await rm(home, { recursive: true, force: true });
 	}
 });

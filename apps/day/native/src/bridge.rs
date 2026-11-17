@@ -295,7 +295,7 @@ pub(crate) enum Command {
     PowerRead,
     /// The user's Resume of work Pilot paused for sleep.
     PowerResume,
-    SlackRead,
+    SlackRead(u32),
     SlackWrite(crate::host::slack_controls::Intent),
     SlackCheck(String),
     SlackSetAside(String),
@@ -658,10 +658,17 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             C::ModelsRead
         }
         "day.slack.read" => {
-            if args != json!({}) {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Page {
+                #[serde(default)]
+                offset: u32,
+            }
+            let r: Page = exact(args)?;
+            if r.offset > 1_000_000 {
                 return Err(Error::Invalid);
             }
-            C::SlackRead
+            C::SlackRead(r.offset)
         }
         "day.slack.write" => {
             let r: crate::host::slack_controls::Intent = exact(args)?;
@@ -1329,7 +1336,7 @@ impl Command {
                     | Self::DatabasesRead
                     | Self::DatabasesRefresh
                     | Self::PowerRead
-                    | Self::SlackRead
+                    | Self::SlackRead(_)
                     | Self::ModelsRecovery(_)
                     | Self::PreferencesHistory(_)
                     | Self::FeedbackRead(_)

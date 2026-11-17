@@ -62,6 +62,23 @@ for await (const line of createInterface({ input: process.stdin })) {
 	if (c.action === "lost") lost = true;
 	if (c.action === "drop") drop = true;
 	if (c.action === "change") await f.projects.update(f.project.id, { name: "Changed project" });
+	if (c.action === "defer-old") {
+		const item = (await f.items.list({ projectId: f.project.id, kind: "slack", offset: 100, limit: 1 })).items[0]!;
+		await f.items.intakeWrite(f.project.id, item.id, item.revision, "later");
+	}
+	if (c.action === "many")
+		await f.items.commit(
+			f.project.id,
+			"slack",
+			Array.from({ length: 201 }, (_, n) => ({
+				externalId: `COTHER/${1794843000 + n}.000001`,
+				title: `Saved report ${n}`,
+				url: `https://example.slack.com/archives/COTHER/p${1794843000 + n}000001`,
+				status: "open",
+				metadata: { manual: true, channel: "COTHER", thread_ts: `${1794843000 + n}.000001`, type: "bug" },
+				updatedAt: Date.now() - n,
+			})),
+		);
 	console.log(
 		JSON.stringify({
 			imports,

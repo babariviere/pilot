@@ -3,6 +3,55 @@ import { test } from "node:test";
 import { parseSlackClassification } from "./slack-classifier.ts";
 
 const valid = { type: "bug" as const, confidence: 0.9, severity: "high", summary: "Export crashes", label: null };
+test("report details require exact source quotes and keep unknown identities null", () => {
+	const source = "For Acme, Zoë reported:\nExport fails.";
+	const details = {
+		client: { value: "Acme", evidence: "For Acme" },
+		issue: { value: "Export fails", evidence: "reported:\nExport fails." },
+		reporter: null,
+	};
+	assert.deepEqual(parseSlackClassification(JSON.stringify({ ...valid, details }), [], source).details, details);
+	for (const detail of [
+		{ value: "Acme", evidence: "for Acme" },
+		{ value: "Acme", evidence: "Acme " },
+		{ value: "x".repeat(241), evidence: "Acme" },
+		{ value: "Acme", evidence: "x".repeat(501) },
+		{ value: "Acme", evidence: "" },
+		{ value: "Acme", evidence: "Acme", invented: true },
+	])
+		assert.throws(() =>
+			parseSlackClassification(JSON.stringify({ ...valid, details: { ...details, client: detail } }), [], source),
+		);
+	assert.throws(() => parseSlackClassification(JSON.stringify({ ...valid, details: { client: null } }), [], source));
+	assert.equal(parseSlackClassification(JSON.stringify(valid), [], source).details, undefined);
+	assert.throws(() =>
+		parseSlackClassification(
+			JSON.stringify({
+				...valid,
+				details: {
+					...details,
+					reporter: { value: "Alice", evidence: "Zoë reported" },
+				},
+			}),
+			[],
+			source,
+		),
+	);
+	assert.deepEqual(
+		parseSlackClassification(
+			JSON.stringify({
+				...valid,
+				details: {
+					...details,
+					reporter: { value: "Zoë", evidence: "Zoë reported" },
+				},
+			}),
+			[],
+			source,
+		).details?.reporter,
+		{ value: "Zoë", evidence: "Zoë reported" },
+	);
+});
 test("classification strictly validates all fields and refuses malformed output without echoing it", () => {
 	assert.deepEqual(parseSlackClassification(JSON.stringify(valid)), valid);
 	for (const text of [

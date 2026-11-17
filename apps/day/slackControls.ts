@@ -1,6 +1,41 @@
 // Native code owns project authority, command IDs and the durable ledger.
 import { signal } from "nsh";
 import { call } from "./bridge";
+export type ReportEvidence = { value: string; evidence: string };
+export type ReportDetails = {
+	client: ReportEvidence | null;
+	reporter: ReportEvidence | null;
+	issue: ReportEvidence | null;
+};
+export type SlackReport = {
+	id: string;
+	revision: number;
+	triageState: "new" | "later" | "discarded";
+	projectId: string;
+	title: string;
+	url: string;
+	caseId?: string;
+	sessionId?: string;
+	missionId?: string;
+	startOperationId?: string;
+	metadata: { author?: string; details?: ReportDetails; channelName?: string };
+	slack?: {
+		type: string;
+		severity: string;
+		label: string | null;
+		status: string;
+		overrides: { details?: Partial<ReportDetails>; status?: string };
+	};
+};
+export type SlackReports = {
+	items: SlackReport[];
+	groups: { id: string; name: string; description: string }[];
+	total: number;
+	complete: boolean;
+	offset?: number;
+	more?: boolean;
+	digest: string;
+};
 export type SlackSnapshot = {
 	version: number;
 	projectId: string;
@@ -9,16 +44,20 @@ export type SlackSnapshot = {
 	config: { channels: string[]; mentionOnly: string[]; groups: string[] };
 	source: { status: string; lastPolledAt?: number; nextPollAt?: number; error?: string };
 	channels: { id: string; pulledAt?: number; failedAt?: number; hasMore?: boolean }[];
+	reports?: SlackReports;
+	labels?: { name: string; description: string; effect?: string }[];
+	canOpenUrl?: boolean;
 };
 export interface SlackControls {
 	snapshot(): SlackSnapshot | null;
 	busy(): boolean;
 	message(): string;
 	unknown(): { operationId: string }[];
-	read(): Promise<void>;
-	write(action: "save" | "import", value: unknown, binding: string): Promise<boolean>;
+	read(offset?: number): Promise<void>;
+	write(action: "save" | "import" | "report" | "group", value: unknown, binding: string): Promise<boolean>;
 	check(id: string): Promise<void>;
 	setAside(id: string): Promise<void>;
+	open?(itemId: string, digest: string, binding: string): Promise<void>;
 }
 export function connectedSlackControls(window: string, changed: () => void): SlackControls {
 	const snapshot = signal<SlackSnapshot | null>(null),
@@ -37,7 +76,7 @@ export function connectedSlackControls(window: string, changed: () => void): Sla
 			if (!r.ok) {
 				message.set(
 					name === "read"
-						? "Slack settings could not be read. The last report stays visible."
+						? "Slack could not be read. The last saved view stays visible."
 						: r.refusal === "stale"
 							? "Project settings changed. Read again; your draft stays."
 							: "Could not confirm this action. Read again and check its receipt. Nothing is sent again.",
@@ -53,17 +92,21 @@ export function connectedSlackControls(window: string, changed: () => void): Sla
 			if (name === "read") message.set("");
 			else
 				message.set(
-					outcome?.state === "accepted"
-						? outcome.receipt?.result?.action === "import"
-							? "Message saved to Today. No channel was added."
-							: r.snapshot
-								? "Tracking saved."
-								: "Tracking saved. Read again for current settings."
-						: outcome?.state === "rejected"
-							? (outcome.receipt?.reason ?? "Nothing changed. Read again before trying a new action.")
-							: outcome?.state === "set-aside"
-								? "Unknown set aside. It may already have saved. Nothing was retried."
-								: "This action is Unknown. Check status only reads its receipt.",
+					outcome?.state === "opened"
+						? ""
+						: outcome?.state === "accepted"
+							? outcome.receipt?.result?.action === "import"
+								? "Message saved to Today. No channel was added."
+								: ["report", "group"].includes(outcome.receipt?.result?.action ?? "")
+									? "Report changes saved."
+									: r.snapshot
+										? "Tracking saved."
+										: "Tracking saved. Read again for current settings."
+							: outcome?.state === "rejected"
+								? (outcome.receipt?.reason ?? "Nothing changed. Read again before trying a new action.")
+								: outcome?.state === "set-aside"
+									? "Unknown set aside. It may already have saved. Nothing was retried."
+									: "This action is Unknown. Check status only reads its receipt.",
 				);
 			if (outcome?.state === "accepted") changed();
 			return outcome?.state === "accepted" && !!r.snapshot;
@@ -71,7 +114,7 @@ export function connectedSlackControls(window: string, changed: () => void): Sla
 			busy.set(false);
 			if (again) {
 				again = false;
-				void request("read", {});
+				void request("read", { offset: snapshot()?.reports?.offset ?? 0 });
 			}
 		}
 	}
@@ -80,8 +123,8 @@ export function connectedSlackControls(window: string, changed: () => void): Sla
 		busy,
 		message,
 		unknown,
-		read: async () => {
-			await request("read", {});
+		read: async (offset = snapshot()?.reports?.offset ?? 0) => {
+			await request("read", { offset });
 		},
 		write: async (action, value, binding) =>
 			!snapshot() || unknown().length > 0 ? false : request("write", { action, value, binding }),
@@ -90,6 +133,13 @@ export function connectedSlackControls(window: string, changed: () => void): Sla
 		},
 		setAside: async (operationId) => {
 			await request("setAside", { operationId });
+		},
+		open: async (itemId, digest, binding) => {
+			await request("write", {
+				action: "open",
+				value: { itemId, digest, offset: snapshot()?.reports?.offset ?? 0 },
+				binding,
+			});
 		},
 	};
 }

@@ -39,6 +39,9 @@ class FakeWorker implements SessionWorker {
 	send(command: KernelCommand): void {
 		this.sent.push(command);
 	}
+	emit(packet: KernelPacket): void {
+		this.onPacket(packet);
+	}
 	async request(command: Command): Promise<void> {
 		this.commands.push(command);
 		const reply = this.reply?.(command);
@@ -83,31 +86,33 @@ async function fixture(t: TestContext, patch: Record<string, unknown> = {}) {
 			: command.type === "activateAttempt"
 				? { type: "rewound", requestId: command.requestId, switched: false }
 				: undefined;
-	const sessions = new SessionManager(
-		home,
-		projects,
-		undefined,
-		{
-			worker: (_spec, onPacket) => {
-				const worker = new FakeWorker(onPacket);
-				worker.reply = (command) => reply?.(command);
-				workers.push(worker);
-				const generation = workers.length;
-				queueMicrotask(() =>
-					onPacket({
-						type: "ready",
-						model: "provider/model",
-						working: false,
-						usage: worker.usage,
-						...(generation > 1 ? { attempts } : {}),
-					}),
-				);
-				return worker;
+	const createSessions = () =>
+		new SessionManager(
+			home,
+			projects,
+			undefined,
+			{
+				worker: (_spec, onPacket) => {
+					const worker = new FakeWorker(onPacket);
+					worker.reply = (command) => reply?.(command);
+					workers.push(worker);
+					const generation = workers.length;
+					queueMicrotask(() =>
+						onPacket({
+							type: "ready",
+							model: "provider/model",
+							working: false,
+							usage: worker.usage,
+							...(generation > 1 ? { attempts } : {}),
+						}),
+					);
+					return worker;
+				},
 			},
-		},
-		{},
-		offlineSessionOptions(),
-	);
+			{},
+			offlineSessionOptions(),
+		);
+	const sessions = createSessions();
 	await sessions.load();
 	t.after(async () => {
 		await sessions.shutdown();
@@ -121,6 +126,13 @@ async function fixture(t: TestContext, patch: Record<string, unknown> = {}) {
 		projects,
 		sessions,
 		workers,
+		async restart() {
+			await sessions.shutdown();
+			const restarted = createSessions();
+			await restarted.load();
+			t.after(() => restarted.shutdown());
+			return restarted;
+		},
 		setReply: (next: FakeWorker["reply"]) => {
 			reply = next;
 		},
@@ -245,4 +257,141 @@ test("HTTP rewind and attempt activation validate input and return the session",
 	const activated = await post("/attempts/1/activate");
 	assert.equal(activated.status, 200);
 	assert.equal(((await activated.json()) as SessionSummary).id, f.id);
+});
+
+test("Slack replies never cold-start a parked session", async (t) => {
+	const f = await fixture(t, { outcome: undefined, outcomeAt: undefined });
+	assert.equal(await f.sessions.resumeSlackReply(f.id, "Reply", "slack-reply:item:1", () => {}), false);
+	assert.equal(f.workers.length, 0);
+	assert.equal(f.sessions.get(f.id)!.error, undefined);
+});
+
+test("Slack replies require the exact live idle worker and preserve Stop and input holds", async (t) => {
+	const f = await fixture(t, { outcome: undefined, outcomeAt: undefined });
+	await f.sessions.send(f.id, "User approved work", "followUp", randomUUID());
+	const worker = f.workers[0]!;
+	assert.ok(worker);
+	const baseline = worker.commands.length;
+	const meta = f.sessions["metas"].get(f.id)!;
+	for (const hold of [
+		"cancelled",
+		"recoveryStopped",
+		"inputsPaused",
+		"updatePaused",
+		"sleepPaused",
+		"delegationFenced",
+	] as const) {
+		meta[hold] = true;
+		assert.equal(await f.sessions.resumeSlackReply(f.id, "Reply", `slack-reply:item:${hold}`, () => {}), false, hold);
+		assert.equal(meta[hold], true, "automatic input does not clear a hold");
+		delete meta[hold];
+	}
+	assert.equal(worker.commands.length, baseline);
+	const beforeActivity = meta.lastUserMessageAt;
+	assert.equal(await f.sessions.resumeSlackReply(f.id, "Reply", "slack-reply:item:allowed", () => {}), true);
+	assert.equal(
+		worker.commands.filter((command) => command.type === "input").at(-1)?.requestId,
+		"slack-reply:item:allowed",
+	);
+	assert.equal(meta.lastUserMessageAt, beforeActivity, "Slack replies are not user activity");
+});
+
+test("Slack reply admission rechecks the item after persistence and before dispatch", async (t) => {
+	const f = await fixture(t, { outcome: undefined, outcomeAt: undefined });
+	await f.sessions.send(f.id, "User approved work", "followUp", randomUUID());
+	const worker = f.workers[0]!;
+	const baseline = worker.commands.length;
+	let changed = false;
+	t.mock.method(f.sessions, "captureRunBoundary" as never, async () => {
+		changed = true;
+	});
+	assert.equal(
+		await f.sessions.resumeSlackReply(f.id, "Stale reply", "slack-reply:item:stale", () => {
+			if (changed) throw new Error("User changed the report");
+		}),
+		false,
+	);
+	assert.equal(worker.commands.length, baseline);
+	assert.equal(f.sessions.get(f.id)!.error, undefined);
+	assert.equal(f.sessions["metas"].get(f.id)!.pending?.length ?? 0, 0);
+});
+
+test("Slack reply rejects a hold or worker replacement during run-boundary I/O", async (t) => {
+	for (const action of ["hold", "replace"] as const) {
+		const f = await fixture(t, { outcome: undefined, outcomeAt: undefined });
+		await f.sessions.send(f.id, "User approved work", "followUp", randomUUID());
+		const worker = f.workers[0]!;
+		const baseline = worker.commands.length;
+		t.mock.method(f.sessions, "captureRunBoundary" as never, async () => {
+			if (action === "hold") f.sessions["metas"].get(f.id)!.inputsPaused = true;
+			else f.sessions["workers"].delete(f.id);
+		});
+		assert.equal(await f.sessions.resumeSlackReply(f.id, "Reply", `slack-reply:item:${action}`, () => {}), false);
+		assert.equal(worker.commands.length, baseline);
+		assert.equal(f.workers.length, 1, "no replacement or cold start");
+		assert.equal(f.sessions.get(f.id)!.error, undefined);
+	}
+});
+
+test("Slack reply never reports delivery when a held drain did not dispatch", async (t) => {
+	const f = await fixture(t, { outcome: undefined, outcomeAt: undefined });
+	await f.sessions.send(f.id, "User approved work", "followUp", randomUUID());
+	const worker = f.workers[0]!;
+	const baseline = worker.commands.length;
+	t.mock.method(f.sessions, "start" as never, async () => new Map());
+	assert.equal(await f.sessions.resumeSlackReply(f.id, "Reply", "slack-reply:item:deferred", () => {}), false);
+	assert.equal(worker.commands.length, baseline);
+	assert.equal(f.sessions["metas"].get(f.id)!.pending?.length ?? 0, 0);
+});
+
+test("a lost Slack reply acknowledgement holds uncertain admission without automatic replay", async (t) => {
+	const f = await fixture(t, { outcome: undefined, outcomeAt: undefined });
+	await f.sessions.send(f.id, "User approved work", "followUp", randomUUID());
+	const worker = f.workers[0]!;
+	f.setReply((command) => (command.type === "input" ? new Error("Input acknowledgement lost") : undefined));
+	const requestId = "slack-reply:item:uncertain";
+	await assert.rejects(
+		f.sessions.resumeSlackReply(f.id, "Reply", requestId, () => {}),
+		/acknowledgement lost/,
+	);
+	const requests = worker.commands.length;
+	assert.equal(await f.sessions.resumeSlackReply(f.id, "Reply", requestId, () => {}), false);
+	assert.equal(worker.commands.length, requests, "uncertain admission is not replayed automatically");
+	assert.equal(f.sessions["metas"].get(f.id)!.pending?.length ?? 0, 0);
+	assert.match(f.sessions.get(f.id)!.error!, /acknowledgement lost/);
+});
+
+test("unknown Slack admission survives readiness and restart, including newer reply IDs", async (t) => {
+	const f = await fixture(t, { outcome: undefined, outcomeAt: undefined });
+	await f.sessions.send(f.id, "User approved work", "followUp", randomUUID());
+	const worker = f.workers[0]!;
+	f.setReply((command) => (command.type === "input" ? new Error("Input acknowledgement lost") : undefined));
+	await assert.rejects(
+		f.sessions.resumeSlackReply(f.id, "Reply", "slack-reply:item:lost", () => {}),
+		/acknowledgement lost/,
+	);
+	worker.emit({ type: "ready", model: "provider/model", working: false, usage: worker.usage });
+	assert.equal(f.sessions.get(f.id)!.error, undefined, "ordinary inputError is cleared on readiness");
+	await Promise.allSettled(f.sessions["saving"].values());
+	assert.equal(
+		JSON.parse(await readFile(join(f.dir, "meta.json"), "utf8")).slackReplyAdmission,
+		"slack-reply:item:lost",
+	);
+	f.setReply(undefined);
+	const before = worker.commands.length;
+	assert.equal(await f.sessions.resumeSlackReply(f.id, "New reply", "slack-reply:item:new", () => {}), false);
+	assert.equal(worker.commands.length, before);
+	await Promise.allSettled(f.sessions["saving"].values());
+	const restarted = await f.restart();
+	assert.equal(f.workers.length, 1, "reloading does not cold-start Slack work");
+	await restarted["ensureWorker"](f.id);
+	await Promise.resolve();
+	assert.equal(restarted.get(f.id)!.error, undefined);
+	assert.equal(restarted.canSendNotice(f.id, "slack-reply:item:newer"), true, "ordinary readiness is not the hold");
+	const live = f.workers.at(-1)!;
+	const restartedBefore = live.commands.length;
+	assert.equal(await restarted.resumeSlackReply(f.id, "Another reply", "slack-reply:item:newer", () => {}), false);
+	assert.equal(live.commands.length, restartedBefore);
+	await restarted.send(f.id, "I checked the uncertain result. Continue.", "followUp", randomUUID());
+	assert.equal(await restarted.resumeSlackReply(f.id, "Fresh reply", "slack-reply:item:resolved", () => {}), true);
 });

@@ -3,6 +3,21 @@
 import { split, Text, View } from "nsh";
 import { Input, type InputProps } from "nsh/base";
 
+/** A labeled, read-only fact. Evidence is separate from its value and from editable inputs. */
+export function ReadField(props: { label: string; value: string; evidence?: string }) {
+	return (
+		<View class="min-w-60 flex-1 gap-2">
+			<Text class="text-sm font-medium text-foreground">{props.label}</Text>
+			<View selectable class="rounded-lg border border-border bg-muted p-3">
+				<Text class="text-base font-semibold text-foreground">{props.value}</Text>
+			</View>
+			<If when={props.evidence}>
+				<Text class="text-xs text-muted-foreground">{props.evidence}</Text>
+			</If>
+		</View>
+	);
+}
+
 /**
  * How a `TextField` looks. `field` (the default) is a form's box; `composer` is the larger, rounder box a message
  * is written in; `title` edits a page title in the title's own size.

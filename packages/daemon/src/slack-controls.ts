@@ -28,7 +28,7 @@ export class SlackControls {
 		this.projects = projects;
 		this.tracking = tracking;
 	}
-	read(projectId: string) {
+	async read(projectId: string, offset = 0) {
 		const project = this.projects.require(projectId);
 		const config = project.tracking ?? { slackChannels: [] };
 		const source = this.tracking.require(`${projectId}:slack`);
@@ -41,6 +41,8 @@ export class SlackControls {
 			true,
 		);
 		return {
+			reports: await this.tracking.items.slackReports(projectId, offset),
+			labels: config.slackLabels ?? [],
 			version: 1,
 			projectId,
 			projectName: project.name,
@@ -78,15 +80,41 @@ export class SlackControls {
 		} catch {
 			throw new OperationRejected("Invalid Slack intent");
 		}
-		let current: ReturnType<SlackControls["read"]>;
+		let current: Awaited<ReturnType<SlackControls["read"]>>;
 		try {
-			current = this.read(p.projectId);
+			current = await this.read(p.projectId);
 		} catch (error) {
 			if (error instanceof NotFound) throw new OperationRejected("Project is no longer available.");
 			throw error;
 		}
 		if (p.binding !== current.binding || op.bindingId !== p.binding)
 			throw new OperationRejected("Project changed. Read again.");
+		// Recheck the live project after the tracking-worker read.
+		if (payloadHash(canonicalJSON(this.projects.require(p.projectId))) !== p.binding)
+			throw new OperationRejected("Project changed. Read again.");
+		if (p.action === "report" || p.action === "group") {
+			const v = p.value as Record<string, unknown>;
+			if (!v || typeof v !== "object" || typeof v.digest !== "string")
+				throw new OperationRejected("Invalid report edit");
+			const { digest, ...value } = v;
+			const patch = value.patch as { label?: unknown } | undefined;
+			if (p.action === "report" && patch?.label != null && !current.labels.some((l) => l.name === patch.label))
+				throw new OperationRejected("Invalid project Slack label");
+			try {
+				await this.tracking.items.editSlackReport(p.projectId, digest, p.action, value);
+			} catch (error) {
+				// Worker validation is before mutation; persistence/transport errors remain Unknown.
+				if (
+					error instanceof Error &&
+					/^(Reports changed|Report is no longer|Group is no longer|Invalid |Only open|Common case limit reached|Unknown common case|limit must)/.test(
+						error.message,
+					)
+				)
+					throw new OperationRejected(error.message);
+				throw error;
+			}
+			return { action: p.action, projectId: p.projectId, saved: true };
+		}
 		if (p.action === "save") {
 			let tracking: ProjectTrackingConfig;
 			try {

@@ -22,6 +22,7 @@ import { captureInterviewView, resetInterviewView, restoreInterviewView } from "
 import { capturePosition, forgetPlaces, restorePosition } from "./kept";
 import { restoreKnowledge, savedKnowledge } from "./knowledgeView";
 import { linearOpen, resetLinearView, restoreLinearView, savedLinear } from "./linearView";
+import { restoreSlackReports, savedSlackReports, slackOpen } from "./slackView";
 import { restoreModelDraft, savedModelDraft } from "./modelSettingsDraft";
 import { flushAll } from "./planCommands";
 import type { Plans } from "./planning";
@@ -77,6 +78,7 @@ export function shownKey(): string {
 	const delivery = deliveryRoute();
 	if (delivery) return `delivery/${delivery.key}`;
 	if (linearOpen()) return "linear";
+	if (slackOpen()) return "slack";
 	const at = place();
 	const thread = threadRoute();
 	if (at.place === "mission" && thread?.missionId === at.id) return `thread/${thread.missionId}/${thread.topicId}`;
@@ -114,6 +116,7 @@ export function captureView(today?: Today): SavedView {
 		...position,
 		...delivery,
 		linear: savedLinear(),
+		slackReports: savedSlackReports(),
 		todayProject: todayProject() === "all" ? "" : todayProject(),
 		...preferences,
 		projectSetup: savedProjectSetup(),
@@ -167,6 +170,7 @@ export function startFresh() {
 	resetDeliveryView();
 	closeArtifacts();
 	resetLinearView();
+	restoreSlackReports("");
 	restoreTodayScope();
 	resetPreferencesView();
 	restoreModelDraft("");
@@ -192,6 +196,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	restoreDeliveryView(view);
 	closeArtifacts();
 	restoreLinearView(view.linear, linear);
+	restoreSlackReports(view.slackReports ?? "");
 	restorePreferences(view.preferences ?? []);
 	restoreProjectSetup(view.projectSetup ?? []);
 	restoreModelDraft(view.modelSettings ?? "");

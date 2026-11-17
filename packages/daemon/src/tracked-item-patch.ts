@@ -26,9 +26,37 @@ export function validatePatch(value: unknown): asserts value is TrackedItemPatch
 			!fields ||
 			typeof fields !== "object" ||
 			Array.isArray(fields) ||
-			Object.keys(fields).some((key) => !["type", "label", "severity", "status"].includes(key))
+			Object.keys(fields).some((key) => !["type", "label", "severity", "status", "details"].includes(key))
 		)
 			throw new Error("Invalid Slack overrides");
+		if (fields.details !== undefined) {
+			const details = fields.details;
+			if (
+				!details ||
+				typeof details !== "object" ||
+				Array.isArray(details) ||
+				Object.keys(details).some((key) => !["client", "issue", "reporter"].includes(key))
+			)
+				throw new Error("Invalid Slack details");
+			for (const detail of Object.values(details)) {
+				if (detail === null) continue;
+				if (
+					!detail ||
+					typeof detail !== "object" ||
+					Array.isArray(detail) ||
+					Object.keys(detail).sort().join(",") !== "evidence,value" ||
+					typeof detail.value !== "string" ||
+					!detail.value.trim() ||
+					detail.value.length > 240 ||
+					/[\x00-\x1f\x7f]/.test(detail.value) ||
+					typeof detail.evidence !== "string" ||
+					!detail.evidence.trim() ||
+					detail.evidence.length > 500 ||
+					/[\x00-\x08\x0b-\x1f\x7f]/.test(detail.evidence)
+				)
+					throw new Error("Invalid Slack details");
+			}
+		}
 		if (fields.type !== undefined && !["bug", "question", "request", "unknown"].includes(fields.type))
 			throw new Error("Invalid Slack type");
 		if (fields.severity !== undefined && !["low", "medium", "high", "critical"].includes(fields.severity))

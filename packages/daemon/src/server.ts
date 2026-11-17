@@ -581,7 +581,14 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (!nativeAuthority || !slackControls) throw new ServiceUnavailable("Native Slack unavailable");
 			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			if (parts.length === 2 && req.method === "GET")
-				return json(res, 200, slackControls.read(url.searchParams.get("projectId") ?? ""));
+				return json(
+					res,
+					200,
+					await slackControls.read(
+						url.searchParams.get("projectId") ?? "",
+						Number(url.searchParams.get("offset") ?? 0),
+					),
+				);
 			throw new HttpError(404, "Not found");
 		}
 		if (parts[1] === "connection-controls") {

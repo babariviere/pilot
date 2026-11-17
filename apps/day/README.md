@@ -88,6 +88,7 @@ It runs that test from the landed revision in two temporary jj workspaces, at th
 (`--before` picks another base), with the macOS host. It prints each pair of PNGs, or `new` when a screen
 has no Before. A Before run that fails part way keeps the PNGs it wrote. It opens windows on this Mac and builds
 the native crate in each workspace. Captures show fixture data only.
+For a new screen with no Before, use `--new-screen` to avoid building an unused base workspace.
 
 ## Development
 

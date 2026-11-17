@@ -109,7 +109,7 @@ test("strict case output rejects invalid/foreign memberships and duplicate token
 	}
 });
 
-test("rename, merge and split are local corrections; emptied cases retire after 30 days", () => {
+test("rename, merge and split are local corrections; manual choices survive the rolling window", () => {
 	const disk = new TrackedItemDisk(":memory:");
 	try {
 		disk.commit("p", "slack", [bug("a"), bug("b"), bug("c")]);
@@ -130,9 +130,9 @@ test("rename, merge and split are local corrections; emptied cases retire after 
 		const later = now + 31 * DAY,
 			input = disk.cases.input("p", later);
 		assert.equal(input.items.length, 0);
-		assert.equal(disk.cases.save("p", input, [], later), true);
-		assert.equal(disk.cases.input("p", later).cases.length, 0);
-		assert.equal(disk.require(itemId).caseId, undefined);
+		assert.equal(disk.cases.save("p", input, [], later), false);
+		assert.equal(disk.cases.input("p", later).cases.length, 1);
+		assert.equal(disk.require(itemId).caseId, first.id);
 	} finally {
 		disk.close();
 	}

@@ -10,6 +10,7 @@ export class SlackFormatChanged extends Error {
 	}
 }
 export interface SlackMessage {
+	author?: string;
 	ts: string;
 	threadTs: string;
 	text: string;
@@ -103,17 +104,19 @@ export function parseSlackPage(value: TrackingJson, limit: number): SlackPage {
 	if (!header) return fail("channel header");
 	const [, name, channel] = header;
 	const text = lines.join("\n").trim();
-	const parts = text.split(/^=== Message from [^\n]+ ===\s*$/m);
+	const parts = text.split(/^=== Message from ([^\n]+) at [^\n]+ ===[ \t]*$/m);
 	if (parts[0]?.trim()) return fail("text before the first message");
 	const parsed: SlackMessage[] = [];
-	for (const part of parts.slice(1)) {
+	for (let i = 1; i < parts.length; i += 2) {
+		const author = slackAuthor(parts[i]!);
+		const part = parts[i + 1]!;
 		const match = /^\s*Message TS: (\d{1,12}\.\d{6})\n([\s\S]*)$/.exec(part);
 		if (!match) return fail("message timestamp");
 		const message = splitMetadata(match[2], true);
 		if (!message) return fail("thread line");
 		// Body text resembling framing is ambiguous. Fail closed instead of guessing identities.
 		if (/^Message TS:|^Thread:|^=== /m.test(message.text)) return fail("framing inside a message");
-		parsed.push({ ts: match[1], threadTs: match[1], ...message });
+		parsed.push({ ...(author ? { author } : {}), ts: match[1], threadTs: match[1], ...message });
 	}
 	if (parsed.length > limit) return fail("more messages than requested");
 	if (new Set(parsed.map((message) => message.ts)).size !== parsed.length) return fail("repeated message timestamp");
@@ -156,7 +159,8 @@ export function parseSlackThread(
 		// Replies carry Reactions and Files lines too, but never a Thread line. Text may be empty (file only).
 		const body = splitMetadata(message[2], false)!.text;
 		if (/^Message TS:|^Thread:|^=== |^--- Reply /m.test(body)) return fail("framing inside a thread message");
-		return { ts: message[1], threadTs: parentTs, text: body, replies: count };
+		const author = slackAuthor(/^\s*From: ([^\n]+)/.exec(part)![1]!);
+		return { ts: message[1], threadTs: parentTs, ...(author ? { author } : {}), text: body, replies: count };
 	};
 	const parent = parseMessage(header[1]);
 	if (parent.ts !== parentTs) return fail("thread parent timestamp");
@@ -284,6 +288,19 @@ export function parseSlackThreadReplies(
 // Control and format characters that hide or reorder text (bidi overrides, zero-width spaces). Joiners stay for emoji.
 const HIDDEN =
 	/[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u061C\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g;
+/** Display identity from Slack framing only, never a report's original reporter. */
+function slackAuthor(from: string): string {
+	return plainText(
+		from
+			.replace(/\s*\([A-Z0-9]{1,40}\)\s*$/, "")
+			.replace(/\s*<[^<>\n]*>\s*$/, "")
+			.trim(),
+	)
+		.replace(/\s+/g, " ")
+		.slice(0, 80)
+		.trim();
+}
+
 function plainText(text: string): string {
 	return text.replace(/\t/g, " ").replace(HIDDEN, "");
 }

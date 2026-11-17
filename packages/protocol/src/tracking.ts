@@ -27,13 +27,12 @@ export type TrackingJson = null | boolean | number | string | TrackingJson[] | {
 
 export type SlackMessageType = "bug" | "question" | "request" | "unknown";
 export type SlackSeverity = "low" | "medium" | "high" | "critical";
-/** waiting: someone outside Pilot (a CSM, the reporter) must answer first. Kept out of the Inbox. A reply in the
- * thread from anyone but the user resumes the linked chat with it (In progress), or reopens the message (Open). */
+/** waiting: someone outside Pilot must answer first. A reply may resume still-approved waiting work only with
+ * a live eligible chat and no other hold. Missing or held work stays waiting. Only a user sets done (tackled). */
 export type SlackLocalStatus = "open" | "in_progress" | "waiting" | "done" | "dismissed";
 /**
  * What a project label does to its Slack messages. none: listed as usual. hide: kept out of the Inbox, behind
- * Show hidden in Slack triage. close: dismissed by Pilot when the label is applied (by the classifier or the user),
- * unless the user set the message's status; reopened when the label no longer applies or stops closing.
+ * Show hidden. The legacy close wire value now means hide only; labels never change completion status.
  */
 export type SlackLabelEffect = "none" | "hide" | "close";
 /** Name is the project-local label identity. No built-in labels. */
@@ -43,7 +42,17 @@ export interface SlackProjectLabel {
 	/** Omitted means none. pilotd always stores it, and reads an older `hideFromInbox: true` as hide. */
 	effect?: SlackLabelEffect;
 }
+/** A report fact with a verbatim quote from the classified Slack message text. */
+export type SlackReportDetail = { value: string; evidence: string };
+/** Customer organization, reported issue and original reporter, never inferred from the Slack author. */
+export type SlackReportDetails = {
+	client: SlackReportDetail | null;
+	issue: SlackReportDetail | null;
+	reporter: SlackReportDetail | null;
+};
 export interface SlackOverrides {
+	/** Omission leaves a field unchanged; null marks it unidentified. */
+	details?: Partial<SlackReportDetails>;
 	type?: SlackMessageType;
 	/** null explicitly clears the label; omission leaves it unchanged. */
 	label?: string | null;
@@ -57,9 +66,9 @@ export interface SlackTriage {
 	severity: SlackSeverity;
 	status: SlackLocalStatus;
 	overrides: SlackOverrides;
-	/** Set while Pilot keeps the message dismissed because of this close label. Any status the user sets clears it. */
+	/** Historical label-dismissal evidence. New labels never set it. */
 	closedByLabel?: string;
-	/** Why a linked work result marked this message Done. Cleared by an explicit user status. */
+	/** Historical automatic completion reason. Cleared by an explicit user status. */
 	doneReason?: string;
 	/** While waiting: what the message waits for, as the agent reported it. Absent when the user set Waiting. */
 	waitingReason?: string;

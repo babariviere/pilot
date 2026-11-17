@@ -345,7 +345,7 @@ test("mention discovery and classification continue beyond the retired hourly ca
 	assert.equal(f.texts.length, 1);
 });
 
-test("option off preserves history behaviour and enabling it never hides/closes existing items or label effects", async (t) => {
+test("mention filtering preserves saved history; legacy close labels never dismiss reports", async (t) => {
 	const f = await fixture(t);
 	const projects = new ProjectStore(f.home);
 	await projects.load();
@@ -383,12 +383,12 @@ test("option off preserves history behaviour and enabling it never hides/closes 
 	);
 	assert.equal((await registry.poll(`${project.id}:slack`)).status, "ok");
 	const before = await f.store.list({ projectId: project.id, kind: "slack", dismissed: true });
-	assert.equal(before.total, 1);
+	assert.equal(before.total, 0);
 	filtered = true;
 	await projects.update(project.id, {
 		tracking: { slackChannels: [channel], slackLabels: labels, slackMentionOnlyChannels: [channel] },
 	});
-	assert.equal((await registry.listItems({ projectId: project.id, kind: "slack", dismissed: true })).total, 1);
+	assert.equal((await registry.listItems({ projectId: project.id, kind: "slack", dismissed: true })).total, 0);
 	await registry.poll(`${project.id}:slack`);
 	assert.deepEqual(
 		(await f.store.list({ projectId: project.id, kind: "slack", dismissed: true })).items,
@@ -397,7 +397,7 @@ test("option off preserves history behaviour and enabling it never hides/closes 
 	newMention = true;
 	assert.equal((await registry.poll(`${project.id}:slack`)).status, "ok");
 	const closed = await f.store.list({ projectId: project.id, kind: "slack", dismissed: true });
-	assert.equal(closed.total, 1, "the classifier's close label cannot hide a qualifying mention");
+	assert.equal(closed.total, 0, "labels never dismiss reports");
 	const mentionedItem = (await f.store.list({ projectId: project.id, kind: "slack" })).items.find((item) =>
 		item.externalId.endsWith(secondParent),
 	);

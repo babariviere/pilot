@@ -18,7 +18,6 @@ import { CredentialBroker } from "./credential-broker.ts";
 import { createDaemonServices } from "./daemon-services.ts";
 import { EnvironmentService } from "./environment.ts";
 import { EnvironmentStateStore } from "./environment-state.ts";
-import { Conflict, NotFound } from "./errors.ts";
 import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
 import { Funding } from "./funding.ts";
 import { fundingBackground } from "./funding-background.ts";
@@ -202,12 +201,11 @@ telemetry.onChange((settings) => {
 const legacyUpdateFrozen = process.platform === "linux" && (await legacyRuntimeUpdateFrozen(config.home));
 sessions.setProjectMemory(memory);
 sessions.setMcpStatus(mcpStatus);
-sessions.setPullRequestObserver((observation) => trackedItems.observeSlackPullRequests(observation));
 sessions.setSlackStatus({
 	call: (sessionId, args) => {
 		const { status, reason } = args;
-		if (status !== "waiting" && status !== "in_progress" && status !== "done")
-			throw new Error('status must be "waiting", "in_progress" or "done"');
+		if (status !== "waiting" && status !== "in_progress")
+			throw new Error('status must be "waiting" or "in_progress"');
 		if (reason !== undefined && typeof reason !== "string") throw new Error("reason must be a string");
 		return trackedItems.agentSlackStatus(sessionId, status, reason);
 	},
@@ -225,15 +223,6 @@ const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
 const missionLinear = new MissionLinearSource(missionStore, sourceMcp);
 const linearSync = new MissionLinearSyncService(missionStore, projects, sourceMcp, tracking.jobDiagnostics);
 tracking.managedLinearMissions = (projectId, issueIds) => missionStore.managedLinearMissions(projectId, issueIds);
-const completionWrites = new Set<Promise<void>>();
-const stopSlackCompletions = missionStore.onCompleted((projectId, missionId, at) => {
-	if (!backgroundStarted || stopping || startupWork.frozen) return;
-	const write = startupWork
-		.run("slack-completion", () => trackedItems.completeSlackMission(projectId, missionId, at))
-		.catch((error: unknown) => console.warn(`pilotd: Slack completion failed: ${error}`))
-		.finally(() => completionWrites.delete(write));
-	completionWrites.add(write);
-});
 
 const missionService = new MissionService(missionStore, sessions, projects);
 const knowledge = new KnowledgeService(missionStore, projects, sessions);
@@ -260,17 +249,9 @@ const connectivity = new ConnectivityService(join(config.home, "connectivity.jso
 	sessions.setConnectivity(online),
 );
 // A reply in a waiting Slack thread resumes the message's latest chat with it, once chats are loaded.
-tracking.slackWaiting = createSlackWaitingWatcher(trackedItems, async (sessionId, message, requestId) => {
-	const chat = sessions.get(sessionId);
-	if (!chat || chat.archivedAt !== undefined || chat.state === "failed") return false;
-	try {
-		await sessions.send(sessionId, message, "followUp", requestId);
-		return true;
-	} catch (error) {
-		if (error instanceof Conflict || error instanceof NotFound) return false;
-		throw error;
-	}
-});
+tracking.slackWaiting = createSlackWaitingWatcher(trackedItems, (sessionId, message, requestId, guard) =>
+	sessions.resumeSlackReply(sessionId, message, requestId, guard),
+);
 const terminals = new TerminalManager();
 const setup = new SetupService(credentials, { mcp: () => mcpStatus.status() });
 const githubSetup = new GitHubSetupService(config.home, {
@@ -328,7 +309,6 @@ let memorySyncDirty = false;
 const startupWork = new RuntimeBackground("daemon-recovery", () => {
 	if (!backgroundStarted || stopping) return;
 	void syncMemoryProjects().catch((error) => console.warn(`pilotd: memory recovery: ${error}`));
-	void recoverCompletions().catch((error) => console.warn(`pilotd: completion recovery: ${error}`));
 });
 function syncMemoryProjects(): Promise<void> {
 	if (stopping || !backgroundStarted || startupWork.frozen) return Promise.resolve();
@@ -362,18 +342,6 @@ function syncMemoryProjects(): Promise<void> {
 		});
 	return memorySync;
 }
-function recoverCompletions(): Promise<void> {
-	if (stopping || !backgroundStarted || startupWork.frozen) return Promise.resolve();
-	const write = startupWork
-		.run("slack-completions", async () => {
-			for (const mission of missionStore.list())
-				if (mission.status === "done" && !mission.passiveLifecycle && mission.completedAt !== undefined)
-					await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
-		})
-		.finally(() => completionWrites.delete(write));
-	completionWrites.add(write);
-	return write;
-}
 async function resumeRuntime(): Promise<void> {
 	if (stopping || server.runtimeFrozen()) return;
 	await sessions.resumeMaintenance();
@@ -406,7 +374,6 @@ async function resumeRuntime(): Promise<void> {
 		schedules.start();
 		backgroundInitialized = true;
 	}
-	await recoverCompletions();
 	daemonServices.recoverOperations();
 }
 const identity = runtimeOwner?.identity();
@@ -533,8 +500,6 @@ async function stop(): Promise<void> {
 			missionService.dispose();
 			await telemetry.featureUsage.close();
 			await credentials.close();
-			stopSlackCompletions();
-			await Promise.all(completionWrites);
 			await funding.close();
 			await backgroundSubscription.close();
 			await trackedItems.close();

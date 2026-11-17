@@ -214,6 +214,7 @@ export function createSlackPoller(
 							)
 						: { messages: [message] };
 					message.replies = thread.messages[0]!.replies;
+					message.author = thread.messages[0]!.author ?? message.author;
 					searchText = thread.messages.map((reply) => reply.text).join("\n\n");
 					classifierContext ??= await classifierContextFor(store, context);
 					classify ??= models.prepareSlackClassifier
@@ -237,7 +238,11 @@ export function createSlackPoller(
 										.join("\n\n")
 										.slice(0, 12_000),
 								);
-								const result = parseSlackClassification(JSON.stringify(classified), classifierContext!.labels);
+								const result = parseSlackClassification(
+									JSON.stringify(classified),
+									classifierContext!.labels,
+									searchText.slice(0, 12_000),
+								);
 								await store.finishSlack(channel, message.threadTs, result, context.project.id);
 								return { state: "done", result };
 							} catch {
@@ -276,6 +281,7 @@ export function createSlackPoller(
 					updatedAt: Number(message.threadTs) * 1000,
 					metadata: {
 						channel: page.channel,
+						...(message.author ? { author: message.author } : {}),
 						...(filtered ? { mentionQualified: true } : {}),
 						channelName: page.name,
 						thread_ts: message.threadTs,
@@ -412,7 +418,14 @@ export function createSlackAdder(
 							classifierContext,
 							{ projectId: context.project.id },
 						);
-				result = parseSlackClassification(JSON.stringify(classified), classifierContext.labels);
+				result = parseSlackClassification(
+					JSON.stringify(classified),
+					classifierContext.labels,
+					thread.messages
+						.map((reply) => reply.text)
+						.join("\n\n")
+						.slice(0, 12_000),
+				);
 			} catch (error) {
 				if (context.signal.aborted) {
 					await store.finishSlack(link.channel, link.threadTs, undefined, context.project.id);
@@ -438,6 +451,7 @@ export function createSlackAdder(
 			updatedAt: Number(link.threadTs) * 1000,
 			metadata: {
 				channel: link.channel,
+				...(parent.author ? { author: parent.author } : {}),
 				...(channelName ? { channelName } : {}),
 				thread_ts: link.threadTs,
 				replies: parent.replies,

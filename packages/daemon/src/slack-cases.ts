@@ -126,7 +126,7 @@ export class SlackCaseDisk {
 	retire(projectId: string, now: number): boolean {
 		if (
 			!this.db
-				.prepare("SELECT id FROM slack_cases WHERE project_id=? AND last_seen<? LIMIT 1")
+				.prepare("SELECT id FROM slack_cases WHERE project_id=? AND last_seen<? AND manual_name=0 LIMIT 1")
 				.get(projectId, now - WINDOW)
 		)
 			return false;
@@ -134,10 +134,12 @@ export class SlackCaseDisk {
 		try {
 			this.db
 				.prepare(
-					"UPDATE tracked_items SET slack_case_id=NULL WHERE project_id=? AND slack_case_id IN (SELECT id FROM slack_cases WHERE project_id=? AND last_seen<?)",
+					"UPDATE tracked_items SET slack_case_id=NULL WHERE project_id=? AND slack_case_id IN (SELECT id FROM slack_cases WHERE project_id=? AND last_seen<? AND manual_name=0)",
 				)
 				.run(projectId, projectId, now - WINDOW);
-			this.db.prepare("DELETE FROM slack_cases WHERE project_id=? AND last_seen<?").run(projectId, now - WINDOW);
+			this.db
+				.prepare("DELETE FROM slack_cases WHERE project_id=? AND last_seen<? AND manual_name=0")
+				.run(projectId, now - WINDOW);
 			this.bump(projectId);
 			this.db.exec("COMMIT");
 			return true;
@@ -202,11 +204,11 @@ export class SlackCaseDisk {
 			// Empty identities retain their history for 30 days, then retire (including stale memberships).
 			this.db
 				.prepare(
-					"UPDATE tracked_items SET slack_case_id=NULL WHERE project_id=? AND slack_case_id IN (SELECT id FROM slack_cases WHERE project_id=? AND last_seen<?)",
+					"UPDATE tracked_items SET slack_case_id=NULL WHERE project_id=? AND slack_case_id IN (SELECT id FROM slack_cases WHERE project_id=? AND last_seen<? AND manual_name=0)",
 				)
 				.run(projectId, projectId, now - WINDOW);
 			const retired = this.db
-				.prepare("DELETE FROM slack_cases WHERE project_id=? AND last_seen<?")
+				.prepare("DELETE FROM slack_cases WHERE project_id=? AND last_seen<? AND manual_name=0")
 				.run(projectId, now - WINDOW);
 			if (groups.length || retired.changes) this.bump(projectId);
 			this.db.exec("COMMIT");
@@ -240,20 +242,33 @@ export class SlackCaseDisk {
 					.prepare("UPDATE tracked_items SET slack_case_id=? WHERE project_id=? AND slack_case_id=?")
 					.run(edit.targetId, projectId, id);
 				this.db
-					.prepare("UPDATE slack_cases SET last_seen=max(last_seen,?),first_seen=min(first_seen,?) WHERE id=?")
+					.prepare(
+						"UPDATE slack_cases SET manual_name=1,last_seen=max(last_seen,?),first_seen=min(first_seen,?) WHERE id=?",
+					)
 					.run(entry.last_seen!, entry.first_seen!, edit.targetId);
 				this.db.prepare("DELETE FROM slack_cases WHERE id=?").run(id);
 			}
 			if (edit.action === "split") {
+				this.db.prepare("UPDATE slack_cases SET manual_name=1 WHERE id=?").run(id);
 				if (this.input(projectId, now).cases.length >= 100) throw new Error("Common case limit reached");
-				const members = this.input(projectId, now).items.filter((item) => item.caseId === id);
 				if (
 					!Array.isArray(edit.itemIds) ||
 					!edit.itemIds.length ||
-					edit.itemIds.length >= members.length ||
-					edit.itemIds.some((itemId) => !members.some((item) => item.id === itemId)) ||
+					edit.itemIds.length > CASE_LIMIT ||
 					new Set(edit.itemIds).size !== edit.itemIds.length
 				)
+					throw new Error("Invalid split members");
+				const members = this.db
+					.prepare(
+						"SELECT id,updated_at AS seen FROM tracked_items WHERE project_id=? AND slack_case_id=? AND id IN (SELECT value FROM json_each(?))",
+					)
+					.all(projectId, id, JSON.stringify(edit.itemIds)) as { id: string; seen: number }[];
+				const total = Number(
+					this.db
+						.prepare("SELECT count(*) AS n FROM tracked_items WHERE project_id=? AND slack_case_id=?")
+						.get(projectId, id)!.n,
+				);
+				if (members.length !== edit.itemIds.length || members.length >= total)
 					throw new Error("Invalid split members");
 				const newId = randomUUID();
 				this.db

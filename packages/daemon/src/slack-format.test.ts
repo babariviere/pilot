@@ -43,6 +43,18 @@ test("Slack message links name the channel and the thread's parent", () => {
 		assert.equal(parseSlackMessageLink(value), undefined, String(value));
 });
 
+test("classification parsers preserve Slack authors separately from message content", () => {
+	const page = parseSlackPage(slackMetadataFixture, 8);
+	assert.equal(page.messages[0]!.author, "Sam Rivera");
+	assert.equal(page.messages.at(-1)!.author, "Monitor");
+	const thread = parseSlackThread(slackThreadFixture, "1791885305.000001", 30);
+	assert.deepEqual(
+		thread.messages.map((message) => message.author),
+		["Reporter", "Helper", "Reporter"],
+	);
+	assert.ok(thread.messages.every((message) => !message.text.includes("reporter@example.test")));
+});
+
 test("observed history wire shape: multiline content, bot/user headers, thread counts, pagination and empty pages", () => {
 	const page = parseSlackPage(slackHistoryFixture, 8);
 	assert.equal(page.channel, "C000000001");
