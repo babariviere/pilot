@@ -355,7 +355,13 @@ export class MissionService {
 				if (coordinator && mission.coordinatorSessionId)
 					throw new Conflict("The mission already has a coordinator");
 				this.assertSameProject(sessionId, missionId);
-				this.assertStartActor(missionId, admission?.actorSessionId, false, admission?.continuationOperationId);
+				this.assertStartActor(
+					missionId,
+					admission?.actorSessionId,
+					false,
+					admission?.continuationOperationId,
+					admission?.taskPrototype === true,
+				);
 				if (admission?.actorSessionId && taskId)
 					this.sessions.assertMissionTaskHolds(
 						missionId,
@@ -1832,6 +1838,7 @@ export class MissionService {
 		sessionId?: string,
 		required = false,
 		continuationOperationId?: string,
+		taskPrototype = false,
 	): void {
 		this.controls.assertOpen(missionId);
 		if (!sessionId && !required) return; // Trusted user path, not a tool-supplied identity.
@@ -1843,6 +1850,8 @@ export class MissionService {
 			throw new Conflict("Only the current mission coordinator can start workers");
 		this.assertSameProject(sessionId, missionId);
 		this.sessions.missionDispatchFence(sessionId);
+		// A task prototype is short, read-only and limited to one per mission: it never waits for a worker slot.
+		if (taskPrototype) return;
 		const uncertain = this.store.controls
 			.continuations(missionId, true)
 			.filter(
@@ -1855,14 +1864,16 @@ export class MissionService {
 	private occupiedWorkers(missionId: string, excludeId?: string): number {
 		const coordinator = this.store.require(missionId).coordinatorSessionId;
 		const tasks = this.store.tasks(missionId);
-		// A builder idle until its task prototype comes back holds no slot, so the prototype chat can start.
 		const prototypes = Object.values(this.store.planningWorkers.get(missionId)?.taskPrototypes ?? {});
+		// A builder idle until its task prototype comes back holds no slot.
 		const awaitingPrototype = (id: string) =>
 			prototypes.some((p) => p.builderSessionId === id && p.state !== "reported" && p.state !== "failed");
+		// Task prototype chats need no slot, so they take none either.
+		const prototypeChat = (id: string) => prototypes.some((p) => p.sessionId === id);
 		return (
 			[...new Set([...this.store.members(missionId), ...this.sessions.missionWorkSessions(missionId)])].filter(
 				(id) => {
-					if (id === coordinator || id === excludeId) return false;
+					if (id === coordinator || id === excludeId || prototypeChat(id)) return false;
 					const chat = this.sessions.get(id);
 					if (!chat || chat.archivedAt !== undefined) return false;
 					if (chat.working || chat.state === "working" || chat.state === "starting" || chat.runningJobs?.length)

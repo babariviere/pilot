@@ -2115,7 +2115,12 @@ export class PlanningWorkers {
 					},
 					false,
 					undefined,
-					{ role: "explorer", actorSessionId: state.binding.ownerSessionId, mainView: true },
+					{
+						role: "explorer",
+						actorSessionId: state.binding.ownerSessionId,
+						mainView: true,
+						taskPrototype: true,
+					},
 				);
 				sessionId = chat.id;
 			} catch (error) {

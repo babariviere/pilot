@@ -151,3 +151,55 @@ test("builders waiting for their task prototypes leave worker slots for the prot
 	chats.set(builders[0]!, { ...chats.get(builders[0]!), state: "working", working: true });
 	assert.equal(await occupied(), 1, "a working builder still holds a slot");
 });
+
+test("task prototype chats start without a free worker slot and take none", async (t) => {
+	const f = await fixture(t, { twoSlices: true });
+	const tasks = f.store.tasks(f.missionId);
+	const chats = new Map<string, Partial<SessionSummary>>();
+	for (const [i, id] of ["builder-1", "builder-2"].entries()) {
+		chats.set(id, { id, projectId: f.project.id, state: "working", working: true, inputGeneration: 0 });
+		f.store.join(id, f.missionId, { sessionId: f.owner }, "builder");
+		f.store.updateTask(f.missionId, tasks[i]!.id, { sessionId: id }, { sessionId: f.owner });
+	}
+	const get = f.sessions.get.bind(f.sessions);
+	t.mock.method(f.sessions, "get", (id: string) =>
+		chats.has(id) ? ({ ...chats.get(id) } as SessionSummary) : get(id),
+	);
+	t.mock.method(f.sessions, "selectTaskModel", async (_cwd: string, model?: string) => ({ model, thinking: "high" }));
+	const admissions: { taskPrototype?: true }[] = [];
+	t.mock.method(
+		f.sessions,
+		"spawn",
+		async (_request: unknown, _c: boolean, _t: unknown, admission: { taskPrototype?: true }) => {
+			admissions.push(admission);
+			f.store.join("proto-1", f.missionId, { sessionId: f.owner }, "explorer");
+			chats.set("proto-1", { id: "proto-1", projectId: f.project.id, state: "working", working: true });
+			return { id: "proto-1" } as SessionSummary;
+		},
+	);
+	const service = new MissionService(f.store, f.sessions, f.projects);
+	const occupied = async () =>
+		((await service.call(f.owner, "get", {})) as { continuation: { occupiedWorkers: number } }).continuation
+			.occupiedWorkers;
+	assert.equal(await occupied(), 2);
+	t.mock.method(f.sessions, "missionDispatchFence", () => "fence");
+	const admit = (taskPrototype: boolean) =>
+		service["assertStartActor"](f.missionId, f.owner, false, undefined, taskPrototype);
+	assert.throws(() => admit(false), /Waiting for a worker slot/, "ordinary workers still wait");
+	assert.doesNotThrow(() => admit(true), "a task prototype needs no slot");
+
+	// Busy builders cannot hold up a prototype: it starts, and it does not take a slot.
+	await service.call("builder-1", "prototype", {
+		taskId: tasks[0]!.id,
+		requestId: "layouts-1",
+		question: "Compare layouts",
+		prototypeModel: "faux/opus",
+	});
+	f.workers.startResearch();
+	await f.workers.settleResearch();
+	assert.deepEqual(
+		admissions.map((a) => a.taskPrototype),
+		[true],
+	);
+	assert.equal(await occupied(), 2, "builder-1 is still working; the prototype chat counts for nothing");
+});
