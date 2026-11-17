@@ -1929,7 +1929,7 @@ export class MissionService {
 				: { taskId: task.id, state: "none" };
 		const keys = Object.keys(args);
 		if (keys.every((k) => k === "taskId")) return view();
-		const allowed = ["taskId", "requestId", "question", "prototypeModel", "prototypeThinking", "maxMinutes"];
+		const allowed = ["taskId", "requestId", "question", "prototypeModel", "prototypeThinking"];
 		if (keys.some((k) => !allowed.includes(k))) throw new Error(`prototype takes only ${allowed.join(", ")}`);
 		const requestId = args.requestId;
 		if (typeof requestId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
@@ -1947,14 +1947,6 @@ export class MissionService {
 		const thinking = args.prototypeThinking;
 		if (thinking !== undefined && (typeof thinking !== "string" || thinking.length > 32))
 			throw new Error("prototypeThinking must be a thinking level");
-		const maxMinutes = args.maxMinutes ?? TASK_PROTOTYPE.minutes;
-		if (
-			typeof maxMinutes !== "number" ||
-			!Number.isSafeInteger(maxMinutes) ||
-			maxMinutes < 5 ||
-			maxMinutes > TASK_PROTOTYPE.minutes
-		)
-			throw new Error(`maxMinutes must be a whole number from 5 to ${TASK_PROTOTYPE.minutes}`);
 		if (prior && !["reported", "failed"].includes(prior.state))
 			throw new Conflict("This task already has a prototype in progress. Read it with taskId alone.");
 		if ((prior?.attempts ?? 0) >= TASK_PROTOTYPE.attempts)
@@ -1972,7 +1964,6 @@ export class MissionService {
 			question: question.trim(),
 			model,
 			...(thinking ? { thinking: thinking as string } : {}),
-			maxMinutes,
 			state: "requested",
 			sessionId: null,
 			requestedAt: Date.now(),

@@ -107,7 +107,7 @@ Keep routine directions in existing task updates or log context, without duplica
 - prGuidance: taskId returns live, per-ticket PR wording. Earlier contributors use Related to; only final contributors (every other contributor Done) use Closes, subject to live terminal/manual-pause safeguards. Recheck before creating/editing PRs and after task/link changes. Never silently edit unsafe PRs.
 - unlink: remove url at taskId (omitted: mission-level), own links only unless coordinator; prefers reference. Absent returns removed:false.
 - report: taskId alone reads your current task-owner source token and expectedPreviousId. Submit report with those exact fields, version 1, unique reportId, taskId, movement moving|not_moving|unknown, summary, nextStep and evidence strings. Optional delivery {commit, checks, issues, screens?} records scoped delivery facts, not completion. For a change users can see, screens is {pairs: [{before?, after}]} of image artifact IDs captured from the real app and attached to the task with artifactRevision (no before: a new screen), or {none: reason}. Reports notify the coordinator durably, never change task status or user acceptance. Reuse exact reportId and bytes after a lost ACK; new stale-source writes reject. reportId alone reads that historical receipt. get(id) includes currentness and 16 recent reports; use reportId from activity for older receipts.
-- prototype (builder, own task): when your task asks for a UI prototype or the user's choice between layouts, ask Pilot to make it: taskId, requestId (your own stable ID; the same ID again only reads it), question (what to compare and which variants), prototypeModel (provider/modelId of the chat that makes it; a refused call lists allowed ones), optional prototypeThinking and maxMinutes (5-30, default 30). Pilot makes it in a separate read-only chat, links the mockup to the task and sends you its artifact and report; then end your turn. When it arrives, ask the user with ask_user which variant they want, naming the artifact. taskId alone reads its state. Never ask the user to register a prototype; this is the way.
+- prototype (builder, own task): when your task asks for a UI prototype or the user's choice between layouts, ask Pilot to make it: taskId, requestId (your own stable ID; the same ID again only reads it), question (what to compare and which variants), prototypeModel (provider/modelId of the chat that makes it; a refused call lists allowed ones), optional prototypeThinking. Pilot makes it in a separate read-only chat, links the mockup to the task and sends you its artifact and report; then end your turn. When it arrives, ask the user with ask_user which variant they want, naming the artifact. taskId alone reads its state. Never ask the user to register a prototype; this is the way.
 - log: add context not already captured by task changes, or kind "handoff" for what the next chat needs to continue (optional health).${
 			coordinator
 				? `
@@ -430,13 +430,6 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 			),
 			question: Type.Optional(
 				Type.String({ maxLength: 4000, description: "prototype: what to compare and which variants." }),
-			),
-			maxMinutes: Type.Optional(
-				Type.Integer({
-					minimum: 5,
-					maximum: 30,
-					description: "prototype: chat time limit in minutes (default 30).",
-				}),
 			),
 			prototypeModel: Type.Optional(
 				Type.String({

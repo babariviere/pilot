@@ -20,7 +20,6 @@ const prototype = (id: string, extra: Record<string, unknown> = {}) => ({
 		context: "Mock Today screen",
 		experimentType: "ui",
 		smallestExperiment: "Three variants of the error card",
-		maxMinutes: 30,
 		maxCostUsd: 3,
 		model: "faux/opus",
 		...extra,
@@ -111,14 +110,15 @@ test("a ready prototype starts one read-only chat with its planner's model; its 
 	assert.deepEqual(
 		f.spawned.map((s) => [s.title, s.mode, s.role, s.model]),
 		[
-			["Prototype: Prototype p1 (up to 30 min, $3)", "ask", "explorer", "faux/opus"],
+			["Prototype: Prototype p1 (about $3)", "ask", "explorer", "faux/opus"],
 			["Research: Research r", "ask", "explorer", "faux/default"],
 		],
 		"one prototype chat at a time, beside research",
 	);
 	assert.deepEqual(f.models, ["faux/opus", undefined]);
 	assert.match(f.spawned[0]!.message, /Publish exactly one NSH artifact/);
-	assert.match(f.spawned[0]!.message, /Pilot stops this chat after 30 minutes/);
+	assert.match(f.spawned[0]!.message, /Budget: about \$3\./);
+	assert.doesNotMatch(f.spawned[0]!.message, /minute/);
 	assert.deepEqual(f.claimed(), { p1: "chat-1", p2: null, r: "chat-2" });
 
 	f.publish("chat-1", "variants", 3);
@@ -130,7 +130,7 @@ test("a ready prototype starts one read-only chat with its planner's model; its 
 	);
 	assert.equal(f.store.artifactReferences(f.missionId, "picture").length, 0);
 	assert.equal(f.spawned.length, 3, "the next prototype starts when the slot frees");
-	assert.equal(f.spawned[2]!.title, "Prototype: Prototype p2 (up to 30 min, $3)");
+	assert.equal(f.spawned[2]!.title, "Prototype: Prototype p2 (about $3)");
 	assert.equal(f.inputs.length, 0, "results wait while other chats run");
 
 	await f.finish("chat-2");
@@ -152,23 +152,22 @@ test("a ready prototype starts one read-only chat with its planner's model; its 
 	assert.equal(f.store.tasks(f.missionId).length, 0, "prototypes never create build tasks");
 });
 
-test("a prototype chat stops at its time limit and passes what it published", async (t) => {
+test("a prototype chat has no time limit, even with a time saved by an older plan", async (t) => {
 	const f = await prototypes(t, [prototype("p1", { maxMinutes: 5 })]);
 	f.workers.startResearch();
 	await f.workers.settleResearch();
 	assert.equal(f.spawned.length, 1);
-	await f.settle();
-	assert.deepEqual(f.stopped, [], "a chat within its limit runs on");
 	const state = f.store.planningWorkers.get(f.missionId)!;
 	f.store.planningWorkers.change(f.missionId, state.revision, (s) => {
-		s.research!.p1!.startedAt = Date.now() - 6 * 60_000;
+		s.research!.p1!.startedAt = Date.now() - 600 * 60_000;
 	});
 	f.publish("chat-1", "variants", 1);
 	await f.settle();
-	assert.deepEqual(f.stopped, ["chat-1"]);
-	await f.settle();
+	assert.deepEqual(f.stopped, [], "a long-running chat runs on");
+	assert.equal(f.inputs.length, 0);
+	await f.finish("chat-1");
 	assert.equal(f.inputs.length, 1);
-	assert.match(f.inputs[0]!.content, /Pilot stopped the chat at its 5-minute limit/);
+	assert.doesNotMatch(f.inputs[0]!.content, /limit/);
 	assert.match(f.inputs[0]!.content, /"artifactId":"variants"/);
 });
 

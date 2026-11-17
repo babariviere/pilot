@@ -8,7 +8,7 @@ test("a topic round shows its prototype and opens the exact pinned revision once
 	const app = await open("./RoundPrototypeFixture.tsx", desktop);
 	await app.waitFor("The prototype");
 	expect(app.texts().some((t) => t.startsWith("Pilot made this mock for these questions."))).toBe(true);
-	expect(app.texts().includes("Its limits: up to 30 minutes and about $3, with faux/opus.")).toBe(true);
+	expect(app.texts().includes("Its budget: about $3, with faux/opus.")).toBe(true);
 	expect(app.texts().includes("NSH · revision 3")).toBe(true);
 	expect(app.texts().includes("Reads: []")).toBe(true);
 	await app.press("id:artifact-card-/chat-proto/variants/3");

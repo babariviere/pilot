@@ -7,7 +7,8 @@ export interface PlanPrototype {
 	context: string;
 	experimentType: "logic-state" | "ui";
 	smallestExperiment: string;
-	maxMinutes: number;
+	/** Saved by older plans only. Pilot no longer stops prototype chats on time. */
+	maxMinutes?: number;
 	maxCostUsd: number;
 	/** The model of the chat that makes the prototype, chosen by the planner. Omitted: the project's task model. */
 	model?: string;
@@ -177,7 +178,7 @@ export interface PlanMapItem {
 	sources: PlanMapSource[];
 	settledBy: PlanMapSource | null;
 	/** Prototype questions only: the limits its planner set, shown to the user. Cost is not enforced. */
-	limits?: { maxMinutes: number; maxCostUsd: number; model?: string };
+	limits?: { maxCostUsd: number; model?: string };
 	/** Prototype questions only. Findings are evidence, never acceptance or build authority. */
 	evidence?: {
 		state: "missing" | "current" | "stale";

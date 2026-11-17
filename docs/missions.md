@@ -115,8 +115,7 @@ with the mission. Findings are evidence, not your acceptance or permission to bu
 question is ready, Pilot starts one read-only prototype chat for it, with the model the planner chose. The
 chat publishes one NSH mock with the variants, and Pilot links it to the mission. The planner then asks
 you about it, and the round shows **The prototype**, which opens in the app's isolated preview (**Full window**
-shows it over the whole page). A chat
-stops at its question's time limit; its cost limit is shown, not enforced. See
+shows it over the whole page). A prototype chat has no time limit; its cost limit is shown, not enforced. See
 [mission prototypes](technical/mission-prototypes.md).
 After the plan is published, a builder whose task needs a UI prototype asks Pilot for one itself. Pilot makes
 it in a read-only chat, links the mock to the task and sends it to the builder, which then asks you to choose.

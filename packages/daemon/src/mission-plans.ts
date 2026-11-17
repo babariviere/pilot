@@ -385,9 +385,9 @@ export class MissionPlans extends MissionPlanReader {
 					"context",
 					"experimentType",
 					"smallestExperiment",
-					"maxMinutes",
 					"maxCostUsd",
-					...(["model", "thinking"] as const).filter((k) => !!p && Object.hasOwn(p, k)),
+					// maxMinutes: saved by older plans only. Pilot no longer stops prototype chats on time.
+					...(["maxMinutes", "model", "thinking"] as const).filter((k) => !!p && Object.hasOwn(p, k)),
 				]);
 				if (p.model !== undefined) text(p.model, 256);
 				if (p.thinking !== undefined) text(p.thinking, 32);
@@ -395,14 +395,11 @@ export class MissionPlans extends MissionPlanReader {
 				text(p.smallestExperiment, 2000);
 				if (
 					!["logic-state", "ui"].includes(p.experimentType) ||
-					!Number.isSafeInteger(p.maxMinutes) ||
-					p.maxMinutes < 1 ||
-					p.maxMinutes > 480 ||
 					!Number.isFinite(p.maxCostUsd) ||
 					p.maxCostUsd < 0 ||
 					p.maxCostUsd > 10
 				)
-					throw new Conflict("Prototype needs an experiment type and small time/cost bounds");
+					throw new Conflict("Prototype needs an experiment type and a small cost bound");
 			} else if (Object.hasOwn(q, "prototype") || Object.hasOwn(q, "prototypeResult"))
 				throw new Conflict("Prototype fields require a prototype question");
 			this.sources(plan.missionId, q.resolution ? fresh(q.sources) : q.sources);

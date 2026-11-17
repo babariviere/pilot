@@ -50,7 +50,6 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 			context: Type.String(),
 			experimentType: Type.Union([Type.Literal("logic-state"), Type.Literal("ui")]),
 			smallestExperiment: Type.String(),
-			maxMinutes: Type.Integer({ minimum: 1, maximum: 480 }),
 			maxCostUsd: Type.Number({ minimum: 0, maximum: 10 }),
 			model: Type.Optional(
 				Type.String({

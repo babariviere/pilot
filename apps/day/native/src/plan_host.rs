@@ -441,17 +441,16 @@ fn prototype_pin(artifact: &Value) -> Option<PrototypePin> {
     (!pin.session_id.is_empty() && !pin.artifact_id.is_empty() && revision > 0).then_some(pin)
 }
 
-/// "Up to 30 minutes and about $3, with faux/opus." The cost is shown, not enforced.
+/// "About $3, with faux/opus." The cost is shown, not enforced. Prototype chats have no time limit.
 fn limits(limits: &Value) -> String {
-    let Some(minutes) = limits["maxMinutes"].as_u64() else {
+    let Some(cost) = limits["maxCostUsd"].as_f64() else {
         return String::new();
     };
-    let cost = limits["maxCostUsd"].as_f64().unwrap_or(0.0);
     let model = limits["model"]
         .as_str()
         .map(|m| format!(", with {m}"))
         .unwrap_or_default();
-    format!("Up to {minutes} minutes and about ${cost}{model}.")
+    format!("About ${cost}{model}.")
 }
 
 fn fog(map: &Value, f: &Value) -> FogArea {

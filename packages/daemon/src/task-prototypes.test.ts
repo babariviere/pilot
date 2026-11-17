@@ -70,7 +70,7 @@ test("a builder's task prototype runs once, links its mockup to the task and rea
 	// Only the task's own builder, a known model and a limited time.
 	await assert.rejects(ask(other, request), /your own task/);
 	await assert.rejects(ask(builder, { ...request, prototypeModel: "faux/forbidden" }), /Allowed models/);
-	await assert.rejects(ask(builder, { ...request, maxMinutes: 90 }), /maxMinutes/);
+	await assert.rejects(ask(builder, { ...request, maxMinutes: 90 }), /prototype takes only/);
 	await assert.rejects(ask(builder, { ...request, cwd: "/" }), /prototype takes only/);
 	assert.deepEqual(await ask(builder, { taskId: task.id }), { taskId: task.id, state: "none" });
 
@@ -84,7 +84,8 @@ test("a builder's task prototype runs once, links its mockup to the task and rea
 	await f.workers.settleResearch();
 	assert.equal(spawned.length, 1, "one read-only chat");
 	assert.deepEqual([spawned[0]!.mode, spawned[0]!.role, spawned[0]!.model], ["ask", "explorer", "faux/opus"]);
-	assert.match(spawned[0]!.title, /^Prototype for #1: Importer \(up to 30 min\)/);
+	assert.equal(spawned[0]!.title, "Prototype for #1: Importer");
+	assert.doesNotMatch(spawned[0]!.message, /minute/);
 	assert.match(spawned[0]!.message, /Compare three overview layouts/);
 	assert.match(spawned[0]!.message, /Publish exactly one NSH artifact/);
 	assert.equal(f.store.plans.get(f.missionId)!.publication !== null, true, "the published plan is left alone");

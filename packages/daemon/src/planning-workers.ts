@@ -133,7 +133,7 @@ const RESEARCH_BATCH = 3;
 /** Final answer characters sent to the planner per research chat. Broad research should be split instead. */
 const RESEARCH_REPORT_LIMIT = 48_000;
 /** Prototype chats a mission runs at once: the user reviews one prototype at a time. The worker cap also applies.
- * Attempts per question are RESEARCH_ATTEMPTS, and each chat stops at its question's maxMinutes. */
+ * Attempts per question are RESEARCH_ATTEMPTS. Pilot does not stop a prototype chat on time. */
 const PROTOTYPE_CHATS = 1;
 /** Chats answering the user's questions about interview questions at once, per mission. */
 const ASK_CHATS = 2;
@@ -249,7 +249,7 @@ function prototypeMessage(
 		q.question,
 		`What to make (${p.experimentType === "ui" ? "UI" : "logic and state"}): ${p.smallestExperiment}`,
 		`Context: ${p.context}`,
-		`Limits: about ${p.maxMinutes} minutes and ${p.maxCostUsd}. Pilot stops this chat after ${p.maxMinutes} minutes and passes on what it published.`,
+		`Budget: about $${p.maxCostUsd}.`,
 		earlier
 			? `An earlier prototype for this question exists: artifact ${earlier.artifactId}, revision ${earlier.revision}, of chat ${earlier.sessionId}. mission({action:"map"}) and the latest interview answers say what the user wants changed. Start from it.`
 			: "",
@@ -269,7 +269,6 @@ function taskPrototypeMessage(missionTitle: string, task: MissionTask, p: TaskPr
 	return [
 		`Make one UI prototype for task #${task.number} "${task.title}" of the mission "${missionTitle}". Its builder asked for it so the user can choose before it builds. This chat is read-only: it changes no project files.`,
 		`What to compare: ${p.question}`,
-		`Limits: Pilot stops this chat after ${p.maxMinutes} minutes and passes on what it published.`,
 		p.earlier
 			? `An earlier prototype for this task exists: artifact ${p.earlier.artifactId}, revision ${p.earlier.revision}, of chat ${p.earlier.sessionId}. The request says what to change. Start from it.`
 			: "",
@@ -317,8 +316,6 @@ export class PlanningWorkers {
 	private readonly repairChats = new Map<string, string>();
 	/** Missions whose submitted round is being sent to the planner now. */
 	private readonly continuing = new Set<string>();
-	/** Time-limit timers of running prototype chats, by chat. Cleared on close. */
-	private readonly prototypeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	/** Task prototypes whose chat Pilot is creating now (missionId:taskId). Others found "starting" were cut off. */
 	private readonly startingPrototypes = new Set<string>();
 	/** Per mission: no start by rule before this time, after one was refused. */
@@ -837,10 +834,7 @@ export class PlanningWorkers {
 					const made = r.artifact
 						? `Artifact pin, linked to this mission: ${canonicalJSON(r.artifact)}`
 						: "The chat published no NSH artifact.";
-					const stopped = r.timedOut
-						? `\n\nPilot stopped the chat at its ${q?.prototype?.maxMinutes ?? "time"}-minute limit.`
-						: "";
-					return `${head}\n\n${made}${stopped}\n\nThe chat's report:\n\n${r.report}`;
+					return `${head}\n\n${made}\n\nThe chat's report:\n\n${r.report}`;
 				}
 				const head = `# Map question "${id}"${q ? ` (${q.title})` : ""}, research chat ${r.sessionId}`;
 				return r.knowledge
@@ -1823,23 +1817,6 @@ export class PlanningWorkers {
 				state = this.changeResearch(state, questionId, { state: "failed", reason: "Research chat is gone" });
 				continue;
 			}
-			if (entry.kind === "prototype" && !entry.timedOut) {
-				const minutes = plan.questions.find((q) => q.id === questionId)?.prototype?.maxMinutes ?? 0;
-				const deadline = (entry.startedAt ?? Date.now()) + minutes * 60_000;
-				const busy = chat.working || (chat.state !== "idle" && chat.state !== "parked") || !chat.outcome;
-				if (busy && Date.now() >= deadline) {
-					state = this.changeResearch(state, questionId, { timedOut: true });
-					await this.deps.store.durable();
-					trace(
-						`pilotd: planning ${missionId} prototype chat for ${questionId} reached its ${minutes}-minute limit; stopping it`,
-					);
-					await this.deps.sessions.stop(entry.sessionId).catch((error: unknown) => {
-						console.warn(`pilotd: prototype chat ${entry.sessionId} not stopped: ${error}`);
-					});
-					continue;
-				}
-				if (busy) this.prototypeTimer(missionId, entry.sessionId, deadline);
-			}
 			if (chat.working || (chat.state !== "idle" && chat.state !== "parked") || !chat.outcome) continue;
 			if (entry.kind === "prototype") {
 				const reply = (await this.deps.sessions.lastAssistantReply(entry.sessionId, RESEARCH_REPORT_LIMIT)) ?? "";
@@ -1971,7 +1948,6 @@ export class PlanningWorkers {
 			reason: undefined,
 			kind,
 			startedAt: undefined,
-			timedOut: undefined,
 			artifact: undefined,
 			earlier: kind ? earlier : undefined,
 		});
@@ -1989,10 +1965,7 @@ export class PlanningWorkers {
 					projectId: state.binding.projectId,
 					missionId,
 					mode: "ask",
-					title: (p
-						? `Prototype: ${q.title} (up to ${p.maxMinutes} min, $${p.maxCostUsd})`
-						: `Research: ${q.title}`
-					).slice(0, 200),
+					title: (p ? `Prototype: ${q.title} (about $${p.maxCostUsd})` : `Research: ${q.title}`).slice(0, 200),
 					message: p ? prototypeMessage(mission.title, q, earlier) : researchMessage(mission.title, q),
 					...selection,
 				},
@@ -2031,8 +2004,8 @@ export class PlanningWorkers {
 		return next.taskPrototypes![taskId]!;
 	}
 	/**
-	 * Builder-requested prototypes of published tasks: starts a read-only prototype chat for each request, stops it at
-	 * its time limit, links its mockup to the task and sends the result to the builder once.
+	 * Builder-requested prototypes of published tasks: starts a read-only prototype chat for each request, links its
+	 * mockup to the task and sends the result to the builder once.
 	 */
 	private async reconcileTaskPrototypes(missionId: string): Promise<void> {
 		const all = () => Object.entries(this.deps.store.planningWorkers.get(missionId)?.taskPrototypes ?? {});
@@ -2052,21 +2025,7 @@ export class PlanningWorkers {
 				await this.deps.store.durable();
 				continue;
 			}
-			const busy = chat.working || (chat.state !== "idle" && chat.state !== "parked") || !chat.outcome;
-			if (busy) {
-				const deadline = (p.startedAt ?? Date.now()) + p.maxMinutes * 60_000;
-				if (p.timedOut) continue;
-				if (Date.now() < deadline) {
-					this.prototypeTimer(missionId, p.sessionId, deadline);
-					continue;
-				}
-				this.changeTaskPrototype(missionId, taskId, { timedOut: true });
-				await this.deps.store.durable();
-				await this.deps.sessions.stop(p.sessionId).catch((error: unknown) => {
-					console.warn(`pilotd: task prototype chat ${p.sessionId} not stopped: ${error}`);
-				});
-				continue;
-			}
+			if (chat.working || (chat.state !== "idle" && chat.state !== "parked") || !chat.outcome) continue;
 			const report = (
 				(await this.deps.sessions.lastAssistantReply(p.sessionId, RESEARCH_REPORT_LIMIT)) ?? ""
 			).trim();
@@ -2107,7 +2066,7 @@ export class PlanningWorkers {
 		const message = p.artifact
 			? [
 					head,
-					`Mockup: artifact ${p.artifact.artifactId}, revision ${p.artifact.revision}, made by chat ${p.artifact.sessionId}. Pilot linked it to the task.${p.timedOut ? " Pilot stopped the chat at its time limit." : ""}`,
+					`Mockup: artifact ${p.artifact.artifactId}, revision ${p.artifact.revision}, made by chat ${p.artifact.sessionId}. Pilot linked it to the task.`,
 					"Ask the user with ask_user which variant they want, naming this artifact in artifacts, with a choice per variant and free text. Build only what they choose. For changes, ask again with mission prototype, which starts from this one.",
 					`The prototype chat's report:\n\n${p.report ?? ""}`,
 				].join("\n\n")
@@ -2150,7 +2109,7 @@ export class PlanningWorkers {
 						projectId: state.binding.projectId,
 						missionId,
 						mode: "ask",
-						title: `Prototype for #${task.number}: ${task.title} (up to ${p.maxMinutes} min)`.slice(0, 200),
+						title: `Prototype for #${task.number}: ${task.title}`.slice(0, 200),
 						message: taskPrototypeMessage(mission.title, task, p),
 						...selection,
 					},
@@ -2198,20 +2157,6 @@ export class PlanningWorkers {
 		await this.deps.store.durable();
 		return { sessionId, artifactId: newest.id, revision: newest.revision };
 	}
-	/** Wakes the mission's reconcile when a running prototype chat reaches its time limit. */
-	private prototypeTimer(missionId: string, sessionId: string, deadline: number): void {
-		if (this.prototypeTimers.has(sessionId) || this.closing.signal.aborted) return;
-		const timer = setTimeout(
-			() => {
-				this.prototypeTimers.delete(sessionId);
-				this.scheduleResearch(missionId);
-			},
-			Math.max(0, deadline - Date.now()) + 1000,
-		);
-		timer.unref?.();
-		this.prototypeTimers.set(sessionId, timer);
-	}
-
 	/** Marks the question as worked on by its research chat, so nobody else researches it too. */
 	private async claimResearch(state: PlanningWorkerState, questionId: string, sessionId: string): Promise<void> {
 		const plan = this.deps.store.plans.get(state.binding.missionId);
@@ -3245,8 +3190,6 @@ export class PlanningWorkers {
 		if (this.closed) return this.closed;
 		this.closing.abort(new Error("Planning worker host is closing"));
 		this.research?.off();
-		for (const timer of this.prototypeTimers.values()) clearTimeout(timer);
-		this.prototypeTimers.clear();
 		this.closed = Promise.allSettled([...this.tasks, ...this.admissions.values()]).then(() => {
 			this.detach();
 			this.offSettled();

@@ -43,7 +43,7 @@ export function RoundPrototype(props: { page: PlanPage; source: ArtifactSource }
 						: "Pilot made this mock for an earlier map, so it may not match these questions. It is kept as history."}
 				</Text>
 				<If when={item()?.limits}>
-					<Text class="text-xs text-faint">{`Its limits: ${(item()?.limits ?? "").replace(/^Up/, "up")}`}</Text>
+					<Text class="text-xs text-faint">{`Its budget: ${(item()?.limits ?? "").replace(/^About/, "about")}`}</Text>
 				</If>
 				<PinnedArtifacts source={props.source} shelf={shelf} rows={rows()} />
 			</View>

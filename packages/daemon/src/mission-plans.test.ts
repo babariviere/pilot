@@ -299,7 +299,6 @@ test("prototype bounds and safe output intents refuse missing or privileged fiel
 	const p = prototype();
 	for (const q of [
 		{ ...p, prototype: undefined },
-		{ ...p, prototype: { ...p.prototype, maxMinutes: 0 } },
 		{ ...p, prototype: { ...p.prototype, maxCostUsd: -1 } },
 		{ ...p, prototype: { ...p.prototype, experimentType: "browser" } },
 		{ ...p, prototype: { ...p.prototype, daemonCredentials: true } },

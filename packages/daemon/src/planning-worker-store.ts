@@ -133,17 +133,15 @@ export interface PlanningResearch {
 	knowledge?: { id: string; revision: number; synopsis: string };
 	/** "prototype": a prototype chat for a prototype question. Absent: research. */
 	kind?: "prototype";
-	/** When the prototype chat started, for its time limit. */
+	/** When the prototype chat started. */
 	startedAt?: number;
-	/** Pilot stopped the prototype chat at its time limit. */
-	timedOut?: boolean;
 	/** The prototype the chat published, linked to the mission at this revision. */
 	artifact?: { sessionId: string; artifactId: string; revision: number };
 	/** The prototype of the attempt before, which the next chat starts from. */
 	earlier?: { sessionId: string; artifactId: string; revision: number };
 }
-/** Limits of a builder's task prototype: request text, chat minutes and prototypes per task. */
-export const TASK_PROTOTYPE = { question: 4000, minutes: 30, attempts: 3 } as const;
+/** Limits of a builder's task prototype: request text and prototypes per task. No time limit. */
+export const TASK_PROTOTYPE = { question: 4000, attempts: 3 } as const;
 /** One prototype a builder asked for its task. */
 export interface TaskPrototype {
 	/** The builder's own ID for this request. The same ID again reads it; nothing starts twice. */
@@ -153,7 +151,6 @@ export interface TaskPrototype {
 	question: string;
 	model: string;
 	thinking?: string;
-	maxMinutes: number;
 	/**
 	 * requested: waits for a chat slot. starting: Pilot is creating the chat. running: the chat works.
 	 * reporting: the result is saved, the builder does not have it yet. reported: the builder has it. failed: ended early.
@@ -164,7 +161,6 @@ export interface TaskPrototype {
 	/** Prototype chats made for this task so far, this one included. */
 	attempts: number;
 	startedAt?: number;
-	timedOut?: boolean;
 	/** The chat's final answer, limited. */
 	report?: string;
 	reason?: string;

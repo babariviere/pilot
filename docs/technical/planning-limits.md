@@ -15,7 +15,7 @@ stopped at the old 40-question map limit.
 | Slice owners | 2 | Meaning: one UI and one backend owner | Product rule, not size | Kept |
 | Text fields (title 200, question/fog/stories 2000, problem/solution 4000) | as listed | Readable map cards | Short card text | Kept |
 | Spec document | 28 KiB | Model tokens: the spec is read by every task | Not measured | Check when a spec reaches it |
-| Prototype time and cost | 480 min, 10 USD | Spend | Product rule | Kept |
+| Prototype cost | 10 USD | Spend | Product rule | Kept; the time limit is removed |
 | One save (operation payload) | 64 KiB | Daemon memory and journal size | Journal-wide limit | Kept; saves list only open questions now |
 
 ## Interviews (`mission-interview-contract.ts`)
@@ -38,7 +38,7 @@ stopped at the old 40-question map limit.
 | Research chats per question | 2 | Cost of weak findings | One retry | Kept |
 | Prototype chats at once | 1 | The user's attention: one prototype is reviewed at a time | One round asks about one prototype; the worker cap also applies | Added |
 | Prototype chats per question | 2 | Cost, and a loop with no progress | The same as research: one try, one after feedback | Added |
-| Prototype chat time | The question's `maxMinutes` (1 to 480) | Cost | Set by the planner for that experiment | Added: Pilot stops the chat and passes what it published |
+| Prototype chat time | None | | A long prototype is better than a cut-off one | Removed: older plans may still save `maxMinutes`; Pilot ignores it |
 | Prototype cost | The question's `maxCostUsd` (0 to 10) | Spend | Set by the planner | Shown to the user, not enforced |
 | Research report read | 48,000 characters | Knowledge entry size (64 KiB revision) | Fits one entry | Kept |
 | Question asks kept | 60 | Planning worker record size | Not measured | Kept |

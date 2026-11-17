@@ -16,7 +16,7 @@ const item = {
 	state: "asking",
 	prototype: { sessionId: "chat-proto", artifactId: "variants", revision: 3 },
 	prototypeCurrent: true,
-	limits: "Up to 30 minutes and about $3, with faux/opus.",
+	limits: "About $3, with faux/opus.",
 };
 const page = { explorations: [item] } as unknown as PlanPage;
 const source: ArtifactSource = {

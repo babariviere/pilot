@@ -17,7 +17,8 @@ recovery-prototype evidence and feedback". Unstick offered Continue, and Continu
 ## Already built
 
 - **The prototype question contract** (`PlanQuestion.prototype`): `context`, `experimentType` (`ui` or
-  `logic-state`), `smallestExperiment`, `maxMinutes` (1 to 480) and `maxCostUsd` (0 to 10).
+  `logic-state`), `smallestExperiment` and `maxCostUsd` (0 to 10). Older plans may also hold `maxMinutes`;
+  Pilot ignores it.
 - **`plan-prototype-result`**: the planner saves the evidence against the exact question and map context.
   The evidence names one artifact revision linked to the mission, observations, a verdict and unresolved questions.
   It goes stale when the question or the map context changes (`prototypeCurrent`).
@@ -71,7 +72,7 @@ by question ID) and add `kind: "prototype"`, so restart, claims and failures beh
 - **Chat:** `sessions.spawn` with `mode: "ask"`, role `explorer` and `mainView: true`. The model is the one the
   planner chose for the question (`prototype.model` and optional `prototype.thinking`). A question without a
   model waits for the planner to choose one. Pilot checks the model when the map is saved and refuses the save with the allowed
-  models. The title shows the limits: "Prototype: <title> (up to 30 min, $3)". The mission's worker cap applies, as for research.
+  models. The title shows the budget: "Prototype: <title> (about $3)". The mission's worker cap applies, as for research.
 - **Claim:** `plan-claim` with the chat's session ID, as for research.
 - **Message:** the question, its prototype metadata and these rules:
   - read `pilot-artifacts` and its NSH guide, and the upstream prototype `UI.md` or `LOGIC.md`;
@@ -100,7 +101,7 @@ These follow the "Limits" rule in `CODING_STANDARDS.md`.
 | --- | --- | --- | --- | --- |
 | Prototype chats per mission at once | 1 | The user's attention: they review one prototype at a time | One round asks about one prototype | The next one waits. The map says "Waits for the prototype before it" |
 | Attempts per question | 2 | Cost, and a loop with no progress | The same as research: one first try, one after feedback | The planner gets "Pilot made 2 prototypes for this question; ask the user how to go on" |
-| Time | The question's `maxMinutes` | Cost | The planner sets it for this experiment (1 to 480, already checked) | Pilot stops the chat and passes what it published, with "stopped at its N-minute limit" |
+| Time | None | | Prototype chats run until they finish or the user stops them | |
 | Cost | The question's `maxCostUsd` | Spend | The planner sets it (0 to 10, already checked) | Shown on the map, in the round and in the chat title. Not enforced (decided by the user) |
 
 The worker cap and Pause, Stop and dispatch holds still apply. Pilot never starts a prototype while the mission
@@ -177,9 +178,9 @@ Planning and work both show you a design before anyone builds a screen.
 Each step ends with tests and, for user-visible steps, a capture from fixtures.
 
 1. **Daemon dispatcher and planner input.** Prototype entries in the research records, the start, claim, link and
-   the prototype result input, the time limit and the round fingerprint change. Tests in
+   the prototype result input and the round fingerprint change. Tests in
    `planning-research.test.ts` style: a ready prototype starts one chat; its artifact is linked and passed once;
-   no artifact; time limit; restart during a run; a held round still submits when a prototype ends.
+   no artifact; no time limit; restart during a run; a held round still submits when a prototype ends.
 2. **Planner instructions.** The prompt change and a test that the skills text names the prototype result.
 3. **Pilot Day.** `prototypes.available`, the round's **The prototype** card and the preview. Tests with a
    fixture mission; captures in light and dark.
@@ -193,7 +194,7 @@ Each step ends with tests and, for user-visible steps, a capture from fixtures.
   Unstick says so, and Continue asks the planner to choose. There is no default.
 - **Writes:** a prototype chat is an Ask chat. It writes only its artifact file, in its own
   `scratch/artifacts/`, which is safe for every agent. No new role or permission.
-- **Cost:** shown, not enforced. The time limit stops a chat that runs long.
+- **Cost:** shown, not enforced. There is no time limit.
 - **One artifact per chat:** a prototype chat publishes one NSH artifact with every variant in it. Pilot links
   the newest one.
 
@@ -202,11 +203,11 @@ Each step ends with tests and, for user-visible steps, a capture from fixtures.
 The map cannot change after publication: a `plan-map` write clears `plan.publication`, and a plan publishes once.
 So a screen task added by a revision gets its prototype from its builder instead:
 
-- Builder mission action `prototype` {taskId, requestId, question, model, thinking?, maxMinutes 5-30}. Own task
+- Builder mission action `prototype` {taskId, requestId, question, model, thinking?}. Own task
   only, one open prototype per task, at most three per task. The same `requestId` reads it; `taskId` alone reads
   the state. The model is checked like a task start.
 - Saved in `PlanningWorkerState.taskPrototypes` by task. The planning reconcile starts one read-only explorer chat
-  (one prototype chat at a time, as for map questions), stops it at its time limit, links its newest NSH artifact
+  (one prototype chat at a time, as for map questions), links its newest NSH artifact
   to the task, and sends the result to the builder once (`task-prototype-<requestId>`, found again by exact input).
 - No map change, no planner turn and no user confirmation. The builder asks the user with `ask_user`, naming the
   artifact. A change request starts from the earlier mockup.
@@ -220,5 +221,5 @@ So a screen task added by a revision gets its prototype from its builder instead
   shows a plain message, and the user can still answer.
 - **Weak prototypes.** A chat in Ask mode cannot run the app or take screenshots. The prototype is a mock in NSH,
   not the real screen. The interview says so.
-- **Cost.** Each prototype is a full chat. The one-at-a-time limit and two attempts keep this small. The time
-  limit stops a chat that runs long.
+- **Cost.** Each prototype is a full chat. The one-at-a-time limit and two attempts keep this small. There is no
+  time limit: the user can stop a chat that runs long.
