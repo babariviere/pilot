@@ -13,6 +13,27 @@ export interface MissionScreenPair {
  */
 export type MissionDeliveryScreens = { pairs: MissionScreenPair[] } | { none: string };
 
+/** One capture of a reported screen: an image artifact pinned on the task's link. */
+export interface ScreenCapture {
+	artifactId: string;
+	revision: number;
+	title: string;
+}
+
+/**
+ * GET /api/projects/:id/screen-pairs: each screen the current worker of a task reported, with both captures pinned,
+ * so a gallery shows one Before/After card instead of two images. No Before: a new screen.
+ */
+export interface ScreenPairSummary {
+	missionId: string;
+	taskId: string;
+	/** The worker chat that saved both captures. */
+	sessionId: string;
+	reportedAt: number;
+	before?: ScreenCapture;
+	after: ScreenCapture;
+}
+
 /** Scoped worker delivery facts. */
 export interface MissionReportDelivery extends MissionCodeCompletion {
 	screens?: MissionDeliveryScreens;

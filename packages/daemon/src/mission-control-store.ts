@@ -184,6 +184,15 @@ export class MissionControlStore {
 		);
 		return row ? JSON.parse(String(row.record)) : undefined;
 	}
+	/** Each project task's latest report with screen pairs, per reporting chat, in one indexed read. */
+	projectScreensReports(projectId: string): MissionReport[] {
+		return this.port
+			.all(
+				"SELECT record FROM mission_reports WHERE rowid IN (SELECT MAX(rowid) FROM mission_reports WHERE mission_id IN (SELECT id FROM missions WHERE project_id=?) AND json_extract(record,'$.write.delivery.screens.pairs') IS NOT NULL GROUP BY mission_id, task_id, json_extract(record,'$.sessionId')) ORDER BY rowid",
+				projectId,
+			)
+			.map((row) => JSON.parse(String(row.record)));
+	}
 	insertReport(report: MissionReport): void {
 		this.port.transaction(() => {
 			if (Number(this.port.one("SELECT COUNT(*) n FROM mission_reports")!.n) >= 16384)

@@ -172,6 +172,27 @@ test("Mission overview in light, dark and a narrow window", async () => {
 });
 
 // Run with `--filter 'delivery screens'`. The first runs on older revisions too, for a Before.
+
+// Run with `--filter 'artifacts screen pair'`: the gallery with a reported screen, closed and open.
+test("artifacts screen pair: the gallery, captured", async () => {
+	const app = await open("./ArtifactsFixture.tsx", { platform: "macos", width: 1100, height: 760 });
+	await app.waitFor("Timeline");
+	await app.press("Reopen with screens");
+	await app.waitFor("Today: mission row");
+	await app.wait(400);
+	await app.screenshot("output/artifacts-screen-gallery.png");
+});
+
+test("artifacts screen pair: the screen open, captured", async () => {
+	const app = await open("./ArtifactsFixture.tsx", { platform: "macos", width: 1100, height: 760 });
+	await app.waitFor("Timeline");
+	await app.press("Reopen with screens");
+	await app.press("id:artifact-card-/chat-c/1b2c3d4e-0000-4000-8000-000000000005/2");
+	await app.waitFor("id:artifact-image");
+	await app.wait(600);
+	await app.screenshot("output/artifacts-screen-open.png");
+});
+
 test("delivery screens: a worker's result page, captured", async () => {
 	const app = await open("./DeliveryFixture.tsx", { platform: "macos", width: 1100, height: 1200 });
 	await app.waitFor("id:to-check");

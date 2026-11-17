@@ -7,11 +7,19 @@ const desktop = { platform: "macos", width: 1100, height: 1200 } as const;
 const NSH = "1b2c3d4e-0000-4000-8000-000000000001";
 const HTML = "1b2c3d4e-0000-4000-8000-000000000002";
 const IMAGE = "1b2c3d4e-0000-4000-8000-000000000003";
+const SHOT_BEFORE = "1b2c3d4e-0000-4000-8000-000000000004";
+const SHOT_AFTER = "1b2c3d4e-0000-4000-8000-000000000005";
+const SHOT_NEW = "1b2c3d4e-0000-4000-8000-000000000006";
 const SAVED = "<p>Saved page</p>";
 const BEFORE = "<p>Before page</p>";
 
 function reads(app: { texts(): string[] }): string {
 	return app.texts().find((t) => t.startsWith("Reads:")) ?? "";
+}
+
+/** The open panel fades out before it closes. */
+async function closed(app: { shows(selector: string): boolean; waitUntil(c: () => boolean): Promise<void> }) {
+	await app.waitUntil(() => !app.shows("id:artifact-viewer"));
 }
 
 /** How many times `text` is on screen: one pane shows it once. */
@@ -38,18 +46,18 @@ test("the project gallery shows cards and opens one exact revision per press", a
 	expect(app.shows("id:artifact-viewer-toggle")).toBe(false);
 	// Escape closes the open artifact first, then leaves.
 	await app.keyboard.press("escape");
-	expect(app.shows("id:artifact-viewer")).toBe(false);
+	await closed(app);
 	expect(app.texts().includes("Timeline")).toBe(true);
 	expect(reads(app)).toBe(`Reads: [${HTML}@4 ${NSH}@2]`);
 	// Pressing the open card closes it, and Close does too.
 	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
 	await app.waitFor("<p>Saved page</p>");
 	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
-	expect(app.shows("id:artifact-viewer")).toBe(false);
+	await closed(app);
 	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
 	await app.waitFor("<p>Saved page</p>");
 	await app.press("id:artifact-viewer-close");
-	expect(app.shows("id:artifact-viewer")).toBe(false);
+	await closed(app);
 	// A refused read shows no earlier text.
 	await app.press("Refuse reads");
 	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
@@ -308,4 +316,36 @@ test("an image fills the full window instead of keeping its page height", async 
 	expect(app.texts().includes("Screenshot · Image · revision 1")).toBe(true);
 	await app.keyboard.press("escape");
 	expect(app.count("id:artifact-image-view")).toBe(1);
+});
+
+test("a reported screen is one card: its Before and After open together, After first", async () => {
+	const app = await open("./ArtifactsFixture.tsx", desktop);
+	await app.waitFor("Timeline");
+	await app.press("Reopen with screens");
+	await app.waitFor("Today: mission row");
+	// One card per screen, named without its side; the Before capture has no card of its own.
+	expect(app.texts().includes("Before / After")).toBe(true);
+	expect(app.texts().includes("Screen · Before and After")).toBe(true);
+	expect(app.texts().includes("Today: mission row (Before)")).toBe(false);
+	expect(app.texts().includes("New screen")).toBe(true);
+	expect(reads(app)).toBe("Reads: []");
+	await app.press(`id:artifact-card-/chat-c/${SHOT_AFTER}/2`);
+	await app.waitFor("id:artifact-tab-before");
+	// Both captures are read once, at their pinned revisions; no version comparison on a screen.
+	expect(reads(app)).toBe(`Reads: [${SHOT_BEFORE}@1 ${SHOT_AFTER}@2]`);
+	expect(app.shows("id:artifact-compare")).toBe(false);
+	expect(app.texts().includes("Today: mission row (After)")).toBe(true);
+	await app.press("id:artifact-tab-before");
+	await app.waitFor("Today: mission row (Before)");
+	expect(reads(app)).toBe(`Reads: [${SHOT_BEFORE}@1 ${SHOT_AFTER}@2]`);
+	// Closing fades the panel out; pressing the card again while it leaves opens it again.
+	await app.press("id:artifact-viewer-close");
+	await app.press(`id:artifact-card-/chat-c/${SHOT_AFTER}/2`);
+	await app.waitFor("id:artifact-tab-before");
+	await app.keyboard.press("escape");
+	await closed(app);
+	// A new screen opens its one capture, with no tabs.
+	await app.press(`id:artifact-card-/chat-c/${SHOT_NEW}/1`);
+	await app.waitFor("id:artifact-image");
+	expect(app.shows("id:artifact-tab-before")).toBe(false);
 });

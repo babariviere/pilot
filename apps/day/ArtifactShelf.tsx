@@ -5,15 +5,31 @@
 // once and shows it below its row, in the app's isolated preview for NSH or
 // as plain text otherwise. One artifact shows at a time on a page, and one
 // pane at a time in it: comparing a previous version switches Before and
-// After in the same place.
+// After in the same place. A screen a worker reported is one card: its After
+// and Before captures open together, After first.
+// The panel arrives with a short fade and rise and the rows below glide; it
+// fades out before it closes, and a new side fades in where the old one was.
 // Nothing here is saved, sent or counted as anyone's check.
-import { cleanup, effect, type Signal, signal, Text, View, type ViewRef } from "nsh";
+import { cleanup, effect, type Signal, signal, Text, untracked, View, type ViewRef } from "nsh";
 import { savedTitle } from "./ArtifactExport";
 import { ArtifactBody, ArtifactTools, closeFullFor, InFullNote, inFull, openFull, paneLine } from "./ArtifactViewer";
-import type { ArtifactList, ArtifactRow, ArtifactSource, Shown } from "./artifactReads";
+import { type ArtifactList, type ArtifactRow, type ArtifactSource, beforeRow, type Shown } from "./artifactReads";
 import { artifactPreviewsAvailable } from "./bridge";
+import { screenTitle } from "./deliveryScreens";
 import { kindName } from "./deliveryView";
-import { Action, Field, glide, Notice, Pressable, SectionTitle, TabItem, TabRow } from "./ui";
+import {
+	Action,
+	createPanelMotion,
+	FadeIn,
+	Field,
+	glide,
+	LEAVE_MS,
+	Notice,
+	Pressable,
+	SectionTitle,
+	TabItem,
+	TabRow,
+} from "./ui";
 
 export { FullArtifact } from "./ArtifactViewer";
 
@@ -23,26 +39,47 @@ type Opened = Shown & { key: string; generation: number; row: ArtifactRow };
 /** What one page's gallery shows. It lives with the page and is never saved. */
 export type Shelf = {
 	open: Signal<Opened | null>;
+	/** The generation of the open artifact while its panel fades out, else null: it counts as closed. */
+	closing: Signal<number | null>;
 	anchors: Map<string, ViewRef>;
-	/** Closes the open artifact and focuses its card. False when none is open. */
+	/** Closes the open artifact, after its panel fades out, and focuses its card. False when none is open or it is already closing. */
 	hideLast(): boolean;
+	/** The open panel's way out, while one is on screen. */
+	leave: (() => Promise<void>) | null;
+	/** Brings the open panel back when another artifact opens while it leaves. */
+	arrive: (() => void) | null;
 };
 
 export function createShelf(): Shelf {
 	const open = signal<Opened | null>(null);
+	const closing = signal<number | null>(null);
 	const anchors = new Map<string, ViewRef>();
-	return {
+	const shelf: Shelf = {
 		open,
+		closing,
 		anchors,
+		leave: null,
+		arrive: null,
 		hideLast() {
 			const now = open();
-			if (!now) return false;
-			glide();
-			open.set(null);
+			if (!now || closing() === now.generation) return false;
 			anchors.get(now.key)?.focus();
+			closing.set(now.generation);
+			const close = () => {
+				// A card opened meanwhile stays open.
+				if (open()?.generation !== now.generation) return;
+				glide();
+				open.set(null);
+				closing.set(null);
+			};
+			const leave = shelf.leave;
+			if (!leave) close();
+			// A panel that leaves the screen some other way never holds the close.
+			else void Promise.race([leave(), new Promise((done) => setTimeout(done, LEAVE_MS + 80))]).then(close);
 			return true;
 		},
 	};
+	return shelf;
 }
 
 /** A card's identity on its page: the same revision can be linked to two tasks. */
@@ -79,9 +116,16 @@ async function openRow(shelf: Shelf, source: ArtifactSource, row: ArtifactRow) {
 		row,
 	};
 	glide();
+	// Opened again while the panel leaves: it comes back rather than closing.
+	if (shelf.closing() !== null) {
+		shelf.closing.set(null);
+		shelf.arrive?.();
+	}
 	shelf.open.set(reading);
 	const r = await source.read(row);
 	if (shelf.open()?.generation !== generation) return;
+	// The read's answer changes the panel's size too: it glides rather than jumps.
+	glide();
 	shelf.open.set(
 		r.status === "shown"
 			? { ...reading, state: "shown", artifact: r.artifact }
@@ -89,21 +133,35 @@ async function openRow(shelf: Shelf, source: ArtifactSource, row: ArtifactRow) {
 	);
 }
 
-/** "NSH · revision 3". A mission link without a pin says it is the current one. */
+/** "NSH · revision 3". A mission link without a pin says it is the current one. A screen says what it compares. */
 function revisionLine(row: ArtifactRow, inMission: boolean): string {
 	if (row.revision === null) return `${kindName(row.kind)} · no saved revision here`;
+	if (row.pair) return row.pair.before ? "Screen · Before and After" : "Screen · new, no Before";
 	const current = inMission && !row.pinned ? " · current" : "";
 	return `${kindName(row.kind)} · revision ${row.revision}${current}`;
+}
+
+/** A card's title: a screen's name without "(After)". */
+function cardTitle(row: ArtifactRow): string {
+	return row.pair ? screenTitle(row.title) : row.title;
+}
+
+/** What a card's thumbnail says. */
+function thumbLabel(row: ArtifactRow): string {
+	if (!row.pair) return kindName(row.kind);
+	return row.pair.before ? "Before / After" : "New screen";
 }
 
 /** One artifact's card. Its thumbnail names the kind; nothing runs until it opens. */
 function Card(props: { source: ArtifactSource; shelf: Shelf; row: ArtifactRow; inMission: boolean }) {
 	const key = rowKey(props.row);
-	const isOpen = () => props.shelf.open()?.key === key;
-	const name = () => props.row.title || "the artifact";
+	const isOpen = () => props.shelf.open()?.key === key && props.shelf.closing() === null;
+	const name = () => cardTitle(props.row) || "the artifact";
 	const label = () => {
 		if (props.row.revision === null) return `${name()}. No saved revision can be read here.`;
 		if (isOpen()) return `Close ${name()}.`;
+		if (props.row.pair?.before) return `Open ${name()}, its Before and After captures. Looking records nothing.`;
+		if (props.row.pair) return `Open ${name()}, a new screen's capture. Looking records nothing.`;
 		return previews(props.row)
 			? `Open ${name()}, revision ${props.row.revision}, in its isolated preview. Looking records nothing.`
 			: `Show the saved source of ${name()}, revision ${props.row.revision}, as plain text. Looking records nothing.`;
@@ -122,10 +180,12 @@ function Card(props: { source: ArtifactSource; shelf: Shelf; row: ArtifactRow; i
 			classList={{ "border-border-strong bg-accent": isOpen(), "border-border": !isOpen() }}
 		>
 			<View class="h-24 items-center justify-center rounded-lg bg-muted">
-				<Text class="text-xs font-semibold tracking-wide text-faint">{kindName(props.row.kind)}</Text>
+				<Text class="text-xs font-semibold tracking-wide text-faint">{thumbLabel(props.row)}</Text>
 			</View>
 			<View class="gap-0.5 px-1 pb-1">
-				<Text class="truncate text-sm text-foreground group-hover:underline">{props.row.title || "Artifact"}</Text>
+				<Text class="truncate text-sm text-foreground group-hover:underline">
+					{cardTitle(props.row) || "Artifact"}
+				</Text>
 				<Text class="truncate text-xs text-muted-foreground">{revisionLine(props.row, props.inMission)}</Text>
 			</View>
 		</Pressable>
@@ -144,24 +204,23 @@ function Viewer(props: { shelf: Shelf; source: ArtifactSource }) {
 	const side = signal<"before" | "after">("after");
 	let comparison = 0;
 	let openedGeneration = -1;
-	effect(() => {
-		const generation = props.shelf.open()?.generation ?? -1;
-		if (generation === openedGeneration) return;
-		openedGeneration = generation;
-		comparison++;
-		before.set(null);
-		side.set("after");
-	});
 	// Every viewer, also a round's pinned prototype, closes its full window as it goes.
 	const shelf = props.shelf;
-	cleanup(() => closeFullFor(shelf));
-	const compare = async () => {
-		const current = now();
-		if (current.pin.revision <= 1) return;
+	const panel = createPanelMotion();
+	shelf.leave = panel.leave;
+	shelf.arrive = panel.arrive;
+	cleanup(() => {
+		if (shelf.leave === panel.leave) shelf.leave = null;
+		if (shelf.arrive === panel.arrive) shelf.arrive = null;
+		closeFullFor(shelf);
+	});
+	/** Reads `row` once as the Before side; a later open or comparison drops a late answer. */
+	const readBefore = async (current: Opened, row: ArtifactRow) => {
+		if (row.revision === null) return;
 		const run = ++comparison;
-		const row = { ...current.row, revision: current.pin.revision - 1 };
 		const reading: Shown = {
 			...current,
+			title: row.title,
 			pin: { revision: row.revision },
 			state: "reading",
 			artifact: null,
@@ -175,6 +234,24 @@ function Viewer(props: { shelf: Shelf; source: ArtifactSource }) {
 				? { ...reading, state: "shown", artifact: result.artifact }
 				: { ...reading, state: "refused", message: result.message },
 		);
+	};
+	effect(() => {
+		const opened = props.shelf.open();
+		const generation = opened?.generation ?? -1;
+		if (generation === openedGeneration) return;
+		openedGeneration = generation;
+		comparison++;
+		before.set(null);
+		side.set("after");
+		// A reported screen opens with both captures: After shown, Before read beside it.
+		const pairBefore = opened ? beforeRow(opened.row) : null;
+		if (opened && pairBefore) untracked(() => void readBefore(opened, pairBefore));
+	});
+	const pair = () => !!now().row.pair?.before;
+	const compare = async () => {
+		const current = now();
+		if (current.pin.revision <= 1) return;
+		await readBefore(current, { ...current.row, revision: current.pin.revision - 1 });
 	};
 	const toggle = () => {
 		glide();
@@ -204,20 +281,20 @@ function Viewer(props: { shelf: Shelf; source: ArtifactSource }) {
 		});
 	};
 	return (
-		<View testID="artifact-viewer" class="gap-2 pt-1">
+		<View testID="artifact-viewer" class="gap-2 pt-1" style={panel.style}>
 			{/* The tabs keep their own width; when the row is narrow, the commands wrap below them, never under them. */}
 			<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
 				<If when={before()}>
 					<View class="flex-row">
 						<TabRow>
 							<TabItem
-								label={`Before · revision ${before()?.pin.revision ?? ""}`}
+								label={pair() ? "Before" : `Before · revision ${before()?.pin.revision ?? ""}`}
 								selected={side() === "before"}
 								testID="artifact-tab-before"
 								onPress={() => side.set("before")}
 							/>
 							<TabItem
-								label={`After · revision ${now().pin.revision}`}
+								label={pair() ? "After" : `After · revision ${now().pin.revision}`}
 								selected={side() === "after"}
 								testID="artifact-tab-after"
 								onPress={() => side.set("after")}
@@ -233,7 +310,7 @@ function Viewer(props: { shelf: Shelf; source: ArtifactSource }) {
 							onPress={() => void openRow(props.shelf, props.source, now().row)}
 						/>
 					</If>
-					<If when={now().state === "shown" && now().pin.revision > 1}>
+					<If when={!now().row.pair && now().state === "shown" && now().pin.revision > 1}>
 						<Action
 							label={before() ? "Close comparison" : "Compare previous version"}
 							testID="artifact-compare"
@@ -265,7 +342,11 @@ function Viewer(props: { shelf: Shelf; source: ArtifactSource }) {
 				{/* A new artifact or side starts its own pane; a preview there starts again from its saved revision. */}
 				<Each of={[`${props.shelf.open()?.generation ?? ""}/${side()}`]} key={String}>
 					{/* Comparing, Before and After share one pane of a fixed height. */}
-					{() => <ArtifactBody shown={pane()} bounded={!!before()} />}
+					{() => (
+						<FadeIn>
+							<ArtifactBody shown={pane()} bounded={!!before()} />
+						</FadeIn>
+					)}
 				</Each>
 			</If>
 		</View>
@@ -336,6 +417,7 @@ export function ArtifactShelf(props: {
 	const query = signal("");
 	cleanup(() => {
 		props.shelf.open.set(null);
+		props.shelf.closing.set(null);
 		props.shelf.anchors.clear();
 		closeFullFor(props.shelf);
 	});
@@ -346,7 +428,13 @@ export function ArtifactShelf(props: {
 		const l = listing();
 		const q = query().trim().toLocaleLowerCase();
 		return l.status === "shown"
-			? l.list.rows.filter((r) => !q || `${r.title} ${r.kind} ${r.taskTitle ?? ""}`.toLocaleLowerCase().includes(q))
+			? l.list.rows.filter(
+					(r) =>
+						!q ||
+						`${r.title} ${r.pair?.before?.title ?? ""} ${r.kind} ${r.taskTitle ?? ""}`
+							.toLocaleLowerCase()
+							.includes(q),
+				)
 			: [];
 	};
 	const groups = () =>

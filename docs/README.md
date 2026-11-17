@@ -38,6 +38,7 @@ Each screen task gets a prototype you choose during planning, and its worker bui
 without one starts with a mockup in its chat, and the worker builds only after you agree.
 When a change you can see lands, its chat captures the real app before and after the change. The result page shows
 each screen under Screens, with Before and After tabs, or the chat's reason for having no captures.
+The Artifacts page and the mission overview show each such screen as one Before/After card.
 On a mission page, a done task folds its report until Show report, and each task links its own chat.
 A request in New (a Linear issue or a Slack message) can also become a mission: Plan a mission… opens New
 with its title and link. Your Plan takes it out of New and links it to the mission, without changing

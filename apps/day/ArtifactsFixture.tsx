@@ -11,6 +11,9 @@ import { Action } from "./ui";
 const NSH = "1b2c3d4e-0000-4000-8000-000000000001";
 const HTML = "1b2c3d4e-0000-4000-8000-000000000002";
 const IMAGE = "1b2c3d4e-0000-4000-8000-000000000003";
+const SHOT_BEFORE = "1b2c3d4e-0000-4000-8000-000000000004";
+const SHOT_AFTER = "1b2c3d4e-0000-4000-8000-000000000005";
+const SHOT_NEW = "1b2c3d4e-0000-4000-8000-000000000006";
 const PIXEL =
 	"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==";
 const SOURCES: Record<string, string> = {
@@ -19,6 +22,9 @@ const SOURCES: Record<string, string> = {
 	[`${HTML}@4`]: "<p>Saved page</p>",
 	[`${HTML}@3`]: "<p>Before page</p>",
 	[`${IMAGE}@1`]: PIXEL,
+	[`${SHOT_BEFORE}@1`]: PIXEL,
+	[`${SHOT_AFTER}@2`]: PIXEL,
+	[`${SHOT_NEW}@1`]: PIXEL,
 };
 /** A title saved with an older revision, since renamed: each revision shows its own. */
 const TITLES: Record<string, string> = { [`${HTML}@3`]: "Old report page" };
@@ -32,16 +38,40 @@ const mission: ArtifactRow[] = [
 	{ ...project[0], revision: 1, pinned: true, taskId: "t1", taskTitle: "Draw the timeline" },
 	{ ...project[0], pinned: false, taskId: null, taskTitle: null },
 ];
+/** Screens a worker reported, as native folds them: each After row carries its pair. */
+const screens: ArtifactRow[] = [
+	{
+		sessionId: "chat-c",
+		artifactId: SHOT_AFTER,
+		title: "Today: mission row (After)",
+		kind: "image",
+		revision: 2,
+		updatedAt: 5,
+		pair: {
+			before: { artifactId: SHOT_BEFORE, revision: 1, title: "Today: mission row (Before)" },
+			after: { artifactId: SHOT_AFTER, revision: 2, title: "Today: mission row (After)" },
+		},
+	},
+	{
+		sessionId: "chat-c",
+		artifactId: SHOT_NEW,
+		title: "Settings: spending (After)",
+		kind: "image",
+		revision: 1,
+		updatedAt: 4,
+		pair: { before: null, after: { artifactId: SHOT_NEW, revision: 1, title: "Settings: spending (After)" } },
+	},
+];
 
 const reads = signal<string[]>([]);
 const page = signal<"project" | "mission">("project");
 const opened = signal(0);
-const script = { refuseList: false, empty: false, refuseReads: false };
+const script = { refuseList: false, empty: false, refuseReads: false, screens: false };
 
 const source: ArtifactSource = {
 	async list(missionId?: string): Promise<ListResult> {
 		if (script.refuseList) return { ok: false, message: "Pilot could not reach its service." };
-		const rows = script.empty ? [] : missionId ? mission : project;
+		const rows = script.empty ? [] : script.screens ? screens : missionId ? mission : project;
 		return { ok: true, list: { rows, more: false } };
 	},
 	async read(row: ArtifactRow): Promise<ReadResult> {
@@ -108,6 +138,13 @@ mount(() => {
 						}}
 					/>
 					<Action label="Reopen empty" onPress={reopenEmpty} />
+					<Action
+						label="Reopen with screens"
+						onPress={() => {
+							script.screens = true;
+							opened.update((n) => n + 1);
+						}}
+					/>
 				</View>
 			</View>
 		</View>

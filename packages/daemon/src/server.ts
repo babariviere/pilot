@@ -104,6 +104,7 @@ import { AutomationsRevisionConflict, EnvironmentRevisionConflict, expandHome } 
 import { PTY_INPUT_CHUNK } from "./pty-input.ts";
 import { isRetiredDevboxOperation } from "./retired-devboxes.ts";
 import { RuntimeResources } from "./runtime-admission.ts";
+import { projectScreenPairs } from "./screen-pairs.ts";
 import { NotFound } from "./sessions.ts";
 import { SetupError } from "./setup-error.ts";
 import { SLACK_CONTROLS } from "./slack-controls.ts";
@@ -2778,6 +2779,8 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "artifacts" && req.method === "GET")
 			return json(res, 200, await sessions.projectArtifacts(parts[2]!));
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "screen-pairs" && req.method === "GET")
+			return json(res, 200, missions ? projectScreenPairs(missions.store, parts[2]!) : []);
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "github" && req.method === "GET")
 			return json(res, 200, await projects.github(parts[2]!));
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "origin" && req.method === "GET")

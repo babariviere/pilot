@@ -17,7 +17,7 @@ function pinned(w: DeliveredWork, id: string): ArtifactLink | null {
 }
 
 /** "Today: mission row (After)" names the screen "Today: mission row". */
-function screenTitle(title: string): string {
+export function screenTitle(title: string): string {
 	return title.replace(/\s*\((before|after)\)\s*$/i, "").trim() || "Screen";
 }
 

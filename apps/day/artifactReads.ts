@@ -31,7 +31,13 @@ export type ArtifactRow = {
 	taskId?: string | null;
 	taskTitle?: string | null;
 	updatedAt: number;
+	/** A reported screen: this row is its After, and its Before (null for a new screen) is folded in. */
+	pair?: ScreenPairRow | null;
 };
+
+/** One capture of a reported screen at its pinned revision. */
+export type ScreenCaptureRow = { artifactId: string; revision: number; title: string };
+export type ScreenPairRow = { before: ScreenCaptureRow | null; after: ScreenCaptureRow };
 
 export type ArtifactList = { rows: ArtifactRow[]; more: boolean };
 
@@ -63,11 +69,38 @@ export const MAX_PREVIEWS = 4;
 const KINDS = new Set(["html", "react", "image", "swiftui", "shader", "visual", "nsh"]);
 const REASONS = new Set(["missing", "oversize", "redacted", "unsupported", "invalid"]);
 
+function captureOf(x: unknown): ScreenCaptureRow | null {
+	const c = x as ScreenCaptureRow | null;
+	if (!c || typeof c !== "object") return null;
+	if (typeof c.artifactId !== "string" || typeof c.title !== "string") return null;
+	if (!Number.isSafeInteger(c.revision) || c.revision < 1) return null;
+	return { artifactId: c.artifactId, revision: c.revision, title: c.title };
+}
+
+/** A row's screen pair, or null. A pair that is off makes the row invalid rather than a plain image. */
+function pairOf(x: unknown, row: { artifactId: string; revision: number | null }): ScreenPairRow | null | undefined {
+	if (x === undefined || x === null) return null;
+	const p = x as { before?: unknown; after?: unknown };
+	const after = captureOf(p.after);
+	const before = p.before === null ? null : captureOf(p.before);
+	if (!after || (before === null && p.before !== null)) return undefined;
+	if (after.artifactId !== row.artifactId || after.revision !== row.revision) return undefined;
+	return { before, after };
+}
+
+/** The row that reads a pair's Before capture. */
+export function beforeRow(row: ArtifactRow): ArtifactRow | null {
+	const b = row.pair?.before;
+	return b ? { ...row, artifactId: b.artifactId, revision: b.revision, title: b.title, pair: null } : null;
+}
+
 function rowOf(x: unknown): ArtifactRow | null {
 	const r = x as ArtifactRow;
 	if (!r || typeof r !== "object") return null;
 	if (typeof r.sessionId !== "string" || typeof r.artifactId !== "string" || typeof r.title !== "string") return null;
 	if (!KINDS.has(r.kind) || (r.revision !== null && !Number.isSafeInteger(r.revision))) return null;
+	const pair = pairOf(r.pair, r);
+	if (pair === undefined || (pair && r.kind !== "image")) return null;
 	return {
 		sessionId: r.sessionId,
 		artifactId: r.artifactId,
@@ -78,6 +111,7 @@ function rowOf(x: unknown): ArtifactRow | null {
 		taskId: typeof r.taskId === "string" ? r.taskId : null,
 		taskTitle: typeof r.taskTitle === "string" ? r.taskTitle : null,
 		updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : 0,
+		pair,
 	};
 }
 

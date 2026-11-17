@@ -15,7 +15,7 @@
 // - tabs: TabRow, TabItem
 // - diff: PatchDiff
 // - icon: Icon
-// - motion: Arrive, glide
+// - motion: Arrive, FadeIn, createPanelMotion, glide
 export * from "./button";
 export * from "./choice";
 export * from "./data";

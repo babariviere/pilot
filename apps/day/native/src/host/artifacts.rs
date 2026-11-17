@@ -83,6 +83,91 @@ fn project_rows(all: &Value, project: &str) -> Result<Vec<Value>, Error> {
         .collect())
 }
 
+/// One capture of a reported screen, pinned on its task.
+#[derive(Debug, Clone, PartialEq)]
+struct Capture {
+    id: String,
+    revision: u64,
+    title: String,
+}
+
+fn capture(v: &Value) -> Option<Capture> {
+    Some(Capture {
+        id: v["artifactId"].as_str().filter(|s| artifact_id(s))?.into(),
+        revision: v["revision"]
+            .as_u64()
+            .filter(|n| (1..=MAX_REVISION).contains(n))?,
+        title: title(&v["title"])?.into(),
+    })
+}
+
+/// A screen the task's current worker reported: its After and, unless the screen is new, its Before.
+#[derive(Debug, Clone, PartialEq)]
+struct Pair {
+    mission: String,
+    task: String,
+    session: String,
+    before: Option<Capture>,
+    after: Capture,
+}
+
+/// The project's screen pairs. A pair that is off is left out, so its images show on their own.
+fn screen_pairs(all: &Value) -> Vec<Pair> {
+    let Some(all) = all.as_array() else {
+        return Vec::new();
+    };
+    all.iter()
+        .filter_map(|p| {
+            let before = match &p["before"] {
+                Value::Null => None,
+                b => Some(capture(b)?),
+            };
+            Some(Pair {
+                mission: p["missionId"].as_str().filter(|s| valid_id(s))?.into(),
+                task: p["taskId"].as_str().filter(|s| valid_id(s))?.into(),
+                session: p["sessionId"].as_str().filter(|s| valid_id(s))?.into(),
+                before,
+                after: capture(&p["after"])?,
+            })
+        })
+        .collect()
+}
+
+fn pair_json(p: &Pair) -> Value {
+    let side = |c: &Capture| json!({"artifactId":c.id,"revision":c.revision,"title":c.title});
+    json!({"before":p.before.as_ref().map(side),"after":side(&p.after)})
+}
+
+/// Shows each reported screen once: its After row carries the pair at the pinned revisions, and its Before row leaves
+/// the list. On a mission page only that mission's pairs fold, and only the links the pair pinned on its task.
+fn fold_pairs(rows: Vec<Value>, pairs: &[Pair], mission: Option<&str>) -> Vec<Value> {
+    let matches = |row: &Value, p: &Pair, c: &Capture| {
+        row["sessionId"] == *p.session
+            && row["artifactId"] == *c.id
+            && row["kind"] == "image"
+            && mission.is_none_or(|_| row["taskId"] == *p.task && row["revision"] == c.revision)
+    };
+    let pairs: Vec<&Pair> = pairs
+        .iter()
+        .filter(|p| mission.is_none_or(|m| p.mission == m))
+        .filter(|p| rows.iter().any(|row| matches(row, p, &p.after)))
+        .collect();
+    rows.into_iter()
+        .filter(|row| {
+            !pairs
+                .iter()
+                .any(|p| p.before.as_ref().is_some_and(|b| matches(row, p, b)))
+        })
+        .map(|mut row| {
+            if let Some(p) = pairs.iter().find(|p| matches(&row, p, &p.after)) {
+                row["revision"] = json!(p.after.revision);
+                row["pair"] = pair_json(p);
+            }
+            row
+        })
+        .collect()
+}
+
 /// The project's artifacts, newest first, or one mission's linked artifacts
 /// with their task. A mission link without a pin names the current revision,
 /// read now; a link whose chat is not in this project has no revision.
@@ -136,6 +221,13 @@ pub(super) async fn list(t: &Transport, r: &List) -> Result<Value, Error> {
             rows
         }
     };
+    // Screens fold into one row each. Without the pairs (an older service), each image shows on its own.
+    let pairs = t
+        .get(&format!("/api/projects/{project}/screen-pairs"))
+        .await
+        .map(|v| screen_pairs(&v))
+        .unwrap_or_default();
+    rows = fold_pairs(rows, &pairs, r.mission_id.as_deref());
     let more = rows.len() > MAX_ROWS;
     rows.truncate(MAX_ROWS);
     // A changed project or native identity during the read cannot publish it.
@@ -175,6 +267,66 @@ pub(super) async fn source(t: &Transport, r: &Request) -> Result<Value, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const BEFORE: &str = "11111111-1111-1111-1111-111111111111";
+    const AFTER: &str = "22222222-2222-2222-2222-222222222222";
+    const OTHER: &str = "33333333-3333-3333-3333-333333333333";
+
+    fn pairs() -> Vec<Pair> {
+        screen_pairs(&json!([
+            {"missionId":"m","taskId":"t","sessionId":"s","reportedAt":1,
+             "before":{"artifactId":BEFORE,"revision":1,"title":"Row (Before)"},
+             "after":{"artifactId":AFTER,"revision":2,"title":"Row (After)"}},
+            {"missionId":"m","taskId":"t","sessionId":"s","after":{"artifactId":"../x","revision":1,"title":"Bad"}}
+        ]))
+    }
+
+    #[test]
+    fn a_reported_screen_folds_into_one_row_at_its_pinned_revisions() {
+        assert_eq!(pairs().len(), 1, "a pair that is off is left out");
+        assert!(screen_pairs(&json!({"error":"Not found"})).is_empty());
+        let row = |id: &str, revision: u64| {
+            json!({"sessionId":"s","artifactId":id,"title":id,"kind":"image","revision":revision,"updatedAt":1})
+        };
+        let rows = fold_pairs(vec![row(AFTER, 3), row(OTHER, 1), row(BEFORE, 1)], &pairs(), None);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["revision"], 2, "the pinned After, not the newest");
+        assert_eq!(rows[0]["pair"]["before"]["artifactId"], BEFORE);
+        assert_eq!(rows[0]["pair"]["after"]["revision"], 2);
+        assert!(rows[1].get("pair").is_none());
+        // Without its After in the list, the Before stays a card of its own.
+        assert_eq!(fold_pairs(vec![row(BEFORE, 1)], &pairs(), None).len(), 1);
+        // Another chat's artifact with the same ID does not fold.
+        let mut theirs = row(BEFORE, 1);
+        theirs["sessionId"] = json!("other");
+        assert_eq!(fold_pairs(vec![row(AFTER, 2), theirs], &pairs(), None).len(), 2);
+    }
+
+    #[test]
+    fn a_mission_page_folds_only_its_tasks_pinned_links() {
+        let link = |id: &str, task: &str, revision: u64| {
+            json!({"sessionId":"s","artifactId":id,"title":id,"kind":"image","revision":revision,
+                "pinned":true,"taskId":task,"updatedAt":1})
+        };
+        let rows = fold_pairs(vec![link(AFTER, "t", 2), link(BEFORE, "t", 1)], &pairs(), Some("m"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["pair"]["before"]["revision"], 1);
+        assert_eq!(
+            fold_pairs(vec![link(AFTER, "t", 2), link(BEFORE, "t", 1)], &pairs(), Some("n")).len(),
+            2,
+            "another mission's page"
+        );
+        assert_eq!(
+            fold_pairs(vec![link(AFTER, "t", 1), link(BEFORE, "t", 1)], &pairs(), Some("m")).len(),
+            2,
+            "an older link of the After"
+        );
+        assert_eq!(
+            fold_pairs(vec![link(AFTER, "other", 2), link(BEFORE, "t", 1)], &pairs(), Some("m")).len(),
+            2,
+            "a link on another task"
+        );
+    }
 
     #[test]
     fn summaries_keep_only_this_projects_known_kinds_and_exact_ids() {
