@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -28,6 +28,7 @@ import { Type } from "typebox";
 import { userText } from "./attempts.ts";
 import { MAX_FAILURE_CHARS } from "./failure.ts";
 import { HeldInputsDoc } from "./held-inputs-doc.ts";
+import { BUILDING_SKILL_PATHS } from "./mission-building-skills.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { PerformanceRecord } from "./performance.ts";
 import { PosthorseDoc } from "./posthorse.ts";
@@ -2074,10 +2075,19 @@ test("slash commands list prompt templates and skills, expand on input, and queu
 		return { additionalPromptTemplatePaths: [prompt], additionalSkillPaths: [skill] };
 	});
 	const session = await f.open();
-	assert.deepEqual(session.commands, [
-		{ name: "review", source: "prompt", description: "Review the diff", argumentHint: "<focus>" },
-		{ name: "skill:commit", source: "skill", description: "Create a commit" },
-	]);
+	const building = BUILDING_SKILL_PATHS.map((path) => `skill:${basename(dirname(path))}`);
+	assert.deepEqual(
+		session.commands.filter((command) => !building.includes(command.name)),
+		[
+			{ name: "review", source: "prompt", description: "Review the diff", argumentHint: "<focus>" },
+			{ name: "skill:commit", source: "skill", description: "Create a commit" },
+		],
+	);
+	assert.deepEqual(
+		session.commands.filter((command) => building.includes(command.name)).map((command) => command.name),
+		building,
+		"bundled building skills are slash commands too",
+	);
 	const adapter = f.adapters[0]!;
 	assert.equal(await adapter.prepareInput("/review tests"), "Review with focus on tests.");
 	assert.match(

@@ -12,7 +12,9 @@ docs/missions.md", how long it has worked and when it last saved a step. After 5
 new step, it says so. **Show planning chat** opens the agent's conversation and steps, read only.
 Neither sends anything, stops the agent or tries again.
 After publication, **Start work** asks you to confirm one ready task and its model. **Start task**
-admits one background worker under existing project permissions and limits. Other tasks do not start
+admits one background worker under existing project permissions and limits. The worker
+follows the bundled upstream implement skill: test-first at the seams the plan agreed (tdd and
+codebase-design), then a code review before it reports. Other tasks do not start
 automatically. If the acknowledgement is lost, use **Check Start**, not another Start. Admission is not
 progress or acceptance. Read the agent's report in the mission overview. This connected path is
 qualified with an isolated daemon and faux workers, not enabled against your live profile. The current app

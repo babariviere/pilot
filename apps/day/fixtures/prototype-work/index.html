@@ -19,7 +19,7 @@ Shape follows the upstream "prototype" skill (UI.md: radically different variant
 floating switcher, ?variant=; LOGIC.md: pure reducer in its own script block, visible state panel,
 free play and guided walkthroughs). Source: mattpocock/skills at
 4ae2317ddb22b046e26455e4f9c9b3aaaf62212d, MIT, Copyright 2026 Matt Pocock, vendored unmodified in
-packages/kernel/skills/mission-planning/upstream/prototype. Adapted to one self-contained file that
+packages/kernel/skills/planning/prototype. Adapted to one self-contained file that
 opens in a browser, because the user asked to review it there.
 
 Mock data only, in memory. No network, no credentials, no Slack/Linear/GitHub calls.
@@ -1476,7 +1476,7 @@ function drawerView() {
 			"<p><b>Choosing a variant is feedback, not approval.</b> Mixing parts (say, B's triage pass with C's list) is a good answer too. Nothing gets built from a pick without a separate agreement.</p>" +
 			"<p><b>Not real.</b> Mock data in memory only. Nothing is sent to Slack, Linear, GitHub or any agent. Reload or Reset starts over. This is a throwaway design prototype, not how Pilot is built: the app stays native (NSH).</p>" +
 			"<p><b>Keys.</b> ↑ ↓ move, Return opens, Esc goes back, ← → switch variant, 1–9 pick an answer, 0 opens “why”, ⌘Return sends.</p>" +
-			"<p><b>Source.</b> Shaped by the upstream <i>prototype</i> skill (UI.md variants with a bottom bar and ?variant=, LOGIC.md pure reducer, state panel and walkthroughs) from mattpocock/skills at 4ae2317, MIT, © 2026 Matt Pocock, vendored in packages/kernel/skills/mission-planning/upstream/prototype. Adapted: one self-contained file opened in your browser instead of an app route.</p>";
+			"<p><b>Source.</b> Shaped by the upstream <i>prototype</i> skill (UI.md variants with a bottom bar and ?variant=, LOGIC.md pure reducer, state panel and walkthroughs) from mattpocock/skills at 4ae2317, MIT, © 2026 Matt Pocock, vendored in packages/kernel/skills/planning/prototype. Adapted: one self-contained file opened in your browser instead of an app route.</p>";
 	}
 	return '<aside class="drawer" aria-label="Prototype panel"><h2>Prototype panel</h2><div class="ptabs">' + tabs.map(([k, l]) => '<button class="' + (ui.dtab === k ? "on" : "") + '" data-act="dtab" data-arg="' + k + '">' + l + "</button>").join("") + "</div>" + body + "</aside>";
 }

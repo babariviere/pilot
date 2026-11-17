@@ -4,6 +4,7 @@ import type { Context } from "@earendil-works/chord/context";
 import { type Extension, hook, type PromptInput, section, ToolTask } from "@earendil-works/pi-durable";
 import type { DiagnosticTargetReference, MissionDecision, MissionRole, OperationHost } from "@pilot/protocol";
 import { messageFormatBlock } from "./message-format.ts";
+import { BUILDING_SKILL_ADAPTATION } from "./mission-building-skills.ts";
 
 import {
 	commandArguments,
@@ -151,6 +152,7 @@ export function missionPrompt(
 	ghStack?: boolean,
 	localOnly = false,
 	requirePullRequest = true,
+	build = true,
 ): string {
 	localOnly ||= mission.role === "explorer";
 	const stackLink =
@@ -191,6 +193,9 @@ export function missionPrompt(
 			? [
 					"- Screen work: the user sees a design before you build it. If your task lists chosen prototypes, build to match them. If your task asks for a UI prototype or a choice between layouts, request it with mission prototype and end your turn; never ask the user to register one. Otherwise, when your task adds or changes something the user sees, first publish an NSH mockup of it with the artifact tool (read the pilot-artifacts skill), then ask the user with `ask_user` to OK it in this chat, naming it in `artifacts` so they see it with the question. Write the product UI code only after they agree, and follow their changes.",
 				]
+			: []),
+		...(build && !localOnly && !mission.thread && mission.coordinator !== "self" && mission.role !== "reviewer"
+			? [BUILDING_SKILL_ADAPTATION]
 			: []),
 		...(mission.planningVersion !== undefined
 			? [
@@ -520,7 +525,7 @@ export function withPilotPolicy(
 				const current = mission();
 				const prompt = pilotPrompt(context, artifactsAvailable(), current?.coordinator === "self");
 				return current && context.role !== "diagnostics"
-					? `${prompt}\n${missionPrompt(current, context.ghStack, context.executionPermission?.level === "investigate", context.requirePullRequest !== false)}`
+					? `${prompt}\n${missionPrompt(current, context.ghStack, context.executionPermission?.level === "investigate", context.requirePullRequest !== false, !context.ask)}`
 					: prompt;
 			}),
 		],

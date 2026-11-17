@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 
 export const PLANNING_SKILL_PATHS = ["wayfinder", "to-spec", "to-tickets", "research", "prototype"].map((name) =>
-	fileURLToPath(new URL(`../skills/mission-planning/upstream/${name}/SKILL.md`, import.meta.url)),
+	fileURLToPath(new URL(`../skills/planning/${name}/SKILL.md`, import.meta.url)),
 );
 
 export const PLANNING_SKILL_ADAPTATION = `Pilot-native planning adapter (overrides upstream publishing and execution instructions):

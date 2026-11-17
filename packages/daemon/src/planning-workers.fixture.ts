@@ -60,7 +60,7 @@ export async function planningWorkerFixture(
 		recommendedOptionId: "yes",
 	}));
 	const code = `function decode(x) { if(typeof x === "string") { try { return decode(JSON.parse(x)); } catch { return x; } } if(x?.content) return decode(x.content.map(p=>p.text??"").join("")); return x; }
-const source = await tools.read({path:${JSON.stringify(fileURLToPath(new URL("../../kernel/skills/mission-interview/upstream/grill-with-docs/SKILL.md", import.meta.url)))}});
+const source = await tools.read({path:${JSON.stringify(fileURLToPath(new URL("../../kernel/skills/interview/grill-with-docs/SKILL.md", import.meta.url)))}});
 const view = decode(await tools.mission_plan({action:"read"}));
 return await tools.mission_plan({action:"questions",request:{purpose:"interview-questions",expected:{fence:view.interview.fence,revision:view.interview.revision},questions:${JSON.stringify(questions)}}});`;
 	const followupCode = code.replace(

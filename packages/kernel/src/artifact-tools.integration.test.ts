@@ -240,7 +240,15 @@ test("bundled authoring skill extends configured skills and survives resource re
 	const checkSkills = () => {
 		const loaded = adapter.session.resourceLoader.getSkills();
 		assert.deepEqual(loaded.diagnostics, []);
-		assert.deepEqual(loaded.skills.map((skill) => skill.name).sort(), ["pilot-artifacts", "user-skill"]);
+		assert.deepEqual(loaded.skills.map((skill) => skill.name).sort(), [
+			"code-review",
+			"codebase-design",
+			"implement",
+			"pilot-artifacts",
+			"tdd",
+			"user-skill",
+			"writing-for-agents",
+		]);
 		assert.equal(loaded.skills.find((skill) => skill.name === "pilot-artifacts")?.filePath, ARTIFACT_SKILL_PATH);
 		assert.equal(
 			adapter.session.getAllTools().find((tool) => tool.name === "artifact")?.namespace?.name,

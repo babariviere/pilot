@@ -89,6 +89,7 @@ import { OwnedJobGroups } from "./job-groups.ts";
 import { JobHistory } from "./job-history.ts";
 import { drainLifecycleJobs, runningJobs } from "./jobs.ts";
 import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
+import { assertBuildingSkills, BUILDING_SKILL_PATHS } from "./mission-building-skills.ts";
 import {
 	assertInterviewSkills,
 	INTERVIEW_SKILL_ADAPTATION,
@@ -294,8 +295,9 @@ export function createTrackedMcpExtension(
 
 /**
  * Pi keeps the first skill of a name, so a personal skill with an upstream name (for example an installed copy of
- * the same upstream skills) hides the bundled file. In a host-selected profile session only, the pinned bundled
- * file wins and the personal skill of that name is left out. A missing bundled file still fails the assertions.
+ * the same upstream skills) hides the bundled file. For Pilot's bundled building, interview and planning skills,
+ * the pinned bundled file wins and the personal skill of that name is left out. A missing bundled file still fails
+ * the assertions.
  */
 function preferBundledSkills(
 	loaded: LoadSkillsResult,
@@ -487,6 +489,8 @@ export class NativeAdapter {
 		if (options.coordinatorSources && (readOnly || options.bundledExtensions === false))
 			throw new Error("Coordinator source admission requires its bundled native profile");
 		const missionInterview = options.missionInterview || options.missionPlanning;
+		// Builders only: coordinator, interview and planning chats delegate code changes.
+		const buildingSkills = options.coordinatorSources ? [] : BUILDING_SKILL_PATHS;
 		if (missionInterview && (!options.coordinatorSources || readOnly))
 			throw new Error("Mission interview skills require a trusted coordinator host");
 		const allowedTools = insights
@@ -625,29 +629,29 @@ export class NativeAdapter {
 						settingsManager,
 						additionalSkillPaths: [
 							...artifactSkillPaths,
+							...buildingSkills,
 							...(missionInterview ? INTERVIEW_SKILL_PATHS : []),
 							...(options.missionPlanning ? PLANNING_SKILL_PATHS : []),
 							...(options.loaderOptions?.additionalSkillPaths ?? []),
 						],
-						...(options.coordinatorSources
-							? {
-									skillsOverride: (loaded: ReturnType<DefaultResourceLoader["getSkills"]>) => {
-										const selected = preferBundledSkills(
-											options.loaderOptions?.skillsOverride?.(loaded) ?? loaded,
-											[
-												...(missionInterview ? INTERVIEW_SKILL_PATHS : []),
-												...(options.missionPlanning ? PLANNING_SKILL_PATHS : []),
-											],
-											cwd,
-											agentDir,
-										);
-										if (missionInterview) assertInterviewSkills(selected.skills);
-										if (options.missionPlanning) assertPlanningSkills(selected.skills);
-										coordinatorSkills = snapshotCoordinatorSkills(selected.skills, agentDir);
-										return selected;
-									},
-								}
-							: {}),
+						skillsOverride: (loaded: ReturnType<DefaultResourceLoader["getSkills"]>) => {
+							const selected = preferBundledSkills(
+								options.loaderOptions?.skillsOverride?.(loaded) ?? loaded,
+								[
+									...buildingSkills,
+									...(missionInterview ? INTERVIEW_SKILL_PATHS : []),
+									...(options.missionPlanning ? PLANNING_SKILL_PATHS : []),
+								],
+								cwd,
+								agentDir,
+							);
+							if (buildingSkills.length) assertBuildingSkills(selected.skills);
+							if (missionInterview) assertInterviewSkills(selected.skills);
+							if (options.missionPlanning) assertPlanningSkills(selected.skills);
+							if (options.coordinatorSources)
+								coordinatorSkills = snapshotCoordinatorSkills(selected.skills, agentDir);
+							return selected;
+						},
 						extensionFactories: [
 							...(jobGroups ? [jobGroups.native] : []),
 							...(posthorse ? [posthorse.factory] : []),

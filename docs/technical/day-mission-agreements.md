@@ -81,7 +81,7 @@ These records do not stop already-running agents; mission Pause is a separate pr
 
 The kernel bundles unmodified `mattpocock/skills` `grill-with-docs`, `grilling`, `domain-modeling` and
 the latter's format references. The pinned source, version and MIT attribution are in
-`packages/kernel/skills/mission-interview/UPSTREAM.md` and `upstream/LICENSE`.
+`packages/kernel/skills/SOURCE.md` and `interview/LICENSE`.
 
 The explicit host-only `NativeAdapterOptions.missionInterview` requires the trusted coordinator
 profile. It adds the actual entries through Pi's normal resource loader and captures their paths

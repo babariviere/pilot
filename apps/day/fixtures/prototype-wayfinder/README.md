@@ -102,5 +102,5 @@ is not approval to build it.
 
 Shape follows the upstream `prototype` skill (UI.md and LOGIC.md) from mattpocock/skills at
 `4ae2317ddb22b046e26455e4f9c9b3aaaf62212d` (MIT, Copyright 2026 Matt Pocock), vendored in
-[`packages/kernel/skills/mission-planning/upstream/prototype`](../../../../packages/kernel/skills/mission-planning/upstream/prototype).
+[`packages/kernel/skills/planning/prototype`](../../../../packages/kernel/skills/planning/prototype).
 Map words follow the vendored `wayfinder` skill in the same folder and Pilot's native map.

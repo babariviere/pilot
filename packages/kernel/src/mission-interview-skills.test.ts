@@ -64,10 +64,10 @@ test("upstream sources and dependencies stay byte-exact, attributed and separate
 		["LICENSE", "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"],
 	];
 	for (const [file, hash] of hashes) {
-		const bytes = await readFile(new URL(`../skills/mission-interview/upstream/${file}`, import.meta.url));
+		const bytes = await readFile(new URL(`../skills/interview/${file}`, import.meta.url));
 		assert.equal(createHash("sha256").update(bytes).digest("hex"), hash, file);
 	}
-	const source = await readFile(new URL("../skills/mission-interview/UPSTREAM.md", import.meta.url), "utf8");
+	const source = await readFile(new URL("../skills/SOURCE.md", import.meta.url), "utf8");
 	assert.match(source, /4ae2317ddb22b046e26455e4f9c9b3aaaf62212d/);
 	for (const boundary of [
 		"whole frontier",
@@ -89,10 +89,7 @@ test("skill entry paths follow a relocated runtime, not the original checkout", 
 	await mkdir(dirname(module), { recursive: true });
 	await copyFile(fileURLToPath(new URL("./mission-interview-skills.ts", import.meta.url)), module);
 	const relocated = await import(pathToFileURL(module).href);
-	assert.equal(
-		relocated.INTERVIEW_SKILL_PATHS[0],
-		join(home, "skills", "mission-interview", "upstream", "grill-with-docs", "SKILL.md"),
-	);
+	assert.equal(relocated.INTERVIEW_SKILL_PATHS[0], join(home, "skills", "interview", "grill-with-docs", "SKILL.md"));
 });
 
 test("opted-in native coordinator loads and reads actual upstream entries", async (t) => {

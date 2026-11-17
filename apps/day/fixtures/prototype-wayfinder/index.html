@@ -32,7 +32,7 @@ Shape follows the upstream "prototype" skill (UI.md: structurally different vari
 floating switcher, ?variant=; LOGIC.md: pure model in its own script block, visible state panel,
 free play and guided walkthroughs). Source: mattpocock/skills at
 4ae2317ddb22b046e26455e4f9c9b3aaaf62212d, MIT, Copyright 2026 Matt Pocock, vendored unmodified in
-packages/kernel/skills/mission-planning/upstream/prototype. Adapted to one self-contained file that
+packages/kernel/skills/planning/prototype. Adapted to one self-contained file that
 opens in a browser, because the user asked to review prototypes there.
 
 Mock data only, in memory. No network, no credentials, no daemon, no provider calls.
@@ -2582,7 +2582,7 @@ function drawerView() {
 			"<p><b>Not real.</b> Mock data in memory only, from the Day mock mission \u201cPilot on Linux desktops\u201d. Nothing is sent anywhere. Reload or Reset starts over. This is a throwaway design prototype, not how Pilot is built: the app stays native (NSH).</p>" +
 			"<p><b>Words.</b> Interview: questions only you answer. Research: an agent looks for evidence. Prototype: a throwaway experiment whose finding is evidence. Fog of war: areas not yet clear enough to ask about. Build task: implementation work from the approved plan.</p>" +
 			"<p><b>Keys.</b> \u2191 \u2193 move, Return opens, Esc closes or goes back, \u2190 \u2192 switch variant. In the interview: 1\u20139 pick an answer, 0 opens \u201cwhy\u201d, \u2190 \u2192 move between questions, \u2318Return submits.</p>" +
-			"<p><b>Source.</b> Shaped by the upstream <i>prototype</i> skill (UI.md variants with a bottom bar and ?variant=, LOGIC.md pure model, state panel and walkthroughs) from mattpocock/skills at 4ae2317, MIT, \u00a9 2026 Matt Pocock, vendored in packages/kernel/skills/mission-planning/upstream/prototype. Map words follow the vendored <i>wayfinder</i> skill and Pilot\u2019s native map.</p>";
+			"<p><b>Source.</b> Shaped by the upstream <i>prototype</i> skill (UI.md variants with a bottom bar and ?variant=, LOGIC.md pure model, state panel and walkthroughs) from mattpocock/skills at 4ae2317, MIT, \u00a9 2026 Matt Pocock, vendored in packages/kernel/skills/planning/prototype. Map words follow the vendored <i>wayfinder</i> skill and Pilot\u2019s native map.</p>";
 	}
 	return '<aside class="drawer" aria-label="Prototype panel"><h2>Prototype panel</h2><div class="ptabs">' + tabs.map(([k, l]) => '<button class="' + (ui.dtab === k ? "on" : "") + '" data-act="dtab" data-arg="' + k + '">' + l + "</button>").join("") + "</div>" + body + "</aside>";
 }

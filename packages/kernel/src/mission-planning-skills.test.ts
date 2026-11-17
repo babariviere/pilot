@@ -81,12 +81,12 @@ test("upstream content, required references and license stay byte-exact and attr
 	for (const [file, hash] of Object.entries(hashes))
 		assert.equal(
 			createHash("sha256")
-				.update(await readFile(new URL(`../skills/mission-planning/upstream/${file}`, import.meta.url)))
+				.update(await readFile(new URL(`../skills/planning/${file}`, import.meta.url)))
 				.digest("hex"),
 			hash,
 			file,
 		);
-	const attribution = await readFile(new URL("../skills/mission-planning/UPSTREAM.md", import.meta.url), "utf8");
+	const attribution = await readFile(new URL("../skills/SOURCE.md", import.meta.url), "utf8");
 	assert.match(attribution, /4ae2317ddb22b046e26455e4f9c9b3aaaf62212d/);
 	assert.match(attribution, /MIT, Copyright 2026 Matt Pocock/);
 	assert.match(PLANNING_SKILL_ADAPTATION, /overrides upstream publishing and execution/);
@@ -111,10 +111,7 @@ test("planning skill paths follow a relocated runtime", async (t) => {
 	await mkdir(dirname(module));
 	await copyFile(fileURLToPath(new URL("./mission-planning-skills.ts", import.meta.url)), module);
 	const relocated = await import(pathToFileURL(module).href);
-	assert.equal(
-		relocated.PLANNING_SKILL_PATHS[0],
-		join(home, "skills", "mission-planning", "upstream", "wayfinder", "SKILL.md"),
-	);
+	assert.equal(relocated.PLANNING_SKILL_PATHS[0], join(home, "skills", "planning", "wayfinder", "SKILL.md"));
 });
 
 test("native planning tool has no human-answer, external-publishing or execution operation", async () => {
@@ -389,5 +386,9 @@ test("same-named personal skills cannot block or replace the trusted planning pr
 	assert.ok(
 		skills.some((skill) => skill.name === "my-own"),
 		"unrelated personal skills stay available",
+	);
+	assert.ok(
+		!skills.some((skill) => skill.filePath.includes("/skills/building/")),
+		"planning chats do not load building skills",
 	);
 });

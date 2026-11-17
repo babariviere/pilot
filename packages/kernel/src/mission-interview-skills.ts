@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 
 export const INTERVIEW_SKILL_PATHS = ["grill-with-docs", "grilling", "domain-modeling"].map((name) =>
-	fileURLToPath(new URL(`../skills/mission-interview/upstream/${name}/SKILL.md`, import.meta.url)),
+	fileURLToPath(new URL(`../skills/interview/${name}/SKILL.md`, import.meta.url)),
 );
 
 /** Used only for a host-selected new-flow coordinator, through the ordinary trusted Pi loader. */
