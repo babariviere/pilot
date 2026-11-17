@@ -152,7 +152,7 @@ test("builders waiting for their task prototypes leave worker slots for the prot
 	assert.equal(await occupied(), 1, "a working builder still holds a slot");
 });
 
-test("task prototype chats start without a free worker slot and take none", async (t) => {
+test("only chats that can change code take worker slots, so Ask prototype chats start while builders are busy", async (t) => {
 	const f = await fixture(t, { twoSlices: true });
 	const tasks = f.store.tasks(f.missionId);
 	const chats = new Map<string, Partial<SessionSummary>>();
@@ -166,14 +166,15 @@ test("task prototype chats start without a free worker slot and take none", asyn
 		chats.has(id) ? ({ ...chats.get(id) } as SessionSummary) : get(id),
 	);
 	t.mock.method(f.sessions, "selectTaskModel", async (_cwd: string, model?: string) => ({ model, thinking: "high" }));
-	const admissions: { taskPrototype?: true }[] = [];
+	const admissions: { role?: string }[] = [];
 	t.mock.method(
 		f.sessions,
 		"spawn",
-		async (_request: unknown, _c: boolean, _t: unknown, admission: { taskPrototype?: true }) => {
+		async (request: { mode?: string }, _c: boolean, _t: unknown, admission: { role?: string }) => {
+			assert.equal(request.mode, "ask");
 			admissions.push(admission);
 			f.store.join("proto-1", f.missionId, { sessionId: f.owner }, "explorer");
-			chats.set("proto-1", { id: "proto-1", projectId: f.project.id, state: "working", working: true });
+			chats.set("proto-1", { id: "proto-1", projectId: f.project.id, mode: "ask", state: "working", working: true });
 			return { id: "proto-1" } as SessionSummary;
 		},
 	);
@@ -183,10 +184,14 @@ test("task prototype chats start without a free worker slot and take none", asyn
 			.occupiedWorkers;
 	assert.equal(await occupied(), 2);
 	t.mock.method(f.sessions, "missionDispatchFence", () => "fence");
-	const admit = (taskPrototype: boolean) =>
-		service["assertStartActor"](f.missionId, f.owner, false, undefined, taskPrototype);
-	assert.throws(() => admit(false), /Waiting for a worker slot/, "ordinary workers still wait");
-	assert.doesNotThrow(() => admit(true), "a task prototype needs no slot");
+	const admit = (changesCode: boolean) =>
+		service["assertStartActor"](f.missionId, f.owner, false, undefined, changesCode);
+	assert.throws(() => admit(true), /Waiting for a worker slot/, "chats that can change code still wait");
+	assert.doesNotThrow(() => admit(false), "an Ask chat needs no slot");
+	assert.equal(f.store.startChangesCode(f.missionId, { role: "explorer" }), false);
+	assert.equal(f.store.startChangesCode(f.missionId, { role: "builder", mode: "ask" }), false);
+	assert.equal(f.store.startChangesCode(f.missionId, { role: "reviewer" }), true);
+	assert.equal(f.store.startChangesCode(f.missionId, {}), true);
 
 	// Busy builders cannot hold up a prototype: it starts, and it does not take a slot.
 	await service.call("builder-1", "prototype", {
@@ -198,8 +203,8 @@ test("task prototype chats start without a free worker slot and take none", asyn
 	f.workers.startResearch();
 	await f.workers.settleResearch();
 	assert.deepEqual(
-		admissions.map((a) => a.taskPrototype),
-		[true],
+		admissions.map((a) => a.role),
+		["explorer"],
 	);
-	assert.equal(await occupied(), 2, "builder-1 is still working; the prototype chat counts for nothing");
+	assert.equal(await occupied(), 2, "builder-1 is still working; the Ask prototype chat takes no slot");
 });

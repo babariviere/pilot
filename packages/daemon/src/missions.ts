@@ -7478,6 +7478,11 @@ export class MissionStore {
 		return workerRole(this.require(id).planningVersion, value);
 	}
 
+	/** Whether a task start makes a chat that can change code. Only those take a worker slot; Ask chats never do. */
+	startChangesCode(id: string, request: { role?: unknown; mode?: unknown }): boolean {
+		return this.workerRole(id, request.role) !== "explorer" && request.mode !== "ask";
+	}
+
 	leave(sessionId: string, actor: MissionActor = USER): void {
 		const id = this.missionOf(sessionId);
 		if (!id) return;

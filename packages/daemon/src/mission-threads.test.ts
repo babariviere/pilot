@@ -5,6 +5,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { type ConversationId, type EntryId, MemoryStorage } from "@earendil-works/pi-durable";
 import type { EntryRecord, SessionSummary, SpawnRequest } from "@pilot/protocol";
 import type { MissionThreadReference, MissionThreadWrite } from "../../protocol/src/mission-thread.ts";
+import { Conflict } from "./errors.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionThreads } from "./mission-threads.ts";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
@@ -197,6 +198,29 @@ test("a thread chat start that never finished stays Unknown; looking it up start
 	assert.equal((await f.threads.lookup(op))?.state, "pending");
 	assert.deepEqual(f.store.threads.get(f.missionId, f.topicId).chat, { operationId: op.operationId });
 	assert.equal(c.spawned.length, 0);
+});
+
+test("a refused thread chat start leaves no chat, and Check starts it once Pilot can", async (t) => {
+	const f = await fixture(t);
+	const c = threadChats(t, f);
+	const spawn = f.sessions.spawn;
+	let refuse = true;
+	t.mock.method(f.sessions, "spawn", async (...args: Parameters<typeof spawn>) => {
+		if (refuse) throw new Conflict("Mission is paused");
+		return spawn.apply(f.sessions, args);
+	});
+	const op = await f.request({ purpose: "thread-send", text: "Hello" });
+	assert.equal((await f.execute(op)).state, "pending");
+	assert.equal(f.store.threads.get(f.missionId, f.topicId).chat, undefined, "no chat was made");
+	assert.equal((await f.threads.lookup(op))?.state, "pending", "still refused");
+	refuse = false;
+	const receipt = await f.threads.lookup(op);
+	assert.equal(receipt?.state, "accepted");
+	assert.deepEqual((receipt?.result as { chat: unknown }).chat, { sessionId: "chat-1" });
+	assert.equal(c.spawned.length, 1);
+	assert.equal(c.spawned[0]!.request.message, "Hello");
+	assert.equal((await f.threads.lookup(op))?.state, "accepted");
+	assert.equal(c.spawned.length, 1, "started once");
 });
 
 test("Discard closes the thread chat; after Reopen a message starts a new one", async (t) => {

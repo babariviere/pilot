@@ -492,19 +492,31 @@ export class MissionThreads {
 		const scope = this.scope(op.targetId);
 		const selection = await sessions.selectTaskModel(projects.require(scope.project.id).path);
 		this.scope(op.targetId);
-		const chat = await sessions.spawn(
-			{
-				projectId: scope.project.id,
-				missionId: op.targetId,
-				mode: "ask",
-				title: `Thread: ${topic.title}`.slice(0, 200),
-				message: text,
-				...selection,
-			},
-			false,
-			undefined,
-			{ role: "explorer", actorSessionId: scope.owner, mainView: true },
-		);
+		let chat: { id: string };
+		try {
+			chat = await sessions.spawn(
+				{
+					projectId: scope.project.id,
+					missionId: op.targetId,
+					mode: "ask",
+					title: `Thread: ${topic.title}`.slice(0, 200),
+					message: text,
+					...selection,
+				},
+				false,
+				undefined,
+				{ role: "explorer", actorSessionId: scope.owner, mainView: true },
+			);
+		} catch (error) {
+			// Spawn admission refused it and removed the new chat, so none exists: Check may start it later.
+			if (error instanceof Conflict) {
+				store.threads.amend(op.targetId, topic.id, (t) => {
+					if (t.chat?.operationId === op.operationId && !t.chat.sessionId) delete t.chat;
+				});
+				await store.durable();
+			}
+			throw error;
+		}
 		store.threads.amend(op.targetId, topic.id, (t) => {
 			t.chat = { operationId: op.operationId, sessionId: chat.id };
 		});
@@ -583,6 +595,8 @@ export class MissionThreads {
 			if (!topic.chat.sessionId) throw new Error("Unknown thread chat start; no replay");
 			return { sessionId: topic.chat.sessionId };
 		}
+		// Its chat start was refused before a chat existed: start it now, saved first as in a first send.
+		if (!topic.chat && topic.disposition === "open") return this.chatSend(op, topic, JSON.parse(op.payload).text);
 		const live = this.liveChat(topic);
 		if (!live) throw new Error("Unknown thread message; its chat is closed");
 		// The chat takes one input per request ID, so sending again cannot repeat the message.

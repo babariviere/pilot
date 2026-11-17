@@ -261,9 +261,18 @@ export class MissionContinuations {
 			);
 		const uncertain = this.store.controls
 			.continuations(record.missionId, true)
-			.filter((r) => r.operationId !== record.operationId && (r.state === "entered" || r.state === "unknown"));
-		if (this.host.occupied(record.missionId, record.targetId) + uncertain.length >= 2)
-			throw new Conflict("Waiting for a worker slot (2 occupied, reviewers included)");
+			.filter(
+				(r) =>
+					r.operationId !== record.operationId &&
+					(r.state === "entered" || r.state === "unknown") &&
+					this.store.startChangesCode(r.missionId, r.request),
+			);
+		// Only chats that can change code wait for a worker slot.
+		if (
+			this.store.startChangesCode(record.missionId, record.request) &&
+			this.host.occupied(record.missionId, record.targetId) + uncertain.length >= 2
+		)
+			throw new Conflict("Waiting for a worker slot (2 chats that can change code, reviewers included)");
 		// Canonical order is authoritative. Never choose a later queued slice around a blocked earlier slice.
 		const queued = this.store.controls
 			.continuations(record.missionId, true)

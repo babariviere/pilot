@@ -252,8 +252,6 @@ export interface MissionSpawnAdmission {
 	actorSessionId?: string;
 	/** Daemon-only: read the project's read-only main view, never the user's checkout or a new workspace. */
 	mainView?: true;
-	/** Daemon-only: a read-only task prototype chat. It needs no worker slot; Pilot runs one per mission at most. */
-	taskPrototype?: true;
 }
 
 /** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */

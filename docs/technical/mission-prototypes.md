@@ -212,8 +212,8 @@ So a screen task added by a revision gets its prototype from its builder instead
 - No map change, no planner turn and no user confirmation. The builder asks the user with `ask_user`, naming the
   artifact. A change request starts from the earlier mockup.
 - A chat cut off while starting is reported to the builder as "no mockup", never started twice.
-- Task prototype chats need no worker slot and take none (`taskPrototype` spawn admission). They are read-only,
-  short and limited to one per mission, so busy builders or builders waiting on the user cannot hold them up.
+- Task prototype chats are Ask chats, so they need no worker slot and take none. Only chats that can change code
+  take slots. Busy builders, or builders waiting on the user, cannot hold a prototype up.
 - An idle builder whose task prototype is not yet reported or failed holds no worker slot. A working builder
   still counts.
 

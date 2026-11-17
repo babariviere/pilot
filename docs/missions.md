@@ -87,8 +87,9 @@ Replies are attributed to the coordinator. Database-access approvals remain your
 
 When you authorize continued work, the coordinator can queue an exact next slice with
 `start` and a stable `operationId`. It waits durably for dependencies and a free worker
-slot, including reviewers (maximum two). A worker finish wakes reconciliation without
-waiting for every other worker. A builder's read-only task prototype chat needs no slot.
+slot (maximum two). Only chats that can change code take a slot, reviewers included. Ask chats
+(explorers, task prototypes and thread chats) never wait for one. A worker finish wakes reconciliation without
+waiting for every other worker.
 The coordinator checks fresh task scope, ownership and
 reports before closing work; a finished turn or published increment does not close a task.
 `get` shows queued starts and waiting reasons. Stop, Pause, changed scope/authority and

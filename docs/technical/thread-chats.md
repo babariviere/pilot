@@ -16,6 +16,9 @@ Each open mission thread has its own **thread chat**. It replaces sending thread
    project's read-only main view) that joins the mission. Later messages go to the same chat with the operation ID
    as request ID, so a retry never repeats one. The chat answers while the planning agent works or is held. The
    thread's history reads this chat (`scope: "thread-chat"`).
+   As an Ask chat, it needs no worker slot and takes none. If Pilot refuses the start (for example, a paused
+   mission), no chat exists, so the message stays Unknown and Check starts the chat once Pilot can. A start lost
+   in a crash stays Unknown and is never started again.
 2. **Read like the coordinator.** Its mission tool (`THREAD_ACTIONS`) has the coordinator's reads: `get` with
    members, needs-you and PRs, `status`, tasks, brief, decisions (coordinator audience too), comments, activity,
    links, artifacts, map, answers and replaced. It has no write action. `thread` reads its own thread, including

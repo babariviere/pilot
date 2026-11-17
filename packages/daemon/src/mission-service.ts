@@ -360,7 +360,7 @@ export class MissionService {
 					admission?.actorSessionId,
 					false,
 					admission?.continuationOperationId,
-					admission?.taskPrototype === true,
+					this.session(sessionId).mode !== "ask",
 				);
 				if (admission?.actorSessionId && taskId)
 					this.sessions.assertMissionTaskHolds(
@@ -1569,7 +1569,13 @@ export class MissionService {
 			throw new Error("overridePhaseGating must be a boolean");
 		if (by !== "user" && request.overridePhaseGating) throw new Conflict("Only the user can override phase gating");
 		if (by === "coordinator")
-			this.assertStartActor(missionId, actorSessionId, true, continuation?.record.operationId);
+			this.assertStartActor(
+				missionId,
+				actorSessionId,
+				true,
+				continuation?.record.operationId,
+				this.store.startChangesCode(missionId, request),
+			);
 		const tasks = this.store.prepareTaskStart(missionId, refs, this.taskStarts, request.overridePhaseGating);
 		if (by === "coordinator")
 			this.sessions.assertMissionTaskHolds(
@@ -1777,7 +1783,13 @@ export class MissionService {
 				!detail.artifacts.some((ref) => ref.artifactId === item.artifactId && ref.sessionId === item.sessionId)
 			)
 				throw new Conflict("That artifact's chat is no longer in this mission");
-		this.assertStartActor(missionId, actorSessionId, false, continuation?.record.operationId);
+		this.assertStartActor(
+			missionId,
+			actorSessionId,
+			false,
+			continuation?.record.operationId,
+			this.store.startChangesCode(missionId, request),
+		);
 		continuation?.guard();
 		this.store.attachTaskReferences(missionId, taskIds, artifacts, links);
 		// A released task keeps its chat. Continuing there preserves the work it already did and avoids
@@ -1785,7 +1797,7 @@ export class MissionService {
 		const holders = !continuation && tasks.length === 1 ? this.sessions.taskHolders(missionId, [tasks[0]!.id]) : [];
 		if (holders.length === 1) {
 			const holder = holders[0]!;
-			this.assertStartActor(missionId, actorSessionId);
+			this.assertStartActor(missionId, actorSessionId, false, undefined, holder.mode !== "ask");
 			if (this.store.membership(holder.id)?.role !== role || (role === "explorer" && holder.mode !== "ask"))
 				throw new Conflict("Existing task holder has a different role/profile; start a fresh task/chat instead");
 			this.store.claimTask(missionId, tasks[0]!.id, holder.id, actorSessionId ? { sessionId: actorSessionId } : {});
@@ -1838,7 +1850,7 @@ export class MissionService {
 		sessionId?: string,
 		required = false,
 		continuationOperationId?: string,
-		taskPrototype = false,
+		changesCode = true,
 	): void {
 		this.controls.assertOpen(missionId);
 		if (!sessionId && !required) return; // Trusted user path, not a tool-supplied identity.
@@ -1850,15 +1862,18 @@ export class MissionService {
 			throw new Conflict("Only the current mission coordinator can start workers");
 		this.assertSameProject(sessionId, missionId);
 		this.sessions.missionDispatchFence(sessionId);
-		// A task prototype is short, read-only and limited to one per mission: it never waits for a worker slot.
-		if (taskPrototype) return;
+		// Worker slots limit chats that can change code. Ask chats (explorers, prototypes, threads) never wait.
+		if (!changesCode) return;
 		const uncertain = this.store.controls
 			.continuations(missionId, true)
 			.filter(
-				(r) => r.operationId !== continuationOperationId && (r.state === "entered" || r.state === "unknown"),
+				(r) =>
+					r.operationId !== continuationOperationId &&
+					(r.state === "entered" || r.state === "unknown") &&
+					this.store.startChangesCode(missionId, r.request),
 			).length;
 		if (this.occupiedWorkers(missionId) + uncertain >= 2)
-			throw new Conflict("Waiting for a worker slot (2 occupied, reviewers included)");
+			throw new Conflict("Waiting for a worker slot (2 chats that can change code, reviewers included)");
 	}
 
 	private occupiedWorkers(missionId: string, excludeId?: string): number {
@@ -1868,14 +1883,14 @@ export class MissionService {
 		// A builder idle until its task prototype comes back holds no slot.
 		const awaitingPrototype = (id: string) =>
 			prototypes.some((p) => p.builderSessionId === id && p.state !== "reported" && p.state !== "failed");
-		// Task prototype chats need no slot, so they take none either.
-		const prototypeChat = (id: string) => prototypes.some((p) => p.sessionId === id);
 		return (
 			[...new Set([...this.store.members(missionId), ...this.sessions.missionWorkSessions(missionId)])].filter(
 				(id) => {
-					if (id === coordinator || id === excludeId || prototypeChat(id)) return false;
+					if (id === coordinator || id === excludeId) return false;
 					const chat = this.sessions.get(id);
 					if (!chat || chat.archivedAt !== undefined) return false;
+					// Only chats that can change code take a slot. Ask chats are read-only.
+					if (chat.mode === "ask") return false;
 					if (chat.working || chat.state === "working" || chat.state === "starting" || chat.runningJobs?.length)
 						return true;
 					return (
