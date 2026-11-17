@@ -6,6 +6,11 @@ import type { SessionManager } from "./sessions.ts";
 
 const id = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(v);
 const digest = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
+/** Native operation kind: one fixed follow-up to one stopped chat, sent once. */
+export const CHAT_CONTINUE = "chat-continue";
+/** What Continue sends. The window cannot supply other words. */
+export const CONTINUE_TEXT =
+	"The user asked you to continue after this chat stopped. If you were waiting on an answer, that question was lost: ask it again. Otherwise pick up where you stopped.";
 export interface Selection {
 	projectId: string;
 	projectPath: string;
@@ -24,7 +29,10 @@ interface Intent extends Selection {
 interface Dependencies {
 	journal: OperationJournal;
 	projects: Pick<ProjectStore, "list" | "require">;
-	sessions: Pick<SessionManager, "spawnDurable" | "selectTaskModel" | "funding">;
+	sessions: Pick<
+		SessionManager,
+		"spawnDurable" | "selectTaskModel" | "activeFunding" | "get" | "sendDurable" | "lookupNativeAttentionInput"
+	>;
 }
 export class NativeChat {
 	private readonly deps: Dependencies;
@@ -53,7 +61,7 @@ export class NativeChat {
 		const model = await this.deps.sessions.selectTaskModel(p.path, p.model);
 		if (canonicalJSON(before) !== canonicalJSON(this.project(projectId)))
 			throw new OperationRejected("Project changed; select it again");
-		const funding = await this.deps.sessions.funding?.read(projectId);
+		const funding = await (await this.deps.sessions.activeFunding())?.read(projectId);
 		return {
 			...before,
 			mode,
@@ -158,7 +166,7 @@ export class NativeChat {
 		title?: string,
 		images?: string[],
 	) {
-		const funding = this.deps.sessions.funding;
+		const funding = await this.deps.sessions.activeFunding();
 		if (funding) {
 			if (p.allowanceMicros == null) throw new OperationRejected("Choose an allowance before starting this work");
 			check();
@@ -191,5 +199,60 @@ export class NativeChat {
 	}
 	async createPinned(p: Selection, draftId: string, operationId: string, message: string) {
 		return this.spawn(p, draftId, operationId, message, await this.qualify(p));
+	}
+	/** The project's quick-fix default, for chats the user starts without an amount field. Empty while limits are off. */
+	async defaultAllowance(projectId: string): Promise<Pick<Selection, "allowanceMicros" | "fundingRequired">> {
+		const funding = await (await this.deps.sessions.activeFunding())?.read(projectId);
+		if (!funding) return {};
+		if (funding.quickFixDefaultMicros == null)
+			throw new OperationRejected("Set a quick-fix default in Funding before starting this work");
+		return { allowanceMicros: funding.quickFixDefaultMicros, fundingRequired: true };
+	}
+	/** Exact Continue envelope: this host, payload `{purpose, sessionId}` aimed at that chat. */
+	private continueRequest(op: DurableOperation): string {
+		let p: Record<string, unknown>;
+		try {
+			p = JSON.parse(op.payload);
+		} catch {
+			throw new OperationRejected("Invalid continue payload");
+		}
+		if (
+			op.kind !== CHAT_CONTINUE ||
+			!p ||
+			typeof p !== "object" ||
+			Object.keys(p).sort().join() !== "purpose,sessionId" ||
+			p.purpose !== CHAT_CONTINUE ||
+			!id(p.sessionId) ||
+			op.targetId !== p.sessionId ||
+			!digest(op.bindingId) ||
+			op.bindingGeneration !== 1 ||
+			op.origin?.hostId !== "local" ||
+			!sameHost(op.origin, this.deps.journal.destination) ||
+			!sameHost(op.destination, this.deps.journal.destination)
+		)
+			throw new OperationRejected("Invalid continue intent");
+		return p.sessionId;
+	}
+	async lookupContinue(op: DurableOperation) {
+		this.continueRequest(op);
+		return this.deps.journal.lookup(op);
+	}
+	/** Sends CONTINUE_TEXT once to a stopped chat. Re-entry only reads whether the chat accepted it. */
+	async continueChat(op: DurableOperation, firstEntry: boolean) {
+		const sessionId = this.continueRequest(op);
+		if (!firstEntry) {
+			if (await this.deps.sessions.lookupNativeAttentionInput(sessionId, op.operationId))
+				return { sessionId, operationId: op.operationId };
+			throw new Error("Continue outcome is unknown; it is never sent again");
+		}
+		const chat = this.deps.sessions.get(sessionId);
+		if (!chat || chat.archivedAt || chat.continuedTo) throw new OperationRejected("This chat can no longer continue");
+		if (chat.outcome !== "stopped" || chat.working) throw new OperationRejected("Only a stopped chat can continue");
+		if (chat.sleepPaused || chat.offlinePaused || chat.subscriptionPause)
+			throw new OperationRejected("This chat is paused");
+		await this.deps.sessions.sendDurable(sessionId, CONTINUE_TEXT, "followUp", op.operationId, {
+			inputGeneration: chat.inputGeneration ?? 0,
+		});
+		return { sessionId, operationId: op.operationId };
 	}
 }

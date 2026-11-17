@@ -58,6 +58,7 @@ mission when you keep it. Choose the project with Pilot's code and a read-only a
 send: it groups duplicates, may ask you a question and proposes a small fix, a mission or no change.
 You answer its question on the same page; the answer only clarifies. Start fix, linking a mission and
 Plan a new mission are your own steps; only you mark feedback resolved.
+Remove deletes one item and its steps after you confirm. Its chats and missions stay.
 Today's New section also shows finished triages and triage questions. Open a row to read the
 proposal or answer the question. Later keeps it out of New across reopening this window;
 Bring back restores it. A new question or finished triage returns to New. Reading or deferring
@@ -76,6 +77,8 @@ Open the triage chat or Open the fix chat shows that chat read only: your messag
 one line per tool step and whether it works, finished or failed. A chat started from New, and a
 mission's coordinator, task and working chats on its overview, open the same way. Reading a chat sends
 nothing.
+A stopped chat shows **Continue**. It asks the agent once to pick up where it stopped, or to ask a lost
+question again. A Continue that Pilot could not confirm shows Check and is never sent again.
 
 | Feature                                         | Guide                                         |
 | ----------------------------------------------- | --------------------------------------------- |

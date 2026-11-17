@@ -167,6 +167,10 @@ class ScriptedFeedback implements FeedbackSource {
 	#apply(intent: StepIntent, operationId: string) {
 		const item = this.#saved.find((i) => i.id === intent.feedbackId);
 		if (!item) return;
+		if (intent.action === "remove") {
+			this.#saved = this.#saved.filter((i) => i !== item);
+			return;
+		}
 		const base = { operationId, recordedAt: Date.UTC(2026, 10, 13, 13) };
 		const n = this.steps().length;
 		let w: UserFeedbackWorkView;
@@ -303,6 +307,9 @@ const row = (key: string, role: ChatRow["role"], text: string): ChatRow => ({
 class ScriptedChat implements SessionChatSource {
 	#chat: SessionChat | null = null;
 	#listeners = new Set<(chat: SessionChat | null) => void>();
+	/** Fix chats open stopped; Continue sends once and sets them working. */
+	stopped = signal(false);
+	continues = signal(0);
 	chat() {
 		return this.#chat;
 	}
@@ -321,7 +328,7 @@ class ScriptedChat implements SessionChatSource {
 		this.#set({
 			sessionId,
 			title: fix ? "Fix: show plan assignees" : "Triage",
-			state: fix ? "done" : "working",
+			state: fix ? (this.stopped() ? "stopped" : "done") : "working",
 			stateReason: "",
 			rows: fix
 				? [
@@ -342,6 +349,20 @@ class ScriptedChat implements SessionChatSource {
 		this.#set({ ...now, rows: [row("3", "you", "Earlier words"), ...now.rows], more: false });
 	}
 	async refresh() {}
+	async continueChat(sessionId: string) {
+		const now = this.#chat;
+		if (now?.sessionId !== sessionId || now.state !== "stopped")
+			return {
+				status: "rejected" as const,
+				message: "Pilot's service refused it: Only a stopped chat can continue.",
+			};
+		this.continues.update((n) => n + 1);
+		this.#set({ ...now, state: "working" });
+		return { status: "accepted" as const, message: "", operationId: "continue-1" };
+	}
+	async checkContinue(operationId: string) {
+		return { status: "unknown" as const, message: "Not confirmed.", operationId };
+	}
 	close(sessionId: string) {
 		if (this.#chat?.sessionId === sessionId) this.#set(null);
 	}
@@ -350,7 +371,8 @@ class ScriptedChat implements SessionChatSource {
 	}
 }
 
-const day = { ...openDay(), feedback: mirrorFeedback(feedback), chat: mirrorSessionChat(new ScriptedChat()) };
+const scriptedChat = new ScriptedChat();
+const day = { ...openDay(), feedback: mirrorFeedback(feedback), chat: mirrorSessionChat(scriptedChat) };
 
 const NEXT: Next[] = ["unknown", "reject"];
 
@@ -393,6 +415,8 @@ mount(() => (
 			<Text testID="kept">{`Kept: [${kept()}]`}</Text>
 			<Text testID="goal-draft">{`New goal: [${goalDraft().split("\n")[0]}]`}</Text>
 			<Text testID="answer-sent">{`Answer: [${feedback.answer()}]`}</Text>
+			<Action label="Fix stops" onPress={() => scriptedChat.stopped.set(true)} />
+			<Text testID="continues">{`Continues: ${scriptedChat.continues()}`}</Text>
 		</View>
 		<MockDayScreen day={day} />
 	</View>

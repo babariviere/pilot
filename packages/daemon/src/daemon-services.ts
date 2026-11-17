@@ -34,7 +34,7 @@ import type { MissionStore } from "./missions.ts";
 import { MODEL_CONTROLS, ModelControls } from "./model-controls.ts";
 import type { ModelCatalog } from "./models.ts";
 import { NativeAttention } from "./native-attention.ts";
-import { NativeChat } from "./native-chat.ts";
+import { CHAT_CONTINUE, NativeChat } from "./native-chat.ts";
 import { isIntakeOperation, NativeIntake } from "./native-intake.ts";
 import { isNativePlanningOperation, NativeMissionPlanning } from "./native-mission-planning.ts";
 import { NativeProjects, PROJECT_ACTION } from "./native-projects.ts";
@@ -721,6 +721,10 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		if (planningWorkers?.owns(op)) return planningWorkers.recover(op);
 		if (op.kind === "native-chat-create") {
 			throw new Error("Chat creation outcome is unknown; check its saved receipt");
+		}
+		if (op.kind === CHAT_CONTINUE) {
+			if (!nativeChat) throw new Error("Continue outcome is unknown; Check only");
+			return nativeChat.continueChat(op, false);
 		}
 		if (isIntakeOperation(op.kind)) {
 			// Recovery is lookup-only; pending intake effects never enter again.

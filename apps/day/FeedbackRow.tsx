@@ -7,7 +7,7 @@
 // its suggestions and a field for the user's own words. The answer is kept
 // as an unsent draft until the user sends it; it goes to that triage chat
 // once and only clarifies: it starts no fix and approves no proposal.
-import { type JSX, Text, View } from "nsh";
+import { type JSX, signal, Text, View } from "nsh";
 import { openChat } from "./chatView";
 import type { Day } from "./day";
 import {
@@ -378,6 +378,8 @@ export function FeedbackRow(props: { day: Day; mirror: FeedbackMirror; item: Fee
 	const triageAgain = () => !!triage() && !running(triage()) && !proposal();
 	const resolvable = () =>
 		!steps().resolved && (!!proposal() || !!steps().fix || !!steps().mission) && !running(steps().fix);
+	// Remove asks once more in place. Its chats and missions stay.
+	const confirming = signal(false);
 	return (
 		<View testID={`feedback-item-${props.item.id}`} class="gap-2.5 border-t border-border py-3">
 			<View selectable class="gap-1">
@@ -518,6 +520,35 @@ export function FeedbackRow(props: { day: Day; mirror: FeedbackMirror; item: Fee
 						testID={`feedback-reopen-${props.item.id}`}
 						disabled={busy()}
 						onPress={() => void send({ action: "reopen", feedbackId: props.item.id })}
+					/>
+				</If>
+				<If
+					when={confirming()}
+					else={
+						<Action
+							label="Remove"
+							testID={`feedback-remove-${props.item.id}`}
+							disabled={busy()}
+							accessibilityLabel="Remove this feedback. Its chats and missions stay."
+							onPress={() => confirming.set(true)}
+						/>
+					}
+				>
+					<Text class="text-xs text-muted-foreground">Remove this feedback? Its chats and missions stay.</Text>
+					<Action
+						variant="outline"
+						label="Remove"
+						testID={`feedback-remove-confirm-${props.item.id}`}
+						disabled={busy()}
+						onPress={() => {
+							confirming.set(false);
+							void send({ action: "remove", feedbackId: props.item.id });
+						}}
+					/>
+					<Action
+						label="Keep"
+						testID={`feedback-remove-cancel-${props.item.id}`}
+						onPress={() => confirming.set(false)}
 					/>
 				</If>
 				<If when={v().stepping === props.item.id}>

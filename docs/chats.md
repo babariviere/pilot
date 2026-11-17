@@ -25,6 +25,9 @@ Automatic inputs wait while it is open. Database approvals require the explicit
 **Stop** ends the current run and holds automatic follow-ups. Send another message
 or explicitly send held inputs to continue. Stop does not undo changes already made.
 On macOS, **⌘.** stops the open chat's working agent.
+In Day, a stopped chat shows **Continue**, which sends one fixed follow-up (native operation
+`chat-continue`, payload `{purpose, sessionId}`; the daemon writes the words and refuses a chat that
+is not stopped). A lost reply is checked by exact input lookup, never sent again.
 
 ## Read and review
 

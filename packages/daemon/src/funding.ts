@@ -8,6 +8,10 @@ export class Funding {
 	private fault?: Error;
 	private readonly clock: () => number;
 	private pending = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>();
+	/** This instance is the file's only writer, so a cached switch stays exact after the first read. */
+	private limits?: Promise<boolean>;
+	/** Requests let through while limits were off. Their settle has nothing to record. Oldest dropped first. */
+	private readonly unlimited = new Set<string>();
 	constructor(file: string, clock = Date.now) {
 		this.clock = clock;
 		this.worker = new Worker(new URL("./funding-worker.ts", import.meta.url), { workerData: { file } });
@@ -40,6 +44,34 @@ export class Funding {
 	}
 	read(projectId?: string): Promise<FundingView> {
 		return this.rpc("read", { projectId });
+	}
+	/** Whether spending limits are on. Read once from disk, then kept in memory. */
+	enabled(): Promise<boolean> {
+		if (!this.limits) {
+			this.limits = this.rpc<boolean>("enabled");
+			this.limits.catch(() => {
+				this.limits = undefined;
+			});
+		}
+		return this.limits;
+	}
+	async setEnabled(expected: number, enabled: boolean): Promise<void> {
+		try {
+			await this.rpc("setEnabled", { expected, enabled });
+		} finally {
+			// A lost reply may or may not have saved; read the switch again.
+			this.limits = undefined;
+		}
+	}
+	/** Lets one request through without a reservation while limits are off. */
+	skip(requestId: string): { id: string; maximumMicros: number } {
+		this.unlimited.add(requestId);
+		if (this.unlimited.size > 4096) this.unlimited.delete(this.unlimited.values().next().value!);
+		return { id: requestId, maximumMicros: 0 };
+	}
+	/** True once for a request that {@link skip} let through. */
+	skipped(requestId: string): boolean {
+		return this.unlimited.delete(requestId);
 	}
 	configure(
 		projectId: string | undefined,

@@ -82,6 +82,7 @@ impl PlanningRecord {
                         | "thread-disposition"
                         | "thread-reference"
                         | "thread-send"
+                        | "chat-continue"
                 )
             )
             || o["payload"]
@@ -108,6 +109,9 @@ impl PlanningRecord {
         }
         if o["kind"] == "native-chat-create" {
             super::new_chat::validate_record(o)?;
+        }
+        if o["kind"] == super::new_chat::CONTINUE {
+            super::new_chat::validate_continue(o)?;
         }
         if o["kind"] == super::preferences::KIND {
             super::preferences::validate_record(&self.source, o)?;
@@ -216,6 +220,7 @@ fn record_pinned(
                     | "thread-disposition"
                     | "thread-reference"
                     | "thread-send"
+                    | "chat-continue"
             )
         )
         || (!matches!(
@@ -244,6 +249,7 @@ fn record_pinned(
                     | "thread-disposition"
                     | "thread-reference"
                     | "thread-send"
+                    | "chat-continue"
             )
         ) && request["expected"]["fence"]["missionId"] != mission)
     {
@@ -352,6 +358,13 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
         {
             return Err(Error::Unknown);
         }
+    }
+    if op["kind"] == super::new_chat::CONTINUE
+        && r["state"] == "accepted"
+        && (r["result"]["sessionId"] != op["targetId"]
+            || r["result"]["operationId"] != op["operationId"])
+    {
+        return Err(Error::Unknown);
     }
     if op["kind"] == super::preferences::KIND && r["state"] == "accepted" {
         super::preferences::exact_result(op, &r)?;

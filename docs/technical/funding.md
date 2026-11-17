@@ -26,6 +26,16 @@ credential capability. New members of a funded planning mission use its account.
 An absent ledger/account never makes such work unmetered. This change does not
 cut over the installed app or migrate old missions automatically.
 
+## Limits off
+
+One global switch (`funding_meta` key `off`, revision-checked like other settings)
+turns limits off. `fundingRequests` then lets every reservation through with no price
+lookup or ledger row, and drops its settle. Native creation opens no account and sets
+no `fundingRequired` marker, so such work stays unmetered after limits return.
+Workers that start while limits are off get no metered credential. Running metered
+workers keep calling reserve until they restart; those calls are let through.
+`Funding` caches the switch in memory because it is the file's only writer.
+
 ## Request boundary
 
 `Funding` owns one `funding.sqlite` file through a bounded worker RPC queue.

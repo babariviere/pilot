@@ -76,6 +76,12 @@ class MockChat implements SessionChatSource {
 	}
 	async earlier() {}
 	async refresh() {}
+	async continueChat() {
+		return { status: "rejected" as const, message: "Mock chats do not continue." };
+	}
+	async checkContinue() {
+		return { status: "rejected" as const, message: "Mock chats do not continue." };
+	}
 	close(sessionId: string) {
 		if (this.#chat?.sessionId === sessionId) this.#set(null);
 	}

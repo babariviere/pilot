@@ -57,6 +57,13 @@ export type UserFeedbackWork = {
 	| { kind: "answer"; sessionId: string; questionId: number; text: string }
 );
 
+/** The receipt of a remove step. The feedback and its saved steps are gone; its chats and missions stay. */
+export interface UserFeedbackRemoved {
+	operationId: string;
+	recordedAt: number;
+	kind: "removed";
+}
+
 /** The question a triage waits on, as its chat saved it. Answering it starts and approves nothing. */
 export interface UserFeedbackQuestion {
 	/** The question's history entry. An answer names it; a newer question refuses an older answer. */
@@ -116,7 +123,8 @@ export interface UserFeedbackChatChoice {
  * Native generic operation kind feedback-work. Native capability authentication is required.
  * triage: targetId = the new read-only Ask chat. fix: targetId = the new Build chat, started from the
  * exact proposal digest the user saw. link: targetId = the mission. resolve / reopen: targetId = the
- * feedback. answer: targetId = the item's latest triage chat, sent as the reply to its pending question
+ * feedback. remove: targetId = the feedback; deletes it and its steps, never its chats or missions.
+ * answer: targetId = the item's latest triage chat, sent as the reply to its pending question
  * `questionId`; it starts no fix and approves no proposal. Accepted receipt.result is the saved
  * UserFeedbackWork. Lost ACK: receipt lookup only; for an answer that lookup also reads whether the chat
  * accepted that exact input, and never sends it again.
@@ -125,6 +133,6 @@ export type UserFeedbackWorkIntent = { purpose: "feedback-work"; feedbackId: str
 	| ({ action: "triage" } & UserFeedbackChatChoice)
 	| ({ action: "fix"; triageSessionId: string; proposalDigest: string } & UserFeedbackChatChoice)
 	| { action: "link"; missionId: string }
-	| { action: "resolve" | "reopen" }
+	| { action: "resolve" | "reopen" | "remove" }
 	| { action: "answer"; questionId: number; message: string }
 );

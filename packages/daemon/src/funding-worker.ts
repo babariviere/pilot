@@ -13,6 +13,12 @@ parentPort!.on("message", ({ id, method, args }) => {
 			case "configure":
 				value = disk.configure(args.projectId, args.expected, args.value);
 				break;
+			case "enabled":
+				value = disk.enabled();
+				break;
+			case "setEnabled":
+				value = disk.setEnabled(args.expected, args.enabled);
+				break;
 			case "fund":
 				value = disk.fund(args.owner, args.expected, args.amount);
 				break;

@@ -63,13 +63,16 @@ None follows from another by itself.
 | `fix` | new chat ID | One Build chat for a finished triage's exact `fix` proposal. |
 | `link` | mission ID | Links an active mission and adds a user note to its activity. |
 | `resolve` / `reopen` | feedback ID | The user's own mark. Nothing else resolves feedback. |
+| `remove` | feedback ID | Deletes the item and its steps. Chats and missions stay. Images go only if no triage or fix chat read them. Receipt kind `removed`. |
 | `answer` | latest triage chat ID | The user's reply to the triage's pending question. |
 
 - Triage and fix payloads freeze the exact project selection that
   `GET /api/projects/:id/chat-profile` returned (`projectId`, `projectPath`,
   `contextDigest`, `model`, `thinking`). The daemon requalifies it through
   `NativeChat` and creates the chat with `spawnDurable`, so project, model policy, price
-  caps, Stop, pause and update gates are the existing ones. The daemon writes the
+  caps, Stop, pause and update gates are the existing ones. With spending limits on, the chat
+  opens a quick-fix allowance at the project's quick-fix default; without that default the
+  step is refused before it is saved. The daemon writes the
   opening message; the window cannot supply one, a mode or a cwd.
 - The step row is saved before the chat is created, so a crash never leaves an unlinked
   chat. If creation then fails, the row shows the chat as `missing`.

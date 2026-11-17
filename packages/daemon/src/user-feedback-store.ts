@@ -26,7 +26,7 @@ export const USER_FEEDBACK_LIMITS = { textBytes: 8192, page: 20, work: 32 } as c
 
 type Saved = UserFeedback & { sequence: number };
 
-/** Saved feedback and the user's steps on it, append only. Nothing here edits, routes or deletes it. */
+/** Saved feedback and the user's steps on it, append only. Only the user's remove step deletes an item. */
 export class UserFeedbackStore {
 	private readonly db: FeedbackDb;
 	constructor(db: FeedbackDb) {
@@ -118,6 +118,16 @@ export class UserFeedbackStore {
 				JSON.stringify(feedback),
 			);
 			return feedback;
+		});
+	}
+
+	/** Deletes one item and its steps together. Their chats and missions are not touched. */
+	remove(id: string): void {
+		this.db.transaction(() => {
+			if (!this.db.one("SELECT 1 FROM user_feedback WHERE id=?", id))
+				throw new Conflict("This feedback no longer exists");
+			this.db.run("DELETE FROM user_feedback_work WHERE feedback_id=?", id);
+			this.db.run("DELETE FROM user_feedback WHERE id=?", id);
 		});
 	}
 }

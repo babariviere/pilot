@@ -53,7 +53,7 @@ export type StepIntent = { feedbackId: string } & (
 	| { action: "triage"; projectId: string; contextDigest: string }
 	| { action: "fix"; projectId: string; contextDigest: string; triageSessionId: string; proposalDigest: string }
 	| { action: "link"; missionId: string }
-	| { action: "resolve" | "reopen" }
+	| { action: "resolve" | "reopen" | "remove" }
 	| { action: "answer"; triageSessionId: string; questionId: number; message: string }
 );
 

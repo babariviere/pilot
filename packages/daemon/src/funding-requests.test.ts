@@ -79,3 +79,49 @@ test("authenticated parent/helper capabilities share host-owned prices and scope
 		"a lost authority after durable reservation never dispatches or refunds",
 	);
 });
+
+test("limits off let requests through without prices or an allowance, and the switch persists", async (t) => {
+	const home = await realpath(await mkdtemp(join(tmpdir(), "funding-off-")));
+	let funding = new Funding(join(home, "funding.sqlite"));
+	t.after(async () => {
+		await funding.close();
+		await rm(home, { recursive: true, force: true });
+	});
+	const owner = { kind: "quick_fix", id: "chat", projectId: "project" } as const;
+	let lookups = 0;
+	const handle = (f: Funding) =>
+		fundingRequests(
+			f,
+			{
+				fundingModel: async () => {
+					lookups++;
+					return undefined;
+				},
+			},
+			() => owner,
+		);
+	const reserve = {
+		op: "funding-reserve",
+		namespace: "pi",
+		key: "off-1",
+		value: { provider: "x", model: "y", api: "z", outputTokens: 10 },
+	} as const;
+	assert.equal(await funding.enabled(), true);
+	await assert.rejects(handle(funding)("chat", reserve), /Physical model bound unavailable/);
+	await assert.rejects(funding.setEnabled(99, false), /Funding changed/);
+	await funding.setEnabled((await funding.read()).revision, false);
+	assert.equal((await funding.read()).enabled, false);
+	lookups = 0;
+	assert.deepEqual(await handle(funding)("chat", reserve), { id: "off-1", maximumMicros: 0 });
+	await handle(funding)("chat", { op: "funding-settle", namespace: "pi", key: "off-1", value: {} });
+	assert.equal(lookups, 0, "no catalog price is needed while limits are off");
+	assert.deepEqual((await funding.read()).accounts, []);
+	assert.equal((await funding.read()).background.spentMicros, 0);
+	// Saved on disk, not only in memory.
+	await funding.close();
+	funding = new Funding(join(home, "funding.sqlite"));
+	assert.equal(await funding.enabled(), false);
+	await funding.setEnabled((await funding.read()).revision, true);
+	assert.equal(await funding.enabled(), true);
+	await assert.rejects(handle(funding)("chat", { ...reserve, key: "on-1" }), /Physical model bound unavailable/);
+});

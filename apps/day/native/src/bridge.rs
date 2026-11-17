@@ -26,6 +26,7 @@ pub const METHODS: &[&str] = &[
     "day.chat.select",
     "day.chat.create",
     "day.chat.check",
+    "day.chat.continue",
     "day.chat.read",
     "day.chat.snapshot",
     "day.chat.close",
@@ -249,6 +250,8 @@ pub(crate) enum Command {
     ChatSelect(crate::host::new_chat::Select),
     ChatCreate(crate::host::new_chat::Create),
     ChatCheck(String),
+    /// Continue one stopped chat: the daemon sends its fixed words once.
+    ChatContinue(String),
     /// Opens a chat Pilot started and reads its newest rows, or older ones. Passive.
     ChatRead {
         session: String,
@@ -510,6 +513,16 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 session: r.session_id,
                 older: r.older,
             }
+        }
+        "day.chat.continue" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Chat {
+                session_id: String,
+            }
+            let r: Chat = exact(args)?;
+            mission(&r.session_id)?;
+            C::ChatContinue(r.session_id)
         }
         "day.chat.snapshot" | "day.chat.close" => {
             #[derive(Deserialize)]
@@ -1718,6 +1731,27 @@ mod tests {
             ),
         ] {
             assert!(command(name, args.clone()).is_err(), "{name} {args}");
+        }
+    }
+
+    #[test]
+    fn chat_continue_is_a_write_that_names_only_its_chat() {
+        let flushing = Gate {
+            flushing: true,
+            ..Gate::default()
+        };
+        let go = command("day.chat.continue", json!({"sessionId":"s-1"})).unwrap();
+        assert_eq!(go.admit(&flushing), Err(Error::Busy));
+        assert_eq!(go.admit(&Gate::default()), Ok(()));
+        for args in [
+            json!({"sessionId":"../s"}),
+            json!({"sessionId":"s","message":"words"}),
+            json!({}),
+        ] {
+            assert!(
+                command("day.chat.continue", args.clone()).is_err(),
+                "{args}"
+            );
         }
     }
 

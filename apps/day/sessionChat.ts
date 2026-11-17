@@ -4,9 +4,11 @@
 // root last read (it reads the chat again as it changes, while it is open);
 // `day.chat.close` stops that. Reading sends nothing to the chat and
 // changes nothing. Only one chat is open at a time.
+// `day.chat.continue` is the one write: it asks a stopped chat to go on with
+// fixed words the service writes, sent once. `day.chat.check` reads its receipt.
 import { type Signal, signal } from "nsh";
 import type { ChatRow } from "pilot-day/native";
-import { call } from "./bridge";
+import { call, type Refusal } from "./bridge";
 
 /** Where the chat is: working, asking, finished, failed, stopped, quiet, or not read yet. */
 export type SessionChatState = "unknown" | "working" | "question" | "done" | "failed" | "stopped" | "idle";
@@ -45,7 +47,49 @@ export interface SessionChatSource {
 	refresh(): Promise<void>;
 	/** Closes chat `sessionId` when it is open: it is no longer read or kept. */
 	close(sessionId: string): void;
+	/** Asks stopped chat `sessionId` to continue. The service writes the words and sends them once. */
+	continueChat(sessionId: string): Promise<ContinueResult>;
+	/** Reads one Continue's exact receipt. Nothing is sent again. */
+	checkContinue(operationId: string): Promise<ContinueResult>;
 	dispose(): void;
+}
+
+/** What one Continue did. Unknown keeps its operation for Check. */
+export type ContinueResult = {
+	status: "accepted" | "rejected" | "unknown";
+	message: string;
+	operationId?: string;
+};
+
+const CONTINUE_UNKNOWN = "Pilot does not know if Continue reached this chat. It will not send it again.";
+
+function continueOutcome(x: unknown): ContinueResult {
+	const o = x as { operationId?: unknown; state?: unknown; receipt?: { reason?: unknown } | null } | null;
+	const operationId = typeof o?.operationId === "string" ? o.operationId : undefined;
+	if (o?.state === "accepted") return { status: "accepted", message: "", operationId };
+	if (o?.state === "rejected" || o?.state === "not-sent") {
+		const reason = typeof o.receipt?.reason === "string" ? o.receipt.reason : "";
+		return {
+			status: "rejected",
+			message: reason ? `Pilot's service refused it: ${reason}.` : "Pilot did not send it.",
+			operationId,
+		};
+	}
+	return { status: "unknown", message: CONTINUE_UNKNOWN, operationId };
+}
+
+function refusedContinue(refusal: Refusal): ContinueResult {
+	switch (refusal) {
+		case "lost":
+			return { status: "unknown", message: `${CONTINUE_UNKNOWN} Press Continue again to find it.` };
+		case "offline":
+			return { status: "rejected", message: "Pilot could not reach its service. Nothing was sent." };
+		case "busy":
+		case "closed":
+			return { status: "rejected", message: "Pilot is busy or closing. Nothing was sent." };
+		default:
+			return { status: "rejected", message: "Pilot could not send this. Nothing was sent." };
+	}
 }
 
 const UNREAD = "Pilot could not read this chat. Nothing was sent.";
@@ -145,6 +189,22 @@ export class ConnectedSessionChat implements SessionChatSource {
 		this.#chat = null;
 		this.#publish();
 		void call(this.#window, "day.chat.close", { sessionId: id });
+	}
+
+	async continueChat(sessionId: string): Promise<ContinueResult> {
+		const r = await call<unknown>(this.#window, "day.chat.continue", { sessionId });
+		if (!r.ok) return refusedContinue(r.refusal);
+		void this.refresh();
+		return continueOutcome(r.value.outcome);
+	}
+
+	async checkContinue(operationId: string): Promise<ContinueResult> {
+		const r = await call<unknown>(this.#window, "day.chat.check", { operationId });
+		if (!r.ok)
+			return { status: "unknown", message: "Pilot could not check it now. Nothing was sent again.", operationId };
+		void this.refresh();
+		const result = continueOutcome(r.value.outcome);
+		return result.status === "unknown" ? { ...result, operationId: result.operationId ?? operationId } : result;
 	}
 
 	dispose(): void {

@@ -6,6 +6,7 @@ import { test } from "node:test";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import type { DurableOperation, SessionSummary, UserFeedbackPage } from "@pilot/protocol";
 import { createAskTools } from "../../kernel/src/ask-tools.ts";
+import { Funding } from "./funding.ts";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
 import { payloadHash } from "./operation-journal.ts";
 
@@ -393,4 +394,159 @@ test("an answer to the triage's question goes to that chat once; a lost ACK is a
 		(await shown()).work.map((w) => w.kind),
 		["triage", "answer", "answer"],
 	);
+});
+
+test("funded feedback triage uses the project's quick-fix default and saves no step without one", async (t) => {
+	const f = await nativeIntakeFixture(),
+		funding = new Funding(join(f.home, "funding.sqlite"));
+	f.sessions.funding = funding;
+	t.after(async () => {
+		await funding.close();
+		await f.close();
+	});
+	const headers = { "x-pilot-github-capability": f.capability, "content-type": "application/json" };
+	const post = async (op: DurableOperation) =>
+		(await fetch(`${f.root}/api/operations`, { method: "POST", headers, body: JSON.stringify(op) })).json();
+	const operation = (targetId: string, request: Record<string, unknown>, binding?: string) => {
+		const payload = JSON.stringify(request);
+		return {
+			schemaVersion: 1,
+			operationId: randomUUID(),
+			producerId: randomUUID(),
+			sequence: 1,
+			origin: { ...f.host, hostId: "local" },
+			destination: f.host,
+			kind: request.purpose,
+			targetId,
+			payload,
+			payloadHash: payloadHash(payload),
+			bindingId: binding ?? payloadHash(payload),
+			bindingGeneration: 1,
+		} as DurableOperation;
+	};
+	const saved = operation(randomUUID(), { purpose: "user-feedback", text: "Export as image", origin: null });
+	assert.equal((await post(saved)).state, "accepted");
+	const profile = await (
+		await fetch(`${f.root}/api/projects/${f.project.id}/chat-profile?mode=ask`, { headers })
+	).json();
+	const { mode: _m, allowanceMicros: _a, fundingRequired: _f, ...ask } = profile;
+	const triage = () =>
+		operation(
+			randomUUID(),
+			{ purpose: "feedback-work", feedbackId: saved.targetId, action: "triage", ...ask },
+			ask.contextDigest,
+		);
+	const configure = async (quickFixDefaultMicros: number | null) =>
+		funding.configure(f.project.id, (await funding.read(f.project.id)).revision, {
+			dailyMicros: null,
+			missionDefaultMicros: null,
+			quickFixDefaultMicros,
+		});
+	const work = async () =>
+		((await (await fetch(`${f.root}/api/feedback`, { headers })).json()) as UserFeedbackPage).items.find(
+			(i) => i.id === saved.targetId,
+		)!.work;
+
+	// No default: refused before the step is saved, so no dangling "no record" triage.
+	await configure(null);
+	const refused = await post(triage());
+	assert.equal(refused.state, "rejected", JSON.stringify(refused));
+	assert.equal(f.stats().sessions, 0);
+	assert.deepEqual(await work(), []);
+
+	await configure(3_000_000);
+	const op = triage(),
+		receipt = await post(op);
+	assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+	assert.equal(f.stats().sessions, 1);
+	assert.equal(f.sessions.fundingRequired(op.targetId), true);
+	const { accounts } = await funding.read();
+	assert.equal(accounts.length, 1);
+	assert.equal(accounts[0]!.limitMicros, 3_000_000);
+});
+
+test("remove deletes the feedback, its steps and its unread images, never its chats", async (t) => {
+	const f = await nativeIntakeFixture();
+	t.after(() => f.close());
+	const headers = { "x-pilot-github-capability": f.capability, "content-type": "application/json" };
+	const post = async (op: DurableOperation) =>
+		(await fetch(`${f.root}/api/operations`, { method: "POST", headers, body: JSON.stringify(op) })).json();
+	const operation = (targetId: string, request: Record<string, unknown>, binding?: string) => {
+		const payload = JSON.stringify(request);
+		return {
+			schemaVersion: 1,
+			operationId: randomUUID(),
+			producerId: randomUUID(),
+			sequence: 1,
+			origin: { ...f.host, hostId: "local" },
+			destination: f.host,
+			kind: request.purpose,
+			targetId,
+			payload,
+			payloadHash: payloadHash(payload),
+			bindingId: binding ?? payloadHash(payload),
+			bindingGeneration: 1,
+		} as DurableOperation;
+	};
+	const png = await readFile(new URL("../../../apps/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
+	const image = { uploadId: randomUUID(), sha256: createHash("sha256").update(png).digest("hex"), bytes: png.length };
+	const uploaded = await fetch(`${f.root}/api/attachments/${image.uploadId}`, {
+		method: "PUT",
+		headers: {
+			...headers,
+			"x-pilot-attachment": Buffer.from(
+				JSON.stringify({ ...image, origin: { ...f.host, hostId: "local" } }),
+			).toString("base64"),
+		},
+		body: png,
+	});
+	assert.equal(uploaded.status, 201);
+	await uploaded.arrayBuffer();
+	const save = async (text: string, attachments?: unknown[]) => {
+		const op = operation(randomUUID(), {
+			purpose: "user-feedback",
+			text,
+			origin: null,
+			...(attachments ? { attachments } : {}),
+		});
+		assert.equal((await post(op)).state, "accepted");
+		return op.targetId;
+	};
+	const ids = async () =>
+		((await (await fetch(`${f.root}/api/feedback`, { headers })).json()) as UserFeedbackPage).items.map((i) => i.id);
+	const remove = (feedbackId: string) =>
+		post(operation(feedbackId, { purpose: "feedback-work", action: "remove", feedbackId }));
+
+	// Never triaged: its image goes with it.
+	const plain = await save("Old screenshot", [image]);
+	const imagePath = join(f.home, "attachments", `${image.uploadId}.png`);
+	await readFile(imagePath);
+	// Exact fields only.
+	assert.equal(
+		(await post(operation(plain, { purpose: "feedback-work", action: "remove", feedbackId: plain, text: "x" })))
+			.state ?? "rejected",
+		"rejected",
+	);
+	const removed = await remove(plain);
+	assert.equal(removed.state, "accepted", JSON.stringify(removed));
+	assert.equal(removed.result.kind, "removed");
+	assert(!(await ids()).includes(plain));
+	await assert.rejects(readFile(imagePath), /ENOENT/);
+	assert.equal((await remove(plain)).state, "rejected");
+
+	// Triaged: the chat stays an ordinary chat.
+	const triaged = await save("Triaged item");
+	const { mode: _m, ...ask } = await (
+		await fetch(`${f.root}/api/projects/${f.project.id}/chat-profile?mode=ask`, { headers })
+	).json();
+	const triage = operation(
+		randomUUID(),
+		{ purpose: "feedback-work", feedbackId: triaged, action: "triage", ...ask },
+		ask.contextDigest,
+	);
+	assert.equal((await post(triage)).state, "accepted");
+	assert.equal((await remove(triaged)).state, "accepted");
+	assert(!(await ids()).includes(triaged));
+	assert.equal(f.stats().sessions, 1);
+	await readFile(join(f.home, "sessions", triage.targetId, "meta.json"));
 });

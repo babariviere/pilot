@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { DurableOperation } from "@pilot/protocol";
+import { CONTINUE_TEXT } from "./native-chat.ts";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
 import { payloadHash } from "./operation-journal.ts";
 
@@ -142,4 +143,71 @@ test("entered creation with missing outer receipt never re-enters session admiss
 	}
 	assert.equal(entered, 1);
 	assert.equal(f.stats().sessions, 1);
+});
+
+test("Continue sends its fixed words once, only to a stopped chat, and a lost reply is a lookup", async (t) => {
+	const f = await nativeIntakeFixture();
+	t.after(() => f.close());
+	const headers = { "x-pilot-github-capability": f.capability, "content-type": "application/json" };
+	const post = async (op: DurableOperation, lookup = false) =>
+		(
+			await fetch(`${f.root}/api/operations${lookup ? "/receipt" : ""}`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify(op),
+			})
+		).json();
+	const envelope = (kind: string, targetId: string, request: Record<string, unknown>, bindingId: string) => {
+		const payload = JSON.stringify(request);
+		return {
+			schemaVersion: 1,
+			operationId: randomUUID(),
+			producerId: randomUUID(),
+			sequence: 1,
+			origin: { ...f.host, hostId: "local" },
+			destination: f.host,
+			kind,
+			targetId,
+			payload,
+			payloadHash: payloadHash(payload),
+			bindingId,
+			bindingGeneration: 1,
+		} as DurableOperation;
+	};
+	const selection = await (
+		await fetch(`${f.root}/api/projects/${f.project.id}/chat-profile?mode=build`, { headers })
+	).json();
+	const draftId = randomUUID();
+	const created = await post(
+		envelope(
+			"native-chat-create",
+			draftId,
+			{ ...selection, purpose: "native-chat-create", draftId, message: "Fix the parser" },
+			selection.contextDigest,
+		),
+	);
+	assert.equal(created.state, "accepted", JSON.stringify(created));
+	const sessionId = created.result.sessionId as string;
+	const go = (extra: Record<string, unknown> = {}, target = sessionId) =>
+		envelope("chat-continue", target, { purpose: "chat-continue", sessionId: target, ...extra }, "0".repeat(64));
+	const queued = () => f.sessions.get(sessionId) as unknown as { outcome?: string };
+	// Not stopped: refused, nothing sent.
+	assert.equal((await post(go())).state, "rejected");
+	// Exact fields only: the window cannot choose words.
+	// The fixture runs no worker: make the chat look stopped, as a user Stop leaves it.
+	const meta = (
+		f.sessions as unknown as { metas: Map<string, { outcome?: string; pending?: unknown[]; working?: boolean }> }
+	).metas.get(sessionId)!;
+	Object.assign(meta, { outcome: "stopped", pending: [], working: false, initializing: undefined });
+	assert.equal(queued().outcome, "stopped");
+	assert.equal((await post(go({ message: "rm -rf" }))).state ?? "rejected", "rejected");
+	const op = go();
+	const receipt = await post(op);
+	assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+	assert.deepEqual(receipt.result, { sessionId, operationId: op.operationId });
+	assert.deepEqual(await post(op, true), receipt);
+	assert.deepEqual(await post(op), receipt);
+	const saved = JSON.parse(await readFile(join(f.home, "sessions", sessionId, "meta.json"), "utf8"));
+	const sent = (saved.pending as { content: string }[]).filter((p) => p.content === CONTINUE_TEXT);
+	assert.equal(sent.length, 1, "Continue is sent once");
 });

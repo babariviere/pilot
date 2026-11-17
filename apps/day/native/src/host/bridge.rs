@@ -261,7 +261,11 @@ async fn run(
     }
     if matches!(
         call.command,
-        Command::Projects | Command::ChatSelect(_) | Command::ChatCreate(_) | Command::ChatCheck(_)
+        Command::Projects
+            | Command::ChatSelect(_)
+            | Command::ChatCreate(_)
+            | Command::ChatCheck(_)
+            | Command::ChatContinue(_)
     ) {
         return super::new_chat::handle(t, journal, shared, epoch, &call.command, &call.gate).await;
     }
@@ -501,7 +505,8 @@ async fn run(
         Command::Projects
         | Command::ChatSelect(_)
         | Command::ChatCreate(_)
-        | Command::ChatCheck(_) => {
+        | Command::ChatCheck(_)
+        | Command::ChatContinue(_) => {
             unreachable!("handled standalone chat command")
         }
         Command::IntakeRead

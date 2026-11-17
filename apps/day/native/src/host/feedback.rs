@@ -265,7 +265,7 @@ impl Step {
                         && self.triage_session_id.is_none()
                         && self.proposal_digest.is_none()
                 }
-                "resolve" | "reopen" => {
+                "resolve" | "reopen" | "remove" => {
                     self.project_id.is_none()
                         && self.context_digest.is_none()
                         && self.triage_session_id.is_none()
@@ -331,7 +331,7 @@ fn step_fields(action: &str) -> Option<&'static [&'static str]> {
         "triage" => Some(CHAT),
         "fix" => Some(FIX),
         "link" => Some(&["missionId"]),
-        "resolve" | "reopen" => Some(&[]),
+        "resolve" | "reopen" | "remove" => Some(&[]),
         "answer" => Some(&["questionId", "message"]),
         _ => None,
     }
@@ -390,6 +390,7 @@ pub(super) fn exact_step(op: &Value, r: &Value) -> Result<(), Error> {
         Some("link") => "mission",
         Some("resolve") => "resolved",
         Some("reopen") => "reopened",
+        Some("remove") => "removed",
         Some("answer") => "answer",
         _ => return Err(Error::Unknown),
     };
@@ -922,6 +923,8 @@ mod tests {
         );
         assert!(step(json!({"feedbackId":"f","action":"link","missionId":"m"})).is_ok());
         assert!(step(json!({"feedbackId":"f","action":"resolve"})).is_ok());
+        assert!(step(json!({"feedbackId":"f","action":"remove"})).is_ok());
+        assert!(step(json!({"feedbackId":"f","action":"remove","missionId":"m"})).is_err());
         assert!(step(json!({"feedbackId":"f","action":"reopen"})).is_ok());
         assert!(
             step(
@@ -1032,6 +1035,25 @@ mod tests {
             exact_step(
                 &mark,
                 &json!({"result":{"operationId":"op","kind":"reopened","recordedAt":1}})
+            ),
+            Err(Error::Unknown)
+        );
+        let removal = op(
+            "f",
+            json!({"purpose":WORK_KIND,"action":"remove","feedbackId":"f"}),
+        );
+        assert_eq!(validate_step_record(&removal), Ok(()));
+        assert_eq!(
+            exact_step(
+                &removal,
+                &json!({"result":{"operationId":"op","kind":"removed","recordedAt":1}})
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            exact_step(
+                &removal,
+                &json!({"result":{"operationId":"op","kind":"resolved","recordedAt":1}})
             ),
             Err(Error::Unknown)
         );

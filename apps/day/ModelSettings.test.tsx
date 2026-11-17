@@ -18,6 +18,19 @@ test("allowances show uncertain catalog value, preserve drafts, and never resend
 	expect(app.shows("Sends: 1, checks: 1")).toBe(true);
 });
 
+test("turning spending limits off hides allowance edits; turning them on shows them again", async () => {
+	const app = await open("./ModelSettingsFixture.tsx", desktop);
+	expect(app.shows("Change allowances")).toBe(true);
+	await app.press("id:funding-limits");
+	await app.waitFor("id:funding-off");
+	expect(app.shows("Spending limits are off. Pilot does not stop work for cost.")).toBe(true);
+	expect(app.shows("Change allowances")).toBe(false);
+	expect(app.shows("Continue anyway")).toBe(true);
+	await app.press("id:funding-limits");
+	await app.waitFor("id:funding-edit");
+	expect(app.shows("Spending limits are off. Pilot does not stop work for cost.")).toBe(false);
+});
+
 test("AI settings show effective action-specific thinking and the actual reference ceiling without writes", async () => {
 	const app = await open("./ModelSettingsFixture.tsx", desktop);
 	await app.waitFor("id:models-effective-task");

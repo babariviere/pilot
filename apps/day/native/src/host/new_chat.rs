@@ -29,6 +29,29 @@ impl Create {
 fn is_chat(r: &planning::PlanningRecord) -> bool {
     r.operation["kind"] == "native-chat-create"
 }
+/// Continue: one fixed follow-up to one stopped chat. The daemon writes the words.
+pub(super) const CONTINUE: &str = "chat-continue";
+/// A Continue record carries no choice, so its binding is a fixed digest.
+const CONTINUE_BINDING: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+fn is_continue(r: &planning::PlanningRecord) -> bool {
+    r.operation["kind"] == CONTINUE
+}
+/// A saved Continue names exactly one chat, as its target and its payload.
+pub(super) fn validate_continue(op: &Value) -> Result<(), Error> {
+    let p: Value = serde_json::from_str(op["payload"].as_str().ok_or(Error::Storage)?)
+        .map_err(|_| Error::Storage)?;
+    let session = p["sessionId"].as_str().unwrap_or("");
+    if p.as_object().is_none_or(|o| o.len() != 2)
+        || p["purpose"] != CONTINUE
+        || !super::valid_id(session)
+        || op["targetId"] != session
+        || op["bindingId"] != CONTINUE_BINDING
+        || op["bindingGeneration"] != 1
+    {
+        return Err(Error::Storage);
+    }
+    Ok(())
+}
 fn same_home(a: &super::Source, b: &super::Source) -> bool {
     a.profile == b.profile && a.home == b.home
 }
@@ -260,7 +283,7 @@ pub(super) async fn handle(
             let mut record = journal
                 .planning
                 .get(id)
-                .filter(|r| same_home(&r.source, &t.source) && is_chat(r))
+                .filter(|r| same_home(&r.source, &t.source) && (is_chat(r) || is_continue(r)))
                 .cloned()
                 .ok_or(Error::Unknown)?;
             // Receipt lookup remains possible after deletion/configuration changes.
@@ -278,6 +301,40 @@ pub(super) async fn handle(
                 json!({"snapshot":null,"operations":operations(t,journal),"outcome":summary(&record)}),
             )
         }
+        Command::ChatContinue(session) => {
+            if !super::valid_id(session) {
+                return Err(Error::Invalid);
+            }
+            // An uncertain Continue holds its chat: it is shown for Check, never sent again.
+            if let Some(prior) = journal.planning.values().find(|r| {
+                same_home(&r.source, &t.source)
+                    && is_continue(r)
+                    && r.pending()
+                    && r.mission() == session.as_str()
+            }) {
+                return Ok(json!({"snapshot":null,"outcome":summary(prior)}));
+            }
+            check()?;
+            let mut record = planning::record(
+                &t.source,
+                session.clone(),
+                CONTINUE_BINDING.into(),
+                json!({"purpose":CONTINUE,"sessionId":session}),
+            )?;
+            journal.save_planning(record.clone())?;
+            if let Err(e) = t.local().and_then(|_| check()) {
+                record.not_sent = true;
+                journal.save_planning(record)?;
+                return Err(e);
+            }
+            if let Ok(receipt) = t.planning_operation(&record.operation, false).await {
+                record.receipt = Some(receipt);
+                if journal.save_planning(record.clone()).is_err() {
+                    return Ok(unsaved_receipt(journal, &record));
+                }
+            }
+            Ok(json!({"snapshot":null,"outcome":summary(&record)}))
+        }
         _ => Err(Error::Invalid),
     }
 }
@@ -292,4 +349,63 @@ fn unsaved_receipt(journal: &mut Journal, record: &planning::PlanningRecord) -> 
 fn summary(r: &planning::PlanningRecord) -> Value {
     json!({"operationId":r.id(),"draftId":r.mission(),"state":if r.not_sent {"not-sent"} else {
         r.receipt.as_ref().and_then(|r| r["state"].as_str()).unwrap_or("unknown")},"receipt":r.receipt})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn op(target: &str, payload: Value, binding: &str) -> Value {
+        json!({"operationId":"op","targetId":target,"kind":CONTINUE,"bindingId":binding,
+            "bindingGeneration":1,"payload":payload.to_string()})
+    }
+
+    #[test]
+    fn a_saved_continue_names_one_chat_and_carries_no_words() {
+        let ok = op(
+            "s1",
+            json!({"purpose":CONTINUE,"sessionId":"s1"}),
+            CONTINUE_BINDING,
+        );
+        assert_eq!(validate_continue(&ok), Ok(()));
+        for forged in [
+            op(
+                "s2",
+                json!({"purpose":CONTINUE,"sessionId":"s1"}),
+                CONTINUE_BINDING,
+            ),
+            op(
+                "s1",
+                json!({"purpose":CONTINUE,"sessionId":"s1","message":"x"}),
+                CONTINUE_BINDING,
+            ),
+            op(
+                "s1",
+                json!({"purpose":CONTINUE,"sessionId":"s1"}),
+                &"1".repeat(64),
+            ),
+            op(
+                "../s",
+                json!({"purpose":CONTINUE,"sessionId":"../s"}),
+                CONTINUE_BINDING,
+            ),
+        ] {
+            assert_eq!(validate_continue(&forged), Err(Error::Storage), "{forged}");
+        }
+    }
+
+    #[test]
+    fn only_a_receipt_naming_this_chat_and_operation_settles_a_continue() {
+        let o = json!({"operationId":"op","targetId":"s1","kind":CONTINUE,"payloadHash":"h",
+            "destination":{"hostId":"daemon"}});
+        let receipt = |result: Value| {
+            json!({"operationId":"op","payloadHash":"h","destination":{"hostId":"daemon"},
+                "targetId":"s1","state":"accepted","result":result})
+        };
+        assert!(planning::exact(receipt(json!({"sessionId":"s1","operationId":"op"})), &o).is_ok());
+        assert!(
+            planning::exact(receipt(json!({"sessionId":"s2","operationId":"op"})), &o).is_err()
+        );
+        assert!(planning::exact(receipt(json!({"sessionId":"s1","operationId":"x"})), &o).is_err());
+    }
 }

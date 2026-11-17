@@ -13,7 +13,12 @@ export function fundingRequests(
 	return async (session: string, request: CredentialRequest) => {
 		const scope = owner(session);
 		if (!request.key || !/^[A-Za-z0-9_-]{1,128}$/.test(request.key)) throw new Error("Invalid request identity");
-		if (request.op === "funding-settle") return funding.settle(scope, request.key, request.value as FundingRate);
+		if (request.op === "funding-settle")
+			return funding.skipped(request.key)
+				? undefined
+				: funding.settle(scope, request.key, request.value as FundingRate);
+		// Limits off: no price lookup, reservation or refusal. Subscription holds are checked elsewhere.
+		if (!(await funding.enabled())) return funding.skip(request.key);
 		const p = request.value as { provider: string; model: string; api: string; outputTokens: number };
 		if (
 			!p ||

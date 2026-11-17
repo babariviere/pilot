@@ -243,6 +243,23 @@ export class AttachmentStore {
 		}).finally(end);
 	}
 
+	/** Deletes the images of removed feedback. Only images that this exact feedback owns. */
+	async releaseFeedback(feedback: import("@pilot/protocol").UserFeedback): Promise<void> {
+		const end = this.admission.begin({ kind: "transfer-metadata", id: feedback.operationId });
+		await this.serial(async () => {
+			await this.init();
+			for (const ref of feedback.attachments ?? []) {
+				const r = this.records.get(ref.uploadId);
+				if (!r || r.owner?.operationId !== feedback.operationId || r.owner.targetId !== feedback.id) continue;
+				await unlink(join(this.root, `${r.uploadId}.png`)).catch((error) => {
+					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				});
+				await unlink(join(this.root, `${r.uploadId}.json`));
+				this.records.delete(r.uploadId);
+			}
+		}).finally(end);
+	}
+
 	/** Caller must have looked up a conclusive rejected receipt in the same intact journal domain. */
 	async releaseRejected(operation: DurableOperation, refs: StagedAttachmentRef[]): Promise<void> {
 		const end = this.admission.begin({ kind: "transfer-metadata", id: operation.operationId });

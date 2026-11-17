@@ -92,6 +92,7 @@ import { isThreadOperation } from "./mission-threads.ts";
 import type { MissionStore } from "./missions.ts";
 import { MODEL_CONTROLS } from "./model-controls.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
+import { CHAT_CONTINUE } from "./native-chat.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
 import { isIntakeOperation } from "./native-intake.ts";
 import { isNativePlanningOperation, PlanningInventoryCapacity } from "./native-mission-planning.ts";
@@ -1216,6 +1217,33 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					end();
 				}
 			}
+			if (operation?.kind === CHAT_CONTINUE) {
+				res.setHeader("cache-control", "no-store");
+				if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native chat continue unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				const saved = await nativeChat.lookupContinue(operation);
+				if (parts[2] === "receipt" && saved?.state === "pending") {
+					// A lost answer: read whether the chat accepted that exact input. Never sent again.
+					const end = mutations.begin({ kind: "operation", id: operation.operationId });
+					try {
+						return json(res, 200, await journal.execute(operation, (op) => nativeChat.continueChat(op, false)));
+					} finally {
+						end();
+					}
+				}
+				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					return json(
+						res,
+						200,
+						await journal.execute(operation, (op, entry) => nativeChat.continueChat(op, entry.firstEntry)),
+					);
+				} finally {
+					end();
+				}
+			}
 			if (isIntakeOperation(operation?.kind)) {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !nativeIntake) throw new ServiceUnavailable("Native intake unavailable");
@@ -1942,7 +1970,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (req.method !== "GET") throw new HttpError(405, "Planning profile is read-only");
 			if (!nativeAuthority || !planningWorkers) throw new ServiceUnavailable("Trusted planning profile unavailable");
 			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
-			const funding = await sessions.funding?.read(parts[2]!);
+			const funding = await (await sessions.activeFunding())?.read(parts[2]!);
 			return json(res, 200, {
 				...planningWorkers.profile(parts[2]!),
 				...(funding ? { allowanceMicros: funding.missionDefaultMicros } : {}),

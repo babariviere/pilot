@@ -41,6 +41,7 @@ impl Intent {
                         .is_some_and(|n| n <= 9_007_199_254_740_991)
             }
             "continue-anyway" => self.value.as_str().is_some_and(super::valid_id),
+            "funding-limits" => self.value.is_boolean(),
             "background-continue" => matches!(self.value.as_str(), Some("anthropic" | "openai")),
             "scope" => {
                 // Same 256-pattern/256-byte contract as daemon model-scope; limits one native request's parsing.
@@ -208,6 +209,7 @@ pub(super) fn exact_result(op: &Value, receipt: &Value) -> Result<(), Error> {
             | "failed-model"
             | "logout"
             | "funding-settings"
+            | "funding-limits"
             | "fund-work"
             | "continue-anyway"
             | "background-continue",
@@ -399,6 +401,7 @@ mod tests {
         for action in [
             "fund-work",
             "funding-settings",
+            "funding-limits",
             "continue-anyway",
             "background-continue",
         ] {
@@ -408,6 +411,7 @@ mod tests {
                     json!({"dailyMicros":2000000,"missionDefaultMicros":null,"quickFixDefaultMicros":0})
                 }
                 "background-continue" => json!("anthropic"),
+                "funding-limits" => json!(false),
                 _ => json!("chat"),
             };
             let intent = Intent {

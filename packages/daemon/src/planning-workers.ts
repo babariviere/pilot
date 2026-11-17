@@ -1552,6 +1552,7 @@ export class PlanningWorkers {
 	/** Called only by authenticated native ingress, with an exact retained envelope. */
 	async enroll(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
 		if (!firstEntry) return this.recover(op);
+		const funding = await this.deps.sessions.activeFunding();
 		let request: PlanningEnrollment;
 		try {
 			request = JSON.parse(op.payload);
@@ -1568,10 +1569,7 @@ export class PlanningWorkers {
 			if (request && typeof request === "object" && Object.hasOwn(request, "replaces")) keys.push("replaces");
 			if (request && typeof request === "object" && Object.hasOwn(request, "request")) keys.push("request");
 			if (request && Object.hasOwn(request, "allowanceMicros")) keys.push("allowanceMicros");
-			if (
-				this.deps.sessions.funding &&
-				(!Number.isSafeInteger(request.allowanceMicros) || request.allowanceMicros! < 0)
-			)
+			if (funding && (!Number.isSafeInteger(request.allowanceMicros) || request.allowanceMicros! < 0))
 				throw new Conflict("Choose a mission allowance before planning");
 			interviewExact(request, keys);
 			interviewId(op.targetId);
@@ -1669,8 +1667,8 @@ export class PlanningWorkers {
 			)
 				throw new Conflict("Planning setup changed");
 		};
-		if (this.deps.sessions.funding)
-			await this.deps.sessions.funding.open(
+		if (funding)
+			await funding.open(
 				{ kind: "mission", id: state.binding.missionId, projectId: request.projectId },
 				request.allowanceMicros!,
 			);

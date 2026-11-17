@@ -26,6 +26,7 @@ const plain = {
 const initial: ModelSettings = {
 	funding: {
 		revision: 1,
+		enabled: true,
 		missionDefaultMicros: 20_000_000,
 		quickFixDefaultMicros: 5_000_000,
 		dailyMicros: 1_000_000,
@@ -126,6 +127,8 @@ const controls: ModelControls = {
 		if (action === "defaults") settings.set({ ...initial, defaults: value as ModelSettings["defaults"] });
 		if (action === "funding-settings")
 			settings.set({ ...settings()!, funding: { ...settings()!.funding!, ...(value as object) } });
+		if (action === "funding-limits")
+			settings.set({ ...settings()!, funding: { ...settings()!.funding!, enabled: value as boolean } });
 		message.set("Saved.");
 		return true;
 	},

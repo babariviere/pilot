@@ -31,6 +31,11 @@ Reviews also keep their own limits. Explicit increases do not clear other holds.
 Missing request bounds or prices stop affected requests before they are sent.
 Legacy desktop chats keep their existing controls until migration.
 
+Clear **Limit spending** to turn allowances off for every project. Pilot then reserves
+nothing and stops no work for cost, including background work. New work asks for no amount.
+Subscription holds and review limits stay. Work started while limits are off stays
+unlimited after you turn them back on; other work uses its allowance again.
+
 ## Long conversations
 
 Open **Context…** in the chat header for reported context and direct/child accounting.

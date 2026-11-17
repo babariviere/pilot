@@ -7052,6 +7052,11 @@ ${run.excerpt}`,
 	}
 	/** Host-only allowance owner. Helpers inherit their parent's credential capability. */
 	funding?: import("./funding.ts").Funding;
+	/** The allowance owner while spending limits are on. Work admitted while they are off opens no allowance. */
+	async activeFunding(): Promise<import("./funding.ts").Funding | undefined> {
+		const funding = this.funding;
+		return funding && (await funding.enabled()) ? funding : undefined;
+	}
 	backgroundSubscription?: import("./background-subscription.ts").BackgroundSubscription;
 	fundingOwner(id: string): import("../../protocol/src/funding.ts").FundingOwner {
 		const meta = this.require(id);
@@ -9511,6 +9516,8 @@ ${run.excerpt}`,
 		job?: ChatJob,
 	): Promise<SessionSummary> {
 		if (admission) this.insightsBacklog?.replacements.assertNotRetired(admission.targetId);
+		// Read before admission's synchronous checks. A planning worker started while limits are off stays unlimited.
+		const plannedFunding = !!planning && !!(await this.activeFunding());
 		if (deferInsightsInput && ((!insightsGrant && !ownerExecution) || request.role !== "insights"))
 			throw new Conflict("Deferred input requires trusted Insights creation");
 		if (missionAdmission?.role === "explorer" && (request.mode !== "ask" || coordinator))
@@ -9770,7 +9777,7 @@ ${run.excerpt}`,
 				? { repairDiagnostics: this.assertDiagnosticRepairAdmission(request) }
 				: {}),
 			...(admission ? { createOperationId: admission.operationId } : {}),
-			...(admission?.fundingRequired || (planning && this.funding) ? { fundingRequired: true as const } : {}),
+			...(admission?.fundingRequired || plannedFunding ? { fundingRequired: true as const } : {}),
 			...(request.missionId &&
 			[...this.metas.values()].some((m) => m.planning?.missionId === request.missionId && m.fundingRequired)
 				? { fundingRequired: true as const, fundingMissionId: request.missionId }
@@ -12792,7 +12799,10 @@ ${run.excerpt}`,
 				spec.credentials = this.credentials?.grant(
 					false,
 					undefined,
-					this.fundingRequired(spec.sessionId) ? spec.sessionId : undefined,
+					// Limits off: the worker starts unmetered, so no request waits on a reservation.
+					this.fundingRequired(spec.sessionId) && (await this.funding?.enabled()) !== false
+						? spec.sessionId
+						: undefined,
 				);
 				const view = spec.pilot?.coordinatorView;
 				try {

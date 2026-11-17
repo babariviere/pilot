@@ -14,6 +14,7 @@ import type {
 	UserFeedback,
 	UserFeedbackProposal,
 	UserFeedbackQuestion,
+	UserFeedbackRemoved,
 	UserFeedbackWork,
 	UserFeedbackWorkView,
 } from "@pilot/protocol";
@@ -46,6 +47,7 @@ type Intent =
 	| { action: "link"; feedbackId: string; missionId: string }
 	| { action: "resolve"; feedbackId: string }
 	| { action: "reopen"; feedbackId: string }
+	| { action: "remove"; feedbackId: string }
 	| Answer;
 
 function fail(message: string): never {
@@ -81,7 +83,7 @@ export function feedbackWorkIntent(op: DurableOperation): Intent {
 				? fields(value, [...base, ...CHOICE, "triageSessionId", "proposalDigest"])
 				: action === "link"
 					? fields(value, [...base, "missionId"])
-					: action === "resolve" || action === "reopen"
+					: action === "resolve" || action === "reopen" || action === "remove"
 						? fields(value, base)
 						: action === "answer"
 							? fields(value, [...base, "questionId", "message"])
@@ -94,7 +96,7 @@ export function feedbackWorkIntent(op: DurableOperation): Intent {
 		if (op.targetId !== missionId) fail("A link names its mission as the target");
 		return { action, feedbackId, missionId };
 	}
-	if (action === "resolve" || action === "reopen") {
+	if (action === "resolve" || action === "reopen" || action === "remove") {
 		if (op.targetId !== feedbackId) fail("A mark names its feedback as the target");
 		return { action, feedbackId };
 	}
@@ -206,8 +208,8 @@ function chatState(s: SessionSummary | undefined): NonNullable<UserFeedbackWorkV
 
 interface Dependencies {
 	store: MissionStore;
-	attachments?: Pick<AttachmentStore, "feedbackPaths">;
-	chats: Pick<NativeChat, "qualify" | "spawn">;
+	attachments?: Pick<AttachmentStore, "feedbackPaths" | "releaseFeedback">;
+	chats: Pick<NativeChat, "qualify" | "spawn" | "defaultAllowance">;
 	sessions: Pick<SessionManager, "get" | "history" | "pendingQuestion" | "sendDurable" | "lookupNativeAttentionInput">;
 }
 
@@ -425,7 +427,11 @@ export class UserFeedbackWorkService {
 	}
 
 	/** Journal re-entry is lookup-only; a saved step cannot replace a missing outer ACK. */
-	async admit(op: DurableOperation, journal: OperationJournal, firstEntry: boolean): Promise<UserFeedbackWork> {
+	async admit(
+		op: DurableOperation,
+		journal: OperationJournal,
+		firstEntry: boolean,
+	): Promise<UserFeedbackWork | UserFeedbackRemoved> {
 		if (!firstEntry) return this.recover(op);
 		const p = feedbackWorkIntent(op);
 		if (!op.origin || !sameHost(op.origin, journal.destination)) fail("Invalid feedback step host");
@@ -435,6 +441,20 @@ export class UserFeedbackWorkService {
 		if (p.action === "answer") return this.answer(p, op);
 		const { sequence: _sequence, ...saved } = feedback;
 		const base = { operationId: op.operationId, recordedAt: Date.now() };
+		if (p.action === "remove") {
+			// A triage or fix chat may have read the images; they stay with that chat's history.
+			const read = store.feedback.work(p.feedbackId).some((w) => w.kind === "triage" || w.kind === "fix");
+			try {
+				store.feedback.remove(p.feedbackId);
+			} catch (error) {
+				if (error instanceof Conflict) fail(error.message);
+				throw error;
+			}
+			await store.durable();
+			// Leftover images only use space. The feedback is already removed.
+			if (!read) await this.deps.attachments?.releaseFeedback(saved).catch(() => {});
+			return { ...base, kind: "removed" };
+		}
 		const add = async (work: UserFeedbackWork, check: (current: UserFeedbackWork[]) => void = () => {}) => {
 			try {
 				store.feedback.addWork(p.feedbackId, work, check);
@@ -484,6 +504,8 @@ export class UserFeedbackWorkService {
 			mode: p.action === "triage" ? "ask" : "build",
 			model: p.model,
 			thinking: p.thinking,
+			// The step has no amount field; it uses the project's quick-fix default. Read before the step is saved.
+			...(await this.deps.chats.defaultAllowance(p.projectId)),
 		};
 		let message: string;
 		let work: UserFeedbackWork;

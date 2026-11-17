@@ -69,3 +69,45 @@ test("native creation shows its project default and opens exactly one explicitly
 	assert.equal((await funding.read()).accounts.length, 1);
 	assert.equal(f.stats().sessions, 1);
 });
+
+test("with limits off, native creation asks no amount, opens no allowance and starts unmetered work", async (t) => {
+	const f = await nativeIntakeFixture(),
+		funding = new Funding(join(f.home, "funding.sqlite"));
+	f.sessions.funding = funding;
+	t.after(async () => {
+		await funding.close();
+		await f.close();
+	});
+	await funding.setEnabled((await funding.read()).revision, false);
+	const headers = { "x-pilot-github-capability": f.capability, "content-type": "application/json" };
+	const selection = await (
+		await fetch(`${f.root}/api/projects/${f.project.id}/chat-profile?mode=build`, { headers })
+	).json();
+	assert.equal(selection.allowanceMicros, undefined);
+	assert.equal(selection.fundingRequired, undefined);
+	const draftId = randomUUID(),
+		payload = JSON.stringify({ ...selection, purpose: "native-chat-create", draftId, message: "Fix the parser" });
+	const receipt = await (
+		await fetch(`${f.root}/api/operations`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				schemaVersion: 1,
+				operationId: randomUUID(),
+				producerId: randomUUID(),
+				sequence: 1,
+				origin: { ...f.host, hostId: "local" },
+				destination: f.host,
+				kind: "native-chat-create",
+				targetId: draftId,
+				payload,
+				payloadHash: payloadHash(payload),
+				bindingId: selection.contextDigest,
+				bindingGeneration: 1,
+			}),
+		})
+	).json();
+	assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+	assert.equal(f.sessions.fundingRequired(receipt.result.sessionId), false);
+	assert.equal((await funding.read()).accountCount, 0);
+});

@@ -236,6 +236,23 @@ test("history lists open items first and keeps its search while navigating", asy
 	expect(counts(app)).toBe("Sends: 2 · Checks: 0");
 });
 
+test("remove asks once in place, Keep changes nothing, and Remove sends one step", async () => {
+	const app = await feedback();
+	await sendWords(app, "Report to keep");
+	await sendWords(app, "Report to remove");
+	await app.press("id:feedback-remove-f2");
+	await app.waitFor("id:feedback-remove-confirm-f2");
+	expect(app.shows("Remove this feedback? Its chats and missions stay.")).toBe(true);
+	await app.press("id:feedback-remove-cancel-f2");
+	expect(app.shows("Report to remove")).toBe(true);
+	expect(app.shows("Steps: []")).toBe(true);
+	await app.press("id:feedback-remove-f2");
+	await app.press("id:feedback-remove-confirm-f2");
+	await app.waitFor("Steps: [remove]");
+	expect(app.shows("Report to remove")).toBe(false);
+	expect(app.shows("Report to keep")).toBe(true);
+});
+
 test("an image-only draft keeps its mission when reopened from the header", async () => {
 	const app = await open("./FeedbackFixture.tsx", {
 		...desktop,
@@ -623,4 +640,27 @@ test("the fix and triage chats open read only with their rows and state; Back an
 	// Reading chats sends nothing.
 	expect(steps(app)).toBe("Steps: [triage,fix]");
 	expect(counts(app)).toBe("Sends: 1 · Checks: 0");
+});
+
+test("a stopped chat offers Continue once; a working or finished chat does not", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "The plan page hides who is working");
+	await app.press("id:feedback-open-triage-f1");
+	await app.waitFor("Triage this feedback.");
+	expect(app.shows("id:chat-continue")).toBe(false);
+	await app.keyboard.press("escape");
+	await app.press("Fix stops");
+	await app.press("Triage fix");
+	await app.waitFor("id:feedback-fix-f1");
+	await app.press("id:feedback-fix-f1");
+	await app.waitFor("id:feedback-open-fix-f1");
+	await app.press("id:feedback-open-fix-f1");
+	await app.waitFor("id:chat-continue");
+	expect(app.shows("Stopped.")).toBe(true);
+	expect(app.shows("Continues: 0")).toBe(true);
+	await app.press("id:chat-continue");
+	await app.waitFor("Working.");
+	expect(app.shows("id:chat-continue")).toBe(false);
+	expect(app.shows("Continues: 1")).toBe(true);
 });

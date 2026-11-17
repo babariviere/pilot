@@ -14,6 +14,8 @@ export interface FundingAccount extends FundingOwner {
 }
 export interface FundingView {
 	revision: number;
+	/** False when the user turned spending limits off for every project. Nothing reserves or refuses for cost. */
+	enabled: boolean;
 	missionDefaultMicros: number | null;
 	quickFixDefaultMicros: number | null;
 	dailyMicros: number | null;

@@ -96,6 +96,19 @@ export class FundingDisk {
 	private daily() {
 		return this.prepare("SELECT value FROM funding_meta WHERE key='daily'").get()?.value as number | undefined;
 	}
+	/** Spending limits are on unless the user turned them off. */
+	enabled(): boolean {
+		return !this.prepare("SELECT value FROM funding_meta WHERE key='off'").get();
+	}
+	setEnabled(expected: number, enabled: boolean): void {
+		this.transaction(() => {
+			if (this.revision() !== expected) throw new FundingRefused("Funding changed; read again");
+			if (typeof enabled !== "boolean") throw new FundingRefused("Invalid funding settings");
+			if (enabled) this.db.exec("DELETE FROM funding_meta WHERE key='off'");
+			else this.db.exec("INSERT OR REPLACE INTO funding_meta VALUES('off',1)");
+			this.bump();
+		});
+	}
 	private background(now: number): FundingOwner {
 		return { kind: "background", id: String(Math.floor(now / DAY)) };
 	}
@@ -141,6 +154,7 @@ export class FundingDisk {
 		const owners = rows.map((r) => JSON.parse(r.owner) as FundingOwner);
 		return {
 			revision: this.revision(),
+			enabled: this.enabled(),
 			backgroundJobs: this.prepare(
 				"SELECT job,json_extract(owner,'$.projectId') AS projectId,sum(CASE WHEN settled=1 THEN amount ELSE 0 END) AS spentMicros,sum(CASE WHEN settled=0 THEN amount ELSE 0 END) AS uncertainMicros FROM funding_calls WHERE account=? OR (account LIKE 'background:%' AND settled=0) GROUP BY job,projectId LIMIT 100",
 			).all(key(this.background(now))) as unknown as NonNullable<FundingView["backgroundJobs"]>,

@@ -184,6 +184,12 @@ export class ModelControls {
 					);
 					break;
 				}
+				case "funding-limits": {
+					if (!this.sessions?.funding || !read.funding || typeof p.value !== "boolean")
+						throw new OperationRejected("Funding unavailable");
+					await this.sessions.funding.setEnabled(read.funding.revision, p.value);
+					break;
+				}
 				case "fund-work": {
 					const v = p.value as { sessionId: string; amountMicros: number };
 					if (

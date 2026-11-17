@@ -73,6 +73,7 @@ export type ModelAction =
 	| "cancel"
 	| "logout"
 	| "funding-settings"
+	| "funding-limits"
 	| "fund-work"
 	| "continue-anyway"
 	| "background-continue";
