@@ -1293,9 +1293,12 @@ function sameTrackedSource(a?: SessionTrackedSource, b?: SessionTrackedSource): 
 	);
 }
 
-/** Planners read and record project Knowledge for their research. Documentation batches stay with coordinators. */
+/**
+ * Planners read and record project Knowledge for their research. Documentation batches stay with coordinators.
+ * Mission ticket reads limited, linked Linear context without writes.
+ */
 export const planningHostCallAllowed = (type: string, action: string | undefined): boolean =>
-	type === "knowledge.call" && action !== "batch";
+	(type === "knowledge.call" && action !== "batch") || (type === "mission.call" && action === "ticket");
 
 /** A finished resume leaves its checkpoint as "resume-acknowledged"; work may go on (see openWorker). */
 const lifecycleHeld = (meta: SessionMeta): boolean =>
