@@ -43,6 +43,8 @@ const KIT_EXPORTS: &[&str] = &[
     "SequenceSpec",
     "SequenceStep",
     "Card",
+    "ChoiceOption",
+    "Choices",
     "ComparisonRow",
     "ComparisonSpec",
     "ComparisonTable",
@@ -51,6 +53,110 @@ const KIT_EXPORTS: &[&str] = &[
     "Section",
     "Stat",
     "TABLE_LIMITS",
+];
+/// What an artifact may take from `nsh`: views, text, drawing, reactivity and read-only settings. Not host,
+/// clipboard, storage, files, media, network, notifications, theme changes or motion (not yet qualified here).
+const NSH_EXPORTS: &[&str] = &[
+    "View",
+    "Text",
+    "Scroll",
+    "List",
+    "Canvas",
+    "Path2D",
+    "ErrorBoundary",
+    "signal",
+    "computed",
+    "effect",
+    "batch",
+    "untracked",
+    "cleanup",
+    "context",
+    "token",
+    "reduceMotion",
+    "colorScheme",
+    "fontScale",
+    "windowSize",
+    "locale",
+    "localeSettings",
+];
+/// Components an artifact may take from `nsh/base`. They keep their state in the preview. Left out: host-reaching
+/// or heavy parts (`Link`, `AlertDialog`, `ColorEyeDropper`, editors, terminal, dock, emoji picker, status bar).
+const BASE_EXPORTS: &[&str] = &[
+    "Accordion",
+    "AccordionHeader",
+    "AccordionItem",
+    "AccordionPanel",
+    "AccordionTrigger",
+    "Avatar",
+    "AvatarGroup",
+    "Button",
+    "Calendar",
+    "Carousel",
+    "CarouselContent",
+    "CarouselItem",
+    "CarouselNext",
+    "CarouselPagination",
+    "CarouselPaginationItem",
+    "CarouselPrevious",
+    "Checkbox",
+    "Collapsible",
+    "ColorArea",
+    "ColorField",
+    "ColorPicker",
+    "ColorSlider",
+    "ColorSwatch",
+    "Combobox",
+    "Command",
+    "ContextMenu",
+    "DataTable",
+    "DatePicker",
+    "Dialog",
+    "DiffView",
+    "HoverCard",
+    "Input",
+    "Menu",
+    "MenuItem",
+    "MenuSeparator",
+    "NavPage",
+    "NavStack",
+    "NumberInput",
+    "OtpInput",
+    "Pagination",
+    "Popover",
+    "Progress",
+    "Radio",
+    "RadioGroup",
+    "ResizablePanel",
+    "ResizablePanelGroup",
+    "Scrollbar",
+    "Select",
+    "Sheet",
+    "Slider",
+    "Submenu",
+    "Switch",
+    "Tab",
+    "Table",
+    "TableBody",
+    "TableCaption",
+    "TableCell",
+    "TableFooter",
+    "TableHead",
+    "TableHeader",
+    "TableRow",
+    "Tabs",
+    "TextView",
+    "TimeField",
+    "Toast",
+    "ToastManager",
+    "ToastStack",
+    "Toggle",
+    "ToggleGroup",
+    "Toolbar",
+    "ToolbarGroup",
+    "ToolbarSeparator",
+    "Tooltip",
+    "Tree",
+    "createNavStack",
 ];
 
 /// The exact source identity supplied by a saved canonical revision, never authored bytecode.
@@ -175,20 +281,11 @@ impl<'a> Visit<'a> for Imports {
                 ModuleExportName::IdentifierName(name) => name.name.as_str(),
                 _ => "",
             };
+            // Types are erased before the module runs, so any type from an allowed module is fine.
+            let type_only = it.import_kind.is_type() || specifier.import_kind.is_type();
             let allowed = match module {
-                "nsh" => [
-                    "View",
-                    "Text",
-                    "Scroll",
-                    "Canvas",
-                    "signal",
-                    "computed",
-                    "token",
-                    "reduceMotion",
-                    "ErrorBoundary",
-                ]
-                .contains(&name),
-                "nsh/base" => name == "Button",
+                "nsh" => type_only || NSH_EXPORTS.contains(&name),
+                "nsh/base" => type_only || BASE_EXPORTS.contains(&name),
                 "pilot-artifact/ui" => KIT_EXPORTS.contains(&name),
                 _ => false,
             };
@@ -400,4 +497,26 @@ fn open_at(directory: &File, name: &str, is_directory: bool) -> Result<File, Str
     }
     // SAFETY: openat returned a fresh, owned descriptor.
     Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BASE_EXPORTS, NSH_EXPORTS, compile_source};
+
+    #[test]
+    fn every_allowed_nsh_and_base_name_exists() {
+        let mut missing_names = Vec::new();
+        for (module, names) in [("nsh", NSH_EXPORTS), ("nsh/base", BASE_EXPORTS)] {
+            for name in names {
+                let source =
+                    format!("import {{{name}}} from '{module}'; export default () => {name};");
+                if let Err(error) = compile_source(&source, "Artifact.tsx") {
+                    missing_names.push(format!("{module} {name}: {error}"));
+                }
+            }
+        }
+        assert!(missing_names.is_empty(), "{missing_names:#?}");
+        let missing = "import {NoSuchPart} from 'nsh/base'; export default () => NoSuchPart;";
+        assert!(compile_source(missing, "Artifact.tsx").is_err());
+    }
 }

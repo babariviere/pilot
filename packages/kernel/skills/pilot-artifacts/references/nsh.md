@@ -41,9 +41,11 @@ export default function Artifact() {
 ```
 
 - Export one component as `default`. Do not call `mount`: Pilot mounts the published component.
-- Import only from `"nsh"` (views, text, canvas, signals, `token`, `reduceMotion`), `"nsh/base"`
-  (behavior such as `Button`) and `"pilot-artifact/ui"` (the helpers below). Other imports, relative files and
-  assets do not load.
+- Import only from `"nsh"` (views, text, `List`, canvas, signals, `effect`, `token`, `reduceMotion`), `"nsh/base"`
+  (unstyled components: `Button`, `Input`, `Select`, `Combobox`, `Checkbox`, `Switch`, `Slider`, `Tabs`, `Dialog`,
+  `Sheet`, `Popover`, `Menu`, `Tooltip`, `Toast`, `Accordion`, `Table`, `DataTable`, `Tree`, `DatePicker` and
+  more; style each part) and `"pilot-artifact/ui"` (the helpers below). Host access, links, editors, motion,
+  relative files and assets do not load.
 - Put the data in the file. The artifact cannot fetch it later.
 - Style with the theme's semantic classes (`bg-card`, `text-foreground`, `text-muted-foreground`,
   `border-border`, `bg-primary`) and the spacing scale (`gap-3`, `p-4`). The artifact then follows light and dark.

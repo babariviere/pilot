@@ -125,11 +125,58 @@ fn captured_runtime_rejects_wrong_identity_and_host_imports_before_execution() {
         "import {Bridge} from 'pilot-day/native'; export default () => Bridge;",
         "import {ArtifactExport} from 'pilot-day/native'; export default () => new ArtifactExport();",
         "import {host} from 'nsh'; export default () => host;",
+        "import {Clipboard} from 'nsh'; export default () => Clipboard;",
+        "import {Storage} from 'nsh'; export default () => Storage;",
+        "import {openUrl} from 'nsh'; export default () => openUrl;",
+        "import {Link} from 'nsh/base'; export default () => Link;",
+        "import {Terminal} from 'nsh/base'; export default () => Terminal;",
+        "import {mountArtifact} from 'pilot-artifact/ui'; export default () => mountArtifact;",
         "import {readFile} from 'fs/promises'; export default () => readFile;",
         "export default () => import('process');",
     ] {
-        assert!(artifact_runtime::config(captured(source)).is_err());
+        assert!(
+            artifact_runtime::config(captured(source)).is_err(),
+            "{source}"
+        );
     }
+}
+
+#[test]
+fn the_bundled_prototype_example_switches_variants_with_choices() {
+    let source = include_str!(
+        "../../../../packages/kernel/skills/pilot-artifacts/nsh/examples/prototype.tsx"
+    );
+    let config =
+        artifact_runtime::config(captured(source)).expect("the prototype example compiles");
+    let mut app = Headless::start(config).expect("separate artifact engine");
+    app.wait_for("A: one banner above the list. The list stays as it was.")
+        .expect("first variant");
+    app.press("role:button[B · Inline row]")
+        .expect("Choices option");
+    app.wait_for("B: the failed row opens in place with what happened.")
+        .expect("second variant");
+}
+
+#[test]
+fn artifacts_may_use_base_components_and_type_imports() {
+    let source = r#"
+import {type Accessor, Text, View, signal, computed, effect} from 'nsh';
+import type {SelectProps} from 'nsh/base';
+import {Checkbox, Collapsible, Input, Progress, Select, Switch, Tab, Tabs, Tooltip} from 'nsh/base';
+import {Choices, Page} from 'pilot-artifact/ui';
+export default function Artifact() {
+  const on = signal(false);
+  const label: Accessor<string> = computed(() => (on() ? "On" : "Off"));
+  effect(() => label());
+  return <Page title="Base components">
+    <Choices label="Size" options={[{id: "s", label: "Small"}, {id: "l", label: "Large"}]} value="s" onChange={() => {}} />
+    <Switch checked={on()} onChange={(v: boolean) => on.set(v)} accessibilityLabel="Power" />
+    <Text>{`State: ${label()}`}</Text>
+  </Page>;
+}"#;
+    let config = artifact_runtime::config(captured(source)).expect("base components are allowed");
+    let mut app = Headless::start(config).expect("separate artifact engine");
+    app.wait_for("State: Off").expect("rendered");
 }
 
 #[test]
