@@ -314,6 +314,7 @@ impl LocalViewer {
                     session_path: None,
                     writable: false,
                     busy: false,
+                    live_work: Some(false),
                     signal: None,
                     background_work: false,
                     order: Default::default(),

@@ -807,6 +807,9 @@ impl Browser {
         cx.notify();
     }
     fn link_availability_changed(&self, chats: &[Chat]) -> bool {
+        if self.overview_status_for(&self.chats) != self.overview_status_for(chats) {
+            return true;
+        }
         let (Some(d), Ok(m)) = (&self.detail, &self.members) else {
             return false;
         };
@@ -1370,6 +1373,7 @@ impl Browser {
         }
         let generation = self.generation;
         let is_list = self.route == Some(Route::Catalog);
+        let mission_status = self.overview_status();
         let title = if is_list {
             "Missions".to_owned()
         } else {
@@ -1422,11 +1426,29 @@ impl Browser {
                     .gap_2()
                     .min_w_0()
                     .child(
-                        div().flex_1().min_w_0().child(
-                            ui::text(Text::Title, SharedString::from(title))
-                                .id("missions-title")
-                                .test_support(),
-                        ),
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                ui::text(Text::Title, SharedString::from(title))
+                                    .id("missions-title")
+                                    .test_support()
+                                    .min_w_0()
+                                    .truncate(),
+                            )
+                            .when(!is_list, |row| {
+                                row.child(
+                                    ui::text(Text::Body, mission_status)
+                                        .id("mission-overview-status")
+                                        .test_support()
+                                        .aria_label(SharedString::from(format!(
+                                            "Mission status: {mission_status}"
+                                        )))
+                                        .flex_none(),
+                                )
+                            }),
                     )
                     .when(!is_list, |d| d.children(self.coordinator_action(cx)))
                     .when(is_list || self.tab == Tab::Overview, |d| {

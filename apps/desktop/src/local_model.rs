@@ -256,6 +256,8 @@ pub(crate) struct Chat {
     pub(crate) session_path: Option<String>,
     pub(crate) writable: bool,
     pub(crate) busy: bool,
+    /// Live work independent of attention, including background jobs; missing evidence stays unknown.
+    pub(crate) live_work: Option<bool>,
     pub(crate) signal: Option<crate::state_mark::Signal>,
     pub(crate) background_work: bool,
     pub(crate) cwd: String,
@@ -399,6 +401,12 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
             .filter(|n| *n <= 9_007_199_254_740_990),
         busy: value["working"] == true
             || matches!(value["state"].as_str(), Some("working" | "starting")),
+        live_work: (value["working"].is_boolean()
+            || matches!(
+                value["state"].as_str(),
+                Some("parked" | "starting" | "idle" | "working" | "failed")
+            ))
+        .then(|| working(value)),
         signal,
         background_work,
         cwd: crate::text::truncate_with_ellipsis(value["cwd"].as_str().unwrap_or(""), 4096),

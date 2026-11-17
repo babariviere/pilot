@@ -2,6 +2,82 @@ use super::*;
 use crate::{mission_browser as model, mission_browser_fixture as f, mission_reader::Response};
 use gpui_kit::{AppContext, TestAppContext};
 #[gpui_kit::test]
+fn overview_status_uses_live_members_not_unfinished_tasks(cx: &mut TestAppContext) {
+    use serde_json::json;
+    cx.update(gpui_kit::init);
+    let pane = cx.new(Browser::new);
+    pane.update(cx, |v, cx| {
+        v.online = true;
+        v.loaded = true;
+        let mut raw = f::detail("mission-A");
+        raw["tasks"][0]["status"] = json!("in_progress");
+        let d = Arc::new(model::detail(&f::key("mission-A"), &raw).unwrap());
+        assert!(!d.summary.working.is_empty());
+        let members = model::members(&d, &json!([
+            {"id":"chat-A","missionId":"mission-A","projectId":"project-A"}
+        ])).map(Arc::new);
+        accept_latest(v, Route::Detail(d.key.clone()), Data::Detail(d.clone(), members), cx);
+        v.tasks_read_generation = Some(v.generation);
+        let chat = |extra: serde_json::Value| {
+            let mut raw = json!({"id":"chat-A","missionId":"mission-A","projectId":"project-A","state":"idle"});
+            raw.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            crate::local_model::chat(&raw).unwrap()
+        };
+        for (extra, expected) in [
+            (json!({"state":"working"}), "Working"),
+            (json!({}), "Idle"),
+            (json!({"runningJobs":[{"id":"job-A"}],"outcome":"question"}), "Working"),
+            (json!({"working":true,"attentionReason":{"kind":"asks","text":"Answer"}}), "Working"),
+            (json!({"working":true,"offlinePaused":true}), "Idle"),
+            (json!({"state":"unknown"}), "Unavailable"),
+            (json!({"projectId":"project-B"}), "Unavailable"),
+            (json!({"missionId":"mission-B"}), "Unavailable"),
+        ] {
+            v.chats = Arc::new(vec![chat(extra.clone())]);
+            assert_eq!(v.overview_status(), expected, "{extra}");
+        }
+        v.chats = Arc::new(vec![chat(json!({}))]);
+        assert!(!v.meta_line(&d).contains("working now"));
+        let mut working = (*v.chats).clone();
+        working[0] = chat(json!({"working":true,"attentionReason":{"kind":"asks","text":"Answer"}}));
+        v.chats = Arc::new(working);
+        let quiet = vec![chat(json!({"working":false,"attentionReason":{"kind":"asks","text":"Answer"}}))];
+        assert!(v.link_availability_changed(&quiet), "work changes must repaint even when attention stays the same");
+        v.chats = Arc::new(quiet);
+        assert_eq!(v.overview_status(), "Idle");
+        v.online = false;
+        assert_eq!(v.overview_status(), "Unavailable");
+        v.online = true;
+        v.loaded = false;
+        assert_eq!(v.overview_status(), "Unavailable");
+        v.loaded = true;
+        v.busy = true;
+        assert_eq!(v.overview_status(), "Unavailable");
+        v.busy = false;
+        v.tasks_read_generation = None;
+        assert_eq!(v.overview_status(), "Unavailable", "reconnect cannot revive old membership");
+        v.tasks_read_generation = Some(v.generation);
+        v.error = Some("Refresh failed");
+        assert_eq!(v.overview_status(), "Unavailable");
+        v.error = None;
+        v.chats = Arc::new(vec![]);
+        assert_eq!(v.overview_status(), "Unavailable", "missing member is not idle");
+        v.members = Err("Unavailable");
+        assert_eq!(v.overview_status(), "Unavailable");
+        v.members = model::members(&d, &json!([])).map(Arc::new);
+        assert_eq!(v.overview_status(), "Idle", "known empty membership");
+        v.chats = Arc::new(vec![chat(json!({}))]);
+        assert_eq!(v.overview_status(), "Unavailable", "new membership needs refresh");
+        v.online = false;
+        for (status, expected) in [("completed", "Finished"), ("archived", "Archived")] {
+            let mut terminal = (*d).clone();
+            terminal.status = status.into();
+            v.detail = Some(Arc::new(terminal));
+            assert_eq!(v.overview_status(), expected);
+        }
+    });
+}
+#[gpui_kit::test]
 fn task_handoff_is_retired_by_errors_closed_lanes_and_replaced_connections(
     cx: &mut TestAppContext,
 ) {

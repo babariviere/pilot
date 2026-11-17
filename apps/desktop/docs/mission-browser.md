@@ -9,10 +9,16 @@ agent start or permission promotion.
 ## Overview at a glance
 
 The overview follows Swift's Overview tab within the existing reading column:
-goal, one meta line (status, project name, "N of M done · K working now"), a
+goal, one meta line (lifecycle, project name, "N of M done"), a
 progress bar and legend, then **Needs you** and **Working now** when they have
 rows, followed by Chats, Tasks and Brief. Raw mission and project IDs stay out
 of the visible text.
+
+Beside the mission title, **Working** or **Idle** reflects current member-chat
+activity, including background work, not unfinished task counts. Canonical
+completed and archived missions show **Finished** and **Archived**. Missing
+member/activity evidence, a failed refresh or an offline/stale connection shows
+**Unavailable**. Reconnecting needs a fresh mission read before activity is current.
 
 - Progress counts every received task, not only the displayed rows,
   by Swift's work status: the stored status when phase gating projects Blocked.

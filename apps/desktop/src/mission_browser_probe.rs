@@ -415,6 +415,14 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
             until(cx, h, &view, |v, cx| {
                 v.missions.read(cx).detail.is_some() && !v.missions.read(cx).busy
             });
+            overview_status_updates(
+                cx,
+                h,
+                &view,
+                &server,
+                &dir,
+                &format!("{}-{}", width as u32, mode.name()),
+            );
             let offline_requests = server.state.lock().unwrap().seen.len();
             cx.update_window(h, |_, w, cx| {
                 view.update(cx, |v, cx| {
@@ -431,6 +439,10 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
                     "offline warning stays visible"
                 );
                 assert_eq!(w.find("mission-chat-chat-A").disabled(), Some(true));
+                assert_eq!(
+                    w.find("mission-overview-status").label(),
+                    Some("Mission status: Unavailable")
+                );
             })
             .unwrap();
             // Copy goal stays available offline, from the overview … menu.
@@ -1314,6 +1326,107 @@ fn needs_you_attention(
     .unwrap();
     cx.update(|cx| assert!(view.read(cx).missions.read(cx).detail.is_some()));
 }
+fn overview_status_updates(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+    server: &Server,
+    dir: &Option<PathBuf>,
+    name: &str,
+) {
+    let original = cx.update(|cx| view.read(cx).state.chats.clone());
+    let check = |cx: &mut HeadlessAppContext, word: &str| {
+        cx.update_window(h, |_, w, _| {
+            let status = w.find("mission-overview-status");
+            assert_eq!(
+                status.label(),
+                Some(format!("Mission status: {word}").as_str())
+            );
+            assert!(status.visible());
+            let bounds = status.bounds();
+            let title = w.find("missions-title").bounds();
+            let page = w.find("missions-page").bounds();
+            assert!(bounds.left() >= title.right() - px(1.));
+            assert!(bounds.right() <= page.right() && bounds.top() >= page.top());
+            assert!(bounds.bottom() <= page.bottom());
+            assert!((bounds.center().y - title.center().y).abs() < px(2.));
+        })
+        .unwrap();
+    };
+    check(cx, "Unavailable");
+    let mut members = f::members("mission-A");
+    members.as_array_mut().unwrap().truncate(2);
+    server.reply(
+        "/api/sessions?archived=all&missionId=mission-A",
+        Reply::json(200, members),
+    );
+    let refresh = |cx: &mut HeadlessAppContext| {
+        cx.update_window(h, |_, w, cx| w.click("missions-refresh", cx))
+            .unwrap();
+        until(cx, h, view, |v, cx| !v.missions.read(cx).busy);
+    };
+    // The attention word stays identical while live work changes underneath it.
+    for working in [true, false] {
+        cx.update_window(h, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.state.chats = Arc::new(
+                    ["chat-A", "chat-B"]
+                        .iter()
+                        .map(|id| {
+                            crate::local_model::chat(&json!({
+                                "id":id,"title":"Same chat title","projectId":"project-A",
+                                "missionId":"mission-A","state":"idle","mode":"build",
+                                "working": working && *id == "chat-B",
+                                "attentionReason":{"kind":"asks","text":"Answer"}
+                            }))
+                            .unwrap()
+                        })
+                        .collect(),
+                );
+                v.rebuild_nav(w, cx);
+            });
+        })
+        .unwrap();
+        if working {
+            refresh(cx);
+        } else {
+            settle(cx, h);
+        }
+        let word = if working { "Working" } else { "Idle" };
+        check(cx, word);
+        capture(
+            cx,
+            h,
+            dir,
+            format!("{name}-status-{}.png", word.to_lowercase()),
+        );
+    }
+    for (status, word) in [("completed", "Finished"), ("archived", "Archived")] {
+        let mut detail = overview_detail();
+        detail["mission"]["status"] = json!(status);
+        server.reply("/api/missions/mission-A", Reply::json(200, detail));
+        refresh(cx);
+        check(cx, word);
+    }
+    server.reply(
+        "/api/missions/mission-A",
+        Reply::json(200, overview_detail()),
+    );
+    server.reply(
+        "/api/sessions?archived=all&missionId=mission-A",
+        Reply::json(200, f::members("mission-A")),
+    );
+    cx.update_window(h, |_, w, cx| {
+        view.update(cx, |v, cx| {
+            v.state.chats = original;
+            v.rebuild_nav(w, cx);
+        });
+    })
+    .unwrap();
+    refresh(cx);
+    check(cx, "Unavailable");
+}
+
 fn overview_at_a_glance(
     cx: &mut HeadlessAppContext,
     h: AnyWindowHandle,
@@ -1327,7 +1440,7 @@ fn overview_at_a_glance(
         let d = b.detail.as_ref().unwrap();
         assert_eq!(
             b.meta_line(d),
-            "Active · Same project · 1 of 5 done · 2 working now",
+            "Active · Same project · 1 of 5 done",
             "one meta line, no raw IDs"
         );
     });

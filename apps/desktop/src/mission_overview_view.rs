@@ -83,6 +83,63 @@ fn overflow(
 }
 
 impl Browser {
+    pub(crate) fn overview_status(&self) -> &'static str {
+        self.overview_status_for(&self.chats)
+    }
+    pub(super) fn overview_status_for(&self, chats: &[Chat]) -> &'static str {
+        let Some(d) = self
+            .detail
+            .as_ref()
+            .filter(|d| self.route == Some(Route::Detail(d.key.clone())))
+        else {
+            return "Unavailable";
+        };
+        match d.status.as_str() {
+            "completed" => return "Finished",
+            "archived" => return "Archived",
+            "active" => {}
+            _ => return "Unavailable",
+        }
+        // A read spanning reconnect cannot make retained membership current.
+        if !self.online
+            || !self.loaded
+            || self.busy
+            || self.error.is_some()
+            || self.tasks_read_generation != Some(self.generation)
+        {
+            return "Unavailable";
+        }
+        let Ok(members) = &self.members else {
+            return "Unavailable";
+        };
+        let mut seen = 0;
+        let mut working = false;
+        for chat in chats {
+            let linked = matches!(&chat.mission, crate::local_model::MissionAssociation::Linked(id) if id == &d.key.id);
+            if !members.ids.contains(&chat.id) {
+                if linked {
+                    return "Unavailable";
+                }
+                continue;
+            }
+            if !linked || chat.local_draft || chat.project_id.as_deref() != Some(d.project.as_str())
+            {
+                return "Unavailable";
+            }
+            let Some(live_work) = chat.live_work else {
+                return "Unavailable";
+            };
+            seen += 1;
+            working |= live_work;
+        }
+        if seen != members.ids.len() {
+            "Unavailable"
+        } else if working {
+            "Working"
+        } else {
+            "Idle"
+        }
+    }
     pub(super) fn project_label(&self, id: &str) -> String {
         self.projects
             .iter()
@@ -90,20 +147,13 @@ impl Browser {
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "Project unavailable".into())
     }
-    /// "Active · Project · 3 of 8 done · 2 working now", IDs left to copy.
+    /// Lifecycle, project and task progress, never inferred live activity.
     pub(crate) fn meta_line(&self, d: &Detail) -> String {
         let s = &d.summary;
         let progress = if s.total() == 0 {
             "No tasks yet".to_owned()
-        } else if s.working.is_empty() {
-            format!("{} of {} done", s.done(), s.total())
         } else {
-            format!(
-                "{} of {} done · {} working now",
-                s.done(),
-                s.total(),
-                s.working.len()
-            )
+            format!("{} of {} done", s.done(), s.total())
         };
         format!(
             "{} · {} · {progress}",
