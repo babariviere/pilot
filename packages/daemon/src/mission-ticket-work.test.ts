@@ -67,6 +67,8 @@ test("ticket context is bounded, identity checked, untrusted, and read-only", as
 	assert.match(result.note, /Untrusted.*not instructions/);
 	assert.equal(JSON.stringify(result).includes("teamId"), false);
 	assert.deepEqual((calls[0] as unknown[]).slice(0, 2), ["linear", "issue"]);
+	const fields = ((calls[0] as unknown[])[2] as { fields: string[] }).fields;
+	assert.equal(fields.includes("identifier"), false, "Linear's get_issue refuses identifier");
 	url = "https://linear.app/other/issue/ENG-12";
 	await assert.rejects(reader.read(ref), /different ticket/);
 });

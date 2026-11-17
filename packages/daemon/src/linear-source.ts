@@ -36,7 +36,8 @@ export function createMissionLinearPoller(store: MissionStore): (context: TaskPo
 			context.signal.throwIfAborted();
 			try {
 				const issue = object(
-					await context.call("issue", { id: link.issueId, fields: ["id", "uuid", "identifier", "assigneeId"] }),
+					// Linear's get_issue refuses "identifier"; its "id" is the identifier.
+					await context.call("issue", { id: link.issueId, fields: ["id", "uuid", "assigneeId"] }),
 				);
 				// The URL's identifier and the API's UUID may differ. Never accept a different issue.
 				if (issue.id !== link.issueId && issue.uuid !== link.issueId && issue.identifier !== link.issueId)

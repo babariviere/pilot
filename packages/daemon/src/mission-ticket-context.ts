@@ -19,7 +19,8 @@ export class MissionTicketReader {
 				"issue",
 				{
 					id: ref.externalId,
-					fields: ["id", "uuid", "identifier", "title", "url", "description", "status", "statusType", "teamId"],
+					// Linear's get_issue refuses "identifier"; its "id" is the identifier (ENG-12).
+					fields: ["id", "uuid", "title", "url", "description", "status", "statusType", "teamId"],
 				},
 				AbortSignal.timeout(15_000),
 			);
