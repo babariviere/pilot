@@ -51,6 +51,11 @@ export interface PlanningWorkerState {
 	 */
 	research?: Record<string, PlanningResearch>;
 	/**
+	 * Prototypes a builder asked for its own published task, by task ID. Pilot makes each in a read-only chat and
+	 * sends the result to that builder. No planning map change and no user confirmation.
+	 */
+	taskPrototypes?: Record<string, TaskPrototype>;
+	/**
 	 * The user's questions about interview questions, by the operation that asked. A read-only chat
 	 * answers each one; the waiting round and the planner are left alone.
 	 */
@@ -135,6 +140,37 @@ export interface PlanningResearch {
 	/** The prototype the chat published, linked to the mission at this revision. */
 	artifact?: { sessionId: string; artifactId: string; revision: number };
 	/** The prototype of the attempt before, which the next chat starts from. */
+	earlier?: { sessionId: string; artifactId: string; revision: number };
+}
+/** Limits of a builder's task prototype: request text, chat minutes and prototypes per task. */
+export const TASK_PROTOTYPE = { question: 4000, minutes: 30, attempts: 3 } as const;
+/** One prototype a builder asked for its task. */
+export interface TaskPrototype {
+	/** The builder's own ID for this request. The same ID again reads it; nothing starts twice. */
+	requestId: string;
+	builderSessionId: string;
+	/** What to compare and which variants, in the builder's words. */
+	question: string;
+	model: string;
+	thinking?: string;
+	maxMinutes: number;
+	/**
+	 * requested: waits for a chat slot. starting: Pilot is creating the chat. running: the chat works.
+	 * reporting: the result is saved, the builder does not have it yet. reported: the builder has it. failed: ended early.
+	 */
+	state: "requested" | "starting" | "running" | "reporting" | "reported" | "failed";
+	sessionId: string | null;
+	requestedAt: number;
+	/** Prototype chats made for this task so far, this one included. */
+	attempts: number;
+	startedAt?: number;
+	timedOut?: boolean;
+	/** The chat's final answer, limited. */
+	report?: string;
+	reason?: string;
+	/** The NSH artifact the chat published, linked to the task at this revision. */
+	artifact?: { sessionId: string; artifactId: string; revision: number };
+	/** The prototype of the request before, which the next chat starts from. */
 	earlier?: { sessionId: string; artifactId: string; revision: number };
 }
 interface Port {

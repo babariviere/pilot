@@ -197,6 +197,21 @@ Each step ends with tests and, for user-visible steps, a capture from fixtures.
 - **One artifact per chat:** a prototype chat publishes one NSH artifact with every variant in it. Pilot links
   the newest one.
 
+## Task prototypes after publication
+
+The map cannot change after publication: a `plan-map` write clears `plan.publication`, and a plan publishes once.
+So a screen task added by a revision gets its prototype from its builder instead:
+
+- Builder mission action `prototype` {taskId, requestId, question, model, thinking?, maxMinutes 5-30}. Own task
+  only, one open prototype per task, at most three per task. The same `requestId` reads it; `taskId` alone reads
+  the state. The model is checked like a task start.
+- Saved in `PlanningWorkerState.taskPrototypes` by task. The planning reconcile starts one read-only explorer chat
+  (one prototype chat at a time, as for map questions), stops it at its time limit, links its newest NSH artifact
+  to the task, and sends the result to the builder once (`task-prototype-<requestId>`, found again by exact input).
+- No map change, no planner turn and no user confirmation. The builder asks the user with `ask_user`, naming the
+  artifact. A change request starts from the earlier mockup.
+- A chat cut off while starting is reported to the builder as "no mockup", never started twice.
+
 ## Risks
 
 - **Preview support.** The isolated preview runs on macOS only. On other clients the user sees the source. Step 3

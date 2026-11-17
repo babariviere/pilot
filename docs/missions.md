@@ -116,6 +116,9 @@ you about it, and the round shows **The prototype**, which opens in the app's is
 shows it over the whole page). A chat
 stops at its question's time limit; its cost limit is shown, not enforced. See
 [mission prototypes](technical/mission-prototypes.md).
+After the plan is published, a builder whose task needs a UI prototype asks Pilot for one itself. Pilot makes
+it in a read-only chat, links the mock to the task and sends it to the builder, which then asks you to choose.
+You do not confirm the prototype first; you answer once, when you choose.
 When Pilot's planning agent has stopped while the plan is still open, **Continue planning** under its
 status asks it to pick up where it stopped. It answers, approves and starts nothing.
 **Unstick**, under the same status, says whether planning moves, waits for you or is stuck, lists what

@@ -33,6 +33,7 @@ import type {
 	PlanningResearch,
 	PlanningWorkerState,
 	QuestionAsk,
+	TaskPrototype,
 	WaitingThreadMessage,
 } from "./planning-worker-store.ts";
 import type { KnowledgeService } from "./project-knowledge.ts";
@@ -263,6 +264,24 @@ function prototypeMessage(
 		.join("\n\n");
 }
 
+/** The opening message of a builder-requested prototype chat for one published task. */
+function taskPrototypeMessage(missionTitle: string, task: MissionTask, p: TaskPrototype): string {
+	return [
+		`Make one UI prototype for task #${task.number} "${task.title}" of the mission "${missionTitle}". Its builder asked for it so the user can choose before it builds. This chat is read-only: it changes no project files.`,
+		`What to compare: ${p.question}`,
+		`Limits: Pilot stops this chat after ${p.maxMinutes} minutes and passes on what it published.`,
+		p.earlier
+			? `An earlier prototype for this task exists: artifact ${p.earlier.artifactId}, revision ${p.earlier.revision}, of chat ${p.earlier.sessionId}. The request says what to change. Start from it.`
+			: "",
+		`mission({action:"get", id:"${task.id}"}) shows the full task. Read the bundled pilot-artifacts skill and its NSH guide first. Use source tools to match the real app: its layout, words and density.`,
+		"Make several clearly different variants of the same screen, inside a realistic copy of the screen around it, switchable from a small bar. The user flips between them and picks one or combines parts. Start from the skill's nsh/examples/prototype.tsx and switch with its Choices helper.",
+		"Publish exactly one NSH artifact with the artifact tool, with every variant in it. Use mock data that looks real and keep state in memory. No live data, credentials, network or real actions. To fix it, update the same artifact; do not create others.",
+		"End with a short report in Markdown: what each variant shows, what the user should compare, and what stays open. Do not decide for the user.",
+	]
+		.filter(Boolean)
+		.join("\n\n");
+}
+
 /** A short plain summary of a research report: the start of its findings, for the Knowledge synopsis. */
 export function researchSynopsis(report: string): string {
 	const at = report.search(/^#{1,6}\s+.*(finding|conclusion)/im);
@@ -300,6 +319,8 @@ export class PlanningWorkers {
 	private readonly continuing = new Set<string>();
 	/** Time-limit timers of running prototype chats, by chat. Cleared on close. */
 	private readonly prototypeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	/** Task prototypes whose chat Pilot is creating now (missionId:taskId). Others found "starting" were cut off. */
+	private readonly startingPrototypes = new Set<string>();
 	/** Per mission: no start by rule before this time, after one was refused. */
 	private readonly executionRetryAt = new Map<string, number>();
 	/** Per mission: why Pilot could not start the next ready task by rule, until a later try starts one or none is ready. */
@@ -1783,6 +1804,7 @@ export class PlanningWorkers {
 		await this.closeThreadChats(missionId);
 		await this.deliverMessages(missionId);
 		await this.linkRequest(missionId);
+		await this.reconcileTaskPrototypes(missionId);
 		state = this.deps.store.planningWorkers.get(missionId)!;
 		const plan = this.deps.store.plans.get(missionId);
 		if (!plan || plan.publication) return;
@@ -2000,10 +2022,162 @@ export class PlanningWorkers {
 		await this.claimResearch(state, q.id, sessionId);
 		return true;
 	}
-	/** Links the newest NSH artifact a prototype chat published to the mission, at its current revision. */
+	private changeTaskPrototype(missionId: string, taskId: string, change: Partial<TaskPrototype>): TaskPrototype {
+		const current = this.deps.store.planningWorkers.get(missionId)!;
+		const next = this.deps.store.planningWorkers.change(missionId, current.revision, (s) => {
+			s.taskPrototypes![taskId] = { ...s.taskPrototypes![taskId]!, ...change };
+		});
+		if (change.state) trace(`pilotd: planning ${missionId} task prototype ${taskId} -> ${change.state}`);
+		return next.taskPrototypes![taskId]!;
+	}
+	/**
+	 * Builder-requested prototypes of published tasks: starts a read-only prototype chat for each request, stops it at
+	 * its time limit, links its mockup to the task and sends the result to the builder once.
+	 */
+	private async reconcileTaskPrototypes(missionId: string): Promise<void> {
+		const all = () => Object.entries(this.deps.store.planningWorkers.get(missionId)?.taskPrototypes ?? {});
+		for (const [taskId, p] of all()) {
+			if (p.state === "starting" && !this.startingPrototypes.has(`${missionId}:${taskId}`)) {
+				// Pilot stopped while creating the chat: a chat may exist, so never start a second one.
+				this.changeTaskPrototype(missionId, taskId, {
+					state: "reporting",
+					reason: "Pilot restarted while starting the prototype chat. Ask again if no prototype came.",
+				});
+				await this.deps.store.durable();
+			}
+			if (p.state !== "running" || !p.sessionId) continue;
+			const chat = this.deps.sessions.get(p.sessionId);
+			if (!chat || chat.archivedAt) {
+				this.changeTaskPrototype(missionId, taskId, { state: "reporting", reason: "The prototype chat is gone." });
+				await this.deps.store.durable();
+				continue;
+			}
+			const busy = chat.working || (chat.state !== "idle" && chat.state !== "parked") || !chat.outcome;
+			if (busy) {
+				const deadline = (p.startedAt ?? Date.now()) + p.maxMinutes * 60_000;
+				if (p.timedOut) continue;
+				if (Date.now() < deadline) {
+					this.prototypeTimer(missionId, p.sessionId, deadline);
+					continue;
+				}
+				this.changeTaskPrototype(missionId, taskId, { timedOut: true });
+				await this.deps.store.durable();
+				await this.deps.sessions.stop(p.sessionId).catch((error: unknown) => {
+					console.warn(`pilotd: task prototype chat ${p.sessionId} not stopped: ${error}`);
+				});
+				continue;
+			}
+			const report = (
+				(await this.deps.sessions.lastAssistantReply(p.sessionId, RESEARCH_REPORT_LIMIT)) ?? ""
+			).trim();
+			const artifact = await this.linkPrototype(missionId, p.sessionId, taskId).catch((error: unknown) => {
+				console.warn(`pilotd: task prototype for ${taskId} not linked: ${error}`);
+				return undefined;
+			});
+			this.changeTaskPrototype(missionId, taskId, {
+				state: "reporting",
+				report: report || `The prototype chat ended (${chat.outcome}) without a report.`,
+				...(artifact ? { artifact } : {}),
+			});
+			await this.deps.store.durable();
+		}
+		for (const [taskId, p] of all()) {
+			if (p.state !== "reporting") continue;
+			await this.sendTaskPrototype(missionId, taskId, p);
+		}
+		if (Date.now() < (this.research?.retryAt.get(missionId) ?? 0)) return;
+		for (const [taskId, p] of all()) {
+			if (p.state !== "requested") continue;
+			const running = all().filter(([, x]) => x.state === "starting" || x.state === "running").length;
+			if (running >= PROTOTYPE_CHATS) return;
+			if (!(await this.startTaskPrototype(missionId, taskId, p))) return;
+		}
+	}
+	/** Sends a finished prototype to its builder, once: a lost send is found by its exact input. */
+	private async sendTaskPrototype(missionId: string, taskId: string, p: TaskPrototype): Promise<void> {
+		const builder = this.deps.sessions.get(p.builderSessionId);
+		const operationId = `task-prototype-${p.requestId}`;
+		if (!builder || builder.archivedAt || builder.continuedTo) {
+			this.changeTaskPrototype(missionId, taskId, { state: "reported" });
+			await this.deps.store.durable();
+			return;
+		}
+		const task = this.deps.store.tasks(missionId).find((t) => t.id === taskId);
+		const head = `Your prototype for task #${task?.number ?? taskId} is ready (request ${p.requestId}).`;
+		const message = p.artifact
+			? [
+					head,
+					`Mockup: artifact ${p.artifact.artifactId}, revision ${p.artifact.revision}, made by chat ${p.artifact.sessionId}. Pilot linked it to the task.${p.timedOut ? " Pilot stopped the chat at its time limit." : ""}`,
+					"Ask the user with ask_user which variant they want, naming this artifact in artifacts, with a choice per variant and free text. Build only what they choose. For changes, ask again with mission prototype, which starts from this one.",
+					`The prototype chat's report:\n\n${p.report ?? ""}`,
+				].join("\n\n")
+			: [
+					head,
+					`No mockup came: ${p.reason ?? p.report ?? "the chat published none"}.`,
+					"Ask again with mission prototype if it is worth another try, or ask the user how to go on.",
+				].join("\n\n");
+		try {
+			if (!(await this.deps.sessions.lookupNativeAttentionInput(p.builderSessionId, operationId)))
+				await this.deps.sessions.sendDurable(p.builderSessionId, message, "followUp", operationId, {
+					inputGeneration: builder.inputGeneration ?? 0,
+				});
+		} catch (error) {
+			// Paused or busy: the same words are tried again on the next change, never twice.
+			console.warn(`pilotd: task prototype result for ${taskId} not sent yet: ${error}`);
+			return;
+		}
+		this.changeTaskPrototype(missionId, taskId, { state: "reported" });
+		await this.deps.store.durable();
+	}
+	/** Starts the read-only prototype chat. False when Pilot could not start it now: it tries again later. */
+	private async startTaskPrototype(missionId: string, taskId: string, p: TaskPrototype): Promise<boolean> {
+		const key = `${missionId}:${taskId}`;
+		this.startingPrototypes.add(key);
+		try {
+			const state = this.deps.store.planningWorkers.get(missionId)!;
+			this.authority(state.binding);
+			this.changeTaskPrototype(missionId, taskId, { state: "starting" });
+			await this.deps.store.durable();
+			let sessionId: string;
+			try {
+				const project = this.deps.projects.require(state.binding.projectId);
+				const selection = await this.deps.sessions.selectTaskModel(project.path, p.model, p.thinking);
+				this.authority(state.binding);
+				const mission = this.deps.store.require(missionId);
+				const task = this.deps.store.resolveTask(missionId, taskId);
+				const chat = await this.deps.sessions.spawn(
+					{
+						projectId: state.binding.projectId,
+						missionId,
+						mode: "ask",
+						title: `Prototype for #${task.number}: ${task.title} (up to ${p.maxMinutes} min)`.slice(0, 200),
+						message: taskPrototypeMessage(mission.title, task, p),
+						...selection,
+					},
+					false,
+					undefined,
+					{ role: "explorer", actorSessionId: state.binding.ownerSessionId, mainView: true },
+				);
+				sessionId = chat.id;
+			} catch (error) {
+				this.changeTaskPrototype(missionId, taskId, { state: "requested" });
+				await this.deps.store.durable();
+				this.research?.retryAt.set(missionId, Date.now() + RESEARCH_RETRY_MS);
+				console.warn(`pilotd: task prototype chat for ${taskId} not started: ${error}`);
+				return false;
+			}
+			this.changeTaskPrototype(missionId, taskId, { state: "running", sessionId, startedAt: Date.now() });
+			await this.deps.store.durable();
+			return true;
+		} finally {
+			this.startingPrototypes.delete(key);
+		}
+	}
+	/** Links the newest NSH artifact a prototype chat published to the mission (and task), at its current revision. */
 	private async linkPrototype(
 		missionId: string,
 		sessionId: string,
+		taskId?: string,
 	): Promise<{ sessionId: string; artifactId: string; revision: number } | undefined> {
 		const newest = (await this.deps.sessions.artifacts(sessionId))
 			.filter((a) => a.kind === "nsh")
@@ -2011,7 +2185,14 @@ export class PlanningWorkers {
 		if (!newest) return undefined;
 		this.deps.store.linkArtifact(
 			missionId,
-			{ sessionId, artifactId: newest.id, title: newest.title, kind: newest.kind, revision: newest.revision },
+			{
+				sessionId,
+				artifactId: newest.id,
+				title: newest.title,
+				kind: newest.kind,
+				revision: newest.revision,
+				...(taskId ? { taskId } : {}),
+			},
 			{ sessionId },
 		);
 		await this.deps.store.durable();

@@ -58,6 +58,7 @@ import { MissionTicketReader } from "./mission-ticket-context.ts";
 import { splitTicket } from "./mission-ticket-work.ts";
 import { type MissionActivityQuery, type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
 import { canonicalJSON } from "./operation-journal.ts";
+import { TASK_PROTOTYPE, type TaskPrototype } from "./planning-worker-store.ts";
 import type { ProjectStore } from "./projects.ts";
 import { replacedMissionView } from "./replaced-mission.ts";
 import {
@@ -1894,6 +1895,98 @@ export class MissionService {
 	}
 
 	/** One `mission` tool call from a member chat. Results are compact JSON for the model. */
+	/**
+	 * A builder asks for a prototype of its own published task, or reads it (taskId alone). Pilot makes it in a
+	 * read-only chat and sends the result to this builder. No plan change and no user confirmation; the user still
+	 * chooses from the prototype when the builder asks.
+	 */
+	private async taskPrototype(sessionId: string, missionId: string, args: Record<string, unknown>) {
+		const authorize = () => {
+			this.assertSameProject(sessionId, missionId);
+			const member = this.store.membership(sessionId);
+			if (member?.missionId !== missionId || !member.active || member.role !== "builder")
+				throw new Conflict("Only a builder of this mission can ask for a task prototype");
+			const task = this.store.resolveTask(missionId, args.taskId);
+			if (task.sessionId !== sessionId) throw new Conflict("Ask for prototypes of your own task only");
+			if (!this.store.planningWorkers.get(missionId))
+				throw new Conflict("Task prototypes need a mission planned in Pilot Day");
+			return task;
+		};
+		let task = authorize();
+		const current = () => this.store.planningWorkers.get(missionId)?.taskPrototypes?.[task.id];
+		const view = (p = current()) =>
+			p
+				? {
+						taskId: task.id,
+						requestId: p.requestId,
+						state: p.state,
+						attempts: p.attempts,
+						...(p.sessionId ? { chatUrl: `pilot://chat/${p.sessionId}` } : {}),
+						...(p.artifact ? { artifact: p.artifact } : {}),
+						...(p.reason ? { reason: p.reason } : {}),
+					}
+				: { taskId: task.id, state: "none" };
+		const keys = Object.keys(args);
+		if (keys.every((k) => k === "taskId")) return view();
+		const allowed = ["taskId", "requestId", "question", "prototypeModel", "prototypeThinking", "maxMinutes"];
+		if (keys.some((k) => !allowed.includes(k))) throw new Error(`prototype takes only ${allowed.join(", ")}`);
+		const requestId = args.requestId;
+		if (typeof requestId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+			throw new Error("requestId must be 1-128 letters, digits, dashes or underscores");
+		const prior = current();
+		if (prior?.requestId === requestId) return view(prior);
+		const question = args.question;
+		if (typeof question !== "string" || !question.trim() || question.length > TASK_PROTOTYPE.question)
+			throw new Error(
+				`question must say what to compare and which variants, in 1-${TASK_PROTOTYPE.question} characters`,
+			);
+		const model = args.prototypeModel;
+		if (typeof model !== "string" || !model.trim() || model.length > 256)
+			throw new Error("prototypeModel is the provider/modelId of the chat that makes the prototype");
+		const thinking = args.prototypeThinking;
+		if (thinking !== undefined && (typeof thinking !== "string" || thinking.length > 32))
+			throw new Error("prototypeThinking must be a thinking level");
+		const maxMinutes = args.maxMinutes ?? TASK_PROTOTYPE.minutes;
+		if (
+			typeof maxMinutes !== "number" ||
+			!Number.isSafeInteger(maxMinutes) ||
+			maxMinutes < 5 ||
+			maxMinutes > TASK_PROTOTYPE.minutes
+		)
+			throw new Error(`maxMinutes must be a whole number from 5 to ${TASK_PROTOTYPE.minutes}`);
+		if (prior && !["reported", "failed"].includes(prior.state))
+			throw new Conflict("This task already has a prototype in progress. Read it with taskId alone.");
+		if ((prior?.attempts ?? 0) >= TASK_PROTOTYPE.attempts)
+			throw new Conflict(`This task already had ${TASK_PROTOTYPE.attempts} prototypes. Ask the user how to go on.`);
+		const project = this.projects.require(this.store.require(missionId).projectId);
+		// Refuses a model outside the project's scope or price cap; the error lists the allowed ones.
+		await this.sessions.selectTaskModel(project.path, model, thinking as string | undefined);
+		task = authorize();
+		const state = this.store.planningWorkers.get(missionId)!;
+		if (canonicalJSON(current() ?? null) !== canonicalJSON(prior ?? null))
+			throw new Conflict("This task's prototype changed. Read it with taskId alone.");
+		const next: TaskPrototype = {
+			requestId,
+			builderSessionId: sessionId,
+			question: question.trim(),
+			model,
+			...(thinking ? { thinking: thinking as string } : {}),
+			maxMinutes,
+			state: "requested",
+			sessionId: null,
+			requestedAt: Date.now(),
+			attempts: (prior?.attempts ?? 0) + 1,
+			...(prior?.artifact ? { earlier: prior.artifact } : {}),
+		};
+		this.store.planningWorkers.change(missionId, state.revision, (s) => {
+			s.taskPrototypes = { ...(s.taskPrototypes ?? {}), [task.id]: next };
+		});
+		await this.store.durable();
+		return {
+			...view(next),
+			next: "Pilot starts a read-only prototype chat for it. When the chat finishes, Pilot sends its mockup and report to this chat. End your turn now; do not ask the user until then.",
+		};
+	}
 	async call(sessionId: string, action: MissionAction, args: Record<string, unknown>): Promise<unknown> {
 		if (this.sharing?.membership(sessionId)) return this.sharing.missionCall(sessionId, action, args);
 		const missionId = this.store.missionOf(sessionId);
@@ -2074,6 +2167,8 @@ export class MissionService {
 				const task = this.store.resolveTask(missionId, args.taskId ?? args.id);
 				return this.reports.source(missionId, sessionId, task.id);
 			}
+			case "prototype":
+				return this.taskPrototype(sessionId, missionId, args);
 			case "requestReview":
 			case "retireReview": {
 				const requests = optionalReviewRequests(this.store, this.sessions, this.projects);
