@@ -125,6 +125,7 @@ test("relocated parser/worker payload needs no source writes, project setup or r
 		"call-path-scan.ts",
 		"call-path-syntax.ts",
 		"source-reader.ts",
+		"history-privacy.ts",
 	])
 		await cp(new URL(name, import.meta.url), join(stage, name));
 	// Assert inside the actual worker, not only in its parent process.
