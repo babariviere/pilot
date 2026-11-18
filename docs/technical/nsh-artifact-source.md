@@ -171,7 +171,7 @@ The kernel looks only for the trusted installed code location
 `packages/artifacts/native/pilot-artifact-host`, relative to its own module.
 It never accepts an executable path from a tool/artifact, nor searches PATH or
 scratch. The Day-only immutable input recipe now builds this fourth native
-executable through the supported Cargo/MBX wrapper and checks its compiled
+executable through the Day Cargo wrapper and checks its compiled
 source/recipe identity through its existing source-only Compile operation.
 No new helper command or authored JS execution is added.
 
@@ -240,7 +240,7 @@ node --test --test-name-pattern='NSH scratch' packages/daemon/src/session-worksp
 node --test --test-name-pattern='saved nsh' packages/daemon/src/delivered-artifact.test.ts
 ```
 
-The first command builds only the helper through supported MBX/global cache,
+The first command builds only the helper through the Day Cargo wrapper,
 then selects the directly affected capture/compiler/tool/transport cases. It
 uses the actual Cargo-reported executable, not a guessed shared target path.
 The existing Day CI invokes it too. Without that fixture binding, macOS native

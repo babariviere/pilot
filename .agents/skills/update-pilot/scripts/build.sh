@@ -34,11 +34,10 @@ fi
 [[ "$(shasum -a 256 "$QJS" | cut -d' ' -f1)" == "$QJS_SHA" ]] || { echo "QuickJS-NG archive checksum mismatch: $QJS"; exit 1; }
 
 # Missing tools stop the build here, before any work.
-NSH_DAY_MBX=$(command -v mbx)
 NSH_DAY_CLI=$(realpath "$(brew --prefix nsh)/libexec/bin/nsh")
 NSH_DAY_REAL_CARGO=$(rustup which --toolchain "$RUST_TOOLCHAIN" cargo)
 RUSTC=$(rustup which --toolchain "$RUST_TOOLCHAIN" rustc)
-export NSH_DAY_CARGO_MODE=mbx NSH_DAY_MBX NSH_DAY_CLI NSH_DAY_REAL_CARGO RUSTC
+export NSH_DAY_CLI NSH_DAY_REAL_CARGO RUSTC
 export PILOT_DAY_QUICKJS_ARCHIVE="$QJS"
 export PILOT_SIGNING_POLICY=private-adhoc
 export PILOT_UPDATER_PUBLIC_KEY='MbGhgDgZuJPyC81SSCJ8IVEyLks66acK5s9NKIudSsE=' # docs/technical/day-package-inputs.md

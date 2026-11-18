@@ -68,12 +68,9 @@ def tool(path):
 
 
 def environment(work, tools, inherited, production):
-    """Selected Cargo adapter; no ambient trust, package hooks or Cargo tuning."""
+    """Pinned stock Cargo; no ambient trust, package hooks or Cargo tuning."""
     env = {name: inherited[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "SDKROOT", "DEVELOPER_DIR") if name in inherited}
-    mode = inherited.get("NSH_DAY_CARGO_MODE", "mbx")
-    if mode not in ("mbx", "direct") or (production is not None and mode != "mbx"):
-        raise ValueError("Invalid Cargo mode for Day inputs")
-    env.update(NSH_DAY_CLI=str(tools["nsh"]), NSH_DAY_CARGO_MODE=mode,
+    env.update(NSH_DAY_CLI=str(tools["nsh"]), TMPDIR=str(work),
                NSH_DAY_REAL_CARGO=str(tools["cargo"]), RUSTC=str(tools["rustc"]),
                RUSTDOC=str(tools["rustc"].with_name("rustdoc")),
                RUSTUP_TOOLCHAIN="1.99.1", RUSTUP_AUTO_INSTALL="0",
@@ -81,10 +78,6 @@ def environment(work, tools, inherited, production):
                MACOSX_DEPLOYMENT_TARGET="15.0", npm_config_ignore_scripts="true",
                npm_config_manage_package_manager_versions="false",
                COREPACK_ENABLE_NETWORK="0", COREPACK_ENABLE_AUTO_PIN="0")
-    if mode == "mbx":
-        env["NSH_DAY_MBX"] = str(tools["mbx"])
-    # mbx uses a Unix socket below TMPDIR (macOS sun_path is only 104 bytes).
-    env["TMPDIR"] = str(work)
     env["DYLD_LIBRARY_PATH"] = str(tools["rustc"].parent.parent / "lib")
     if production is not None:
         supplied = {"PILOT_UPDATER_" + key.upper(): production[key] for key in TRUST_FIELDS}
@@ -264,14 +257,13 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     compiler = execute([tools["rustc"], "-vV"], cwd=checkout, env=env)
     if not compiler.startswith("rustc 1.99.1 ") or "host: " + TARGET not in compiler:
         raise ValueError("Expected installed native Rust 1.99.1")
-    if execute([tools["cargo"], "--version"], cwd=checkout, env=env).split()[1] != "1.99.1":
-        raise ValueError("Expected installed Cargo 1.99.1")
+    cargo_version = execute([tools["cargo"], "--version"], cwd=checkout, env=env).strip()
+    if not re.fullmatch(r"cargo 1\.99\.1 \([^)]+\)", cargo_version):
+        raise ValueError("Expected stock Cargo 1.99.1 from rustup which --toolchain 1.99.1 cargo")
     if execute([tools["nsh"], "--version"], cwd=checkout, env=env).strip() != CLI_VERSION:
         raise ValueError("Expected installed unmodified Longbridge NSH 0.5.0")
     if bundle.digest(tools["nsh"]) != CLI_SHA256:
         raise ValueError("Installed NSH release executable checksum mismatch")
-    if env["NSH_DAY_CARGO_MODE"] == "mbx" and not re.fullmatch(r"mbx \d+\.\d+\.\d+", execute([tools["mbx"], "--version"], cwd=checkout, env=env).strip()):
-        raise ValueError("Expected installed mise-managed mbx")
     recipe = bundle.digest(Path(__file__))
     env.update(PILOT_BUILD_SOURCE=expected, PILOT_BUILD_RECIPE=recipe)
     profile = "release" if production is not None else "debug"
@@ -360,8 +352,6 @@ def snapshot_day(expected, output, production=None, *, tools=None, inherited=Non
     inherited = os.environ if inherited is None else inherited
     if tools is None:
         variables = [("nsh", "NSH_DAY_CLI"), ("cargo", "NSH_DAY_REAL_CARGO"), ("rustc", "RUSTC")]
-        if inherited.get("NSH_DAY_CARGO_MODE", "mbx") != "direct":
-            variables.append(("mbx", "NSH_DAY_MBX"))
         tools = {name:tool(inherited[variable]) for name, variable in variables}
     with tempfile.TemporaryDirectory(prefix="day-build-", dir="/tmp") as directory:
         work = Path(directory).resolve()

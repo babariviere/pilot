@@ -45,7 +45,7 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_validated_tuple_only_reaches_shared_native_consumer(self):
         config = day.configuration(self.env)
-        tools = {key: Path("/qualified") / key for key in ("nsh", "cargo", "rustc", "mbx")}
+        tools = {key: Path("/qualified") / key for key in ("nsh", "cargo", "rustc")}
         inherited = self.env | self.legacy | {"PILOT_UPDATER_PRIVATE_KEY": "not-forwarded"}
         env = day.environment(Path("/private/work"), tools, inherited, config)
         for field in day.TRUST_FIELDS:
@@ -90,7 +90,7 @@ class RecipeTests(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.source = "a" * 40
         (self.root / "bin").mkdir()
-        self.tools = {name:self.root / "bin" / name for name in ("nsh", "mbx", "cargo", "rustc")}
+        self.tools = {name:self.root / "bin" / name for name in ("nsh", "cargo", "rustc")}
         for path in self.tools.values():
             path.write_text("#!/bin/sh\nexit 1\n")
             path.chmod(0o755)
@@ -104,20 +104,21 @@ class RecipeTests(unittest.TestCase):
         bundle.write_json(built / "app.json", {"id":bundle.APP_ID})
         return built
 
-    def test_environment_uses_global_mbx_defaults_and_drops_ambient_authority(self):
+    def test_environment_uses_selected_stock_cargo_and_drops_ambient_authority(self):
         inherited = dict(PATH="/usr/bin:/bin", HOME=str(self.root / "user"), PILOT_NEXT_UPDATER_PUBLIC_KEY="fixture",
                          GH_TOKEN="never-forward", NODE_OPTIONS="--import hostile", RUSTFLAGS="bad",
-                         MBX_SOCKET="bad", RUSTC_WRAPPER="bad", NSH_APP_DIR="bad",
+                         CARGO_FORK_AUTO_UPDATE="1", RUSTC_WRAPPER="bad", NSH_APP_DIR="bad",
                          npm_config_ignore_scripts="false", CARGO_TARGET_DIR="bad", CARGO_HOME="bad",
-                         CARGO_BUILD_JOBS="bad", CARGO_PROFILE_DEV_DEBUG="bad")
+                         CARGO_BUILD_JOBS="bad", CARGO_PROFILE_DEV_DEBUG="bad") | {
+                             "NSH_DAY_REAL_CARGO": "/wrong/cargo"}
         env = day.environment(self.root, self.tools, inherited, None)
-        for key in inherited.keys() - {"PATH", "HOME", "npm_config_ignore_scripts"}:
+        for key in inherited.keys() - {"PATH", "HOME", "npm_config_ignore_scripts", "NSH_DAY_REAL_CARGO"}:
             self.assertNotIn(key, env)
         self.assertEqual(env["HOME"], inherited["HOME"])
         self.assertNotIn("CARGO_HOME", env)
         self.assertNotIn("CARGO_TARGET_DIR", env)
         self.assertNotIn("CARGO_INCREMENTAL", env)
-        self.assertFalse(any(key.startswith("MBX_") for key in env))
+        self.assertEqual(env["NSH_DAY_REAL_CARGO"], str(self.tools["cargo"]))
         self.assertEqual(env["CARGO_NET_OFFLINE"], "true")
         self.assertNotIn("CARGO_BUILD_JOBS", env)
         self.assertFalse(any(key.startswith("CARGO_PROFILE_") for key in env))
@@ -130,29 +131,80 @@ class RecipeTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             day.environment(self.root, self.tools, {}, {})
 
-    def test_direct_cargo_is_explicit_and_excludes_mbx(self):
-        tools = {key: value for key, value in self.tools.items() if key != "mbx"}
-        env = day.environment(self.root, tools, {"NSH_DAY_CARGO_MODE": "direct"}, None)
-        self.assertEqual(env["NSH_DAY_CARGO_MODE"], "direct")
-        self.assertNotIn("NSH_DAY_MBX", env)
-        with self.assertRaisesRegex(ValueError, "Invalid Cargo mode"):
-            day.environment(self.root, tools, {"NSH_DAY_CARGO_MODE": "direct"}, {})
-        cargo = tools["cargo"]
-        cargo.write_text('#!/bin/sh\nprintf "direct:%s\\n" "$*"\n')
-        result = subprocess.run([str(bundle.ROOT / "apps/day/scripts/cargo"), "metadata", "--offline"],
-                                env={"PATH": "/usr/bin:/bin", "NSH_DAY_CARGO_MODE": "direct",
-                                     "NSH_DAY_REAL_CARGO": str(cargo), "NSH_DAY_MBX": "/nonexistent"},
-                                capture_output=True, text=True, check=True)
-        self.assertEqual(result.stdout, "direct:metadata --offline\n")
+    def test_cargo_defaults_to_path_and_an_explicit_executable_wins(self):
+        cargo = self.tools["cargo"]
+        report = '#!/bin/sh\nprintf "%s:%s:%s\\n" "$CARGO" "$CARGO_TARGET_DIR" "$*"\n'
+        cargo.write_text(report)
+        stock = cargo.with_name("stock-cargo")
+        stock.write_text(report)
+        stock.chmod(0o755)
+        base = {"PATH": str(cargo.parent) + ":/usr/bin:/bin", "CARGO": "/unrelated/cargo",
+                "CARGO_TARGET_DIR": "/private/target"}
+        for overrides, selected in (({}, cargo), ({"NSH_DAY_REAL_CARGO": str(stock)}, stock)):
+            with self.subTest(selected=selected):
+                result = subprocess.run([bundle.ROOT / "apps/day/scripts/cargo", "metadata", "--offline"],
+                                        env=base | overrides, capture_output=True, text=True, check=True)
+                self.assertEqual(result.stdout, f"{selected}:/private/target:metadata --offline\n")
 
-    def test_cargo_defaults_to_mbx(self):
-        mbx = self.tools["mbx"]
-        mbx.write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo "mbx 1.30.0"; '
-                       'else printf "mbx:%s:%s\\n" "$MBX_CARGO_SHIM_MODE" "$*"; fi\n')
-        result = subprocess.run([str(bundle.ROOT / "apps/day/scripts/cargo"), "metadata"],
-                                env={"PATH": "/usr/bin:/bin", "NSH_DAY_REAL_CARGO": str(self.tools["cargo"]),
-                                     "NSH_DAY_MBX": str(mbx)}, capture_output=True, text=True, check=True)
-        self.assertEqual(result.stdout, "mbx:1:metadata\n")
+    def test_nsh_looks_past_a_stale_target_only_for_the_fork(self):
+        app = self.root / "day"
+        (app / "scripts").mkdir(parents=True)
+        for name in ("nsh.sh", "scripts/cargo", "scripts/build-env.sh", "runner.Cargo.lock"):
+            shutil.copy2(bundle.ROOT / "apps/day" / name, app / name)
+        # Old generated targets were symlinks into the retired build cache.
+        retired = self.root / "mbx/targets/v1/old"
+        retired.mkdir(parents=True)
+        (retired / "kept").touch()
+        generated = app / ".nsh/rust"
+        generated.mkdir(parents=True)
+        (generated / "target").symlink_to(retired)
+        (app / "target").mkdir()
+        (app / "target/runner").write_text("stale")
+        # Model the fork's workspace-local output and NSH 0.5's lookup order.
+        self.tools["cargo"].write_text("""#!/bin/sh
+set -eu
+if [ "$1" = --version ]; then
+    printf '%s\\n' "$VERSION"
+elif [ "$1" = build ]; then
+    dest=${CARGO_TARGET_DIR:-.nsh/rust/target}
+    mkdir -p "$dest"
+    echo fresh > "$dest/runner"
+fi
+""")
+        self.tools["nsh"].write_text("""#!/bin/sh
+set -eu
+if [ "$1" = --version ]; then
+    echo 'nsh 0.5.0 (f4d68f7)'
+    exit
+fi
+export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$PWD/target}
+"$CARGO" build --manifest-path .nsh/rust/Cargo.toml
+if [ -f "$CARGO_TARGET_DIR/runner" ]; then
+    cat "$CARGO_TARGET_DIR/runner"
+else
+    cat .nsh/rust/target/runner
+fi
+""")
+        base = {"PATH": str(self.tools["cargo"].parent) + ":/usr/bin:/bin",
+                "NSH_DAY_CLI": str(self.tools["nsh"])}
+        command = [app / "nsh.sh", "--verbose", "build"]
+        fork = base | {"VERSION": "cargo 1.102.0 (fixture) (huacnlee/cargo 0.103.0-1)"}
+        result = subprocess.run(command, env=fork, capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout, "fresh\n")
+        self.assertEqual((app / "target/runner").read_text(), "stale")
+        self.assertFalse((generated / "target").is_symlink())
+        self.assertTrue((retired / "kept").exists())
+        self.assertFalse((retired / "runner").exists())
+        isolated = self.root / "isolated"
+        result = subprocess.run(command, env=fork | {"CARGO_TARGET_DIR": str(isolated)},
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("use stock Cargo", result.stderr)
+        stock = base | {"VERSION": "cargo 1.99.1 (fixture)", "CARGO_TARGET_DIR": str(isolated),
+                        "NSH_DAY_REAL_CARGO": str(self.tools["cargo"])}
+        result = subprocess.run(command, env=stock, capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout, "fresh\n")
+        self.assertTrue((isolated / "runner").exists())
 
     def test_selected_xcode_survives_the_isolated_build_environment(self):
         selected = "/Applications/Xcode_26.2.app/Contents/Developer"
@@ -343,6 +395,17 @@ class RecipeTests(unittest.TestCase):
                 day.compile_snapshot(self.root, self.root, self.root / "out", self.source,
                                      self.tools, {}, connected_only=True)
 
+    def test_snapshot_refuses_the_fork_even_if_its_cargo_version_matches(self):
+        app = self.root / "apps/day/native"
+        app.mkdir(parents=True)
+        shutil.copyfile(bundle.ROOT / "apps/day/native/Cargo.lock", app / "Cargo.lock")
+        for version in ("cargo 1.102.0 (fixture) (huacnlee/cargo 0.103.0-1)",
+                        "cargo 1.99.1 (fixture) (huacnlee/cargo 0.103.0-1)"):
+            with self.subTest(version=version), patch.object(day, "execute", side_effect=[self.compiler, version]) as run:
+                with self.assertRaisesRegex(ValueError, "stock Cargo 1.99.1"):
+                    day.compile_snapshot(self.root, self.root, self.root / "out", self.source, self.tools, {})
+                self.assertEqual(run.call_count, 2)
+
     def compile_recipe(self, *, connected_only, configured=False):
         checkout = self.root / "source"
         app = checkout / "apps/day"
@@ -380,7 +443,7 @@ class RecipeTests(unittest.TestCase):
             if args == [str(self.tools["rustc"]), "-vV"]:
                 return self.compiler
             if args[-1] == "--version":
-                return {"nsh":day.CLI_VERSION, "cargo":"cargo 1.99.1 (fixture)", "mbx":"mbx 1.30.0"}[Path(args[0]).name]
+                return {"nsh": day.CLI_VERSION, "cargo": "cargo 1.99.1 (fixture)"}[Path(args[0]).name]
             if args[0] == "/usr/bin/lipo":
                 return "arm64"
             if "metadata" in args:
@@ -391,8 +454,8 @@ class RecipeTests(unittest.TestCase):
             if "--message-format=json-render-diagnostics" in args:
                 self.assertNotIn("CARGO_TARGET_DIR", env)
                 self.assertNotIn("CARGO_HOME", env)
-                target = self.root / "global-mbx-target"
-                target.mkdir(exist_ok=True)
+                target = Path(args[args.index("--manifest-path") + 1]).parent / "target" / ("release" if production else "debug")
+                target.mkdir(parents=True, exist_ok=True)
                 name = args[args.index("--bin") + 1]
                 path = target / name
                 path.write_bytes(("faux:" + name).encode())

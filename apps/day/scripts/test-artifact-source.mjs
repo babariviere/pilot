@@ -28,7 +28,7 @@ for await (const line of createInterface({ input: command.stdout })) {
 			executable = value.executable;
 		if (value.reason === "compiler-message" && value.message?.rendered) process.stderr.write(value.message.rendered);
 	} catch {
-		/* MBX may also print a non-JSON status line. */
+		/* Skip non-JSON status lines. */
 	}
 }
 const code = command.exitCode ?? (await new Promise((resolve) => command.once("close", resolve)));

@@ -7,7 +7,7 @@ bootstrap, sole `NativeHost` and deferred close owner. NSH stays at unmodified
 
 ## Prepare without assembly or signing
 
-Use current main, the existing installed NSH/Rust tools, global MBX defaults and
+Use current main, the installed NSH and Rust tools, and
 the frozen pnpm dependency tree. This app-only lane does not need the visual
 worker's QuickJS archive. The environment/tool paths are described in
 [Day package inputs](day-package-inputs.md#entry-points).

@@ -4,26 +4,8 @@ set -euo pipefail
 # shellcheck source=apps/day/scripts/build-env.sh
 source "$(dirname "$0")/build-env.sh"
 export CARGO="$NSH_DAY_REAL_CARGO"
-if [[ "$NSH_DAY_CARGO_MODE" == direct ]]; then
-	exec "$NSH_DAY_REAL_CARGO" "$@"
+# This path is for NSH's lookup only. Do not ask the fork to write to it.
+if [[ "${CARGO_TARGET_DIR:-}" == "$day/.nsh/cargo-fork-target" ]]; then
+	unset CARGO_TARGET_DIR
 fi
-# Use Cargo's namespace (including metadata and --version), not mbx commands.
-# These are the dispatch variables used by mbx 1.26's own setup launcher.
-export MBX_CARGO_SHIM_MODE=1 MBX_CARGO_SHIM_PATH="$day/scripts/cargo"
-# NSH builds its generated workspace with CARGO_TARGET_DIR=apps/day/target. mbx leaves an explicit target
-# alone, so each checkout kept about 10 GB that mbx gc never collects. Let mbx manage the generated workspace's
-# target instead (shared store, size budgets), and keep apps/day/target as a link to it for NSH.
-if [[ "${CARGO_TARGET_DIR:-}" == "$day/target" ]]; then
-	generated="$day/.nsh/rust"
-	if [[ -d "$day/target" && ! -L "$day/target" && ! -e "$generated/target" ]]; then
-		mv "$day/target" "$generated/target" # Keep the built files; adopt moves them under mbx.
-	fi
-	if [[ -d "$generated/target" && ! -L "$generated/target" ]]; then
-		env -u MBX_CARGO_SHIM_MODE -u MBX_CARGO_SHIM_PATH "$NSH_DAY_MBX" adopt "$generated" >&2
-	fi
-	if [[ ! -e "$day/target" && ! -L "$day/target" ]]; then
-		ln -s .nsh/rust/target "$day/target"
-	fi
-	if [[ -L "$day/target" ]]; then unset CARGO_TARGET_DIR; fi
-fi
-exec "$NSH_DAY_MBX" "$@"
+exec "$NSH_DAY_REAL_CARGO" "$@"

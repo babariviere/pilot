@@ -35,14 +35,15 @@ New Day distributions are named `Pilot.app`, display Pilot, and can install at
 
 ## Run
 
-Prerequisites: macOS arm64, Command Line Tools, Rust 1.99.1, installed
-NSH 0.5.0 (`f4d68f7`), and mise-managed `mbx` on `PATH`. `NSH_DAY_CLI` can
+Prerequisites: macOS arm64, Command Line Tools, Rust 1.99.1, Cargo on `PATH`,
+and installed NSH 0.5.0 (`f4d68f7`). `NSH_DAY_CLI` can
 select a local official distribution without changing a global installation. Prepare the
 workspace dependencies before running checks. Cargo may download locked crates.
-Day CI sets `NSH_DAY_CARGO_MODE=direct` to run the selected real Cargo directly.
-The default for local development remains the MBX adapter.
-With it, `apps/day/target` is a link into mbx's managed targets, so `mbx gc` and mbx's size limits clean it
-like other Rust builds. The first build in a checkout moves an existing `apps/day/target` there.
+Local commands use the Cargo on `PATH`, including [huacnlee/cargo](https://github.com/huacnlee/cargo)
+if installed. The fork ignores target directory overrides. NSH finds the fork's outputs in each generated
+workspace's `.nsh/rust/target` instead of the app's `target`.
+For an explicit target directory, set `NSH_DAY_REAL_CARGO="$(rustup which --toolchain 1.99.1 cargo)"`
+to select stock Cargo, as CI and the package input build do.
 
 From the repository root:
 

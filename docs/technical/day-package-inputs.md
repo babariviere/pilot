@@ -10,8 +10,8 @@ and legacy apps are unchanged.
 The input is a full immutable Pilot commit, not a working tree or bookmark.
 The builder extracts Git objects into a fresh private directory, then:
 
-1. Checks the native macOS arm64 host, installed Rust/Cargo 1.99.1,
-   mise-managed mbx and official Longbridge NSH 0.5.0. The installed CLI checksum
+1. Checks the native macOS arm64 host, installed stock Rust/Cargo 1.99.1,
+   and official Longbridge NSH 0.5.0. The installed CLI checksum
    is pinned. Day's lock must select only release f4d68f7 NSH crates and
    must not contain GPUI. There is no CLI-build or source-patch fallback.
 2. Builds Day's own `pilot-desktop`, with `macos-host`, and the existing
@@ -42,12 +42,12 @@ This full-distribution recipe remains the default, including in CI. The
 [connected development candidate](day-connected-candidate.md) explicitly selects
 only its consumed main executable and NSH resources in the same builder. It has
 a distinct receipt kind, no helper/visual evidence and no QuickJS archive input.
-Both selections use the same source-matched recipe hash and shared local caches;
-no separate target/store or candidate-specific builder is added.
+Both selections use the same source-matched recipe hash and installed dependency
+sources. No separate candidate-specific builder is added.
 
-Cargo is offline and runs through the current Day MBX dispatcher. The builder
-keeps the real HOME so global MBX settings and shared caches apply. It does not
-set Cargo cache/target paths, job counts, debug or incremental settings.
+Cargo is offline and uses the pinned stock executable, independently of the
+user's global Cargo. The builder keeps the real HOME so Cargo can read installed
+dependency sources. Build outputs remain in the private checkout.
 Ambient trust, provider/discovery credentials, compiler wrappers, Cargo tuning,
 NSH resource overrides and package-manager configuration are not inherited.
 Missing dependencies fail, rather than bootstrapping or repairing shared state.
@@ -82,13 +82,12 @@ not a successful update.
 ## Entry points
 
 Prepare dependencies/tools separately. The builder never bootstraps them.
-Use absolute qualified tool paths, global MBX defaults and a fresh output:
+Use absolute paths to the qualified tools and a fresh output directory:
 
 ```sh
 export NSH_DAY_CLI=/absolute/installed/longbridge/nsh
-export NSH_DAY_MBX="$(mise which mbx)"
-export NSH_DAY_REAL_CARGO=/absolute/installed/toolchain/bin/cargo
-export RUSTC=/absolute/installed/toolchain/bin/rustc
+export NSH_DAY_REAL_CARGO="$(rustup which --toolchain 1.99.1 cargo)"
+export RUSTC="$(rustup which --toolchain 1.99.1 rustc)"
 export PILOT_DAY_QUICKJS_ARCHIVE=/private/build/quickjs-ng-0.17.0.tar.gz
 python3 apps/desktop/scripts/bundle_runtime.py rust --gui day \
   --source FULL_COMMIT --output /private/build/day-inputs
@@ -155,8 +154,8 @@ input compilation or full bundle assembly under this existing policy.
 These are commands for a separately authorized production run, **not commands
 executed as task verification**. Use tools from the selected immutable source,
 with the qualified installed paths above, frozen dependencies and offline Cargo
-inputs already prepared (see `prepare-day-qualification.py`). Local builds use
-MBX, never CI's direct-Cargo setting. Source must include the daemon handoff
+inputs already prepared (see `prepare-day-qualification.py`). Local and CI
+package builds use the same pinned Cargo. Source must include the daemon handoff
 change `29102eb5f20f735c208300769f65cd9227279986` and this CLI change. Capture one
 full commit once; do not resolve a moving branch again between steps.
 
@@ -166,7 +165,6 @@ set -euo pipefail
 : "${BUILD:?Set the explicit numeric target build}"
 [[ "$SOURCE" =~ ^[0-9a-f]{40}$ ]]
 git merge-base --is-ancestor 29102eb5f20f735c208300769f65cd9227279986 "$SOURCE"
-export NSH_DAY_CARGO_MODE=mbx
 export PILOT_SIGNING_POLICY=private-adhoc
 export PILOT_UPDATER_PUBLIC_KEY='MbGhgDgZuJPyC81SSCJ8IVEyLks66acK5s9NKIudSsE='
 export PILOT_UPDATER_REPOSITORY=babariviere/pilot

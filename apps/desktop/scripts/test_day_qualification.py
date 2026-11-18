@@ -265,7 +265,7 @@ class WorkflowTests(unittest.TestCase):
                           "gui_release.py macos", "nsh.sh package", "codesign"):
             self.assertNotIn(forbidden, workflow)
         self.assertIn('bundle_runtime.py bundle --unsigned-day --source "$SOURCE"', workflow)
-        self.assertIn('bundle_runtime.py verify --unsigned-day "$RUNNER_TEMP/day-bundle/Pilot Next.app"', workflow)
+        self.assertIn('bundle_runtime.py verify --unsigned-day "$RUNNER_TEMP/day-bundle/Pilot.app"', workflow)
         self.assertIn('path: ${{ runner.temp }}/Pilot-Day-unsigned.zip', workflow)
         self.assertIn("if-no-files-found: error", workflow)
         callers = []
@@ -297,12 +297,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("discover -s apps/day/scripts -p 'test_*.py'", job)
         native = (ROOT / ".github/workflows/day-qualification.yml").read_text()
         self.assertIn("--frozen-lockfile --ignore-scripts", native)
-        self.assertIn("NSH_DAY_CARGO_MODE: direct", native)
-        self.assertNotIn("mise which mbx", native)
-        self.assertNotIn("mr-boxington", native)
+        self.assertIn('NSH_DAY_REAL_CARGO=$(rustup which --toolchain 1.99.1 cargo)', native)
+        self.assertIn('bundle_runtime.py native --gui day --source "$SOURCE"', native)
         self.assertIn("$stage/nsh/bin/nsh", native)
         self.assertIn(day.CLI_SHA256, native)
-        self.assertIn("for file in App Plan Intake Update;", native)
+        self.assertIn("for file in App Plan Intake Update ", native)
         self.assertIn("--manifest-path apps/day/native/Cargo.toml --features macos-host --lib", native)
         self.assertIn("--test boundary --test connected -- --test-threads=1", native)
         self.assertNotIn("nsh.sh test Native", native)
@@ -334,10 +333,10 @@ class DependencyPreparationTests(unittest.TestCase):
                 path = Path(args[-1])
                 self.assertTrue(path.read_text().endswith("\n[workspace]\n"))
                 self.assertEqual((path.parent / "Cargo.lock").read_bytes(),
-                                 (ROOT / "apps/desktop/Cargo.lock").read_bytes())
+                                 (ROOT / "apps/day/visual-worker.Cargo.lock").read_bytes())
                 (path.parent / "Cargo.lock").write_text('[[package]]\nname="pilot-visual-worker"\nversion="0.1.0"\n')
         before = {path:bundle.digest(path) for path in (ROOT / "apps/desktop/visual-worker/Cargo.toml",
-                   ROOT / "apps/desktop/Cargo.lock", ROOT / "apps/day/native/Cargo.lock")}
+                   ROOT / "apps/day/visual-worker.Cargo.lock", ROOT / "apps/day/native/Cargo.lock")}
         with patch.object(prepare.subprocess, "run", side_effect=run):
             prepare.main()
         self.assertEqual(len(calls), 5)
