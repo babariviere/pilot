@@ -419,3 +419,11 @@ test("mission page scroll on a real platform: what is at the top of the screen s
 	await app.screenshot("output/mission-scroll-after-update.png");
 	// Each real drag and read is a round trip to the macOS driver; the page itself waits on nothing.
 }, 60_000);
+test("capture Linear linked work", async () => {
+	const app = await open("./LinearFixture.tsx", { platform: "macos", width: 1100, height: 1200 });
+	await app.waitFor("id:incoming");
+	await app.press("id:linear-open");
+	await app.press("id:linear-issue-ln-231");
+	await app.waitFor("id:linear-detail-ln-231");
+	await app.screenshot("output/linear-linked-work.png");
+});

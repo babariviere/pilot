@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import type { Project, TrackingJson } from "@pilot/protocol";
 import { createLinearSizePoller, parseSize } from "./linear-size.ts";
-import { TrackedItemStore } from "./tracked-items.ts";
-import { TrackedItemDisk } from "./tracked-items-disk.ts";
 import { linearPrefill } from "./linear-source.ts";
 import type { SourcePollContext } from "./sources.ts";
+import { TrackedItemStore } from "./tracked-items.ts";
+import { TrackedItemDisk } from "./tracked-items-disk.ts";
 
 test("size parser rejects extra fields, tools, prose and malformed enums", () => {
 	assert.equal(parseSize('{"size":"needs_planning"}'), "needs_planning");
@@ -16,18 +16,16 @@ test("size parser rejects extra fields, tools, prose and malformed enums", () =>
 		assert.throws(() => parseSize(text));
 });
 
-test("size cache reserves once per version, shares budget, and corrections survive source refresh", () => {
+test("size cache reserves once per version without a separate daily cap, and corrections survive refresh", () => {
 	const disk = new TrackedItemDisk(":memory:");
 	try {
-		assert.equal(disk.sizes.reserve("p", "i", 1, 1).state, "reserved");
+		assert.equal(disk.sizes.reserve("p", "i", 1).state, "reserved");
 		disk.sizes.finish("p", "i", 1, "quick_fix");
-		assert.deepEqual(disk.sizes.reserve("p", "i", 1, 1), { state: "cached", size: "quick_fix" });
-		assert.equal(disk.sizes.reserve("p", "i", 2, 1).state, "reserved");
+		assert.deepEqual(disk.sizes.reserve("p", "i", 1), { state: "cached", size: "quick_fix" });
+		assert.equal(disk.sizes.reserve("p", "i", 2).state, "reserved");
 		disk.sizes.finish("p", "i", 1, "needs_planning");
-		assert.deepEqual(disk.sizes.reserve("p", "i", 2, 1), { state: "cached", size: "unknown" });
-		for (let i = 0; i < 198; i++) assert.equal(disk.sizes.reserve("other", String(i), 1, 1).state, "reserved");
-		assert.equal(disk.sizes.reserve("other", "overflow", 1, 1).state, "budget");
-		assert.equal(disk.sizes.reserve("other", "overflow", 1, 86_400_001).state, "reserved");
+		assert.deepEqual(disk.sizes.reserve("p", "i", 2), { state: "cached", size: "unknown" });
+		for (let i = 0; i < 200; i++) assert.equal(disk.sizes.reserve("other", String(i), 1).state, "reserved");
 		const item = {
 			externalId: "i",
 			title: "Repair export",

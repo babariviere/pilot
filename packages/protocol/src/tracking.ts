@@ -140,7 +140,47 @@ export interface LinearWorkflowStateOption extends LinearWorkflowState {
 	/** Linear category, for example unstarted, started or completed. */
 	type: string;
 }
+export interface MissionLinearSync {
+	state: "idle" | "pending" | "synced" | "paused" | "error" | "terminal";
+	target?: "inProgress" | "inReview" | "merged";
+	reason?: string;
+	/** An external closure needs human plan review, not automatic task changes. */
+	reconcilePlan?: boolean;
+	/** Separate execution hold, not a manual status pause. */
+	reassigned?: boolean;
+	error?: string;
+	/** Fixed, sanitized mission-sync diagnostics, independent of background discovery health. */
+	failure?: {
+		stage: "issue" | "states" | "configuration" | "prepare" | "write" | "confirm" | "cancellation";
+		category:
+			| "sign_in"
+			| "access_denied"
+			| "not_found"
+			| "configuration"
+			| "transport"
+			| "rate_limited"
+			| "invalid_response"
+			| "write_failed"
+			| "remote_error"
+			| "unknown";
+	};
+	issueId?: string;
+	teamId?: string;
+	observedStateId?: string;
+	observedStateName?: string;
+	updatedAt: number;
+	retryAt?: number;
+}
+
 export interface TrackedItem {
+	/** Read-only projection on Day's saved Linear page. Not part of a start intent. */
+	linearManagement?: {
+		sessionId?: string;
+		missionId?: string;
+		enabled: boolean;
+		pin: string;
+		status?: MissionLinearSync;
+	};
 	/** Local intake CAS, independent of source timestamps and Slack status. */
 	revision: number;
 	triageState: "new" | "later" | "discarded";
@@ -250,6 +290,8 @@ export interface IntakeIntent {
 	/** Start creates exactly this Build chat, optionally in the selected mission. */
 	sessionId?: string;
 	missionId?: string;
+	/** Explicit user choice; omitted means reference only. */
+	manageStatus?: boolean;
 }
 export type SourceStatus = "not_configured" | "idle" | "ok" | "syncing" | "sign_in_required" | "error";
 /** Browser sign-in to the dedicated MCP server of a kind, run by pilotd through pi's MCP OAuth flow.

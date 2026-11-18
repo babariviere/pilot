@@ -169,7 +169,7 @@ prove access to live Linear/Slack. No alternate routes or stores are needed.
 
 ### The Linear page
 
-Day's connected window shows this read on a read-only Linear page, opened from
+Day's connected window shows this saved read on the Linear page, opened from
 "Your Linear issues" in New on Today when Linear is one of the project's sources.
 `linearFeed.ts` reads only when the page opens, on Read again and when Today's
 requests change while it is open; the window's startup does not call it.
@@ -183,8 +183,8 @@ requests change while it is open; the window's startup does not call it.
   a failed later read keeps the last one and says so.
 - Rows group by Linear state type. A row's place comes from `missionId`/`sessionId`
   and `triageState` only, plus whether New on Today lists its exact ID. Earlier
-  links are counted from `missionIds`/`sessionIds`. The page offers only "Open the
-  mission" (a mission on Today) and "Show it in New"; triage stays in New.
+  links are counted from `missionIds`/`sessionIds`. Eligible issues share New's
+  explicit start and prefill controls. Triage stays in New.
 - `more > 0` always shows how many saved rows are not shown; there is no paging.
 - A close or update saves the page in the window's `SavedView.linear`, as
   `<project>` or `<project>/<tracked item>` with the issue open in place, plus
@@ -239,9 +239,13 @@ is created through `spawnDurable`, optionally joining the explicitly chosen
 same-project active mission under existing mission/lifecycle gates. A final
 configuration guard also runs in the normal metadata creation path.
 
-The existing confirmed-start link is recorded only after durable chat creation.
-Its existing best-effort Slack eyes / Linear state side effects remain exactly
-on that path. No other external write is added. A creation receipt proves
+The confirmed-start link is recorded only after durable chat creation. Slack
+keeps its start reaction. Linear's default path is reference only. An explicit
+`manageStatus: true` reserves the sole manager before chat admission; the sync
+service requires the exact saved chat creation before it can write. Changes to
+an existing chat's management use a native-capability route with an exact pin
+on the linked issue, chat and sync state. A stale or lost reply requires a fresh
+read, not an automatic retry. A creation receipt proves
 durable chat creation and a saved opening input, not agent progress, successful execution, delivery,
 production release or user acceptance.
 

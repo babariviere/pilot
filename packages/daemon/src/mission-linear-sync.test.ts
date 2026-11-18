@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
-import type { LinearStateMapping, MissionTaskStatus } from "@pilot/protocol";
+import type { LinearStateMapping, MissionTaskStatus, SessionSummary } from "@pilot/protocol";
 import { BackgroundJobDiagnostics, jobConfigurationKey } from "./background-job-diagnostics.ts";
 import { MissionLinearSyncService } from "./mission-linear-sync.ts";
 import { MissionStore } from "./missions.ts";
@@ -43,6 +43,7 @@ function remote(n = 1, state = "todo", teamId = "child") {
 		status: states.find((s) => s.id === state)!.name,
 		statusId: state,
 		statusType: states.find((s) => s.id === state)!.type,
+		assigneeId: "viewer",
 	};
 }
 
@@ -71,11 +72,13 @@ async function fixture(t: TestContext, disk = false, planningVersion?: 1) {
 	const reads: Array<Record<string, unknown>> = [];
 	let hook: ((tool: string, args: Record<string, unknown>) => void | Promise<void>) | undefined;
 	let failure: "before" | "after" | undefined;
+	let chat: SessionSummary | undefined;
 	const mcp: SourceMcpClient = {
 		async call(kind, tool, args, signal) {
 			assert.equal(kind, "linear");
 			signal.throwIfAborted();
 			await hook?.(tool, args);
+			if (tool === "me") return { id: "viewer" };
 			if (tool === "states") return states;
 			const issue = issues.find((i) => i.id === args.id || i.identifier === args.id);
 			assert.ok(issue, `unexpected issue ${args.id}`);
@@ -83,7 +86,7 @@ async function fixture(t: TestContext, disk = false, planningVersion?: 1) {
 				reads.push(args);
 				// Match get_issue's selected-field contract. Returning our whole internal fixture hid
 				// unsupported requests and accidentally supplied identifier/statusId to every caller.
-				const allowed = new Set(["id", "uuid", "url", "teamId", "status", "statusType"]);
+				const allowed = new Set(["id", "uuid", "url", "teamId", "status", "statusType", "assigneeId"]);
 				const fields = args.fields as string[];
 				if (fields.some((field) => !allowed.has(field))) throw new SourceToolError("Invalid fields selection");
 				const payload = { ...issue, uuid: issue.id };
@@ -103,7 +106,8 @@ async function fixture(t: TestContext, disk = false, planningVersion?: 1) {
 		},
 	};
 	const diagnostics = new BackgroundJobDiagnostics();
-	let service = new MissionLinearSyncService(store, projects, mcp, diagnostics);
+	const session = (id: string) => (chat?.id === id ? chat : undefined);
+	let service = new MissionLinearSyncService(store, projects, mcp, diagnostics, session);
 	t.after(async () => {
 		await service.stop();
 		await store.durable();
@@ -128,6 +132,9 @@ async function fixture(t: TestContext, disk = false, planningVersion?: 1) {
 		issues,
 		writes,
 		reads,
+		setChat(value: Partial<SessionSummary> = {}) {
+			chat = { id: "managed-chat", projectId: project.id, mode: "build", ...value } as SessionSummary;
+		},
 		setHook(value: typeof hook) {
 			hook = value;
 		},
@@ -155,10 +162,48 @@ async function fixture(t: TestContext, disk = false, planningVersion?: 1) {
 			await store.durable();
 			store.close();
 			store = new MissionStore(file);
-			service = new MissionLinearSyncService(store, projects, mcp);
+			service = new MissionLinearSyncService(store, projects, mcp, diagnostics, session);
 		},
 	};
 }
+
+test("an existing chat's explicit management syncs progress and review; reassignment clears only its hold", async (t) => {
+	const f = await fixture(t, true);
+	f.setChat();
+	const issue = remote(2);
+	f.issues.push(issue);
+	f.store.addLinearChatLink(f.project.id, "managed-chat", issue.url);
+	await f.poll();
+	assert.deepEqual(
+		f.writes.map((w) => w.state),
+		["active"],
+	);
+	f.setChat({ pullRequest: { state: "open" } as SessionSummary["pullRequest"] });
+	await f.poll();
+	assert.deepEqual(
+		f.writes.map((w) => w.state),
+		["active", "review"],
+	);
+	f.state("todo", 1);
+	issue.assigneeId = "someone-else";
+	await f.poll();
+	assert.match(f.store.linearWorkHold("managed-chat")!, /Assigned/);
+	let control = f.store.linearChatControl(f.project.id, "managed-chat", issue.url)!;
+	assert.equal(control.status?.state, "paused");
+	await f.restart();
+	issue.assigneeId = "viewer";
+	await f.poll();
+	assert.equal(f.store.linearWorkHold("managed-chat"), undefined);
+	assert.equal(f.writes.length, 2, "manual status pause survives return");
+	control = f.store.linearChatControl(f.project.id, "managed-chat", issue.url)!;
+	f.store.changeLinearChatManagement(f.project.id, "managed-chat", issue.url, control.version, "resume");
+	await f.poll();
+	assert.equal(f.writes.at(-1)?.state, "review");
+	const lastWrite = f.writes.length;
+	f.setChat({ outcome: "done", pullRequest: { state: "merged" } as SessionSummary["pullRequest"] });
+	await f.poll();
+	assert.equal(f.writes.length, lastWrite);
+});
 
 test("linked sync health reuses authoritative failure stages/categories and inspection never writes", async (t) => {
 	const f = await fixture(t);
@@ -179,7 +224,7 @@ test("linked sync health reuses authoritative failure stages/categories and insp
 	assert.deepEqual([f.reads.length, f.writes.length], before);
 });
 
-test("aggregate actual task transitions through progress, review and Merged, never references", async (t) => {
+test("aggregate task transitions through progress and review, never references or completion", async (t) => {
 	const f = await fixture(t);
 	await f.poll();
 	assert.equal(f.writes.length, 0);
@@ -197,24 +242,30 @@ test("aggregate actual task transitions through progress, review and Merged, nev
 	assert.equal(f.writes.at(-1)?.state, "review");
 	f.set("2", "done");
 	await f.poll();
-	assert.equal(f.writes.at(-1)?.state, "merged");
-	assert.equal(f.status().state, "synced");
+	assert.deepEqual(
+		f.writes.map((w) => w.state),
+		["active", "review"],
+	);
 	assert.equal(f.status().teamId, "child", "root selection isn't the actual issue team");
 	assert.ok(f.reads.slice(1).every((r) => r.id === f.issues[0]!.id));
 });
 
-test("coordinator-owned planning retains canceled-ticket evidence without automatically dropping tasks", async (t) => {
+test("coordinator-owned planning retains canceled-ticket evidence and asks for reconciliation", async (t) => {
 	const f = await fixture(t, false, 1);
 	f.state("canceled");
 	await f.poll();
 	assert.equal(f.status().state, "terminal");
+	assert.equal(f.status().reconcilePlan, true);
+	assert.match(f.store.require(f.mission.id).needsYouReason!, /Review the proposed plan change/);
+	assert.throws(() => f.store.prepareTaskStart(f.mission.id, ["1"]), /needs plan review/);
+	assert.doesNotThrow(() => f.store.prepareTaskStart(f.mission.id, ["3"]));
 	assert.equal(f.store.resolveTask(f.mission.id, "1").status, "todo");
 	assert.equal(f.store.resolveTask(f.mission.id, "2").status, "todo");
 	assert.equal(f.writes.length, 0);
 });
 
 for (const state of ["deployed", "canceled", "duplicate"]) {
-	test(`preserve ${state}; inbound cancellation drops only unfinished contributors`, async (t) => {
+	test(`preserve ${state}; keep task status and hold only affected unfinished contributors`, async (t) => {
 		const f = await fixture(t);
 		f.set("1", "done");
 		f.state(state);
@@ -222,23 +273,24 @@ for (const state of ["deployed", "canceled", "duplicate"]) {
 		assert.equal(f.writes.length, 0);
 		assert.equal(f.status().state, "terminal");
 		assert.equal(f.store.resolveTask(f.mission.id, "1").status, "done");
-		assert.equal(f.store.resolveTask(f.mission.id, "2").status, state === "deployed" ? "todo" : "dropped");
+		assert.equal(f.store.resolveTask(f.mission.id, "2").status, "todo");
+		if (state !== "deployed") assert.throws(() => f.store.prepareTaskStart(f.mission.id, ["2"]), /needs plan review/);
 		assert.equal(f.store.resolveTask(f.mission.id, "3").status, "todo");
 	});
 }
 
-test("a shared task is preserved for another active ticket; fresh peer cancellation permits drop", async (t) => {
+test("shared task history is kept and each closed issue needs review", async (t) => {
 	const f = await fixture(t);
 	const peer = f.store.addResource(f.mission.id, { url: url(2), linearRole: "managed" });
 	f.store.addResource(f.mission.id, { url: url(2), taskId: "2", linearRole: "contribution" });
 	f.issues.push(remote(2));
 	f.state("canceled");
 	await f.poll();
-	assert.equal(f.store.resolveTask(f.mission.id, "1").status, "dropped");
+	assert.equal(f.store.resolveTask(f.mission.id, "1").status, "todo");
 	assert.equal(f.store.resolveTask(f.mission.id, "2").status, "todo");
 	f.state("duplicate", 1);
 	await f.poll();
-	assert.equal(f.store.resolveTask(f.mission.id, "2").status, "dropped");
+	assert.equal(f.store.resolveTask(f.mission.id, "2").status, "todo");
 	assert.equal(f.store.linearSyncRecord(peer.id)!.status.state, "terminal");
 });
 
@@ -247,14 +299,13 @@ test("missing mappings fail actionably and durably; retry budget is bounded and 
 	t.mock.method(Date, "now", () => now);
 	const f = await fixture(t, true);
 	await f.projects.update(f.project.id, { tracking: { linearTeam: "root", slackChannels: [] } });
-	f.set("1", "done");
-	f.set("2", "done");
+	f.set("1", "in_progress");
 	for (let i = 0; i < 6; i++) {
 		now += 600_000;
 		await f.poll();
 	}
 	assert.equal(f.status().state, "error");
-	assert.match(f.status().error!, /merged.*actual team.*Project settings/);
+	assert.match(f.status().error!, /inProgress.*actual team.*Project settings/);
 	assert.equal(f.store.linearSyncRecord(f.manager.id)!.attempts, 5);
 	const reads = f.reads.length;
 	await f.restart();
@@ -269,7 +320,7 @@ test("missing mappings fail actionably and durably; retry budget is bounded and 
 	});
 	f.store.setLinearSyncPaused(f.mission.id, f.manager.id, "resume");
 	await f.poll();
-	assert.equal(f.writes.at(-1)?.state, "merged");
+	assert.equal(f.writes.at(-1)?.state, "active");
 });
 
 test("manual changes pause across task edits and restart; resume accepts reviewed baseline", async (t) => {
@@ -287,7 +338,7 @@ test("manual changes pause across task edits and restart; resume accepts reviewe
 	assert.equal(f.status().state, "paused");
 	f.store.setLinearSyncPaused(f.mission.id, f.manager.id, "resume");
 	await f.poll();
-	assert.equal(f.writes.at(-1)?.state, "merged");
+	assert.equal(f.writes.length, 1, "resume never completes the issue");
 	f.set("1", "todo");
 	await f.poll();
 	assert.equal(f.status().state, "paused");
@@ -307,8 +358,7 @@ test("empty sets and structural detach never manufacture completion, including A
 	await f.poll();
 	assert.equal(f.writes.length, 1);
 	const g = await fixture(t);
-	g.set("1", "done");
-	g.set("2", "done");
+	g.set("1", "in_progress");
 	let once = false;
 	g.setHook((tool) => {
 		if (tool !== "states" || once) return;
@@ -325,14 +375,13 @@ test("restart reconciles an ambiguous successful remote write without replay", a
 	let now = Date.now();
 	t.mock.method(Date, "now", () => now);
 	const f = await fixture(t, true);
-	f.set("1", "done");
-	f.set("2", "done");
+	f.set("1", "in_progress");
 	f.setFailure("after");
 	await f.poll();
 	assert.equal(f.status().state, "error");
 	assert.doesNotMatch(f.status().error!, /ambiguous|secret/);
 	assert.deepEqual(f.status().failure, { stage: "write", category: "transport" });
-	assert.equal(f.store.linearSyncRecord(f.manager.id)!.intent?.stateId, "merged");
+	assert.equal(f.store.linearSyncRecord(f.manager.id)!.intent?.stateId, "active");
 	await f.restart();
 	now += 600_000;
 	f.setFailure(undefined);
@@ -399,7 +448,7 @@ test("dropped, blocked and delegated contributors prevent review or completion",
 		f.set("1", status);
 		f.set("2", "in_review");
 		await f.poll();
-		assert.equal(f.writes.at(-1)?.state, "active");
+		assert.equal(f.writes.at(-1)?.state, status === "delegated" ? undefined : "active");
 		f.set("2", "done");
 		await f.poll();
 		assert.notEqual(f.writes.at(-1)?.state, "merged");
@@ -418,27 +467,26 @@ test("initial all-Done attachment and reference-only empty scopes cannot complet
 	assert.equal(f.writes.length, 0);
 });
 
-test("inbound cancellation works without outbound mappings and retries after a detach race", async (t) => {
+test("inbound cancellation works without outbound mappings and ignores detached tasks", async (t) => {
 	const f = await fixture(t, true);
 	await f.projects.update(f.project.id, { tracking: { linearTeam: "root", slackChannels: [] } });
 	f.state("canceled");
-	let reads = 0;
 	f.setHook((tool) => {
-		if (tool === "issue" && ++reads === 2) f.store.updateResource(f.mission.id, f.b.id, { linearRole: "reference" });
+		if (tool === "states") f.store.updateResource(f.mission.id, f.b.id, { linearRole: "reference" });
 	});
 	await f.poll();
 	assert.equal(f.store.resolveTask(f.mission.id, "1").status, "todo", "stale cancellation cannot mutate any task");
 	f.setHook(undefined);
 	await f.restart();
 	await f.poll();
-	assert.equal(f.store.resolveTask(f.mission.id, "1").status, "dropped");
+	assert.throws(() => f.store.prepareTaskStart(f.mission.id, ["1"]), /needs plan review/);
 	assert.equal(f.store.resolveTask(f.mission.id, "2").status, "todo", "detached tasks stay open");
+	assert.doesNotThrow(() => f.store.prepareTaskStart(f.mission.id, ["2"]));
 });
 
 test("mapping changes and detach during durable intent save fence outbound writes", async (t) => {
 	const f = await fixture(t);
-	f.set("1", "done");
-	f.set("2", "done");
+	f.set("1", "in_progress");
 	let detached = false;
 	t.mock.method(f.store, "durable", async () => {
 		if (detached) return;
@@ -549,7 +597,8 @@ test("manual pauses do not hide inbound cancellation or change its task policy",
 	await f.poll();
 	assert.equal(f.status().state, "terminal");
 	assert.equal(f.status().reason, "canceled");
-	assert.equal(f.store.resolveTask(f.mission.id, "1").status, "dropped");
+	assert.equal(f.store.resolveTask(f.mission.id, "1").status, "todo");
+	assert.equal(f.status().reconcilePlan, true);
 	assert.equal(f.store.resolveTask(f.mission.id, "3").status, "todo");
 });
 
@@ -589,7 +638,7 @@ test("Needs you counts each paused or failed managed ticket and clears on recove
 	assert.equal(f.store.require(f.mission.id).needsYouReason, undefined);
 });
 
-test("already In Progress is a verified no-op, but later review and completion still synchronize", async (t) => {
+test("already In Progress is a verified no-op, then review syncs without completion", async (t) => {
 	const f = await fixture(t);
 	f.state("active");
 	f.set("1", "in_progress");
@@ -606,7 +655,7 @@ test("already In Progress is a verified no-op, but later review and completion s
 	await f.poll();
 	assert.deepEqual(
 		f.writes.map((w) => w.state),
-		["review", "merged"],
+		["review"],
 	);
 });
 
@@ -868,41 +917,24 @@ test("an already-matching ticket still verifies workflow guards and respects exp
 	assert.equal(g.writes.length, 0);
 });
 
-test("terminal observation retains its warning until required cancellation reconciliation succeeds", async (t) => {
+test("terminal observation replaces transient write warnings with plan review", async (t) => {
 	let now = Date.now();
 	t.mock.method(Date, "now", () => now);
 	const f = await fixture(t);
 	f.set("1", "in_progress");
 	f.setFailure("before");
 	await f.poll();
-	const failed = f.status();
+	assert.equal(f.status().state, "error");
 	now += 600_000;
 	f.state("canceled");
-	let reads = 0;
-	let observedError: string | undefined;
-	let observedNeedsYou = 0;
-	f.setHook((tool) => {
-		if (tool === "issue" && ++reads === 2) {
-			observedError = f.status().error;
-			observedNeedsYou = f.store.require(f.mission.id).needsYouCount;
-			throw new SourceToolError("private detail");
-		}
-	});
-	await f.poll();
-	assert.equal(observedError, failed.error);
-	assert.equal(observedNeedsYou, 1);
-	assert.deepEqual(f.status().failure, { stage: "cancellation", category: "remote_error" });
-	assert.equal(f.store.require(f.mission.id).needsYouCount, 1);
-	f.setHook(undefined);
-	now += 600_000;
 	await f.poll();
 	assert.equal(f.status().state, "terminal");
 	assert.equal(f.status().error, undefined);
 	assert.equal(f.status().failure, undefined);
 	assert.equal(f.status().retryAt, undefined);
 	assert.equal(f.store.linearSyncRecord(f.manager.id)!.attempts, 0);
-	assert.equal(f.store.require(f.mission.id).needsYouCount, 0);
-	assert.equal(f.store.resolveTask(f.mission.id, "1").status, "dropped");
+	assert.equal(f.store.require(f.mission.id).needsYouCount, 1);
+	assert.equal(f.store.resolveTask(f.mission.id, "1").status, "in_progress");
 });
 
 test("a status no-op does not skip synchronization of other managed tickets", async (t) => {

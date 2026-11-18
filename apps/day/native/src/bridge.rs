@@ -35,6 +35,7 @@ pub const METHODS: &[&str] = &[
     "day.chat.close",
     "day.intake.read",
     "day.linear.read",
+    "day.linear.manage",
     "day.preferences.read",
     "day.knowledge.read",
     "day.knowledge.save",
@@ -295,6 +296,7 @@ pub(crate) enum Command {
     ChatClose(String),
     IntakeRead,
     LinearRead,
+    LinearManage(crate::host::intake::Management),
     PreferencesRead,
     KnowledgeRead(crate::host::knowledge::Read),
     KnowledgeSave(crate::host::knowledge::Edit),
@@ -682,6 +684,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 return Err(Error::Invalid);
             }
             C::LinearRead
+        }
+        "day.linear.manage" => {
+            let r: crate::host::intake::Management = exact(args)?;
+            r.validate()?;
+            C::LinearManage(r)
         }
         "day.preferences.read" => {
             if args != json!({}) {

@@ -22,29 +22,20 @@ export function parseSize(text: string): LinearSize {
 		throw new Error("Invalid Linear size");
 	return value.size;
 }
-export type SizeReservation = { state: "reserved" | "budget" } | { state: "cached"; size: LinearSize };
+export type SizeReservation = { state: "reserved" } | { state: "cached"; size: LinearSize };
 export class LinearSizeDisk {
 	private db: DatabaseSync;
 	constructor(db: DatabaseSync) {
 		this.db = db;
-		db.exec(`CREATE TABLE IF NOT EXISTS linear_sizes(project_id TEXT,external_id TEXT,version INTEGER,size TEXT NOT NULL,PRIMARY KEY(project_id,external_id));
-		 CREATE TABLE IF NOT EXISTS linear_size_budget(day TEXT PRIMARY KEY,used INTEGER NOT NULL);`);
+		db.exec(
+			`CREATE TABLE IF NOT EXISTS linear_sizes(project_id TEXT,external_id TEXT,version INTEGER,size TEXT NOT NULL,PRIMARY KEY(project_id,external_id));`,
+		);
 	}
-	reserve(projectId: string, externalId: string, version: number, now: number): SizeReservation {
+	reserve(projectId: string, externalId: string, version: number): SizeReservation {
 		const row = this.db
 			.prepare("SELECT version,size FROM linear_sizes WHERE project_id=? AND external_id=?")
 			.get(projectId, externalId);
 		if (row && Number(row.version) >= version) return { state: "cached", size: row.size as LinearSize };
-		const day = new Date(now).toISOString().slice(0, 10);
-		const admission = this.db
-			.prepare(
-				`INSERT INTO linear_size_budget VALUES (?,1) ON CONFLICT(day) DO UPDATE SET used=used+1 WHERE used<200`,
-			)
-			.run(day);
-		if (!admission.changes) return { state: "budget" };
-		this.db
-			.prepare("DELETE FROM linear_size_budget WHERE day<?")
-			.run(new Date(now - 7 * 86_400_000).toISOString().slice(0, 10));
 		// Unknown is durable before any fetching/model work. Interrupted and failed attempts never replay this update.
 		this.db
 			.prepare(
@@ -61,12 +52,8 @@ export class LinearSizeDisk {
 	}
 }
 
-/** Mine/team membership is fetched by pollLinear before any issue text. Eight attempts per poll, 200/day globally. */
-export function createLinearSizePoller(
-	store: TrackedItemStore,
-	complete: TriageComplete,
-	now = Date.now,
-): SourcePoller {
+/** At most eight new attempts per poll. Model calls use the shared background AI allowance. */
+export function createLinearSizePoller(store: TrackedItemStore, complete: TriageComplete): SourcePoller {
 	return async (context) => {
 		const result = await pollLinear(context);
 		context.observe?.({ stage: "discovery", phase: "completed", outcome: "success", count: result.items.length });
@@ -93,14 +80,7 @@ export function createLinearSizePoller(
 			context.signal.throwIfAborted();
 			let size: LinearSize = "unknown";
 			if (attempts < 8) {
-				const reservation = await store.reserveLinearSize(
-					context.project.id,
-					item.externalId,
-					item.updatedAt,
-					now(),
-				);
-				if (reservation.state === "budget")
-					context.observe?.({ stage: "classification", phase: "partial", reason: "local_classification_budget" });
+				const reservation = await store.reserveLinearSize(context.project.id, item.externalId, item.updatedAt);
 				if (reservation.state === "cached") size = reservation.size;
 				else if (reservation.state === "reserved") {
 					attempts++;

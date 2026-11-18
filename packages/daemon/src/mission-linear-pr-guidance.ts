@@ -96,13 +96,13 @@ export async function linearPrGuidance(
 			url: ref.url,
 			closingAllowed: allowed,
 			reason,
-			directive: `${allowed ? "Closes" : "Related to"} ${ref.externalId ?? ref.url}`,
+			directive: `Related to ${ref.externalId ?? ref.url}`,
 		});
 	}
 	return {
 		task: task.number,
 		tickets,
-		note: "Recheck before creating/editing a PR and after task/link changes. Only the final contributor may close, when every other contributor is Done and live safeguards allow. Related to is relation-only; refs/contributes to may still trigger status changes. Avoid ticket IDs in earlier branch names and commit messages. Never silently edit a PR. Linear integration automations are independent of local mappings and pauses.",
+		note: "Recheck before creating/editing a PR and after task/link changes. Use Related to. An eligible final contributor can use a closing directive only after the user explicitly chooses that outcome. Never silently edit a PR. Linear integration automations are independent of local mappings and pauses.",
 	};
 }
 

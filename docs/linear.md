@@ -28,23 +28,27 @@ approvals. Mission workflows are unchanged.
 
 See [shared interviews](technical/shared-interviews.md) for durability and recovery.
 
-Starting work can move an eligible issue to the team's configured **In progress**
-state. A missing or invalid mapping leaves Linear unchanged and reports an error
-without blocking local work. Review each team's state mappings in project settings.
+In Day, open an issue to start linked work or prefill a mission draft. **Manage
+status** is off unless you turn it on. A reference keeps the link without
+changing Linear. Size advice uses the shared background AI allowance and never
+chooses or starts a route. Issue text is context, not permission.
 
 ## Mission ticket contributions
 
-A ticket link is normally a read-only reference. Explicitly choose to manage a
-ticket in a mission and count tasks toward it when you want synchronization.
-One mission manages a ticket; several tasks can contribute.
+A chat or mission can manage an issue, but not both. For a mission planned from
+an issue with **Manage status** on, tasks in the approved initial plan count
+toward that issue. Other ticket and task links are references by default.
 
-Managed tickets follow contributing work toward In progress, In review, and Merged,
-not Deployed. Dropped contributors block completion until explicitly excluded.
-Empty contribution sets and reference links do not complete tickets.
+Pilot syncs only **In progress** and **In review**. You mark the issue complete
+in Linear. Use relation-only PR wording unless you explicitly choose closure
+and the final contributor passes the live checks. Set the state mappings for
+the issue's team in project settings. A missing mapping leaves Linear unchanged.
 
-Manual Linear changes or contribution-scope changes can pause synchronization.
-Review **Linear tickets** in Mission Overview, then choose **Resume** or **Retry**
-when appropriate. A warning is not proof the requested remote update succeeded.
+An external status change pauses sync, not the work. Review the issue before
+resuming. For a linked chat, you can change status management from the issue
+without starting another chat.
 
-Tasks delegated to someone else in Linear do not count as complete. Existing
-chats are not stopped just because the assignee changed.
+Reassignment holds the affected work and marks contributing tasks delegated.
+When the issue returns to you, only the assignment hold clears. Canceled or
+duplicate issues hold affected work and ask for plan review. No tasks are
+dropped or transferred automatically.

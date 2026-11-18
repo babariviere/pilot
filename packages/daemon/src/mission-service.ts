@@ -21,8 +21,8 @@ import type {
 } from "@pilot/protocol";
 import type { CriticalReviewVault } from "./critical-review-vault.ts";
 import { Conflict, NotFound } from "./errors.ts";
-import { explorerQuestion } from "./explorer-questions.ts";
 import { operations } from "./event-loop-watchdog.ts";
+import { explorerQuestion } from "./explorer-questions.ts";
 import type { CodePullRequestObservation } from "./github-delivery.ts";
 import { githubRepository } from "./github-url.ts";
 import { observeCodeContributions, observeCodeIntegration } from "./mission-code-delivery.ts";
@@ -323,6 +323,7 @@ export class MissionService {
 			missionAdmissionHeld: (sessionId) => {
 				return this.controls.fence(sessionId)?.held ?? false;
 			},
+			linearWorkHold: (sessionId) => store.linearWorkHold(sessionId),
 			coordinatorSourceMembers: (sessionId) => {
 				const member = store.membership(sessionId);
 				if (!member?.active || !member.coordinator) return undefined;
@@ -544,6 +545,12 @@ export class MissionService {
 			},
 		});
 		this.subscriptions.push(
+			store.onLinearHoldChange((sessionId) => {
+				void store
+					.durable()
+					.then(() => sessions.linearHoldChanged(sessionId))
+					.catch(() => console.warn("pilotd: could not confirm Linear work checkpoint"));
+			}),
 			store.onMembershipChange((sessionId) => {
 				const context = this.context(sessionId);
 				this.contexts.set(sessionId, JSON.stringify(context ?? null));

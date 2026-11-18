@@ -1,7 +1,6 @@
 // The user's own Linear issues that Pilot saved for this project, and the
-// cycle Pilot's last sync read. Read only: nothing here changes Linear,
-// starts work or triages a request. Requests are triaged in New on Today;
-// this page only points there. An issue's chat or mission comes from its
+// cycle Pilot's last sync read. Reading never starts work. The open issue
+// reuses Today's explicit start and prefill actions. A chat or mission comes from its
 // saved IDs, never from a matching title or link. The page says when the
 // copy was saved, says when it is not complete and never claims to show
 // the team's issues or other cycles.
@@ -12,7 +11,7 @@ import { effect, keymap, Scroll, type ScrollRef, signal, Text, View, type ViewRe
 import type { MissionRow } from "pilot-day/native";
 import type { Day } from "./day";
 import { keepRead, staleLine } from "./freshness";
-import { openRequest } from "./Incoming";
+import { IntakeWorkControls, openMissions, openRequest } from "./Incoming";
 import { keepScroll } from "./kept";
 import type { LinearMirror, LinearView } from "./linearFeed";
 import type { LinearCycleSummary, SavedLinearRead, TrackedItem } from "./linearRead";
@@ -124,10 +123,33 @@ function PlaceAction(props: { place: Place; itemId: string }) {
 }
 
 /** One saved issue: opens in place to its link, parent and place in Pilot. */
-function Issue(props: { item: TrackedItem; group: GroupKey; place: Place }) {
+function Issue(props: { day: Day; item: TrackedItem; group: GroupKey; place: Place }) {
 	const i = () => props.item;
 	const open = () => openIssue() === i().id;
 	const key = () => identifierOf(i());
+	const intake = props.day.intake;
+	const request = () =>
+		intake?.view().projectId === linearProject()
+			? intake?.view().fresh.find((row) => row.request.id === i().id && row.revision === i().revision)
+			: undefined;
+	const size = () =>
+		i().linearSize === "quick_fix" ? "Quick fix" : i().linearSize === "needs_planning" ? "Needs planning" : "";
+	const management = () => i().linearManagement;
+	const sync = () => management()?.status;
+	const managing = signal(false);
+	const managementMessage = signal("");
+	const changeManagement = async (action: "manage" | "stop" | "resume") => {
+		const seen = management();
+		const source = props.day.linear?.source;
+		if (!seen || managing() || !source?.manage) return;
+		managing.set(true);
+		managementMessage.set("");
+		try {
+			managementMessage.set(await source.manage(i().id, seen.pin, action));
+		} finally {
+			managing.set(false);
+		}
+	};
 	const node = signal<ViewRef | null>(null);
 	// A restored window's open issue takes the keyboard focus once.
 	effect(() => {
@@ -163,6 +185,85 @@ function Issue(props: { item: TrackedItem; group: GroupKey; place: Place }) {
 							</Text>
 						</If>
 						<Text class="text-xs text-faint">{i().url}</Text>
+						<If when={size()}>
+							<Text class="text-sm text-muted-foreground">{`Suggested size: ${size()}. You choose how to start.`}</Text>
+						</If>
+						<If when={sync()}>
+							<Text class="text-sm text-muted-foreground">
+								{sync()?.reconcilePlan
+									? "Review the linked work. Linear closed the issue without changing the Pilot plan."
+									: sync()?.reassigned
+										? "Work is held because Linear assigned the issue to someone else."
+										: sync()?.error ||
+											sync()?.reason ||
+											"Pilot manages progress and review. You mark the issue complete."}
+							</Text>
+						</If>
+						<If when={management() && !!props.day.linear?.source.manage}>
+							<View class="flex-row flex-wrap gap-2">
+								<If when={!management()?.enabled}>
+									<Action
+										label="Manage status"
+										disabled={managing()}
+										onPress={() => void changeManagement("manage")}
+									/>
+								</If>
+								<If
+									when={
+										management()?.sessionId &&
+										management()?.enabled &&
+										!sync()?.reassigned &&
+										!sync()?.reconcilePlan
+									}
+								>
+									<Action
+										label="Stop managing status"
+										disabled={managing()}
+										onPress={() => void changeManagement("stop")}
+									/>
+								</If>
+								<If
+									when={
+										management()?.enabled &&
+										!sync()?.reassigned &&
+										(sync()?.state === "paused" || sync()?.state === "error")
+									}
+								>
+									<Action
+										label="Resume status sync"
+										disabled={managing()}
+										onPress={() => void changeManagement("resume")}
+									/>
+								</If>
+							</View>
+							<If when={managementMessage()}>
+								<Text class="text-sm text-needs-ink">{managementMessage()}</Text>
+							</If>
+						</If>
+						<Each of={intake && request() ? [request()!] : []} key={(row) => row.request.id}>
+							{(row) => (
+								<IntakeWorkControls
+									mirror={intake!}
+									row={row()}
+									missions={openMissions(
+										props.day.scope
+											?.view()
+											.snapshot?.projects.find((p) => p.id === linearProject() && p.currentness === "live")
+											?.today ??
+											(props.day.scope
+												? { ...props.day.today(), moving: [], notMoving: [], unreported: [] }
+												: props.day.today()),
+									)}
+									busy={
+										intake!.view().sending.includes(i().id) ||
+										intake!.view().unsettled.some((o) => o.itemId === i().id)
+									}
+									workOnly
+									fromLinearList
+									onStarted={closeLinear}
+								/>
+							)}
+						</Each>
 					</View>
 				</View>
 			}
@@ -226,7 +327,7 @@ function Issues(props: { day: Day; read: SavedLinearRead }) {
 							<SectionTitle title={g().title} count={g().rows.length} />
 						</View>
 						<Each of={g().rows} key={(r) => r.item.id}>
-							{(r) => <Issue item={r().item} group={g().key} place={r().place} />}
+							{(r) => <Issue day={props.day} item={r().item} group={g().key} place={r().place} />}
 						</Each>
 					</View>
 				)}
@@ -351,7 +452,7 @@ export function LinearScreen(props: { day: Day }) {
 		>
 			<Page testID="linear" gap={8}>
 				<View class="gap-2">
-					<Text class="text-xs text-faint">Linear · read only</Text>
+					<Text class="text-xs text-faint">Linear</Text>
 					<PageTitle title={linearTitle(read())} />
 					<Text class="text-base leading-relaxed text-muted-foreground">
 						Your own issues that Pilot saved for this project. Not your team's other issues or other cycles.
@@ -406,7 +507,7 @@ export function LinearScreen(props: { day: Day }) {
 					</Each>
 				</If>
 				<Text class="border-t border-border pt-5 text-xs text-faint">
-					Read only. Nothing here changes Linear, starts work or triages a request.
+					Reading the list never starts work or changes Linear.
 				</Text>
 			</Page>
 		</Scroll>

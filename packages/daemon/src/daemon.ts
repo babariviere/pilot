@@ -221,7 +221,17 @@ trackedItems.onChange((projectId) => {
 // Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
 const missionLinear = new MissionLinearSource(missionStore, sourceMcp);
-const linearSync = new MissionLinearSyncService(missionStore, projects, sourceMcp, tracking.jobDiagnostics);
+const linearSync = new MissionLinearSyncService(
+	missionStore,
+	projects,
+	sourceMcp,
+	tracking.jobDiagnostics,
+	(id, operationId) => sessions.linearLinkedBuild(id, operationId),
+	(id) => sessions.linearReservationAbsent(id),
+);
+sessions.onChange((session) => {
+	if (session.archivedAt !== undefined || session.continuedTo) missionStore.retireLinearChatManagement(session.id);
+});
 tracking.managedLinearMissions = (projectId, issueIds) => missionStore.managedLinearMissions(projectId, issueIds);
 
 const missionService = new MissionService(missionStore, sessions, projects);

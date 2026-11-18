@@ -5,6 +5,7 @@
 // asks Linear nothing, starts nothing and writes nothing anywhere.
 import { type Signal, signal } from "nsh";
 import type { Refusal } from "./bridge";
+import { call } from "./bridge";
 import { readSavedLinear, type SavedLinearRead } from "./linearRead";
 import { glide } from "./ui";
 
@@ -26,6 +27,7 @@ export interface LinearSource {
 	onChange(listener: (view: LinearView) => void): () => void;
 	/** Reads the saved issues again. Passive: it sends, starts and asks Linear nothing. */
 	read(): Promise<void>;
+	manage?(itemId: string, pin: string, action: "manage" | "stop" | "resume"): Promise<string>;
 	dispose(): void;
 }
 
@@ -72,6 +74,15 @@ export class ConnectedLinear implements LinearSource {
 
 	constructor(window: string) {
 		this.#window = window;
+	}
+
+	async manage(itemId: string, pin: string, action: "manage" | "stop" | "resume"): Promise<string> {
+		const reply = await call<{ ok: boolean }>(this.#window, "day.linear.manage", { itemId, pin, action });
+		await this.read();
+		if (reply.ok) return "";
+		return reply.refusal === "stale"
+			? "This changed. Review the updated issue before acting again."
+			: "Pilot could not confirm the change. Read the issue again before acting.";
 	}
 
 	view(): LinearView {

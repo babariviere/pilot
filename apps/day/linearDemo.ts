@@ -45,7 +45,9 @@ const ISSUES: TrackedItem[] = [
 	}),
 	issue("ln-224", "BIL-224", "Invoice PDF footer overlaps totals", "In Review", "started", { sessionId: "chat-224" }),
 	// The mock world's Linear request in New.
-	issue("ln-231", "BIL-231", "CSV export times out for large accounts", "Todo", "unstarted"),
+	issue("ln-231", "BIL-231", "CSV export times out for large accounts", "Todo", "unstarted", {
+		linearSize: "quick_fix",
+	}),
 	issue("ln-226", "BIL-226", "Show tax ID on credit notes", "Backlog", "backlog", { triageState: "later" }),
 	// Same title as a mission on Today, but no saved link: never shown as part of it.
 	issue("ln-240", "BIL-240", "Faster search", "Todo", "unstarted"),

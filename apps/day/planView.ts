@@ -25,7 +25,13 @@ export const replacesDraft = signal<{ missionId: string; title: string } | null>
  * The request in New (a Linear issue or Slack message) New's words plan, set by
  * its "Plan a mission". Only Plan sends it, and it goes when the words go.
  */
-export const requestDraft = signal<{ itemId: string; revision: number; title: string; source: string } | null>(null);
+export const requestDraft = signal<{
+	itemId: string;
+	revision: number;
+	title: string;
+	source: string;
+	manageStatus?: boolean;
+} | null>(null);
 /** Whether New waits for the user to confirm a direct start. */
 export const confirmingStart = signal(false);
 /** The last message New's intents returned. */

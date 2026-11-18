@@ -1,6 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
+import { editSlackReport, readSlackReports } from "./slack-reports-disk.ts";
 import { TrackedItemDisk } from "./tracked-items-disk.ts";
-import { readSlackReports, editSlackReport } from "./slack-reports-disk.ts";
 
 const disk = new TrackedItemDisk(workerData.path);
 let changed = false;
@@ -48,7 +48,7 @@ parentPort!.on("message", ({ id, method, args }) => {
 				projectId = args.projectId;
 				break;
 			case "reserveLinearSize":
-				value = disk.sizes.reserve(args.projectId, args.externalId, args.version, args.now);
+				value = disk.sizes.reserve(args.projectId, args.externalId, args.version);
 				break;
 			case "finishLinearSize":
 				disk.sizes.finish(args.projectId, args.externalId, args.version, args.size);

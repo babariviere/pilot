@@ -1330,6 +1330,9 @@ pub struct PlanRequest {
     pub item_id: String,
     /// The request's revision the screen showed.
     pub revision: u32,
+    /// Explicit user choice; omitted is reference only.
+    #[prop(default)]
+    pub manage_status: Option<bool>,
 }
 
 /// Save one answer as a draft. It never submits or starts anything.

@@ -32,6 +32,8 @@ pub(super) struct PlanningEnrollment {
 struct EnrollRequest {
     item_id: String,
     revision: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    manage_status: Option<bool>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 enum Purpose {
@@ -210,6 +212,7 @@ impl Prepared {
                 request: intent.request.as_ref().map(|q| EnrollRequest {
                     item_id: q.item_id.clone(),
                     revision: q.revision,
+                    manage_status: q.manage_status.filter(|v| *v),
                 }),
             })
             .map_err(|_| Error::Invalid)?,
@@ -400,6 +403,14 @@ pub(super) async fn send(
                 != intent.request.as_ref().map(|q| q.item_id.as_str())
             || request["request"]["revision"].as_u64()
                 != intent.request.as_ref().map(|q| u64::from(q.revision))
+            || request["request"]["manageStatus"]
+                .as_bool()
+                .unwrap_or(false)
+                != intent
+                    .request
+                    .as_ref()
+                    .and_then(|q| q.manage_status)
+                    .unwrap_or(false)
             || record.not_sent
         {
             return Err(Error::Stale);
@@ -568,6 +579,7 @@ mod tests {
             request: Some(crate::plan::PlanRequest {
                 item_id: item_id.into(),
                 revision,
+                manage_status: None,
             }),
             ..intent(None)
         };

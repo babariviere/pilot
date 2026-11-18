@@ -51,6 +51,7 @@ test("all open statuses delegate and restore, unassignment is ignored, notices o
 			const observe = (assignee: typeof other | null) => f.store.observeLinearAssignee("p", link.id, assignee, "me");
 			observe(other);
 			assert.equal(f.store.task(f.id, task.id).status, "delegated");
+			if (status === "in_progress") assert.match(f.store.linearWorkHold("worker")!, /Assigned/);
 			assert.equal(f.store.task(f.id, task.id).delegatedTo, "Alex");
 			observe(other);
 			observe(null);
@@ -62,7 +63,10 @@ test("all open statuses delegate and restore, unassignment is ignored, notices o
 			const events = f.store.activity(f.id, { taskId: task.id, limit: 100 });
 			assert.equal(events.filter((event) => event.text.startsWith("Delegated to Alex in Linear")).length, 1);
 			assert.equal(events.filter((event) => event.text.startsWith("Returned to you in Linear")).length, 1);
-			if (status === "in_progress") assert.equal(f.store.task(f.id, task.id).sessionId, "worker");
+			if (status === "in_progress") {
+				assert.equal(f.store.task(f.id, task.id).sessionId, "worker");
+				assert.equal(f.store.linearWorkHold("worker"), undefined);
+			}
 		}
 		// The store saves to its file in the background.
 		await f.store.durable();
@@ -217,7 +221,7 @@ test("poll reads only linked open tasks in active projects, rotates bounded batc
 			async call(tool, args): Promise<TrackingJson> {
 				if (tool === "me") return args.query === "me" ? { id: "me" } : { id: "other", displayName: "Alex" };
 				assert.equal(tool, "issue", "never write to Linear");
-				assert.deepEqual(args.fields, ["id", "uuid", "identifier", "assigneeId"]);
+				assert.deepEqual(args.fields, ["id", "uuid", "assigneeId"]);
 				issues.push(args.id as string);
 				return { id: args.id as string, assigneeId: "other" };
 			},

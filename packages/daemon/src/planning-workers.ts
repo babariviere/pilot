@@ -57,7 +57,7 @@ export interface PlanningEnrollment {
 	/** An old mission this one re-plans. Linked in the enrollment transaction; the old mission is not changed. */
 	replaces?: string;
 	/** The request in New (a Linear issue or Slack message) this mission is planned from, as the user saw it. */
-	request?: { itemId: string; revision: number };
+	request?: { itemId: string; revision: number; manageStatus?: boolean };
 }
 interface Dependencies {
 	home: string;
@@ -796,7 +796,7 @@ export class PlanningWorkers {
 			(op.kind === "thread-send"
 				? this.discussionContent(op)
 				: op.kind === "plan-revisit"
-					? "The user explicitly requested a planning-only Revisit. Read mission_plan for current agreement, active decisions, tasks and settled answers. Use the trusted upstream skills. Keep settled answers; ask only genuinely new gaps in one saved kind=revisit round. Save an inert revision with action revision when ready. Never publish a creation plan, change agreement, approve or start execution."
+					? "The user explicitly requested a planning-only Revisit. Read mission_plan for current agreement, active decisions, tasks and settled answers. If linearPlanReview lists external closures, propose how to reconcile only affected unfinished tasks; an external closure does not approve any plan change. Use the trusted upstream skills. Keep settled answers; ask only genuinely new gaps in one saved kind=revisit round. Save an inert revision with action revision when ready. Never publish a creation plan, change agreement, approve or start execution."
 					: op.kind === "plan-continue" && JSON.parse(op.payload).feedback !== undefined
 						? `The user sent feedback on the current interview instead of answering it. Redo the round with it: reword, split, merge, drop or add questions as asked, and save the whole list again with the action you used for this round. Keep a question's id when its meaning stays, so its saved answer stays. The feedback answers no question and approves nothing. Planning only: no build work or worker starts.\nFeedback: ${JSON.stringify(JSON.parse(op.payload).feedback)}`
 						: op.kind === "plan-continue" && JSON.parse(op.payload).note !== undefined
@@ -1675,7 +1675,13 @@ export class PlanningWorkers {
 			interviewId(request.ownerSessionId);
 			if (request.replaces !== undefined) interviewId(request.replaces);
 			if (request.request !== undefined) {
-				interviewExact(request.request, ["itemId", "revision"]);
+				interviewExact(request.request, [
+					"itemId",
+					"revision",
+					...(request.request.manageStatus === undefined ? [] : ["manageStatus"]),
+				]);
+				if (request.request.manageStatus !== undefined && typeof request.request.manageStatus !== "boolean")
+					throw new Conflict("Invalid Linear management choice");
 				interviewId(request.request.itemId);
 				if (!Number.isSafeInteger(request.request.revision) || request.request.revision < 1)
 					throw new Conflict("Invalid request revision");
@@ -1707,15 +1713,28 @@ export class PlanningWorkers {
 				throw new Conflict("Fresh planning enrollment changed");
 			if (request.replaces !== undefined) this.deps.store.assertReplaceable(request.replaces, request.projectId);
 		};
+		let origin: Awaited<ReturnType<PlanningWorkers["requestOpen"]>> | undefined;
 		try {
 			check();
-			if (request.request !== undefined) await this.requestOpen(request.projectId, request.request);
+			if (request.request !== undefined) origin = await this.requestOpen(request.projectId, request.request);
 			check();
 		} catch (e) {
 			throw new OperationRejected(e instanceof Error ? e.message : String(e));
 		}
 		await this.deps.journal.checkpoint(op, { stage: "planning-enrollment-entered", payloadHash: op.payloadHash });
 		check();
+		if (request.request?.manageStatus && origin) {
+			// The same issue cannot be taken by another Start while its managed
+			// mission is being enrolled. A lost claim reply is never replayed.
+			origin = await this.deps.tracking!.items.intakeWrite(
+				request.projectId,
+				origin.id,
+				request.request.revision,
+				undefined,
+				op.operationId,
+			);
+			check();
+		}
 		const state = this.deps.store.planningWorkers.create(() => {
 			check();
 			const interview = this.deps.store.interviews.enroll(
@@ -1723,6 +1742,14 @@ export class PlanningWorkers {
 				{ projectId: request.projectId, title: request.title },
 				request.ownerSessionId,
 			);
+			const managed =
+				request.request?.manageStatus && origin
+					? this.deps.store.addResource(interview.fence.missionId, {
+							url: origin.url,
+							title: origin.title,
+							linearRole: "managed",
+						})
+					: undefined;
 			if (request.replaces !== undefined)
 				this.deps.store.linkSuccessor(
 					request.replaces,
@@ -1747,6 +1774,7 @@ export class PlanningWorkers {
 				goal: request.goal,
 				configurationDigest: request.configurationDigest,
 				...(request.request ? { request: { ...request.request } } : {}),
+				...(managed ? { linearOriginId: managed.id } : {}),
 				revision: 1,
 				phase: "setup",
 				hold: null,
@@ -2067,9 +2095,7 @@ export class PlanningWorkers {
 			sessionId: null,
 			attempts: (prior?.attempts ?? 1) + (prior ? 1 : 0),
 			// The chat this one replaces keeps its history; its question no longer needs the user (explorer-questions.ts).
-			...(prior?.sessionId
-				? { earlierSessionIds: [...(prior.earlierSessionIds ?? []), prior.sessionId] }
-				: {}),
+			...(prior?.sessionId ? { earlierSessionIds: [...(prior.earlierSessionIds ?? []), prior.sessionId] } : {}),
 			operation: undefined,
 			report: undefined,
 			reason: undefined,
@@ -2558,6 +2584,7 @@ export class PlanningWorkers {
 			agreement: store.brief(binding.missionId),
 			decisions: store.workflowConfirmationState(binding.missionId).decisions,
 			tasks: store.tasks(binding.missionId),
+			linearPlanReview: store.linearPlanReview(binding.missionId),
 			revisionDelta: store.revisions.latestConfirmed(binding.missionId) ?? null,
 			revisionSource: store.revisions.source(binding.missionId),
 			interview: store.interviews.latest(binding.missionId),
@@ -2965,6 +2992,7 @@ export class PlanningWorkers {
 				(t) =>
 					t?.status === "todo" &&
 					!this.deps.store.revisionTaskHeld(missionId, t.id) &&
+					!this.deps.store.linearReconciliationHeld(t.id) &&
 					!t.sessionId &&
 					!(
 						this.deps.store.planningWorkers.get(missionId)?.start?.taskId === t.id &&
@@ -3193,7 +3221,9 @@ export class PlanningWorkers {
 				);
 			await tracking.patch(item.id, { missionId }, operationId);
 			try {
-				store.addResource(missionId, { url: item.url, title: item.title });
+				// An existing reference stays a reference. Only this saved, explicit
+				// enrollment choice can create a new managed origin.
+				if (!state.linearOriginId) store.addResource(missionId, { url: item.url, title: item.title });
 			} catch (error) {
 				console.warn(`pilotd: planning ${missionId} could not link ${item.url}: ${String(error)}`);
 			}
@@ -3202,7 +3232,7 @@ export class PlanningWorkers {
 		}
 	}
 	/**
-	 * The first task worker marks the mission's request started in Linear or Slack, best effort. A request that
+	 * The first task worker links the request and marks a Slack request started, best effort. A request that
 	 * already has a start result or a chat was started before, and is left as it is.
 	 */
 	private async markRequestStarted(missionId: string, sessionId: string): Promise<void> {
@@ -3225,10 +3255,14 @@ export class PlanningWorkers {
 		}
 	}
 	/** A request the user plans from must still be new in New, in this project, as they saw it. */
-	private async requestOpen(projectId: string, request: { itemId: string; revision: number }): Promise<void> {
+	private async requestOpen(projectId: string, request: { itemId: string; revision: number; manageStatus?: boolean }) {
 		if (!this.deps.tracking) throw new Conflict("Requests are unavailable here");
 		const item = await this.deps.tracking.items.require(request.itemId);
 		if (item.projectId !== projectId) throw new Conflict("That request belongs to another project");
+		if (request.manageStatus) {
+			if (item.kind !== "linear") throw new Conflict("Only Linear issues have managed status");
+			this.deps.store.assertLinearChatLink(item.url);
+		}
 		if (
 			item.revision !== request.revision ||
 			item.triageState !== "new" ||
@@ -3239,6 +3273,7 @@ export class PlanningWorkers {
 			item.missionIds?.length
 		)
 			throw new Conflict("That request changed or already started. Look at it again in New.");
+		return item;
 	}
 	/** Only an authenticated, explicit native Start enters this method. No submission calls it. */
 	start(op: DurableOperation, firstEntry: boolean): Promise<unknown> {

@@ -422,7 +422,9 @@ export async function planMission(plans: Plans, createAnother = false) {
 	const goal = goalDraft();
 	const replaces = replacesDraft()?.missionId ?? null;
 	const from = requestDraft();
-	const request = from ? { itemId: from.itemId, revision: from.revision } : null;
+	const request = from
+		? { itemId: from.itemId, revision: from.revision, ...(from.manageStatus ? { manageStatus: true } : {}) }
+		: null;
 	try {
 		const setup = plans.planning().setup;
 		const chosen = newFundingDraft();

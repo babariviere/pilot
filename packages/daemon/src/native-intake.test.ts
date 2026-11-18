@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { DurableOperation, IntakeIntent, Project, SessionSummary } from "@pilot/protocol";
+import { MissionStore } from "./missions.ts";
 import { NativeIntake } from "./native-intake.ts";
 import { canonicalJSON, OperationJournal, payloadHash } from "./operation-journal.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
@@ -14,7 +15,7 @@ function trackedInput(externalId = "issue-1", updatedAt = 10) {
 		externalId,
 		updatedAt,
 		title: "Request",
-		url: "https://example.invalid/request",
+		url: "https://linear.app/acme/issue/ENG-1/request",
 		status: "Todo",
 		metadata: {},
 	};
@@ -24,8 +25,10 @@ const host = { hostId: "local", daemonId: "daemon", lineageId: "lineage" };
 async function fixture(t: TestContext) {
 	const home = await mkdtemp(join(tmpdir(), "intake-"));
 	const items = new TrackedItemStore(join(home, "items.sqlite"));
+	const missions = new MissionStore(":memory:");
 	t.after(async () => {
 		await items.close();
+		missions.close();
 		await rm(home, { recursive: true, force: true });
 	});
 	let journal = new OperationJournal(join(home, "operations"), host);
@@ -65,6 +68,8 @@ async function fixture(t: TestContext) {
 				},
 			},
 			sessions: {
+				linearLinkedBuild: (id) =>
+					starts && !fail ? ({ id, mode: "build", projectId: "p" } as SessionSummary) : undefined,
 				selectTaskModel: async () => {
 					if (modelDenied) throw new Error("Task model price/scope policy refused");
 					return { model: "fake/model", thinking: "high" };
@@ -78,6 +83,10 @@ async function fixture(t: TestContext) {
 				},
 			},
 			missions: {
+				assertLinearChatLink: missions.assertLinearChatLink.bind(missions),
+				addLinearChatLink: missions.addLinearChatLink.bind(missions),
+				linearChatControl: missions.linearChatControl.bind(missions),
+				changeLinearChatManagement: missions.changeLinearChatManagement.bind(missions),
 				require: (id) => ({ id, projectId: id === "other" ? "q" : "p", status: "active" }) as never,
 				list: () => [],
 			},
@@ -116,6 +125,7 @@ async function fixture(t: TestContext) {
 	};
 	return {
 		items,
+		missions,
 		projects,
 		operation,
 		get service() {
@@ -146,6 +156,27 @@ async function fixture(t: TestContext) {
 		},
 	};
 }
+
+test("only an explicit Start pins managed ownership, not a title, ref link or receipt lookup", async (t) => {
+	const reference = await fixture(t);
+	const off = await reference.operation("intake-start");
+	assert.equal((await reference.execute(off)).state, "accepted");
+	assert.equal(reference.missions.linearSyncBatch().length, 0);
+
+	const managed = await fixture(t);
+	const on = await managed.operation("intake-start", { manageStatus: true });
+	assert.equal(await managed.service.lookup(on), undefined);
+	assert.equal(managed.missions.linearSyncBatch().length, 0);
+	const ack = await managed.execute(on);
+	assert.equal(ack.state, "accepted");
+	const [link] = managed.missions.linearSyncBatch();
+	assert.equal(link?.operationId, on.operationId);
+	assert.equal(link?.sessionId, JSON.parse(on.payload).sessionId);
+	assert.equal(link?.record.intent?.target, "inProgress");
+	assert.deepEqual(await managed.execute(on), ack);
+	assert.equal(managed.starts, 1);
+	assert.equal(managed.missions.linearSyncBatch().length, 1);
+});
 
 test("complete local intake exceeds preview; filters linked/closed/other projects, reports overflow", async (t) => {
 	const f = await fixture(t);

@@ -74,6 +74,21 @@ test("authenticated HTTP intake, exact receipts and project-pinned durable Build
 	assert.equal(f.stats().sessions, 1);
 	assert.equal(f.stats().external, 0);
 	assert.equal((await f.items.require(start.targetId)).sessionId, sessionId);
+	assert.equal(f.store.linearSyncBatch().length, 0, "reference-only Start has no manager");
+	const management = (body: unknown, token = f.capability) =>
+		fetch(`${f.root}/api/projects/${f.project.id}/linear-management`, {
+			method: "POST",
+			headers: { "content-type": "application/json", "x-pilot-github-capability": token },
+			body: JSON.stringify(body),
+		});
+	const fake = { action: "manage", pin: "a".repeat(64), itemId: start.targetId };
+	const deniedManage = await management(fake, "wrong");
+	assert.notEqual(deniedManage.status, 200);
+	await deniedManage.arrayBuffer();
+	const stale = await management(fake);
+	assert.equal(stale.status, 409);
+	await stale.arrayBuffer();
+	assert.equal(f.store.linearSyncBatch().length, 0, "denied or stale actions cannot upgrade a reference");
 	await f.projects.update(f.project.id, { tracking: { linearTeam: "CHANGED", slackChannels: [] } });
 	// Changed configuration is not allowed to expose previously synced team rows.
 	// Add the old checkpoint explicitly because initial fixture rows predate any sync.

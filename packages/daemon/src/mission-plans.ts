@@ -917,6 +917,8 @@ export class MissionPlans extends MissionPlanReader {
 			brief = store.writeBrief(plan.missionId, markdown, submission.briefRevision);
 		const ids = new Map<string, string>(),
 			remaining = [...plan.slices];
+		const origin = store.planningWorkers.get(plan.missionId)?.request;
+		const managed = origin?.manageStatus ? store.linearPlanOrigin(plan.missionId) : undefined;
 		while (remaining.length) {
 			const index = remaining.findIndex((s) => s.dependsOn.every((key) => ids.has(key)));
 			if (index < 0) throw new Conflict("Invalid slice dependencies");
@@ -931,6 +933,8 @@ export class MissionPlans extends MissionPlanReader {
 				},
 				{ sessionId: plan.ownerSessionId },
 			);
+			if (managed)
+				store.addResource(plan.missionId, { url: managed.url, taskId: task.id, linearRole: "contribution" });
 			for (const id of slice.prototypes ?? []) {
 				const q = plan.questions.find((q) => q.id === id)!;
 				const a = q.prototypeResult!.artifact;

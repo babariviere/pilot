@@ -573,6 +573,7 @@ fn native_detail() -> MissionDetail {
             }),
             linear_role: None,
             linear_key: None,
+            linear_sync: None,
         },
         Resource {
             id: s("res-pr-history"),
@@ -591,6 +592,7 @@ fn native_detail() -> MissionDetail {
             }),
             linear_role: None,
             linear_key: None,
+            linear_sync: None,
         },
     ];
     detail.artifacts = vec![ArtifactLink {

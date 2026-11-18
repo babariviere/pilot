@@ -1215,7 +1215,6 @@ export class SourceRegistry {
 		const newLink =
 			(patch.sessionId && !before.sessionIds?.includes(patch.sessionId)) ||
 			(patch.missionId && !before.missionIds?.includes(patch.missionId));
-		if (patch.start && newLink && item.kind === "linear") void this.startLinear(item).catch(() => {});
 		if (patch.start && newLink && item.kind === "slack") void this.startSlack(item).catch(() => {});
 		return this.withParents([item], (item) => item.projectId)[0]!;
 	}

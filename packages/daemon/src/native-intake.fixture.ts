@@ -53,7 +53,7 @@ export async function nativeIntakeFixture(
 	const input = (externalId: string) => ({
 		externalId,
 		title: `Request ${externalId}`,
-		url: "https://example.invalid/request",
+		url: `https://linear.app/fixture/issue/FAKE-${externalId === "one" ? 1 : externalId === "two" ? 2 : 3}`,
 		status: "Todo",
 		metadata: {},
 		updatedAt: 10,

@@ -200,10 +200,6 @@ export class MissionLinearPrChecks {
 						warnings.push(
 							`${ticket.identifier}: premature closing directive (${ticket.reason}). Use ${ticket.directive}; correct the PR/commits explicitly`,
 						);
-					if (ticket.closingAllowed && !prCloses)
-						warnings.push(
-							`${ticket.identifier}: final contributor should include ${ticket.directive} in its PR title or description`,
-						);
 					if (
 						!ticket.closingAllowed &&
 						ticket.identifier &&

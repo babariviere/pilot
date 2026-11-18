@@ -342,6 +342,7 @@ async fn run(
         call.command,
         Command::IntakeRead
             | Command::LinearRead
+            | Command::LinearManage(_)
             | Command::IntakeWrite(_)
             | Command::IntakeCheck(_)
     ) {
@@ -637,6 +638,7 @@ async fn run(
         }
         Command::IntakeRead
         | Command::LinearRead
+        | Command::LinearManage(_)
         | Command::IntakeWrite(_)
         | Command::IntakeCheck(_) => {
             unreachable!("handled intake command")

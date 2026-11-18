@@ -4,7 +4,7 @@ use crate::{
     bridge::{Command, Gate},
     contract::TrackedSource,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
@@ -16,6 +16,7 @@ pub(crate) struct Intent {
     context_digest: String,
     state: Option<String>,
     mission_id: Option<String>,
+    manage_status: Option<bool>,
 }
 impl Intent {
     pub(crate) fn validate(&self, start: bool) -> Result<(), Error> {
@@ -29,8 +30,37 @@ impl Intent {
                 self.state.is_some()
             } else {
                 self.mission_id.is_some()
+                    || self.manage_status.is_some()
                     || !matches!(self.state.as_deref(), Some("new" | "later" | "discarded"))
             }
+        {
+            return Err(Error::Invalid);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct Management {
+    item_id: String,
+    pin: String,
+    action: ManagementAction,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ManagementAction {
+    Manage,
+    Stop,
+    Resume,
+}
+
+impl Management {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
+        if !valid_id(&self.item_id)
+            || self.pin.len() != 64
+            || !self.pin.bytes().all(|c| c.is_ascii_hexdigit())
         {
             return Err(Error::Invalid);
         }
@@ -62,9 +92,11 @@ pub(super) fn validate_record(source: &super::Source, op: &Value) -> Result<(), 
                 || p["sessionId"].as_str().is_none_or(|s| !valid_id(s))
                 || (!p["missionId"].is_null()
                     && p["missionId"].as_str().is_none_or(|s| !valid_id(s)))
+                || p.get("manageStatus").is_some_and(|v| !v.is_boolean())
         } else {
             !p["sessionId"].is_null()
                 || !p["missionId"].is_null()
+                || p.get("manageStatus").is_some()
                 || !matches!(p["state"].as_str(), Some("new" | "later" | "discarded"))
         }
     {
@@ -251,6 +283,37 @@ pub(super) async fn handle(
             check()?;
             return Ok(json!({"snapshot":snapshot,"outcome":null}));
         }
+        Command::LinearManage(intent) => {
+            let snapshot = read_linear(t).await?;
+            if !snapshot["items"].as_array().is_some_and(|items| {
+                items.iter().any(|item| {
+                    item["id"] == intent.item_id && item["linearManagement"]["pin"] == intent.pin
+                })
+            }) {
+                return Err(Error::Stale);
+            }
+            check()?;
+            let project = t.source.project()?;
+            let response = t
+                .client
+                .post(t.url(&format!(
+                    "/api/projects/{}/linear-management",
+                    project.project_id
+                )))
+                .header("x-pilot-github-capability", t.local()?)
+                .header("content-type", "application/json")
+                .body(serde_json::to_vec(intent).map_err(|_| Error::Invalid)?)
+                .send()
+                .await
+                .map_err(|_| Error::Unknown)?;
+            if response.status() == reqwest::StatusCode::CONFLICT {
+                return Err(Error::Stale);
+            }
+            if !response.status().is_success() {
+                return Err(Error::Unknown);
+            }
+            return Ok(json!({"snapshot":null, "outcome":{"ok":true}}));
+        }
         Command::IntakeRead => {}
         Command::IntakeWrite(intent) => {
             if journal.planning.values().any(|r| {
@@ -313,6 +376,12 @@ pub(super) async fn handle(
                 "projectId":t.source.project()?.project_id,"itemId":intent.item_id,"revision":intent.revision,"contextDigest":context});
             if start {
                 request["sessionId"] = json!(uuid::Uuid::new_v4().to_string());
+                if intent.manage_status == Some(true) {
+                    if item["kind"] != "linear" {
+                        return Err(Error::Invalid);
+                    }
+                    request["manageStatus"] = json!(true);
+                }
                 if let Some(mission) = &intent.mission_id {
                     request["missionId"] = json!(mission);
                 }

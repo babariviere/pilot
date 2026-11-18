@@ -135,6 +135,59 @@ async function fixture(
 	};
 }
 
+test("Linear reassignment checkpoints only the affected worker and does not clear mission Pause", async (t) => {
+	const f = await fixture(t);
+	const task = f.store.addTask(f.mission.id, { title: "Linked" });
+	f.store.claimTask(f.mission.id, task.id, f.a.id);
+	const url = "https://linear.app/acme/issue/ENG-1";
+	f.store.addResource(f.mission.id, { url, linearRole: "managed" });
+	const link = f.store.addResource(f.mission.id, { url, taskId: task.id, linearRole: "contribution" });
+	const exit = deferred(),
+		entered = deferred();
+	t.after(exit.resolve);
+	f.gate(exit.promise, entered.resolve);
+	f.store.observeLinearAssignee("p", link.id, { id: "other", name: "Other" }, "me");
+	await entered.promise;
+	try {
+		assert.equal(f.store.task(f.mission.id, task.id).status, "delegated");
+		await assert.rejects(f.sessions.send(f.a.id, "blocked by reassignment"), /paused/);
+		assert.ok(!f.commands.some((c) => c.id === f.b.id && c.command.type === "checkpointLifecycle"));
+		// The Stop generation is an independent, durable mission hold.
+		f.store.controls.stop(f.mission.id);
+		f.store.observeLinearAssignee("p", link.id, { id: "me", name: "You" }, "me");
+		assert.equal(f.store.linearWorkHold(f.a.id), undefined);
+		await assert.rejects(f.sessions.send(f.a.id, "still held"), /paused/);
+	} finally {
+		exit.resolve();
+	}
+});
+
+test("mission Resume releases other work while a Linear assignment hold remains", async (t) => {
+	const f = await fixture(t);
+	const task = f.store.addTask(f.mission.id, { title: "Linked" });
+	f.store.claimTask(f.mission.id, task.id, f.a.id);
+	f.store.join(f.b.id, f.mission.id);
+	const url = "https://linear.app/acme/issue/ENG-1";
+	f.store.addResource(f.mission.id, { url, linearRole: "managed" });
+	const link = f.store.addResource(f.mission.id, { url, taskId: task.id, linearRole: "contribution" });
+	const command = f.command();
+	await f.service.controls.execute(f.mission.id, command);
+	f.store.observeLinearAssignee("p", link.id, { id: "other", name: "Other" }, "me");
+	const resume = await f.service.controls.execute(f.mission.id, f.command("resume", command.operationId));
+	assert.equal(resume.control.state, "running");
+	assert.equal(resume.members.find((member) => member.sessionId === f.a.id)?.state, "held");
+	assert.equal(resume.members.find((member) => member.sessionId === f.b.id)?.state, "resumed");
+	assert.equal(f.opened.filter((id) => id === f.a.id).length, 1);
+	const returned = deferred();
+	const off = f.sessions.onChange(() => {
+		if (f.opened.filter((id) => id === f.a.id).length === 2) returned.resolve();
+	});
+	t.after(off);
+	f.store.observeLinearAssignee("p", link.id, { id: "me", name: "You" }, "me");
+	await returned.promise;
+	assert.equal(f.store.task(f.mission.id, task.id).status, "in_progress");
+});
+
 test("mission Pause proves ACK, census and joined exit; unrelated work stays running", async (t) => {
 	const f = await fixture(t),
 		exit = deferred(),

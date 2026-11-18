@@ -67,7 +67,7 @@ const MODES: { mode: ChatMode; label: string }[] = [
 /** What Plan does with the request New's words come from. A chat started instead leaves it in New. */
 function fromRequest(r: { title: string; source: string } | null): string {
 	if (!r) return "";
-	return `From ${r.source}: “${r.title}”. Plan takes it out of New. Pilot marks it started in ${r.source} when the first task starts.`;
+	return `From ${r.source}: “${r.title}”. Plan links the request to the mission.`;
 }
 
 function ProjectRow(props: { plans: Plans }) {
@@ -365,6 +365,13 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 					<If when={requestDraft()}>
 						<Text testID="new-request" class="text-xs text-faint">
 							{fromRequest(requestDraft())}
+						</Text>
+					</If>
+					<If when={requestDraft()?.source === "Linear"}>
+						<Text class="text-xs text-muted-foreground">
+							{requestDraft()?.manageStatus
+								? "Manage status: On. Tasks in the approved plan count toward this issue. Pilot syncs progress and review only."
+								: "Manage status: Off. Reference only."}
 						</Text>
 					</If>
 					<If when={replacesDraft()}>

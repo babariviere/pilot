@@ -200,8 +200,8 @@ export class TrackedItemStore {
 	): Promise<void> {
 		return this.rpc("editCase", { projectId, caseId, edit, now });
 	}
-	reserveLinearSize(projectId: string, externalId: string, version: number, now: number): Promise<SizeReservation> {
-		return this.rpc("reserveLinearSize", { projectId, externalId, version, now });
+	reserveLinearSize(projectId: string, externalId: string, version: number): Promise<SizeReservation> {
+		return this.rpc("reserveLinearSize", { projectId, externalId, version });
 	}
 	finishLinearSize(
 		projectId: string,

@@ -48,7 +48,8 @@ test("only final contributions close, references never do; each ticket is indepe
 	f.store.updateTask(f.id, f.a.id, { status: "done" });
 	const context = f.store.addResource(f.id, { url: "https://linear.app/acme/issue/ENG-13", taskId: f.b.id });
 	const result = await linearPrGuidance(f.store, f.id, f.b.id, allow);
-	assert.equal(result.tickets[0]!.directive, "Closes ENG-12");
+	assert.equal(result.tickets[0]!.closingAllowed, true);
+	assert.equal(result.tickets[0]!.directive, "Related to ENG-12");
 	assert.equal(result.tickets.find((ref) => ref.resourceId === context.id)!.closingAllowed, false);
 	for (const reason of [
 		"Deployed",
@@ -151,7 +152,7 @@ test("automatic checks flag premature PR/commit directives and branch triggers, 
 	// A local change drives revalidation even without a new GitHub polling interval.
 	f.store.updateTask(f.id, f.b.id, { status: "in_review" });
 	await checker.flush();
-	assert.match(comments()[0]!.text, /final contributor should include Closes/);
+	assert.equal(comments().length, 0, "relation wording stays valid for the final contributor");
 	assert.equal(f.store.detail(f.id).resources.find((ref) => ref.id === f.pr.id)?.url, f.pr.url);
 });
 

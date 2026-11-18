@@ -1,6 +1,12 @@
 /** Single-flight, bounded remote synchronization. SQLite intents precede every network write. */
 import { createHash } from "node:crypto";
-import type { LinearStateMapping, MissionLinearSync, ProjectTrackingConfig, TrackingJson } from "@pilot/protocol";
+import type {
+	LinearStateMapping,
+	MissionLinearSync,
+	ProjectTrackingConfig,
+	SessionSummary,
+	TrackingJson,
+} from "@pilot/protocol";
 import {
 	type BackgroundJobDiagnostics,
 	type JobOutcome,
@@ -23,7 +29,14 @@ import { LookupFormatChanged } from "./tracking-lookup.ts";
 
 type Linked = NonNullable<ReturnType<MissionStore["linearSyncResource"]>>;
 type Call = (tool: string, args: Record<string, unknown>) => Promise<TrackingJson>;
-type Issue = { id: string; teamId: string; stateId: string; stateName: string; type: string };
+type Issue = {
+	id: string;
+	teamId: string;
+	stateId: string;
+	stateName: string;
+	type: string;
+	assigneeId?: string | null;
+};
 // get_issue rejects unknown field selections. Identifier is encoded in id or the canonical URL;
 // status is verified against the team's workflow rather than requesting the unsupported statusId.
 const FIELDS = ["id", "uuid", "url", "teamId", "status", "statusType"];
@@ -101,16 +114,23 @@ export class MissionLinearSyncService {
 	private readonly projects: ProjectStore;
 	private readonly mcp: SourceMcpClient;
 	private readonly diagnostics?: BackgroundJobDiagnostics;
+	private readonly session?: (id: string, operationId?: string) => SessionSummary | undefined;
+	private readonly reservationAbsent?: (id: string) => boolean;
+	private readonly startedAt = Date.now();
 	constructor(
 		store: MissionStore,
 		projects: ProjectStore,
 		mcp: SourceMcpClient,
 		diagnostics?: BackgroundJobDiagnostics,
+		session?: (id: string, operationId?: string) => SessionSummary | undefined,
+		reservationAbsent?: (id: string) => boolean,
 	) {
 		this.store = store;
 		this.projects = projects;
 		this.mcp = mcp;
 		this.diagnostics = diagnostics;
+		this.session = session;
+		this.reservationAbsent = reservationAbsent;
 		diagnostics?.register("linked_linear_sync", "linear");
 	}
 
@@ -202,6 +222,12 @@ export class MissionLinearSyncService {
 		)
 			throw new StaleSync();
 	}
+
+	private chatTarget(session: SessionSummary): "inProgress" | "inReview" | undefined {
+		if (session.outcome === "stopped" || session.outcome === "failed" || session.pullRequest?.state === "merged")
+			return;
+		return session.pullRequest?.state === "open" ? "inReview" : "inProgress";
+	}
 	private save(link: Linked): void {
 		this.publishing = true;
 		try {
@@ -234,10 +260,11 @@ export class MissionLinearSyncService {
 	private async observe(
 		link: Linked,
 		call: Call,
+		workflow?: { teamId: string; states: ReturnType<typeof workflowStates> },
 	): Promise<{ issue: Issue; mapping: LinearStateMapping | undefined; states: ReturnType<typeof workflowStates> }> {
 		const response = await call("issue", {
 			id: link.record.status.issueId ?? link.resource.externalId,
-			fields: FIELDS,
+			fields: this.session ? [...FIELDS, "assigneeId"] : FIELDS,
 		});
 		if (response === null)
 			throw new SyncProblem(
@@ -265,7 +292,8 @@ export class MissionLinearSyncService {
 				);
 		}
 		const teamId = string(raw.teamId);
-		const states = workflowStates(await call("states", { team: teamId }));
+		if (workflow && teamId !== workflow.teamId) throw new StaleSync();
+		const states = workflow?.states ?? workflowStates(await call("states", { team: teamId }));
 		const status =
 			raw.status && typeof raw.status === "object" && !Array.isArray(raw.status) ? raw.status : undefined;
 		const stateId = raw.statusId ?? status?.id;
@@ -291,7 +319,14 @@ export class MissionLinearSyncService {
 				);
 		}
 		return {
-			issue: { id, teamId, stateId: state.id, stateName: state.name, type: state.type },
+			issue: {
+				id,
+				teamId,
+				stateId: state.id,
+				stateName: state.name,
+				type: state.type,
+				...(this.session ? { assigneeId: raw.assigneeId === null ? null : string(raw.assigneeId) } : {}),
+			},
 			mapping,
 			states,
 		};
@@ -352,6 +387,28 @@ export class MissionLinearSyncService {
 		};
 		try {
 			const record = link.record;
+			const session = link.sessionId ? this.session?.(link.sessionId, link.operationId) : undefined;
+			if (
+				link.sessionId &&
+				link.operationId &&
+				link.reservedAt !== undefined &&
+				link.reservedAt < this.startedAt &&
+				!session &&
+				this.reservationAbsent?.(link.sessionId)
+			) {
+				this.store.retireLinearChatManagement(link.sessionId);
+				await this.store.durable();
+				return;
+			}
+			if (link.sessionId && (!session || session.archivedAt !== undefined || session.projectId !== link.projectId))
+				return;
+			// Older versions persisted automatic completion intents. Never dispatch one,
+			// including after a process restart with an unfinished write.
+			if (record.intent?.target === "merged") {
+				delete record.intent;
+				delete record.status.target;
+				if (record.status.state === "pending") record.status.state = "idle";
+			}
 			if (record.contributors.length > 1000)
 				throw new SyncProblem(
 					"This ticket has more than 1,000 contributing tasks. Reduce its contribution scope before retrying synchronization.",
@@ -376,15 +433,17 @@ export class MissionLinearSyncService {
 				updatedAt: Date.now(),
 			};
 			if (terminal) {
+				delete record.reviewedClosure;
 				record.status.state = "terminal";
 				record.status.reason = terminal;
 				delete record.intent;
 				delete record.status.target;
 				if (terminal !== "deployed") {
 					stage = "cancellation";
-					await this.cancelTasks(link, config, signal, call);
+					record.status.reconcilePlan =
+						!!link.sessionId || record.contributors.some((task) => !["done", "dropped"].includes(task.status));
 				}
-				// Observing terminal state alone does not complete required peer/task reconciliation.
+				// The external closure does not change task history.
 				delete link.record.status.error;
 				delete link.record.status.failure;
 				delete link.record.status.retryAt;
@@ -392,6 +451,16 @@ export class MissionLinearSyncService {
 				this.save(link);
 				return;
 			}
+			if (record.reviewedClosure) {
+				delete record.status.reconcilePlan;
+				delete record.reviewedClosure;
+			}
+			let me: string | undefined;
+			if (this.session && issue.assigneeId !== null) {
+				me = string(object(await call("me", { query: "me" })).id);
+				record.status.reassigned = issue.assigneeId !== me;
+			}
+			stage = "configuration";
 			if (!record.acceptBaseline && previous.teamId && previous.teamId !== issue.teamId) {
 				this.pause(
 					link,
@@ -431,6 +500,20 @@ export class MissionLinearSyncService {
 				return;
 			}
 			delete record.acceptBaseline;
+			if (record.status.reconcilePlan || record.status.reassigned || (this.session && issue.assigneeId === null)) {
+				this.save(link);
+				return;
+			}
+			if (session) {
+				const target = this.chatTarget(session);
+				if (!target) {
+					delete record.intent;
+					delete record.status.target;
+				} else if (record.intent?.target !== target && (previous.target !== target || record.intent)) {
+					record.intent = { target };
+					record.status.target = target;
+				}
+			}
 			const target = record.intent && mapping?.[record.intent.target];
 			if (
 				readOnly &&
@@ -441,14 +524,7 @@ export class MissionLinearSyncService {
 					"configuration",
 				);
 			if (readOnly && issue.type === "completed") return false;
-			if (
-				record.intent &&
-				(!target ||
-					!states.some(
-						(s) =>
-							s.id === target.id && s.type === (record.intent!.target === "merged" ? "completed" : "started"),
-					))
-			)
+			if (record.intent && (!target || !states.some((s) => s.id === target.id && s.type === "started")))
 				throw new SyncProblem(
 					`Choose a valid ${record.intent.target} state for the issue's actual team in Project settings, then retry.`,
 					"configuration",
@@ -507,7 +583,20 @@ export class MissionLinearSyncService {
 			this.current(link, config, signal);
 			// Linear has no conditional update. Minimize the unavoidable read/write race and do not
 			// replay if another actor changed the remote state or actual team during preparation.
-			const latest = await this.observe(link, call);
+			const latest = await this.observe(link, call, {
+				teamId: issue.teamId,
+				states: workflowStates(await call("states", { team: issue.teamId })),
+			});
+			if (
+				this.session &&
+				(latest.issue.assigneeId !== issue.assigneeId ||
+					latest.issue.assigneeId === null ||
+					latest.issue.assigneeId !== me)
+			) {
+				if (latest.issue.assigneeId !== null) record.status.reassigned = true;
+				this.save(link);
+				return;
+			}
 			if (latest.issue.teamId === issue.teamId && latest.issue.stateId === target.id) {
 				this.synced(link, latest.issue);
 				return;
@@ -518,6 +607,11 @@ export class MissionLinearSyncService {
 					"Linear changed while preparing an update. Review the ticket, then resume synchronization.",
 				);
 				return;
+			}
+			if (link.sessionId) {
+				const live = this.session?.(link.sessionId, link.operationId);
+				if (!live || live.projectId !== link.projectId || this.chatTarget(live) !== record.intent.target)
+					throw new StaleSync();
 			}
 			await call("startIssue", { id: issue.id, state: target.id });
 			// A successful RPC is not proof that the new state was applied. Confirmation also repairs
@@ -575,47 +669,6 @@ export class MissionLinearSyncService {
 			}
 			this.busy.delete(link.resource.id);
 		}
-	}
-
-	private async cancelTasks(link: Linked, config: string, signal: AbortSignal, call: Call): Promise<void> {
-		const peerIds = this.store.linearCancellationPeers(link.resource.id);
-		if (peerIds.length > 25)
-			throw new SyncProblem(
-				"Too many shared ticket links to verify safely. Review the contributing tasks and retry.",
-				"configuration",
-			);
-		const peers = new Map<string, { version: string; inactive: boolean }>();
-		for (const id of peerIds) {
-			const peer = this.store.linearSyncResource(id);
-			if (!peer) throw new StaleSync();
-			const observation = await this.observe(peer, call);
-			if (this.store.linearSyncRecord(id)?.version !== peer.record.version) throw new StaleSync();
-			if (!peer.record.status.issueId) {
-				peer.record.status.issueId = observation.issue.id;
-				peer.record.status.teamId = observation.issue.teamId;
-				this.save(peer);
-			}
-			peers.set(id, {
-				version: peer.record.version,
-				inactive: !!this.terminal(observation.issue, observation.mapping) || observation.issue.type === "completed",
-			});
-		}
-		// Recheck the canceled ticket after peer lookups, not just its cached terminal marker.
-		const latest = await this.observe(link, call);
-		if (!["canceled", "duplicated"].includes(this.terminal(latest.issue, latest.mapping) ?? ""))
-			throw new StaleSync();
-		this.current(link, config, signal);
-		// Publish the verified terminal observation only after all remote prerequisites succeeded,
-		// immediately before the synchronous task policy. Failed peer reads retain the warning.
-		this.save(link);
-		if (!this.store.dropCanceledLinearTasks(link.resource.id, link.record.version, peers)) throw new StaleSync();
-		// Dropping contributors may change our own version synchronously. Retain that exact version
-		// across the durability await so unrelated scope edits still fence completion.
-		const current = this.store.linearSyncResource(link.resource.id);
-		if (!current) throw new StaleSync();
-		link.record = current.record;
-		await this.store.durable();
-		this.current(link, config, signal);
 	}
 
 	/** Finality itself is checked by the PR policy; this supplies a fresh fail-closed lifecycle guard. */

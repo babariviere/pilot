@@ -812,6 +812,9 @@ pub struct ChatLine {
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MissionPage {
+    /// Tickets with local work held pending a human plan review.
+    #[prop(default)]
+    pub linear_plan_review: Vec<String>,
     /// Service-reported waits, not inferred from chat activity.
     #[prop(default)]
     pub execution_queue: Vec<ExecutionWait>,

@@ -4,7 +4,7 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { AgentEvent as DurableAgentEvent } from "./agent-events.ts";
 import type { DiagnosticContextRequest } from "./diagnostic-context.ts";
 import type { OperationHost } from "./operations.ts";
-import type { ProjectTrackingConfig, TrackingSource } from "./tracking.ts";
+import type { MissionLinearSync, ProjectTrackingConfig, TrackingSource } from "./tracking.ts";
 
 export type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 export type {
@@ -1380,34 +1380,6 @@ export interface MissionArtifactLink {
 export type MissionLinearRole = "reference" | "managed" | "contribution";
 
 /** Daemon-owned synchronization for a managed ticket. References never have this field. */
-export interface MissionLinearSync {
-	state: "idle" | "pending" | "synced" | "paused" | "error" | "terminal";
-	target?: "inProgress" | "inReview" | "merged";
-	reason?: string;
-	error?: string;
-	/** Fixed, sanitized mission-sync diagnostics, independent of background discovery health. */
-	failure?: {
-		stage: "issue" | "states" | "configuration" | "prepare" | "write" | "confirm" | "cancellation";
-		category:
-			| "sign_in"
-			| "access_denied"
-			| "not_found"
-			| "configuration"
-			| "transport"
-			| "rate_limited"
-			| "invalid_response"
-			| "write_failed"
-			| "remote_error"
-			| "unknown";
-	};
-	issueId?: string;
-	teamId?: string;
-	observedStateId?: string;
-	observedStateName?: string;
-	updatedAt: number;
-	retryAt?: number;
-}
-
 /** POST /api/missions/:id/resources/:resourceId/linear-sync. Explicit user review, not an agent action. */
 export interface MissionLinearSyncWrite {
 	action: "pause" | "resume";

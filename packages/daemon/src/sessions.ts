@@ -281,6 +281,7 @@ export interface SessionMissionBridge {
 	missionResumeAuthorized?(sessionId: string, pauseOperationId: string): boolean;
 	/** Local Pause admission only. Unsupported remote work is reported, not silently enrolled. */
 	missionAdmissionHeld?(sessionId: string): boolean;
+	linearWorkHold?(sessionId: string): string | undefined;
 	/** Current local membership only; historical task/retirement links are never source grants. */
 	coordinatorSourceMembers?(sessionId: string): { projectId: string; sessionIds: string[] } | undefined;
 	/** Creation-only opted-in builder scope. Never enroll an already-existing workspace. */
@@ -7379,6 +7380,27 @@ ${run.excerpt}`,
 		const meta = this.metas.get(id);
 		return meta && this.summary(meta);
 	}
+	linearLinkedBuild(id: string, operationId?: string): SessionSummary | undefined {
+		const meta = this.metas.get(id);
+		if (
+			!meta ||
+			meta.archivedAt !== undefined ||
+			meta.mode !== "build" ||
+			meta.role ||
+			meta.control ||
+			meta.continuedTo ||
+			this.isMissionCoordinator(id) ||
+			(operationId && (meta.createOperationId !== operationId || this.saving.has(id)))
+		)
+			return undefined;
+		return this.summary(meta);
+	}
+	/** Call only for an earlier daemon's reservation; absence during a current Start is not proof. */
+	linearReservationAbsent(id: string): boolean {
+		return (
+			this.sessionInventoryQualified && !this.metas.has(id) && !this.durableCreateAdmissions.has(id.toLowerCase())
+		);
+	}
 	/** Host-only allowance owner. Helpers inherit their parent's credential capability. */
 	funding?: import("./funding.ts").Funding;
 	/** The allowance owner while spending limits are on. Work admitted while they are off opens no allowance. */
@@ -9015,6 +9037,8 @@ ${run.excerpt}`,
 
 	private missionWorkHeld(id: string): boolean {
 		try {
+			if (this.linearCheckpointing.has(this.missionWorkOwner(id))) return true;
+			if (this.missions?.linearWorkHold?.(this.missionWorkOwner(id))) return true;
 			this.missionResumeGuards.get(id)?.();
 			const continuation = this.metas.get(id)?.missionContinuationStart;
 			if (
@@ -9036,6 +9060,49 @@ ${run.excerpt}`,
 
 	private assertMissionWorkOpen(id: string): void {
 		if (this.missionWorkHeld(id)) throw new Conflict("Mission work is paused");
+	}
+
+	/** The saved Linear observation owns this hold. Leave all other holds intact. */
+	private readonly linearCheckpointing = new Set<string>();
+	async linearHoldChanged(id: string): Promise<void> {
+		const meta = this.metas.get(id);
+		if (!meta || meta.archivedAt !== undefined || this.closing || this.linearCheckpointing.has(id)) return;
+		this.linearCheckpointing.add(id);
+		try {
+			if (
+				this.missions?.linearWorkHold?.(id) &&
+				(this.workers.has(id) || this.starting.has(id) || this.actionRunner.isWorking(id))
+			) {
+				const end = this.updateGate.begin();
+				try {
+					this.postRunTasks.get(id)?.controller.abort();
+					await this.actionRunner.checkpointSession(id);
+					await this.checkpointLifecycleWorkers(randomUUID(), "linear-hold", undefined, new Set([id]));
+				} finally {
+					end();
+				}
+			}
+		} finally {
+			this.linearCheckpointing.delete(id);
+		}
+		if (
+			!this.missionWorkHeld(id) &&
+			!this.updateGate.frozen &&
+			!meta.cancelled &&
+			!meta.recoveryStopped &&
+			!meta.inputsPaused &&
+			!meta.sleepPaused &&
+			!this.sleepPause &&
+			meta.missionUserStopGeneration === undefined &&
+			this.internetOnline !== false &&
+			!this.subscriptionPaused(id) &&
+			((meta.lifecycleCheckpoint?.phase === "checkpointed" &&
+				meta.lifecycleCheckpoint.prior.working &&
+				this.lifecycleRecoveryAllowed(meta)) ||
+				meta.pending?.some((command) => command.type === "input"))
+		) {
+			await this.start(id);
+		}
 	}
 
 	/** Uses the same final inventory/census/close ACK/exit protocol, not the upgrade lease. */
@@ -9150,7 +9217,9 @@ ${run.excerpt}`,
 			this.subscriptionPaused(id) ||
 			this.updateGate.frozen ||
 			this.updateGate.paused ||
-			meta.recoveryStopped
+			meta.recoveryStopped ||
+			this.linearCheckpointing.has(id) ||
+			this.missions?.linearWorkHold?.(id)
 		)
 			return "held";
 		// This explicit Resume may follow another member's Stop. Pin current controls,
@@ -9179,6 +9248,7 @@ ${run.excerpt}`,
 			guard();
 			await this.start(id);
 			guard();
+			if (checkpoint.phase === "checkpointed" && this.missions?.linearWorkHold?.(id)) return "held";
 			if (
 				meta.lifecycleCheckpoint !== checkpoint ||
 				this.require(id).lifecycleCheckpoint?.phase !== "resume-acknowledged"
@@ -9368,7 +9438,32 @@ ${run.excerpt}`,
 
 	private async checkpointLifecycleWorkers(
 		operationId: string,
-		purpose: "app-update" | "daemon-upgrade" | "daemon-stop" | "daemon-restart" | "mission-pause",
+		purpose: import("./lifecycle-checkpoint.ts").LifecycleCheckpoint["purpose"],
+		replacement?: LifecycleRuntime,
+		selected?: Set<string>,
+		acceptedLoss?: import("./global-update-preparation.ts").AcceptedUpdateLoss,
+	): Promise<void> {
+		if (
+			this.lifecycleCheckpointAll ||
+			(!selected && this.lifecycleCheckpointSessions.size) ||
+			(selected && [...selected].some((id) => this.lifecycleCheckpointSessions.has(id)))
+		)
+			throw new Conflict("A worker is already checkpointing");
+		if (selected) for (const id of selected) this.lifecycleCheckpointSessions.add(id);
+		else this.lifecycleCheckpointAll = true;
+		try {
+			await this.checkpointLifecycleWorkersEntered(operationId, purpose, replacement, selected, acceptedLoss);
+		} finally {
+			if (selected) for (const id of selected) this.lifecycleCheckpointSessions.delete(id);
+			else this.lifecycleCheckpointAll = false;
+		}
+	}
+	private lifecycleCheckpointAll = false;
+	private readonly lifecycleCheckpointSessions = new Set<string>();
+
+	private async checkpointLifecycleWorkersEntered(
+		operationId: string,
+		purpose: import("./lifecycle-checkpoint.ts").LifecycleCheckpoint["purpose"],
 		replacement?: LifecycleRuntime,
 		selected?: Set<string>,
 		acceptedLoss?: import("./global-update-preparation.ts").AcceptedUpdateLoss,
@@ -10000,6 +10095,7 @@ ${run.excerpt}`,
 		checkpoint: import("./lifecycle-checkpoint.ts").LifecycleCheckpoint,
 	): boolean {
 		try {
+			if (checkpoint.purpose === "linear-hold") return !this.missionWorkHeld(id);
 			if (checkpoint.purpose === "mission-pause") {
 				this.missionResumeGuards.get(id)?.();
 				const permit = this.missionResuming.get(id);
@@ -13792,6 +13888,7 @@ ${run.excerpt}`,
 						}
 						await this.save(meta);
 						if (this.closing || this.sleepPause || this.globalUpdatePreparing) return;
+						if (command.type !== "abort" && this.missionWorkHeld(id)) return;
 						// Stop can replace the queue while this write is in flight.
 						if (meta.pending[0] !== command) continue;
 						// User work arriving during persistence wins over an automatic notification.
@@ -13942,6 +14039,7 @@ ${run.excerpt}`,
 					await this.save(meta, undefined, undefined, true);
 				}
 				if (this.closing || this.sleepPause) return;
+				if (this.linearCheckpointing.has(id) || this.missions?.linearWorkHold?.(id)) return;
 				if (error instanceof WorkerUnavailable) {
 					// Startup may have committed state before its acknowledgement was lost. Keep stable IDs.
 					// Without queued commands nothing is uncertain: the kernel failed, the session is still usable.
@@ -15728,7 +15826,11 @@ ${run.excerpt}`,
 			(mainBusy || (childrenWorking && !questionWaits));
 		const toolPauses: DiagnosticPauseReason[] = [];
 		// Its mission paused or archived it: the turn is kept for a resume, but nothing runs.
-		const missionHeld = !worker && meta.lifecycleCheckpoint?.purpose === "mission-pause";
+		const missionHeld =
+			!worker &&
+			(meta.lifecycleCheckpoint?.purpose === "mission-pause" ||
+				(meta.lifecycleCheckpoint?.purpose === "linear-hold" &&
+					meta.lifecycleCheckpoint.phase !== "resume-acknowledged"));
 		if (paused) toolPauses.push("sleep");
 		if (meta.updatePaused) toolPauses.push("update");
 		if (quotaPaused) toolPauses.push("quota");
@@ -15760,6 +15862,14 @@ ${run.excerpt}`,
 			!working &&
 			(mainBusy || (childrenWorking && !questionWaits));
 		const workHolds: string[] = [];
+		const linearHold = this.missions?.linearWorkHold?.(meta.id);
+		if (linearHold) workHolds.push(linearHold);
+		if (
+			meta.lifecycleCheckpoint?.purpose === "linear-hold" &&
+			!meta.lifecycleCheckpoint.quiescent &&
+			["checkpointing", "unknown"].includes(meta.lifecycleCheckpoint.phase)
+		)
+			workHolds.push("Linear pause not confirmed");
 		if (meta.missionUserStopGeneration !== undefined) workHolds.push("User Stop hold");
 		if (meta.inputsPaused) workHolds.push("Input paused");
 		if (meta.recoveryStopped) workHolds.push("Recovery stopped");

@@ -38,6 +38,7 @@ import {
 	ExpandableRow,
 	glide,
 	Mark,
+	Notice,
 	Page,
 	PageTitle,
 	Panel,
@@ -747,7 +748,7 @@ function Replan(props: { day: Day; page: MissionPage }) {
 	);
 }
 
-function PlanLink(props: { plans: Plans; missionId: string }) {
+function PlanLink(props: { plans: Plans; missionId: string; linearPlanReview: string[] }) {
 	const row = (): PlanRow | null => props.plans.planning().plans.find((p) => p.missionId === props.missionId) ?? null;
 	const page = () => {
 		props.plans.planning();
@@ -775,6 +776,12 @@ function PlanLink(props: { plans: Plans; missionId: string }) {
 	};
 	return (
 		<View testID="mission-plan" class="gap-2">
+			<If when={props.linearPlanReview.length > 0}>
+				<Notice
+					text={`Review work linked to ${props.linearPlanReview.join(", ")}`}
+					detail="Linear canceled or marked an issue as duplicate. The affected work is held. No tasks were dropped or transferred."
+				/>
+			</If>
 			<RowLink
 				testID="open-plan"
 				title={title()}
@@ -802,7 +809,7 @@ function PlanLink(props: { plans: Plans; missionId: string }) {
 				<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1 pt-1">
 					<Action
 						testID="mission-revisit"
-						label="Revisit mission"
+						label={props.linearPlanReview.length ? "Review proposed plan change" : "Revisit mission"}
 						accessibilityLabel="Revisit mission: Pilot compares it with what you agreed and asks about gaps. Nothing changes until you confirm."
 						onPress={() => {
 							open();
@@ -1081,7 +1088,13 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf;
 						missionId={row().id}
 						section="map"
 						title="Map, interview and plan"
-						content={<PlanLink plans={props.plans as Plans} missionId={row().id} />}
+						content={
+							<PlanLink
+								plans={props.plans as Plans}
+								missionId={row().id}
+								linearPlanReview={props.page.linearPlanReview ?? []}
+							/>
+						}
 					/>
 				</If>
 			</View>

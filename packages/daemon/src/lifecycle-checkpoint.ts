@@ -66,7 +66,7 @@ export function matchingRuntime(left: LifecycleRuntime, right: LifecycleRuntime)
 export interface LifecycleCheckpoint {
 	schema: 1;
 	operationId: string;
-	purpose: "app-update" | "daemon-upgrade" | "daemon-stop" | "daemon-restart" | "mission-pause";
+	purpose: "app-update" | "daemon-upgrade" | "daemon-stop" | "daemon-restart" | "mission-pause" | "linear-hold";
 	incarnation: string;
 	conversationId?: string;
 	originBoot?: string;

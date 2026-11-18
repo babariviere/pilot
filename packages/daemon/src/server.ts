@@ -2065,6 +2065,17 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				parts[3] === "saved-linear" ? await nativeIntake.readLinear(parts[2]!) : await nativeIntake.read(parts[2]!),
 			);
 		}
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "linear-management" && req.method === "POST") {
+			res.setHeader("cache-control", "no-store");
+			if (!nativeAuthority || !nativeIntake) throw new ServiceUnavailable("Native intake unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			const end = mutations.begin({ kind: "operation", id: `linear-management:${parts[2]}` });
+			try {
+				return json(res, 200, await nativeIntake.changeLinear(parts[2]!, await readJson<unknown>(req)));
+			} finally {
+				end();
+			}
+		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "planning-inventory") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Planning inventory is read-only");

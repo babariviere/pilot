@@ -21,11 +21,15 @@ export interface LinearSyncRecord {
 	acceptBaseline?: boolean;
 	/** Independent of transient network errors and terminal observations. Only explicit resume clears it. */
 	paused?: string;
+	/** An explicit Resume may clear the closure hold only on a freshly verified open issue. */
+	reviewedClosure?: boolean;
 }
 
 export function linearTarget(tasks: LinearContributor[]): MissionLinearSync["target"] {
 	if (!tasks.length) return;
-	if (tasks.every((t) => t.status === "done")) return "merged";
+	// Done is local evidence, not permission to complete the issue.
+	if (tasks.every((t) => t.status === "done")) return;
+	if (tasks.some((t) => t.status === "delegated")) return;
 	const unfinished = tasks.filter((t) => t.status !== "done");
 	if (unfinished.every((t) => t.status === "in_review")) return "inReview";
 	if (tasks.some((t) => t.status === "in_progress" || t.status === "in_review" || t.status === "done"))
@@ -71,13 +75,15 @@ export function reconcileLinearRecord(
 		);
 	if (previous?.status.state === "terminal" && !reopened) {
 		record.status.state = "terminal";
+		if (["canceled", "duplicated"].includes(record.status.reason ?? ""))
+			record.status.reconcilePlan = contributors.some((task) => !["done", "dropped"].includes(task.status));
 		return record;
 	}
 	if (
 		previous?.paused ||
 		previous?.status.state === "paused" ||
 		reopened ||
-		(structural && (previous?.status.issueId || previous?.intent))
+		(structural && (previous?.intent || (previous?.contributors.length && previous.status.issueId)))
 	) {
 		record.status.state = "paused";
 		record.status.reason = reopened
@@ -90,8 +96,7 @@ export function reconcileLinearRecord(
 	}
 	delete record.status.reason;
 	const target = linearTarget(contributors);
-	// Initial attachment and link edits alone may start work, but never mark it complete.
-	if (target && (target !== "merged" || (previous && !structural))) {
+	if (target) {
 		record.intent = { target };
 		record.status = { ...record.status, state: "pending", target };
 	}

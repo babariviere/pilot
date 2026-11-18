@@ -648,6 +648,15 @@ pub struct Resource {
     pub linear_role: Option<String>,
     #[serde(default)]
     pub linear_key: Option<String>,
+    #[serde(default)]
+    pub linear_sync: Option<LinearSync>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinearSync {
+    #[serde(default)]
+    pub reconcile_plan: bool,
 }
 
 /// The parts of `SessionPullRequest` an output shows.

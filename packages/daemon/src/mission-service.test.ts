@@ -2198,7 +2198,7 @@ test("PR guidance tool forwards live safeguards and recomputes task/link eligibi
 		assert.equal(ref, manager.id);
 		return { allowed: true };
 	});
-	assert.equal((await guidance()).tickets[0]!.directive, "Closes ENG-12");
+	assert.equal((await guidance()).tickets[0]!.directive, "Related to ENG-12");
 	const earlier = f.store.addTask(mission.id, { title: "Another contributor" });
 	f.store.addResource(mission.id, { url, taskId: earlier.id, linearRole: "contribution" });
 	assert.equal((await guidance()).tickets[0]!.directive, "Related to ENG-12");

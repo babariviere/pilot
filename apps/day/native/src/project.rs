@@ -714,6 +714,16 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
         .filter(|d| d.mission.planning_version.is_none())
         .map_or_else(Vec::new, |d| replan_parts(d, &problems));
     Some(MissionPage {
+        linear_plan_review: detail.map_or_else(Vec::new, |d| {
+            d.resources
+                .iter()
+                .filter(|r| {
+                    r.linear_role.as_deref() == Some("managed")
+                        && r.linear_sync.as_ref().is_some_and(|s| s.reconcile_plan)
+                })
+                .filter_map(|r| r.external_id.clone())
+                .collect()
+        }),
         execution_queue: detail
             .and_then(|d| d.execution.as_ref())
             .filter(|e| e.version == 1)

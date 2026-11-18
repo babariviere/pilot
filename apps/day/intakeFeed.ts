@@ -67,7 +67,13 @@ export type IntakeResult = {
 };
 
 export type TriageIntent = { itemId: string; revision: number; contextDigest: string; state: Triage };
-export type StartIntent = { itemId: string; revision: number; contextDigest: string; missionId: string | null };
+export type StartIntent = {
+	itemId: string;
+	revision: number;
+	contextDigest: string;
+	missionId: string | null;
+	manageStatus?: boolean;
+};
 
 /** The New section's source. The connected window has one; the mock window has none. */
 export interface IntakeSource {
@@ -374,9 +380,10 @@ export class ConnectedIntake implements IntakeSource {
 	}
 
 	start(intent: StartIntent): Promise<IntakeResult> {
-		const { itemId, revision, contextDigest, missionId } = intent;
+		const { itemId, revision, contextDigest, missionId, manageStatus } = intent;
 		const args: Record<string, unknown> = { itemId, revision, contextDigest };
 		if (missionId) args.missionId = missionId;
+		if (manageStatus) args.manageStatus = true;
 		return this.#write(itemId, "day.intake.start", args);
 	}
 

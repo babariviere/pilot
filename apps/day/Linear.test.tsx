@@ -16,7 +16,7 @@ async function page(mode?: string) {
 test("the page names its scope, the saved cycle and groups the user's issues by state", async () => {
 	const app = await page();
 	await app.waitFor("Your issues in cycle 42");
-	expect(app.shows("Linear · read only")).toBe(true);
+	expect(app.shows("Reading the list never starts work or changes Linear.")).toBe(true);
 	expect(
 		app.shows("Your own issues that Pilot saved for this project. Not your team's other issues or other cycles."),
 	).toBe(true);
@@ -188,6 +188,19 @@ test("a restored page never shows another project's issues in its place", async 
 	await app.press("id:linear-open");
 	await app.waitFor("id:linear-issue-ln-219");
 	expect(app.shows("id:linear-other-project")).toBe(false);
+});
+
+test("an open issue offers size advice and reference-only start by default", async () => {
+	const app = await page();
+	await app.press("id:linear-issue-ln-231");
+	await app.waitFor("Suggested size: Quick fix. You choose how to start.");
+	await app.waitFor("Pilot links this issue without updating its status.");
+	await app.press("id:start-ln-231");
+	await app.waitFor("Pilot links the issue for context only. Its Linear status does not change.");
+	await app.press("Cancel");
+	await app.press("id:linear-manage-ln-231");
+	await app.press("id:start-ln-231");
+	await app.waitFor("Pilot links the issue and manages progress and review only. You mark it complete in Linear.");
 });
 
 test("a restored issue that is no longer shown says so and opens nothing else", async () => {
