@@ -314,11 +314,13 @@ fn line(event: &str, fields: Value) -> Vec<u8> {
             // How long a project switch took to show the chosen project, and
             // why a scope read was refused.
             "scope.switch" | "scope.read_refused" => event,
+            // An answer or request Pilot did not send, and why.
+            "attention.send_refused" => event,
             _ => "other",
         }
         .into(),
     );
-    for key in ["generation", "protocol", "ms"] {
+    for key in ["generation", "protocol", "ms", "tries"] {
         if let Some(v) = fields
             .get(key)
             .filter(|v| v.as_u64().is_some_and(|n| n <= 9_007_199_254_740_991))

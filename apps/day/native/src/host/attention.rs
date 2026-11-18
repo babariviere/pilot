@@ -471,41 +471,21 @@ pub(super) async fn handle(
                 );
         }
         super::Work::AttentionSend(request) => {
-            // A refusal only because the read moved on (a mission notice raised the read fence, or
-            // the authority digest around the target moved) sends the same answer again, rebound
-            // to the newest read, as a new operation. A changed or gone target stops at once.
-            // Unknown never comes back here: it is never resent.
-            let mut request = request;
-            let mut epoch = epoch;
-            let mut attempt = 1;
-            loop {
-                match send_once(t, journal, shared, epoch, request.clone()).await {
-                    Err(Error::Stale) => {}
-                    other => return other,
-                }
-                // The window moved to another project: this answer is not sent there.
-                if shared
-                    .focus
-                    .lock()
-                    .expect("native focus poisoned")
-                    .as_ref()
-                    .is_some_and(|p| t.source.project.as_ref() != Some(p))
-                {
-                    return Err(Error::Stale);
-                }
-                let Some(wait) = retry_after(attempt) else {
-                    return Ok(shared.outcome(OutcomeStatus::Stale, exhausted(&request)));
-                };
-                tokio::time::sleep(wait).await;
-                attempt += 1;
-                // The newest read under the current fence; the target is checked again against it.
-                epoch = shared.epoch.load(std::sync::atomic::Ordering::SeqCst);
-                let current = read(t, shared, epoch).await?;
-                request = match rebind(&request, &current) {
-                    Ok(next) => next,
-                    Err(changed) => return Ok(shared.outcome(OutcomeStatus::Stale, changed)),
-                };
+            let kind = request["kind"].as_str().unwrap_or("").to_owned();
+            let (result, tries) = send(t, journal, shared, epoch, request).await;
+            // Only the kind, error and tries: never the question, answer or words.
+            let error = match &result {
+                Ok(outcome) if outcome.status == OutcomeStatus::Accepted => None,
+                Ok(outcome) => Some(format!("{:?}", outcome.status)),
+                Err(error) => Some(format!("{error:?}")),
+            };
+            if let Some(error) = error {
+                crate::day_log::event(
+                    "attention.send_refused",
+                    json!({"command": kind, "error": error, "tries": tries}),
+                );
             }
+            return result;
         }
         super::Work::AttentionCheck(id) => {
             let mut record = journal
@@ -561,6 +541,62 @@ fn exhausted(request: &Value) -> &'static str {
         "Pilot tried 3 times, but the mission kept changing around this question. Nothing was sent; your answer stays. Try again in a moment."
     } else {
         "Pilot tried 3 times, but the mission kept changing around this request. Nothing was sent; your words stay. Try again in a moment."
+    }
+}
+
+/// Sends "request" and returns the result with the number of tries used. A refusal only because
+/// the read moved on (a mission notice raised the read fence, or the authority digest around the
+/// target moved) sends the same answer again, rebound to the newest read, as a new operation. A
+/// read that itself races another notice uses that try and reads again on the next one. A changed
+/// or gone target stops at once. Unknown never comes back here: it is never resent.
+async fn send(
+    t: &Transport,
+    journal: &mut super::Journal,
+    shared: &Shared,
+    mut epoch: u64,
+    mut request: Value,
+) -> (Result<crate::model::IntentOutcome, Error>, u32) {
+    use crate::model::OutcomeStatus;
+    let mut attempt = 1;
+    let mut result = send_once(t, journal, shared, epoch, request.clone()).await;
+    loop {
+        if !matches!(result, Err(Error::Stale)) {
+            return (result, attempt);
+        }
+        // The window moved to another project: this answer is not sent there.
+        if shared
+            .focus
+            .lock()
+            .expect("native focus poisoned")
+            .as_ref()
+            .is_some_and(|p| t.source.project.as_ref() != Some(p))
+        {
+            return (Err(Error::Stale), attempt);
+        }
+        let Some(wait) = retry_after(attempt) else {
+            return (
+                Ok(shared.outcome(OutcomeStatus::Stale, exhausted(&request))),
+                attempt,
+            );
+        };
+        tokio::time::sleep(wait).await;
+        attempt += 1;
+        // The newest read under the current fence; the target is checked again against it.
+        epoch = shared.epoch.load(std::sync::atomic::Ordering::SeqCst);
+        result = match read(t, shared, epoch).await {
+            Ok(current) => match rebind(&request, &current) {
+                Ok(next) => {
+                    request = next;
+                    send_once(t, journal, shared, epoch, request.clone()).await
+                }
+                Err(changed) => {
+                    return (Ok(shared.outcome(OutcomeStatus::Stale, changed)), attempt);
+                }
+            },
+            // Another notice came during this read: nothing was sent, so this try is used.
+            Err(Error::Stale) => Err(Error::Stale),
+            Err(error) => return (Err(error), attempt),
+        };
     }
 }
 

@@ -23,6 +23,8 @@ let hold = false,
 // Reads left that see the mission moved on: the chat's authority changes, its question does not.
 let churn = 0,
 	delivered = 0;
+// Every attention read races a mission notice: the window hears it before the read's reply.
+let notice = false;
 const sockets = new Set<WebSocket>();
 const wss = new WebSocketServer({ noServer: true });
 const proxy = createServer(async (req, res) => {
@@ -37,6 +39,10 @@ const proxy = createServer(async (req, res) => {
 		if (intent?.kind === "read" && churn > 0) {
 			churn--;
 			f.session = { ...f.session, outcomeAt: (f.session.outcomeAt ?? 0) + 1 };
+		}
+		if (intent?.kind === "read" && notice) {
+			for (const ws of wss.clients) ws.send(JSON.stringify({ type: "mission" }));
+			await new Promise((r) => setTimeout(r, 100));
 		}
 		if (lookup) lookups++;
 		if (sends) {
@@ -121,6 +127,7 @@ for await (const line of createInterface({ input: process.stdin })) {
 	// true: the next two reads see the mission move; false: every read does.
 	if (cmd.action === "churn") churn = cmd.value ? 2 : 1_000_000;
 	if (cmd.action === "calm") churn = 0;
+	if (cmd.action === "notice") notice = cmd.value;
 	// Answers reach the chat: the input executor takes them.
 	if (cmd.action === "deliver")
 		f.sessions.sendDurable = async () => {
