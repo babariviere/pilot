@@ -10555,6 +10555,7 @@ ${run.excerpt}`,
 				current.kernelRestartPending ||
 				current.failure ||
 				current.inputError ||
+				current.databases?.request ||
 				(current.slackReplyAdmission && current.slackReplyAdmission !== requestId) ||
 				current.working ||
 				current.preparing ||
