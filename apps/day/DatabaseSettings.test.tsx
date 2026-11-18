@@ -2,6 +2,16 @@ import { expect, open, test } from "nsh/test";
 
 const desktop = { platform: "macos", width: 1000, height: 1800 } as const;
 
+test("Today hides its empty state until database approval is settled", async () => {
+	const app = await open("./DatabaseSettingsFixture.tsx", desktop);
+	await app.press("Show Today");
+	await app.waitFor("id:database-approval");
+	expect(app.shows("Nothing needs you. Pilot keeps going on its own.")).toBe(false);
+	await app.press("Allow read-only");
+	await app.waitFor("Nothing needs you. Pilot keeps going on its own.");
+	expect(app.shows("id:database-approval")).toBe(false);
+});
+
 test("ineligible agents keep revocation without new approval", async () => {
 	const app = await open("./DatabaseSettingsFixture.tsx", desktop);
 	await app.press("Make agent ineligible");

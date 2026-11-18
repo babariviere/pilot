@@ -70,7 +70,7 @@ function headline(day: Day): string {
 	const today = day.today();
 	if (today.problems.length > 0) return "Some work needs a look.";
 	if (!today.problemsKnown) return "Your last read.";
-	if (day.databases?.snapshot()?.agents.some(a => !!a.request)) return "Database access needs your approval.";
+	if (day.databases?.snapshot()?.agents.some((a) => !!a.request)) return "Database access needs your approval.";
 	if (today.attention.state !== "live" && (today.headline.startsWith("Nothing needs you") || today.notes.length > 0)) {
 		return "Your last read.";
 	}
@@ -238,7 +238,12 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 							</Text>
 						}
 					>
-						<If when={incomingFeedback(props.day).length === 0}>
+						<If
+							when={
+								incomingFeedback(props.day).length === 0 &&
+								!props.day.databases?.snapshot()?.agents.some((a) => !!a.request)
+							}
+						>
 							<Text class="text-base text-foreground">
 								{checks() > 0
 									? "No question or action waits for you. Check the results below."

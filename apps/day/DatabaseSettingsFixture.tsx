@@ -2,6 +2,7 @@ import { mount, Scroll, signal, Text, View } from "nsh";
 import { DatabaseSettings } from "./DatabaseSettings";
 import type { DatabaseControls, DatabaseSnapshot } from "./databaseControls";
 import { restoreDatabaseDraft, savedDatabaseDraft } from "./databaseDraft";
+import { MockDayScreen, openDay } from "./mockFeeds";
 import { Action } from "./ui";
 
 const initial: DatabaseSnapshot = {
@@ -78,33 +79,46 @@ const controls: DatabaseControls = {
 		return true;
 	},
 };
+const day = { ...openDay("quiet"), databases: controls };
+const todayShown = signal(false);
 mount(() => (
-	<Scroll class="flex-1 bg-background">
-		<View class="gap-4 p-6">
-			<Text class="text-xs text-faint">Mock data · Database connections</Text>
-			<Text>{`Sends: ${sends()}, reads: ${reads()}, checks: ${checks()}`}</Text>
-			<View class="flex-row gap-2">
-				<Action label="Toggle Settings" onPress={() => shown.set(!shown())} />
-				<Action label="Save and restore draft" onPress={() => restoreDatabaseDraft(savedDatabaseDraft())} />
-				<Action label="External change" onPress={() => snapshot.set({ ...snapshot()!, binding: "b".repeat(64) })} />
-				<Action label="Lose next reply" onPress={() => lose.set(true)} />
-				<Action
-					label="Make agent ineligible"
-					onPress={() =>
-						snapshot.set({
-							...snapshot()!,
-							agents: snapshot()!.agents.map((a) => ({
-								...a,
-								eligible: false,
-								grants: a.request ? [a.request] : a.grants,
-							})),
-						})
-					}
-				/>
-			</View>
-			<If when={shown()}>
-				<DatabaseSettings controls={controls} />
-			</If>
-		</View>
-	</Scroll>
+	<If
+		when={todayShown()}
+		else={
+			<Scroll class="flex-1 bg-background">
+				<View class="gap-4 p-6">
+					<Text class="text-xs text-faint">Mock data · Database connections</Text>
+					<Text>{`Sends: ${sends()}, reads: ${reads()}, checks: ${checks()}`}</Text>
+					<View class="flex-row gap-2">
+						<Action label="Show Today" onPress={() => todayShown.set(true)} />
+						<Action label="Toggle Settings" onPress={() => shown.set(!shown())} />
+						<Action label="Save and restore draft" onPress={() => restoreDatabaseDraft(savedDatabaseDraft())} />
+						<Action
+							label="External change"
+							onPress={() => snapshot.set({ ...snapshot()!, binding: "b".repeat(64) })}
+						/>
+						<Action label="Lose next reply" onPress={() => lose.set(true)} />
+						<Action
+							label="Make agent ineligible"
+							onPress={() =>
+								snapshot.set({
+									...snapshot()!,
+									agents: snapshot()!.agents.map((a) => ({
+										...a,
+										eligible: false,
+										grants: a.request ? [a.request] : a.grants,
+									})),
+								})
+							}
+						/>
+					</View>
+					<If when={shown()}>
+						<DatabaseSettings controls={controls} />
+					</If>
+				</View>
+			</Scroll>
+		}
+	>
+		<MockDayScreen day={day} />
+	</If>
 ));
