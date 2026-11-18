@@ -161,6 +161,41 @@ test("code changes without a PR survive reading and clear when a PR is created o
 	}
 });
 
+test("an archived mission's chats leave needs you and its counts, whatever they left behind", () => {
+	const left = session({ id: "left", missionId: "old", outcome: "done", outcomeAt: 1, unpublishedWork: true });
+	const asks = session({ id: "asks", missionId: "old", outcome: "question", outcomeAt: 2 });
+	const live = session({ id: "live", missionId: "m", outcome: "done", outcomeAt: 3, unpublishedWork: true });
+	const dashboard = build({
+		sessions: [left, asks, live],
+		missions: [mission({ id: "old", status: "archived" }), mission({ id: "m" })],
+		isUnread: () => false,
+	});
+	assert.deepEqual(
+		dashboard.needsYou.items.map((item) => item.id),
+		["session:live"],
+	);
+	assert.equal(dashboard.summary.needsYou, 1);
+	assert.equal(dashboard.missions.items[0]?.needsYou, 1);
+});
+
+test("a mission chat waiting for a reply needs you with a waits reason and can continue", () => {
+	const chat = session({
+		id: "waits",
+		missionId: "m",
+		outcome: "done",
+		outcomeAt: 1,
+		waitsForReply: true,
+		canContinue: true,
+	});
+	const dashboard = build({ sessions: [chat], missions: [mission({ id: "m" })], isUnread: () => false });
+	const row = dashboard.needsYou.items[0];
+	assert.equal(row?.kind, "question");
+	assert.equal(row?.attentionReason.kind, "waits");
+	assert.equal(row?.canContinue, true);
+	assert.match(row?.reason ?? "", /waiting for your reply/);
+	assert.equal(build({ sessions: [{ ...chat, waitsForReply: undefined }], isUnread: () => false }).needsYou.total, 0);
+});
+
 test("chats blocked on an MCP server need the user even while working, with the server to fix", () => {
 	const attentionReason = { kind: "mcp" as const, detail: "datadog needs sign-in", server: "datadog" };
 	const chat = session({ id: "logs", state: "working", working: true, attentionReason, attentionAt: 7 });
@@ -340,6 +375,16 @@ test("reviewed results leave needs you and appear under recent instead, but fail
 	assert.equal(dashboard.recent.total, 1);
 	// A newer completion is unread again.
 	assert.equal(build({ sessions: [{ ...seen, outcomeAt: 301 }], isUnread: (_id, at) => at > 300 }).needsYou.total, 1);
+});
+
+test("a failure the user dismissed leaves needs you; one that can continue says so on its row", () => {
+	const retry = session({ outcome: "failed", outcomeAt: 200, canContinue: true });
+	const dismissed = session({ outcome: "failed", outcomeAt: 300, failureDismissed: true });
+	const dashboard = build({ sessions: [retry, dismissed] });
+	assert.deepEqual(
+		dashboard.needsYou.items.map((item) => [item.sessionId, item.canContinue]),
+		[[retry.id, true]],
+	);
 });
 
 test("a chat whose PRs all settled no longer needs review, but an unpublished one still does", () => {

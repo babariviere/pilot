@@ -691,6 +691,9 @@ test("research uses linked Knowledge and cannot resolve human decisions", async 
 		{ ...question("choice", ["fact"]), sources: [source] },
 	]);
 	const resolution = { kind: "knowledge", id: k.entry.id, digest: digest(source) };
+	// The planner cannot compute digests: the view hands it the exact resolution.
+	const fact = (await f.service().view(f.missionId)).exploration.find((e) => e.questionId === "fact");
+	assert.deepEqual(fact?.resolveWith, [resolution]);
 	assert.equal((await f.write({ purpose: "plan-resolve", questionId: "fact", resolution })).receipt.state, "accepted");
 	assert.deepEqual(
 		planFrontier(f.plan).map((q) => q.id),

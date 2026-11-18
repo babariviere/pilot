@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SessionSummary } from "@pilot/protocol";
+import { explorerQuestionSettled } from "./explorer-questions.ts";
 import { publishedPlanningFixture as fixture } from "./published-planning.fixture.ts";
 
 const research = (id: string, dependsOn: string[] = []) => ({
@@ -87,12 +88,40 @@ test("ready research starts limited read-only chats and reports all findings tog
 	await settle();
 	assert.equal(spawned.length, 4);
 	assert.equal(claimed().a, "research-4");
+	// research-4 took over a's question: research-1's question no longer needs the user. b's chat still asks.
+	assert.deepEqual(f.store.planningWorkers.get(f.missionId)!.research!.a!.earlierSessionIds, ["research-1"]);
+	const settled = (id: string, title: string) => explorerQuestionSettled(f.store, { id, title });
+	assert.equal(settled("research-1", "Research: Research a"), true);
+	assert.equal(settled("research-4", "Research: Research a"), false);
+	assert.equal(settled("research-2", "Research: Research b"), false);
 	finish("research-4");
 	await settle();
 	assert.equal(f.inputs.length, 2);
 	await unclaim();
 	await settle();
 	assert.equal(spawned.length, 4, "at most two research chats per question");
+	// The planner changes the question (say, new source access): that changed question gets one chat again.
+	await f.plan({
+		purpose: "plan-map",
+		expectedRevision: f.store.plans.get(f.missionId)!.revision,
+		destination: "Importer",
+		sources: [],
+		questions: [
+			{ ...research("a"), question: "What is true about a, now that its source is readable?" },
+			research("b"),
+			research("c"),
+			research("later", ["a"]),
+		],
+		fog: [],
+	} as { purpose: string });
+	await settle();
+	assert.equal(spawned.length, 5);
+	assert.equal(claimed().a, "research-5");
+	finish("research-5");
+	await settle();
+	await unclaim();
+	await settle();
+	assert.equal(spawned.length, 5, "the same changed question does not loop");
 	assert.equal(f.store.tasks(f.missionId).length, 0, "research never creates build tasks");
 });
 

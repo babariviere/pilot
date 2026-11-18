@@ -21,6 +21,11 @@ import { pauseRevisionWork, resumeRevisionWork } from "./revision-work-pause.ts"
 import type { SessionManager } from "./sessions.ts";
 import type { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
+/**
+ * Planner history reads one planning list read runs at once. Each is a worker-thread read in the cold reader, whose
+ * queue (32) chat pages share; 4 keeps most of it free. Measured with scripts/bench/planning-inventory.ts.
+ */
+const PLANNER_READS = 4;
 export const isNativePlanningOperation = (kind: string) =>
 	isInterviewOperation(kind) ||
 	isPlanOperation(kind) ||
@@ -200,6 +205,26 @@ export class NativeMissionPlanning {
 		await store.durable();
 		if (canonicalJSON(snapshot()) !== identity) throw new Conflict("Planning inventory changed");
 		const items = pin.rows.map(({ item }) => item);
+		// Stuck planning is advice, not part of the pinned identity: checked once, after the pin. Both the stuck read
+		// (stuckView) and the planner's last words (plannerSays) are kept until they change.
+		const workers = this.deps.workers;
+		const replies: PlanningInventoryItem[] = [];
+		for (const item of items) {
+			const unstick = item.stage === "published" ? undefined : workers?.stuckView(item.missionId);
+			if (!unstick) continue;
+			item.stuck = { line: unstick.line, ...(unstick.reply ? { reply: true as const } : {}) };
+			if (unstick.reply) replies.push(item);
+		}
+		// History reads share the cold reader's 32-read queue with chat pages: at most PLANNER_READS at once.
+		let next = 0;
+		const read = async () => {
+			while (next < replies.length) {
+				const item = replies[next++]!;
+				const says = await workers?.plannerSays(item.missionId);
+				if (says && item.stuck) item.stuck.plannerSays = says;
+			}
+		};
+		await Promise.all(Array.from({ length: Math.min(PLANNER_READS, replies.length) }, read));
 		return { version: 1, projectId, status: "available", limit, total: items.length, items };
 	}
 
@@ -287,6 +312,9 @@ export class NativeMissionPlanning {
 		const start = await this.deps.workers?.startView(missionId);
 		const activity = await this.activity(missionId);
 		const revision = this.revisionView(missionId);
+		const unstick = this.deps.workers?.unstickView(missionId) ?? null;
+		// The planner ended its turn while the plan is open: show its last words, so the user can reply to them.
+		const plannerSays = unstick?.reply ? await this.deps.workers?.plannerSays(missionId) : undefined;
 		await this.deps.store.durable();
 		check();
 		if (canonicalJSON(revision) !== canonicalJSON(this.revisionView(missionId)))
@@ -304,7 +332,7 @@ export class NativeMissionPlanning {
 				reason: "Trusted Revisit owner unavailable",
 			},
 			questionAsks: this.deps.workers?.askView(missionId) ?? [],
-			unstick: this.deps.workers?.unstickView(missionId) ?? null,
+			unstick: unstick && plannerSays ? { ...unstick, plannerSays } : unstick,
 			repair: this.deps.workers?.repairView(missionId) ?? null,
 			continuePlanning: this.deps.workers?.continueView(missionId) ?? {
 				available: false,

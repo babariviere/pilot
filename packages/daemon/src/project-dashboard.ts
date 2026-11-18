@@ -120,12 +120,18 @@ function needsReview(session: SessionSummary, isUnread: DashboardInput["isUnread
 	// A scheduled follow-up message is the user's answer: the chat now waits on that schedule.
 	if (session.scheduledMessage) return false;
 	if (session.attentionReason?.kind === "pr_stuck" || session.attentionReason?.kind === "automation") return true;
+	// A mission chat that ended its turn with no result and no question waits for the user's reply.
+	if (session.waitsForReply) return true;
 	if (hasMissingPullRequest(session)) return true;
-	// A question waits until it is answered, not until the chat is viewed.
-	if (session.outcome === "question") return true;
+	// A question waits until it is answered, not until the chat is viewed. An explorer's question its plan settled
+	// (questionSettled) waits for nobody.
+	if (session.outcome === "question") return !session.questionSettled;
+	// A chat Pilot started for a map question reports to the planner, which used its findings: never unread for the user.
+	if (session.mapExplorer && !failed(session)) return false;
 	if (hasTerminalPullRequest(session)) return false;
-	// A failure waits until it is retried, not until the chat is viewed.
-	if (failed(session)) return true;
+	// A failure waits until it is retried or the user dismisses it, not until the chat is viewed.
+	// An explorer's failure its plan settled (questionSettled) waits for nobody.
+	if (failed(session)) return !session.failureDismissed && !session.questionSettled;
 	// Mirror SessionSummary.isReadyToMerge: coordinators never represent their PR as ready chat work.
 	if (
 		!(session.missionCoordinator ?? session.activeMissionCoordinator) &&
@@ -149,7 +155,10 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 	const needsYou: DashboardNeedsYouItem[] = [];
 	const needsYouByMission = new Map<string, number>();
 	const reviewing = new Set<string>();
+	// An archived mission's chats need nothing more: whatever they left (such as changes without a PR) stays there.
+	const archived = new Set(input.missions.filter((mission) => mission.status === "archived").map((m) => m.id));
 	for (const session of sessions) {
+		if (session.missionId && archived.has(session.missionId)) continue;
 		if (!needsReview(session, isUnread)) continue;
 		reviewing.add(session.id);
 		if (session.missionId)
@@ -165,16 +174,20 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 				? attentionReason.kind
 				: undefined;
 		const isFailure = !attention && failed(session);
+		const waits = !attention && attentionReason.kind === "waits";
 		const reason = reasonLine(
-			attention ? attentionReason.detail : (session.outcomeReason ?? (isFailure ? session.error : undefined)),
+			attention || waits
+				? attentionReason.detail
+				: (session.outcomeReason ?? (isFailure ? session.error : undefined)),
 		);
 		needsYou.push({
-			kind: attention ?? (isFailure ? "failed" : session.outcome === "question" ? "question" : "unread"),
+			kind: attention ?? (isFailure ? "failed" : session.outcome === "question" || waits ? "question" : "unread"),
 			id: `session:${session.id}`,
 			title: session.title,
 			sessionId: session.id,
 			...(session.missionId ? { missionId: session.missionId } : {}),
 			...(!attention ? { outcome: session.outcome ?? "failed" } : {}),
+			...(session.canContinue ? { canContinue: true as const } : {}),
 			...(reason ? { reason } : {}),
 			attentionReason,
 			at: (attention ? session.attentionAt : session.outcomeAt) ?? session.updatedAt,

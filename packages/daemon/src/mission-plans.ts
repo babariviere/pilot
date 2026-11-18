@@ -225,23 +225,42 @@ export class MissionPlanReader {
 			exploration: pin.plan
 				? pin.plan.questions
 						.filter((q) => !q.resolution)
-						.map((q) => ({
-							questionId: q.id,
-							status:
-								q.kind === "prototype"
-									? "needs-prototype"
+						.map(
+							(
+								q,
+							): {
+								questionId: string;
+								status: string;
+								ready: boolean;
+								questionDigest?: string;
+								contextDigest?: string;
+								evidence?: "missing" | "current" | "stale";
+								resolveWith?: { kind: "knowledge"; id: string; digest: string }[];
+							} => ({
+								questionId: q.id,
+								status:
+									q.kind === "prototype"
+										? "needs-prototype"
+										: q.kind === "research"
+											? "needs-research"
+											: "needs-grilling",
+								ready: planFrontier(pin.plan!).some((p) => p.id === q.id),
+								...(q.kind === "prototype"
+									? {
+											questionDigest: planQuestionDigest(q),
+											contextDigest: prototypeContextDigest(pin.plan!),
+											evidence: evidence(q),
+										}
 									: q.kind === "research"
-										? "needs-research"
-										: "needs-grilling",
-							ready: planFrontier(pin.plan!).some((p) => p.id === q.id),
-							...(q.kind === "prototype"
-								? {
-										questionDigest: planQuestionDigest(q),
-										contextDigest: prototypeContextDigest(pin.plan!),
-										evidence: evidence(q),
-									}
-								: {}),
-						}))
+										? {
+												// The exact plan-resolve resolutions this question accepts: its linked findings.
+												resolveWith: q.sources
+													.filter((s) => s.kind === "knowledge")
+													.map((s) => ({ kind: "knowledge" as const, id: s.id, digest: digest(s) })),
+											}
+										: {}),
+							}),
+						)
 				: [],
 			// The shared map: the same projection the native page shows. Derived, never stored.
 			map: planMap({
@@ -822,7 +841,9 @@ export class MissionPlans extends MissionPlanReader {
 		} else if (resolution.kind === "knowledge" && q.kind === "research") {
 			const source = q.sources.find((s) => s.kind === "knowledge" && s.id === resolution.id);
 			if (!source || digest(source) !== resolution.digest)
-				throw new Conflict("Exact linked research evidence required");
+				throw new Conflict(
+					"Exact linked research evidence required: link the finding in the question's sources, then pass a resolution from the question's exploration resolveWith",
+				);
 			this.sources(plan.missionId, [source]);
 		} else if (resolution.kind === "interview" && (q.kind === "human" || q.kind === "prototype")) {
 			const i = this.context(plan.missionId).interview,

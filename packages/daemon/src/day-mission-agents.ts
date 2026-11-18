@@ -26,6 +26,7 @@ export function dayMissionAgents(
 				working,
 				waitingForUser:
 					s.archivedAt === undefined &&
+					!s.questionSettled &&
 					(s.attentionReason?.kind === "asks" || (s.outcome === "question" && !s.scheduledMessage)),
 				holds,
 			},

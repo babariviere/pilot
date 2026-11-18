@@ -51,7 +51,10 @@ test("an approved repair note reaches the planner word for word; with feedback, 
 	const op = f.operation(f.missionId, { purpose: "plan-continue", note }, digest);
 	assert.equal((await f.execute(op)).state, "accepted");
 	assert.equal(f.inputs.length, 1);
-	assert.match(f.inputs[0]!.content, /repair agent looked at why planning stopped, and the user approved this note/);
+	assert.match(
+		f.inputs[0]!.content,
+		/a reply to your last message, or a fix from Pilot's repair agent that they approved/,
+	);
 	assert.ok(f.inputs[0]!.content.endsWith(`Note: ${JSON.stringify(note)}`));
 });
 

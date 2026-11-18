@@ -137,6 +137,16 @@ const RESEARCH_REPORT_LIMIT = 48_000;
 const PROTOTYPE_CHATS = 1;
 /** Chats answering the user's questions about interview questions at once, per mission. */
 const ASK_CHATS = 2;
+/**
+ * Characters of the planner's last message shown when it ended its turn: a request to the user fits in a few short
+ * paragraphs (the same size mission-service shows for a chat's last reply). It keeps the planning read small.
+ */
+const PLANNER_SAYS_CHARS = 1500;
+/**
+ * Planners whose last message, and missions whose stuck read, are kept. It protects daemon memory (at most 1500
+ * characters each): twice the planning list's 100 rows, so one project's list and the open plan page always hit.
+ */
+const PLANNER_SAYS_KEPT = 200;
 /** Questions kept per mission; the oldest finished ones go first. */
 const ASKS_KEPT = 60;
 /** Answer characters shown to the user. Answers are meant to be short. */
@@ -312,6 +322,7 @@ export class PlanningWorkers {
 	private readonly turnAdmissions = new Map<string, Promise<void>>();
 	private readonly detach: () => void;
 	private readonly offSettled: () => void;
+	private readonly offStuck: () => void;
 	/** Repair chats are not mission members: their changes reach the mission through this map. */
 	private readonly repairChats = new Map<string, string>();
 	/** Missions whose submitted round is being sent to the planner now. */
@@ -331,6 +342,13 @@ export class PlanningWorkers {
 		{ at: string; operationId: string; reason: string; changes: string[] | null }
 	>();
 	private readonly unstickLog: UnstickLog;
+	/** The planner's last message by planner chat, with the summary state it was read at (see plannerSays). */
+	private readonly plannerWords = new Map<string, { key: string; words: Promise<string | undefined> }>();
+	/** The planning list's stuck read by mission, with its planner's state (see stuckView). */
+	private readonly stuckKept = new Map<
+		string,
+		{ key: string; view: ReturnType<PlanningWorkers["unstickView"]> | undefined }
+	>();
 	private readonly recentOperations = new Map<
 		string,
 		{ kind: string; state: string; reason: string | null; operationId: string; at: string }[]
@@ -350,6 +368,8 @@ export class PlanningWorkers {
 			close: () => this.close(),
 		});
 		this.offSettled = deps.journal.onSettled((op, receipt) => this.noteOperation(op, receipt));
+		// A kept stuck read goes with any committed change of its mission (planning step, round, map, controls).
+		this.offStuck = deps.store.onChange((missionId) => this.stuckKept.delete(missionId));
 	}
 	/**
 	 * Read-only planning facts for a Diagnostics chat: why planning moves, waits or is stuck, with counts and
@@ -780,7 +800,7 @@ export class PlanningWorkers {
 					: op.kind === "plan-continue" && JSON.parse(op.payload).feedback !== undefined
 						? `The user sent feedback on the current interview instead of answering it. Redo the round with it: reword, split, merge, drop or add questions as asked, and save the whole list again with the action you used for this round. Keep a question's id when its meaning stays, so its saved answer stays. The feedback answers no question and approves nothing. Planning only: no build work or worker starts.\nFeedback: ${JSON.stringify(JSON.parse(op.payload).feedback)}`
 						: op.kind === "plan-continue" && JSON.parse(op.payload).note !== undefined
-							? `Pilot's repair agent looked at why planning stopped, and the user approved this note. Act on it, then continue planning: read mission_plan, and judge only by Pilot's answers. The note answers no question and approves nothing. Planning only: no build work or worker starts.\nNote: ${JSON.stringify(JSON.parse(op.payload).note)}`
+							? `The user sent you this note after planning stopped: a reply to your last message, or a fix from Pilot's repair agent that they approved. Act on it, then continue planning: read mission_plan, and judge only by Pilot's answers. The note answers no interview question and approves nothing. To ask the user, save a round. Planning only: no build work or worker starts.\nNote: ${JSON.stringify(JSON.parse(op.payload).note)}`
 							: op.kind === "plan-continue"
 								? `The user asked you to continue planning. Read mission_plan for the current map and answers. Link human answers that settle map questions and save a new round only for real new human questions. Pilot starts read-only research chats for ready research questions and prototype chats for ready prototype questions, and sends you their results. ${this.modelHint(state.binding.missionId)}${this.refusalHint(state.binding.missionId)} Planning only: no build work or worker starts.`
 								: op.kind === "plan-research-result"
@@ -1072,6 +1092,8 @@ export class PlanningWorkers {
 		line: string;
 		fix: "continue" | "drop-earlier-answers" | null;
 		checks: string[];
+		/** The planner ended its turn with no question while the plan is open: it may wait for a reply in prose. */
+		reply?: true;
 	} {
 		const checks: string[] = [];
 		const result = (
@@ -1199,12 +1221,72 @@ export class PlanningWorkers {
 				`Pilot made ${RESEARCH_ATTEMPTS} prototypes for "${titleOf(spent[0])}". Continue asks the planning agent to ask you how to go on.`,
 				canContinue ? "continue" : null,
 			);
-		return result(
-			"stuck",
-			"Pilot's planning agent stopped while the plan is still open.",
-
-			canContinue ? "continue" : null,
-		);
+		return {
+			...result(
+				"stuck",
+				"Pilot's planning agent ended its turn while the plan is still open. It may be waiting for your reply.",
+				canContinue ? "continue" : null,
+			),
+			reply: true,
+		};
+	}
+	/**
+	 * Unstick for the planning list: the stuck read, or undefined when planning is not stuck. A working planner
+	 * cannot be stuck, so it costs nothing. Otherwise the read is kept until its mission changes (store change) or
+	 * its planner chat does (turn, update time, input generation, state). unstickView reads the mission's authority
+	 * twice (about 2 ms a row), which made a 100-row list read 190 ms slower when every planner was idle.
+	 */
+	stuckView(missionId: string): ReturnType<PlanningWorkers["unstickView"]> | undefined {
+		const state = this.deps.store.planningWorkers.get(missionId);
+		if (!state) return undefined;
+		const owner = this.deps.sessions.get(state.binding.ownerSessionId);
+		if (owner && (owner.working || (owner.state !== "idle" && owner.state !== "parked"))) return undefined;
+		// Admissions in flight change no stored record until they settle: never keep a read taken during one.
+		const settled =
+			!this.admissions.has(missionId) && !this.turnAdmissions.has(missionId) && !this.continuing.has(missionId);
+		const key = owner
+			? `${owner.updatedAt}:${owner.outcomeAt ?? ""}:${owner.inputGeneration ?? 0}:${owner.state}`
+			: "gone";
+		const kept = this.stuckKept.get(missionId);
+		if (settled && kept?.key === key) return kept.view;
+		const view = this.unstickView(missionId);
+		const stuck = view.state === "stuck" ? view : undefined;
+		if (settled) {
+			this.stuckKept.delete(missionId);
+			this.stuckKept.set(missionId, { key, view: stuck });
+			if (this.stuckKept.size > PLANNER_SAYS_KEPT)
+				this.stuckKept.delete(this.stuckKept.keys().next().value as string);
+		}
+		return stuck;
+	}
+	/**
+	 * The planner's last message, for a planner that ended its turn while the plan is open (unstick `reply`).
+	 * Passive: reads saved history, never wakes the planner. At most PLANNER_SAYS_CHARS. Kept per planner chat
+	 * until its turn, update time or input generation changes: an idle planner's history changes only with those.
+	 * Without it, every planning list read paid one history read (a worker thread) per stuck planner.
+	 */
+	async plannerSays(missionId: string): Promise<string | undefined> {
+		const state = this.deps.store.planningWorkers.get(missionId);
+		if (!state) return undefined;
+		const id = state.binding.ownerSessionId;
+		const owner = this.deps.sessions.get(id);
+		if (!owner) return undefined;
+		const key = `${owner.updatedAt}:${owner.outcomeAt ?? ""}:${owner.inputGeneration ?? 0}:${owner.state}`;
+		const kept = this.plannerWords.get(id);
+		if (kept?.key === key) return kept.words;
+		const words = this.deps.sessions
+			.lastAssistantReply(id, PLANNER_SAYS_CHARS)
+			.then((text) => text?.trim())
+			.catch(() => {
+				// A planner whose history cannot be read shows the stuck line without its words; the next read tries again.
+				if (this.plannerWords.get(id)?.words === words) this.plannerWords.delete(id);
+				return undefined;
+			});
+		this.plannerWords.delete(id);
+		this.plannerWords.set(id, { key, words });
+		if (this.plannerWords.size > PLANNER_SAYS_KEPT)
+			this.plannerWords.delete(this.plannerWords.keys().next().value as string);
+		return words;
 	}
 
 	/** The user's questions about interview questions, oldest first, with their answers. */
@@ -1951,9 +2033,16 @@ export class PlanningWorkers {
 		let active = working();
 		for (const q of planResearchFrontier(plan)) {
 			if (active >= RESEARCH_CHATS) return;
-			// A question unclaimed after weak findings gets one more research chat, never more.
+			// A question unclaimed after weak findings gets one more research chat. After that only a question the
+			// planner changed (for example after new source access) gets another: the same question never loops.
 			const prior = state.research?.[q.id];
-			if (prior && !(["reported", "failed"].includes(prior.state) && (prior.attempts ?? 1) < RESEARCH_ATTEMPTS))
+			if (
+				prior &&
+				!(
+					["reported", "failed"].includes(prior.state) &&
+					((prior.attempts ?? 1) < RESEARCH_ATTEMPTS || prior.questionDigest !== planQuestionDigest(q))
+				)
+			)
 				continue;
 			if (!(await this.startExplorer(state, missionId, q))) return;
 			active++;
@@ -1977,6 +2066,10 @@ export class PlanningWorkers {
 			state: "starting",
 			sessionId: null,
 			attempts: (prior?.attempts ?? 1) + (prior ? 1 : 0),
+			// The chat this one replaces keeps its history; its question no longer needs the user (explorer-questions.ts).
+			...(prior?.sessionId
+				? { earlierSessionIds: [...(prior.earlierSessionIds ?? []), prior.sessionId] }
+				: {}),
 			operation: undefined,
 			report: undefined,
 			reason: undefined,
@@ -3286,6 +3379,7 @@ export class PlanningWorkers {
 		this.closed = Promise.allSettled([...this.tasks, ...this.admissions.values()]).then(() => {
 			this.detach();
 			this.offSettled();
+			this.offStuck();
 		});
 		return this.closed;
 	}

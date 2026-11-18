@@ -28,6 +28,91 @@ const REPAIR_WORDS: Record<Fix, string> = {
 	none: "Nothing to apply from here.",
 };
 
+/** Whether the planner ended its turn while the plan is open, and may wait for a reply in prose. */
+export function plannerWaits(page: PlanPage): boolean {
+	return page.unstick?.state === "stuck" && page.unstick.reply === true;
+}
+
+/**
+ * The planner ended its turn with no question while the plan is open: its last words, a reply field and the two
+ * ways on. Reply sends the user's words as a note it reads; Continue sends none. Each is sent once, on a press.
+ */
+export function PlannerWaits(props: { plans: Plans; page: PlanPage }) {
+	const reply = signal("");
+	const busy = signal(false);
+	const message = signal("");
+	const u = () => props.page.unstick;
+	const send = async (note: string) => {
+		const feed = props.plans.feed;
+		if (busy() || !feed.continuePlanning) return;
+		busy.set(true);
+		message.set("");
+		try {
+			// Called on the feed: the connected feed's methods use their own private state.
+			const outcome = await feed.continuePlanning({ missionId: props.page.missionId, feedback: "", note });
+			message.set(outcome.message);
+			if (outcome.status === "accepted") reply.set("");
+		} catch (error) {
+			logEvent("ui.error", errorText(error));
+			message.set("Pilot could not send this. Nothing was sent.");
+		} finally {
+			busy.set(false);
+		}
+	};
+	const ready = () => !busy() && props.page.fresh && props.page.canContinue;
+	return (
+		<If when={plannerWaits(props.page) || message()}>
+			<Panel testID="planner-waits" class="gap-3">
+				<If when={plannerWaits(props.page)}>
+					<MarkLine kind="needs">
+						<Text testID="planner-waits-line" class="text-sm text-foreground">
+							{u()?.line ?? ""}
+						</Text>
+					</MarkLine>
+					<If when={u()?.plannerSays}>
+						<View selectable class="gap-0.5">
+							<Text class="text-xs text-faint">Its last message</Text>
+							<Text testID="planner-says" class="text-sm leading-relaxed text-foreground">
+								{u()?.plannerSays ?? ""}
+							</Text>
+						</View>
+					</If>
+					<TextField
+						testID="planner-reply"
+						multiline
+						compact
+						value={reply()}
+						onChange={({ value }) => reply.set(value)}
+						accessibilityLabel="Your reply to Pilot's planning agent. It reads it as a note and continues."
+					/>
+					<View class="-ml-3 flex-row gap-2">
+						<Action
+							variant="outline"
+							testID="planner-reply-send"
+							label={busy() ? "Sending…" : "Reply"}
+							disabled={!ready() || !reply().trim()}
+							accessibilityLabel="Send your reply to Pilot's planning agent. Sent once. It answers no interview question."
+							onPress={() => void send(reply())}
+						/>
+						<Action
+							testID="planner-continue"
+							label="Continue"
+							disabled={!ready()}
+							accessibilityLabel="Continue planning with no reply. Pilot's planning agent picks up where it stopped."
+							onPress={() => void send("")}
+						/>
+					</View>
+				</If>
+				<If when={message()}>
+					<Text testID="planner-waits-message" class="text-xs text-faint">
+						{message()}
+					</Text>
+				</If>
+			</Panel>
+		</If>
+	);
+}
+
 /** The Unstick action under the planner's status, and its card once opened. */
 export function Unstick(props: { plans: Plans; page: PlanPage }) {
 	const open = signal(false);

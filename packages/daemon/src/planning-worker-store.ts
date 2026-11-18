@@ -129,6 +129,8 @@ export interface PlanningResearch {
 	reason?: string;
 	/** Research chats started for this question so far (1 when absent). */
 	attempts?: number;
+	/** Earlier chats of this question, oldest first. Each attempt adds one, so their number is limited by attempts. */
+	earlierSessionIds?: string[];
 	/** The Knowledge entry Pilot saved the findings in, word for word, linked to the mission. */
 	knowledge?: { id: string; revision: number; synopsis: string };
 	/** "prototype": a prototype chat for a prototype question. Absent: research. */

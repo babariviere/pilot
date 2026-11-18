@@ -26,8 +26,13 @@ export function sessionNeedsYouReason(session: SessionSummary, now = Date.now())
 			detail: reasonLine(session.outcomeReason) ?? reasonLine(session.error) ?? "The chat failed",
 		};
 	}
-	if (session.outcome === "question")
+	if (session.outcome === "question" && !session.questionSettled)
 		return { kind: "asks", detail: reasonLine(session.outcomeReason) ?? "A question is waiting for your answer" };
+	if (session.waitsForReply)
+		return {
+			kind: "waits",
+			detail: "Its chat ended its turn without a result or a question. It may be waiting for your reply.",
+		};
 	if (session.attentionReason) return session.attentionReason;
 	if (hasMissingPullRequest(session)) return { kind: "no_pr" };
 	return { kind: "not_reviewed" };

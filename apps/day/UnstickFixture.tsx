@@ -20,6 +20,8 @@ const page = signal<PlanPage>({
 		fix: "dropEarlierAnswers",
 		checks: ["Planning agent: idle", "Questions: 13, saved answers: 7, 7 to an earlier wording"],
 		repair: { available: true, state: "none", chatId: "", proposal: null, reason: "", current: false },
+		reply: false,
+		plannerSays: "",
 	},
 });
 const applied = signal(0);
@@ -42,7 +44,14 @@ plans.feed = Object.assign(Object.create(Object.getPrototypeOf(source)), source,
 		applied.set(applied() + 1);
 		page.set({
 			...page(),
-			unstick: { state: "waiting", line: "Pilot waits for your answers to this round.", fix: "none", checks: [] },
+			unstick: {
+				state: "waiting",
+				line: "Pilot waits for your answers to this round.",
+				fix: "none",
+				checks: [],
+				reply: false,
+				plannerSays: "",
+			},
 		});
 		return accepted(intent.missionId, "Removed. Answer those questions again.");
 	},
