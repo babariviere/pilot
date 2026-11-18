@@ -33,6 +33,7 @@ import { NativeReviewReader } from "./native-review.ts";
 import { KnowledgeService } from "./project-knowledge.ts";
 import { ProjectStore } from "./projects.ts";
 import type { PullRequestOptions } from "./pull-requests.ts";
+import { DependencySources } from "./reference-sources.ts";
 import { retainedReviewDescriptor } from "./retained-review-contract.ts";
 import type { ReviewSnapshot, ReviewSnapshotStore } from "./review-snapshots.ts";
 import { CommandRejected, SessionManager, type SessionWorker } from "./sessions.ts";
@@ -188,6 +189,54 @@ test("source scope IPC trusts current coordinator membership, retains delivered 
 	assert.equal((await scope()).result!.members.length, 1, "an explicit fresh join grants current access again");
 	f.store.update(mission.id, { coordinatorSessionId: null });
 	assert.ok((await scope()).error, "revoked coordinator cannot renew an old scope");
+});
+
+test("reference sources IPC lists linked main views and pinned modules, never unlinked projects", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const third = await f.projects.create({ path: await mkdtemp(join(f.home, "third-")), workspace: "direct" });
+	const goModCache = join(f.home, "gomod");
+	const module = join(goModCache, "github.com", "!acme", "schema@v0.32.0");
+	await mkdir(module, { recursive: true });
+	await writeFile(
+		join(f.project.path, "go.mod"),
+		"module example.com/app\n\nrequire github.com/Acme/schema v0.32.0\n",
+	);
+	const host = f.sessions as unknown as {
+		dependencySources: DependencySources;
+		mainViews: { path(id: string): string };
+		currentMainView(id: string): Promise<string>;
+	};
+	host.dependencySources = new DependencySources({ goModCache });
+	const refreshed: string[] = [];
+	t.mock.method(host, "currentMainView", async (id: string) => {
+		refreshed.push(id);
+		return host.mainViews.path(id);
+	});
+	for (const id of [f.other.id, third.id]) await mkdir(host.mainViews.path(id), { recursive: true });
+	await f.projects.update(f.project.id, { linkedProjects: [f.other.id] });
+	let sequence = 0;
+	const references = async () => {
+		const worker = f.workers.get(chat.id)!;
+		const callId = `references-${sequence++}`;
+		worker.onPacket({ type: "source.references", callId } as KernelPacket);
+		return until(
+			() =>
+				worker.sent.find((command) => command.type === "source.references.result" && command.callId === callId) as
+					| Extract<KernelCommand, { type: "source.references.result" }>
+					| undefined,
+		);
+	};
+	assert.deepEqual((await references()).result, [
+		{ kind: "linked", name: f.other.name, path: await realpath(host.mainViews.path(f.other.id)) },
+		{ kind: "dependency", name: "github.com/Acme/schema", version: "v0.32.0", path: await realpath(module) },
+	]);
+	assert.deepEqual(refreshed, [f.other.id], "linked main views refresh in the background, not per read");
+	await references();
+	assert.deepEqual(refreshed, [f.other.id]);
+	await f.projects.update(f.project.id, { linkedProjects: [] });
+	const after = (await references()).result!;
+	assert.ok(!after.some((source) => source.kind === "linked"), "an unlinked project's main view is not offered");
 });
 
 test("non-code delivery resolves pinned artifacts and cannot accept or retire work", async (t) => {

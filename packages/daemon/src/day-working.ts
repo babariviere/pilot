@@ -1,4 +1,4 @@
-import type { DayWorkingChat, Mission, MissionTask, SessionSummary } from "@pilot/protocol";
+import type { DayWaitingChat, DayWorkingChat, Mission, MissionTask, SessionSummary } from "@pilot/protocol";
 
 /** Reads live session facts and saved task titles only. Never opens or wakes a worker. */
 export function dayWorking(
@@ -23,6 +23,8 @@ export function dayWorking(
 			s.projectId !== projectId ||
 			s.working !== true ||
 			s.state === "starting" ||
+			// Saved input that waits for a coding slot is not running: it shows under Waiting instead.
+			(s.codingQueueReason && s.state !== "working") ||
 			s.archivedAt !== undefined ||
 			s.continuedTo ||
 			s.sleepPaused ||
@@ -43,4 +45,24 @@ export function dayWorking(
 		});
 	}
 	return [...rows.values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+}
+
+/** Chats of the project whose saved input waits for a coding slot, first in line first. Reads summaries only. */
+export function dayWaiting(projectId: string, sessions: SessionSummary[], missions: Mission[]): DayWaitingChat[] {
+	const titles = new Map(missions.map((m) => [m.id, m.title]));
+	return sessions
+		.flatMap((s) =>
+			s.projectId === projectId && s.codingQueue && s.archivedAt === undefined
+				? [
+						{
+							sessionId: s.id,
+							title: s.title,
+							missionId: s.missionId ?? null,
+							missionTitle: s.missionId ? (titles.get(s.missionId) ?? null) : null,
+							queue: s.codingQueue,
+						},
+					]
+				: [],
+		)
+		.sort((a, b) => a.queue.position - b.queue.position || a.sessionId.localeCompare(b.sessionId));
 }

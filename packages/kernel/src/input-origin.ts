@@ -9,6 +9,7 @@ const PREFIXES: [string, InputOrigin | "user"][] = [
 	["native:subagent", "subagent"],
 	["native:", "extension"],
 	["mission-notice:", "mission"],
+	["mission-wait:", "mission"],
 	["watch-notice:", "watch"],
 	["control:", "control"],
 	["mission:send:", "coordinator"],

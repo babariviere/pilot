@@ -1462,6 +1462,50 @@ test("isolated copies allow two coding agents and queue the third", async (t) =>
 	assert.match(sessions.get(queued[0]!.id)?.codingQueueReason ?? "", /2 of 2/);
 });
 
+test("a chat that already ran a turn is never queued again for a coding slot", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({ workspace: async (_source, path) => ({ path, base: "HEAD", jj: false }) });
+	const chats = await Promise.all(
+		[1, 2, 3].map((i) => sessions.spawn({ projectId: f.project.id, message: `writer ${i}` })),
+	);
+	await Promise.all([...sessions["starting"].values()]);
+	const queued = chats.find((c) => sessions.get(c.id)?.codingQueueReason)!;
+	assert.equal(f.workers.length, 2);
+	// The same chat after an earlier turn (say, the user replies to its question): both slots are still taken.
+	sessions["require"](queued.id).lastCompletionAt = Date.now();
+	await sessions["start"](queued.id);
+	assert.equal(f.workers.length, 3);
+	assert.equal(sessions.get(queued.id)?.codingQueueReason, undefined);
+});
+
+test("a queued chat's summary says its place in line and which chats hold the slots", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({ workspace: async (_source, path) => ({ path, base: "HEAD", jj: false }) });
+	const chats: SessionSummary[] = [];
+	for (const i of [1, 2, 3, 4]) {
+		chats.push(await sessions.spawn({ projectId: f.project.id, message: `writer ${i}` }));
+		await Promise.all([...sessions["starting"].values()]);
+	}
+	await until(() => sessions.get(chats[3]!.id)?.codingQueue?.position === 2);
+	const holders = [chats[0]!, chats[1]!].map((c) => sessions.get(c.id)!.title);
+	assert.deepEqual(sessions.get(chats[2]!.id)?.codingQueue, { kind: "slots", position: 1, holders });
+	assert.deepEqual(sessions.get(chats[3]!.id)?.codingQueue, { kind: "slots", position: 2, holders });
+	const seen: number[] = [];
+	const off = sessions.onChange((s) => {
+		if (s.id === chats[3]!.id && s.codingQueue) seen.push(s.codingQueue.position);
+	});
+	t.after(off);
+	await sessions.stop(chats[0]!.id);
+	await until(() => f.workers.length === 3);
+	await until(() => sessions.get(chats[3]!.id)?.codingQueue?.position === 1);
+	assert.equal(sessions.get(chats[2]!.id)?.codingQueue, undefined, "the first in line started");
+	assert.deepEqual(
+		sessions.get(chats[3]!.id)?.codingQueue?.holders,
+		[chats[1]!, chats[2]!].map((c) => sessions.get(c.id)!.title),
+	);
+	assert.ok(seen.includes(1), "the move up in line was published");
+});
+
 async function insightsFixture(t: TestContext, factories: SessionFactories = {}, backlog?: MissionStore) {
 	const f = await fixture(t);
 	const missionId = backlog?.create({ title: "Review backlog", projectId: f.project.id }).id ?? "backlog";
@@ -2305,6 +2349,7 @@ test("Insights forged IPC cannot call broad capabilities or deliver stale eviden
 		"diagnostics.proposal",
 		"artifact.reference.get",
 		"source.scope",
+		"source.references",
 		"publication.source",
 	])
 		sessions["onPacket"](meta, worker, {
@@ -2312,7 +2357,7 @@ test("Insights forged IPC cannot call broad capabilities or deliver stale eviden
 			callId: type,
 			request: { action: "spawn" },
 		} as unknown as KernelPacket);
-	assert.equal(worker.sent.filter((p) => "error" in p && p.error === "Insights denies this capability").length, 13);
+	assert.equal(worker.sent.filter((p) => "error" in p && p.error === "Insights denies this capability").length, 14);
 	assert.equal(f.broadCalls(), 0);
 	const count = f.workers.length;
 	for (const type of [

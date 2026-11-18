@@ -13,7 +13,8 @@ API=http://127.0.0.1:4319
 [[ -d "$NEW" ]] || { echo "no build at $NEW"; exit 1; }
 [[ ! -e "$RECORD" ]] || { echo "$BUILD is already installed ($RECORD)"; exit 1; }
 codesign --verify --deep --strict '-R=identifier "com.babariviere.pilot-next"' "$NEW"
-working=$(curl -s -m3 "$API/api/sessions" | node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8"));console.log(a.filter(s=>s.working||s.state==="working").map(s=>s.title||s.id).join("; "))')
+# A chat that only waits for a coding slot runs nothing; its queued input is durable and survives the restart.
+working=$(curl -s -m3 "$API/api/sessions" | node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8"));console.log(a.filter(s=>s.state==="working"||(s.working&&!s.codingQueueReason)).map(s=>s.title||s.id).join("; "))')
 [[ -z "$working" ]] || { echo "chats working: $working"; exit 1; }
 # A maintenance dark wake lasts at most about 3 minutes: installing in one lets the Mac sleep mid-quit.
 woke=$(sysctl -n kern.waketime | awk -F'[ ,]+' '{print $4}')

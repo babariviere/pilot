@@ -73,6 +73,13 @@ let rows: {
 	},
 ];
 let state = "live";
+let waiting: {
+	sessionId: string;
+	title: string;
+	missionId: string | null;
+	missionTitle: string | null;
+	queue: { kind: "slots" | "files"; position: number; holders: string[] };
+}[] = [];
 let hold = true;
 let refusal: "offline" | "invalid" | "stale" | "identity" | null = null;
 const held: (() => void)[] = [];
@@ -96,7 +103,11 @@ const scope: ScopeMirror & { invalidate?: () => void } = mirrorScope({
 				results: null,
 				errors: {},
 				canAct: false,
-				working: { state, items: rows.filter((r) => (i === 0) === (r.sessionId !== "solo-agent")) },
+				working: {
+					state,
+					items: rows.filter((r) => (i === 0) === (r.sessionId !== "solo-agent")),
+					waiting: i === 0 ? waiting : [],
+				},
 			}));
 		const snapshot = {
 			version: 1,
@@ -125,8 +136,16 @@ function changeTask() {
 	});
 }
 
+/** The queued chat moves up: the chat before it started. */
+function moveUp() {
+	update(() => {
+		waiting = waiting.map((w) => ({ ...w, queue: { ...w.queue, position: 1, holders: ["Native activity"] } }));
+	});
+}
+
 mount(() => {
 	keymap.bind("mod+shift+u", changeTask, { when: "always" });
+	keymap.bind("mod+shift+q", moveUp, { when: "always" });
 	return (
 		<View class="flex-1 bg-background">
 			<View class="flex-1">
@@ -151,6 +170,42 @@ mount(() => {
 							onPress={() =>
 								update(() => {
 									rows = rows.filter((r) => r.sessionId !== "mission-agent");
+								})
+							}
+						/>
+						<Action
+							label="Queue chat"
+							onPress={() =>
+								update(() => {
+									waiting = [
+										{
+											sessionId: "queued-agent",
+											title: "Queued fix",
+											missionId: null,
+											missionTitle: null,
+											queue: { kind: "slots", position: 2, holders: ["Native activity", "Other work"] },
+										},
+									];
+								})
+							}
+						/>
+						<Action label="Move up" onPress={moveUp} />
+						<Action
+							label="Start queued"
+							onPress={() =>
+								update(() => {
+									waiting = [];
+									rows = [
+										...rows,
+										{
+											sessionId: "queued-agent",
+											title: "Queued fix",
+											purpose: null,
+											missionId: null,
+											missionTitle: null,
+											status: "working",
+										},
+									];
 								})
 							}
 						/>

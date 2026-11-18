@@ -167,6 +167,7 @@ import {
 	workspaceChangeIds,
 } from "./pull-requests.ts";
 import { RecoveryStops } from "./recovery-stops.ts";
+import { DependencySources } from "./reference-sources.ts";
 import { ReviewSnapshotStore } from "./review-snapshots.ts";
 import { type RunBoundary, type RunFinished, readRunFiles, runChangedFiles, runSnapshot } from "./run-finished.ts";
 import type { ScheduleInputGate } from "./schedules.ts";
@@ -262,8 +263,12 @@ export interface MissionSpawnAdmission {
 
 /** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */
 export interface SessionMissionBridge {
-	/** Occupied task owners and uncertain starts, including identities without readable metadata. */
-	codingReservations?(): Array<{ sessionId: string; projectId: string; files?: string[] }>;
+	/**
+	 * Occupied task owners and uncertain starts, including identities without readable metadata. `waiting`: the owner
+	 * waits for the user (a question, a reply, or a check of its delivered result), so it holds no coding slot, but its
+	 * files still count for shared-file ownership.
+	 */
+	codingReservations?(): Array<{ sessionId: string; projectId: string; files?: string[]; waiting?: true }>;
 	continuationInputAllowed?(sessionId: string, operationId: string): boolean;
 	/** Current durable mission controls for upgrade recovery; null means no current membership.
 	 * Mission Pause owns this state and all mission-wide work. Install before enabling those controls.
@@ -286,6 +291,16 @@ export interface SessionMissionBridge {
 	continueSession?(from: string, to: string): void;
 	/** Revalidate an automatic notice after persistence/startup, before kernel admission. */
 	noticeAllowed?(sessionId: string, requestId: string): boolean;
+	/**
+	 * Whether this chat is an active mission builder whose open tasks have no delivery since `since` (its last input).
+	 * Its turn then ended without a result: Pilot reminds it once, then shows it as waiting for the user's reply.
+	 */
+	waitsForReply?(sessionId: string, since: number): boolean;
+	/**
+	 * A chat Pilot started for a map question, and whether its question is moot (explorer-questions.ts). Undefined
+	 * for other chats. It keeps the chat and its outcome.
+	 */
+	explorerQuestion?(sessionId: string, title: string): { settled: boolean } | undefined;
 	/** Validate new-chat admission and resolve the mission's project. */
 	spawnProject(missionId: string): string;
 	/** Join and optionally claim all selected tasks after metadata is saved, before worker startup. */
@@ -494,6 +509,8 @@ interface SessionMeta extends OutcomeMeta {
 	insightsSetupPending?: true;
 	/** Persisted source-read fence for a bounded turn, including daemon/worker restart. */
 	insightsReviewRun?: string;
+	/** Request ID of the last automatic reminder sent after a turn ended with no result and no question. */
+	waitNudge?: string;
 	/** App/host diagnostics without an attached chat. Mutually exclusive with diagnosticTarget. */
 	diagnosticScope?: "app";
 	/** Exact host-local chat admitted for this specialist. */
@@ -521,6 +538,8 @@ interface SessionMeta extends OutcomeMeta {
 	missionContinuationStart?: { operationId: string; admitted: boolean; inputAccepted?: boolean };
 	/** A factual Stop hold, independent of a later/cooperative worker outcome. Only user input clears it. */
 	missionUserStopGeneration?: number;
+	/** The failed outcome (its outcomeAt) the user dismissed from Needs you. A later outcome shows again. */
+	failureDismissedAt?: number;
 	/** Host-only creation admission. Never synthesized on load, role change or continuation. */
 	retainedScope?: JjProjectScope;
 	/** Host-only initial managed mission creation marker. Never inferred on load or join. */
@@ -734,6 +753,19 @@ const HANDOFF_FAILURE = /^Compaction failed: .*handoff/is;
 const HANDOFF_RETRY_TEXT =
 	"The automatic context handoff failed, and the user asked to retry it. Continue the task from where you left off.";
 const DAY_MS = 24 * 60 * 60 * 1_000;
+/** What Pilot sends once when a mission builder's turn ended with no result and no question. */
+export const WAIT_NUDGE_TEXT =
+	"Your turn ended without delivering a result or asking the user. If you need the user (a choice, a review of a mockup, agreement), ask with your question tool and attach the mockup; if your work is done, deliver it; otherwise continue.";
+/** One reminder per user input: the ID names the chat and its last input, so the kernel never takes it twice. */
+const waitNudgeId = (meta: { id: string; lastUserMessageAt?: number; createdAt: number }) =>
+	`mission-wait:${meta.id}:${meta.lastUserMessageAt ?? meta.createdAt}`;
+/**
+ * Characters of a waiting chat's last message that Day shows: a request in prose fits in a few short paragraphs, as
+ * for the planner's last words (planning-workers PLANNER_SAYS_CHARS). It keeps Day's reads small.
+ */
+const WAITING_SAYS_CHARS = 1500;
+/** Waiting chats whose last message is kept. It protects daemon memory; far more chats than ever wait at once. */
+const WAITING_SAYS_KEPT = 64;
 
 /**
  * The credential endpoint's daemon is gone. The kernel reports a stale broker, and a fresh
@@ -4923,11 +4955,55 @@ ${run.excerpt}`,
 		if (JSON.stringify(scope) !== JSON.stringify(snapshot()))
 			throw new Conflict("Coordinator source membership changed during admission; retry");
 		const canonical = (path: string) => resolve(home, relative(this.home, path));
+		const references = await this.referenceSources(meta);
 		return {
 			main: canonical(scope.main),
 			scratch: canonical(scope.scratch),
 			members: members.map((member) => ({ ...member, path: canonical(member.path) })),
+			...(references.length ? { references } : {}),
 		};
+	}
+
+	/**
+	 * Read-only roots outside the project: pinned dependency sources from its lock files and linked projects'
+	 * main views. Derived from host state only; dependency resolution reruns only after a lock file changes.
+	 */
+	private async referenceSources(meta: SessionMeta): Promise<import("@pilot/kernel").ReferenceSource[]> {
+		if (!meta.projectId || meta.role || this.closing) return [];
+		const project = this.projects.get(meta.projectId);
+		if (!project) return [];
+		const directory = async (path: string) => {
+			try {
+				const real = await realpath(path);
+				return (await lstat(real)).isDirectory() ? real : undefined;
+			} catch {
+				return undefined;
+			}
+		};
+		const linked: import("@pilot/kernel").ReferenceSource[] = [];
+		for (const id of project.linkedProjects ?? []) {
+			const other = this.projects.get(id);
+			if (!other || id === project.id) continue;
+			this.refreshLinkedView(id);
+			const path = await directory(this.mainViews.path(id));
+			if (path) linked.push({ kind: "linked", name: other.name, path });
+		}
+		const main = await directory(this.mainViews.path(project.id));
+		const dependencies = await this.dependencySources.resolve(main ?? project.path, project.path);
+		return [...linked, ...dependencies];
+	}
+
+	/** Keeps a linked project's main view present and near current without fetching on every read. */
+	private refreshLinkedView(projectId: string): void {
+		const now = Date.now();
+		// Reads come many times a minute during planning; one fetch per 10 minutes keeps network and git work small.
+		if (now - (this.linkedViewRefreshes.get(projectId) ?? 0) < 10 * 60_000) return;
+		this.linkedViewRefreshes.set(projectId, now);
+		void this.currentMainView(projectId).catch((error: unknown) =>
+			console.warn(
+				`pilotd: linked project main view ${projectId} unavailable: ${formatFailure(error, "Main view")}`,
+			),
+		);
 	}
 
 	onChange(listener: (session: SessionSummary) => void): () => void {
@@ -4961,7 +5037,18 @@ ${run.excerpt}`,
 	diagnosticDomainRead?: (request: DiagnosticContextRequest) => Promise<DiagnosticContextResponse>;
 	diagnosticFeatureUsage?: (host: OperationHost) => import("@pilot/protocol").FeatureUsageSnapshot;
 	private diagnosticContextReads = new Map<string, AbortController>();
+	/** Asks the Day window bound to a screen agent chat (ScreenBroker.call). Missing means no window can answer. */
+	screenCall?: (
+		sessionId: string,
+		operation: import("@pilot/protocol").ScreenOperation,
+		signal: AbortSignal,
+	) => Promise<unknown>;
+	/** Waiting ui_* calls by `sessionId:callId`, so a kernel abort or a worker change cancels them. */
+	private screenCalls = new Map<string, AbortController>();
 	private coordinatorSourceReads = new Set<string>();
+	private readonly dependencySources = new DependencySources();
+	/** Last background main-view refresh per linked project. */
+	private readonly linkedViewRefreshes = new Map<string, number>();
 	/** Already-admitted own-chat accounting drains before revocation acknowledges. */
 	private readonly insightsAccounting = new Map<string, Set<Promise<void>>>();
 
@@ -5544,7 +5631,7 @@ ${run.excerpt}`,
 				(!target.projectId || !!this.projects.get(target.projectId)) &&
 				insightsSourceAllowed(settings.settings, target);
 			admission.revalidate();
-		} else if (caller.role === "diagnostics") {
+		} else if (caller.role === "diagnostics" || caller.role === "screen") {
 			const ref = caller.diagnosticTarget;
 			allowed =
 				id === callerId || (!ref ? true : id === ref.sessionId && canonicalJSON(ref.host) === canonicalJSON(host));
@@ -5606,7 +5693,9 @@ ${run.excerpt}`,
 		this.validateMode(caller);
 		const request = parseDiagnosticContext(input);
 		if (request.action === "scoped_metrics") return this.scopedMetrics(callerId, request, signal);
-		if (caller.role !== "diagnostics") throw new Conflict("Only diagnostics may read app-wide evidence");
+		// A screen agent diagnoses the Pilot window the user shows it, with the same read-only evidence.
+		const appWide = (role: SessionMeta["role"]) => role === "diagnostics" || role === "screen";
+		if (!appWide(caller.role)) throw new Conflict("Only diagnostics may read app-wide evidence");
 		const host = request.host ?? this.diagnosticHost;
 		if (!host || !this.diagnosticHost) throw new ServiceUnavailable("Diagnostic host identity is unavailable");
 		if (
@@ -5619,7 +5708,7 @@ ${run.excerpt}`,
 				return { ...diagnosticContextResponse(host, null), status: "unavailable", reason: "unsupported" };
 			try {
 				const result = await this.diagnosticReadBroker.read(request, signal);
-				if (signal?.aborted || this.require(callerId).role !== "diagnostics")
+				if (signal?.aborted || !appWide(this.require(callerId).role))
 					throw new Conflict("Diagnostic read cancelled");
 				if (request.action === "hosts")
 					return { ...diagnosticContextResponse(this.diagnosticHost, result), status: "partial" };
@@ -8168,8 +8257,10 @@ ${run.excerpt}`,
 
 	/** Corrupt metadata must never silently reopen an Ask chat as an unrestricted Build kernel. */
 	private validateMode(meta: SessionMeta, prepared = false): void {
-		if (meta.role !== undefined && meta.role !== "diagnostics" && meta.role !== "insights")
+		if (meta.role !== undefined && meta.role !== "diagnostics" && meta.role !== "insights" && meta.role !== "screen")
 			throw new Error("Invalid session role");
+		if (meta.role === "screen" && (meta.mode !== "ask" || !meta.projectId || meta.control || meta.workspace))
+			throw new Error("Invalid screen agent metadata");
 		if (meta.role === "insights") {
 			if (meta.insightsOwner) {
 				if (
@@ -8429,6 +8520,9 @@ ${run.excerpt}`,
 	private readonly codingAdmissions = new Set<string>();
 	private readonly codingProjectPaths = new Map<string, string>();
 	private readonly codingQueue = new Map<string, string>();
+	/** Each queued chat's place in line and slot holders, as its summary shows them. Refreshed on queue changes. */
+	private readonly codingQueueViews = new Map<string, import("@pilot/protocol").CodingQueueView>();
+	private codingQueueViewsScheduled = false;
 	private codingWakeScheduled = false;
 	private readonly codingOccupancy = new Map<string, string>();
 	private codingReservationSignature?: string;
@@ -8438,61 +8532,200 @@ ${run.excerpt}`,
 		return () => this.codingCapacityListeners.delete(listener);
 	}
 
+	/** Whether chat `id` runs or is being admitted to run code now, not only waiting for a slot. */
+	private runningCode(id: string): boolean {
+		const meta = this.metas.get(id);
+		const worker = this.workers.get(id);
+		return (
+			this.codingAdmissions.has(id) ||
+			worker?.state === "working" ||
+			(!!meta && this.backgroundWorking(meta, worker))
+		);
+	}
+
 	/** Synchronous final-admission check. A missing receipt or stopped unfinished task does not free its slot. */
 	codingCapacityReason(projectId?: string, excludeId?: string, requestedFiles?: string[]): string | undefined {
+		return this.codingCapacity(projectId, excludeId, requestedFiles)?.reason;
+	}
+
+	/** The admission check with the chats that hold the slots (or the shared files) it waits for. */
+	private codingCapacity(
+		projectId?: string,
+		excludeId?: string,
+		requestedFiles?: string[],
+	): { reason: string; kind: "slots" | "files"; holders: string[] } | undefined {
 		const occupied = new Map<string, string>();
 		const reservations = this.missions?.codingReservations?.() ?? [];
 		for (const entry of reservations) occupied.set(entry.sessionId, entry.projectId);
+		const waiting = new Set(reservations.filter((r) => r.waiting).map((r) => r.sessionId));
 		const files = requestedFiles ?? reservations.find((r) => r.sessionId === excludeId)?.files;
 		for (const meta of this.metas.values()) {
 			const worker = this.workers.get(meta.id);
+			// A chat that only waits in this queue holds no slot: counting it let waiting chats block each other.
+			const onlyWaiting =
+				this.codingQueue.has(meta.id) &&
+				!this.codingAdmissions.has(meta.id) &&
+				worker?.state !== "working" &&
+				!this.backgroundWorking(meta, worker);
 			if (
 				meta.archivedAt === undefined &&
 				!meta.continuedTo &&
 				meta.mode !== "ask" &&
 				!meta.planning &&
 				!meta.coordinatorView &&
+				!onlyWaiting &&
 				(this.codingAdmissions.has(meta.id) ||
-					meta.working ||
+					// Saved `working` without a worker is input that waits to start, not a running chat. At startup the
+					// chats start one by one, so counting it let not-yet-started chats block the first ones forever.
+					(meta.working && worker !== undefined) ||
 					worker?.state === "working" ||
 					this.backgroundWorking(meta, worker)) &&
 				!this.isMissionCoordinator(meta.id)
-			)
+			) {
 				occupied.set(meta.id, meta.projectId ?? `cwd:${meta.cwd}`);
+				// A chat that runs holds its slot, whatever its task waited for before.
+				waiting.delete(meta.id);
+			}
 		}
-		if (excludeId) occupied.delete(excludeId);
 		const path = (id: string) => this.codingProjectPaths.get(id) ?? this.projects.get(id)?.path ?? id;
-		const count = [...occupied.values()].filter((id) => projectId && path(id) === path(projectId)).length;
+		// Open tasks keep their slot even when stopped. When more tasks hold one than the limit allows (they started
+		// before the limit), the earliest ones take the slots in order, so the tasks never wait on each other forever.
+		const projectReservations = reservations.filter((r) => projectId && path(r.projectId) === path(projectId));
+		const own = excludeId ? projectReservations.findIndex((r) => r.sessionId === excludeId) : -1;
+		if (own >= 0)
+			for (const later of projectReservations.slice(own + 1))
+				if (!this.metas.has(later.sessionId) || !this.runningCode(later.sessionId))
+					occupied.delete(later.sessionId);
+		if (excludeId) occupied.delete(excludeId);
+		const inProject = (owner: string) => !!projectId && path(owner) === path(projectId);
+		const key = (path: string) => path.normalize("NFC").toLowerCase().replace(/\/$/, "");
+		// Only declared scopes that overlap wait for each other. Tasks with unknown scopes run side by side (the user
+		// chose this); their conflicts show when the work is merged.
+		const overlaps = (a?: string[], b?: string[]) =>
+			!!a?.length &&
+			!!b?.length &&
+			a.some((x) =>
+				b.some((y) => key(x) === key(y) || key(x).startsWith(`${key(y)}/`) || key(y).startsWith(`${key(x)}/`)),
+			);
+		// A stopped task that must wait for a running task's files cannot use a slot, so it holds none.
+		for (const r of projectReservations)
+			if (
+				occupied.has(r.sessionId) &&
+				!(this.metas.has(r.sessionId) && this.runningCode(r.sessionId)) &&
+				projectReservations.some(
+					(o) =>
+						o.sessionId !== r.sessionId &&
+						occupied.has(o.sessionId) &&
+						this.metas.has(o.sessionId) &&
+						this.runningCode(o.sessionId) &&
+						overlaps(r.files, o.files),
+				)
+			)
+				occupied.delete(r.sessionId);
+		// Owners waiting for the user hold no slot; they still take part in shared-file ownership below.
+		const holding = [...occupied].filter(([id]) => !waiting.has(id));
+		const count = holding.filter(([, owner]) => inProject(owner)).length;
 		const project = projectId ? this.projects.require(projectId) : undefined;
 		// User-agreed coding concurrency: four app-wide, two isolated copies, one direct-folder writer.
 		const limit = !project ? 4 : project.sourceCopy === "folder" || project.workspace === "direct" ? 1 : 2;
 		if (count >= limit)
-			return limit === 1
-				? "Waiting for one writer in the user's folder (1 of 1 occupied)."
-				: "Waiting for a project coding slot (2 of 2 occupied).";
-		if (occupied.size >= 4) return "Waiting for a Pilot coding slot (4 of 4 occupied).";
-		if (
-			count > 0 &&
-			(project?.sourceCopy || files?.length || reservations.some((r) => path(r.projectId) === path(projectId ?? "")))
-		) {
-			const key = (path: string) => path.normalize("NFC").toLowerCase().replace(/\/$/, "");
-			for (const [id, ownerProject] of occupied) {
-				if (!projectId || path(ownerProject) !== path(projectId)) continue;
-				const owned = reservations.find((r) => r.sessionId === id)?.files;
-				if (
-					!files?.length ||
-					!owned?.length ||
-					files.some((a) =>
-						owned.some(
-							(b) => key(a) === key(b) || key(a).startsWith(`${key(b)}/`) || key(b).startsWith(`${key(a)}/`),
-						),
-					)
-				)
-					return "Waiting for shared-file ownership. Unknown scopes take turns; shared changes need combined checks before dependent work.";
-			}
-		}
+			return {
+				reason:
+					limit === 1
+						? "Waiting for one writer in the user's folder (1 of 1 occupied)."
+						: "Waiting for a project coding slot (2 of 2 occupied).",
+				kind: "slots",
+				holders: holding.filter(([, owner]) => inProject(owner)).map(([id]) => id),
+			};
+		// The app-wide limit protects the machine: only chats that run now count, not stopped tasks of other projects.
+		const running = holding.filter(([id]) => this.metas.has(id) && this.runningCode(id));
+		if (running.length >= 4)
+			return {
+				reason: "Waiting for a Pilot coding slot (4 of 4 occupied).",
+				kind: "slots",
+				holders: running.map(([id]) => id),
+			};
+		for (const [id, ownerProject] of occupied)
+			if (inProject(ownerProject) && overlaps(files, reservations.find((r) => r.sessionId === id)?.files))
+				return {
+					reason: "Waiting for shared-file ownership. Shared changes need combined checks before dependent work.",
+					kind: "files",
+					holders: [id],
+				};
 		return undefined;
 	}
+
+	/**
+	 * Places in line, 1-based, among queued chats for the same project's slots: open-task reservations first in the
+	 * order they take slots, then the other chats in queue order. Memory only.
+	 */
+	private codingQueuePositions(): Map<string, number> {
+		const rank = new Map<string, number>();
+		for (const [i, r] of (this.missions?.codingReservations?.() ?? []).entries())
+			if (!rank.has(r.sessionId)) rank.set(r.sessionId, i);
+		const groups = new Map<string, string[]>();
+		for (const id of this.codingQueue.keys()) {
+			const meta = this.metas.get(id);
+			if (!meta) continue;
+			const owner = meta.projectId ?? `cwd:${meta.cwd}`;
+			const key = this.codingProjectPaths.get(owner) ?? this.projects.get(owner)?.path ?? owner;
+			groups.set(key, [...(groups.get(key) ?? []), id]);
+		}
+		const positions = new Map<string, number>();
+		for (const ids of groups.values()) {
+			// Stable sort: chats with no reservation keep queue order after the reserved ones.
+			ids.sort((a, b) => (rank.get(a) ?? Infinity) - (rank.get(b) ?? Infinity));
+			for (const [i, id] of ids.entries()) positions.set(id, i + 1);
+		}
+		return positions;
+	}
+
+	private codingQueueView(
+		id: string,
+		positions: Map<string, number>,
+	): import("@pilot/protocol").CodingQueueView | undefined {
+		const meta = this.metas.get(id);
+		const reason = this.codingQueue.get(id);
+		if (!meta || reason === undefined) return undefined;
+		const now = this.codingCapacity(meta.projectId, id);
+		const titles = (now?.holders ?? []).flatMap((holder) => {
+			const title = this.metas.get(holder)?.title?.trim();
+			return title ? [title] : [];
+		});
+		return {
+			kind: now?.kind ?? (reason.includes("shared-file") ? "files" : "slots"),
+			position: positions.get(id) ?? 1,
+			// At most 3 names keep one line short; the chat page and Today show the same line.
+			holders: titles.slice(0, 3),
+		};
+	}
+
+	/** Recomputes every queued chat's view and emits only the chats whose view changed. */
+	private refreshCodingQueueViews(): void {
+		for (const id of [...this.codingQueueViews.keys()])
+			if (!this.codingQueue.has(id)) this.codingQueueViews.delete(id);
+		if (!this.codingQueue.size) return;
+		const positions = this.codingQueuePositions();
+		for (const id of [...this.codingQueue.keys()]) {
+			const view = this.codingQueueView(id, positions);
+			if (!view) continue;
+			const prior = this.codingQueueViews.get(id);
+			if (prior && canonicalJSON(prior) === canonicalJSON(view)) continue;
+			this.codingQueueViews.set(id, view);
+			this.emit(this.metas.get(id)!);
+		}
+	}
+
+	private scheduleCodingQueueViews(): void {
+		if (this.codingQueueViewsScheduled || this.closing || (!this.codingQueue.size && !this.codingQueueViews.size))
+			return;
+		this.codingQueueViewsScheduled = true;
+		queueMicrotask(() => {
+			this.codingQueueViewsScheduled = false;
+			if (!this.closing) this.refreshCodingQueueViews();
+		});
+	}
+
 	private wakeCodingQueue(): void {
 		if (this.codingWakeScheduled || this.closing || this.updateGate.paused || !this.codingQueue.size) return;
 		this.codingWakeScheduled = true;
@@ -8502,6 +8735,7 @@ ${run.excerpt}`,
 				const meta = this.metas.get(id);
 				if (!meta || !meta.pending?.length || meta.cancelled || meta.archivedAt !== undefined) {
 					this.codingQueue.delete(id);
+					this.scheduleCodingQueueViews();
 					continue;
 				}
 				if (!this.codingCapacityReason(meta.projectId, id)) {
@@ -8526,6 +8760,8 @@ ${run.excerpt}`,
 	}
 	private notifyCodingCapacityChanged(): void {
 		this.wakeCodingQueue();
+		// Holders and places change with capacity; a later microtask sees the chats the wake admitted.
+		this.scheduleCodingQueueViews();
 		for (const listener of this.codingCapacityListeners) listener();
 	}
 
@@ -10011,8 +10247,24 @@ ${run.excerpt}`,
 				throw new Conflict("Owner creation authority changed");
 		};
 
-		if (request.role !== undefined && request.role !== "diagnostics" && request.role !== "insights")
+		if (
+			request.role !== undefined &&
+			request.role !== "diagnostics" &&
+			request.role !== "insights" &&
+			request.role !== "screen"
+		)
 			throw new Error("Unknown session role");
+		if (
+			request.role === "screen" &&
+			(request.mode !== "ask" ||
+				!request.projectId ||
+				coordinator ||
+				request.missionId !== undefined ||
+				request.cwd !== undefined ||
+				request.workspace !== undefined ||
+				request.baseBranch !== undefined)
+		)
+			throw new Error("A screen agent is a read-only project chat");
 		if (request.mode !== undefined && request.mode !== "build" && request.mode !== "ask")
 			throw new Error("mode must be build or ask");
 		if (request.workspace !== undefined && request.workspace !== "clone" && request.workspace !== "direct")
@@ -10502,6 +10754,50 @@ ${run.excerpt}`,
 			else this.sending.delete(id);
 			end();
 		}
+	}
+
+	/**
+	 * Sends WAIT_NUDGE_TEXT once to an idle mission builder whose turn ended done with its task open, no delivery since
+	 * its last input and no question (the mission bridge decides). Never after a Stop, and once per user input. It uses
+	 * the idle-only outbox of other automatic inputs. True when queued, false when not due, undefined when the chat is
+	 * busy now (try again on a later change).
+	 */
+	async sendWaitNudge(id: string): Promise<boolean | undefined> {
+		const meta = this.metas.get(id);
+		if (!meta || meta.mode === "ask" || meta.planning || meta.role || meta.control || meta.outcome !== "done")
+			return false;
+		const requestId = waitNudgeId(meta);
+		if (meta.waitNudge === requestId || this.isMissionCoordinator(id)) return false;
+		if (!this.missions?.waitsForReply?.(id, meta.lastUserMessageAt ?? meta.createdAt)) return false;
+		if (!this.canSendNotice(id, requestId) || this.missionWorkHeld(id) || this.postRunTasks.has(id)) return undefined;
+		const end = this.updateGate.begin();
+		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+		const release = () => {
+			const count = (this.sending.get(id) ?? 1) - 1;
+			if (count) this.sending.set(id, count);
+			else this.sending.delete(id);
+			end();
+		};
+		try {
+			meta.waitNudge = requestId;
+			meta.pending ??= [];
+			meta.pending.push({ type: "input", requestId, content: WAIT_NUDGE_TEXT, mode: "followUp", onlyIfIdle: true });
+			try {
+				await this.save(meta);
+			} catch (error) {
+				meta.pending = meta.pending.filter((command) => command.requestId !== requestId);
+				delete meta.waitNudge;
+				throw error;
+			}
+			this.emit(meta);
+		} catch (error) {
+			release();
+			throw error;
+		}
+		void this.start(id, true)
+			.catch((error: unknown) => console.warn(`pilotd: could not deliver the reminder for ${id}: ${error}`))
+			.finally(release);
+		return true;
 	}
 
 	/** Explicit agent follow-ups use user admission, but report the kernel's durable placement. */
@@ -12242,6 +12538,36 @@ ${run.excerpt}`,
 	}
 
 	/**
+	 * The last message of a chat waiting for a reply (SessionSummary.waitsForReply), at most WAITING_SAYS_CHARS, with
+	 * "…" when cut. Passive: it reads saved history and never wakes the chat. Kept per chat until its turn or input
+	 * changes, so Day's repeated reads pay one history read per waiting chat.
+	 */
+	async waitingSays(id: string): Promise<string | undefined> {
+		const meta = this.metas.get(id);
+		if (!meta) return undefined;
+		const key = `${meta.outcomeAt ?? ""}:${meta.lastUserMessageAt ?? ""}:${meta.inputGeneration ?? 0}`;
+		const kept = this.waitingWords.get(id);
+		if (kept?.key === key) return kept.words;
+		const words = this.lastAssistantReply(id, WAITING_SAYS_CHARS + 1)
+			.then((text) => {
+				const trimmed = text?.trim();
+				if (!trimmed) return undefined;
+				return trimmed.length > WAITING_SAYS_CHARS ? `${trimmed.slice(0, WAITING_SAYS_CHARS)}…` : trimmed;
+			})
+			.catch(() => {
+				// Shown without its words; the next read tries again.
+				if (this.waitingWords.get(id)?.words === words) this.waitingWords.delete(id);
+				return undefined;
+			});
+		this.waitingWords.delete(id);
+		this.waitingWords.set(id, { key, words });
+		if (this.waitingWords.size > WAITING_SAYS_KEPT)
+			this.waitingWords.delete(this.waitingWords.keys().next().value as string);
+		return words;
+	}
+	private readonly waitingWords = new Map<string, { key: string; words: Promise<string | undefined> }>();
+
+	/**
 	 * Queue a manual compaction. Resolves once the kernel has committed its task. Idle compaction queues new input
 	 * until its summary is placed; active runs retain turn-boundary placement. Stop cancels it.
 	 */
@@ -12880,6 +13206,20 @@ ${run.excerpt}`,
 		return this.coldReader.readAcceptedInput(join(this.dir(meta.id), "durable"), operationId);
 	}
 
+	/**
+	 * Takes the chat's failed outcome out of Needs you, as the user asked. Sends nothing to the chat. A later outcome
+	 * shows again. Returns false when the chat has no failed outcome now.
+	 */
+	async dismissFailure(id: string): Promise<boolean> {
+		const meta = this.require(id);
+		if (meta.outcome !== "failed" || meta.outcomeAt === undefined || this.summary(meta).working) return false;
+		if (meta.failureDismissedAt === meta.outcomeAt) return true;
+		meta.failureDismissedAt = meta.outcomeAt;
+		await this.save(meta, undefined, undefined, true);
+		this.emit(meta);
+		return true;
+	}
+
 	/** Passive current question read; never subscribes or starts a worker. */
 	async pendingQuestion(id: string) {
 		const view = await this.recentColdSnapshot(this.require(id));
@@ -13268,19 +13608,28 @@ ${run.excerpt}`,
 		const alreadyOccupied =
 			meta.working ||
 			this.workers.get(id)?.state === "working" ||
-			this.backgroundWorking(meta, this.workers.get(id));
+			this.backgroundWorking(meta, this.workers.get(id)) ||
+			// A chat that already ran a turn never waits in the coding queue again: the queue only limits new chats.
+			meta.lastCompletionAt !== undefined;
 		if (coding && !alreadyOccupied && meta.pending?.[0]?.type !== "abort") {
 			const reason = this.codingCapacityReason(meta.projectId, id);
 			if (reason) {
 				if (this.codingQueue.get(id) !== reason) {
+					const added = !this.codingQueue.has(id);
 					this.codingQueue.set(id, reason);
+					// The first summary already says where it is in line; the others' places follow in one refresh.
+					const view = this.codingQueueView(id, this.codingQueuePositions());
+					if (view) this.codingQueueViews.set(id, view);
 					this.emit(meta);
+					this.scheduleCodingQueueViews();
+					// Look at the whole queue again once: a chat queued after others may change who goes first.
+					if (added) this.wakeCodingQueue();
 				}
 				return Promise.resolve(new Map());
 			}
-			this.codingQueue.delete(id);
+			if (this.codingQueue.delete(id)) this.scheduleCodingQueueViews();
 			this.codingAdmissions.add(id);
-		}
+		} else if (coding && this.codingQueue.delete(id)) this.scheduleCodingQueueViews();
 		const rejected = new Map<string, Error>();
 		const run = async () => {
 			try {
@@ -13451,14 +13800,18 @@ ${run.excerpt}`,
 							command.onlyIfIdle &&
 							((command.requestId.startsWith("mission-notice:")
 								? !this.missions?.noticeAllowed?.(id, command.requestId) || meta.archivedAt !== undefined
-								: command.requestId.startsWith("automation:flow:")
-									? false
-									: command.requestId.startsWith("automation:")
-										? !this.automationsEnabled() ||
-											meta.automation?.followUps?.requestId !== command.requestId
-										: !command.requestId.startsWith("schedule:") &&
-											!command.requestId.startsWith("insights-review:") &&
-											meta.prFollowUp?.requestId !== command.requestId) ||
+								: command.requestId.startsWith("mission-wait:")
+									? meta.waitNudge !== command.requestId ||
+										meta.missionUserStopGeneration !== undefined ||
+										meta.archivedAt !== undefined
+									: command.requestId.startsWith("automation:flow:")
+										? false
+										: command.requestId.startsWith("automation:")
+											? !this.automationsEnabled() ||
+												meta.automation?.followUps?.requestId !== command.requestId
+											: !command.requestId.startsWith("schedule:") &&
+												!command.requestId.startsWith("insights-review:") &&
+												meta.prFollowUp?.requestId !== command.requestId) ||
 								meta.pending.some((pending) => pending !== command))
 						) {
 							if (command.requestId.startsWith("automation:flow:")) {
@@ -14157,6 +14510,7 @@ ${run.excerpt}`,
 				"diagnostics.proposal": "diagnostics.proposal.result",
 				"artifact.reference.get": "artifact.reference.result",
 				"source.scope": "source.scope.result",
+				"source.references": "source.references.result",
 				"publication.source": "publication.source.result",
 			} as const;
 			const resultType = denied[packet.type as keyof typeof denied];
@@ -14379,6 +14733,23 @@ ${run.excerpt}`,
 			);
 			return;
 		}
+		if (packet.type === "source.references") {
+			void this.referenceSources(meta).then(
+				(result) => {
+					if (this.workers.get(meta.id) === worker)
+						worker.send({ type: "source.references.result", callId: packet.callId, result });
+				},
+				(error: unknown) => {
+					if (this.workers.get(meta.id) === worker)
+						worker.send({
+							type: "source.references.result",
+							callId: packet.callId,
+							error: formatFailure(error, "Reference sources"),
+						});
+				},
+			);
+			return;
+		}
 		if (packet.type === "source.scope") {
 			const key = `${meta.id}:${packet.callId}`;
 			if (this.coordinatorSourceReads.size >= 8 || this.coordinatorSourceReads.has(key)) {
@@ -14500,6 +14871,42 @@ ${run.excerpt}`,
 		}
 		if (packet.type === "diagnostics.context.cancel") {
 			this.diagnosticContextReads.get(`${meta.id}:${packet.callId}`)?.abort();
+			this.screenCalls.get(`${meta.id}:${packet.callId}`)?.abort();
+			return;
+		}
+		if (packet.type === "screen.call") {
+			const key = `${meta.id}:${packet.callId}`;
+			const controller = new AbortController();
+			this.screenCalls.get(key)?.abort();
+			this.screenCalls.set(key, controller);
+			void Promise.resolve()
+				.then(() => {
+					if (this.workers.get(meta.id) !== worker || meta.role !== "screen")
+						throw new Error("Only a screen agent chat can use the window");
+					if (!this.screenCall) throw new Error("No Day window can answer here");
+					return this.screenCall(meta.id, packet.operation, controller.signal);
+				})
+				.then(
+					(result) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({
+								type: "screen.result",
+								callId: packet.callId,
+								result: result as import("@earendil-works/chord/json").JsonValue,
+							});
+					},
+					(error: unknown) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({
+								type: "screen.result",
+								callId: packet.callId,
+								error: error instanceof Error ? error.message : "The window did not answer",
+							});
+					},
+				)
+				.finally(() => {
+					if (this.screenCalls.get(key) === controller) this.screenCalls.delete(key);
+				});
 			return;
 		}
 		if (packet.type === "diagnostics.context.call") {
@@ -15361,6 +15768,49 @@ ${run.excerpt}`,
 			workHolds.push("Update hold");
 		if (meta.kernelRestartPending) workHolds.push("Kernel recovery pending");
 		const state = heldAtQuota && kernelState !== "failed" ? "working" : kernelState;
+		// A mission builder ended its turn with no result and no question, even after Pilot's one reminder.
+		const waitsForReply =
+			!working &&
+			!heldAtQuota &&
+			!offlinePaused &&
+			!paused &&
+			!coordinator &&
+			meta.archivedAt === undefined &&
+			meta.mode !== "ask" &&
+			meta.outcome === "done" &&
+			meta.missionUserStopGeneration === undefined &&
+			meta.waitNudge === waitNudgeId(meta) &&
+			!meta.pending?.length &&
+			!!this.missions?.waitsForReply?.(meta.id, meta.lastUserMessageAt ?? meta.createdAt);
+		// A chat Pilot started for a map question: its results are the planner's, not the user's. Its question or
+		// failure that the plan settled no longer needs the user either. Members only: the role is already read.
+		const explorer =
+			!working && membership.missionRole === "explorer"
+				? this.missions?.explorerQuestion?.(meta.id, meta.title)
+				: undefined;
+		const questionSettled = !!explorer?.settled && (meta.outcome === "question" || meta.outcome === "failed");
+		// Continue sends one user follow-up. A stopped chat, a mission chat under the user's Stop hold, or a failed
+		// run with no tool in flight (a new turn replays nothing) can take it, and so can a chat waiting for a reply.
+		// Startup failures use retry-startup.
+		const canContinue =
+			!working &&
+			!heldAtQuota &&
+			!offlinePaused &&
+			!paused &&
+			!quotaPaused &&
+			!retainedHistory &&
+			!coordinator &&
+			!meta.planning &&
+			!meta.failure &&
+			!meta.continuedTo &&
+			!meta.continuationPending &&
+			!meta.delegationFenced &&
+			!meta.inputsPaused &&
+			meta.archivedAt === undefined &&
+			(meta.outcome === "stopped" ||
+				meta.missionUserStopGeneration !== undefined ||
+				(meta.outcome === "failed" && !!failedModelSource) ||
+				waitsForReply);
 		const longJob = meta.archivedAt === undefined ? longJobAttention(worker?.runningJobs ?? []) : undefined;
 		const mcpAttention =
 			meta.archivedAt === undefined && !longJob ? this.mcpAttention?.attention(meta.id) : undefined;
@@ -15373,6 +15823,9 @@ ${run.excerpt}`,
 		return {
 			id: meta.id,
 			...(this.codingQueue.has(meta.id) ? { codingQueueReason: this.codingQueue.get(meta.id)! } : {}),
+			...(this.codingQueue.has(meta.id) && this.codingQueueViews.has(meta.id)
+				? { codingQueue: this.codingQueueViews.get(meta.id)! }
+				: {}),
 			inputGeneration: meta.inputGeneration ?? 0,
 			...(meta.control ? { control: true } : {}),
 			...(meta.role ? { role: meta.role } : {}),
@@ -15507,6 +15960,15 @@ ${run.excerpt}`,
 			...(meta.attempts?.length ? { attempts: meta.attempts } : {}),
 			...(this.canRetryStartup(meta) ? { canRetryStartup: true } : {}),
 			...(this.canRetryHandoff(meta) ? { canRetryHandoff: true } : {}),
+			...(canContinue ? { canContinue: true as const } : {}),
+			...(waitsForReply ? { waitsForReply: true as const } : {}),
+			...(questionSettled ? { questionSettled: true as const } : {}),
+			...(explorer ? { mapExplorer: true as const } : {}),
+			...(meta.outcome === "failed" &&
+			meta.failureDismissedAt !== undefined &&
+			meta.failureDismissedAt === meta.outcomeAt
+				? { failureDismissed: true as const }
+				: {}),
 			...(meta.unpublishedWork ? { unpublishedWork: true } : {}),
 			...(meta.failure || meta.inputError || worker?.error || this.kernelErrors.has(meta.id)
 				? {

@@ -25,7 +25,7 @@ the existing bounded native overview. It never uses the queue read as permission
 Reviewed `PlanSlice.files` contains exact repository-relative files or directory prefixes, not globs, absolute
 paths or traversal. At most 100 paths of 512 characters protect saved planning/model context. The review
 shows them and the published task body carries them. A source mismatch loses the declaration rather than
-borrowing stale ownership. Missing scopes take turns with the project's other writers. Case-folded prefix
+borrowing stale ownership. Missing scopes run alongside other writers; conflicts show at merge. Case-folded prefix
 overlap waits until the prior task is checked done. Distinct declared scopes can proceed within capacity.
 An earlier blocked unpinned task does not block an independent disjoint task; explicit pinned order still wins.
 Workers must check the combined changes before reporting ready, and the user checks the result before

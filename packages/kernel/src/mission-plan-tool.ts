@@ -112,7 +112,7 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 			files: Type.Optional(
 				Type.Array(Type.String(), {
 					description:
-						"Owned repository-relative files or directory prefixes, no globs. Disjoint declared scopes can run in parallel. Omit to serialize unknown scope. Shared-file tasks take turns and verify combined changes before dependent work.",
+						"Owned repository-relative files or directory prefixes, no globs. Only overlapping declared scopes take turns; omitted scopes run in parallel and conflicts show at merge. Shared-file tasks verify combined changes before dependent work.",
 				}),
 			),
 			prototypes: Type.Optional(

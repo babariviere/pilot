@@ -37,12 +37,36 @@ test("an activity update leaves the focused reply field and its draft alone", as
 	expect(app.value("id:question")).toBe("My draftx");
 });
 
+test("a chat waiting for a coding slot shows under Working, updates in place and keeps the focus", async () => {
+	const app = await ready();
+	await app.press("Queue chat");
+	await app.waitFor("id:waiting-queued-agent");
+	expect(app.shows("Waiting · 1")).toBe(true);
+	expect(
+		app.shows("pilot · Waiting for a coding slot · 2nd in line · slots used by Native activity, Other work"),
+	).toBe(true);
+	// Not Needs you, no action beyond opening the chat.
+	expect(app.shows("label:Open chat “Queued fix” in pilot")).toBe(true);
+	await app.press("Ask a question");
+	await app.type("id:question", "My draft");
+	await app.keyboard.press("mod+shift+q");
+	await app.waitFor("pilot · Waiting for a coding slot · 1st in line · slots used by Native activity");
+	expect(app.count("id:waiting-queued-agent")).toBe(1);
+	await app.keyboard.press("x");
+	expect(app.value("id:question")).toBe("My draftx");
+	await app.press("Start queued");
+	await app.waitFor("id:working-queued-agent");
+	expect(app.shows("id:waiting-queued-agent")).toBe(false);
+	expect(app.shows("id:working-waiting")).toBe(false);
+});
+
 test("activity distinguishes confirmed empty, old reads, disconnected and failed reads", async () => {
 	for (const [button, words] of [
 		["None working", "No chat is working now."],
 		["Disconnected", "Not connected. Working chats are not known."],
 		["Failed", "Working chats could not be read. This does not mean none are working."],
-		["Stale", "Earlier activity. Current work is not known."],
+		// An earlier read: its rows say "Was working", with no note.
+		["Stale", "Was working"],
 	]) {
 		const app = await ready();
 		await app.press(button);
@@ -58,7 +82,8 @@ test("access loss removes chat details and late reads cannot resurrect stopped a
 	await app.waitUntil(() => !app.shows("id:working-solo-agent"));
 	expect(app.shows("Standalone investigation")).toBe(false);
 	await app.press("Hold reads");
-	await app.waitFor("Was working");
+	// Holding a read is an ordinary refresh: rows never flicker to "Was working".
+	expect(app.shows("Was working")).toBe(false);
 	await app.press("Stop agent");
 	await app.press("Release newer");
 	await app.waitFor("No chat is working now.");
@@ -90,19 +115,21 @@ test("Show all stays expanded across chat navigation and invalidation fences an 
 	await app.press("Hold reads");
 	await app.press("Invalidate");
 	await app.press("Release newer");
-	expect(app.shows("Was working")).toBe(true);
+	expect(app.shows("Was working")).toBe(false);
+	expect(app.shows("Show fewer")).toBe(true);
 	await app.press("Duplicate read");
-	await app.waitUntil(() => !app.shows("Was working"));
+	await app.waitFor("id:working-extra-4");
 });
 
-test("each read crossed by a notification still advances starts, task changes and stops as earlier", async () => {
+test("each read crossed by a notification still advances starts, task changes and stops, without flicker", async () => {
 	const app = await ready();
 	for (const action of ["Start agent", "Change task", "Stop agent"]) {
 		await app.press("Hold reads");
 		await app.press(action);
 		await app.press("Invalidate");
 		await app.press("Release newer");
-		expect(app.shows("Was working")).toBe(true);
+		// An ordinary refresh is not old data: rows keep saying "Working".
+		expect(app.shows("Was working")).toBe(false);
 		if (action === "Start agent") expect(app.shows("id:working-new-agent")).toBe(true);
 		if (action === "Change task") expect(app.shows("pilot · Daily work · Updated task")).toBe(true);
 		if (action === "Stop agent") expect(app.shows("id:working-mission-agent")).toBe(false);

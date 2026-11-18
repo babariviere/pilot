@@ -275,7 +275,7 @@ test("published file ownership serializes shared paths until the user checks the
 	f.store.join("writer", f.missionId);
 	f.store.claimTask(f.missionId, first.id, "writer");
 	assert.match(f.sessions.codingCapacityReason(f.project.id, undefined, ["src/search/index.ts"]) ?? "", /shared-file/);
-	assert.match(f.sessions.codingCapacityReason(f.project.id) ?? "", /shared-file/, "undeclared scope takes turns");
+	assert.equal(f.sessions.codingCapacityReason(f.project.id), undefined, "undeclared scope runs alongside");
 	assert.equal(f.sessions.codingCapacityReason(f.project.id, undefined, ["tests/export.ts"]), undefined);
 	delete f.project.sourceCopy;
 	assert.match(
@@ -349,4 +349,243 @@ test("an uncertain first Start reserves only its task and independent ready work
 	assert.equal(f.store.task(f.missionId, first.id).sessionId, undefined);
 	assert.equal(f.store.planningWorkers.get(f.missionId)!.start!.sessionId, "uncertain-first");
 	assert.match(service.executionView(f.missionId)!.queue[0]!.reason, /unknown/);
+});
+
+test("more stopped open tasks than coding slots take the slots in order instead of waiting on each other", async (t) => {
+	const f = await publishedPlanningFixture(t, { twoSlices: true, independentSlices: true });
+	delete f.project.sourceCopy;
+	delete f.project.workspace;
+	const service = new MissionService(f.store, f.sessions, f.projects);
+	t.after(() => service.dispose());
+	const [first, second] = f.store.tasks(f.missionId);
+	assert.ok(first && second);
+	const third = f.store.addTask(f.missionId, { title: "Third slice", body: "Independent." });
+	for (const [writer, task] of [
+		["writer-1", first],
+		["writer-2", second],
+		["writer-3", third],
+	] as const) {
+		f.store.join(writer, f.missionId);
+		f.store.claimTask(f.missionId, task.id, writer);
+	}
+	// None of them runs: they were stopped with their tasks still open, and the limit is two. The earliest two take
+	// the slots, so the third waits for them rather than all waiting on each other.
+	assert.equal(f.sessions.codingCapacityReason(f.project.id, "writer-1"), undefined);
+	assert.equal(f.sessions.codingCapacityReason(f.project.id, "writer-2"), undefined);
+	assert.match(f.sessions.codingCapacityReason(f.project.id, "writer-3") ?? "", /2 of 2 occupied/);
+	assert.match(f.sessions.codingCapacityReason(f.project.id) ?? "", /2 of 2 occupied/, "other chats still wait");
+	f.store.updateTask(f.missionId, first.id, { status: "done" });
+	assert.equal(f.sessions.codingCapacityReason(f.project.id, "writer-3"), undefined);
+});
+
+test("a queued chat's place in line and slot holders follow the order the slots go", async (t) => {
+	const f = await publishedPlanningFixture(t, {
+		twoSlices: true,
+		independentSlices: true,
+		files: [["src/search/"], ["src/search/index.ts"]],
+	});
+	delete f.project.sourceCopy;
+	delete f.project.workspace;
+	const service = new MissionService(f.store, f.sessions, f.projects);
+	t.after(() => service.dispose());
+	const [first, second] = f.store.tasks(f.missionId);
+	assert.ok(first && second);
+	const third = f.store.addTask(f.missionId, { title: "Third slice", body: "Independent." });
+	const metas = f.sessions["metas"];
+	const chat = (id: string, title: string) =>
+		metas.set(id, { id, title, projectId: f.project.id, cwd: "/", createdAt: 1, updatedAt: 1 } as never);
+	for (const [writer, task, title] of [
+		["writer-1", first, "Search index"],
+		["writer-2", second, "Export tests"],
+		["writer-3", third, "Third slice"],
+	] as const) {
+		f.store.join(writer, f.missionId);
+		f.store.claimTask(f.missionId, task.id, writer);
+		chat(writer, title);
+	}
+	chat("solo", "Standalone fix");
+	const emitted: string[] = [];
+	t.mock.method(f.sessions as unknown as { emit(meta: { id: string }): void }, "emit", (meta: { id: string }) => {
+		emitted.push(meta.id);
+	});
+	// Queued first, the standalone chat still goes after every open task; the tasks go in reservation order.
+	const queue = f.sessions["codingQueue"];
+	queue.set("solo", "Waiting for a project coding slot (2 of 2 occupied).");
+	queue.set("writer-3", "Waiting for a project coding slot (2 of 2 occupied).");
+	queue.set("writer-2", "Waiting for shared-file ownership.");
+	f.sessions["refreshCodingQueueViews"]();
+	const views = f.sessions["codingQueueViews"];
+	// Overlapping declared files take turns: the second task waits for the first, named by its task.
+	assert.deepEqual(views.get("writer-2"), { kind: "files", position: 1, holders: ["Search index"] });
+	assert.deepEqual(views.get("writer-3"), { kind: "slots", position: 2, holders: ["Search index", "Export tests"] });
+	assert.deepEqual(views.get("solo"), {
+		kind: "slots",
+		position: 3,
+		holders: ["Search index", "Export tests", "Third slice"],
+	});
+	assert.deepEqual(emitted.sort(), ["solo", "writer-2", "writer-3"]);
+	emitted.length = 0;
+	f.sessions["refreshCodingQueueViews"]();
+	assert.deepEqual(emitted, [], "an unchanged view emits nothing");
+	// The second task leaves the line: the others move up and only they emit.
+	queue.delete("writer-2");
+	f.sessions["refreshCodingQueueViews"]();
+	assert.equal(views.get("writer-3")?.position, 1);
+	assert.equal(views.get("solo")?.position, 2);
+	assert.equal(views.has("writer-2"), false);
+	assert.deepEqual(emitted.sort(), ["solo", "writer-3"]);
+});
+
+test("a task whose chat waits for the user frees its coding slot; overlapping files still wait", async (t) => {
+	const f = await publishedPlanningFixture(t, {
+		twoSlices: true,
+		independentSlices: true,
+		files: [["src/import.ts"], ["src/export.ts"]],
+	});
+	f.project.sourceCopy = "jj";
+	delete f.project.workspace;
+	const service = new MissionService(f.store, f.sessions, f.projects);
+	t.after(() => service.dispose());
+	const [first, second] = f.store.tasks(f.missionId);
+	assert.ok(first && second);
+	for (const [writer, task] of [
+		["writer-1", first],
+		["writer-2", second],
+	] as const) {
+		f.store.join(writer, f.missionId);
+		f.store.claimTask(f.missionId, task.id, writer);
+	}
+	const other = ["src/other.ts"];
+	assert.match(f.sessions.codingCapacityReason(f.project.id, undefined, other) ?? "", /2 of 2 occupied/);
+	const chats = new Map<string, Partial<SessionSummary>>();
+	const real = f.sessions.get.bind(f.sessions);
+	t.mock.method(f.sessions, "get", (id: string) =>
+		chats.has(id)
+			? ({ id, title: id, cwd: "/", createdAt: 1, updatedAt: 1, state: "idle", ...chats.get(id) } as SessionSummary)
+			: real(id),
+	);
+	// A pending question and a chat waiting for a reply hold no slot.
+	chats.set("writer-1", { outcome: "question" });
+	chats.set("writer-2", { outcome: "done", waitsForReply: true });
+	assert.equal(f.sessions.codingCapacityReason(f.project.id, undefined, other), undefined);
+	assert.match(
+		f.sessions.codingCapacityReason(f.project.id, undefined, ["src/import.ts"]) ?? "",
+		/shared-file/,
+		"their files still count",
+	);
+	// A result delivered since the chat's last input waits for the user's check: no slot either.
+	const delivered = t.mock.method(f.store.controls, "latestDeliveryReport", () => ({ reportedAt: 20 }));
+	chats.set("writer-1", { working: true, state: "working" });
+	chats.set("writer-2", { outcome: "done", lastUserMessageAt: 10 });
+	assert.equal(f.sessions.codingCapacityReason(f.project.id, undefined, other), undefined);
+	// A send-back (a newer input) or work in progress takes the slot back.
+	chats.set("writer-2", { outcome: "done", lastUserMessageAt: 30 });
+	assert.match(f.sessions.codingCapacityReason(f.project.id, undefined, other) ?? "", /2 of 2 occupied/);
+	delivered.mock.restore();
+});
+
+test("a builder that ended its turn with no result and no question is reminded once per turn", async (t) => {
+	const f = await publishedPlanningFixture(t, { twoSlices: true, independentSlices: true });
+	const service = new MissionService(f.store, f.sessions, f.projects);
+	t.after(() => service.dispose());
+	const [first, second] = f.store.tasks(f.missionId);
+	assert.ok(first && second);
+	f.store.join("builder", f.missionId);
+	f.store.claimTask(f.missionId, first.id, "builder");
+	f.store.join("explorer", f.missionId, {}, "explorer");
+	f.store.claimTask(f.missionId, second.id, "explorer");
+	// biome-ignore lint/complexity/useLiteralKeys: the bridge the session manager reads
+	const bridge = f.sessions["missions"]!;
+	assert.equal(bridge.waitsForReply?.("builder", 5), true, "open task, nothing delivered since the input");
+	assert.equal(bridge.waitsForReply?.("explorer", 5), false, "explorers are not reminded");
+	assert.equal(bridge.waitsForReply?.("stranger", 5), false);
+	const delivered = t.mock.method(f.store.controls, "latestDeliveryReport", () => ({ reportedAt: 6 }));
+	assert.equal(bridge.waitsForReply?.("builder", 5), false, "it delivered since the input");
+	assert.equal(bridge.waitsForReply?.("builder", 7), true, "an older delivery does not count");
+	delivered.mock.restore();
+	const chats = new Map<string, Partial<SessionSummary>>();
+	t.mock.method(f.sessions, "get", (id: string) =>
+		chats.has(id)
+			? ({ id, title: id, cwd: "/", createdAt: 1, updatedAt: 1, state: "idle", ...chats.get(id) } as SessionSummary)
+			: undefined,
+	);
+	const sent: string[] = [];
+	t.mock.method(f.sessions, "sendWaitNudge", async (id: string) => {
+		sent.push(id);
+		return true;
+	});
+	chats.set("builder", { missionId: f.missionId, working: true, state: "working" });
+	service.nudgeWaitingBuilders();
+	assert.deepEqual(sent, [], "a working chat is not reminded");
+	chats.set("builder", { missionId: f.missionId, outcome: "done", outcomeAt: 6, lastUserMessageAt: 5 });
+	service.nudgeWaitingBuilders();
+	service.nudgeWaitingBuilders();
+	assert.deepEqual(sent, ["builder"], "checked once per turn; SessionManager keeps it once per input");
+	chats.set("builder", { missionId: f.missionId, outcome: "done", outcomeAt: 9, lastUserMessageAt: 8 });
+	service.nudgeWaitingBuilders();
+	assert.deepEqual(sent, ["builder", "builder"]);
+	for (const change of [{ outcome: "question" as const }, { outcome: "stopped" as const }, { mode: "ask" as const }]) {
+		chats.set("builder", {
+			missionId: f.missionId,
+			outcome: "done",
+			outcomeAt: 12,
+			lastUserMessageAt: 11,
+			...change,
+		});
+		service.nudgeWaitingBuilders();
+	}
+	assert.equal(sent.length, 2, "questions, Stops and Ask chats are never reminded");
+});
+
+test("open tasks of an archived mission hold no coding slot", async (t) => {
+	const f = await publishedPlanningFixture(t, { twoSlices: true, independentSlices: true });
+	delete f.project.sourceCopy;
+	delete f.project.workspace;
+	const service = new MissionService(f.store, f.sessions, f.projects);
+	t.after(() => service.dispose());
+	const [first, second] = f.store.tasks(f.missionId);
+	assert.ok(first && second);
+	for (const [writer, task] of [
+		["old-1", first],
+		["old-2", second],
+	] as const) {
+		f.store.join(writer, f.missionId);
+		f.store.claimTask(f.missionId, task.id, writer);
+	}
+	assert.match(f.sessions.codingCapacityReason(f.project.id) ?? "", /occupied|take turns/);
+	f.store.update(f.missionId, { status: "archived" });
+	assert.equal(f.sessions.codingCapacityReason(f.project.id), undefined);
+});
+
+test("tasks with unknown scopes run side by side; a task waiting on a running task's files holds no slot", async (t) => {
+	const f = await publishedPlanningFixture(t, {
+		twoSlices: true,
+		independentSlices: true,
+		files: [["src/search/"], ["src/search/index.ts"]],
+	});
+	f.project.sourceCopy = "jj";
+	delete f.project.workspace;
+	const service = new MissionService(f.store, f.sessions, f.projects);
+	t.after(() => service.dispose());
+	const [first, second] = f.store.tasks(f.missionId);
+	assert.ok(first && second);
+	for (const [writer, task] of [
+		["writer-1", first],
+		["writer-2", second],
+	] as const) {
+		f.store.join(writer, f.missionId);
+		f.store.claimTask(f.missionId, task.id, writer);
+	}
+	// writer-1 runs; writer-2 overlaps its files, so it cannot start and must not take the second slot.
+	f.sessions["codingAdmissions"].add("writer-1");
+	f.sessions["metas"].set("writer-1", {
+		id: "writer-1",
+		projectId: f.project.id,
+		cwd: "/",
+		createdAt: 1,
+		updatedAt: 1,
+	} as never);
+	assert.match(f.sessions.codingCapacityReason(f.project.id, "writer-2") ?? "", /shared-file/);
+	assert.equal(f.sessions.codingCapacityReason(f.project.id), undefined, "an unknown-scope chat takes the free slot");
+	assert.equal(f.sessions.codingCapacityReason(f.project.id, undefined, ["docs/x.md"]), undefined);
 });

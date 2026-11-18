@@ -12,6 +12,7 @@ const queued = (chat: SessionChat | null): SessionChat | null =>
 				title: "Queued coding work",
 				state: "idle",
 				stateReason: "Waiting for a Pilot coding slot (4 of 4 occupied).",
+				queue: { kind: "slots", position: 2, holders: ["Search index", "Export tests", "Docs pass"] },
 			}
 		: null;
 const chat = mirrorSessionChat({

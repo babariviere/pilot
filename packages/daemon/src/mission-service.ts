@@ -21,6 +21,7 @@ import type {
 } from "@pilot/protocol";
 import type { CriticalReviewVault } from "./critical-review-vault.ts";
 import { Conflict, NotFound } from "./errors.ts";
+import { explorerQuestion } from "./explorer-questions.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import type { CodePullRequestObservation } from "./github-delivery.ts";
 import { githubRepository } from "./github-url.ts";
@@ -245,6 +246,8 @@ export class MissionService {
 	private readonly taskStarts = new Set<string>();
 	/** Scoped to an explicit user start, including the final synchronous spawn admission. */
 	private readonly phaseOverrides = new Set<string>();
+	/** Per builder chat, the turn and input last checked for the reminder, so each turn is checked once. */
+	private readonly nudgeChecked = new Map<string, string>();
 
 	constructor(
 		store: MissionStore,
@@ -289,6 +292,7 @@ export class MissionService {
 		this.subscriptions.push(
 			sessions.onChange((session) => {
 				if (!session.missionId && !sessions.missionWorkMission(session.id)) return;
+				this.nudgeIfWaiting(session);
 				const key = JSON.stringify([
 					session.state,
 					session.working,
@@ -347,6 +351,8 @@ export class MissionService {
 			},
 			continueSession: (from, to) => store.continueSession(from, to),
 			noticeAllowed: (sessionId, requestId) => this.notices.allowed(sessionId, requestId),
+			waitsForReply: (sessionId, since) => this.waitsForReply(sessionId, since),
+			explorerQuestion: (sessionId, title) => explorerQuestion(store, { id: sessionId, title }),
 			spawnProject: (missionId) => {
 				this.controls.assertOpen(missionId);
 				const mission = store.require(missionId);
@@ -354,23 +360,37 @@ export class MissionService {
 				return mission.projectId;
 			},
 			codingReservations: () => {
-				const entries = new Map<string, { sessionId: string; projectId: string; files?: string[] }>();
+				const entries = new Map<
+					string,
+					{ sessionId: string; projectId: string; files?: string[]; waiting?: true }
+				>();
 				for (const mission of store.list()) {
-					const add = (sessionId: string, taskId?: string) => {
+					// A finished or archived mission runs no more work: its open tasks hold no coding slot. They kept the
+					// project's slots taken forever (31 such tasks on a real profile).
+					if (mission.status !== "active") continue;
+					const add = (sessionId: string, taskId?: string, owner = false) => {
 						const chat = sessions.get(sessionId);
 						// Known read-only/coordinator owners consume no coding slot. Missing metadata stays uncertain.
 						if (chat && (chat.mode === "ask" || chat.missionCoordinator || chat.role || chat.control)) return;
 						const files = taskId ? this.codingFiles(mission.id, taskId) : undefined;
 						const prior = entries.get(sessionId);
+						// An owner waiting for the user frees its slot only when every task it holds waits.
+						const waiting =
+							owner &&
+							!!chat &&
+							!!taskId &&
+							this.waitsForUser(chat, mission.id, taskId) &&
+							(!prior || prior.waiting);
 						entries.set(sessionId, {
 							sessionId,
 							projectId: mission.projectId,
 							files: prior ? (prior.files && files ? [...prior.files, ...files] : undefined) : files,
+							...(waiting ? { waiting: true as const } : {}),
 						});
 					};
 					for (const task of store.tasks(mission.id)) {
 						if (task.sessionId && isOpen(task) && !store.retiredMember(task.sessionId))
-							add(task.sessionId, task.id);
+							add(task.sessionId, task.id, true);
 					}
 					const state = store.planningWorkers.get(mission.id);
 					if (state?.start && !state.start.admitted) add(state.start.sessionId, state.start.taskId);
@@ -566,6 +586,75 @@ export class MissionService {
 		)
 			return undefined;
 		return slice.files;
+	}
+
+	/**
+	 * The task's owner waits for the user and needs no coding slot: it asks a question, waits for a reply
+	 * (SessionSummary.waitsForReply), or delivered since its last input and waits for the user's check.
+	 */
+	private waitsForUser(chat: SessionSummary, missionId: string, taskId: string): boolean {
+		if (chat.working || chat.codingQueueReason || (chat.state !== "idle" && chat.state !== "parked")) return false;
+		if (chat.outcome === "question" || chat.waitsForReply) return true;
+		return (
+			chat.outcome === "done" &&
+			this.deliveredSince(missionId, taskId, chat.id, chat.lastUserMessageAt ?? chat.createdAt)
+		);
+	}
+
+	/** The chat delivered this task (a delivery report or evidence submission) at or after `since`. */
+	private deliveredSince(missionId: string, taskId: string, sessionId: string, since: number): boolean {
+		const report = this.store.controls.latestDeliveryReport(missionId, taskId, sessionId);
+		if (report && report.reportedAt >= since) return true;
+		return this.store
+			.currentDeliveryEvidence(missionId, taskId)
+			.some((r) => r.type === "submission" && r.actorSessionId === sessionId && r.createdAt >= since);
+	}
+
+	/**
+	 * An active builder (not a coordinator, explorer, reviewer or thread chat) in a mission the user coordinates,
+	 * with open tasks and none delivered since `since`. A mission with its own coordinator chat leaves it to that chat.
+	 */
+	private waitsForReply(sessionId: string, since: number): boolean {
+		const member = this.store.membership(sessionId);
+		if (!member?.active || member.coordinator || (member.role !== undefined && member.role !== "builder"))
+			return false;
+		const mission = this.store.require(member.missionId);
+		if (mission.coordinatorSessionId && !this.store.plannedWithoutCoordinator(mission.id)) return false;
+		const tasks = this.store.tasks(mission.id).filter((task) => task.sessionId === sessionId && isOpen(task));
+		return tasks.length > 0 && !tasks.some((task) => this.deliveredSince(mission.id, task.id, sessionId, since));
+	}
+
+	/** After a builder's turn ends done, sends the one reminder when it is due (SessionManager.sendWaitNudge). */
+	private nudgeIfWaiting(session: SessionSummary): void {
+		if (session.outcome !== "done" || session.working || session.waitsForReply || session.mode === "ask") return;
+		if (session.missionCoordinator || session.archivedAt !== undefined) return;
+		const key = `${session.outcomeAt ?? ""}:${session.lastUserMessageAt ?? ""}`;
+		if (this.nudgeChecked.get(session.id) === key) return;
+		this.nudgeChecked.set(session.id, key);
+		const retry = () => {
+			if (this.nudgeChecked.get(session.id) === key) this.nudgeChecked.delete(session.id);
+		};
+		void this.sessions.sendWaitNudge(session.id).then(
+			(sent) => {
+				// Busy now (another input, post-run checks): a later change checks again.
+				if (sent === undefined) retry();
+			},
+			(error: unknown) => {
+				retry();
+				console.warn(`pilotd: reminder for ${session.id} not sent: ${error}`);
+			},
+		);
+	}
+
+	/** Startup: builders whose turn ended before this daemon saw it get their one reminder too. */
+	nudgeWaitingBuilders(): void {
+		for (const mission of this.store.list()) {
+			if (mission.status !== "active") continue;
+			for (const task of this.store.tasks(mission.id)) {
+				const chat = task.sessionId && isOpen(task) ? this.sessions.get(task.sessionId) : undefined;
+				if (chat) this.nudgeIfWaiting(chat);
+			}
+		}
 	}
 
 	executionView(missionId: string): import("@pilot/protocol").MissionExecutionView | undefined {
