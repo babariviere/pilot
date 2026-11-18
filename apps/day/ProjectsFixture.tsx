@@ -9,7 +9,10 @@ const writes = signal(0),
 	uncertain = signal(false);
 const snapshot: ProjectSetup = {
 	version: 1,
-	projects: [{ id: "one", name: "Harbour", path: "/Users/test/src/harbour", copy: "jj", setup: [] }],
+	projects: [
+		{ id: "one", name: "Harbour", path: "/Users/test/src/harbour", copy: "jj", setup: [], linked: [] },
+		{ id: "two", name: "Lighthouse", path: "/Users/test/src/lighthouse", copy: "jj", setup: [] },
+	],
 	github: { phase: "ready", apiReady: true, sshReady: true, account: "test", sshIdentity: "existing" },
 	imports: [
 		{
@@ -35,6 +38,18 @@ const source: ProjectsSource = {
 		pending = uncertain();
 		if (args.action === "add" && !pending)
 			snapshot.projects.push({ id: "new", name: "New project", path: args.path ?? "", copy: "folder", setup: [] });
+		if ((args.action === "link" || args.action === "unlink") && !pending)
+			snapshot.projects = snapshot.projects.map((p) =>
+				p.id !== args.project
+					? p
+					: {
+							...p,
+							linked:
+								args.action === "link"
+									? [...(p.linked ?? []), args.linked ?? ""]
+									: (p.linked ?? []).filter((id) => id !== args.linked),
+						},
+			);
 		return {
 			snapshot: { ...snapshot },
 			operations: pending ? [{ operationId: "saved-action", state: "unknown" }] : [],

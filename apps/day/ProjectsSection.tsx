@@ -10,7 +10,7 @@ import {
 	projectRepository,
 	type SourcePreview,
 } from "./projectSetup";
-import { Action, Panel, SectionTitle, TextField } from "./ui";
+import { Action, CheckboxRow, Disclosure, Panel, SectionTitle, TextField } from "./ui";
 
 // Keep Settings small; paging reaches every project and saved import.
 const PAGE_SIZE = 5;
@@ -28,6 +28,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 	const projectPage = signal(0),
 		importPage = signal(0),
 		github = signal(false);
+	const linksOpen = signal("");
 	const unsettled = () => operations().filter((o) => o.state === "unknown" || o.state === "pending");
 	const accept = (r: ProjectsReply) => {
 		if (r.snapshot) {
@@ -58,6 +59,8 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 	const read = () => run(async () => accept(await source.read()));
 	const action = (args: Record<string, string>) => run(async () => accept(await source.action(args)));
 	const disabled = () => busy() || unsettled().length > 0 || !snapshot();
+	const linkedNames = (linked: string[] | undefined) =>
+		(linked ?? []).flatMap((id) => snapshot()?.projects.find((p) => p.id === id)?.name ?? []);
 	effect(() => {
 		untracked(() => {
 			void read();
@@ -102,6 +105,37 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 								<Text class="text-xs text-faint">{`${s().enabled ? "Configured setup" : "Disabled setup"}: ${s().name}`}</Text>
 							)}
 						</Each>
+						<If when={(snapshot()?.projects.length ?? 0) > 1}>
+							<Disclosure
+								testID={`project-links-${p().id}`}
+								label={`Also reads: ${linkedNames(p().linked).join(", ") || "none"}`}
+								open={linksOpen() === p().id}
+								onToggle={() => linksOpen.set(linksOpen() === p().id ? "" : p().id)}
+							>
+								<View class="gap-1 pl-4">
+									<Text class="text-xs text-muted-foreground">
+										Agents in this project can read the main branch of the projects you tick. Read-only.
+									</Text>
+									<Each of={snapshot()?.projects.filter((o) => o.id !== p().id) ?? []} key={(o) => o.id}>
+										{(o) => (
+											<CheckboxRow
+												testID={`project-link-${p().id}-${o().id}`}
+												label={o().name}
+												checked={(p().linked ?? []).includes(o().id)}
+												disabled={disabled()}
+												onChange={() =>
+													void action({
+														action: (p().linked ?? []).includes(o().id) ? "unlink" : "link",
+														project: p().id,
+														linked: o().id,
+													})
+												}
+											/>
+										)}
+									</Each>
+								</View>
+							</Disclosure>
+						</If>
 					</View>
 				)}
 			</Each>

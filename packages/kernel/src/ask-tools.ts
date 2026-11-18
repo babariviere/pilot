@@ -28,6 +28,7 @@ export const ASK_TOOL_NAMES = [
 	"chat_report",
 	"scoped_metrics",
 	"diagnostic_logs",
+	"reference_sources",
 	...EXPLORATION_TOOL_NAMES,
 ];
 const readOnlyAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };

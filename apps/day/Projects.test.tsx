@@ -90,3 +90,20 @@ test("import previews its destination before any clone and keeps interrupted imp
 	expect(app.shows("GitHub account: test")).toBe(true);
 	expect(app.shows("SSH verified (existing).")).toBe(true);
 });
+
+test("linking another project is one explicit tick that the next read shows, and unticking unlinks", async () => {
+	const app = await open("./ProjectsFixture.tsx", desktop);
+	await app.waitFor("id:project-links-one");
+	expect(app.shows("Also reads: none")).toBe(true);
+	expect(app.shows("id:project-link-one-two")).toBe(false);
+	await app.press("id:project-links-one");
+	await app.waitFor("id:project-link-one-two");
+	expect(app.shows("Mock data. Actions: 0. Checks: 0.")).toBe(true);
+	await app.press("id:project-link-one-two");
+	await app.waitFor("Also reads: Lighthouse");
+	expect(app.shows("Mock data. Actions: 1. Checks: 0.")).toBe(true);
+	expect(app.shows("id:project-link-one-two")).toBe(true);
+	await app.press("id:project-link-one-two");
+	await app.waitFor("Mock data. Actions: 2. Checks: 0.");
+	expect(app.shows("Also reads: none")).toBe(true);
+});

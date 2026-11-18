@@ -69,7 +69,7 @@ export async function createCoordinatorSourceTools(
 		...templates.map(
 			(template): ToolDefinition => ({
 				...template,
-				description: `${template.description} Coordinator paths default to current main; use an absolute path from source_roots for a member or scratch. Repository metadata is unavailable.`,
+				description: `${template.description} Coordinator paths default to current main; use an absolute path from source_roots for a member or scratch, or from reference_sources. Repository metadata is unavailable.`,
 				async execute(id, params, signal, update, ctx) {
 					const scope = await readScope(signal);
 					signal?.throwIfAborted();
@@ -83,9 +83,12 @@ export async function createCoordinatorSourceTools(
 					// Preserve the host's TMPDIR spelling, not arbitrary aliases supplied by a caller.
 					if (isAbsolute(input) && contained(cwd, absolute) && realpathSync(cwd) === scope.scratch)
 						absolute = resolve(scope.scratch, sourcePath(cwd, absolute));
-					const root = [scope.main, ...scope.members.map((member) => member.path), scope.scratch].find((root) =>
-						contained(root, absolute),
-					);
+					const root = [
+						scope.main,
+						...scope.members.map((member) => member.path),
+						scope.scratch,
+						...(scope.references ?? []).map((reference) => reference.path),
+					].find((root) => contained(root, absolute));
 					let selected = root;
 					let sourceOnly = true;
 					// Host-owned documentation and pasted images are read-only exceptions, not source/search roots.
@@ -114,7 +117,9 @@ export async function createCoordinatorSourceTools(
 						}
 					}
 					if (!selected)
-						throw new Error("Coordinator source path is outside current main, member workspaces and scratch");
+						throw new Error(
+							"Coordinator source path is outside current main, member workspaces, scratch and reference sources",
+						);
 					checkConfiguredRead(template.name.startsWith("code_") ? selected : absolute, template.name !== "read");
 					const path = sourceContentPath(selected, absolute);
 					const forwarded: Record<string, unknown> = { ...args, path };

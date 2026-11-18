@@ -209,3 +209,54 @@ test("native project actions bind the displayed source, preserve exact receipts 
 	assert.equal(projects.list().length, 2);
 	await loadedImports.close();
 });
+
+test("native link and unlink change one project's linked list and lookups never replay", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "native-projects-link-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const host = { hostId: "daemon", daemonId: "d", lineageId: "l" };
+	const home = join(root, "data");
+	const projects = new ProjectStore(home);
+	await projects.load();
+	await mkdir(join(root, "app"));
+	await mkdir(join(root, "lib"));
+	const app = await projects.create({ path: join(root, "app") });
+	const lib = await projects.create({ path: join(root, "lib") });
+	const setup = new GitHubSetupService(home, host, {
+		userHome: root,
+		env: {},
+		command: async () => {
+			throw new Error("No external actions expected");
+		},
+	});
+	t.after(() => setup.close());
+	const journal = new OperationJournal(join(home, "operations"), host);
+	const service = new NativeProjects({ projects, setup, imports: new GitHubImportService(setup, projects), journal });
+	let sequence = 0;
+	const operation = (action: string, fields: Record<string, string>): DurableOperation => {
+		const payload = JSON.stringify({ purpose: PROJECT_ACTION, action, ...fields });
+		return {
+			schemaVersion: 1,
+			operationId: randomUUID(),
+			producerId: "app",
+			sequence: ++sequence,
+			origin: { ...host, hostId: "local" },
+			destination: host,
+			kind: PROJECT_ACTION,
+			targetId: "projects",
+			bindingId: payloadHash(payload),
+			bindingGeneration: 1,
+			payload,
+			payloadHash: payloadHash(payload),
+		};
+	};
+	const link = operation("link", { project: app.id, linked: lib.id });
+	assert.equal((await journal.execute(link, (o, e) => service.admit(o, e.firstEntry))).state, "accepted");
+	assert.deepEqual((await service.read()).projects.find((p) => p.id === app.id)?.linked, [lib.id]);
+	assert.deepEqual(await service.recover(link), { project: { id: app.id, linked: [lib.id] } });
+	const self = operation("link", { project: app.id, linked: app.id });
+	assert.equal((await journal.execute(self, (o, e) => service.admit(o, e.firstEntry))).state, "rejected");
+	const unlink = operation("unlink", { project: app.id, linked: lib.id });
+	assert.equal((await journal.execute(unlink, (o, e) => service.admit(o, e.firstEntry))).state, "accepted");
+	assert.equal(projects.require(app.id).linkedProjects, undefined);
+	await assert.rejects(service.recover(link), /unknown/, "a lookup reports the current list, never relinks");
+});

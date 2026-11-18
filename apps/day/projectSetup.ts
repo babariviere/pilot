@@ -13,6 +13,8 @@ export type ProjectSetup = {
 		path: string;
 		copy: string;
 		setup: { id: string; name: string; enabled: boolean }[];
+		/** IDs of other projects whose read-only main view this project's agents can read. */
+		linked?: string[];
 	}[];
 	github: {
 		phase: string;

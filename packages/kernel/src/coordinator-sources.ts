@@ -1,11 +1,14 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { CoordinatorSkillResource } from "./coordinator-skill-resources.ts";
+import type { ReferenceSource } from "./reference-sources.ts";
 
 /** A fresh host-admitted scope of canonical roots for one finite native request, never a reusable capability. */
 export interface CoordinatorSources {
 	main: string;
 	members: { sessionId: string; path: string }[];
 	scratch: string;
+	/** Read-only dependency and linked-project roots. Omitted when there are none. */
+	references?: ReferenceSource[];
 }
 
 export type ReadCoordinatorSources = (signal?: AbortSignal) => Promise<CoordinatorSources>;

@@ -31,6 +31,7 @@ export class NativeProjects {
 				name: p.name,
 				path: p.path,
 				copy: p.sourceCopy ?? "legacy",
+				linked: p.linkedProjects ?? [],
 				setup:
 					p.automations?.items
 						.filter((a) => a.on.includes("workspace.created") || a.on.includes("workspace.restored"))
@@ -56,6 +57,12 @@ export class NativeProjects {
 		if (p.action === "add") {
 			const project = await this.deps.projects.registration(op.operationId, op.payloadHash);
 			if (project) return registered(project);
+		}
+		if ((p.action === "link" || p.action === "unlink") && typeof p.project === "string") {
+			// Linking is a set change: the current list shows whether it took effect. Nothing is replayed.
+			const project = this.deps.projects.get(p.project);
+			if (project && (project.linkedProjects ?? []).includes(p.linked) === (p.action === "link"))
+				return { project: { id: project.id, linked: project.linkedProjects ?? [] } };
 		}
 		if (p.action === "import") {
 			const saved = await this.deps.imports.acceptedStart(op.operationId);
@@ -101,6 +108,8 @@ export class NativeProjects {
 			"importId",
 			"account",
 			"fingerprint",
+			"project",
+			"linked",
 		];
 		if (
 			Object.keys(p).some((k) => !allowed.includes(k)) ||
@@ -120,6 +129,19 @@ export class NativeProjects {
 					payloadHash: op.payloadHash,
 				}),
 			);
+		}
+		if (p.action === "link" || p.action === "unlink") {
+			if (typeof p.project !== "string" || typeof p.linked !== "string")
+				throw new OperationRejected("Choose a project to link");
+			const source = projects.get(p.project);
+			if (!source) throw new OperationRejected("This project was removed. Read again.");
+			const current = source.linkedProjects ?? [];
+			const next =
+				p.action === "link"
+					? [...current.filter((id) => id !== p.linked), p.linked]
+					: current.filter((id) => id !== p.linked);
+			const project = await projects.update(p.project, { linkedProjects: next });
+			return { project: { id: project.id, linked: project.linkedProjects ?? [] } };
 		}
 		if (p.action === "import") {
 			if (typeof p.url !== "string" || typeof p.destination !== "string")

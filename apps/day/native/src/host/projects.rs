@@ -18,9 +18,17 @@ pub(crate) struct Intent {
     import_id: Option<String>,
     account: Option<String>,
     fingerprint: Option<String>,
+    /// Link and unlink: the project whose agents read, and the project they read.
+    project: Option<String>,
+    linked: Option<String>,
 }
 impl Intent {
     pub(crate) fn validate(&self) -> Result<(), Error> {
+        if matches!(self.action.as_str(), "link" | "unlink")
+            && (self.project.is_none() || self.linked.is_none())
+        {
+            return Err(Error::Invalid);
+        }
         if !matches!(
             self.action.as_str(),
             "add"
@@ -34,6 +42,8 @@ impl Intent {
                 | "prepare_key"
                 | "approve_key"
                 | "cancel"
+                | "link"
+                | "unlink"
         ) || [
             &self.path,
             &self.digest,
@@ -42,6 +52,8 @@ impl Intent {
             &self.import_id,
             &self.account,
             &self.fingerprint,
+            &self.project,
+            &self.linked,
         ]
         .iter()
         .any(|s| {
@@ -62,6 +74,8 @@ impl Intent {
             ("importId", &self.import_id),
             ("account", &self.account),
             ("fingerprint", &self.fingerprint),
+            ("project", &self.project),
+            ("linked", &self.linked),
         ] {
             if let Some(value) = value {
                 p[name] = json!(value);
@@ -223,6 +237,14 @@ mod tests {
         }
         let invalid: Intent = serde_json::from_value(json!({"action":"revoke_key"})).unwrap();
         assert_eq!(invalid.validate(), Err(Error::Invalid));
+        let link: Intent =
+            serde_json::from_value(json!({"action":"link","project":"app","linked":"lib"}))
+                .unwrap();
+        assert_eq!(link.validate(), Ok(()));
+        assert_eq!(link.payload()["linked"], "lib");
+        let partial: Intent =
+            serde_json::from_value(json!({"action":"unlink","project":"app"})).unwrap();
+        assert_eq!(partial.validate(), Err(Error::Invalid));
     }
 
     #[test]

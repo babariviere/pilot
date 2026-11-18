@@ -40,6 +40,9 @@ export async function requireDirectory(path: string): Promise<string> {
 	return resolved;
 }
 
+// Each link adds a main-view refresh and a line in agents' reference list; ten covers a service and its shared libraries.
+const MAX_LINKED_PROJECTS = 10;
+
 export class ProjectStore {
 	private projects: Project[] = [];
 	/** Profiles and overrides that failed validation on load, by project. Kept so a later save does not silently drop
@@ -299,6 +302,11 @@ export class ProjectStore {
 			else delete next.workspace;
 		}
 		if (request.requirePullRequest !== undefined) next.requirePullRequest = request.requirePullRequest;
+		if (request.linkedProjects !== undefined) {
+			const linked = this.validateLinkedProjects(id, request.linkedProjects);
+			if (linked.length) next.linkedProjects = linked;
+			else delete next.linkedProjects;
+		}
 		// Even a later edit back to identical settings must invalidate an earlier confirmation.
 		if (JSON.stringify(next) !== JSON.stringify(project)) next.workflowGeneration = randomUUID();
 		this.projects = this.projects.map((existing) => (existing.id === id ? next : existing));
@@ -406,8 +414,32 @@ export class ProjectStore {
 		this.invalid.automations.delete(id);
 		this.invalid.environment.delete(id);
 		this.invalid.environmentOverride.delete(id);
-		this.projects = this.projects.filter((project) => project.id !== id);
+		this.projects = this.projects
+			.filter((project) => project.id !== id)
+			.map((project) => {
+				if (!project.linkedProjects?.includes(id)) return project;
+				const { linkedProjects, ...rest } = project;
+				const kept = linkedProjects.filter((linked) => linked !== id);
+				return kept.length ? { ...rest, linkedProjects: kept } : rest;
+			});
 		await this.persist();
+	}
+
+	/** Existing other projects only. Their read-only main views become readable by this project's chats. */
+	private validateLinkedProjects(id: string, value: unknown): string[] {
+		if (!Array.isArray(value) || value.some((item) => typeof item !== "string"))
+			throw new Error("linkedProjects must be a list of project IDs");
+		const linked = [...new Set(value as string[])];
+		// Each link adds a main-view refresh and a line in agents' reference list; a few covers related repositories.
+		if (linked.length > MAX_LINKED_PROJECTS)
+			throw new Conflict(
+				`A project links at most ${MAX_LINKED_PROJECTS} projects and this update has ${linked.length}. Unlink one first.`,
+			);
+		for (const linkedId of linked) {
+			if (linkedId === id) throw new Conflict("A project cannot link itself");
+			if (!this.get(linkedId)) throw new Conflict(`Unknown project: ${linkedId}`);
+		}
+		return linked;
 	}
 
 	private persist(): Promise<void> {

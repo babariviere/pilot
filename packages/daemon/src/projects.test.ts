@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { Project } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 
 test("GitHub repository lookup is on demand, host-local, bounded and never opens a browser", async (t) => {
@@ -140,4 +141,33 @@ test("rejects invalid PR requirement values without changing projects", async ()
 	} finally {
 		await rm(home, { recursive: true, force: true });
 	}
+});
+
+test("linked projects round trip, refuse self, unknown and too many links, and clear on removal", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-projects-linked-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const store = new ProjectStore(home);
+	await store.load();
+	const created = [];
+	for (const name of ["app", "lib", "schema"]) {
+		await mkdir(join(home, name));
+		created.push(await store.create({ path: join(home, name) }));
+	}
+	const [app, lib, schema] = created as [Project, Project, Project];
+	const linked = await store.update(app.id, { linkedProjects: [lib.id, schema.id, lib.id] });
+	assert.deepEqual(linked.linkedProjects, [lib.id, schema.id]);
+	const reopened = new ProjectStore(home);
+	await reopened.load();
+	assert.deepEqual(reopened.require(app.id).linkedProjects, [lib.id, schema.id]);
+	await assert.rejects(store.update(app.id, { linkedProjects: [app.id] }), /cannot link itself/);
+	await assert.rejects(store.update(app.id, { linkedProjects: ["missing"] }), /Unknown project: missing/);
+	await assert.rejects(
+		store.update(app.id, { linkedProjects: Array.from({ length: 11 }, (_, i) => `p${i}`) }),
+		/at most 10 projects and this update has 11/,
+	);
+	await assert.rejects(store.update(app.id, { linkedProjects: "lib" as unknown as string[] }), /list of project IDs/);
+	assert.deepEqual(store.require(app.id).linkedProjects, [lib.id, schema.id], "refused updates change nothing");
+	await store.remove(schema.id);
+	assert.deepEqual(store.require(app.id).linkedProjects, [lib.id]);
+	assert.equal(Object.hasOwn(await store.update(app.id, { linkedProjects: [] }), "linkedProjects"), false);
 });
