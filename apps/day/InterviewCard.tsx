@@ -1,7 +1,7 @@
 // Standalone adapter for the same saved-round form missions use. Local JSON
 // keeps drafts only; native code resolves exact options and digests on Submit.
 import { cleanup, computed, effect, signal, Text, View, type ViewRef } from "nsh";
-import type { Decision, Interview, Question, QuestionSection } from "pilot-day/native";
+import type { Decision, IntentOutcome, Interview, Question, QuestionSection } from "pilot-day/native";
 import { checkDecision, laterDecision, needsCheck, saveDecisionDraft } from "./commands";
 import type { Day } from "./day";
 import { type InterviewRead, InterviewRenderer, type InterviewSource } from "./InterviewRenderer";
@@ -16,25 +16,46 @@ const SECTIONS: Record<string, QuestionSection> = {
 	authority: "authority",
 };
 
+type DraftAnswer = Pick<Decision["interviewQuestions"][number], "selectedOptionId" | "text"> & {
+	questionId: string;
+};
+
+function initialAnswers(decision: Decision, kept?: string): DraftAnswer[] {
+	const saved = new Map<string, DraftAnswer>();
+	if (kept && decision.delivery === "idle") {
+		try {
+			const draft = JSON.parse(kept);
+			if (draft?.roundId === decision.interviewRoundId && Array.isArray(draft?.answers)) {
+				for (const a of draft.answers) {
+					if (
+						typeof a?.questionId === "string" &&
+						typeof a.text === "string" &&
+						(a.selectedOptionId === null || typeof a.selectedOptionId === "string")
+					)
+						saved.set(a.questionId, a);
+				}
+			}
+		} catch {
+			// The kept window draft is optional; use native projection when unreadable.
+		}
+	}
+	return decision.interviewQuestions.map((q) => {
+		const a = saved.get(q.id);
+		return {
+			questionId: q.id,
+			selectedOptionId: a
+				? q.options.some((o) => o.id === a.selectedOptionId)
+					? a.selectedOptionId
+					: null
+				: q.selectedOptionId,
+			text: a?.text ?? q.text,
+		};
+	});
+}
+
 export function InterviewCard(props: { day: Day; decision: Decision; later: boolean; keyboardActive: boolean }) {
 	const d = () => props.decision;
 	const id = d().id;
-	// Entry plus round identity scopes the form's kept navigation and fields.
-	const interviewId = `attention/${id}/${d().interviewRoundId}`;
-	const answers = signal(
-		d().interviewQuestions.map((q) => ({
-			questionId: q.id,
-			selectedOptionId: q.selectedOptionId,
-			text: q.text,
-		})),
-	);
-	const sending = signal(false);
-	const submitted = signal(false);
-	const draftMessage = signal("");
-	const contextOpen = signal<Record<string, boolean>>({});
-	const composing = new Set<string>();
-	const idle = () => d().delivery === "idle" && !sending() && !submitted();
-	const serialized = () => JSON.stringify({ roundId: d().interviewRoundId, answers: answers() });
 	const primary = signal<ViewRef | null>(null);
 	anchors.set(id, () => primary() ?? undefined);
 	effect(() => {
@@ -43,17 +64,103 @@ export function InterviewCard(props: { day: Day; decision: Decision; later: bool
 			focusFront.set(false);
 		}
 	});
-	setFor(replies, id, serialized());
 	cleanup(() => {
 		anchors.delete(id);
 		props.day.feed.flushDrafts();
 	});
+	return (
+		<InterviewForm
+			decision={d()}
+			identity={`attention/${id}/${d().interviewRoundId}`}
+			keyboardActive={props.keyboardActive}
+			anchor={(node) => primary.set(node)}
+			initialize={(text) => setFor(replies, id, text)}
+			message={messages()[id]}
+			onSave={(text) => {
+				setFor(replies, id, text);
+				const outcome = saveDecisionDraft(props.day, d());
+				return outcome.status === "accepted" ? "" : outcome.message;
+			}}
+			onFlush={() => props.day.feed.flushDrafts()}
+			onSubmit={async (text) => {
+				const outcome = await props.day.feed.reply({
+					decisionId: id,
+					revision: d().revision,
+					optionId: null,
+					optionIds: [],
+					text,
+				});
+				setFor(messages, id, outcome.message);
+				if (outcome.status === "accepted") focusFront.set(true);
+				return outcome;
+			}}
+			onCheck={() => void checkDecision(props.day, d())}
+			onFocus={() => holdFront(id)}
+			onLater={props.later ? () => laterDecision(props.day, d()) : undefined}
+		/>
+	);
+}
+
+/** The same round form without the selected project's draft or command state. */
+export function ScopedInterviewCard(props: {
+	decision: Decision;
+	/** Stable project, entry and round identity. Remount when the pinned form changes. */
+	identity: string;
+	keyboardActive: boolean;
+	/** Optional window draft for this exact pin, read only on mount. */
+	draftText?: string;
+	draftMessage?: string;
+	onSave: (text: string) => void;
+	onSubmit: (text: string) => Promise<IntentOutcome>;
+	onCheck: () => void;
+}) {
+	return (
+		<InterviewForm
+			decision={props.decision}
+			identity={`scoped-attention/${props.identity}`}
+			keyboardActive={props.keyboardActive}
+			draftText={props.draftText}
+			draftMessage={props.draftMessage}
+			onSave={props.onSave}
+			onSubmit={props.onSubmit}
+			onCheck={props.onCheck}
+		/>
+	);
+}
+
+function InterviewForm(props: {
+	decision: Decision;
+	identity: string;
+	keyboardActive: boolean;
+	anchor?: (node: ViewRef) => void;
+	initialize?: (text: string) => void;
+	message?: string;
+	draftText?: string;
+	draftMessage?: string;
+	onSave: (text: string) => string | void;
+	onFlush?: () => void;
+	onSubmit: (text: string) => Promise<IntentOutcome>;
+	onCheck: () => void;
+	onLater?: () => void;
+	onFocus?: () => void;
+}) {
+	const d = () => props.decision;
+	const interviewId = props.identity;
+	const roundId = d().interviewRoundId;
+	const answers = signal(initialAnswers(d(), props.draftText));
+	const sending = signal(false);
+	const submitted = signal(false);
+	const draftMessage = signal("");
+	const resultMessage = signal("");
+	const contextOpen = signal<Record<string, boolean>>({});
+	const composing = new Set<string>();
+	const idle = () => !!roundId && d().delivery === "idle" && !sending() && !submitted();
+	const serialized = () => JSON.stringify({ roundId, answers: answers() });
+	props.initialize?.(serialized());
 
 	function save(questionId: string) {
 		if (!idle() || composing.has(questionId)) return;
-		setFor(replies, id, serialized());
-		const outcome = saveDecisionDraft(props.day, d());
-		draftMessage.set(outcome.status === "accepted" ? "" : outcome.message);
+		draftMessage.set(props.onSave(serialized()) ?? "");
 	}
 	function edit(questionId: string, patch: { selectedOptionId?: string | null; text?: string }) {
 		if (!idle()) return;
@@ -61,23 +168,20 @@ export function InterviewCard(props: { day: Day; decision: Decision; later: bool
 		save(questionId);
 	}
 	async function submit() {
-		if (!idle() || composing.size || answers().some((a) => a.selectedOptionId === null && !a.text.trim())) return;
+		if (
+			!idle() ||
+			composing.size ||
+			!answers().length ||
+			answers().some((a) => a.selectedOptionId === null && !a.text.trim())
+		)
+			return;
 		const text = serialized();
 		sending.set(true);
 		try {
-			props.day.feed.flushDrafts();
-			const outcome = await props.day.feed.reply({
-				decisionId: id,
-				revision: d().revision,
-				optionId: null,
-				optionIds: [],
-				text,
-			});
-			setFor(messages, id, outcome.message);
-			if (outcome.status === "accepted") {
-				submitted.set(true);
-				focusFront.set(true);
-			}
+			props.onFlush?.();
+			const outcome = await props.onSubmit(text);
+			resultMessage.set(outcome.message);
+			if (outcome.status === "accepted") submitted.set(true);
 		} finally {
 			sending.set(false);
 		}
@@ -136,7 +240,7 @@ export function InterviewCard(props: { day: Day; decision: Decision; later: bool
 			fresh: true,
 			keyboardActive: props.keyboardActive,
 			busy: sending(),
-			message: draftMessage() || messages()[id] || "",
+			message: props.draftMessage || draftMessage() || props.message || resultMessage(),
 			routeKey: "today",
 			heading: "Questions before proceeding",
 			submitLabel: "Submit answers",
@@ -150,8 +254,8 @@ export function InterviewCard(props: { day: Day; decision: Decision; later: bool
 					{
 						choice: q.chosen ?? (q.text.trim() ? null : undefined),
 						text: q.text,
-						unsaved: d().draft.unsaved || draftMessage() !== "",
-						message: draftMessage(),
+						unsaved: d().draft.unsaved || !!props.draftMessage || draftMessage() !== "",
+						message: props.draftMessage || draftMessage(),
 					},
 				]),
 			),
@@ -178,20 +282,20 @@ export function InterviewCard(props: { day: Day; decision: Decision; later: bool
 					break;
 				case "save":
 					save(command.questionId);
-					props.day.feed.flushDrafts();
+					props.onFlush?.();
 					break;
 				case "submit":
 					void submit();
 					break;
 				case "check":
-					void checkDecision(props.day, d());
+					if (needsCheck(d()) && d().delivery !== "checking") props.onCheck();
 					break;
 				case "help":
 					if (command.help === "context") toggleContext(command.questionId);
 					break;
 				case "focus":
 					// Answering this round keeps it in front while it waits.
-					holdFront(id);
+					props.onFocus?.();
 					break;
 			}
 		},
@@ -216,9 +320,9 @@ export function InterviewCard(props: { day: Day; decision: Decision; later: bool
 	};
 	return (
 		<View testID="interview-card" class="gap-4">
-			<InterviewRenderer source={source} anchor={(node) => primary.set(node)} />
-			<If when={props.later}>
-				<Action label="Later" disabled={!idle()} onPress={() => laterDecision(props.day, d())} />
+			<InterviewRenderer source={source} anchor={(node) => props.anchor?.(node)} />
+			<If when={props.onLater}>
+				<Action label="Later" disabled={!idle()} onPress={() => props.onLater?.()} />
 			</If>
 		</View>
 	);

@@ -48,7 +48,7 @@ type Shown = {
 };
 
 const shown = new Map<string, Shown>();
-const timers = new Map<string, number>();
+const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const saving = new Map<string, Promise<void>>();
 const composing = new Set<string>();
 

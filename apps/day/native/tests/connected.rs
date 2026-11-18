@@ -1040,6 +1040,51 @@ fn global_dashboard_opens_without_project_setup_and_refreshes_from_events() {
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }
 
+#[test]
+fn search_back_restores_the_previous_project_before_returning_to_the_draft() {
+    let root = FakeRoot::new();
+    root.reply("day.navigation.project", json!("atlas"));
+    root.reply(
+        "day.window.read",
+        serde_json::to_value(pilot_day_native::update::SavedView {
+            goal: "Keep my Atlas draft".into(),
+            ..Default::default()
+        }).unwrap(),
+    );
+    root.reply("day.navigation.restore", Value::Null);
+    root.reply(
+        "day.search.read",
+        json!({"projects":[{"id":"atlas","name":"Atlas"},{"id":"harbor","name":"Harbor"}],
+            "hits":[{"kind":"output","key":"export","projectId":"harbor","projectName":"Harbor",
+                "title":"Export comparison","target":{"sessionId":"owner","artifactId":"report",
+                    "kind":"html","title":"Export comparison","revision":3,"updatedAt":1}}],
+            "partial":false,"more":false}),
+    );
+    root.reply("day.search.output", json!({
+        "version":1,"reference":{"sourceSessionId":"owner","artifactId":"report","revision":3},
+        "metadata":{"title":"Export comparison","kind":"html"},"rendering":"unsupported",
+        "content":{"state":"text","source":"This exact output","containerSha256":"sha","containerBytes":17}
+    }));
+    let entry = entry();
+    let mut app = open_on(&entry, root.channel.clone());
+    wait(&mut app, "id:new-open");
+    app.press("id:new-open").unwrap();
+    wait(&mut app, "id:goal");
+    assert_eq!(app.screen().input_text("id:goal"), Ok(Some("Keep my Atlas draft")));
+    app.press("id:search-open").unwrap();
+    wait(&mut app, "Export comparison");
+    app.press("role:option[Export comparison, Output in Harbor]").unwrap();
+    wait(&mut app, "This exact output");
+    app.press("role:button[Back to New]").unwrap();
+    wait(&mut app, "id:goal");
+    assert_eq!(app.screen().input_text("id:goal"), Ok(Some("Keep my Atlas draft")));
+    assert_eq!(root.args("day.navigation.restore").last(), Some(&json!({"projectId":"atlas"})));
+    assert_eq!(root.args("day.search.output").last().unwrap()["artifact"]["revision"], 3);
+    assert_eq!(root.count("day.attention.reply"), 0);
+    drop(app);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
 /// A complete, current inventory read, as the root projects it.
 fn inventory(rows: Vec<PlanRow>) -> Value {
     serde_json::to_value(Planning {

@@ -123,6 +123,18 @@ test("Today renders natively and takes pointer, keyboard and text input", async 
 	await app.screenshot("output/today-answered-1100.png");
 });
 
+test("daily navigation capture: Today and palette over an unsent draft", async () => {
+	const app = await open("./MockApp.tsx", { platform: "macos", width: 1100, height: 850 });
+	await app.waitFor("Three short things need you.");
+	await app.screenshot("output/daily-navigation-today.png");
+	await app.press("id:new-open");
+	await app.waitFor("id:goal");
+	await app.type("id:goal", "Keep exported columns in the order shown.");
+	await app.keyboard.press("mod+k");
+	await app.waitFor("id:palette");
+	await app.screenshot("output/daily-navigation-search.png");
+});
+
 test("Today in dark appearance", async () => {
 	const app = await open("./MockApp.tsx", { platform: "macos", width: 1100, height: 900, colorScheme: "dark" });
 	await app.waitFor("Three short things need you.");

@@ -9,12 +9,12 @@ import { keepScroll } from "./kept";
 import { pageScroll, scrolled } from "./onScreen";
 import { Page, PageTitle } from "./ui";
 
-export function ArtifactsScreen(props: { source: ArtifactSource }) {
+export function ArtifactsScreen(props: { source: ArtifactSource; onBackFromJump?: () => boolean }) {
 	const shelf = createShelf();
 	keymap.bind(
 		"escape",
 		() => {
-			if (!shelf.hideLast()) closeArtifacts();
+			if (!shelf.hideLast() && !props.onBackFromJump?.()) closeArtifacts();
 		},
 		{ when: "always" },
 	);

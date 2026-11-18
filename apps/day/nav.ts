@@ -6,6 +6,7 @@
 // one level of that tree, Escape does the same, and Pilot at the top left
 // always goes to Today. Moving around only changes where the user is: it
 // never drops a draft, sends, saves or starts anything.
+import { signal } from "nsh";
 import { artifactsOpen, closeArtifacts, openArtifacts } from "./artifactReads";
 import type { Changes } from "./changeFeed";
 import { changesRoute, showChanges } from "./changesView";
@@ -20,10 +21,12 @@ import { closePlanning, openNew, openPlan, planRoute } from "./planView";
 import { closeSettings, openSettings, settingsOpen } from "./preferencesView";
 import { backFromStandup, closeRitual, ritualRoute } from "./ritualView";
 import { schedulesOpen } from "./scheduleDraft";
+import { scopedQuestion } from "./ScopedQuestion";
 import { closeThread, threadRoute } from "./threadView";
 import { glide } from "./ui";
 import { closeUpdate, updateEntry, updateOpen } from "./updateView";
 import { closeMission, openMission, route } from "./view";
+import { destinationProject, searchDetail } from "./workSearch";
 
 /** What the window has: the screens that can show. */
 export type Places = { day: Day; plans?: Plans; changes?: Changes };
@@ -56,6 +59,8 @@ export function planBack(day: Day | undefined, missionId: string): Back {
 /** The kind of screen shown. */
 export type Shown =
 	| "update"
+	| "search-detail"
+	| "scoped-question"
 	| "ritual"
 	| "chat"
 	| "settings"
@@ -85,6 +90,8 @@ export function animatePlanningList(plans: Plans, at: () => Shown): () => void {
 /** Which screen the window shows now, in the same order `DayScreen` picks it. */
 export function shown(places: Places): Shown {
 	if (updateEntry() && updateOpen()) return "update";
+	if (places.day.search && searchDetail()) return "search-detail";
+	if (places.day.search && scopedQuestion()) return "scoped-question";
 	if (ritualRoute()) return "ritual";
 	if (places.day.chat && chatRoute()) return "chat";
 	if (places.day.preferences && settingsOpen()) return "settings";
@@ -105,10 +112,16 @@ export function shown(places: Places): Shown {
 
 /** Where Back goes from the screen shown, or null on Today. */
 export function backTarget(places: Places): Back | null {
+	const jump = jumpBack(places);
+	if (jump) return jump;
 	switch (shown(places)) {
 		case "update":
 			// The update page lies over whichever screen was open.
 			return { label: "Back", accessibilityLabel: "Back", go: closeUpdate };
+		case "search-detail":
+			return to("Today", () => searchDetail.set(null));
+		case "scoped-question":
+			return to("Today", () => scopedQuestion.set(null));
 		case "ritual": {
 			const at = ritualRoute();
 			if (at?.kind === "standup" && at.from) {
@@ -165,7 +178,10 @@ export function backTarget(places: Places): Back | null {
  * Today, from anywhere: every other screen closes. Drafts, answers, notes
  * and Today's place stay; an open confirmation is put away, not answered.
  */
-export function goHome() {
+function closePlaces() {
+	searchDetail.set(null);
+	scopedQuestion.set(null);
+	destinationProject.set("");
 	closeSlack();
 	schedulesOpen.set(false);
 	closeUpdate();
@@ -180,6 +196,132 @@ export function goHome() {
 	changesRoute.set(null);
 	closePlanning();
 	closeMission();
+}
+
+export function goHome() {
+	if (navigationRestoring()) return;
+	navigationError.set("");
+	returns.set([]);
+	closePlaces();
+}
+
+const returns = signal<{ destination: string; back: Back }[]>([]);
+export const navigationError = signal("");
+export const navigationRestoring = signal(false);
+
+function location(places: Places): string {
+	return JSON.stringify([
+		shown(places),
+		route(),
+		planRoute(),
+		chatRoute()?.sessionId,
+		deliveryRoute()?.key,
+		threadRoute()?.topicId,
+		changesRoute(),
+		ritualRoute(),
+		schedulesOpen(),
+		searchDetail()?.key,
+		scopedQuestion()?.decisionId,
+	]);
+}
+
+export function jumpBack(places: Places): Back | null {
+	const last = returns().at(-1);
+	return last?.destination === location(places) ? last.back : null;
+}
+
+/** A palette jump keeps the previous locations, but never snapshots or rewinds drafts. */
+export function jump(places: Places, open: () => void) {
+	if (navigationRestoring()) return;
+	const from = location(places);
+	const source = places.day.search;
+	// Enqueue before the new page can enqueue its own reads or change focus.
+	const priorProject = source?.project?.();
+	const history = returns();
+	const screen = shown(places);
+	const mission = route();
+	const plan = planRoute();
+	const chat = chatRoute();
+	const delivery = deliveryRoute();
+	const thread = threadRoute();
+	const change = changesRoute();
+	const ritual = ritualRoute();
+	const settings = settingsOpen();
+	const schedules = schedulesOpen();
+	const feedback = feedbackOpen();
+	const linear = linearOpen();
+	const slack = slackOpen();
+	const artifacts = artifactsOpen();
+	const update = updateOpen();
+	const detail = searchDetail();
+	const question = scopedQuestion();
+	const project = destinationProject();
+	open();
+	const destination = location(places);
+	if (destination === from) {
+		returns.set(history);
+		return;
+	}
+	const label = {
+		today: "Today",
+		new: "New",
+		mission: "Mission overview",
+		plan: "Plan",
+		chat: "Chat",
+		delivery: "Result",
+		thread: "Discussion",
+		settings: "Settings",
+		feedback: "Feedback",
+		linear: "Linear issues",
+		slack: "Slack reports",
+		artifacts: "Artifacts",
+		update: "Update",
+		changes: "Changes",
+		change: "Change",
+		ritual: "Daily notes",
+		"search-detail": "Saved item",
+		"scoped-question": "Agent question",
+	}[screen];
+	returns.set([
+		...history,
+		{
+			destination,
+			back: to(label, async () => {
+				if (navigationRestoring()) return;
+				if (priorProject && source?.restoreProject) {
+					navigationRestoring.set(true);
+					const selected = await priorProject;
+					const ok = selected !== undefined && (await source.restoreProject(selected));
+					navigationRestoring.set(false);
+					if (returns().at(-1)?.destination !== destination || location(places) !== destination) return;
+					if (!ok) {
+						navigationError.set("Pilot could not restore the previous project. Your draft is kept.");
+						return;
+					}
+				}
+				navigationError.set("");
+				closePlaces();
+				route.set(mission);
+				planRoute.set(plan);
+				chatRoute.set(chat);
+				deliveryRoute.set(delivery);
+				threadRoute.set(thread);
+				changesRoute.set(change);
+				ritualRoute.set(ritual);
+				settingsOpen.set(settings);
+				schedulesOpen.set(schedules);
+				feedbackOpen.set(feedback);
+				linearOpen.set(linear);
+				slackOpen.set(slack);
+				artifactsOpen.set(artifacts);
+				updateOpen.set(update);
+				searchDetail.set(detail);
+				scopedQuestion.set(question);
+				destinationProject.set(project);
+				returns.set(history);
+			}),
+		},
+	]);
 }
 
 // The places every screen can reach. Each goes home first, so its Back

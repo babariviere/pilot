@@ -449,15 +449,23 @@ export class ConnectedDelivery implements DeliverySource {
 	}
 
 	/** Applies an answer unless a newer call's answer was applied first. */
+	#projectOpsApplied = new Map<string, number>();
 	#apply(order: number, reply: DeliveryReply, read?: VerificationSubject) {
 		if (reply.ok) {
 			// Only a read or the saved commands say what this window can open.
 			if (reply.outputCapabilities) this.#webLinks = reply.outputCapabilities.web === true;
-			if (order > this.#opsApplied) {
-				this.#ops = opsOf(reply.operations) ?? this.#ops;
-				this.#opsApplied = order;
-				this.#auto.watch(this.#ops.filter((o) => o.state === "unknown").map((o) => o.operationId));
+			const project = reply.operationsProjectId;
+			const ops = opsOf(reply.operations);
+			if (project && order > (this.#projectOpsApplied.get(project) ?? 0)) {
+				if (ops && ops.every((o) => o.subject.projectId === project)) {
+					this.#ops = [...this.#ops.filter((o) => o.subject.projectId !== project), ...ops];
+					this.#projectOpsApplied.set(project, order);
+				}
+			} else if (!project && order > this.#opsApplied) {
+				this.#ops = ops ?? this.#ops;
 			}
+			this.#opsApplied = Math.max(this.#opsApplied, order);
+			this.#auto.watch(this.#ops.filter((o) => o.state === "unknown").map((o) => o.operationId));
 			const snapshot = snapshotOf(reply.snapshot);
 			if (snapshot) {
 				const key = deliveryKey(snapshot.subject);
@@ -660,7 +668,7 @@ export class ConnectedDelivery implements DeliverySource {
 		this.#notice(key);
 		if (!reply.ok) {
 			// A lost answer may hide a saved command: reading the saved commands lists it as Unknown.
-			if (reply.refusal === "lost" || reply.refusal === "unknown") void this.readSaved();
+			if (reply.refusal === "lost" || reply.refusal === "unknown") void this.read(shown.subject);
 			if (reply.refusal === "stale") void this.read(shown.subject);
 			this.#publish();
 			return refusedResult(reply.refusal);

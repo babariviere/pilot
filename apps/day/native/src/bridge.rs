@@ -31,6 +31,7 @@ pub const METHODS: &[&str] = &[
     "day.chat.dismiss",
     "day.chat.reply",
     "day.chat.read",
+    "day.chat.liveChanges",
     "day.chat.snapshot",
     "day.chat.close",
     "day.intake.read",
@@ -103,6 +104,11 @@ pub const METHODS: &[&str] = &[
     "day.today.read",
     "day.today.refresh",
     "day.today.scope",
+    "day.search.read",
+    "day.search.knowledge",
+    "day.search.output",
+    "day.navigation.project",
+    "day.navigation.restore",
     "day.mission.read",
     "day.mission.pause",
     "day.mission.resume",
@@ -141,6 +147,7 @@ pub const METHODS: &[&str] = &[
     "day.plan.leave",
     "day.log.event",
     "day.attention.read",
+    "day.attention.scoped",
     "day.attention.reply",
     "day.attention.action",
     "day.attention.check",
@@ -170,9 +177,13 @@ pub fn restrict(mut bundle: nsh_engine::Bundle) -> Result<nsh_engine::Bundle, Er
         .copied()
         .filter(|name| access.allows_host(name))
         .collect();
-    let grant = json!({"host":names, "picker": access.allows_picker(), "clipboard": access.allows_clipboard()}).to_string();
+    let mut grant = json!({"host":names, "picker": access.allows_picker(), "clipboard": access.allows_clipboard()});
+    // A normal inspection window only. The bundle must declare it too.
+    if bundle.policy.declared.as_ref().is_some_and(|caps| caps.windows.is_some()) {
+        grant["windows"] = json!({"kinds":["normal"],"levels":["normal"],"max":1});
+    }
     bundle.policy.granted =
-        Some(nsh_engine::parse_capabilities(&grant).map_err(|_| Error::Invalid)?);
+        Some(nsh_engine::parse_capabilities(&grant.to_string()).map_err(|_| Error::Invalid)?);
     bundle.policy.harden = true;
     Ok(bundle)
 }
@@ -263,6 +274,18 @@ struct Envelope {
 
 pub(crate) enum Command {
     TodayScope(crate::host::today_scope::Request),
+    Search(crate::host::search::Request),
+    NavigationProject,
+    NavigationRestore(Option<String>),
+    SearchKnowledge {
+        project: String,
+        id: String,
+        revision: u32,
+    },
+    SearchOutput {
+        project: String,
+        request: crate::host::artifacts::Request,
+    },
     Projects,
     ProjectSetupRead,
     ProjectPreview {
@@ -290,6 +313,7 @@ pub(crate) enum Command {
         session: String,
         older: bool,
     },
+    ChatLiveChanges { session: String, workspace: String },
     /// The open chat as last read. No I/O.
     ChatSnapshot(String),
     /// The chat page closed. Local only: nothing is sent.
@@ -453,6 +477,7 @@ pub(crate) enum Command {
         action: bool,
     },
     Draft(crate::model::DraftIntent),
+    ScopedAttention(crate::host::attention::scoped_attention::Command),
     Flush(u32, u64, Option<crate::update::SavedView>),
     WindowRead,
     UpdateRead,
@@ -575,6 +600,18 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 session: r.session_id,
                 older: r.older,
             }
+        }
+        "day.chat.liveChanges" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Read {
+                session_id: String,
+                workspace_key: String,
+            }
+            let r: Read = exact(args)?;
+            mission(&r.session_id)?;
+            uuid::Uuid::parse_str(&r.workspace_key).map_err(|_| Error::Invalid)?;
+            C::ChatLiveChanges { session: r.session_id, workspace: r.workspace_key }
         }
         "day.chat.recover" => {
             let r: crate::host::new_chat::Recovery = exact(args)?;
@@ -1114,6 +1151,62 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: crate::host::today_scope::Request = exact(args)?;
             r.validate()?;
             C::TodayScope(r)
+        }
+        "day.search.read" => {
+            let r: crate::host::search::Request = exact(args)?;
+            r.validate()?;
+            C::Search(r)
+        }
+        "day.attention.scoped" => {
+            let r: crate::host::attention::scoped_attention::Command = exact(args)?;
+            r.validate()?;
+            C::ScopedAttention(r)
+        }
+        "day.navigation.project" => {
+            if !args.as_object().is_some_and(|o| o.is_empty()) {
+                return Err(Error::Invalid);
+            }
+            C::NavigationProject
+        }
+        "day.navigation.restore" => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Project {
+                project_id: Option<String>,
+            }
+            let r: Project = exact(args)?;
+            if let Some(project) = &r.project_id {
+                id(project)?;
+            }
+            C::NavigationRestore(r.project_id)
+        }
+        "day.search.knowledge" => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Read {
+                project_id: String,
+                id: String,
+                revision: u32,
+            }
+            let r: Read = exact(args)?;
+            id(&r.project_id)?;
+            id(&r.id)?;
+            if r.revision == 0 {
+                return Err(Error::Invalid);
+            }
+            C::SearchKnowledge { project: r.project_id, id: r.id, revision: r.revision }
+        }
+        "day.search.output" => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Read {
+                project_id: String,
+                artifact: crate::host::artifacts::Request,
+            }
+            let r: Read = exact(args)?;
+            id(&r.project_id)?;
+            r.artifact.validate()?;
+            C::SearchOutput { project: r.project_id, request: r.artifact }
         }
         "day.today.read"
         | "day.today.refresh"

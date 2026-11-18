@@ -12,6 +12,7 @@ import { closeChat } from "./chatView";
 import { queueLine } from "./codingQueue";
 import { DiagnosisReply } from "./DiagnosisSettings";
 import type { Day } from "./day";
+import { LiveChanges } from "./LiveChanges";
 import { RECOVERY_INPUT_BYTES, recoveryBytes, recoveryNote, setRecoveryNote } from "./recoveryDraft";
 import type { ContinueResult, SessionChat, SessionChatMirror, SessionChatSource } from "./sessionChat";
 import { Action, type MarkKind, MarkLine, Page, PageTitle, TextField } from "./ui";
@@ -212,11 +213,17 @@ export function ContinueRow(props: {
 }
 
 /** The chat page. Opening it only reads. */
-export function ChatScreen(props: { day: Day; sessionId: string }) {
+export function ChatScreen(props: { day: Day; sessionId: string; onBackFromJump?: () => boolean }) {
 	const mirror = props.day.chat as SessionChatMirror;
 	void mirror.source.open(props.sessionId);
 	cleanup(() => mirror.source.close(props.sessionId));
-	keymap.bind("escape", closeChat, { when: "always" });
+	keymap.bind(
+		"escape",
+		() => {
+			if (!props.onBackFromJump?.()) closeChat();
+		},
+		{ when: "always" },
+	);
 	const chat = () => {
 		const c = mirror.chat();
 		return c?.sessionId === props.sessionId ? c : null;
@@ -249,6 +256,14 @@ export function ChatScreen(props: { day: Day; sessionId: string }) {
 						<MarkLine testID="chat-state" kind={state()?.mark ?? "still"}>
 							<Text class="text-sm text-foreground">{state()?.text ?? ""}</Text>
 						</MarkLine>
+						<If when={mirror.source.readLiveChanges && chat()?.liveChangesKey}>
+							{(key) => (
+								<LiveChanges
+									workspaceKey={key()}
+									read={(workspaceKey) => mirror.source.readLiveChanges!(props.sessionId, workspaceKey)}
+								/>
+							)}
+						</If>
 						<If
 							when={
 								chat()?.canContinue &&

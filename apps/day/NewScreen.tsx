@@ -21,6 +21,7 @@ import type { Day } from "./day";
 import { fundingAmount } from "./FundingSettings";
 import { keepRead } from "./freshness";
 import { keepField, keepScroll } from "./kept";
+import { jumpBack } from "./nav";
 import { newFundingDraft } from "./modelSettingsDraft";
 import { OpenChatAction } from "./OpenChatAction";
 import { stageMark, stageWord } from "./PlanScreen";
@@ -322,6 +323,7 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 		() => {
 			if (projectsOpen()) return;
 			if (confirmingStart()) confirmingStart.set(false);
+			else if (props.day) (jumpBack({ day: props.day, plans: props.plans })?.go ?? closePlanning)();
 			else closePlanning();
 		},
 		{ when: "always" },

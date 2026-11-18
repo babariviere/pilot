@@ -728,7 +728,13 @@ function Body(props: {
  * Opening it asks Rust to read the saved interview and plan; that read
  * answers, submits and starts nothing.
  */
-export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; title?: string }) {
+export function PlanScreen(props: {
+	day?: Day;
+	plans: Plans;
+	missionId: string;
+	title?: string;
+	onBackFromJump?: () => boolean;
+}) {
 	// Leaving stops reading this page as its agent works, and closes its chat.
 	cleanup(() => props.plans.feed.leave?.(props.missionId));
 	const page = computed(() => {
@@ -756,7 +762,9 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 		}
 	}
 	void read();
-	keymap.bind("escape", () => back().go());
+	keymap.bind("escape", () => {
+		if (!props.onBackFromJump?.()) back().go();
+	});
 	const scroll = keepScroll(`plan/${id}`);
 	// The map's chart, full window, over this page. The page stays mounted underneath,
 	// so closing the chart comes back to the same scroll position and drafts.

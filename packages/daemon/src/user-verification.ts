@@ -66,6 +66,35 @@ export class UserVerifications {
 	constructor(deps: Dependencies) {
 		this.deps = deps;
 	}
+	/** Return only exact destinations, not private review contents or the queue's selection state. */
+	async search(projectId: string, query: string, chatCandidates: { id: string; title?: string }[]) {
+		this.deps.projects.require(projectId);
+		await this.deps.store.durable();
+		this.deps.projects.require(projectId);
+		// At most one palette of each type. A further candidate signals that searching
+		// a more specific title is useful without expanding or loading every delivery.
+		const limit = 30;
+		const words = query.trim().toLowerCase().split(/\s+/);
+		const tasks = this.deps.store.userVerifications.searchTitles(projectId, words, limit + 1);
+		const rows: { subject: VerificationSubject; title: string }[] = [];
+		for (const { taskId, missionId, title } of tasks.slice(0, limit)) {
+			const subject: VerificationSubject = { kind: "task", projectId, missionId, taskId };
+			if (this.readNow(subject).deliveryId) rows.push({ subject, title });
+		}
+		let more = tasks.length > limit;
+		for (const { id: sessionId, title } of chatCandidates) {
+			if (!title || !words.every((word) => title.toLowerCase().includes(word))) continue;
+			if (this.deps.store.membership(sessionId)) continue;
+			const subject: VerificationSubject = { kind: "chat", projectId, sessionId };
+			if (!this.readNow(subject).deliveryId) continue;
+			if (rows.length === limit) {
+				more = true;
+				break;
+			}
+			rows.push({ subject, title });
+		}
+		return { items: rows, more };
+	}
 	/** Passive discovery. Only the first-use cutoff is saved, never acceptance or a moving read cursor. */
 	async list(projectId: string, after?: number): Promise<DeliveredWorkList> {
 		if (!id(projectId) || (after !== undefined && (!Number.isSafeInteger(after) || after < 0)))

@@ -11,11 +11,12 @@ import {
 	type Back,
 	backTarget,
 	goArtifacts,
-	goChanges,
 	goFeedback,
+	goChanges,
 	goHome,
 	goNew,
 	goSettings,
+	jump,
 	type Places,
 	shown,
 } from "./nav";
@@ -26,6 +27,7 @@ import { updateLabel } from "./UpdateScreen";
 import { Action, Icon, Pressable } from "./ui";
 import { showUpdate, updateEntry, updateOpen } from "./updateView";
 import { dataSource } from "./view";
+import { destinationProject } from "./workSearch";
 
 /** The keystroke that opens New, as the platform writes it. */
 export const NEW_KEYS = keymap.label("mod+n");
@@ -52,7 +54,7 @@ function Home() {
 }
 
 /** The Changes place: how many reviews wait, said to screen readers too. */
-function ChangesPlace(props: { changes: Changes; narrow: boolean }) {
+function ChangesPlace(props: { changes: Changes; narrow: boolean; onPress: () => void }) {
 	const waiting = () => props.changes.list().waiting.length;
 	return (
 		<Action
@@ -62,7 +64,7 @@ function ChangesPlace(props: { changes: Changes; narrow: boolean }) {
 			badge={waiting() > 0 ? String(waiting()) : undefined}
 			testID="changes-open"
 			accessibilityLabel={waiting() > 0 ? `Changes, ${waiting()} to review` : "Changes"}
-			onPress={goChanges}
+			onPress={props.onPress}
 		/>
 	);
 }
@@ -78,11 +80,12 @@ export function AppHeader(props: { day: Day; plans?: Plans; changes?: Changes })
 		const entry = updateEntry();
 		return entry && !updateOpen() ? updateLabel(entry.service()) : "";
 	};
-	if (props.plans) keymap.bind("mod+n", goNew);
-	if (props.day.preferences) keymap.bind("mod+,", goSettings);
+	const newWork = () => jump(places, goNew);
+	const settings = () => jump(places, goSettings);
+	if (props.plans) keymap.bind("mod+n", newWork);
+	if (props.day.preferences) keymap.bind("mod+,", settings);
 	return (
 		<View testID="app-header" class="h-12 flex-row items-center gap-1 border-b border-border bg-background px-3">
-			<Palette places={places} />
 			<Home />
 			<Each of={back() ? [back() as Back] : []} key={(b) => b.label}>
 				{(b) => (
@@ -101,6 +104,9 @@ export function AppHeader(props: { day: Day; plans?: Plans; changes?: Changes })
 					</View>
 				)}
 			</Each>
+			<If when={destinationProject() && at() !== "today" && at() !== "search-detail" && !narrow()}>
+				<Text class="max-w-32 shrink truncate px-2 text-xs text-muted-foreground">{destinationProject()}</Text>
+			</If>
 			<View class="flex-1" />
 			<If when={props.day.power?.view().paused}>
 				<PowerPause power={props.day.power!} narrow={narrow()} />
@@ -109,36 +115,39 @@ export function AppHeader(props: { day: Day; plans?: Plans; changes?: Changes })
 				<Action label={update()} icon="update" testID="update-open" onPress={showUpdate} />
 			</If>
 			<If when={props.changes && at() !== "changes"}>
-				<ChangesPlace changes={props.changes as Changes} narrow={narrow()} />
+				<ChangesPlace
+					changes={props.changes as Changes}
+					narrow={narrow()}
+					onPress={() => jump(places, goChanges)}
+				/>
 			</If>
+			<Palette places={places} narrow={narrow()} />
 			<If when={props.day.feedback && at() !== "feedback"}>
 				<Action
 					label="Feedback"
 					icon="notes"
-					iconOnly={narrow()}
+					iconOnly
 					testID="feedback-open"
-					accessibilityLabel="Send feedback about Pilot"
-					onPress={goFeedback}
+					onPress={() => jump(places, goFeedback)}
 				/>
 			</If>
 			<If when={props.day.artifacts && at() !== "artifacts"}>
 				<Action
 					label="Artifacts"
 					icon="document"
-					iconOnly={narrow()}
-					accessibilityLabel="Artifacts this project's chats saved"
+					iconOnly
 					testID="artifacts-open"
-					onPress={goArtifacts}
+					onPress={() => jump(places, goArtifacts)}
 				/>
 			</If>
 			<If when={props.day.preferences && at() !== "settings"}>
 				<Action
 					label="Settings"
 					icon="settings"
-					iconOnly={narrow()}
+					iconOnly
 					shortcut={SETTINGS_KEYS}
 					testID="settings-open"
-					onPress={goSettings}
+					onPress={settings}
 				/>
 			</If>
 			<If when={props.plans && at() !== "new"}>
@@ -150,7 +159,7 @@ export function AppHeader(props: { day: Day; plans?: Plans; changes?: Changes })
 						iconOnly={narrow()}
 						shortcut={NEW_KEYS}
 						testID="new-open"
-						onPress={goNew}
+						onPress={newWork}
 					/>
 				</View>
 			</If>

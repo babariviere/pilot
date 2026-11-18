@@ -992,8 +992,13 @@ export class MissionStore {
 			this.db.close();
 			this.db = loadInMemory(file);
 			this.replica = new MissionReplica(file, (error) => console.warn(`pilotd: ${error.message}`));
-			this.session = this.db.createSession();
 		}
+		// Search needs an indexed pin lookup across all missions. Build it only in memory; the
+		// durable schema and replication stay unchanged.
+		this.db.exec(
+			"CREATE INDEX artifact_search_owner ON artifact_links(session_id, artifact_id, id) WHERE revision IS NOT NULL",
+		);
+		if (this.replica) this.session = this.db.createSession();
 	}
 
 	/** Schema creation and upgrades, on the disk file at startup. */
@@ -2547,6 +2552,82 @@ export class MissionStore {
 			? this.all(`${MISSION_SELECT} WHERE project_id = ? ORDER BY updated_at DESC`, projectId)
 			: this.all(`${MISSION_SELECT} ORDER BY updated_at DESC`);
 		return rows.map(missionFrom);
+	}
+
+	/** Seek to the next raw window before filtering. Foreign rows cost budget too. */
+	metadataSearchMissions(projectId: string, limit: number, before?: number) {
+		const upper = before === undefined ? "" : "AND rowid <= ?";
+		const args = before === undefined ? [] : [before];
+		const boundary = this.one(
+			`SELECT rowid FROM missions WHERE rowid > 0 ${upper} ORDER BY rowid DESC LIMIT 1 OFFSET ?`,
+			...args,
+			limit,
+		);
+		const rows = this.all(
+			`SELECT id, substr(title, 1, 641) AS title FROM missions WHERE rowid > ? ${upper} AND project_id = ?`,
+			boundary?.rowid ?? 0,
+			...args,
+			projectId,
+		);
+		return {
+			rows: rows.map((row) => ({ id: str(row.id!), title: str(row.title!) })),
+			next: boundary && num(boundary.rowid!),
+		};
+	}
+
+	/** Existing saved pins only. Never infer a revision or consult a chat's artifact tree. */
+	metadataSearchOutputLinks(projectId: string, limit: number, before?: number) {
+		const upper = before === undefined ? "" : "AND a.id <= ?";
+		const args = before === undefined ? [] : [before];
+		const boundary = this.one(
+			`SELECT a.id FROM artifact_links a WHERE a.id > 0 ${upper} ORDER BY a.id DESC LIMIT 1 OFFSET ?`,
+			...args,
+			limit,
+		);
+		const rows = this.all(
+			`SELECT a.id, a.artifact_id, a.session_id, substr(a.title, 1, 641) AS title, a.kind, a.revision, a.linked_at
+			FROM artifact_links a WHERE a.id > ? ${upper} AND a.revision IS NOT NULL
+			AND EXISTS (SELECT 1 FROM missions m WHERE m.id = a.mission_id AND m.project_id = ?)`,
+			boundary?.id ?? 0,
+			...args,
+			projectId,
+		);
+		return { rows: rows.map((row) => this.metadataSearchLink(row)), next: boundary && num(boundary.id!) };
+	}
+
+	/** Seek by indexed identity and ID so even very widely linked outputs have a bounded probe. */
+	metadataSearchPins(projectId: string, sessionId: string, artifactId: string, limit: number, after: number) {
+		const rows = this.all(
+			`SELECT a.id, a.artifact_id, a.session_id, substr(a.title, 1, 641) AS title, a.kind, a.revision, a.linked_at,
+				EXISTS (SELECT 1 FROM missions m WHERE m.id = a.mission_id AND m.project_id = ?) AS owned
+			FROM artifact_links a INDEXED BY artifact_search_owner
+			WHERE a.session_id = ? AND a.artifact_id = ? AND a.revision IS NOT NULL AND a.id > ?
+			ORDER BY a.id LIMIT ?`,
+			projectId,
+			sessionId,
+			artifactId,
+			after,
+			limit + 1,
+		);
+		const more = rows.length > limit;
+		if (more) rows.pop();
+		return {
+			rows: rows.filter((row) => row.owned === 1).map((row) => this.metadataSearchLink(row)),
+			visited: rows.length,
+			next: more ? num(rows.at(-1)!.id!) : undefined,
+		};
+	}
+
+	private metadataSearchLink(row: Row) {
+		return {
+			linkId: num(row.id!),
+			artifactId: str(row.artifact_id!),
+			sessionId: str(row.session_id!),
+			title: str(row.title!),
+			artifactKind: str(row.kind!) as ArtifactKind,
+			revision: num(row.revision!),
+			updatedAt: num(row.linked_at!),
+		};
 	}
 
 	/** The re-planning link of an old mission, if any. */

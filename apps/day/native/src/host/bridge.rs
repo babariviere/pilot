@@ -237,6 +237,38 @@ fn retry_after(now: u64, shown: u64, attempt: u32) -> Option<std::time::Duration
     (now != shown && attempt < 3)
         .then(|| std::time::Duration::from_millis(250 * u64::from(attempt)))
 }
+
+pub(super) async fn search_read(
+    root: Transport,
+    shared: std::sync::Arc<Shared>,
+    call: Call,
+    cancel: tokio::sync::oneshot::Receiver<()>,
+) {
+    let read = async {
+        let Command::Search(request) = &call.command else {
+            return Err(Error::Invalid);
+        };
+        call.command
+            .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
+        shared.open()?;
+        let snapshot = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            super::search::read(&root, request),
+        )
+        .await
+        .map_err(|_| Error::Unavailable)??;
+        shared.open()?;
+        call.command
+            .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
+        Ok(json!({"snapshot":snapshot,"outcome":null}))
+    };
+    let result = tokio::select! {
+        biased;
+        _ = cancel => Err(Error::Stale),
+        result = read => result,
+    };
+    (call.reply)(result);
+}
 /// Ritual calls share the native feed's rules: reads sample the root's clock
 /// and write nothing, a visit or save needs the exact context and revision,
 /// and an uncertain write is Unknown, never resent. The reply carries the
@@ -286,6 +318,44 @@ async fn run(
     call.command
         .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
     shared.open()?;
+    if let Command::ScopedAttention(request) = &call.command {
+        let snapshot = super::attention::scoped_attention::handle(
+            root,
+            journal,
+            shared,
+            epoch,
+            request,
+            || {
+                call.command
+                    .admit(&call.gate.lock().expect("bridge gate poisoned"))
+            },
+        )
+        .await?;
+        return Ok(json!({"snapshot":snapshot,"outcome":null}));
+    }
+    if matches!(call.command, Command::NavigationProject) {
+        return Ok(
+            json!({"snapshot":t.source.project.as_ref().map(|p| &p.project_id),"outcome":null}),
+        );
+    }
+    if let Command::NavigationRestore(id) = &call.command {
+        let restored = match id {
+            Some(id) => Some(
+                super::search::project(root, id)
+                    .await?
+                    .source
+                    .project()?
+                    .clone(),
+            ),
+            None if root.source.project.is_none() => None,
+            None => return Err(Error::Invalid),
+        };
+        let gate = call.gate.lock().expect("bridge gate poisoned");
+        call.command.admit(&gate)?;
+        shared.open()?;
+        *shared.focus.lock().expect("native focus poisoned") = restored;
+        return Ok(json!({"snapshot":null,"outcome":null}));
+    }
     if let Command::Migration(request) = &call.command {
         let snapshot =
             super::migration::handle(t, journal, shared, epoch, request, &call.gate).await?;
@@ -295,6 +365,59 @@ async fn run(
         let snapshot = super::today_scope::read(root, journal, shared, request, &call.gate).await?;
         return Ok(json!({"snapshot":snapshot,"outcome":null}));
     }
+    let search = match &call.command {
+        Command::SearchOutput { project, request } => {
+            let project = super::search::project(root, project).await?;
+            Some(super::artifacts::source(&project, request).await?)
+        }
+        Command::SearchKnowledge {
+            project,
+            id,
+            revision,
+        } => {
+            let project = super::search::project(root, project).await?;
+            let request = super::knowledge::Read::Detail {
+                id: id.clone(),
+                revision: Some(*revision),
+            };
+            Some(super::knowledge::read(&project, &request, journal).await?)
+        }
+        _ => None,
+    };
+    if let Some(snapshot) = search {
+        shared.open()?;
+        call.command
+            .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
+        return Ok(json!({"snapshot":snapshot,"outcome":null}));
+    }
+    // A direct result action carries its exact subject. A receipt lookup
+    // carries only its operation ID and can use only the saved subject.
+    // Never change the window's focus to make a scoped action work.
+    let delivery_project = match &call.command {
+        Command::DeliveryRead(subject) => Some(subject.project()),
+        Command::DeliveryOpen(r) => Some(r.subject.project()),
+        Command::DeliveryWrite(r) => Some(r.subject.project()),
+        Command::DeliveryArtifact(r) => Some(r.subject.project()),
+        Command::DeliveryWork(r) => Some(r.subject.project()),
+        Command::ResultReview(r) => Some(r.subject.project()),
+        Command::ResultReviewCheck(id) => journal
+            .result_reviews
+            .get(id)
+            .map(|r| r.request.subject.project()),
+        Command::DeliveryCheck(id) => journal
+            .planning
+            .get(id)
+            .and_then(|r| r.source.project.as_ref())
+            .map(|p| p.project_id.as_str()),
+        _ => None,
+    };
+    let scoped = match delivery_project {
+        Some(id) if t.source.project.as_ref().is_none_or(|p| p.project_id != id) => {
+            Some(super::search::project(root, id).await?)
+        }
+        _ => None,
+    };
+    let t = scoped.as_ref().unwrap_or(t);
     if matches!(call.command, Command::WindowRead) {
         // One passive capture from this exact source, not an update receipt or
         // authority to replay anything. Recheck the selected home/project first.
@@ -550,6 +673,13 @@ async fn run(
             .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
         return Ok(json!({"snapshot":session_chat(&call.host, session),"outcome":null}));
     }
+    if let Command::ChatLiveChanges { session, workspace } = &call.command {
+        let snapshot = super::session_chat::live_changes(root, shared, session, workspace).await?;
+        shared.open()?;
+        call.command
+            .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
+        return Ok(json!({"snapshot":snapshot,"outcome":null}));
+    }
     use super::updates::Command as U;
     if let Command::UpdateForceConfirm(request) = &call.command {
         if !super::valid_id(&request.id) {
@@ -606,6 +736,13 @@ async fn run(
             unreachable!("handled library command")
         }
         Command::TodayScope(_) => unreachable!("handled scoped Today read"),
+        Command::Search(_) | Command::SearchOutput { .. } | Command::SearchKnowledge { .. } => {
+            unreachable!("handled search read")
+        }
+        Command::NavigationProject | Command::NavigationRestore(_) => {
+            unreachable!("handled project navigation")
+        }
+        Command::ScopedAttention(_) => unreachable!("handled exact cross-project attention"),
         Command::DeliveryArtifact(_) => unreachable!("handled captured artifact read"),
         Command::DeliveryWork(_) => unreachable!("handled agent work read"),
         Command::ResultReview(_) | Command::ResultReviewCheck(_) | Command::ResultReviewId => {
@@ -678,7 +815,10 @@ async fn run(
         | Command::Log { .. } => {
             unreachable!("handled planning chat command")
         }
-        Command::ChatRead { .. } | Command::ChatSnapshot(_) | Command::ChatClose(_) => {
+        Command::ChatRead { .. }
+        | Command::ChatLiveChanges { .. }
+        | Command::ChatSnapshot(_)
+        | Command::ChatClose(_) => {
             unreachable!("handled read-only chat command")
         }
         Command::WindowRead => unreachable!("handled saved window read"),

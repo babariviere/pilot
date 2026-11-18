@@ -301,8 +301,8 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 			<FeedbackIncoming day={props.day} active={!first()} />
 			<ToCheck day={props.day} nested />
 			<If when={props.day.databases}>{(c) => <DatabaseApprovals controls={c()} />}</If>
-			<OtherNeeds ctx={props.ctx} />
-			<OtherToCheck ctx={props.ctx} nested />
+			<OtherNeeds ctx={props.ctx} day={props.day} />
+			<OtherToCheck ctx={props.ctx} day={props.day} nested />
 		</View>
 	);
 }
@@ -398,7 +398,7 @@ function Missions(props: { day: Day; ctx: TodayScope; plans?: Plans }) {
 					plans={props.plans}
 				/>
 			</If>
-			<OtherMissions ctx={props.ctx} />
+			<OtherMissions ctx={props.ctx} day={props.day} />
 		</View>
 	);
 }
@@ -647,7 +647,14 @@ function ComingUp(props: { day: Day; ctx: TodayScope }) {
 	);
 }
 
-/** Today while it shows only another project: its rows, read only here. */
+function unreadProblems(ctx: TodayScope) {
+	return ctx
+		.others()
+		.filter((p) => !p.today?.problemsKnown || p.currentness !== "live")
+		.map((p) => p.name);
+}
+
+/** Today while it shows only another project. */
 function OtherProject(props: { day: Day; ctx: TodayScope }) {
 	return (
 		<If when={props.ctx.others().length > 0} else={<WorkingNow day={props.day} ctx={props.ctx} />}>
@@ -659,9 +666,15 @@ function OtherProject(props: { day: Day; ctx: TodayScope }) {
 					</View>
 				</If>
 				<View class="gap-4">
+					<Problems
+						rows={props.ctx.others().flatMap((p) => p.today?.problems ?? [])}
+						known
+						unreadProjects={unreadProblems(props.ctx)}
+						project={props.ctx.name}
+					/>
 					<SectionTitle title="Needs you" count={otherNeedsCount(props.ctx)} />
-					<OtherNeeds ctx={props.ctx} />
-					<OtherToCheck ctx={props.ctx} nested />
+					<OtherNeeds ctx={props.ctx} day={props.day} />
+					<OtherToCheck ctx={props.ctx} day={props.day} nested />
 				</View>
 				<OtherNotShown ctx={props.ctx} />
 				<WorkingNow day={props.day} ctx={props.ctx} />
@@ -673,7 +686,7 @@ function OtherProject(props: { day: Day; ctx: TodayScope }) {
 				</If>
 				<View class="gap-3">
 					<SectionTitle title="Missions" count={otherMissionsCount(props.ctx)} />
-					<OtherMissions ctx={props.ctx} />
+					<OtherMissions ctx={props.ctx} day={props.day} />
 				</View>
 				<View class="gap-1">
 					<Text role="header" class="text-sm font-semibold text-muted-foreground">
@@ -739,6 +752,18 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 
 						<If when={ctx.showsOwn()} else={<OtherProject day={props.day} ctx={ctx} />}>
 							<View class="gap-12">
+								<Problems
+									rows={[...today().problems, ...ctx.others().flatMap((p) => p.today?.problems ?? [])]}
+									known={today().problemsKnown}
+									unreadProjects={unreadProblems(ctx)}
+									chat={props.day.chat?.source}
+									actionProject={ctx.on() ? ctx.own() : undefined}
+									earlier={
+										todayWarning(props.day.freshness, today().freshness) !== "" ||
+										ctx.others().some((p) => p.currentness === "stale")
+									}
+									project={ctx.tagged() ? ctx.name : undefined}
+								/>
 								<Incoming day={props.day} />
 								<If when={otherNewShown(ctx)}>
 									<View testID="scope-new" class="gap-1">
@@ -747,12 +772,6 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 									</View>
 								</If>
 								<NeedsYou day={props.day} ctx={ctx} />
-								<Problems
-									rows={today().problems}
-									known={today().problemsKnown}
-									earlier={todayWarning(props.day.freshness, today().freshness) !== ""}
-									chat={props.day.chat?.source}
-								/>
 								<WorkingNow day={props.day} ctx={ctx} />
 								<If when={ctx.tagged()}>
 									<OtherNotShown ctx={ctx} />

@@ -5,8 +5,10 @@
 // choose a project. Commands that act stay on their screens, behind their
 // own confirmation. Escape clears the search, then closes the palette, and
 // the keyboard focus goes back where it was.
-import { computed, effect, Keyboard, keymap, signal, Text, untracked, View } from "nsh";
+import { cleanup, computed, effect, Keyboard, keymap, signal, Text, untracked, View } from "nsh";
 import { Command, type CommandItem, type CommandRef, Dialog } from "nsh/base";
+import { openChat } from "./chatView";
+import { openDelivery } from "./deliveryView";
 import {
 	goArtifacts,
 	goChanges,
@@ -18,6 +20,7 @@ import {
 	goPlan,
 	goSchedules,
 	goSettings,
+	jump,
 	type Places,
 	shown,
 } from "./nav";
@@ -25,13 +28,50 @@ import { stageMark, stageWord } from "./PlanScreen";
 import { offered, openRitual, openStandup, ritualEntry } from "./ritualView";
 import { screenAgentAvailable, screenAgentOpen } from "./screenAgentOpen";
 import { updateLabel } from "./UpdateScreen";
-import { KeyCap, KeyHint, Mark, type MarkKind } from "./ui";
+import { Action, KeyCap, KeyHint, Mark, type MarkKind, Picker } from "./ui";
 import { showUpdate, updateEntry, updateOpen } from "./updateView";
 import { route } from "./view";
 import { stateMark, stateWord } from "./words";
+import { destinationProject, searchDetail, type SearchHit, type WorkSearchPage } from "./workSearch";
 
 /** One row: the command, a quiet word or mark beside it, and where it goes. */
-type Entry = { item: CommandItem; hint?: string; mark?: MarkKind; run?: () => void };
+type Entry = { item: CommandItem; title?: string; hint?: string; mark?: MarkKind; project?: string; run?: () => void };
+
+function openHit(hit: SearchHit) {
+	if (hit.kind === "mission") goMission(hit.target);
+	else goHome();
+	switch (hit.kind) {
+		case "mission":
+			break;
+		case "chat":
+			openChat(hit.target, "Today");
+			break;
+		case "result":
+			openDelivery(hit.target, hit.title);
+			break;
+		case "output":
+		case "knowledge":
+			searchDetail.set(hit);
+			break;
+	}
+	destinationProject.set(hit.projectName);
+}
+
+function hitEntry(hit: SearchHit): Entry {
+	const labels = {
+		mission: "Mission",
+		chat: "Chat",
+		result: "Result",
+		output: "Output",
+		knowledge: "Knowledge",
+	};
+	return {
+		item: { id: hit.key, label: `${hit.title}, ${labels[hit.kind]} in ${hit.projectName}`, group: labels[hit.kind] },
+		title: hit.title,
+		project: hit.projectName,
+		run: () => openHit(hit),
+	};
+}
 
 /** A row that cannot be chosen, with the reason in place of a destination. */
 function unavailable(id: string, label: string, group: string, hint: string): Entry {
@@ -66,7 +106,7 @@ function entries(places: Places): Entry[] {
 	const word = update && !updateOpen() ? updateLabel(update.service()) : "";
 	if (word) place("update", word, true, showUpdate, { keywords: ["update", "service"] });
 	const rituals = ritualEntry();
-	const ritual = rituals ? offered(day.today(), rituals.progress(), rituals.uncertain()) : null;
+	const ritual = !day.search && rituals ? offered(day.today(), rituals.progress(), rituals.uncertain()) : null;
 	if (ritual) {
 		place(ritual, ritual === "start" ? "Start the day" : "End the day", true, () => {
 			goHome();
@@ -106,7 +146,7 @@ function entries(places: Places): Entry[] {
 	});
 	place(
 		"standup",
-		"Standup notes",
+		day.search ? "Plan or recap" : "Standup notes",
 		true,
 		() => {
 			goHome();
@@ -164,7 +204,68 @@ function Open(props: {
 	anchor: (ref: CommandRef) => void;
 }) {
 	const query = signal("");
-	const all = computed(() => entries(props.places));
+	const project = signal<string | null>(null);
+	const projects = signal<WorkSearchPage["projects"]>([]);
+	const page = signal<WorkSearchPage | null>(null);
+	const reading = signal(false);
+	const failed = signal(false);
+	const retry = signal(0);
+	const cursor = signal<string | undefined>(undefined);
+	const source = props.places.day.search;
+	let pending: (() => Promise<void>) | undefined;
+	let running = false;
+	const drain = async () => {
+		if (running) return;
+		running = true;
+		try {
+			while (pending) {
+				const next = pending;
+				pending = undefined;
+				await next();
+			}
+		} finally {
+			running = false;
+		}
+	};
+	if (source) {
+		effect(() => {
+			const text = query().trim();
+			const selected = project();
+			const offset = cursor();
+			retry();
+			let current = true;
+			page.set(null);
+			failed.set(false);
+			reading.set(true);
+			const timer = setTimeout(
+				() => {
+					pending = async () => {
+						const reply = await source.read(text, selected, offset).catch(() => null);
+						if (!current) return;
+						if (reply) projects.set(reply.projects);
+						page.set(reply);
+						failed.set(!reply);
+						reading.set(false);
+					};
+					void drain();
+				},
+				text ? 250 : 0,
+			);
+			cleanup(() => {
+				current = false;
+				pending = undefined;
+				clearTimeout(timer);
+			});
+		});
+	}
+	const all = computed(() => {
+		const search = query().trim().toLowerCase();
+		const local = entries(props.places).filter((entry) => {
+			if (source && (entry.item.group === "Missions" || entry.item.group === "Planning")) return false;
+			return [entry.item.label, ...(entry.item.keywords ?? [])].some((word) => word.toLowerCase().includes(search));
+		});
+		return [...local, ...(page()?.hits ?? []).map(hitEntry)];
+	});
 	const items = () => all().map((e) => e.item);
 	const find = (id: string) => all().find((e) => e.item.id === id);
 	// Over every screen's own Escape while the palette is open: the search
@@ -190,22 +291,29 @@ function Open(props: {
 			testID="palette"
 			ref={props.anchor}
 			items={items()}
+			filterable={false}
 			query={query()}
-			onQueryChange={({ query: next }) => query.set(next)}
+			onQueryChange={({ query: next }) => {
+				cursor.set(undefined);
+				query.set(next);
+			}}
+			loading={!!source && reading()}
 			onCancel={props.onClose}
 			onSelect={({ id }) => {
 				const chosen = find(id);
 				if (!chosen?.run || chosen.item.disabled) return;
 				props.onClose();
-				chosen.run();
+				if (id === "today") chosen.run();
+				else jump(props.places, chosen.run);
 			}}
 			autoFocus
-			placeholder="Go to a place or mission…"
-			accessibilityLabel="Places and missions"
-			searchAccessibilityLabel="Search places and missions"
+			placeholder="Search your work or go to a place…"
+			accessibilityLabel="Search results and places"
+			searchAccessibilityLabel="Search work and places"
 			class="overflow-hidden rounded-xl border border-border bg-popover shadow-md"
 			searchBarClass="flex-row items-center border-b border-border px-3.5"
 			searchClass="h-11 flex-1 text-sm text-foreground placeholder:text-faint"
+			searchSuffix={<Action label="Close search" onPress={props.onClose} />}
 			listClass="max-h-80 p-1"
 			groupClass="px-2.5 pb-1 pt-2 text-xs text-faint"
 			separatorClass="mx-1.5 my-1 h-px bg-border"
@@ -215,7 +323,12 @@ function Open(props: {
 					<If when={find(entry.id)?.mark}>
 						<Mark kind={find(entry.id)?.mark as MarkKind} />
 					</If>
-					<Text class="min-w-0 flex-1 truncate text-sm text-popover-foreground">{entry.label}</Text>
+					<Text class="min-w-0 flex-1 truncate text-sm text-popover-foreground">
+						{find(entry.id)?.title ?? entry.label}
+					</Text>
+					<If when={find(entry.id)?.project}>
+						<Text class="max-w-32 truncate text-xs text-muted-foreground">{find(entry.id)?.project ?? ""}</Text>
+					</If>
 					<If when={find(entry.id)?.hint}>
 						<Text class="shrink-0 text-xs text-faint">{find(entry.id)?.hint ?? ""}</Text>
 					</If>
@@ -229,17 +342,58 @@ function Open(props: {
 			)}
 			empty={
 				<View testID="palette-empty" class="gap-1 px-3 py-6">
-					<Text class="text-center text-sm text-muted-foreground">{`Nothing matches “${query()}”.`}</Text>
+					<Text class="text-center text-sm text-muted-foreground">
+						{failed() || page()?.partial || page()?.more
+							? "No matches from the work Pilot could read."
+							: `Nothing matches “${query()}”.`}
+					</Text>
 					<Text class="text-center text-xs text-faint">
-						The palette finds places and the missions Today lists.
+						{source ? "Try another title or project." : "The palette finds places and the missions Today lists."}
 					</Text>
 				</View>
 			}
 			footer={
-				<View class="flex-row items-center gap-4 border-t border-border px-3.5 py-2">
-					<KeyHint keys="↑↓" label="move" />
-					<KeyHint keys="↩" label="go" />
-					<KeyHint keys="esc" label="close" />
+				<View class="gap-2 border-t border-border px-3.5 py-2">
+					<If when={!!source}>
+						<View class="flex-row flex-wrap items-center gap-2">
+							<Picker
+								testID="search-project"
+								label="Search project"
+								items={[
+									{ value: "all", title: "All projects" },
+									...projects().map((p) => ({ value: p.id, title: p.name })),
+								]}
+								value={project() ?? "all"}
+								placeholder="All projects"
+								onChange={(value) => {
+									cursor.set(undefined);
+									project.set(value === "all" ? null : value);
+								}}
+							/>
+							<Text class="flex-1 text-xs text-muted-foreground">
+								{reading()
+									? "Searching…"
+									: failed()
+										? "Work search is unavailable."
+										: page()?.partial
+											? "Some work could not be read. Try one project or search again."
+											: page()?.more
+												? "More work may match. Narrow your search."
+												: ""}
+							</Text>
+							<If when={failed()}>
+								<Action label="Try again" onPress={() => retry.update((n) => n + 1)} />
+							</If>
+							<If when={page()?.nextCursor}>
+								<Action label="Search more" onPress={() => cursor.set(page()?.nextCursor ?? undefined)} />
+							</If>
+						</View>
+					</If>
+					<View class="flex-row items-center gap-4">
+						<KeyHint keys="↑↓" label="move" />
+						<KeyHint keys="↩" label="open" />
+						<KeyHint keys="esc" label="close" />
+					</View>
 				</View>
 			}
 		/>
@@ -250,7 +404,7 @@ function Open(props: {
  * The palette over the window's screens, and its Command+K. It is built
  * anew each time it opens, with an empty search.
  */
-export function Palette(props: { places: Places }) {
+export function Palette(props: { places: Places; narrow: boolean }) {
 	const open = signal(false);
 	let search: CommandRef | undefined;
 	// The search field lets the keyboard go first, so the dialog gives it
@@ -261,26 +415,37 @@ export function Palette(props: { places: Places }) {
 	};
 	keymap.bind("mod+k", () => (open() ? close() : open.set(true)));
 	return (
-		<If when={open()}>
-			<Dialog
-				testID="palette-dialog"
-				accessibilityLabel="Go to"
-				animation="fade"
-				// The search field takes the keyboard once the palette is up, so typing and the arrow keys work at once.
-				onOpen={() => search?.focus()}
-				onOpenChange={(e) => {
-					if (!e.open) open.set(false);
-				}}
-				backdropClass="bg-background/50"
-				class="mx-auto mt-16 w-full max-w-xl px-4"
-			>
-				<Open
-					places={props.places}
-					onClose={close}
-					onAway={() => open.set(false)}
-					anchor={(ref) => (search = ref)}
-				/>
-			</Dialog>
-		</If>
+		<>
+			<Action
+				label="Search"
+				icon="search"
+				iconOnly={props.narrow}
+				variant="outline"
+				shortcut={keymap.label("mod+k")}
+				testID="search-open"
+				onPress={() => open.set(true)}
+			/>
+			<If when={open()}>
+				<Dialog
+					testID="palette-dialog"
+					accessibilityLabel="Go to"
+					animation="fade"
+					// The search field takes the keyboard once the palette is up, so typing and the arrow keys work at once.
+					onOpen={() => search?.focus()}
+					onOpenChange={(e) => {
+						if (!e.open) open.set(false);
+					}}
+					backdropClass="bg-background/50"
+					class="mx-auto mt-16 w-full max-w-xl px-4"
+				>
+					<Open
+						places={props.places}
+						onClose={close}
+						onAway={() => open.set(false)}
+						anchor={(ref) => (search = ref)}
+					/>
+				</Dialog>
+			</If>
+		</>
 	);
 }

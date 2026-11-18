@@ -24,6 +24,7 @@ import { glide } from "./ui";
 
 /** Today's read model as Rust last published it, and the feed to change it. */
 export type Day = {
+	search?: WorkSearchSource;
 	/** Native AI settings; absent from mock worlds unless explicitly supplied. */
 	models?: ModelControls;
 	diagnosis?: DiagnosisControls;
@@ -156,3 +157,4 @@ function shape(t: Today): string {
 		t.intake.requests.map((r) => r.id).join(","),
 	].join("|");
 }
+import type { WorkSearchSource } from "./workSearch";

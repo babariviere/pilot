@@ -1137,7 +1137,12 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
  * The page of one delivered result, over Today or a mission. Opening it
  * reads the result; that read sends, settles and records nothing.
  */
-export function DeliveryScreen(props: { day: Day; place: DeliveryPlace; reviewSource?: ResultReviewSource }) {
+export function DeliveryScreen(props: {
+	day: Day;
+	place: DeliveryPlace;
+	reviewSource?: ResultReviewSource;
+	onBackFromJump?: () => boolean;
+}) {
 	const mirror = props.day.delivery as DeliveryMirror;
 	const key = props.place.key;
 	const entry = () => mirror.view().entries[key];
@@ -1207,7 +1212,7 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace; reviewSo
 				glide();
 				hideArtifact(key, { sessionId: last.pin.sourceSessionId, artifactId: last.pin.artifactId });
 				anchors.get(last.pin.artifactId)?.focus();
-			} else closeDelivery();
+			} else if (!props.onBackFromJump?.()) closeDelivery();
 		},
 		{ when: "always" },
 	);
@@ -1228,6 +1233,21 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace; reviewSo
 				<View class="gap-2">
 					<PageTitle title={title()} />
 					<Text class="text-sm text-muted-foreground">{origin()}</Text>
+					<If when={props.day.search && fresh() && work()?.deliveryId}>
+						<InspectInWindow
+							title={title()}
+							context={destinationProject() || origin()}
+							text={[
+								work()?.scope,
+								agentLine(work()!),
+								work()?.workerDelivery?.summary,
+								work()?.completion?.checks ?? work()?.workerDelivery?.checks,
+								work()?.completion?.issues ?? work()?.workerDelivery?.issues,
+							]
+								.filter(Boolean)
+								.join("\n\n")}
+						/>
+					</If>
 				</View>
 				<If when={entry()?.reason}>
 					<Notice testID="delivery-off" text={entry()?.reason ?? ""} />
@@ -1274,3 +1294,5 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace; reviewSo
 		</Scroll>
 	);
 }
+import { InspectInWindow } from "./InspectionWindow";
+import { destinationProject } from "./workSearch";

@@ -13,7 +13,7 @@ const MAX_ACTIONS: usize = 20;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Request {
-    subject: delivery::Subject,
+    pub(super) subject: delivery::Subject,
     target_id: String,
     delivery_id: String,
     owner_session_id: String,

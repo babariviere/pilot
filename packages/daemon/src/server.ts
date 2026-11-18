@@ -1,4 +1,6 @@
 /** HTTP API and WebSocket event streams. */
+import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { RetainedCallQuery } from "@pilot/kernel/retained-calls";
 import type {
@@ -2021,6 +2023,59 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				return json(res, 200, await service.diff(subject, tail[1]!));
 			throw new HttpError(405, "Unsupported private review action");
 		}
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "result-search") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Result search is read-only");
+			if (!nativeAuthority || !userVerifications) throw new ServiceUnavailable("Result search unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			const query = url.searchParams.get("q")?.trim() ?? "";
+			if (!query || Array.from(query).length > 200 || [...url.searchParams.keys()].length !== 1)
+				throw new HttpError(400, "Result search requires one query, up to 200 characters");
+			const projectId = parts[2]!;
+			return json(
+				res,
+				200,
+				await userVerifications.search(
+					projectId,
+					query,
+					sessions.list({ projectId, archived: "all" }).filter((chat) => chat.outcome === "done"),
+				),
+			);
+		}
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "metadata-search") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Metadata search is read-only");
+			if (!nativeAuthority || !missions) throw new ServiceUnavailable("Metadata search unavailable");
+			const capability = req.headers["x-pilot-github-capability"];
+			await nativeAuthority.authenticate(capability);
+			const { metadataSearchId, searchProjectMetadata } = await import("./metadata-search.ts");
+			const projectId = parts[2]!;
+			const query = url.searchParams.get("q")?.trim() ?? "";
+			const cursor = url.searchParams.get("cursor") ?? undefined;
+			if (
+				!metadataSearchId.test(projectId) ||
+				!query ||
+				Array.from(query).length > 200 ||
+				url.searchParams.getAll("q").length !== 1 ||
+				url.searchParams.getAll("cursor").length > 1 ||
+				(cursor !== undefined && !/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/.test(cursor)) ||
+				[...url.searchParams.keys()].some((key) => key !== "q" && key !== "cursor")
+			)
+				throw new HttpError(400, "Metadata search requires an exact project and one query, up to 200 characters");
+			return json(
+				res,
+				200,
+				await searchProjectMetadata(
+					projects,
+					missions.store,
+					sessions,
+					projectId,
+					query,
+					String(capability),
+					cursor,
+				),
+			);
+		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "delivered-work") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Delivery discovery is read-only");
@@ -3202,6 +3257,92 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					host: requestedDiagnosticHost(url, hello),
 				}),
 			);
+		}
+		if (parts[1] === "sessions" && parts.length === 5 && parts[3] === "changes" && parts[4] === "live") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Live changes are read-only");
+			if (!nativeAuthority) throw new ServiceUnavailable("Live changes unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			const projectIds = url.searchParams.getAll("expectedProjectId");
+			const paths = url.searchParams.getAll("expectedCwd");
+			const [projectId] = projectIds;
+			const [expectedCwd] = paths;
+			if (
+				projectIds.length !== 1 ||
+				!projectId ||
+				paths.length !== 1 ||
+				!expectedCwd?.startsWith("/") ||
+				Buffer.byteLength(expectedCwd) > 4096 ||
+				expectedCwd.includes("\0") ||
+				[...url.searchParams.keys()].some((key) => key !== "expectedProjectId" && key !== "expectedCwd")
+			)
+				throw new HttpError(400, "Exact expectedProjectId and expectedCwd required");
+			const sessionId = parts[2]!;
+			const authorize = () => {
+				const session = sessions.get(sessionId);
+				if (!session || session.id !== sessionId) throw new HttpError(404, "Unknown chat");
+				if (session.projectId !== projectId) throw new HttpError(403, "Live changes unavailable in this scope");
+				const projectPath = projects.require(projectId).path;
+				if (
+					session.cwd !== expectedCwd ||
+					projectPath === expectedCwd ||
+					session.mode !== "build" ||
+					session.workspace !== "clone" ||
+					session.role !== undefined ||
+					session.control ||
+					session.missionCoordinator ||
+					session.archivedAt !== undefined ||
+					session.continuedTo !== undefined ||
+					session.workspaceDiscardedAt !== undefined ||
+					session.workspaceReclaimedAt !== undefined ||
+					session.recoveryBlockedReason !== undefined ||
+					(session.workspaceSetup && session.workspaceSetup.state !== "ok")
+				)
+					throw new Conflict("Live changes require the chat's current private working copy");
+				const changes = sessions.changeBase(sessionId);
+				if (changes.cwd !== expectedCwd || !changes.base)
+					throw new Conflict("Live changes require the matching workspace base");
+				const fence = JSON.stringify([
+					projectPath,
+					session.createdAt,
+					session.missionId,
+					session.workspaceStorage,
+					changes,
+				]);
+				return { projectPath, changes, fence };
+			};
+			const identity = async (projectPath: string) => {
+				const [workspace, project] = await Promise.all([
+					stat(expectedCwd, { bigint: true }),
+					stat(projectPath, { bigint: true }),
+				]).catch(() => {
+					throw new Conflict("The working copy is unavailable");
+				});
+				if (!workspace.isDirectory() || (workspace.dev === project.dev && workspace.ino === project.ino))
+					throw new Conflict("Live changes require a separate working copy");
+				return [
+					workspace.dev,
+					workspace.ino,
+					workspace.birthtimeNs,
+					project.dev,
+					project.ino,
+					project.birthtimeNs,
+				].join(":");
+			};
+			const { projectPath, changes, fence } = authorize();
+			const directory = await identity(projectPath);
+			if (authorize().fence !== fence) throw new Conflict("The working copy changed during the read");
+			const { cwd, base, baseBranch, branch } = changes;
+			const value = await repositoryChanges.changes(
+				cwd,
+				base,
+				baseBranch,
+				JSON.stringify([sessionId, projectId, fence, directory, randomUUID()]),
+			);
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			if ((await identity(projectPath)) !== directory || authorize().fence !== fence)
+				throw new Conflict("The working copy changed during the read");
+			return json(res, 200, { ...recordedBranch(value, branch), version: 1, sessionId, projectId, cwd });
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "changes" && req.method === "GET") {
 			const { cwd, base, baseBranch, branch } = sessions.changeBase(parts[2]!);

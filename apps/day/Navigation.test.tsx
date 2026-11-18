@@ -80,20 +80,23 @@ test("a mission in planning that Today does not list goes back to Today", async 
 	await app.waitFor(TODAY);
 });
 
-test("the header's places open from a nested page, and their Back goes to Today", async () => {
+test("Back from New returns to the plan it was opened from", async () => {
 	const app = await open("./MockApp.tsx", desktop);
 	await openSearchPlan(app);
 	await app.press("id:new-open");
 	await app.waitFor("What do you want done?");
-	// New has no second New in the header, and goes back to Today.
+	// New has no second New in the header, and keeps the previous screen.
 	expect(app.shows("id:new-open")).toBe(false);
-	expect(app.shows("role:button[Back to Today]")).toBe(true);
+	await app.press("role:button[Back to Plan]");
+	await app.waitFor("id:back");
+	expect(app.shows("What do you want done?")).toBe(false);
 	await app.press("id:changes-open");
 	await app.waitFor("id:back");
 	expect(app.shows("What do you want done?")).toBe(false);
 	expect(app.shows("id:changes-open")).toBe(false);
-	await app.press("role:button[Back to Today]");
-	await app.waitFor(TODAY);
+	await app.keyboard.press("escape");
+	await app.waitFor("id:changes-open");
+	expect(app.shows("role:button[Back to Mission overview]")).toBe(true);
 });
 
 test("going home and back keeps New's goal and an interview answer exactly, and sends nothing", async () => {

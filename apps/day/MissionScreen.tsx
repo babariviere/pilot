@@ -1120,7 +1120,7 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf;
  * Opening it asks Rust to read the mission's detail again; that read sends,
  * pauses and settles nothing.
  */
-export function MissionScreen(props: { day: Day; plans?: Plans; missionId: string }) {
+export function MissionScreen(props: { day: Day; plans?: Plans; missionId: string; onBackFromJump?: () => boolean }) {
 	const page = computed(() => {
 		props.day.today();
 		return props.day.feed.mission(props.missionId) ?? null;
@@ -1150,7 +1150,7 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 			else if (props.day.threads && naming()[props.missionId]) {
 				glide();
 				naming.update((all) => ({ ...all, [props.missionId]: false }));
-			} else if (!shelf.hideLast()) closeMission();
+			} else if (!shelf.hideLast() && !props.onBackFromJump?.()) closeMission();
 		},
 		{ when: "always" },
 	);

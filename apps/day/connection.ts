@@ -367,6 +367,7 @@ async function connect() {
 			freshness,
 		});
 		feeds.day = day;
+		day.search = connectedWorkSearch(window);
 		// New's projects are read when New opens; reading sends nothing.
 		day.models = connectedModelControls(window);
 		day.diagnosis = connectedDiagnosisControls(window);
@@ -474,3 +475,4 @@ export function readAgain(): Promise<void> {
 }
 
 void read();
+import { connectedWorkSearch } from "./workSearch";

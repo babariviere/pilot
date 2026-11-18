@@ -7,7 +7,9 @@ import { expect, open, test } from "nsh/test";
 
 const desktop = { platform: "macos", width: 1100, height: 1400 } as const;
 const TODAY = "Three short things need you.";
-const SEARCH = "label:Search places and missions";
+const SEARCH = "label:Search work and places";
+const OUTPUT = "role:option[Export comparison, Output in Harbor]";
+const CHAT = "role:option[Export checks, Chat in Atlas]";
 
 type App = Awaited<ReturnType<typeof open>>;
 
@@ -85,6 +87,46 @@ test("going through the palette keeps New's goal exactly and picks no project", 
 	expect(app.shows("Choose a project")).toBe(true);
 });
 
+test("the visible Search control opens a mission and Back restores the draft", async () => {
+	const app = await open("./MockApp.tsx", desktop);
+	await app.press("id:new-open");
+	await app.waitFor("id:goal");
+	await app.type("id:goal", "Keep this draft 日本語");
+	await app.press("id:search-open");
+	await app.type(SEARCH, "faster");
+	await app.keyboard.press("enter");
+	await app.waitFor("id:mission-section-map");
+	await app.press("role:button[Back to New]");
+	await app.waitFor("id:goal");
+	expect(app.value("id:goal")).toBe("Keep this draft 日本語");
+});
+
+test("search filters by project and opens the exact saved output without leaving the draft behind", async () => {
+	const app = await open("./SearchFixture.tsx", desktop);
+	await app.press("id:new-open");
+	await app.type("id:goal", "Preserve order 日本語");
+	await app.press("id:search-open");
+	await app.type(SEARCH, "export");
+	await app.waitFor(OUTPUT);
+	await app.waitFor(CHAT);
+	await app.press("label:Search project");
+	await app.press("role:option[Harbor]");
+	await app.waitUntil(() => app.shows(OUTPUT) && !app.shows(CHAT));
+	await app.press(OUTPUT);
+	await app.waitFor("Harbor · Saved output");
+	await app.waitFor("Before: B, A. After: A, B.");
+	await app.keyboard.press("escape");
+	expect(app.value("id:goal")).toBe("Preserve order 日本語");
+});
+
+test("an unavailable work search is not an empty search", async () => {
+	const app = await open("./SearchFixture.tsx", desktop);
+	await app.press("id:search-open");
+	await app.type(SEARCH, "offline");
+	await app.waitFor("Work search is unavailable.");
+	expect(app.shows("Nothing matches “offline”.")).toBe(false);
+});
+
 test("the screen's commit key does nothing while the palette covers it, and works again after", async () => {
 	const app = await open("./MockApp.tsx", desktop);
 	await app.waitFor("1 of 3");
@@ -134,4 +176,15 @@ test("a Today read that failed says so instead of listing no missions", async ()
 	await openPalette(app);
 	expect(app.shows("role:option[Missions could not be read]")).toBe(true);
 	expect(app.enabled("role:option[Missions could not be read]")).toBe(false);
+});
+test("a bounded search page can continue to older work", async () => {
+	const app = await open("./SearchFixture.tsx", desktop);
+	await app.press("id:search-open");
+	await app.waitFor("label:Search project");
+	await app.press("label:Search project");
+	await app.press("role:option[Harbor]");
+	await app.type(SEARCH, "old");
+	await app.waitFor("Search more");
+	await app.press("Search more");
+	await app.waitFor(OUTPUT);
 });

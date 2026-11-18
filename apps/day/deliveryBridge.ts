@@ -39,6 +39,7 @@ export type DeliveryReply =
 			ok: true;
 			snapshot: DeliveredWork | null;
 			operations: DeliveryOperation[];
+			operationsProjectId?: string;
 			outcome: DeliveryOperation | null;
 			outputCapabilities?: OutputCapabilities;
 	  }
@@ -51,6 +52,7 @@ async function invoke(window: string, name: string, args: unknown): Promise<Deli
 		ok: true,
 		snapshot: r.snapshot,
 		operations: r.value.operations as DeliveryOperation[],
+		operationsProjectId: typeof r.value.operationsProjectId === "string" ? r.value.operationsProjectId : undefined,
 		outcome: (r.value.outcome ?? null) as DeliveryOperation | null,
 		outputCapabilities: r.value.outputCapabilities as OutputCapabilities | undefined,
 	};

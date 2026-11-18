@@ -20,11 +20,22 @@ import { LinearScreen } from "./LinearScreen";
 import { SlackReportsScreen } from "./SlackReportsScreen";
 import { MissionScreen } from "./MissionScreen";
 import { NewScreen } from "./NewScreen";
-import { animatePlanningList, type Shown, shown } from "./nav";
+import {
+	animatePlanningList,
+	jumpBack,
+	navigationError,
+	navigationRestoring,
+	type Places as WindowPlaces,
+	type Shown,
+	shown,
+} from "./nav";
 import { PlanScreen } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { planRoute } from "./planView";
 import { RitualScreen } from "./RitualScreen";
+import { SearchDetailScreen } from "./SearchDetailScreen";
+import { ScopedQuestion, scopedQuestion } from "./ScopedQuestion";
+import { todayProject } from "./todayScope";
 import type { Rituals } from "./ritualFeed";
 import { ritualEntry } from "./ritualView";
 import { SettingsScreen } from "./SettingsScreen";
@@ -32,10 +43,20 @@ import { ThreadScreen } from "./ThreadScreen";
 import { TodayScreen } from "./TodayScreen";
 import { threadRoute } from "./threadView";
 import { bindRestore, UpdateScreen } from "./UpdateScreen";
-import { Arrive } from "./ui";
+import { Arrive, Notice } from "./ui";
 import type { Update } from "./updateFeed";
 import { updateEntry } from "./updateView";
 import { route } from "./view";
+import { type DetailHit, searchDetail, type WorkSearchSource } from "./workSearch";
+
+function backFromJump(places: WindowPlaces) {
+	return () => {
+		const back = jumpBack(places);
+		if (!back) return false;
+		back.go();
+		return true;
+	};
+}
 
 /** The planning screen the user opened, if any. */
 function Planning(props: { day: Day; plans: Plans }) {
@@ -52,6 +73,7 @@ function Planning(props: { day: Day; plans: Plans }) {
 								plans={props.plans}
 								missionId={id()}
 								title={props.day.feed.mission(id())?.row.title ?? ""}
+								onBackFromJump={backFromJump(props)}
 							/>
 						</Arrive>
 					)}
@@ -99,6 +121,12 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 	return (
 		<View class="flex-1 bg-background">
 			<AppHeader day={props.day} plans={props.plans} changes={props.changes} />
+			<If when={navigationError()}>
+				<Notice text={navigationError()} />
+			</If>
+			<If when={navigationRestoring()}>
+				<Notice text="Returning to the previous project…" />
+			</If>
 			<View class="min-h-0 flex-1">
 				<If
 					when={at() === "update"}
@@ -135,6 +163,33 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 function Screens(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
 	return (
 		<If
+			when={props.at === "search-detail"}
+			else={
+				<If when={props.at === "scoped-question"} else={<MainScreens {...props} />}>
+					<If when={scopedQuestion()}>
+						{(place) => (
+							<ScopedQuestion
+								place={place()}
+								onBack={() => backFromJump(props)() || scopedQuestion.set(null)}
+								onAnswered={() => {
+									void props.day.scope?.read(todayProject());
+								}}
+							/>
+						)}
+					</If>
+				</If>
+			}
+		>
+			<Each of={searchDetail() ? [searchDetail() as DetailHit] : []} key={(hit) => hit.key}>
+				{(hit) => <SearchDetailScreen places={props} source={props.day.search as WorkSearchSource} hit={hit()} />}
+			</Each>
+		</If>
+	);
+}
+
+function MainScreens(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
+	return (
+		<If
 			when={props.at === "chat"}
 			else={
 				<If
@@ -153,13 +208,13 @@ function Screens(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; 
 							}
 						>
 							<Arrive class="flex-1">
-								<FeedbackScreen day={props.day} />
+								<FeedbackScreen day={props.day} onBackFromJump={backFromJump(props)} />
 							</Arrive>
 						</If>
 					}
 				>
 					<Arrive class="flex-1">
-						<SettingsScreen day={props.day} />
+						<SettingsScreen day={props.day} onBackFromJump={backFromJump(props)} />
 					</Arrive>
 				</If>
 			}
@@ -167,7 +222,7 @@ function Screens(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; 
 			<Each of={chatRoute() ? [chatRoute()?.sessionId as string] : []} key={(id) => id}>
 				{(id) => (
 					<Arrive class="flex-1">
-						<ChatScreen day={props.day} sessionId={id()} />
+						<ChatScreen day={props.day} sessionId={id()} onBackFromJump={backFromJump(props)} />
 					</Arrive>
 				)}
 			</Each>
@@ -206,7 +261,10 @@ function OtherResults(props: { at: Shown; day: Day; rituals: Rituals; plans?: Pl
 							}
 						>
 							<Arrive class="flex-1">
-								<ArtifactsScreen source={props.day.artifacts as ArtifactSource} />
+								<ArtifactsScreen
+									source={props.day.artifacts as ArtifactSource}
+									onBackFromJump={backFromJump(props)}
+								/>
 							</Arrive>
 						</If>
 					}
@@ -220,7 +278,7 @@ function OtherResults(props: { at: Shown; day: Day; rituals: Rituals; plans?: Pl
 			<Each of={deliveryRoute() ? [deliveryRoute() as DeliveryPlace] : []} key={(p) => p.key}>
 				{(p) => (
 					<Arrive class="flex-1">
-						<DeliveryScreen day={props.day} place={p()} />
+						<DeliveryScreen day={props.day} place={p()} onBackFromJump={backFromJump(props)} />
 					</Arrive>
 				)}
 			</Each>
@@ -250,7 +308,12 @@ function Places(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; c
 										when={props.at === "thread"}
 										else={
 											<Arrive class="flex-1">
-												<MissionScreen day={props.day} plans={props.plans} missionId={id()} />
+												<MissionScreen
+													day={props.day}
+													plans={props.plans}
+													missionId={id()}
+													onBackFromJump={backFromJump(props)}
+												/>
 											</Arrive>
 										}
 									>
@@ -271,7 +334,7 @@ function Places(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; c
 				</If>
 			}
 		>
-			<ChangesScreen changes={props.changes as Changes} />
+			<ChangesScreen changes={props.changes as Changes} onBackFromJump={backFromJump(props)} />
 		</If>
 	);
 }

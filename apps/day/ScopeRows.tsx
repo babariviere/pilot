@@ -8,15 +8,19 @@ import { effect, lifecycle, Text, untracked, View } from "nsh";
 import type { Decision, HumanAction, MissionRow, Planning } from "pilot-day/native";
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
-import { waitsForCheck } from "./deliveryView";
+import { openChat } from "./chatView";
+import { openDelivery, waitsForCheck } from "./deliveryView";
+import { jump } from "./nav";
 import { openRequestIn } from "./Incoming";
 import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { openPlan } from "./planView";
 import { type ScopeCount, type ScopeProject, todayProject } from "./todayScope";
-import { InlineAction, Mark, Picker, RowLink, SectionTitle } from "./ui";
+import { Action, InlineAction, Mark, Picker, RowLink, SectionTitle } from "./ui";
 import { drafts, openMission, picks, placeRow, replies, reports } from "./view";
 import { rowLine, stateMark, stateWord } from "./words";
+import { destinationProject } from "./workSearch";
+import { scopedQuestion } from "./ScopedQuestion";
 
 const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
 
@@ -307,14 +311,20 @@ function Unread(props: { project: ScopeProject; section: string }) {
 	);
 }
 
-type Need = { id: string; title: string; effort: string; decision: Decision | null };
+type Need = { id: string; title: string; effort: string; why: string; decision: Decision | null };
 
 function needsOf(p: ScopeProject): Need[] {
 	const t = p.today;
 	if (!t) return [];
 	return [
-		...t.decisions.map((d) => ({ id: d.id, title: d.title, effort: d.effort, decision: d })),
-		...t.actions.map((a: HumanAction) => ({ id: a.id, title: a.title, effort: a.effort, decision: null })),
+		...t.decisions.map((d) => ({ id: d.id, title: d.title, effort: d.effort, why: d.reason, decision: d })),
+		...t.actions.map((a: HumanAction) => ({
+			id: a.id,
+			title: a.title,
+			effort: a.effort,
+			why: a.why,
+			decision: null,
+		})),
 	];
 }
 
@@ -323,25 +333,54 @@ export function otherNeedsCount(ctx: TodayScope): number {
 	return ctx.others().reduce((n, p) => n + needsOf(p).length, 0);
 }
 
-/** Other projects' rows in Needs you: titles only, read only here. */
-export function OtherNeeds(props: { ctx: TodayScope }) {
+/** Other projects' attention. Opening the exact item does not switch the Today filter. */
+export function OtherNeeds(props: { ctx: TodayScope; day: Day }) {
 	return (
 		<Each of={props.ctx.others()} key={(p) => p.id}>
 			{(p) => (
 				<View testID={`scope-needs-${p().id}`} class="gap-0.5">
 					<ProjectLabel name={p().name} stale={p().currentness === "stale"} />
 					<Unread project={p()} section="needsYou" />
-					<If when={complete(p(), "needsYou") && needsOf(p()).length === 0}>
-						<Text class="py-1.5 text-sm text-muted-foreground">Nothing needs you here.</Text>
-					</If>
 					<Each of={needsOf(p())} key={(n) => n.id}>
 						{(n) => (
 							<View class="flex-row items-center gap-2.5 py-1.5">
 								<Mark kind={n().decision ? decisionMark(n().decision as Decision) : "needs"} />
-								<Text class="flex-1 text-sm text-foreground">
-									{n().decision ? n().title : `Action for you: ${n().title}`}
-								</Text>
-								<Text class="text-xs text-faint">{n().effort}</Text>
+								<View class="min-w-0 flex-1 gap-0.5">
+									<Text class="text-sm text-foreground">{n().title}</Text>
+									<Text class="text-xs text-muted-foreground">{n().why}</Text>
+								</View>
+								<If when={props.day.chat && n().decision?.requestSessionId}>
+									<Action
+										label="Open chat"
+										onPress={() => {
+											const id = n().decision?.requestSessionId;
+											if (!id) return;
+											destinationProject.set(p().name);
+											openChat(id, "Today");
+										}}
+									/>
+								</If>
+								<If
+									when={
+										props.day.search &&
+										(n().decision?.reply || !!n().decision?.interviewRoundId) &&
+										n().id.startsWith("question-")
+									}
+								>
+									<Action
+										label={n().decision?.interviewRoundId ? "Open interview" : "Answer"}
+										accessibilityLabel={`Answer ${n().title} in ${p().name}`}
+										onPress={() =>
+											scopedQuestion.set({
+												projectId: p().id,
+												projectName: p().name,
+												decisionId: n().id,
+												interviewRoundId: n().decision?.interviewRoundId ?? undefined,
+											})
+										}
+									/>
+								</If>
+								<Text class="text-xs text-muted-foreground">{n().effort}</Text>
 							</View>
 						)}
 					</Each>
@@ -362,7 +401,7 @@ export function otherMissionsCount(ctx: TodayScope): number {
 }
 
 /** Other projects' missions: state and one line. Pressing one opens the mission. */
-export function OtherMissions(props: { ctx: TodayScope }) {
+export function OtherMissions(props: { ctx: TodayScope; day: Day }) {
 	return (
 		<Each of={props.ctx.others()} key={(p) => p.id}>
 			{(p) => (
@@ -376,7 +415,12 @@ export function OtherMissions(props: { ctx: TodayScope }) {
 						{(m) => {
 							const id = m().id;
 							// The same place as the window's own row: back on Today, the row takes the focus again.
-							const place = placeRow(`mission-${id}`, () => openMission(id));
+							const place = placeRow(`mission-${id}`, () =>
+								jump({ day: props.day }, () => {
+									openMission(id);
+									destinationProject.set(p().name);
+								}),
+							);
 							return (
 								<View class="gap-1 border-t border-border py-3">
 									<RowLink
@@ -542,7 +586,7 @@ export function OtherNew(props: { ctx: TodayScope }) {
 }
 
 /** Other projects' delivered results. Reading does not retarget this window or grant actions. */
-export function OtherToCheck(props: { ctx: TodayScope; nested?: boolean }) {
+export function OtherToCheck(props: { ctx: TodayScope; day: Day; nested?: boolean }) {
 	const rows = (p: ScopeProject) =>
 		p.results?.items.filter(
 			(i) => i.unsettled || i.snapshot?.pendingOperationId || waitsForCheck(i.snapshot, undefined),
@@ -570,6 +614,16 @@ export function OtherToCheck(props: { ctx: TodayScope; nested?: boolean }) {
 												? "Check not confirmed"
 												: "To check"}
 										</Text>
+										<If when={props.day.delivery}>
+											<Action
+												label="Review result"
+												accessibilityLabel={`Review ${i().title} in ${p().name}`}
+												onPress={() => {
+													destinationProject.set(p().name);
+													openDelivery(i().subject, i().title);
+												}}
+											/>
+										</If>
 									</View>
 								)}
 							</Each>
@@ -579,7 +633,7 @@ export function OtherToCheck(props: { ctx: TodayScope; nested?: boolean }) {
 										"Delivered results could not all be read. This is not an empty list."}
 								</Text>
 							</If>
-							<If when={rows(p()).length > 0}>
+							<If when={!props.day.delivery && rows(p()).length > 0}>
 								<Text class="text-xs text-faint">
 									{props.ctx.scope() === "all"
 										? "Choose this project above to check its results here."

@@ -411,6 +411,29 @@ test("discovery starts fresh once, keeps history and uses one durable cutoff acr
 	assert.equal(f.sends.length, 0);
 });
 
+test("result search finds pre-cutoff work and does not initialize the review queue", async (t) => {
+	const f = await fixture(t);
+	f.deliver();
+	assert.deepEqual(await f.service.search(f.project.id, "result delivered", []), {
+		items: [{ subject: f.subject, title: "Delivered result" }],
+		more: false,
+	});
+	assert.deepEqual(await f.service.search(f.project.id, "not this", []), { items: [], more: false });
+	await mkdir(join(f.home, "other"));
+	const other = await f.projects.create({ path: join(f.home, "other") });
+	assert.deepEqual(await f.service.search(other.id, "result", []), { items: [], more: false });
+	const second = f.store.addTask(f.mission.id, { title: "Another delivery" });
+	f.store.completeTask(f.mission.id, second.id, "completion-lead", {
+		commit: "b".repeat(40),
+		checks: "Synthetic",
+		issues: "",
+	});
+	const first = await f.service.list(f.project.id);
+	assert.deepEqual(first.items, []);
+	assert.equal((await f.service.search(f.project.id, "result", [])).items.length, 1);
+	assert.equal(f.sends.length, 0);
+});
+
 test("discovery hides only exact acknowledged Done or Sent back and keeps Unknown", async (t) => {
 	const f = await fixture(t);
 	const baseline = (await f.service.list(f.project.id)).baseline;

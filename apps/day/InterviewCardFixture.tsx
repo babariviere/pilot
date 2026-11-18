@@ -2,6 +2,7 @@
 import { effect, mount, Scroll, signal, Text, View } from "nsh";
 import type { Decision, DraftIntent, ReplyIntent } from "pilot-day/native";
 import { DecisionCard } from "./DecisionCard";
+import { ScopedInterviewCard } from "./InterviewCard";
 import { openDay } from "./mockFeeds";
 import { Action } from "./ui";
 
@@ -40,6 +41,7 @@ const snapshot = day.today();
 effect(() => day.today.set({ ...snapshot, decisions: [decision()] }));
 const visible = signal(true);
 const second = signal(false);
+const scoped = signal(false);
 const saved = signal("");
 const saves = signal(0);
 const sends = signal(0);
@@ -62,8 +64,13 @@ day.feed = Object.assign(Object.create(Object.getPrototypeOf(day.feed)), day.fee
 	},
 });
 
-// The fixture simulates native draft projection on reopening. Runtime TSX never parses JSON.
+// The selected card receives native draft projection. The scoped card also
+// accepts an unsaved draft kept by the window for its exact pin.
 function reopen() {
+	if (scoped()) {
+		visible.set(true);
+		return;
+	}
 	const draft = saved()
 		? (JSON.parse(saved()) as { answers: { questionId: string; selectedOptionId: string | null; text: string }[] })
 		: { answers: [] };
@@ -83,7 +90,25 @@ mount(() => (
 		<View class="gap-4 p-8">
 			<Text class="text-xs text-muted-foreground">Mock data. Standalone interview</Text>
 			<If when={visible()}>
-				<DecisionCard day={day} decision={decision()} index={0} count={1} later={false} />
+				<If
+					when={scoped()}
+					else={<DecisionCard day={day} decision={decision()} index={0} count={1} later={false} />}
+				>
+					<ScopedInterviewCard
+						decision={decision()}
+						identity="other-project/question/round-1"
+						keyboardActive
+						draftText={saved()}
+						onSave={(text) => saved.set(text)}
+						onSubmit={async (text) => {
+							saved.set(text);
+							sends.set(sends() + 1);
+							decision.set({ ...decision(), delivery: "unknown" });
+							return { status: "unknown", message: "Not confirmed. Check again reads only.", revision: 1 };
+						}}
+						onCheck={() => checks.set(checks() + 1)}
+					/>
+				</If>
 			</If>
 			<If when={second()}>
 				<View testID="secondary-round">
@@ -133,6 +158,7 @@ mount(() => (
 					}}
 				/>
 			</View>
+			<Action label="Open other project's round" onPress={() => scoped.set(true)} />
 			<Text class="text-xs text-muted-foreground">{`Saved edits: ${saves()}`}</Text>
 			<Text class="text-xs text-muted-foreground">{`Submissions: ${sends()}`}</Text>
 			<Text class="text-xs text-muted-foreground">{`Receipt checks: ${checks()}`}</Text>

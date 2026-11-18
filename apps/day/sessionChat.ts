@@ -36,6 +36,8 @@ export type SessionChat = {
 	specialist?: boolean;
 	archived?: boolean;
 	workspaceKept?: boolean;
+	/** An opaque key for the open chat's eligible coding copy. */
+	liveChangesKey?: string;
 	restartOnly?: boolean;
 	recoveryBlocked?: string;
 	pendingRecovery?: ContinueResult | null;
@@ -62,6 +64,8 @@ export interface SessionChatSource {
 	refresh(): Promise<void>;
 	/** Closes chat `sessionId` when it is open: it is no longer read or kept. */
 	close(sessionId: string): void;
+	/** Inspect only this chat's current private copy. No chat input or subscription. */
+	readLiveChanges?(sessionId: string, workspaceKey: string): Promise<LiveChangesResult>;
 	/** Asks stopped or failed chat `sessionId` to continue. The service writes the words and sends them once. */
 	continueChat(sessionId: string): Promise<ContinueResult>;
 	/** Retry or corrected words, in this same failed/stopped chat. Empty means Retry. */
@@ -74,6 +78,10 @@ export interface SessionChatSource {
 	checkContinue(operationId: string): Promise<ContinueResult>;
 	dispose(): void;
 }
+
+export type LiveChangesResult =
+	| { status: "read"; fileCount: number; patch: string; truncated: boolean }
+	| { status: "stale" | "unavailable" };
 
 /** What one Continue did. Unknown keeps its operation for Check. */
 export type ContinueResult = {
@@ -148,6 +156,7 @@ function chatOf(x: unknown, sessionId: string): SessionChat | null {
 		specialist: c.specialist === true,
 		archived: c.archived === true,
 		workspaceKept: c.workspaceKept === true,
+		liveChangesKey: typeof c.liveChangesKey === "string" ? c.liveChangesKey : undefined,
 		restartOnly: c.restartOnly === true,
 		recoveryBlocked: typeof c.recoveryBlocked === "string" ? c.recoveryBlocked : "",
 		pendingRecovery: c.pendingRecovery ? continueOutcome(c.pendingRecovery, RECOVERY_UNKNOWN) : null,
@@ -237,6 +246,34 @@ export class ConnectedSessionChat implements SessionChatSource {
 		this.#chat = null;
 		this.#publish();
 		void call(this.#window, "day.chat.close", { sessionId: id });
+	}
+
+	async readLiveChanges(sessionId: string, workspaceKey: string): Promise<LiveChangesResult> {
+		const current = () =>
+			!this.#closed && this.#chat?.sessionId === sessionId && this.#chat.liveChangesKey === workspaceKey;
+		if (!current()) return { status: "stale" };
+		const r = await call<{
+			sessionId?: unknown;
+			workspaceKey?: unknown;
+			fileCount?: unknown;
+			patch?: unknown;
+			truncated?: unknown;
+		} | null>(this.#window, "day.chat.liveChanges", { sessionId, workspaceKey });
+		if (!current() || (!r.ok && r.refusal === "stale")) return { status: "stale" };
+		if (!r.ok) return { status: "unavailable" };
+		const s = r.snapshot;
+		if (
+			s?.sessionId !== sessionId ||
+			s.workspaceKey !== workspaceKey ||
+			typeof s.fileCount !== "number" ||
+			!Number.isSafeInteger(s.fileCount) ||
+			s.fileCount < 0 ||
+			typeof s.patch !== "string" ||
+			typeof s.truncated !== "boolean" ||
+			(s.fileCount === 0 && (s.patch !== "" || s.truncated))
+		)
+			return { status: "unavailable" };
+		return { status: "read", fileCount: s.fileCount, patch: s.patch, truncated: s.truncated };
 	}
 
 	async continueChat(sessionId: string): Promise<ContinueResult> {

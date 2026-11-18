@@ -6856,6 +6856,32 @@ ${run.excerpt}`,
 		});
 	}
 
+	/** Resume parked and archived catalog rows without rebuilding summaries or skipping a prefix. */
+	metadataSearchSessions(projectId: string) {
+		const entries = this.metas.values();
+		let next = entries.next();
+		return (limit: number) => {
+			const rows: { id: string; title: string }[] = [];
+			for (let visited = 0; !next.done && visited < limit; visited++) {
+				const { id } = next.value;
+				next = entries.next();
+				const meta = this.metas.get(id);
+				if (meta?.projectId !== projectId || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) continue;
+				rows.push({ id, title: typeof meta.title === "string" ? meta.title.slice(0, 641) : "" });
+			}
+			return { rows, more: !next.done };
+		};
+	}
+
+	ownsMetadataSession(projectId: string, id: string): boolean {
+		return this.metas.get(id)?.projectId === projectId;
+	}
+
+	/** Only a current exact-project owner may open an inventory. */
+	metadataSearchArtifacts(projectId: string, id: string) {
+		return this.ownsMetadataSession(projectId, id) ? this.artifactStore(id).searchMetadata() : undefined;
+	}
+
 	list(query: SessionListQuery = {}): SessionSummary[] {
 		return [...this.metas.values()]
 			.filter((meta) => {

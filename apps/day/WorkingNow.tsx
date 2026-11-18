@@ -66,9 +66,11 @@ export function WorkingNow(props: { day: Day; ctx: TodayScope }) {
 			<SectionTitle title="Working now" count={complete() ? rows().length : undefined}>
 				<View class="h-8 w-8" />
 			</SectionTitle>
-			<Text testID="working-note" class="min-h-5 text-xs text-muted-foreground">
-				{note()}
-			</Text>
+			<If when={note()}>
+				<Text testID="working-note" class="text-xs text-muted-foreground">
+					{note()}
+				</Text>
+			</If>
 			<Each of={shown()} key={(r) => r.sessionId}>
 				{(r) => {
 					const place = placeRow(`working-${r().sessionId}`, () => openChat(r().sessionId, "Today"));

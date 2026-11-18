@@ -212,12 +212,15 @@ def artifact_host(inputs, source, *, module=None):
     return dict(schema=1, identity=identity, bytes=entry["bytes"], sha256=entry["sha256"])
 
 
+INSPECTION_WINDOW = dict(kinds=["normal"], levels=["normal"], max=1)
+
+
 def compiled_capabilities(names):
     # Exact NSH 0.5.0 Capabilities::to_json form. Explicit empty/false defaults
     # are denials, not additional authority. Unknown keys still fail equality.
     return dict(host=names, network=dict(hosts=[], http=[]),
                 process=dict(execute=[], exit=False, env=[]), fs=dict(read=[], write=[]),
-                statusBar=False, clipboard=True, picker=True, openUrl=False)
+                statusBar=False, clipboard=True, picker=True, openUrl=False, windows=INSPECTION_WINDOW)
 
 
 def resource_closure(built, output, names):
@@ -270,7 +273,8 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     config = production or dict(schema=1, mode="unconfigured")
     names = host_methods(day)
     original_config = bundle.read_json(day / "nsh.json")
-    connected = dict(original_config, id=bundle.APP_ID, capabilities=dict(host=names, clipboard=True, picker=True))
+    connected = dict(original_config, id=bundle.APP_ID,
+                     capabilities=dict(host=names, clipboard=True, picker=True, windows=INSPECTION_WINDOW))
     bundle.write_json(day / "nsh.json", connected)
     manifests = [("pilot-desktop", day / "native/Cargo.toml", "macos-host")]
     locked = {day / "native/Cargo.lock": bundle.digest(day / "native/Cargo.lock")}

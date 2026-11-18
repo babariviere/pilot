@@ -210,6 +210,21 @@ export class UserVerificationStore {
 				sequence: Number(r.source_sequence),
 			}));
 	}
+	/** Search delivery evidence without initializing or filtering by the review queue cutoff. */
+	searchTitles(projectId: string, words: string[], limit: number) {
+		return this.port
+			.all(
+				`SELECT t.id task_id,t.mission_id,t.title
+				FROM tasks t JOIN missions m ON m.id=t.mission_id
+				WHERE m.project_id=? AND EXISTS(SELECT 1 FROM delivery_sources s WHERE s.task_id=t.id)
+				AND ${words.map(() => "instr(lower(t.title),?) > 0").join(" AND ")}
+				ORDER BY t.updated_at DESC, t.id LIMIT ?`,
+				projectId,
+				...words,
+				limit,
+			)
+			.map((r) => ({ taskId: String(r.task_id), missionId: String(r.mission_id), title: String(r.title) }));
+	}
 	current(key: string): UserVerification | null {
 		const r = this.port.one(
 			"SELECT record FROM user_verifications WHERE subject_key=? ORDER BY sequence DESC LIMIT 1",

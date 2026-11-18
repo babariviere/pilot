@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+#[path = "scoped_attention.rs"]
+pub(crate) mod scoped_attention;
+
 /// Native navigation authority. The root supplies it; screen code cannot choose an opener.
 pub type UrlOpener = std::sync::Arc<dyn Fn(&str) -> Result<(), Error> + Send + Sync>;
 
@@ -111,6 +114,9 @@ impl Record {
                     && r["operation"]["kind"] == "attention-answer" => {}
             _ => return Err(Error::Invalid),
         }
+        if self.request.get("scopedTarget").is_some() {
+            scoped_attention::validate_record(self)?;
+        }
         if let Some(receipt) = &self.receipt {
             exact(r, receipt)?;
         }
@@ -126,6 +132,9 @@ fn home(source: &Source) -> Value {
 }
 fn exact(request: &Value, reply: &Value) -> Result<(), Error> {
     if reply["ok"] == false {
+        if request.get("scopedTarget").is_some() {
+            return Err(Error::Unknown);
+        }
         return if matches!(
             reply["error"]["code"].as_str(),
             Some(
@@ -193,6 +202,12 @@ fn exact(request: &Value, reply: &Value) -> Result<(), Error> {
         Some("help") if value["request"] == request["request"] => (),
         Some("answer") => {
             super::planning::exact(value.clone(), &request["operation"])?;
+            if request.get("scopedTarget").is_some()
+                && value["state"] == "accepted"
+                && value["result"]["sessionId"] != request["operation"]["targetId"]
+            {
+                return Err(Error::Unknown);
+            }
             if request["clarification"] == true && value["state"] == "accepted" {
                 let saved = &value["result"]["clarification"];
                 if value["result"]["sessionId"] != request["operation"]["targetId"]
@@ -698,22 +713,7 @@ async fn send_once(
                     }
                 }
                 Some("answer") => {
-                    let mut payload = json!({"projectId":t.source.project()?.project_id,"scope":request["scope"]});
-                    if let Some(interview) = request.get("interview") {
-                        payload["interview"] = interview.clone();
-                    } else {
-                        payload["message"] = request["message"].clone();
-                        if request["clarification"] == true {
-                            payload["clarification"] = json!(true);
-                        }
-                    }
-                    let payload = serde_json::to_string(&payload).map_err(|_| Error::Invalid)?;
-                    // bindingId uses canonical sorted JSON, not feature-dependent serde map order.
-                    let scope = canonical(&request["scope"]);
-                    request["operation"] = json!({"schemaVersion":1,"operationId":id,"producerId":uuid::Uuid::new_v4().to_string(),"sequence":1,
-                        "origin":home(&t.source),"destination":{"hostId":"daemon","daemonId":t.source.home.daemon_id,"lineageId":t.source.home.lineage_id},
-                        "kind":"attention-answer","targetId":request["scope"]["subject"]["sessionId"],"payloadHash":format!("{:x}",Sha256::digest(payload.as_bytes())),
-                        "payload":payload,"bindingId":format!("{:x}",Sha256::digest(scope.as_bytes())),"bindingGeneration":1});
+                    bind_answer(&t.source, &id, &mut request)?;
                 }
                 _ => return Err(Error::Invalid),
             }
@@ -782,6 +782,27 @@ async fn send_once(
             return Ok(shared.outcome(status,"Exact attention result saved. Completion reports do not verify publication or start work."));
         }
     }
+}
+
+// Ordinary and direct answers use exactly the same daemon operation envelope.
+fn bind_answer(source: &Source, id: &str, request: &mut Value) -> Result<(), Error> {
+    let mut payload = json!({"projectId":source.project()?.project_id,"scope":request["scope"]});
+    if let Some(interview) = request.get("interview") {
+        payload["interview"] = interview.clone();
+    } else {
+        payload["message"] = request["message"].clone();
+        if request["clarification"] == true {
+            payload["clarification"] = json!(true);
+        }
+    }
+    let payload = serde_json::to_string(&payload).map_err(|_| Error::Invalid)?;
+    // bindingId uses canonical sorted JSON, not feature-dependent serde map order.
+    let scope = canonical(&request["scope"]);
+    request["operation"] = json!({"schemaVersion":1,"operationId":id,"producerId":uuid::Uuid::new_v4().to_string(),"sequence":1,
+        "origin":home(source),"destination":{"hostId":"daemon","daemonId":source.home.daemon_id,"lineageId":source.home.lineage_id},
+        "kind":"attention-answer","targetId":request["scope"]["subject"]["sessionId"],"payloadHash":format!("{:x}",Sha256::digest(payload.as_bytes())),
+        "payload":payload,"bindingId":format!("{:x}",Sha256::digest(scope.as_bytes())),"bindingGeneration":1});
+    Ok(())
 }
 
 fn record_status(record: &Record) -> crate::model::OutcomeStatus {

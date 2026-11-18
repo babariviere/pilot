@@ -31,11 +31,11 @@ pub(crate) enum Read {
     },
 }
 
-fn encoded(s: &str) -> String {
+pub(super) fn encoded(s: &str) -> String {
     s.bytes().map(|b| format!("%{b:02X}")).collect()
 }
 impl Read {
-    fn path(&self, project: &str) -> Result<String, Error> {
+    pub(super) fn path(&self, project: &str) -> Result<String, Error> {
         let base = format!("/api/projects/{project}");
         Ok(match self {
             Self::List {

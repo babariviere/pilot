@@ -1,7 +1,8 @@
 /** Immutable revisions plus an atomic latest pointer. The session worker is the sole writer. */
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readdir, readFile, rename } from "node:fs/promises";
-import { join } from "node:path";
+import type { Dir, Dirent, Stats } from "node:fs";
+import { lstat, mkdir, open, opendir, readdir, readFile, rename } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import type { ArtifactRevision, ArtifactSummary, ArtifactWrite } from "@pilot/protocol";
 import { assertArtifactWriteKind, prepareArtifact, prepareArtifactWrite } from "./render.ts";
 import {
@@ -12,8 +13,21 @@ import {
 } from "./stored-revision.ts";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const KINDS = new Set<ArtifactSummary["kind"]>(["html", "react", "image", "swiftui", "shader", "visual", "nsh"]);
+type SearchMetadata = Pick<ArtifactSummary, "id" | "sessionId" | "title" | "kind" | "revision" | "updatedAt">;
 
 export class ArtifactNotFound extends Error {}
+
+async function plainDirectory(path: string): Promise<Stats> {
+	const info = await lstat(path);
+	if (!info.isDirectory()) throw new Error("Unsafe artifact directory");
+	return info;
+}
+
+async function checkDirectory(path: string, before: Stats): Promise<void> {
+	const current = await plainDirectory(path);
+	if (current.dev !== before.dev || current.ino !== before.ino) throw new Error("Artifact directory changed");
+}
 
 function artifactSummary(value: ArtifactRevision): ArtifactSummary {
 	const {
@@ -94,6 +108,99 @@ export class ArtifactStore {
 			.sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
 	}
 
+	/** Resume the directory itself, not an offset that would reread the entire prefix. */
+	searchMetadata() {
+		const sessionDir = dirname(this.directory);
+		const sessionRoot = dirname(sessionDir);
+		let dir: Dir | undefined;
+		let identity: { root: Stats; session: Stats; storage: Stats } | undefined;
+		let pending: Dirent | undefined;
+		const close = async () => {
+			const opened = dir;
+			dir = undefined;
+			await opened?.close();
+		};
+		const checkParents = async () => {
+			if (!identity) throw new Error("Artifact inventory unavailable");
+			await checkDirectory(sessionRoot, identity.root);
+			await checkDirectory(sessionDir, identity.session);
+			await checkDirectory(this.directory, identity.storage);
+		};
+		const read = async (entryLimit: number) => {
+			const rows: SearchMetadata[] = [];
+			let visited = 0;
+			let partial = false;
+			try {
+				if (!dir) {
+					const root = await plainDirectory(sessionRoot);
+					const session = await plainDirectory(sessionDir);
+					const storage = await plainDirectory(this.directory).catch((error) => {
+						if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+					});
+					if (!storage) return { rows, visited, more: false, partial };
+					identity = { root, session, storage };
+					dir = await opendir(this.directory, { bufferSize: 8 });
+				}
+				await checkParents();
+				let entry = pending ?? (await dir.read());
+				while (entry && visited < entryLimit) {
+					visited++;
+					const current = entry;
+					entry = await dir.read();
+					if (!ID.test(current.name)) continue;
+					try {
+						const directory = join(this.directory, current.name);
+						const before = await plainDirectory(directory);
+						const latest = await this.readLatestPointer(current.name).catch((error) => {
+							// No commit marker after an interrupted first save.
+							if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+						});
+						await checkDirectory(directory, before);
+						if (latest === undefined) continue;
+						const { id, sessionId, title, kind, revision, updatedAt, createdAt, projectId } = latest;
+						if (
+							id !== current.name ||
+							sessionId !== this.identity.sessionId ||
+							// Older pointers did not name a project. Current exact session ownership is still required.
+							(projectId !== undefined && projectId !== this.identity.projectId) ||
+							typeof title !== "string" ||
+							!KINDS.has(kind) ||
+							!Number.isSafeInteger(revision) ||
+							revision < 1 ||
+							!Number.isSafeInteger(createdAt) ||
+							createdAt < 0 ||
+							!Number.isSafeInteger(updatedAt) ||
+							updatedAt < 0
+						) {
+							partial = true;
+							continue;
+						}
+						rows.push({ id, sessionId, title, kind, revision, updatedAt });
+					} catch {
+						partial = true;
+					}
+				}
+				await checkParents();
+				pending = entry ?? undefined;
+				if (!pending) await close();
+				return { rows, visited, more: pending !== undefined, partial };
+			} catch {
+				// Ambiguous inventory root or incomplete traversal. Do not disclose rows from it.
+				await close().catch(() => undefined);
+				return { rows: [], visited, more: false, partial: true };
+			}
+		};
+		return { read, close };
+	}
+
+	private async readLatestPointer(id: string, signal?: AbortSignal): Promise<ArtifactSummary> {
+		return JSON.parse(
+			new TextDecoder("utf-8", { fatal: true }).decode(
+				await readStoredFile(join(this.directory, id, "latest.json"), STORED_REVISION_LIMITS.pointerBytes, signal),
+			),
+		) as ArtifactSummary;
+	}
+
 	/** Read only the committed pointer, without loading or rendering the artifact body. */
 	async summary(id: string): Promise<ArtifactSummary> {
 		if (!ID.test(id)) throw new ArtifactNotFound("Unknown artifact");
@@ -145,11 +252,7 @@ export class ArtifactStore {
 			throw new Error("Invalid explicit artifact revision");
 		try {
 			const directory = join(this.directory, id);
-			const latest = JSON.parse(
-				new TextDecoder("utf-8", { fatal: true }).decode(
-					await readStoredFile(join(directory, "latest.json"), STORED_REVISION_LIMITS.pointerBytes, signal),
-				),
-			) as ArtifactSummary;
+			const latest = await this.readLatestPointer(id, signal);
 			if (
 				latest.id !== id ||
 				latest.sessionId !== this.identity.sessionId ||

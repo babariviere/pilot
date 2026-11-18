@@ -37,6 +37,7 @@ pub(crate) mod result_review;
 pub mod ritual;
 pub(crate) mod schedules;
 pub(crate) mod screen;
+pub(crate) mod search;
 mod session_chat;
 mod shown;
 pub(crate) mod slack_controls;
@@ -1215,22 +1216,16 @@ fn sync_focus(
     shared: &Shared,
 ) -> Result<bool, Error> {
     let want = shared.focus.lock().expect("native focus poisoned").clone();
-    let Some(project) = want else {
-        return Ok(false);
-    };
     if root.source.project.is_some()
-        || focused
-            .as_ref()
-            .is_some_and(|t| t.source.project.as_ref() == Some(&project))
+        || focused.as_ref().and_then(|t| t.source.project.as_ref()) == want.as_ref()
     {
         return Ok(false);
     }
     crate::day_log::event(
         "focus.changed",
-        serde_json::json!({"project":project.project_id}),
+        serde_json::json!({"project":want.as_ref().map(|project| &project.project_id)}),
     );
-    let project_id = project.project_id.clone();
-    let t = root.focus(project);
+    let t = want.map(|project| root.focus(project));
     *shared
         .database_cache
         .lock()
@@ -1257,9 +1252,13 @@ fn sync_focus(
     *shared
         .shown_project
         .lock()
-        .expect("native shown project poisoned") = project_id.clone();
-    restore_project(journal, shared, &t.source)?;
-    *focused = Some(t);
+        .expect("native shown project poisoned") = t
+        .as_ref()
+        .and_then(|t| t.source.project.as_ref())
+        .map(|p| p.project_id.clone())
+        .unwrap_or_default();
+    restore_project(journal, shared, &t.as_ref().unwrap_or(root).source)?;
+    *focused = t;
     Ok(true)
 }
 
@@ -1423,6 +1422,10 @@ async fn run(
     // A global window's focused project. Its transport carries that project's
     // checks; the root keeps the window, update, ritual and scope reads.
     let mut focused: Option<Transport> = None;
+    let mut active_search = None::<(
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    )>;
     // Local clock refresh only. No daemon GET, visit, mark or automatic ritual.
     // An overdue tick runs after wake; missed ticks never build up a queue.
     let mut clock = tokio::time::interval(Duration::from_secs(30));
@@ -1432,6 +1435,17 @@ async fn run(
             biased;
             request = requests.recv() => {
                 let Ok(request) = request else { break; };
+                if matches!(&request.work, Work::Bridge(call) if matches!(call.command, crate::bridge::Command::Search(_))) {
+                    if let Some((cancel, previous)) = active_search.take() {
+                        let _ = cancel.send(());
+                        let _ = previous.await;
+                    }
+                    let Work::Bridge(call) = request.work else { unreachable!() };
+                    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+                    let reader = tokio::spawn(bridge::search_read(root.search_reader(), shared.clone(), call, cancelled));
+                    active_search = Some((cancel, reader));
+                    continue;
+                }
                 // Opening a mission in a global window acts in its project.
                 if root.source.project.is_none()
                     && let Some(mission) = opened_mission(&request.work)
@@ -1489,9 +1503,8 @@ async fn run(
                 if changed { shared.change(|_| ()); }
                 let _ = request.reply.try_send(result);
                 // A scope read may have chosen another project: show it now.
-                if sync_focus(&root, &mut focused, &journal, &shared)?
-                    && let Some(t) = &focused
-                {
+                if sync_focus(&root, &mut focused, &journal, &shared)? {
+                    let t = focused.as_ref().unwrap_or(&root);
                     let epoch = shared.epoch.load(Ordering::SeqCst);
                     if let Err(e) = refresh(t, &journal, &shared, epoch, None).await { fail(&shared, e, "focus.refresh"); }
                 }
@@ -1516,6 +1529,10 @@ async fn run(
                 ritual::refresh_clock(&root.source, day.as_ref().expect("clock is bound"), &mut journal, &shared);
             }
         }
+    }
+    if let Some((cancel, active)) = active_search {
+        let _ = cancel.send(());
+        let _ = active.await;
     }
     ws.abort();
     let _ = ws.await;

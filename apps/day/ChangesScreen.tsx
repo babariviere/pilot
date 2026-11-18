@@ -169,10 +169,12 @@ function count(n: number, one: string, many: string): string {
 }
 
 /** The list of kept changes. */
-function ChangeList(props: { changes: Changes }) {
+function ChangeList(props: { changes: Changes; onBackFromJump?: () => boolean }) {
 	const list = () => props.changes.list();
 	const total = () => list().waiting.length + list().later.length + list().earlier.length;
-	keymap.bind("escape", backFromChanges);
+	keymap.bind("escape", () => {
+		if (!props.onBackFromJump?.()) backFromChanges();
+	});
 	const more = () => listMessage.set(props.changes.feed.more().message);
 	// Pilot reads the list again on its own while it cannot show it, and when the window comes back.
 	const reads = keepRead(
@@ -575,10 +577,13 @@ function ChangeScreen(props: { changes: Changes; snapshotId: string }) {
 }
 
 /** The Changes list, or the kept snapshot the user reopened. */
-export function ChangesScreen(props: { changes: Changes }) {
+export function ChangesScreen(props: { changes: Changes; onBackFromJump?: () => boolean }) {
 	const at = () => changesRoute();
 	return (
-		<If when={at()?.kind === "change"} else={<ChangeList changes={props.changes} />}>
+		<If
+			when={at()?.kind === "change"}
+			else={<ChangeList changes={props.changes} onBackFromJump={props.onBackFromJump} />}
+		>
 			<Each of={at()?.kind === "change" ? [(at() as { snapshotId: string }).snapshotId] : []} key={(id) => id}>
 				{(id) => <ChangeScreen changes={props.changes} snapshotId={id()} />}
 			</Each>

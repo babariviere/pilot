@@ -7,6 +7,8 @@ import { workspaceBranch } from "./workspaces.ts";
 
 const MAX_DIFF = 1024 * 1024;
 // The client's unified-diff parser expects a/ and b/, regardless of the user's Git config.
+// Passive reads must not refresh the index on disk or run a configured fsmonitor hook.
+const READ_GIT = ["-c", "core.fsmonitor=false"];
 const PATCH_ARGS = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/"];
 
 /** Only expose complete hunks from a clipped patch, never a partial line or incorrect hunk body. */
@@ -47,8 +49,9 @@ function completePatchPrefix(diff: string): string {
 
 /** Bound both retained output and Git's lifetime, not just the final concatenated string. */
 async function gitPatch(cwd: string, args: string[], maxBytes: number, allowExitOne = false) {
-	const result = await subprocesses.run("git", args, {
+	const result = await subprocesses.run("git", [...READ_GIT, ...args], {
 		cwd,
+		env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
 		timeoutMs: 30_000,
 		killSignal: "SIGKILL",
 		maxBytes,
@@ -88,9 +91,9 @@ export class RepositoryChanges {
 		}) as Promise<SessionBranch>;
 	}
 
-	changes(cwd: string, base = "HEAD", baseBranch?: string): Promise<SessionChanges> {
-		return this.cache.get(JSON.stringify([cwd, base, baseBranch ?? null, "full"]), () =>
-			this.readMetadata(cwd, base, baseBranch).then((metadata) => collectPatch(cwd, metadata)),
+	changes(cwd: string, base = "HEAD", baseBranch?: string, workspaceFence?: string): Promise<SessionChanges> {
+		return this.cache.get(JSON.stringify([cwd, base, baseBranch ?? null, "full", workspaceFence ?? null]), () =>
+			this.readMetadata(cwd, base, baseBranch, workspaceFence).then((metadata) => collectPatch(cwd, metadata)),
 		) as Promise<SessionChanges>;
 	}
 
@@ -105,16 +108,22 @@ export class RepositoryChanges {
 		this.metadata.invalidate((key) => (JSON.parse(key) as string[])[0] === cwd);
 	}
 
-	private readMetadata(cwd: string, base: string, baseBranch?: string): Promise<ChangeMetadata> {
-		return this.metadata.get(JSON.stringify([cwd, base, baseBranch ?? null]), () =>
+	private readMetadata(
+		cwd: string,
+		base: string,
+		baseBranch?: string,
+		workspaceFence?: string,
+	): Promise<ChangeMetadata> {
+		return this.metadata.get(JSON.stringify([cwd, base, baseBranch ?? null, workspaceFence ?? null]), () =>
 			collectMetadata(cwd, base, baseBranch),
 		);
 	}
 }
 
 async function git(cwd: string, args: string[], allowExitOne = false, stdin?: string): Promise<string> {
-	const result = await subprocesses.run("git", args, {
+	const result = await subprocesses.run("git", [...READ_GIT, ...args], {
 		cwd,
+		env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
 		...(stdin !== undefined ? { stdin } : {}),
 		timeoutMs: 30_000,
 		maxBytes: 32 * 1024 * 1024,
@@ -276,7 +285,9 @@ async function collectMetadata(cwd: string, base: string, baseBranch?: string): 
 	const { mergeBase, ...metadata } = await changeBase(cwd, base, baseBranch);
 
 	const files = new Map<string, ChangedFile>();
-	const records = (await git(cwd, ["diff", "--name-status", "-z", "-M", mergeBase, "--"])).split("\0");
+	const records = (
+		await git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", mergeBase, "--"])
+	).split("\0");
 	for (let i = 0; i < records.length; ) {
 		const code = records[i++];
 		if (!code) continue;

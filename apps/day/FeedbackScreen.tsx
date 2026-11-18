@@ -435,11 +435,17 @@ function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 }
 
 /** The feedback page. Opening it only reads. */
-export function FeedbackScreen(props: { day: Day }) {
+export function FeedbackScreen(props: { day: Day; onBackFromJump?: () => boolean }) {
 	const mirror = props.day.feedback as FeedbackMirror;
 	void mirror.source.read();
 	void mirror.source.readProjects();
-	keymap.bind("escape", closeFeedback, { when: "always" });
+	keymap.bind(
+		"escape",
+		() => {
+			if (!props.onBackFromJump?.()) closeFeedback();
+		},
+		{ when: "always" },
+	);
 	const scroll = keepScroll("feedback");
 	// A restored offset waits for the rows it scrolled through.
 	let waiting = scroll.contentOffset.y > 0 ? scroll.contentOffset.y : null;

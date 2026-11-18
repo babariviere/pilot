@@ -84,16 +84,27 @@ export function Problems(props: {
 	earlier?: boolean;
 	/** Sends Continue and Dismiss. Without it, rows offer only their way to the work. */
 	chat?: SessionChatSource;
+	actionProject?: string | null;
+	project?: (id: string) => string;
+	unreadProjects?: string[];
 }) {
 	return (
-		<If when={props.rows.length > 0 || !props.known}>
+		<If when={props.rows.length > 0 || !props.known || !!props.unreadProjects?.length}>
 			<View testID="problems" class="gap-1">
-				<SectionTitle title="Needs a look" count={props.rows.length} />
+				<SectionTitle
+					title="Work that needs attention"
+					count={props.known && !props.unreadProjects?.length ? props.rows.length : undefined}
+				/>
 				<If when={!props.known}>
 					<Text class="text-sm text-muted-foreground">
 						Pilot cannot read all unresolved problems. This is not the same as having none.
 					</Text>
 				</If>
+				<Each of={props.unreadProjects ?? []} key={String}>
+					{(name) => (
+						<Text class="text-sm text-muted-foreground">{`Could not check all blockers in ${name()}.`}</Text>
+					)}
+				</Each>
 				<If when={props.earlier}>
 					<Text class="text-xs text-faint">Earlier read. These problems may have changed.</Text>
 				</If>
@@ -101,11 +112,21 @@ export function Problems(props: {
 					{(p) => (
 						<View testID={`problem-${p().id}`} selectable class="gap-2 border-t border-border py-3">
 							<Text class="text-sm font-medium text-foreground">{p().title}</Text>
+							<If when={props.project}>
+								<Text class="text-xs text-muted-foreground">{props.project?.(p().projectId)}</Text>
+							</If>
 							<If when={p().cause}>
 								<Text class="text-sm text-muted-foreground">{p().cause as string}</Text>
 							</If>
 							<Text class="text-sm text-muted-foreground">{`Next: ${p().nextStep}`}</Text>
-							<If when={props.chat && p().sessionId && p().canReply}>
+							<If
+								when={
+									props.chat &&
+									(props.actionProject === undefined || props.actionProject === p().projectId) &&
+									p().sessionId &&
+									p().canReply
+								}
+							>
 								<ChatWaits
 									chat={props.chat as SessionChatSource}
 									sessionId={p().sessionId as string}
@@ -114,7 +135,15 @@ export function Problems(props: {
 									place={props.inMission ? `mission/${p().missionId ?? ""}` : "today"}
 								/>
 							</If>
-							<If when={props.chat && p().sessionId && !p().canReply && (p().canContinue || p().canDismiss)}>
+							<If
+								when={
+									props.chat &&
+									(props.actionProject === undefined || props.actionProject === p().projectId) &&
+									p().sessionId &&
+									!p().canReply &&
+									(p().canContinue || p().canDismiss)
+								}
+							>
 								<ChatActions p={p()} chat={props.chat as SessionChatSource} />
 							</If>
 							<If when={p().taskId || (p().sessionId && !p().missionId)}>

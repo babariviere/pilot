@@ -78,7 +78,7 @@ impl Subject {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Write {
-    subject: Subject,
+    pub(super) subject: Subject,
     target_id: String,
     delivery_id: String,
     expected_revision: u64,
@@ -124,7 +124,7 @@ fn valid_note(action: &str, note: &str) -> bool {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Open {
-    subject: Subject,
+    pub(super) subject: Subject,
     target_id: String,
     delivery_id: String,
     owner_session_id: Option<String>,
@@ -493,7 +493,7 @@ pub(super) async fn handle(
             check()?;
             return Ok(
                 json!({"snapshot":{"projectId":t.source.project()?.project_id},
-                "operations":operations(t,journal),"outcome":null,
+                "operations":operations(t,journal),"operationsProjectId":t.source.project()?.project_id,"outcome":null,
                 "outputCapabilities":output_capabilities(shared)}),
             );
         }
@@ -613,12 +613,13 @@ pub(super) async fn handle(
         let v = snapshot?;
         check()?;
         Ok(
-            json!({"snapshot":v,"operations":operations(t,journal),"outcome":outcome,
+            json!({"snapshot":v,"operations":operations(t,journal),"operationsProjectId":t.source.project()?.project_id,"outcome":outcome,
             "outputCapabilities":output_capabilities(shared)}),
         )
     } else {
         Ok(
-            json!({"snapshot":snapshot.ok().filter(|_|check().is_ok()),"operations":operations(t,journal),"outcome":outcome}),
+            json!({"snapshot":snapshot.ok().filter(|_|check().is_ok()),"operations":operations(t,journal),
+            "operationsProjectId":t.source.project()?.project_id,"outcome":outcome}),
         )
     }
 }

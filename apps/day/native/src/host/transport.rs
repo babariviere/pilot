@@ -36,6 +36,19 @@ pub(super) struct Transport {
 }
 
 impl Transport {
+    /// A passive search owns neither focus nor the action/journal lane.
+    pub(super) fn search_reader(&self) -> Self {
+        Self {
+            source: self.source.clone(),
+            client: self.client.clone(),
+            controls: AtomicBool::new(false),
+            replanning: AtomicBool::new(false),
+            planning_model: None,
+            focused: false,
+            gated: std::sync::OnceLock::new(),
+        }
+    }
+
     /// A project view of this same connection. Never changes the root or grants controls.
     pub(super) fn for_project(&self, project: &Value) -> Result<Self, Error> {
         let mut source = self.source.clone();

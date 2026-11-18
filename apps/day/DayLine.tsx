@@ -3,7 +3,7 @@
 // skips a ritual, and that is saved, Today stops offering it for that day.
 // Showing Today records that the user looked, once for each day; reading or
 // opening Pilot in the background does not.
-import { effect, lifecycle, Text, untracked, View } from "nsh";
+import { effect, lifecycle, signal, Text, untracked, View } from "nsh";
 import type { RitualSnapshot } from "pilot-day/native";
 import type { Day } from "./day";
 import type { Rituals } from "./ritualFeed";
@@ -26,6 +26,7 @@ export function DayLine(props: { day: Day; rituals: Rituals }) {
 	const today = () => props.day.today();
 	const r = props.rituals;
 	const ritual = () => offered(today(), r.progress(), r.uncertain());
+	const shortcuts = signal(false);
 	const note = () => progressLine(r.progress(), r.uncertain());
 	// Today is on screen, readable and in front: that is a visit. The store
 	// sends it once for each day context and never resends a lost one.
@@ -39,15 +40,31 @@ export function DayLine(props: { day: Day; rituals: Rituals }) {
 		<View class="gap-1.5">
 			<View class="flex-row flex-wrap items-center gap-x-2 gap-y-1">
 				<Text class="pr-1 text-xs text-muted-foreground">{today().dateLine}</Text>
-				<If when={ritual() === "start"}>
+				<If when={!props.day.search && ritual() === "start"}>
 					<Action label="Start the day" icon="sun" testID="start-day" onPress={() => openRitual("start")} />
 				</If>
-				<If when={ritual() === "end"}>
+				<If when={!props.day.search && ritual() === "end"}>
 					<Action label="End the day" icon="moon" testID="end-day" onPress={() => openRitual("end")} />
 				</If>
-				<Action label="Standup notes" icon="notes" testID="standup" onPress={() => openStandup(null)} />
+				<Action
+					label={props.day.search ? "Plan or recap" : "Standup notes"}
+					icon="notes"
+					testID="standup"
+					onPress={() => openStandup(null)}
+				/>
+				<If when={props.day.search}>
+					<Action
+						label={shortcuts() ? "Hide shortcuts" : "Shortcuts"}
+						onPress={() => shortcuts.update((open) => !open)}
+					/>
+				</If>
 			</View>
-			<If when={note()}>
+			<If when={shortcuts()}>
+				<Text class="text-xs text-muted-foreground">
+					J / K: next or previous item. 1–9: pick an option. L: Later. Use the card’s submit button when ready.
+				</Text>
+			</If>
+			<If when={!props.day.search && note()}>
 				<View testID="ritual-progress" class="flex-row flex-wrap items-center gap-x-2 gap-y-1">
 					<Mark kind="unknown" />
 					<Text class="text-xs text-muted-foreground">{note()}</Text>

@@ -17,6 +17,7 @@ import plus from "../icons/plus.svg";
 import pointer from "../icons/pointer.svg";
 import refresh from "../icons/refresh.svg";
 import rename from "../icons/rename.svg";
+import search from "../icons/search.svg";
 import settings from "../icons/settings.svg";
 import share from "../icons/share.svg";
 import sun from "../icons/sun.svg";
@@ -38,6 +39,7 @@ const ICONS = {
 	pointer,
 	refresh,
 	rename,
+	search,
 	settings,
 	share,
 	sun,

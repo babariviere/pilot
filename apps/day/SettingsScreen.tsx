@@ -529,12 +529,12 @@ function History(props: { mirror: PreferencesMirror }) {
 }
 
 /** Settings over the window's preferences. Opening it only reads. */
-export function SettingsScreen(props: { day: Day }) {
+export function SettingsScreen(props: { day: Day; onBackFromJump?: () => boolean }) {
 	const mirror = props.day.preferences as PreferencesMirror;
 	void mirror.source.read();
 	keymap.bind("escape", () => {
 		if (schedulesOpen()) schedulesOpen.set(false);
-		else closeSettings();
+		else if (!props.onBackFromJump?.()) closeSettings();
 	});
 	const scroll = keepScroll("settings");
 	// A restored offset waits for the rows it scrolled through.
@@ -561,6 +561,7 @@ export function SettingsScreen(props: { day: Day }) {
 					}}
 				>
 					<Page testID="settings" gap={10}>
+						<ScopedAnswerDrafts />
 						<PageTitle title="Settings" />
 						<If when={props.day.schedules}>
 							<View class="flex-row">
@@ -591,3 +592,4 @@ export function SettingsScreen(props: { day: Day }) {
 		</If>
 	);
 }
+import { ScopedAnswerDrafts } from "./ScopedQuestion";

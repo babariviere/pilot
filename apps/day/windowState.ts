@@ -132,6 +132,7 @@ export function captureView(today?: Today): SavedView {
 		...feedback,
 		questionHelp: savedQuestionHelp(),
 		recoveryNotes: savedRecoveryNotes(),
+		scopedDrafts: captureScopedDrafts(),
 	};
 }
 
@@ -163,6 +164,7 @@ export async function saveForms(day: Day, plans?: Plans): Promise<FormSave> {
 
 /** A fresh window clears only the same view-local state as before. */
 export function startFresh() {
+	restoreScopedDrafts();
 	restoreRecoveryNotes([]);
 	resetTodayView();
 	resetPlanningView();
@@ -187,6 +189,7 @@ export function startFresh() {
 
 /** Restores drafts and disclosures without user intent. Changes may passively read. */
 export function restoreView(view: SavedView, changes?: Changes, today?: Today, linear = false, settings = false) {
+	restoreScopedDrafts(view.scopedDrafts);
 	restoreRecoveryNotes(view.recoveryNotes ?? []);
 	restoreMissionPlace(view);
 	restorePlanningPlace(view);
@@ -217,3 +220,4 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	restorePosition(shownKey(), view, todayY);
 	restoreUpdateView(view.update);
 }
+import { captureScopedDrafts, restoreScopedDrafts } from "./ScopedQuestion";

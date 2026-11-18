@@ -22,6 +22,55 @@ const TARGET_CHARS: usize = 200;
 const ACTION_CHARS: usize = 80;
 /// Longest kept title and state reason.
 const LINE_CHARS: usize = 300;
+/// The daemon's limit for one unified patch.
+const PATCH_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq)]
+struct LiveWorkspace {
+    cwd: String,
+    created_at: u64,
+    mission: Value,
+    branch: Value,
+    source_branch: Value,
+    storage: Value,
+}
+
+impl LiveWorkspace {
+    fn from_session(session: &Value, id: &str, project: &Value) -> Option<Self> {
+        let project_id = project["projectId"].as_str()?;
+        let project_path = project["projectPath"].as_str()?;
+        let cwd = session["cwd"].as_str()?;
+        if !valid_id(project_id)
+            || session["id"] != id
+            || session["projectId"] != project_id
+            || session["mode"] != "build"
+            || session["workspace"] != "clone"
+            || !session["role"].is_null()
+            || session["control"] == true
+            || session["missionCoordinator"] == true
+            || !session["archivedAt"].is_null()
+            || !session["continuedTo"].is_null()
+            || !session["workspaceDiscardedAt"].is_null()
+            || !session["workspaceReclaimedAt"].is_null()
+            || !session["recoveryBlockedReason"].is_null()
+            || (!session["workspaceSetup"].is_null() && session["workspaceSetup"]["state"] != "ok")
+            || !cwd.starts_with('/')
+            || cwd.len() > 4096
+            || cwd.contains('\0')
+            || cwd == project_path
+        {
+            return None;
+        }
+        Some(Self {
+            cwd: cwd.into(),
+            created_at: session["createdAt"].as_u64()?,
+            mission: session["missionId"].clone(),
+            branch: session["branch"].clone(),
+            source_branch: session["sourceBranch"].clone(),
+            storage: session["workspaceStorage"].clone(),
+        })
+    }
+}
 
 /// The open chat.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -29,6 +78,8 @@ pub(crate) struct ChatState {
     pub session: String,
     /// The project row this chat reads through, once a global window found it.
     pub project: Option<Value>,
+    /// Changes only when the eligible workspace changes, not on transcript updates.
+    live_workspace: Option<(uuid::Uuid, LiveWorkspace)>,
     pub title: String,
     pub source_path: String,
     pub source_label: String,
@@ -73,9 +124,22 @@ impl ChatState {
             "reading":self.reading,"reason":self.reason});
         let chat = crate::plan_activity::chat(&rows);
         json!({"sessionId":self.session,"title":self.title,"state":self.state,
-            "stateReason":self.state_reason,"queue":self.queue,"canContinue":self.can_continue,
-            "questionSettled":self.question_settled,"specialist":self.specialist,"archived":self.archived,"workspaceKept":self.workspace_kept,"restartOnly":self.restart_only,"rows":chat.rows,"more":chat.more,
-            "reading":chat.reading,"reason":chat.reason,"sourcePath":self.source_path,"sourceLabel":self.source_label,"pendingRecovery":self.pending_recovery,"recoveryBlocked":self.recovery_blocked})
+            "stateReason":self.state_reason,"queue":self.queue,"canContinue":self.can_continue,"questionSettled":self.question_settled,"specialist":self.specialist,"archived":self.archived,"workspaceKept":self.workspace_kept,"restartOnly":self.restart_only,"rows":chat.rows,"more":chat.more,
+            "reading":chat.reading,"reason":chat.reason,"sourcePath":self.source_path,"sourceLabel":self.source_label,"pendingRecovery":self.pending_recovery,"recoveryBlocked":self.recovery_blocked,
+            "liveChangesKey":self.live_workspace.as_ref().map(|(key, _)| key.to_string())})
+    }
+
+    fn set_workspace(&mut self, read: &Read) {
+        let workspace = read
+            .project
+            .as_ref()
+            .and_then(|p| LiveWorkspace::from_session(&read.session, &self.session, p));
+        if self.project == read.project
+            && self.live_workspace.as_ref().map(|(_, w)| w) == workspace.as_ref()
+        {
+            return;
+        }
+        self.live_workspace = workspace.map(|w| (uuid::Uuid::new_v4(), w));
     }
 }
 
@@ -479,6 +543,7 @@ async fn read_chat(
             match &result {
                 Ok(read) => {
                     merge(&mut state.pages, &read.page, older);
+                    state.set_workspace(read);
                     state.project = read.project.clone();
                     state.title = one_line(&read.session["title"], LINE_CHARS).unwrap_or_default();
                     state.specialist = read.session["role"] == "diagnostics";
@@ -515,6 +580,7 @@ async fn read_chat(
                     state.reason = "Chat not available. Nothing was sent.".into();
                 }
                 Err(_) => {
+                    state.live_workspace = None;
                     state.reason = if state.pages.rows.is_empty() {
                         "Pilot could not read this chat. Nothing was sent.".into()
                     } else {
@@ -532,6 +598,110 @@ struct Read {
     session: Value,
     page: Value,
     project: Option<Value>,
+}
+
+/// An explicit read for the open chat's current private coding copy.
+/// Nothing is cached in window state, and no worker or subscription is opened.
+pub(super) async fn live_changes(
+    root: &Transport,
+    shared: &Shared,
+    session: &str,
+    workspace_key: &str,
+) -> Result<Value, Error> {
+    let key = uuid::Uuid::parse_str(workspace_key).map_err(|_| Error::Invalid)?;
+    if !valid_id(session) {
+        return Err(Error::Invalid);
+    }
+    let pinned = || {
+        let chat = shared
+            .session_chat
+            .lock()
+            .expect("native session chat poisoned");
+        let state = chat
+            .as_ref()
+            .filter(|s| s.session == session)
+            .ok_or(Error::Stale)?;
+        let (_, workspace) = state
+            .live_workspace
+            .as_ref()
+            .filter(|(current, _)| *current == key)
+            .ok_or(Error::Stale)?;
+        Ok::<_, Error>((
+            state.project.clone().ok_or(Error::Stale)?,
+            workspace.clone(),
+        ))
+    };
+    let (project, workspace) = pinned()?;
+    let t = root.for_project(&project)?;
+    let project_id = &t.source.project()?.project_id;
+    let check_access = || async {
+        t.gate(false).await?;
+        let catalog = super::new_chat::inventory(root).await?;
+        if !catalog["projects"]
+            .as_array()
+            .is_some_and(|rows| rows.contains(&project))
+        {
+            return Err(Error::Identity);
+        }
+        Ok::<_, Error>(())
+    };
+    let path = format!("/api/sessions/{session}");
+    let check_workspace = || async {
+        let meta = t.get(&path).await?;
+        if LiveWorkspace::from_session(&meta, session, &project).as_ref() != Some(&workspace) {
+            return Err(Error::Stale);
+        }
+        Ok::<_, Error>(())
+    };
+    check_access().await?;
+    check_workspace().await?;
+    pinned()?;
+    let url = reqwest::Url::parse_with_params(
+        &t.url(&format!("{path}/changes/live")),
+        [
+            ("expectedProjectId", project_id.as_str()),
+            ("expectedCwd", workspace.cwd.as_str()),
+        ],
+    )
+    .map_err(|_| Error::Invalid)?;
+    let query = url.query().ok_or(Error::Invalid)?;
+    let snapshot = t.get(&format!("{path}/changes/live?{query}")).await?;
+    check_access().await?;
+    check_workspace().await?;
+    pinned()?;
+    live_changes_view(
+        &snapshot,
+        session,
+        project_id,
+        &workspace.cwd,
+        workspace_key,
+    )
+}
+
+fn live_changes_view(
+    snapshot: &Value,
+    session: &str,
+    project_id: &str,
+    cwd: &str,
+    workspace_key: &str,
+) -> Result<Value, Error> {
+    if snapshot["version"] != 1
+        || snapshot["sessionId"] != session
+        || snapshot["projectId"] != project_id
+        || snapshot["cwd"] != cwd
+    {
+        return Err(Error::Identity);
+    }
+    let files = snapshot["files"].as_array().ok_or(Error::Invalid)?;
+    let patch = snapshot["diff"].as_str().ok_or(Error::Invalid)?;
+    let truncated = snapshot["truncated"].as_bool().ok_or(Error::Invalid)?;
+    if patch.len() > PATCH_BYTES || (files.is_empty() && (!patch.is_empty() || truncated)) {
+        return Err(Error::Invalid);
+    }
+    Ok(json!({
+        "sessionId": session, "workspaceKey": workspace_key,
+        "fileCount": files.len(), "patch": patch, "truncated": truncated
+    }))
 }
 
 /// Every window reads through the chat's accessible project. Opening never
@@ -628,6 +798,75 @@ async fn fetch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn workspace_read(cwd: &str) -> Read {
+        Read {
+            session: json!({"id":"s","projectId":"p","mode":"build","workspace":"clone","cwd":cwd,"createdAt":52}),
+            page: Value::Null,
+            project: Some(json!({"projectId":"p","projectPath":"/project"})),
+        }
+    }
+
+    #[test]
+    fn live_changes_require_an_active_private_coding_copy() {
+        for (field, value) in [
+            ("id", json!("another")),
+            ("projectId", json!("another")),
+            ("mode", json!("ask")),
+            ("workspace", json!("direct")),
+            ("cwd", json!("/project")),
+            ("role", json!("diagnostics")),
+            ("missionCoordinator", json!(true)),
+            ("archivedAt", json!(1)),
+            ("continuedTo", json!("another")),
+            ("workspaceDiscardedAt", json!(1)),
+            ("workspaceReclaimedAt", json!(1)),
+            ("recoveryBlockedReason", json!("Still preparing")),
+            ("workspaceSetup", json!({"state":"pending"})),
+        ] {
+            let mut read = workspace_read("/copy");
+            read.session[field] = value;
+            let mut state = ChatState::new("s");
+            state.set_workspace(&read);
+            assert!(
+                state.view()["liveChangesKey"].is_null(),
+                "{field} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_keys_survive_transcript_updates_but_not_replacement_or_reopen() {
+        let mut read = workspace_read("/copy");
+        let mut state = ChatState::new("s");
+        state.set_workspace(&read);
+        state.project = read.project.clone();
+        let first = state.view()["liveChangesKey"].clone();
+        read.session["updatedAt"] = json!(100);
+        state.set_workspace(&read);
+        assert_eq!(state.view()["liveChangesKey"], first);
+        read.session["cwd"] = json!("/other-copy");
+        state.set_workspace(&read);
+        let replacement = state.view()["liveChangesKey"].clone();
+        assert_ne!(first, replacement);
+        let mut reopened = ChatState::new("s");
+        reopened.set_workspace(&read);
+        assert_ne!(reopened.view()["liveChangesKey"], replacement);
+    }
+
+    #[test]
+    fn live_changes_never_show_a_mismatched_or_incomplete_reply_as_empty() {
+        let mut snapshot = json!({
+            "version":1,"sessionId":"s","projectId":"p","cwd":"/copy",
+            "files":[],"diff":"","truncated":false
+        });
+        let view = live_changes_view(&snapshot, "s", "p", "/copy", "key").unwrap();
+        assert_eq!(view["fileCount"], 0);
+        assert_eq!(view["workspaceKey"], "key");
+        assert!(live_changes_view(&snapshot, "s", "p", "/new-copy", "key").is_err());
+        snapshot["files"] = Value::Null;
+        assert!(live_changes_view(&snapshot, "s", "p", "/copy", "key").is_err());
+    }
 
     fn user(id: u64, text: &str) -> Value {
         json!({"id":id,"kind":"pi.user","model":[{"role":"user","content":text}]})

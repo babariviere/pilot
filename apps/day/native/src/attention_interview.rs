@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 /// Backend's complete answer list limit, in UTF-8 JSON bytes.
-const ANSWERS_LIMIT: usize = 48 * 1024;
+pub(crate) const ANSWERS_LIMIT: usize = 48 * 1024;
 /// The local JSON draft is itself stored in a JSON string. Leave room for
 /// its escaped characters and the journal's draft fields, not more answers.
 pub const DRAFT_STORAGE_LIMIT: usize = 2 * ANSWERS_LIMIT + 1024;
@@ -36,8 +36,16 @@ struct RoundDraft {
 }
 
 fn draft(round: &Value, text: &str) -> Option<RoundDraft> {
+    if text.len() > ANSWERS_LIMIT {
+        return None;
+    }
     let draft: RoundDraft = serde_json::from_str(text).ok()?;
     (round["roundId"].as_str() == Some(&draft.round_id)).then_some(draft)
+}
+
+/// Drafts may be incomplete, but must name the exact round.
+pub(crate) fn matches_draft(round: &Value, text: &str) -> bool {
+    draft(round, text).is_some()
 }
 
 pub fn project(round: &Value, text: &str) -> Vec<AttentionInterviewQuestion> {
@@ -87,9 +95,6 @@ pub fn sent(request: &Value) -> Vec<AttentionInterviewQuestion> {
 }
 
 pub fn answer(round: &Value, text: &str) -> Result<Value, Refusal> {
-    if text.len() > ANSWERS_LIMIT {
-        return Err(INCOMPLETE);
-    }
     let draft = draft(round, text).ok_or(INCOMPLETE)?;
     let questions = round["questions"].as_array().ok_or(INCOMPLETE)?;
     if questions.is_empty() || questions.len() != draft.answers.len() {

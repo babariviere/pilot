@@ -420,6 +420,9 @@ pub struct SavedView {
     /// Unsent corrected follow-ups as "<session>\n<exact text>". Restore never sends.
     #[prop(default)]
     pub recovery_notes: Vec<String>,
+    /// Unsent cross-project answers, pinned to the exact question shown. Restoring sends nothing.
+    #[prop(default)]
+    pub scoped_drafts: Vec<String>,
 }
 
 impl SavedView {
@@ -441,6 +444,7 @@ impl SavedView {
             .chain(&self.feedback_later)
             .chain(&self.question_help)
             .chain(&self.recovery_notes)
+            .chain(&self.scoped_drafts)
             .map(String::len)
             .sum::<usize>();
         self.goal.len()
@@ -490,6 +494,7 @@ impl SavedView {
             + self.feedback_later.len()
             + self.question_help.len()
             + self.recovery_notes.len()
+            + self.scoped_drafts.len()
     }
 
     /// Whether its offsets are plain, non-negative numbers.

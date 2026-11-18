@@ -21,12 +21,17 @@ Other goals and drafts remain available. Re-planning an old mission offers conte
 and asks before replacing New's existing words and project choice.
 While Pilot plans, the planning page shows the agent's current step and time, and
 Show planning chat opens its conversation, read only.
-Command+K opens a palette over any screen. Search to go to a place or to a mission
-that Today or Planning lists. It only navigates: answers, sends and starts stay on their pages.
+Choose Search or press Command+K to find missions, chats, results, saved outputs,
+Knowledge and app destinations. Work is labeled by project. The search filter does not
+change Today's filter. Open an item in the same window, then use Back to return to your
+draft. Search never sends an answer, accepts a result or starts work.
+Choose **Open in new window** to inspect a saved result, output or Knowledge
+revision without editing it there. Open an agent's chat to inspect its current
+private working copy. The live comparison is separate from saved evidence.
 Today To check discovers new mission deliveries from a saved first-use cutoff.
 To check is part of Needs you on Today, and a mission's overview lists its own results to check.
 Older work stays in missions, without being accepted or deleted. Your saved
-checks stay available. Other projects' results are read-only in this window.
+checks stay available. Open a result directly from any project you can access.
 Result pages keep private general, section and code-line comments. Code changes shows
 saved old/new sources with line numbers, never a live working copy. A comparison must
 be linked evidence or match the owner's explicitly reported committed revision; otherwise

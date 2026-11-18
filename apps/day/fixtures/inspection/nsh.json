@@ -1,0 +1,7 @@
+{
+	"name": "Day inspection test",
+	"theme": "../../theme.json",
+	"capabilities": {
+		"windows": { "kinds": ["normal"], "levels": ["normal"], "max": 1 }
+	}
+}

@@ -58,6 +58,29 @@ test("drafts and fields survive reopening but never answer a new round", async (
 	expect(app.count("Not answered")).toBe(2);
 });
 
+test("scoped round keeps a draft and checks without submitting again", async () => {
+	const app = await open("./InterviewCardFixture.tsx", desktop);
+	await app.press("Open other project's round");
+	await app.waitFor("id:choice-outcome-drafts");
+	await app.press("id:choice-outcome-drafts");
+	await app.press("id:next");
+	await app.waitFor("id:own-authority");
+	await app.press("id:own-authority");
+	await app.type("id:answer-authority", "My team");
+	await app.press("Close card");
+	await app.press("Reopen card");
+	await app.waitFor("id:answer-authority");
+	expect(app.value("id:answer-authority")).toBe("My team");
+	expect(app.shows("Submissions: 0")).toBe(true);
+	await app.press("id:next");
+	await app.press("id:submit");
+	await app.waitFor("Check again");
+	expect(app.shows("id:submit")).toBe(false);
+	await app.press("Check again");
+	await app.waitFor("Receipt checks: 1");
+	expect(app.shows("Submissions: 1")).toBe(true);
+});
+
 test("all forty questions use the same See all and bounded scroll", async () => {
 	// A drag moves 10 points a display frame: on the system clock 16,000 points take about 27 s
 	// of real time. The manual clock runs those frames at once; rendering is not the cost.
