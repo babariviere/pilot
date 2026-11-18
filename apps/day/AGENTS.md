@@ -17,6 +17,7 @@
 - Build screens from the component library in `ui/` (`ui/index.ts` lists it). Screens do not import
   `nsh/base` or restyle a control: add a variant to the library instead. Only single-use overlays
   (the palette, the full-window artifact) assemble `nsh/base` themselves.
+- Follow "Live data in the UI" in [CODING_STANDARDS.md](../../CODING_STANDARDS.md) for every read, refresh and write.
 - Keep entries beside `nsh.json`, which supplies their theme and capabilities.
   Keep the default entry's capabilities deny-all.
 - Preserve stable identities: `pilot-day/native`, `dev.pilot.day`, and existing
@@ -32,8 +33,9 @@
   `.nsh/types` and the existing bridge; do not duplicate their API in prose.
 - TSX must not choose credentials, service addresses or operation IDs.
   The native host supplies authority and journals commands before sending.
-- Writes name the exact identity and revision shown. Refuse stale writes.
-  A lost reply stays unknown; Check only looks up its receipt, never resends.
+- Writes name the exact identity and revision shown. Rust decides whether that target is
+  unchanged and builds every resend and its operation ID; TSX never resends. Check only
+  looks up a receipt. The retry and lookup rules are in "Live data in the UI".
 - Opening, reading, saving a draft and restoring a view must not submit,
   approve or start work. Keep those actions separate and explicit.
 - Failed, stale or incomplete reads must not look like complete empty results.

@@ -54,8 +54,8 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
   palette and quiet motion, and keeps text readable over it. In Pilot Next it is atmosphere only: rows show state
   with still marks and words (see State vocabulary), never dither. The Swift app keeps its status corners
   (`DitherCorner`) unchanged until it retires.
-- **Check it by eye.** Beauty is reviewed, not assumed. Look at the real result with real
-  and long content, before calling a UI change done.
+- **Review in the native app.** Inspect the result at the size users will see it, with real and
+  long content. Try the changed interactions before calling the change done.
 
 ## Attention budget
 

@@ -80,15 +80,12 @@ Docs to use when the task touches them:
   pnpm store, so per-session installs cost little disk. Declare every imported package in the importing
   package's `package.json`; pnpm does not expose undeclared transitive dependencies.
 - Biome: tabs, width 120. `pnpm fmt` / `pnpm fmt:check`.
-- Tests use `node:test` and `node:assert/strict`, beside their implementation as `*.test.ts`. `pnpm test` fails any
-  test that runs longer than two minutes (`PILOT_TEST_TIMEOUT_MS`), so a test awaiting an event that never comes
-  fails instead of stalling the whole run.
-- `docs/technical/testing.md` covers suite selection and replay-only service fixtures. `pnpm test:fast` is for
-  quick feedback; `pnpm test` remains the complete gate, including integration and stress groups.
+- Tests use `node:test` and `node:assert/strict`, beside their implementation as `*.test.ts`.
+- See [testing.md](docs/technical/testing.md) for suite selection, replay-only fixtures, timeouts and concurrency.
+  Use `pnpm test:fast` for quick feedback and `pnpm test` for the full suite.
 - Local checks use temporary directories and faux model providers, not real accounts. Run the ones that cover
-  your change, fix failures it causes, and rerun them without asking: `pnpm typecheck`, `pnpm test` (two
-  test files at a time; `PILOT_TEST_CONCURRENCY=4 pnpm test` when the machine has headroom). Use the desktop
-  and Day verification wrappers documented in their READMEs for native changes.
+  your change, fix failures it causes, and rerun them without asking: `pnpm typecheck`, `pnpm test`.
+  For native changes, use the verification wrappers in the desktop and Day READMEs.
 
 ## Repository safety
 
