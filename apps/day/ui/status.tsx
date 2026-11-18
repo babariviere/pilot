@@ -2,6 +2,7 @@
 // words beside it carry the meaning; a notice is a quiet panel that says
 // what could not be read or confirmed, and what the user can do.
 import { type JSX, Text, View } from "nsh";
+import { useAgent } from "./agent";
 import { Icon } from "./icon";
 import { Panel } from "./layout";
 
@@ -88,8 +89,15 @@ export function Notice(props: {
 	class?: string;
 	children?: JSX.Element;
 }) {
+	const agent = useAgent({
+		component: "status",
+		label: () => props.text,
+		id: () => props.testID,
+		text: () => props.detail,
+		actions: {},
+	});
 	return (
-		<Panel testID={props.testID} class={`gap-1.5 ${props.class ?? ""}`}>
+		<Panel anchor={agent.anchor} testID={props.testID} class={`gap-1.5 ${props.class ?? ""}`}>
 			<View class="flex-row items-center gap-2.5">
 				<Mark kind={props.kind ?? "unknown"} />
 				<Text role={props.role} class="flex-1 text-sm text-foreground">

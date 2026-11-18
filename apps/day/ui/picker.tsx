@@ -2,6 +2,7 @@
 // one popup frame.
 import { type JSX, Text, View } from "nsh";
 import { type Align, Menu as BaseMenu, MenuItem as BaseMenuItem, Select, type SelectItem } from "nsh/base";
+import { type AgentMark, useAgent } from "./agent";
 import { FOCUS_RING } from "./button";
 import { Icon, type IconName } from "./icon";
 
@@ -27,12 +28,25 @@ export function Picker(props: {
 	searchPlaceholder?: string;
 	/** A quiet second line for an item, by value. */
 	detail?: (value: string) => string;
+	agent?: AgentMark;
 	onChange: (value: string) => void;
 	onOpenChange?: (open: boolean) => void;
 }) {
 	const title = () => props.items.find((i) => i.value === props.value)?.title ?? props.placeholder;
+	const agent = useAgent({
+		component: "select",
+		label: () => props.label,
+		id: () => props.testID,
+		state: { value: () => props.value },
+		items: () => props.items.map((i) => ({ value: i.value, label: i.title })),
+		closed: true,
+		disabled: () => props.disabled,
+		mark: () => props.agent,
+		actions: { setValue: (value) => props.onChange(String(value)) },
+	});
 	return (
 		<Select
+			ref={agent.anchor}
 			testID={props.testID}
 			items={props.items}
 			value={props.value}
@@ -77,11 +91,24 @@ export function Menu(props: {
 	align?: Align;
 	/** What opens it: a view with `role="button"`. */
 	trigger: JSX.Element;
+	/** The screen agent's name for the menu, such as its trigger's label. */
+	agentLabel?: string;
 	/** A `MenuTitle` and its `MenuItem`s. */
 	children?: JSX.Element;
 }) {
+	const agent = useAgent({
+		component: "menu",
+		label: () => props.agentLabel,
+		state: { open: () => props.open },
+		actions: {
+			setOpen: (open) => {
+				if (open !== props.open) props.onOpenChange(open === true);
+			},
+		},
+	});
 	return (
 		<BaseMenu
+			ref={agent.anchor}
 			open={props.open}
 			onOpenChange={(e) => props.onOpenChange(e.open)}
 			align={props.align}
@@ -121,9 +148,24 @@ export function MenuTitle(props: { label: string }) {
 }
 
 /** One command of a `Menu`. Choosing it closes the menu. */
-export function MenuItem(props: { label: string; testID?: string; disabled?: boolean; onSelect: () => void }) {
+export function MenuItem(props: {
+	label: string;
+	testID?: string;
+	disabled?: boolean;
+	agent?: AgentMark;
+	onSelect: () => void;
+}) {
+	const agent = useAgent({
+		component: "menuitem",
+		label: () => props.label,
+		id: () => props.testID,
+		disabled: () => props.disabled,
+		mark: () => props.agent,
+		actions: { press: () => props.onSelect() },
+	});
 	return (
 		<BaseMenuItem
+			ref={agent.anchor}
 			testID={props.testID}
 			disabled={props.disabled}
 			onSelect={props.onSelect}

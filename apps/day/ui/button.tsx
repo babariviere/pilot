@@ -3,6 +3,7 @@
 // that toggles help, and `Pressable`, a bare press target for custom rows.
 import { type JSX, Text, View, type ViewProps, type ViewRef } from "nsh";
 import { Button, Toggle } from "nsh/base";
+import { type AgentMark, useAgent } from "./agent";
 import { Icon, type IconName } from "./icon";
 
 /** The keyboard's focus ring, shared by every control. */
@@ -47,16 +48,29 @@ export function Action(props: {
 	testID?: string;
 	/** Hears the button's view, to give it the keyboard focus. */
 	anchor?: (node: ViewRef) => void;
+	/** What the screen agent must know: `confirm` for a commit only the person may press. */
+	agent?: AgentMark;
 	onPress: () => void;
 }) {
 	const variant = (): ActionVariant => props.variant ?? "plain";
+	const agent = useAgent({
+		component: "button",
+		label: () => props.accessibilityLabel ?? props.label,
+		id: () => props.testID,
+		disabled: () => props.disabled,
+		mark: () => props.agent,
+		actions: { press: () => props.onPress() },
+	});
 	const frame = () =>
 		props.iconOnly && variant() === "plain"
 			? "min-w-8 justify-center px-2 hover:bg-accent active:bg-accent"
 			: ACTION_FRAME[variant()];
 	return (
 		<Button
-			ref={props.anchor}
+			ref={(node: ViewRef) => {
+				agent.anchor(node);
+				props.anchor?.(node);
+			}}
 			testID={props.testID}
 			disabled={props.disabled}
 			accessibilityLabel={props.accessibilityLabel ?? (props.iconOnly ? props.label : null)}
@@ -87,9 +101,16 @@ export function Badge(props: { label: string }) {
 }
 
 /** An inline text command inside a sentence. */
-export function InlineAction(props: { label: string; testID?: string; onPress: () => void }) {
+export function InlineAction(props: { label: string; testID?: string; agent?: AgentMark; onPress: () => void }) {
+	const agent = useAgent({
+		component: "button",
+		label: () => props.label,
+		id: () => props.testID,
+		mark: () => props.agent,
+		actions: { press: () => props.onPress() },
+	});
 	return (
-		<Button testID={props.testID} onPress={props.onPress} class={`rounded-sm ${FOCUS_RING}`}>
+		<Button ref={agent.anchor} testID={props.testID} onPress={props.onPress} class={`rounded-sm ${FOCUS_RING}`}>
 			<Text class="text-sm text-needs-ink underline">{props.label}</Text>
 		</Button>
 	);
@@ -102,12 +123,23 @@ export function RowLink(props: {
 	accessibilityLabel: string;
 	/** Hears the row's view, to give it the keyboard focus. */
 	anchor?: (node: ViewRef) => void;
+	agent?: AgentMark;
 	onPress: () => void;
 	children?: JSX.Element;
 }) {
+	const agent = useAgent({
+		component: "button",
+		label: () => props.accessibilityLabel ?? props.title,
+		id: () => props.testID,
+		mark: () => props.agent,
+		actions: { press: () => props.onPress() },
+	});
 	return (
 		<Button
-			ref={props.anchor}
+			ref={(node: ViewRef) => {
+				agent.anchor(node);
+				props.anchor?.(node);
+			}}
 			testID={props.testID}
 			accessibilityLabel={props.accessibilityLabel}
 			onPress={props.onPress}
@@ -128,11 +160,28 @@ export function ToggleChip(props: {
 	shortcut?: string;
 	/** Hears the chip's view, to give it the keyboard focus. */
 	anchor?: (node: ViewRef) => void;
+	agent?: AgentMark;
 	onChange: (pressed: boolean) => void;
 }) {
+	const agent = useAgent({
+		component: "toggle",
+		label: () => props.label,
+		id: () => props.testID,
+		state: { pressed: () => props.pressed },
+		mark: () => props.agent,
+		actions: {
+			setPressed: (on) => {
+				if (on !== props.pressed) props.onChange(on === true);
+			},
+			toggle: () => props.onChange(!props.pressed),
+		},
+	});
 	return (
 		<Toggle
-			ref={props.anchor}
+			ref={(node: ViewRef) => {
+				agent.anchor(node);
+				props.anchor?.(node);
+			}}
 			testID={props.testID}
 			pressed={props.pressed}
 			tooltip={props.shortcut ? `${props.label}  ${props.shortcut}` : undefined}
@@ -153,14 +202,24 @@ export function LinkAction(props: {
 	pressed?: boolean;
 	/** The look of the words (default `primary`): `faint` for a quiet disclosure. */
 	tone?: "primary" | "faint";
+	agent?: AgentMark;
 	onPress: () => void;
 }) {
 	const words = () => (props.tone === "faint" ? "text-xs text-faint" : "text-xs text-primary");
+	const agent = useAgent({
+		component: "button",
+		label: () => props.accessibilityLabel ?? props.label,
+		id: () => props.testID,
+		state: { pressed: () => props.pressed },
+		mark: () => props.agent,
+		actions: { press: () => props.onPress() },
+	});
 	return (
 		<If
 			when={props.pressed !== undefined}
 			else={
 				<Button
+					ref={agent.anchor}
 					testID={props.testID}
 					accessibilityLabel={props.accessibilityLabel ?? null}
 					onPress={props.onPress}
@@ -171,6 +230,7 @@ export function LinkAction(props: {
 			}
 		>
 			<Toggle
+				ref={agent.anchor}
 				testID={props.testID}
 				accessibilityLabel={props.accessibilityLabel ?? null}
 				pressed={props.pressed === true}
@@ -199,6 +259,9 @@ export function Pressable(props: {
 	expanded?: boolean;
 	/** Hears the target's view, to give it the keyboard focus. */
 	anchor?: (node: ViewRef) => void;
+	/** The screen agent's name for a target whose words are its content, such as a disclosure's label. */
+	agentLabel?: string;
+	agent?: AgentMark;
 	/** It took or lost the keyboard focus. Only a disclosure's trigger (`expanded` set) reports it. */
 	onFocus?: () => void;
 	onBlur?: () => void;
@@ -211,12 +274,34 @@ export function Pressable(props: {
 	children?: JSX.Element;
 }) {
 	const look = () => `${props.class ?? ""} ${FOCUS_RING}`;
+	// A disclosure's trigger is a disclosure to the agent: it reads and sets whether its content shows.
+	const agent = useAgent({
+		component: props.expanded !== undefined ? "disclosure" : "button",
+		label: () => props.accessibilityLabel ?? props.agentLabel ?? props.tooltip,
+		id: () => props.testID,
+		state: { selected: () => props.selected, open: () => props.expanded },
+		disabled: () => props.disabled,
+		mark: () => props.agent,
+		actions:
+			props.expanded !== undefined
+				? {
+						setOpen: (open) => {
+							if (open !== props.expanded) props.onPress();
+						},
+						toggle: () => props.onPress(),
+					}
+				: { press: () => props.onPress() },
+	});
+	const anchor = (node: ViewRef) => {
+		agent.anchor(node);
+		props.anchor?.(node);
+	};
 	return (
 		<If
 			when={props.expanded !== undefined}
 			else={
 				<Button
-					ref={props.anchor}
+					ref={anchor}
 					testID={props.testID}
 					accessibilityLabel={props.accessibilityLabel ?? null}
 					tooltip={props.tooltip}
@@ -232,7 +317,7 @@ export function Pressable(props: {
 			}
 		>
 			<View
-				ref={(node: ViewRef) => props.anchor?.(node)}
+				ref={anchor}
 				testID={props.testID}
 				role="button"
 				accessibilityLabel={props.accessibilityLabel}

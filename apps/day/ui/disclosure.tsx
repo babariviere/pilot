@@ -23,6 +23,7 @@ export function Disclosure(props: {
 			<Pressable
 				testID={props.testID}
 				accessibilityLabel={props.accessibilityLabel}
+				agentLabel={props.label}
 				anchor={props.anchor}
 				onFocus={props.onFocus}
 				onBlur={props.onBlur}

@@ -1,6 +1,6 @@
 // The page's frame: its column, its title, section titles and the quiet
 // panel that groups one thing. Pages put their content inside these.
-import { type JSX, Text, View } from "nsh";
+import { type JSX, Text, View, type ViewRef } from "nsh";
 
 /**
  * The column every page sits in: centred, up to 1024 px wide, with the page's side and top padding. Change the
@@ -80,10 +80,13 @@ export function Panel(props: {
 	selectable?: boolean;
 	/** Layout classes only, such as `gap-2` or `flex-row items-center`. */
 	class?: string;
+	/** Hears the panel's view, such as for the screen agent's registry. */
+	anchor?: (node: ViewRef) => void;
 	children?: JSX.Element;
 }) {
 	return (
 		<View
+			ref={props.anchor}
 			testID={props.testID}
 			selectable={props.selectable}
 			class={`${PANEL[props.size ?? "md"]} ${PANEL_TONE[props.tone ?? "muted"]} ${props.class ?? ""}`}

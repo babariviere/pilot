@@ -16,6 +16,8 @@
 // - diff: PatchDiff, ReviewDiff
 // - icon: Icon
 // - motion: Arrive, FadeIn, createPanelMotion, glide
+// - agent: the screen agent's registry (useAgent, AgentScope, snapshot, query, act)
+export * from "./agent";
 export * from "./button";
 export * from "./choice";
 export * from "./data";

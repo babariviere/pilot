@@ -2,6 +2,7 @@
 // looks; `Field` adds a label above it. The page owns every value.
 import { split, Text, View } from "nsh";
 import { Input, type InputProps } from "nsh/base";
+import { type AgentMark, useAgent } from "./agent";
 
 /** A labeled, read-only fact. Evidence is separate from its value and from editable inputs. */
 export function ReadField(props: { label: string; value: string; evidence?: string }) {
@@ -59,9 +60,22 @@ export function TextField(
 		large?: boolean;
 		/** Layout classes only, such as `flex-1`. */
 		class?: string;
+		/** What the screen agent must know: `secret` hides the value (masked fields always are). */
+		agent?: AgentMark;
 	},
 ) {
-	const [own, rest] = split(props, ["variant", "rows", "compact", "large", "class"]);
+	const [own, rest] = split(props, ["variant", "rows", "compact", "large", "class", "agent", "ref"]);
+	const agent = useAgent({
+		component: "input",
+		label: () => rest.accessibilityLabel ?? rest.placeholder,
+		id: () => rest.testID,
+		state: { value: () => rest.value ?? "" },
+		mark: () => (rest.masked ? { ...own.agent, secret: true } : own.agent),
+		actions: {
+			setValue: (value) => rest.onChange?.({ value: String(value) }),
+			clear: () => rest.onChange?.({ value: "" }),
+		},
+	});
 	const frame = () => (own.compact ? "min-h-8 rounded-lg px-3 py-1.5" : FRAME[own.variant ?? "field"]);
 	const words = () => {
 		if (own.variant === "title") return "text-2xl font-semibold tracking-tight";
@@ -70,6 +84,10 @@ export function TextField(
 	return (
 		<Input
 			{...rest}
+			ref={(node) => {
+				agent.anchor(node);
+				if (typeof own.ref === "function") own.ref(node);
+			}}
 			class={`border border-input bg-background text-foreground focus:border-primary ${frame()} ${words()} ${MIN_HEIGHT[own.rows ?? 1]} ${own.class ?? ""}`}
 		/>
 	);

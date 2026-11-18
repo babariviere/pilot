@@ -1,6 +1,7 @@
 // Tabs that switch one pane in place.
 import { type JSX, Text } from "nsh";
 import { Tab, Tabs } from "nsh/base";
+import { type AgentMark, useAgent } from "./agent";
 import { FOCUS_RING } from "./button";
 
 /** A row of tabs. The page shows the selected tab's content below it. */
@@ -13,9 +14,28 @@ export function TabRow(props: { children?: JSX.Element }) {
 }
 
 /** One tab of a `TabRow`. */
-export function TabItem(props: { label: string; selected: boolean; testID?: string; onPress: () => void }) {
+export function TabItem(props: {
+	label: string;
+	selected: boolean;
+	testID?: string;
+	agent?: AgentMark;
+	onPress: () => void;
+}) {
+	const agent = useAgent({
+		component: "tab",
+		label: () => props.label,
+		id: () => props.testID,
+		state: { selected: () => props.selected },
+		mark: () => props.agent,
+		actions: {
+			select: () => {
+				if (!props.selected) props.onPress();
+			},
+		},
+	});
 	return (
 		<Tab
+			ref={agent.anchor}
 			testID={props.testID}
 			selected={props.selected}
 			onPress={props.onPress}

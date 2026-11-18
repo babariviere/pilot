@@ -226,6 +226,20 @@ export class AttachmentStore {
 		});
 	}
 
+	/** The bytes of one ready upload that matches its reference exactly, such as a screen agent's picture. */
+	async read(ref: StagedAttachmentRef): Promise<Buffer> {
+		const path = await this.serial(async () => {
+			await this.init();
+			const r = typeof ref?.uploadId === "string" ? this.records.get(ref.uploadId) : undefined;
+			if (!r?.ready || r.sha256 !== ref.sha256 || r.bytes !== ref.bytes)
+				throw new OperationRejected("The picture is not uploaded");
+			return join(this.root, `${r.uploadId}.png`);
+		});
+		const bytes = await readFile(path);
+		if (bytes.length !== ref.bytes) throw new OperationRejected("The picture is not uploaded");
+		return bytes;
+	}
+
 	async discard(uploadId: string): Promise<void> {
 		const end = this.admission.begin({ kind: "transfer-metadata", id: uploadId });
 		await this.serial(async () => {

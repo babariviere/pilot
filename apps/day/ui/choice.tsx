@@ -3,6 +3,7 @@
 // its indicator, then its words. The page owns which are chosen.
 import { type JSX, Text, View, type ViewRef } from "nsh";
 import { Checkbox, Radio, RadioGroup, Toggle } from "nsh/base";
+import { type AgentMark, useAgent } from "./agent";
 import { FOCUS_RING } from "./button";
 
 /** A choice row's size: `md` for settings and short lists, `lg` for a decision's options. */
@@ -59,13 +60,30 @@ export function RadioRow(props: {
 	accessibilityLabel?: string;
 	/** Hears the row's view, to give it the keyboard focus. */
 	anchor?: (node: ViewRef) => void;
+	agent?: AgentMark;
 	onChange: () => void;
 	children?: JSX.Element;
 }) {
 	const size = (): ChoiceSize => props.size ?? "md";
+	const agent = useAgent({
+		component: "radio",
+		label: () => props.accessibilityLabel ?? props.label,
+		id: () => props.testID,
+		state: { checked: () => props.checked },
+		disabled: () => props.disabled,
+		mark: () => props.agent,
+		actions: {
+			select: () => {
+				if (!props.checked) props.onChange();
+			},
+		},
+	});
 	return (
 		<Radio
-			ref={props.anchor}
+			ref={(node: ViewRef) => {
+				agent.anchor(node);
+				props.anchor?.(node);
+			}}
 			testID={props.testID}
 			checked={props.checked}
 			disabled={props.disabled}
@@ -92,13 +110,31 @@ export function CheckboxRow(props: {
 	accessibilityLabel?: string;
 	/** Hears the row's view, to give it the keyboard focus. */
 	anchor?: (node: ViewRef) => void;
+	agent?: AgentMark;
 	onChange: () => void;
 	children?: JSX.Element;
 }) {
 	const size = (): ChoiceSize => props.size ?? "md";
+	const agent = useAgent({
+		component: "checkbox",
+		label: () => props.accessibilityLabel ?? props.label,
+		id: () => props.testID,
+		state: { checked: () => props.checked },
+		disabled: () => props.disabled,
+		mark: () => props.agent,
+		actions: {
+			setChecked: (on) => {
+				if (on !== props.checked) props.onChange();
+			},
+			toggle: () => props.onChange(),
+		},
+	});
 	return (
 		<Checkbox
-			ref={props.anchor}
+			ref={(node: ViewRef) => {
+				agent.anchor(node);
+				props.anchor?.(node);
+			}}
 			testID={props.testID}
 			checked={props.checked}
 			disabled={props.disabled}
@@ -151,14 +187,32 @@ export function ToggleRow(props: {
 	accessibilityLabel?: string;
 	/** Hears the row's view, to give it the keyboard focus. */
 	anchor?: (node: ViewRef) => void;
+	agent?: AgentMark;
 	indicator: JSX.Element;
 	onChange: () => void;
 	children?: JSX.Element;
 }) {
 	const size = (): ChoiceSize => props.size ?? "md";
+	const agent = useAgent({
+		component: "toggle",
+		label: () => props.accessibilityLabel,
+		id: () => props.testID,
+		state: { pressed: () => props.pressed },
+		disabled: () => props.disabled,
+		mark: () => props.agent,
+		actions: {
+			setPressed: (on) => {
+				if (on !== props.pressed) props.onChange();
+			},
+			toggle: () => props.onChange(),
+		},
+	});
 	return (
 		<Toggle
-			ref={props.anchor}
+			ref={(node: ViewRef) => {
+				agent.anchor(node);
+				props.anchor?.(node);
+			}}
 			testID={props.testID}
 			pressed={props.pressed}
 			disabled={props.disabled}
