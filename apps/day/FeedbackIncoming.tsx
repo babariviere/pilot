@@ -3,7 +3,7 @@ import { effect, Keyboard, signal, Text, View } from "nsh";
 import type { Day } from "./day";
 import { FeedbackRow } from "./FeedbackRow";
 import type { FeedbackItem } from "./feedbackFeed";
-import { chatState, clip, questionOf, stepsOf } from "./feedbackSteps";
+import { askingOf, chatState, clip, stepsOf } from "./feedbackSteps";
 import { dayOf, feedbackLater } from "./feedbackView";
 import { todayProject } from "./todayScope";
 import { Action, Mark } from "./ui";
@@ -11,16 +11,18 @@ import { Action, Mark } from "./ui";
 /** User-selected feedback can come forward without answering the current chat question. */
 export const feedbackFocus = signal<string | null>(null);
 
-/** A new question or triage replaces an earlier Later. */
+/** A new question, triage or prototype result replaces an earlier Later. */
 export function feedbackAttention(item: FeedbackItem): string | null {
 	const s = stepsOf(item);
 	if (s.resolved || !s.triage) return null;
-	const q = questionOf(s.triage);
-	if (q) return `${item.id}/${s.triage.operationId}/${q.id}`;
-	const digest = s.triage.proposal?.digest;
-	const state = chatState(s.triage);
-	if (["failed", "stopped", "missing"].includes(state)) return `${item.id}/${s.triage.operationId}/${state}`;
-	return state === "done" ? `${item.id}/${s.triage.operationId}/${digest ? `done-${digest}` : "done"}` : null;
+	const asking = askingOf(s);
+	if (asking) return `${item.id}/${asking.step.operationId}/${asking.question.id}`;
+	// After a prototype starts, its result needs the user, not the triage's proposal.
+	const lead = s.prototype ?? s.triage;
+	const digest = lead.proposal?.digest;
+	const state = chatState(lead);
+	if (["failed", "stopped", "missing"].includes(state)) return `${item.id}/${lead.operationId}/${state}`;
+	return state === "done" ? `${item.id}/${lead.operationId}/${digest ? `done-${digest}` : "done"}` : null;
 }
 
 export function incomingFeedback(day: Day): FeedbackItem[] {
@@ -59,7 +61,8 @@ export function FeedbackIncoming(props: { day: Day; active?: boolean }) {
 	};
 	return (
 		<View testID="incoming-feedback" class="gap-1">
-			<If when={v().reason}>
+			{/* Only a read that never worked says so here; the Feedback page carries the old-data warning. */}
+			<If when={v().reason && v().availability !== "live"}>
 				<Text class="text-sm text-muted-foreground">{v().reason}</Text>
 			</If>
 			<Each of={first() ? [first()!] : []} key={(i) => i.id}>
@@ -81,7 +84,7 @@ export function FeedbackIncoming(props: { day: Day; active?: boolean }) {
 			<Each of={pending().filter((i) => i.id !== first()?.id)} key={(i) => i.id}>
 				{(item) => (
 					<View class="flex-row items-center gap-2.5 py-1.5">
-						<Mark kind={questionOf(stepsOf(item()).triage) ? "needs" : "new"} />
+						<Mark kind={askingOf(stepsOf(item())) ? "needs" : "new"} />
 						<View class="flex-1">
 							<Action
 								label={`Up next: Feedback · ${clip(item().text, 100)}`}

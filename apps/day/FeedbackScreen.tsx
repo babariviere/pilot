@@ -21,7 +21,7 @@ import {
 	type UserFeedbackOriginRef,
 	utf8Bytes,
 } from "./feedbackFeed";
-import { stepsOf } from "./feedbackSteps";
+import { askingOf, stepsOf } from "./feedbackSteps";
 import {
 	closeFeedback,
 	dayOf,
@@ -40,6 +40,7 @@ import {
 	resumeFeedbackDraft,
 	setStepMessage,
 } from "./feedbackView";
+import { keepRead, staleLine } from "./freshness";
 import { keepField, keepScroll } from "./kept";
 import { Action, glide, Notice, Page, PageTitle, Picker, SectionTitle, TextField } from "./ui";
 
@@ -343,6 +344,12 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 /** Saved feedback, newest first, with each item's steps. Reading it changes nothing. */
 function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 	const v = (): FeedbackView => props.mirror.view();
+	// Pilot reads again on its own after a failed read, and when the window comes back.
+	const reads = keepRead(
+		() => props.mirror.source.read(),
+		() => !!v().reason,
+		() => v().availability === "live",
+	);
 	const items = () => {
 		const query = feedbackSearch().trim().toLocaleLowerCase();
 		return v()
@@ -376,10 +383,14 @@ function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 					? "Open items first. Search covers loaded feedback; Show earlier searches older items."
 					: "Open items first, then resolved history."}
 			</Text>
-			<If when={v().reason}>
+			<If when={v().reason && (v().availability !== "live" || reads.stale())}>
 				<Notice
 					testID="feedback-off"
-					text={v().availability === "live" ? v().reason : `Pilot cannot show your feedback. ${v().reason}`}
+					text={
+						v().availability === "live"
+							? staleLine(reads.readAt() ?? 0)
+							: `Pilot cannot show your feedback. ${v().reason}`
+					}
 					detail={v().availability === "live" ? undefined : "This is not the same as having none."}
 				/>
 			</If>
@@ -404,7 +415,7 @@ function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 							mirror={props.mirror}
 							item={i()}
 							when={savedLine(i())}
-							keyboardActive={items().find((item) => stepsOf(item).triage?.question)?.id === i().id}
+							keyboardActive={items().find((item) => askingOf(stepsOf(item)))?.id === i().id}
 						/>
 					)}
 				</Each>

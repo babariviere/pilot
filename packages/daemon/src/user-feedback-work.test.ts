@@ -880,3 +880,213 @@ test("feedback triage shares daily background funding; unusable output and exact
 	);
 	assert.equal(f.stats().sessions, 2, "valid recommendation correction starts no extra chat");
 });
+
+test("a prototype proposal starts one read-only prototype chat; its question shows mockups, and the choice becomes the fix", async (t) => {
+	const f = await nativeIntakeFixture();
+	t.after(() => f.close());
+	const headers = { "x-pilot-github-capability": f.capability, "content-type": "application/json" };
+	const get = async (path: string) => {
+		const r = await fetch(f.root + path, { headers });
+		assert.equal(r.status, 200, path);
+		return r.json();
+	};
+	const post = async (op: DurableOperation, lookup = false) => {
+		const r = await fetch(`${f.root}/api/operations${lookup ? "/receipt" : ""}`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify(op),
+		});
+		return r.json();
+	};
+	const operation = (targetId: string, request: Record<string, unknown>) => {
+		const payload = JSON.stringify(request);
+		return {
+			schemaVersion: 1,
+			operationId: randomUUID(),
+			producerId: randomUUID(),
+			sequence: 1,
+			origin: { ...f.host, hostId: "local" },
+			destination: f.host,
+			kind: request.purpose,
+			targetId,
+			payload,
+			payloadHash: payloadHash(payload),
+			bindingId: (request.contextDigest as string | undefined) ?? payloadHash(payload),
+			bindingGeneration: 1,
+		} as DurableOperation;
+	};
+	const saved = operation(randomUUID(), { purpose: "user-feedback", text: "Plan rows feel crowded", origin: null });
+	assert.equal((await post(saved)).state, "accepted");
+	const id = saved.targetId;
+	const choice = async (mode: "ask" | "build") => {
+		const { mode: _mode, ...c } = await get(`/api/projects/${f.project.id}/chat-profile?mode=${mode}`);
+		return c as Record<string, string>;
+	};
+	const step = (targetId: string, request: Record<string, unknown>) =>
+		operation(targetId, { purpose: "feedback-work", feedbackId: id, ...request });
+	const triage = step(randomUUID(), { action: "triage", ...(await choice("ask")) });
+	assert.equal((await post(triage)).state, "accepted");
+
+	// Chats as the test sets them: state, last answer and pending question per chat.
+	const real = f.sessions.get.bind(f.sessions);
+	const state = new Map<string, Partial<SessionSummary>>();
+	const answers = new Map<string, string>();
+	const questions = new Map<string, { id: number; data: Record<string, unknown> }>();
+	t.mock.method(f.sessions, "get", (sid: string) => {
+		const s = real(sid);
+		return s && state.has(sid) ? ({ ...s, ...state.get(sid) } as SessionSummary) : s;
+	});
+	t.mock.method(f.sessions, "history", async (sid: string) => ({
+		entries: [
+			{ id: "1", kind: "pi.user" },
+			{
+				id: "2",
+				kind: "pi.assistant",
+				model: [{ role: "assistant", content: [{ type: "text", text: answers.get(sid) ?? "" }] }],
+			},
+		],
+		more: false,
+	}));
+	t.mock.method(f.sessions, "pendingQuestion", async (sid: string) => questions.get(sid) ?? null);
+	const shown = async () => ((await get("/api/feedback")) as UserFeedbackPage).items.find((i) => i.id === id)!;
+	const done = (sid: string, outcomeAt: number) => state.set(sid, { working: false, outcome: "done", outcomeAt });
+	const asking = (sid: string) => state.set(sid, { working: true, outcome: "question" });
+	const proposal = {
+		summary: "Plan rows are hard to scan.",
+		duplicates: [],
+		next: "prototype",
+		detail: "How each plan row shows its owner and state.",
+		missionId: null,
+		goal: null,
+	};
+
+	// The triage proposes a prototype: it needs two or three directions.
+	done(triage.targetId, 1);
+	answers.set(triage.targetId, JSON.stringify({ ...proposal, directions: ["Inline chips"] }));
+	const few = (await shown()).work[0]!.proposal!;
+	assert("problem" in few && /2 to 3 directions/.test(few.problem), JSON.stringify(few));
+	done(triage.targetId, 2);
+	answers.set(triage.targetId, JSON.stringify({ ...proposal, directions: ["Inline chips", "A side column"] }));
+	const proposed = (await shown()).work[0]!.proposal!;
+	assert("value" in proposed, JSON.stringify(proposed));
+	assert.equal(proposed.value.next, "prototype");
+	assert.deepEqual(proposed.value.directions, ["Inline chips", "A side column"]);
+
+	// Start prototype names the exact proposal. A lost reply stays Unknown: Check only, never a second chat.
+	const ask = await choice("ask");
+	const start = (proposalDigest: string) =>
+		step(randomUUID(), { action: "prototype", ...ask, triageSessionId: triage.targetId, proposalDigest });
+	assert.equal((await post(start("0".repeat(64)))).state, "rejected");
+	const spawn = f.sessions.spawnDurable.bind(f.sessions);
+	const lostSpawn = t.mock.method(f.sessions, "spawnDurable", async (...args: Parameters<typeof spawn>) => {
+		await spawn(...args);
+		throw new Error("connection lost after admission");
+	});
+	const prototype = start(proposed.digest);
+	assert.equal((await post(prototype)).state, "pending");
+	assert.equal((await post(prototype, true)).state, "pending");
+	assert.equal((await post(prototype)).state, "pending");
+	lostSpawn.mock.restore();
+	assert.equal(f.stats().sessions, 2, "one triage and one prototype chat");
+	assert.equal((await post(start(proposed.digest))).state, "rejected", "a prototype is still running");
+	assert.equal(f.stats().sessions, 2);
+	const meta = JSON.parse(await readFile(join(f.home, "sessions", prototype.targetId, "meta.json"), "utf8"));
+	assert.equal(meta.mode, "ask", "a prototype writes no code");
+	assert.match(meta.title, /^Prototype: /);
+	const opening = meta.pending[0].content as string;
+	assert.match(opening, /1\. Inline chips\n2\. A side column/);
+	assert.match(opening, /ask_user/);
+	assert.match(opening, /"mockup"/);
+
+	// Its question shows on the item with the mockups it attached; unknown IDs are left out.
+	asking(prototype.targetId);
+	const mockups = [
+		{ id: "m-chips", title: "Inline chips", kind: "nsh", revision: 2, updatedAt: 1 },
+		{ id: "m-column", title: "Side column", kind: "nsh", revision: 1, updatedAt: 2 },
+	];
+	t.mock.method(f.sessions, "artifacts", async (sid: string) => (sid === prototype.targetId ? mockups : []));
+	questions.set(prototype.targetId, {
+		id: 7,
+		data: {
+			question: "Which one should Pilot build?",
+			options: [{ label: "Inline chips" }, { label: "Side column" }],
+			artifacts: ["m-chips", "m-column", "gone"],
+		},
+	});
+	const waiting = (await shown()).work.find((w) => w.kind === "prototype")!;
+	assert.equal(waiting.chat?.state, "question");
+	assert.deepEqual(waiting.question?.artifacts, [
+		{ sessionId: prototype.targetId, artifactId: "m-chips", title: "Inline chips", kind: "nsh", revision: 2 },
+		{ sessionId: prototype.targetId, artifactId: "m-column", title: "Side column", kind: "nsh", revision: 1 },
+	]);
+	const pick = step(prototype.targetId, {
+		action: "answer",
+		questionId: 7,
+		message: "Inline chips\n\nKeep the owner first.",
+	});
+	const picked = await post(pick);
+	assert.equal(picked.state, "accepted", JSON.stringify(picked));
+	assert.equal(picked.result.sessionId, prototype.targetId);
+	assert.equal(f.stats().sessions, 2, "an answer starts no fix");
+
+	// The prototype ends with the user's choice as a fix that names one of its own mockups.
+	questions.delete(prototype.targetId);
+	done(prototype.targetId, 3);
+	const fixProposal = {
+		summary: "Inline owner chips on plan rows.",
+		duplicates: [],
+		next: "fix",
+		detail: "Add owner and state chips to PlanRow, as in the chosen mockup.",
+		missionId: null,
+		goal: null,
+	};
+	answers.set(prototype.targetId, JSON.stringify({ ...fixProposal, mockup: "gone" }));
+	const unnamed = (await shown()).work.find((w) => w.kind === "prototype")!.proposal!;
+	assert("problem" in unnamed, "only a mockup this prototype made");
+	done(prototype.targetId, 4);
+	answers.set(prototype.targetId, JSON.stringify({ ...fixProposal, mockup: "m-chips" }));
+	const chosen = (await shown()).work.find((w) => w.kind === "prototype")!.proposal!;
+	assert("value" in chosen, JSON.stringify(chosen));
+	assert.deepEqual(chosen.value.mockup, {
+		sessionId: prototype.targetId,
+		artifactId: "m-chips",
+		title: "Inline chips",
+		kind: "nsh",
+		revision: 2,
+	});
+
+	// Start fix builds exactly that mockup; its message names it and carries the user's words.
+	t.mock.method(f.sessions, "artifact", async (sid: string, artifactId: string, revision: number) => {
+		assert.deepEqual([sid, artifactId, revision], [prototype.targetId, "m-chips", 2]);
+		return { source: "export default () => <Text>Owner chips</Text>;" };
+	});
+	const fix = step(randomUUID(), {
+		action: "fix",
+		...(await choice("build")),
+		triageSessionId: prototype.targetId,
+		proposalDigest: chosen.digest,
+	});
+	const fixed = await post(fix);
+	assert.equal(fixed.state, "accepted", JSON.stringify(fixed));
+	const fixMeta = JSON.parse(await readFile(join(f.home, "sessions", fix.targetId, "meta.json"), "utf8"));
+	assert.equal(fixMeta.mode, "build");
+	const message = fixMeta.pending[0].content as string;
+	assert.match(message, /Build exactly the mockup they chose/);
+	assert.match(message, /The chosen mockup: "Inline chips" \(artifact m-chips, revision 2/);
+	assert.match(message, /Owner chips/);
+	assert.match(message, /Keep the owner first/);
+	assert.match(message, /ask the user with ask_user; never propose another chat/);
+
+	// The fix's own question shows on the item and takes the user's answer.
+	asking(fix.targetId);
+	questions.set(fix.targetId, { id: 9, data: { question: "Chips above or beside the title?", options: [] } });
+	const fixing = (await shown()).work.find((w) => w.kind === "fix")!;
+	assert.equal(fixing.question?.question, "Chips above or beside the title?");
+	const reply = await post(step(fix.targetId, { action: "answer", questionId: 9, message: "Beside" }));
+	assert.equal(reply.state, "accepted", JSON.stringify(reply));
+	assert.deepEqual(
+		(await shown()).work.map((w) => w.kind),
+		["triage", "prototype", "answer", "fix", "answer"],
+	);
+	assert.equal(f.stats().sessions, 3);
+});

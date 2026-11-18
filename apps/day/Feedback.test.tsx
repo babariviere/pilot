@@ -515,6 +515,54 @@ test("with a chosen project a saved Send starts one triage; Start fix is a separ
 	expect(steps(app)).toBe("Steps: [triage,fix]");
 });
 
+test("a prototype proposal starts one prototype; its mockups and choice show on the item, and the choice is the fix", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "Plan rows feel crowded");
+	await app.waitFor("id:feedback-triage-f1");
+	await app.press("Triage prototype");
+	await app.waitFor("id:feedback-directions-f1");
+	expect(app.shows("Proposed: try a prototype first")).toBe(true);
+	expect(app.shows("1. Inline owner chips")).toBe(true);
+	expect(app.shows("2. An owner column")).toBe(true);
+	expect(steps(app)).toBe("Steps: [triage]");
+	// Start prototype is sent once. A lost reply stays Unknown; Check only reads it.
+	await app.press("Next step unknown");
+	await app.press("id:feedback-prototype-start-f1");
+	await app.waitFor("id:feedback-step-unknown-f1");
+	expect(app.enabled("id:feedback-prototype-start-f1")).toBe(false);
+	await app.press("id:feedback-step-check-f1");
+	await app.waitFor("Pilot did it.");
+	expect(steps(app)).toBe("Steps: [triage,prototype]");
+	expect(app.shows("A prototype is in progress. It makes mockups to choose from; it writes no code.")).toBe(true);
+	expect(app.shows("id:feedback-prototype-start-f1")).toBe(false);
+	// Its question shows here with the mockups it attached, and the shared answer form.
+	await app.press("Prototype asks");
+	await app.waitFor("id:feedback-question-f1");
+	expect(app.shows("The prototype needs your choice.")).toBe(true);
+	expect(app.shows("id:question-artifacts")).toBe(true);
+	expect(app.shows("Owner column")).toBe(true);
+	await app.press("id:choice-9-0");
+	await app.press("id:next");
+	await app.waitFor("id:submit");
+	expect(app.shows("Your choice becomes the fix proposal. It starts no fix.")).toBe(true);
+	expect(steps(app)).toBe("Steps: [triage,prototype]");
+	await app.press("id:submit");
+	await app.waitFor("id:feedback-chose-f1");
+	expect(app.shows("Answer: [Inline owner chips]")).toBe(true);
+	expect(steps(app)).toBe("Steps: [triage,prototype,answer]");
+	// The choice comes back as the fix proposal, with the chosen mockup linked.
+	await app.press("Prototype chose");
+	await app.waitFor("Proposed: a small fix, from your choice");
+	expect(app.shows("The mockup you chose:")).toBe(true);
+	expect(app.shows("Proposed: try a prototype first")).toBe(false);
+	expect(steps(app)).toBe("Steps: [triage,prototype,answer]");
+	await app.press("id:feedback-fix-f1");
+	await app.waitFor("id:feedback-fixing-f1");
+	expect(steps(app)).toBe("Steps: [triage,prototype,answer,fix]");
+	expect(counts(app)).toBe("Sends: 1 · Checks: 1");
+});
+
 test("resolving hides the saved fix proposal and its action; reopening restores them without starting work", async () => {
 	const app = await feedback();
 	await chooseProject(app);

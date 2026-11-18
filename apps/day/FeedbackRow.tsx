@@ -7,8 +7,13 @@
 // its suggestions and a field for the user's own words. The answer is kept
 // as an unsent draft until the user sends it; it goes to that triage chat
 // once and only clarifies: it starts no fix and approves no proposal.
+// A triage may propose a prototype first. Start prototype starts one
+// read-only chat that makes mockups and asks the user to choose; its
+// question shows here with them. The choice comes back as a fix proposal
+// with the chosen mockup, and Start fix builds exactly that.
 import { type JSX, signal, Text, View } from "nsh";
 import { namedFeedbackPaths } from "../../packages/kernel/src/feedback-paths";
+import type { ArtifactSource } from "./artifactReads";
 import { openChat } from "./chatView";
 import type { Day } from "./day";
 import { FeedbackQuestion } from "./FeedbackQuestion";
@@ -22,6 +27,7 @@ import type {
 } from "./feedbackFeed";
 import {
 	answerKey,
+	answerTo,
 	type ChatStep,
 	chatLine,
 	chatState,
@@ -36,22 +42,23 @@ import {
 import { closeFeedback, feedbackProject, setAnswerDraft, setStepMessage, stepMessages } from "./feedbackView";
 import { OpenChatAction } from "./OpenChatAction";
 import { goalDraft, openNew } from "./planView";
+import { QuestionArtifacts } from "./QuestionArtifacts";
 import { Action, glide, type Mark, MarkLine, Panel, Picker } from "./ui";
 import { openMission } from "./view";
 
 /**
- * The way into a triage or fix chat, read only. Without a chat page, its
+ * The way into a triage, prototype or fix chat, read only. Without a chat page, its
  * address, for the user to open it in Pilot.
  */
 function ChatLink(props: { day: Day; item: FeedbackItem; step: ChatStep }) {
 	const kind = () => props.step.kind;
-	const label = () => (kind() === "triage" ? "Open triage chat" : "Open fix chat");
+	const label = () => `Open ${kind()} chat`;
 	return (
 		<If
 			when={props.day.chat}
 			else={
 				<View selectable>
-					<Text class="text-xs text-faint">{`${kind() === "triage" ? "Triage" : "Fix"} chat: pilot://chat/${props.step.sessionId}`}</Text>
+					<Text class="text-xs text-faint">{`${{ triage: "Triage", prototype: "Prototype", fix: "Fix" }[kind()]} chat: pilot://chat/${props.step.sessionId}`}</Text>
 				</View>
 			}
 		>
@@ -103,10 +110,11 @@ function missionChoices(day: Day): { value: string; title: string }[] {
 	return out;
 }
 
-/** The agent's proposal and the one step it suggests. The user may pick another. */
+/** The agent's proposal and the one step it suggests. The user may pick another. A prototype's is the user's choice. */
 function Proposal(props: {
 	day: Day;
 	item: FeedbackItem;
+	/** The chat that proposed it: a triage, or a prototype for the fix the user chose. */
 	triage: ChatStep;
 	value: UserFeedbackProposal;
 	digest: string;
@@ -126,12 +134,19 @@ function Proposal(props: {
 		const f = steps().fix;
 		return f?.kind === "fix" && "proposalDigest" in f && f.proposalDigest === props.digest;
 	};
+	const prototyped = () => {
+		const p = steps().prototype;
+		return p?.kind === "prototype" && "proposalDigest" in p && p.proposalDigest === props.digest;
+	};
+	const prototype = () => p().next === "prototype";
 	const linkable = () => missionChoices(props.day);
 	const suggested = () => (p().missionId ? (linkable().find((m) => m.value === p().missionId) ?? null) : null);
 	const heading = () => {
 		switch (p().next) {
 			case "fix":
-				return "Proposed: a small fix";
+				return p().mockup ? "Proposed: a small fix, from your choice" : "Proposed: a small fix";
+			case "prototype":
+				return "Proposed: try a prototype first";
 			case "existing-mission":
 				return suggested() ? `Proposed: add it to “${suggested()!.title}”` : "Proposed: add it to a mission";
 			case "new-mission":
@@ -156,6 +171,21 @@ function Proposal(props: {
 			</View>
 			<If when={p().next === "new-mission" && p().goal}>
 				<Text class="text-sm text-foreground">{`Suggested goal: ${p().goal ?? ""}`}</Text>
+			</If>
+			<If when={prototype() && p().directions?.length}>
+				<View class="gap-1" testID={`feedback-directions-${props.item.id}`}>
+					<Text class="text-xs text-faint">Directions to mock up</Text>
+					<Each of={(p().directions ?? []).map((text, n) => ({ n, text }))} key={(d) => String(d.n)}>
+						{(d) => <Text class="text-sm text-foreground">{`${d().n + 1}. ${d().text}`}</Text>}
+					</Each>
+				</View>
+			</If>
+			<If when={p().mockup && props.day.artifacts}>
+				<QuestionArtifacts
+					source={props.day.artifacts as ArtifactSource}
+					artifacts={p().mockup ? [p().mockup!] : []}
+					label="The mockup you chose:"
+				/>
 			</If>
 			<Each of={duplicates()} key={(d) => d.id}>
 				{(d) => <Text class="text-xs text-faint">{`Same as: “${clip(d().text)}”`}</Text>}
@@ -182,9 +212,28 @@ function Proposal(props: {
 						onPress={plan}
 					/>
 				</If>
-				<If when={!fixed()}>
+				<If when={prototype() && !prototyped()}>
 					<Action
 						variant="outline"
+						label="Start prototype"
+						testID={`feedback-prototype-start-${props.item.id}`}
+						disabled={props.busy || !project() || running(steps().prototype)}
+						accessibilityLabel="Start one read-only chat that makes mockups to choose from. It writes no code."
+						onPress={() =>
+							props.send({
+								action: "prototype",
+								feedbackId: props.item.id,
+								projectId: props.triage.projectId,
+								contextDigest: project()?.contextDigest ?? "",
+								triageSessionId: props.triage.sessionId,
+								proposalDigest: props.digest,
+							})
+						}
+					/>
+				</If>
+				<If when={!fixed()}>
+					<Action
+						variant={prototype() ? "plain" : "outline"}
 						label="Start fix"
 						testID={`feedback-fix-${props.item.id}`}
 						disabled={props.busy || !project() || running(steps().fix)}
@@ -205,6 +254,9 @@ function Proposal(props: {
 					<Text class="text-xs text-faint">Its project is not in your project list.</Text>
 				</If>
 			</View>
+			<If when={prototype() && !prototyped()}>
+				<Text class="text-xs text-faint">A prototype makes mockups to choose from. It writes no code.</Text>
+			</If>
 			<If when={linkable().length > 0}>
 				<View class="flex-row items-center gap-2.5">
 					<Text class="text-xs text-faint">{suggested() ? "Or link another" : "Link a mission"}</Text>
@@ -242,6 +294,13 @@ export function FeedbackRow(props: {
 	const accessOpen = signal(false);
 	const readProject = () => v().projects?.find((p) => p.projectId === triage()?.projectId);
 	const proposal = () => (triage() && chatState(triage()!) === "done" ? proposalOf(triage()) : null);
+	/** A prototype started from the triage's proposal takes its place while it runs or holds the user's choice. */
+	const prototypeShown = () => {
+		const p = steps().prototype;
+		return (
+			!!p && p.kind === "prototype" && p.proposalDigest === proposal()?.digest && (running(p) || !!proposalOf(p))
+		);
+	};
 	const question = () => questionOf(triage());
 	const unusable = () => {
 		const p = triage()?.proposal;
@@ -376,7 +435,11 @@ export function FeedbackRow(props: {
 				</View>
 			</If>
 			<Each
-				of={!steps().resolved && proposal() && triage() ? [{ triage: triage()!, ...proposal()! }] : []}
+				of={
+					!steps().resolved && proposal() && triage() && !prototypeShown()
+						? [{ triage: triage()!, ...proposal()! }]
+						: []
+				}
 				key={(x) => x.digest}
 			>
 				{(x) => (
@@ -391,22 +454,108 @@ export function FeedbackRow(props: {
 					/>
 				)}
 			</Each>
+			<Each of={steps().prototype ? [steps().prototype!] : []} key={(p) => p.operationId}>
+				{(p) => (
+					<View class="gap-2.5">
+						<Line
+							testID={`feedback-prototyping-${props.item.id}`}
+							mark={
+								running(p())
+									? chatState(p()) === "question"
+										? "needs"
+										: "moving"
+									: chatState(p()) === "done"
+										? "ready"
+										: "unknown"
+							}
+							text={chatLine(p())}
+						>
+							<ChatLink day={props.day} item={props.item} step={p()} />
+						</Line>
+						<Each of={questionOf(p()) ? [questionOf(p())!] : []} key={(q) => `${p().sessionId}/${q.id}`}>
+							{(q) => (
+								<FeedbackQuestion
+									item={props.item}
+									triage={p()}
+									question={q()}
+									artifacts={props.day.artifacts as ArtifactSource | undefined}
+									busy={busy()}
+									sending={v().stepping === props.item.id}
+									send={send}
+									check={check}
+									unknown={unknown()}
+									keyboardActive={props.keyboardActive}
+									routeKey={props.routeKey}
+								/>
+							)}
+						</Each>
+						<If when={!questionOf(p()) && answerTo(props.item, p().sessionId)}>
+							<View selectable>
+								<Text
+									testID={`feedback-chose-${props.item.id}`}
+									class="text-xs text-muted-foreground"
+								>{`You answered: “${clip(answerTo(props.item, p().sessionId)?.text ?? "", 120)}”`}</Text>
+							</View>
+						</If>
+						<Each of={!steps().resolved && proposalOf(p()) ? [proposalOf(p())!] : []} key={(x) => x.digest}>
+							{(x) => (
+								<Proposal
+									day={props.day}
+									item={props.item}
+									triage={p()}
+									value={x().value}
+									digest={x().digest}
+									busy={busy()}
+									send={(i) => void send(i)}
+								/>
+							)}
+						</Each>
+					</View>
+				)}
+			</Each>
 			<Each of={steps().fix ? [steps().fix!] : []} key={(f) => f.operationId}>
 				{(f) => (
-					<Line
-						testID={`feedback-fixing-${props.item.id}`}
-						mark={running(f()) ? "moving" : chatState(f()) === "done" ? "ready" : "unknown"}
-						text={chatLine(f())}
-						action={
-							<If when={props.day.chat}>
+					<View class="gap-2.5">
+						<Line
+							testID={`feedback-fixing-${props.item.id}`}
+							mark={
+								chatState(f()) === "question"
+									? "needs"
+									: running(f())
+										? "moving"
+										: chatState(f()) === "done"
+											? "ready"
+											: "unknown"
+							}
+							text={chatLine(f())}
+							action={
+								<If when={props.day.chat}>
+									<ChatLink day={props.day} item={props.item} step={f()} />
+								</If>
+							}
+						>
+							<If when={!props.day.chat}>
 								<ChatLink day={props.day} item={props.item} step={f()} />
 							</If>
-						}
-					>
-						<If when={!props.day.chat}>
-							<ChatLink day={props.day} item={props.item} step={f()} />
-						</If>
-					</Line>
+						</Line>
+						<Each of={questionOf(f()) ? [questionOf(f())!] : []} key={(q) => `${f().sessionId}/${q.id}`}>
+							{(q) => (
+								<FeedbackQuestion
+									item={props.item}
+									triage={f()}
+									question={q()}
+									artifacts={props.day.artifacts as ArtifactSource | undefined}
+									busy={busy()}
+									sending={v().stepping === props.item.id}
+									send={send}
+									check={check}
+									unknown={unknown()}
+									keyboardActive={props.keyboardActive}
+									routeKey={props.routeKey}
+								/>
+							)}
+						</Each>
+					</View>
 				)}
 			</Each>
 			<Each of={steps().mission ? [steps().mission!] : []} key={(m) => m.operationId}>

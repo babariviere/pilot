@@ -6,7 +6,7 @@ import type { DecisionArtifact } from "pilot-day/native";
 import { createShelf, PinnedArtifacts } from "./ArtifactShelf";
 import type { ArtifactRow, ArtifactSource } from "./artifactReads";
 
-export function QuestionArtifacts(props: { source: ArtifactSource; artifacts: DecisionArtifact[] }) {
+export function QuestionArtifacts(props: { source: ArtifactSource; artifacts: DecisionArtifact[]; label?: string }) {
 	const shelf = createShelf();
 	const rows = (): ArtifactRow[] =>
 		props.artifacts.map((a) => ({
@@ -21,9 +21,10 @@ export function QuestionArtifacts(props: { source: ArtifactSource; artifacts: De
 	return (
 		<View testID="question-artifacts" class="gap-2">
 			<Text class="text-xs text-muted-foreground">
-				{props.artifacts.length === 1
-					? "The chat attached this to look at:"
-					: "The chat attached these to look at:"}
+				{props.label ??
+					(props.artifacts.length === 1
+						? "The chat attached this to look at:"
+						: "The chat attached these to look at:")}
 			</Text>
 			<PinnedArtifacts source={props.source} shelf={shelf} rows={rows()} />
 		</View>

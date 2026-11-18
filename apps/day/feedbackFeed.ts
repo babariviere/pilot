@@ -11,6 +11,7 @@
 // triage chat once. It clarifies the feedback; it starts and approves nothing.
 import { type Signal, signal } from "nsh";
 import { call, type Refusal, type Reply } from "./bridge";
+import { queueOf } from "./codingQueue";
 import type {
 	UserFeedback,
 	UserFeedbackOrigin,
@@ -56,8 +57,21 @@ export type FeedbackProject = { projectId: string; name: string; contextDigest: 
 
 /** One explicit step on one saved item. */
 export type StepIntent = { feedbackId: string } & (
-	| { action: "triage"; projectId: string; contextDigest: string }
-	| { action: "fix"; projectId: string; contextDigest: string; triageSessionId: string; proposalDigest: string }
+	| {
+			action: "triage";
+			projectId: string;
+			contextDigest: string;
+			/** A screen agent chat of this project that becomes the triage, instead of a new chat. */
+			adoptSessionId?: string;
+	  }
+	| {
+			action: "prototype" | "fix";
+			projectId: string;
+			contextDigest: string;
+			/** The chat whose proposal it starts from: a triage, or for a fix also a prototype. */
+			triageSessionId: string;
+			proposalDigest: string;
+	  }
 	| { action: "link"; missionId: string }
 	| { action: "resolve" | "reopen" | "remove" }
 	| { action: "answer"; triageSessionId: string; questionId: number; message: string }
@@ -255,8 +269,14 @@ export function feedbackOf(x: unknown): UserFeedback | null {
 }
 
 const STATES = ["starting", "working", "question", "done", "failed", "stopped", "archived", "missing"];
-const NEXT = ["fix", "existing-mission", "new-mission", "none"];
+const NEXT = ["fix", "prototype", "existing-mission", "new-mission", "none"];
 const str = (v: unknown) => typeof v === "string";
+
+/** A saved artifact of a feedback chat at an exact revision. */
+function artifactOf(x: unknown): boolean {
+	const a = x as Record<string, unknown> | null;
+	return !!a && str(a.sessionId) && str(a.artifactId) && str(a.title) && str(a.kind) && typeof a.revision === "number";
+}
 
 function proposalOf(x: unknown): UserFeedbackWorkView["proposal"] | null {
 	const p = x as Record<string, unknown> | null;
@@ -271,10 +291,12 @@ function proposalOf(x: unknown): UserFeedbackWorkView["proposal"] | null {
 	if (!v || typeof v !== "object" || !str(p.digest) || !str(v.summary) || !str(v.detail)) return null;
 	if (!NEXT.includes(v.next as string) || !Array.isArray(v.duplicates) || !v.duplicates.every(str)) return null;
 	if ((v.missionId !== null && !str(v.missionId)) || (v.goal !== null && !str(v.goal))) return null;
+	if (v.directions !== undefined && (!Array.isArray(v.directions) || !v.directions.every(str))) return null;
+	if (v.mockup !== undefined && !artifactOf(v.mockup)) return null;
 	return { value: v as unknown as UserFeedbackProposal, digest: p.digest as string };
 }
 
-/** A triage's pending question, or null when it does not read. */
+/** A feedback chat's pending question, or null when it does not read. */
 function questionOf(x: unknown): UserFeedbackQuestion | null {
 	const q = x as Record<string, unknown> | null;
 	if (!q || typeof q !== "object" || typeof q.id !== "number" || !str(q.question)) return null;
@@ -282,6 +304,7 @@ function questionOf(x: unknown): UserFeedbackQuestion | null {
 	if (!Array.isArray(q.options) || q.options.length > 9) return null;
 	for (const o of q.options as Record<string, unknown>[])
 		if (!o || !str(o.label) || (o.detail !== undefined && !str(o.detail))) return null;
+	if (q.artifacts !== undefined && (!Array.isArray(q.artifacts) || !q.artifacts.every(artifactOf))) return null;
 	return q as unknown as UserFeedbackQuestion;
 }
 
@@ -289,13 +312,19 @@ function questionOf(x: unknown): UserFeedbackQuestion | null {
 function workOf(x: unknown): UserFeedbackWorkView | null {
 	const w = x as Record<string, unknown> | null;
 	if (!w || typeof w !== "object" || !str(w.operationId) || typeof w.recordedAt !== "number") return null;
-	if (w.kind === "triage" || w.kind === "fix") {
+	if (w.kind === "triage" || w.kind === "prototype" || w.kind === "fix") {
 		const chat = w.chat as Record<string, unknown> | undefined;
 		if (!str(w.sessionId) || !str(w.projectId)) return null;
 		if (chat !== undefined && (!chat || !str(chat.title) || !STATES.includes(chat.state as string))) return null;
-		if (w.kind === "fix" && (!str(w.triageSessionId) || !str(w.proposalDigest))) return null;
+		if (w.kind !== "triage" && (!str(w.triageSessionId) || !str(w.proposalDigest))) return null;
 		if (w.proposal !== undefined && !proposalOf(w.proposal)) return null;
 		if (w.question !== undefined && !questionOf(w.question)) return null;
+		// A queue view that does not read is left out; the step still shows.
+		if (chat?.queue !== undefined) {
+			const { queue, ...rest } = chat;
+			const read = queueOf(queue);
+			return { ...w, chat: read ? { ...rest, queue: read } : rest } as unknown as UserFeedbackWorkView;
+		}
 		return w as unknown as UserFeedbackWorkView;
 	}
 	if (w.kind === "mission") {
@@ -466,11 +495,8 @@ export class ConnectedFeedback implements FeedbackSource {
 
 	view(): FeedbackView {
 		const items = this.#items;
-		const reason = this.#refusal
-			? items
-				? `${feedbackReason(this.#refusal)} What shows is from Pilot's last read.`
-				: feedbackReason(this.#refusal)
-			: "";
+		// With items shown, the screen says nothing about a failed read until the shared old-data rule does.
+		const reason = this.#refusal ? feedbackReason(this.#refusal) : "";
 		return {
 			availability: items ? "live" : this.#refusal ? "unavailable" : this.#asked ? "reading" : "idle",
 			reason,

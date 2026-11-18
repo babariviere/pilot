@@ -78,7 +78,7 @@ export class UserFeedbackStore {
 		return row ? JSON.parse(String(row.record)) : undefined;
 	}
 
-	/** Exact saved native triage/fix admission, not agent-authored provenance. */
+	/** Exact saved native triage/prototype/fix admission, not agent-authored provenance. */
 	metricsScope(operationId: string, sessionId: string): { origin: UserFeedback["origin"] } | undefined {
 		const row = this.db.one(
 			"SELECT f.record AS feedback, w.record AS work FROM user_feedback_work w JOIN user_feedback f ON f.id=w.feedback_id WHERE w.operation_id=?",
@@ -86,7 +86,8 @@ export class UserFeedbackStore {
 		);
 		if (!row) return undefined;
 		const work = JSON.parse(String(row.work)) as UserFeedbackWork;
-		if ((work.kind !== "triage" && work.kind !== "fix") || work.sessionId !== sessionId) return undefined;
+		if ((work.kind !== "triage" && work.kind !== "prototype" && work.kind !== "fix") || work.sessionId !== sessionId)
+			return undefined;
 		return { origin: (JSON.parse(String(row.feedback)) as UserFeedback).origin };
 	}
 

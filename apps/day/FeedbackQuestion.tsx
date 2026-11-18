@@ -2,11 +2,13 @@
 // The feedback source still owns exact question delivery and receipt reconciliation.
 import { cleanup, computed, signal, Text, View } from "nsh";
 import type { Interview, Question } from "pilot-day/native";
+import type { ArtifactSource } from "./artifactReads";
 import type { FeedbackItem, StepIntent, StepResult, UserFeedbackQuestion } from "./feedbackFeed";
 import { MAX_ANSWER_LENGTH } from "./feedbackFeed";
 import { answerKey, answerMessage, type ChatStep } from "./feedbackSteps";
 import { answerDrafts, setAnswerDraft, stepMessages } from "./feedbackView";
 import { type InterviewRead, InterviewRenderer, type InterviewSource } from "./InterviewRenderer";
+import { QuestionArtifacts } from "./QuestionArtifacts";
 import { ToggleChip } from "./ui";
 
 // Only the form the user last touched owns its shortcuts, even in feedback history.
@@ -14,8 +16,11 @@ const activeQuestion = signal<string | null>(null);
 
 export function FeedbackQuestion(props: {
 	item: FeedbackItem;
+	/** The asking chat: a triage, a prototype or a fix. */
 	triage: ChatStep;
 	question: UserFeedbackQuestion;
+	/** Reads the mockups the chat attached. Without it they are not shown. */
+	artifacts?: ArtifactSource;
 	correctionDigest?: string;
 	busy: boolean;
 	sending: boolean;
@@ -94,7 +99,12 @@ export function FeedbackQuestion(props: {
 				: (stepMessages()[props.item.id] ?? ""),
 			heading: props.correctionDigest ? "Correct the investigation" : "Questions before proceeding",
 			submitLabel: props.correctionDigest ? "Send correction" : "Submit answers",
-			submissionHint: "Clarifies this investigation only. Starts no fix and approves nothing.",
+			submissionHint:
+				props.triage.kind === "prototype"
+					? "Your choice becomes the fix proposal. It starts no fix."
+					: props.triage.kind === "fix"
+						? "Goes to the fix chat only. It approves nothing else."
+						: "Clarifies this investigation only. Starts no fix and approves nothing.",
 			roundHint: props.question.multiSelect
 				? "Choose all that apply. Only Submit answers sends your answer."
 				: "Drafts do not continue the chat. Only Submit answers sends your answer.",
@@ -187,7 +197,10 @@ export function FeedbackQuestion(props: {
 		),
 	};
 	return (
-		<View testID={`feedback-question-${props.item.id}`}>
+		<View testID={`feedback-question-${props.item.id}`} class="gap-2.5">
+			<If when={props.artifacts && props.question.artifacts?.length}>
+				<QuestionArtifacts source={props.artifacts as ArtifactSource} artifacts={props.question.artifacts ?? []} />
+			</If>
 			<InterviewRenderer source={source} />
 		</View>
 	);

@@ -2,9 +2,10 @@
 // the latest triage, its question or proposal and the user's last answer to
 // it, the latest fix, the linked mission and the user's own resolved mark.
 // Pure: reading these changes nothing.
+import { queueLine } from "./codingQueue";
 import type { FeedbackItem, UserFeedbackProposal, UserFeedbackQuestion, UserFeedbackWorkView } from "./feedbackFeed";
 
-export type ChatStep = Extract<UserFeedbackWorkView, { kind: "triage" | "fix" }>;
+export type ChatStep = Extract<UserFeedbackWorkView, { kind: "triage" | "prototype" | "fix" }>;
 export type MissionStep = Extract<UserFeedbackWorkView, { kind: "mission" }>;
 export type AnswerStep = Extract<UserFeedbackWorkView, { kind: "answer" }>;
 export type ChatState = NonNullable<ChatStep["chat"]>["state"];
@@ -15,6 +16,8 @@ export type Steps = {
 	triage: ChatStep | null;
 	/** The user's last answer to the latest triage, or null. */
 	answer: AnswerStep | null;
+	/** The latest prototype: mockups the user chooses from. */
+	prototype: ChatStep | null;
 	fix: ChatStep | null;
 	mission: MissionStep | null;
 };
@@ -30,6 +33,7 @@ export function stepsOf(item: FeedbackItem): Steps {
 		resolved: last("resolved", "reopened")?.kind === "resolved",
 		triage,
 		answer: answer && triage && answer.sessionId === triage.sessionId ? answer : null,
+		prototype: (last("prototype") as ChatStep | undefined) ?? null,
 		fix: (last("fix") as ChatStep | undefined) ?? null,
 		mission: (last("mission") as MissionStep | undefined) ?? null,
 	};
@@ -39,21 +43,35 @@ export function chatState(step: ChatStep): ChatState {
 	return step.chat?.state ?? "missing";
 }
 
-/** Whether a triage or fix chat may still change. */
+/** The user's last answer to one chat's questions, or null. */
+export function answerTo(item: FeedbackItem, sessionId: string): AnswerStep | null {
+	return (item.work.findLast((w) => w.kind === "answer" && w.sessionId === sessionId) as AnswerStep) ?? null;
+}
+
+/** The latest chat waiting on the user's answer: a fix, then a prototype, then a triage. */
+export function askingOf(s: Steps): { step: ChatStep; question: UserFeedbackQuestion } | null {
+	for (const step of [s.fix, s.prototype, s.triage]) {
+		const question = questionOf(step);
+		if (step && question) return { step, question };
+	}
+	return null;
+}
+
+/** Whether a triage, prototype or fix chat may still change. */
 export function running(step: ChatStep | null): boolean {
 	const s = step ? chatState(step) : null;
 	return s === "starting" || s === "working" || s === "question";
 }
 
-/** The finished triage's readable proposal, or null. */
+/** The finished triage's or prototype's readable proposal, or null. */
 export function proposalOf(step: ChatStep | null): { value: UserFeedbackProposal; digest: string } | null {
 	const p = step?.proposal;
 	return p && "value" in p ? p : null;
 }
 
-/** The question a triage waits on, or null. */
+/** The question a triage, prototype or fix waits on, or null. */
 export function questionOf(step: ChatStep | null): UserFeedbackQuestion | null {
-	return step && step.kind === "triage" && chatState(step) === "question" ? (step.question ?? null) : null;
+	return step && chatState(step) === "question" ? (step.question ?? null) : null;
 }
 
 /** Where an unsent answer is kept: its triage chat and question. */
@@ -76,31 +94,39 @@ export function answerMessage(question: UserFeedbackQuestion, picks: number[], t
 	return label || own;
 }
 
-/** One calm line about a triage or fix chat. */
+/** One calm line about a triage, prototype or fix chat. */
 export function chatLine(step: ChatStep): string {
 	const triage = step.kind === "triage";
+	const name = step.kind;
+	// A chat waiting for a coding slot says where it is in line; it starts by itself.
+	if (step.chat?.queue) return queueLine(step.chat.queue);
 	switch (chatState(step)) {
 		case "starting":
 		case "working":
 			return triage
 				? "An agent is triaging this. It reads and proposes; it changes nothing."
-				: "A fix is in progress.";
+				: name === "prototype"
+					? "A prototype is in progress. It makes mockups to choose from; it writes no code."
+					: "A fix is in progress.";
 		case "question":
 			if (triage && step.question) return "The triage needs your answer before it can propose a next step.";
-			return `The ${triage ? "triage" : "fix"} asked you a question. Answer it in its chat.`;
+			if (name === "prototype" && step.question) return "The prototype needs your choice.";
+			if (step.question) return "The fix needs your answer before it can go on.";
+			return `The ${name} asked you a question. Answer it in its chat.`;
 		case "done": {
-			if (!triage) return "The fix finished. Check its result. This stays open until you mark it resolved.";
+			if (name === "fix") return "The fix finished. Check its result. This stays open until you mark it resolved.";
 			const p = step.proposal;
-			return p && "problem" in p ? `The triage finished without a proposal Pilot can read: ${p.problem}` : "";
+			if (p && "problem" in p) return `The ${name} finished without a proposal Pilot can read: ${p.problem}`;
+			return triage ? "" : "The prototype finished with your choice.";
 		}
 		case "failed":
-			return `The ${triage ? "triage" : "fix"} failed.`;
+			return `The ${name} failed.`;
 		case "stopped":
-			return `The ${triage ? "triage" : "fix"} was stopped.`;
+			return `The ${name} was stopped.`;
 		case "archived":
-			return `The ${triage ? "triage" : "fix"} chat was archived.`;
+			return `The ${name} chat was archived.`;
 		default:
-			return `Pilot has no record of the ${triage ? "triage" : "fix"} chat. It may not have started.`;
+			return `Pilot has no record of the ${name} chat. It may not have started.`;
 	}
 }
 

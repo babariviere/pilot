@@ -7,11 +7,11 @@
 //! no work and approves nothing.
 //!
 //! A step is one explicit act of the user's on saved feedback: start an agent
-//! triage or a small fix in a project the user chose, link a mission, or mark
-//! it resolved or open again. The host re-reads the project's chat setup right
-//! before saving a triage or fix, and sends each step once, like a Send.
-//! An answer is the user's reply to the triage's pending question, sent to
-//! that chat once. It clarifies the feedback; it starts and approves nothing.
+//! triage, a read-only prototype or a small fix in a project the user chose,
+//! link a mission, or mark it resolved or open again. The host re-reads the
+//! project's chat setup right before saving a chat, and sends each step once,
+//! like a Send. An answer is the user's reply to a feedback chat's pending
+//! question, sent to that chat once. It starts and approves nothing.
 use super::{Error, Journal, Shared, Transport, planning, valid_id};
 use crate::bridge::{Command, Gate};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -48,6 +48,15 @@ fn valid_digest(s: &str) -> bool {
     s.len() == 64
         && s.bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
+/// The setup digest a project's chat profile names now.
+fn current_digest(profile: &Value) -> Result<String, Error> {
+    profile["contextDigest"]
+        .as_str()
+        .filter(|d| valid_digest(d))
+        .map(str::to_owned)
+        .ok_or(Error::Invalid)
 }
 
 /// Null, or exactly one mission or chat by its ID.
@@ -183,6 +192,12 @@ async fn upload(t: &Transport, image: &ImageUpload) -> Result<Value, Error> {
     let bytes = STANDARD
         .decode(data.trim_start_matches("data:image/png;base64,"))
         .map_err(|_| Error::Invalid)?;
+    Ok(json!({"image":put_image(t, id, bytes).await?}))
+}
+
+/// Uploads one PNG with the upload identity `id` and returns its exact reference
+/// (`{uploadId,sha256,bytes}`). Also used for the screen agent's pictures.
+pub(super) async fn put_image(t: &Transport, id: &str, bytes: Vec<u8>) -> Result<Value, Error> {
     if bytes.len() < 33 || bytes.len() > MAX_IMAGE || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Err(Error::Invalid);
     }
@@ -212,7 +227,7 @@ async fn upload(t: &Transport, image: &ImageUpload) -> Result<Value, Error> {
         return Err(Error::Invalid);
     }
     t.profile_gate().await?;
-    Ok(json!({"image":reference}))
+    Ok(reference)
 }
 
 /// One page of saved feedback: the newest, or older than `before`. Read only.
@@ -256,6 +271,9 @@ pub(crate) struct Step {
     /// answer: the user's words, exactly as sent to the triage.
     #[serde(default)]
     message: Option<String>,
+    /// triage: a screen agent chat of the same project that becomes the triage, instead of a new chat.
+    #[serde(default)]
+    adopt_session_id: Option<String>,
 }
 impl Step {
     pub(crate) fn validate(&self) -> Result<(), Error> {
@@ -264,13 +282,18 @@ impl Step {
         let chat =
             id(&self.project_id) && digest(&self.context_digest) && self.mission_id.is_none();
         let answer = self.question_id.is_some() || self.message.is_some();
+        let adopt = self.adopt_session_id.is_some();
         let ok = valid_id(&self.feedback_id)
             && matches!(self.action.as_str(), "answer" | "correct") == answer
+            && (!adopt || (self.action == "triage" && id(&self.adopt_session_id)))
             && match self.action.as_str() {
                 "triage" => {
                     chat && self.triage_session_id.is_none() && self.proposal_digest.is_none()
                 }
-                "fix" => chat && id(&self.triage_session_id) && digest(&self.proposal_digest),
+                // fix: from a triage's or prototype's proposal; prototype: from a triage's.
+                "fix" | "prototype" => {
+                    chat && id(&self.triage_session_id) && digest(&self.proposal_digest)
+                }
                 "link" => {
                     id(&self.mission_id)
                         && self.project_id.is_none()
@@ -367,7 +390,7 @@ fn step_fields(action: &str) -> Option<&'static [&'static str]> {
     ];
     match action {
         "triage" => Some(CHAT),
-        "fix" => Some(FIX),
+        "fix" | "prototype" => Some(FIX),
         "link" => Some(&["missionId"]),
         "resolve" | "reopen" | "remove" => Some(&[]),
         "answer" => Some(&["questionId", "message"]),
@@ -394,13 +417,17 @@ pub(super) fn validate_step_record(op: &Value) -> Result<(), Error> {
             && p["thinking"].as_str().is_some_and(|t| t.len() <= 128)
     };
     let target = op["targetId"].as_str().unwrap_or("");
-    let funding_fields = if matches!(action, "triage" | "fix") {
+    let funding_fields = if matches!(action, "triage" | "prototype" | "fix") {
         usize::from(o.contains_key("allowanceMicros"))
             + usize::from(o.contains_key("fundingRequired"))
     } else {
         0
     };
-    let ok = o.len() == 3 + fields.len() + funding_fields
+    // A triage that adopts a screen agent chat names it, and targets it.
+    let adopt = usize::from(action == "triage" && o.contains_key("adoptSessionId"));
+    let ok = o.len() == 3 + fields.len() + funding_fields + adopt
+        && p.get("adoptSessionId")
+            .is_none_or(|v| v.as_str().is_some_and(|s| valid_id(s) && s == target))
         && p.get("allowanceMicros")
             .is_none_or(|v| v.is_null() || v.as_u64().is_some_and(|n| n <= MAX_CURSOR))
         && p.get("fundingRequired").is_none_or(|v| v == true)
@@ -411,7 +438,7 @@ pub(super) fn validate_step_record(op: &Value) -> Result<(), Error> {
         && valid_id(str_of("feedbackId"))
         && match action {
             "triage" => chat() && valid_id(target),
-            "fix" => {
+            "fix" | "prototype" => {
                 chat()
                     && valid_id(target)
                     && valid_id(str_of("triageSessionId"))
@@ -439,6 +466,7 @@ pub(super) fn exact_step(op: &Value, r: &Value) -> Result<(), Error> {
     let result = &r["result"];
     let kind = match p["action"].as_str() {
         Some("triage") => "triage",
+        Some("prototype") => "prototype",
         Some("fix") => "fix",
         Some("link") => "mission",
         Some("resolve") => "resolved",
@@ -449,7 +477,7 @@ pub(super) fn exact_step(op: &Value, r: &Value) -> Result<(), Error> {
         _ => return Err(Error::Unknown),
     };
     let same = match kind {
-        "triage" | "fix" => {
+        "triage" | "prototype" | "fix" => {
             result["sessionId"] == op["targetId"] && result["projectId"] == p["projectId"]
         }
         "mission" => result["missionId"] == op["targetId"],
@@ -662,12 +690,9 @@ pub(super) async fn handle(
             }
             let id = uuid::Uuid::new_v4().to_string();
             if let Some(selected) = &intent.investigation {
-                let select = super::new_chat::Select {
-                    project_id: selected.project_id.clone(),
-                    context_digest: selected.context_digest.clone(),
-                    mode: "ask".into(),
-                };
-                let profile = super::new_chat::profile(t, &select).await?;
+                // The project the user picked is the target. Its setup digest moves with any
+                // project edit; the investigation then starts under the current one.
+                let profile = super::new_chat::profile_now(t, &selected.project_id, "ask").await?;
                 check()?;
                 let mut child = json!({"purpose":WORK_KIND,"action":"triage","feedbackId":id});
                 for k in [
@@ -686,7 +711,7 @@ pub(super) async fn handle(
                 let pinned = planning::record(
                     &t.source,
                     uuid::Uuid::new_v4().to_string(),
-                    select.context_digest,
+                    current_digest(&profile)?,
                     child,
                 )?;
                 request["investigation"] = json!({"operation":pinned.operation});
@@ -710,19 +735,13 @@ pub(super) async fn handle(
             let mut request =
                 json!({"purpose":WORK_KIND,"action":step.action,"feedbackId":step.feedback_id});
             let (target, digest) = match step.action.as_str() {
-                "triage" | "fix" => {
-                    let mode = if step.action == "triage" {
-                        "ask"
-                    } else {
-                        "build"
-                    };
-                    let select = super::new_chat::Select {
-                        project_id: step.project_id.clone().unwrap_or_default(),
-                        context_digest: step.context_digest.clone().unwrap_or_default(),
-                        mode: mode.into(),
-                    };
-                    // The project's current setup, read right before saving. A changed one is Stale.
-                    let profile = super::new_chat::profile(t, &select).await?;
+                "triage" | "prototype" | "fix" => {
+                    // Triage and prototype only read and mock up; a fix builds.
+                    let mode = if step.action == "fix" { "build" } else { "ask" };
+                    // The project's current setup, read right before saving. The project is the
+                    // target; when only its setup digest moved, the work names the current one.
+                    let project = step.project_id.clone().unwrap_or_default();
+                    let profile = super::new_chat::profile_now(t, &project, mode).await?;
                     check()?;
                     for k in [
                         "projectId",
@@ -738,11 +757,19 @@ pub(super) async fn handle(
                             request[k] = v.clone();
                         }
                     }
-                    if step.action == "fix" {
+                    if step.action != "triage" {
                         request["triageSessionId"] = json!(step.triage_session_id);
                         request["proposalDigest"] = json!(step.proposal_digest);
                     }
-                    (uuid::Uuid::new_v4().to_string(), select.context_digest)
+                    // An adopted screen agent chat is the triage's own chat, so its target.
+                    let target = match &step.adopt_session_id {
+                        Some(chat) => {
+                            request["adoptSessionId"] = json!(chat);
+                            chat.clone()
+                        }
+                        None => uuid::Uuid::new_v4().to_string(),
+                    };
+                    (target, current_digest(&profile)?)
                 }
                 "link" => {
                     request["missionId"] = json!(step.mission_id);
@@ -1088,6 +1115,17 @@ mod tests {
             )
             .is_ok()
         );
+        assert!(
+            step(
+                json!({"feedbackId":"f","action":"prototype","projectId":"p","contextDigest":d,
+            "triageSessionId":"s","proposalDigest":d})
+            )
+            .is_ok()
+        );
+        assert!(
+            step(json!({"feedbackId":"f","action":"prototype","projectId":"p","contextDigest":d}))
+                .is_err()
+        );
         assert!(step(json!({"feedbackId":"f","action":"link","missionId":"m"})).is_ok());
         assert!(step(json!({"feedbackId":"f","action":"resolve"})).is_ok());
         assert!(step(json!({"feedbackId":"f","action":"remove"})).is_ok());
@@ -1207,6 +1245,19 @@ mod tests {
                 "{pointer}"
             );
         }
+        // A prototype is settled only by a prototype receipt for its own chat.
+        let prototype = op(
+            "s3",
+            json!({"purpose":WORK_KIND,"action":"prototype","feedbackId":"f","projectId":"p",
+                "projectPath":"/repo","contextDigest":d,"model":"fake/model","thinking":"high",
+                "triageSessionId":"s1","proposalDigest":d}),
+        );
+        assert_eq!(validate_step_record(&prototype), Ok(()));
+        let started = json!({"result":{"operationId":"op","kind":"prototype","sessionId":"s3","projectId":"p","recordedAt":1}});
+        assert_eq!(exact_step(&prototype, &started), Ok(()));
+        let mut as_fix = started.clone();
+        as_fix["result"]["kind"] = json!("fix");
+        assert_eq!(exact_step(&prototype, &as_fix), Err(Error::Unknown));
         let link = op(
             "m",
             json!({"purpose":WORK_KIND,"action":"link","feedbackId":"f","missionId":"m"}),
@@ -1271,5 +1322,38 @@ mod tests {
                 "{forged}"
             );
         }
+    }
+    #[test]
+    fn only_a_triage_may_adopt_a_screen_agent_chat_and_it_targets_that_chat() {
+        let d = "a".repeat(64);
+        assert!(
+            step(
+                json!({"feedbackId":"f","action":"triage","projectId":"p","contextDigest":d,
+                "adoptSessionId":"screen-1"})
+            )
+            .is_ok()
+        );
+        for forged in [
+            json!({"feedbackId":"f","action":"triage","projectId":"p","contextDigest":d,"adoptSessionId":"../s"}),
+            json!({"feedbackId":"f","action":"fix","projectId":"p","contextDigest":d,
+                "triageSessionId":"s","proposalDigest":d,"adoptSessionId":"screen-1"}),
+            json!({"feedbackId":"f","action":"resolve","adoptSessionId":"screen-1"}),
+        ] {
+            assert!(step(forged.clone()).is_err(), "{forged}");
+        }
+        let op = |target: &str, adopt: &str| {
+            json!({"operationId":"op","targetId":target,"kind":WORK_KIND,"bindingGeneration":1,
+                "bindingId":d,"payload":json!({"purpose":WORK_KIND,"action":"triage","feedbackId":"f",
+                "projectId":"p","projectPath":"/repo","contextDigest":d,"model":"fake/model",
+                "thinking":"high","adoptSessionId":adopt}).to_string()})
+        };
+        let adopted = op("screen-1", "screen-1");
+        assert_eq!(validate_step_record(&adopted), Ok(()));
+        assert_eq!(
+            validate_step_record(&op("other", "screen-1")),
+            Err(Error::Storage)
+        );
+        let r = json!({"result":{"operationId":"op","kind":"triage","sessionId":"screen-1","projectId":"p","recordedAt":1}});
+        assert_eq!(exact_step(&adopted, &r), Ok(()));
     }
 }

@@ -8,8 +8,12 @@
 // answer puts it back to work, and "Answer:" shows the last words sent.
 // A triage or fix chat opens as a scripted read-only chat: a triage chat
 // works, a fix chat is done and has an earlier page.
+// "Triage prototype" proposes a prototype; "Prototype asks" leaves the
+// prototype waiting on a choice with two mockups; "Prototype chose" finishes
+// it with the chosen fix. Mockups read from a scripted artifact source.
 import { mount, signal, Text, View } from "nsh";
 import type { ChatRow } from "pilot-day/native";
+import type { ArtifactRow, ArtifactSource, ListResult, ReadResult } from "./artifactReads";
 import {
 	type FeedbackItem,
 	type FeedbackSource,
@@ -193,6 +197,16 @@ class ScriptedFeedback implements FeedbackSource {
 				proposalDigest: intent.proposalDigest,
 				chat: { title: "Fix", state: "working" },
 			};
+		else if (intent.action === "prototype")
+			w = {
+				...base,
+				kind: "prototype",
+				sessionId: `prototype-${n}`,
+				projectId: intent.projectId,
+				triageSessionId: intent.triageSessionId,
+				proposalDigest: intent.proposalDigest,
+				chat: { title: "Prototype", state: "working" },
+			};
 		else if (intent.action === "link")
 			w = {
 				...base,
@@ -220,16 +234,16 @@ class ScriptedFeedback implements FeedbackSource {
 				text: intent.message,
 			};
 		} else w = { ...base, kind: intent.action === "resolve" ? "resolved" : "reopened" };
-		// An answered triage goes back to work, without its question.
+		// An answered chat goes back to work, without its question.
 		const work = item.work.map((x): UserFeedbackWorkView => {
 			if (
 				(intent.action !== "answer" && intent.action !== "correct") ||
-				x.kind !== "triage" ||
+				(x.kind !== "triage" && x.kind !== "prototype" && x.kind !== "fix") ||
 				x.sessionId !== intent.triageSessionId
 			)
 				return x;
 			const { question: _question, proposal: _proposal, ...rest } = x;
-			return { ...rest, chat: { title: "Triage", state: "working" } };
+			return { ...rest, chat: { title: x.chat?.title ?? "Triage", state: "working" } };
 		});
 		this.#saved = this.#saved.map((i) => (i === item ? { ...i, work: [...work, w] } : i));
 	}
@@ -319,12 +333,78 @@ class ScriptedFeedback implements FeedbackSource {
 		this.#saved = [{ ...item, work }, ...this.#saved.slice(1)];
 		this.#publish();
 	}
+	/** Leaves the newest item's prototype asking which mockup to build, or finishes it with the choice. */
+	prototype(state: "asks" | "chose") {
+		const item = this.#saved[0];
+		const t = item?.work.findIndex((w) => w.kind === "prototype") ?? -1;
+		if (!item || t < 0) return;
+		const w = item.work[t]!;
+		if (w.kind !== "prototype") return;
+		const mockups = MOCKUPS.map((m) => ({ ...m, sessionId: w.sessionId }));
+		const next: UserFeedbackWorkView =
+			state === "asks"
+				? {
+						...w,
+						chat: { title: "Prototype", state: "question" },
+						question: {
+							id: 9,
+							question: "Which one should Pilot build?",
+							options: [{ label: "Inline owner chips", suggested: true }, { label: "Owner column" }],
+							artifacts: mockups,
+						},
+					}
+				: {
+						...w,
+						chat: { title: "Prototype", state: "done" },
+						proposal: {
+							value: {
+								summary: "Inline owner chips on plan rows.",
+								duplicates: [],
+								next: "fix",
+								detail: "Add an owner chip after each task title, as in the chosen mockup.",
+								missionId: null,
+								goal: null,
+								mockup: mockups[0]!,
+							},
+							digest: "c".repeat(64),
+						},
+					};
+		this.#saved = [{ ...item, work: item.work.map((x, i) => (i === t ? next : x)) }, ...this.#saved.slice(1)];
+		this.#publish();
+	}
 	dispose() {
 		this.#listeners.clear();
 	}
 }
 
 const feedback = new ScriptedFeedback();
+
+const MOCKUPS = [
+	{ artifactId: "m-chips", title: "Inline owner chips", kind: "nsh", revision: 2 },
+	{ artifactId: "m-column", title: "Owner column", kind: "nsh", revision: 1 },
+];
+
+/** Mockups as inert text. Opening one reads it once; it sends nothing. */
+const mockupReads = signal<string[]>([]);
+const artifacts: ArtifactSource = {
+	async list(): Promise<ListResult> {
+		return { ok: true, list: { rows: [], more: false } };
+	},
+	async read(row: ArtifactRow): Promise<ReadResult> {
+		mockupReads.update((all) => [...all, `${row.artifactId}@${row.revision}`]);
+		const text = "export default () => <Text>Owner chips</Text>;";
+		return {
+			status: "shown",
+			artifact: {
+				version: 1,
+				reference: { sourceSessionId: row.sessionId, artifactId: row.artifactId, revision: row.revision ?? 0 },
+				metadata: { title: row.title, kind: row.kind },
+				rendering: "unsupported",
+				content: { state: "text", source: text, containerSha256: "a".repeat(64), containerBytes: text.length },
+			},
+		};
+	},
+};
 
 const row = (key: string, role: ChatRow["role"], text: string): ChatRow => ({
 	key,
@@ -362,6 +442,7 @@ class ScriptedChat implements SessionChatSource {
 			title: fix ? "Fix: show plan assignees" : "Triage",
 			state: fix ? (this.stopped() ? "stopped" : "done") : "working",
 			stateReason: "",
+			canContinue: fix && this.stopped(),
 			rows: fix
 				? [
 						row("10", "you", "Show the assignee on each plan row."),
@@ -389,7 +470,7 @@ class ScriptedChat implements SessionChatSource {
 				message: "Pilot's service refused it: Only a stopped chat can continue.",
 			};
 		this.continues.update((n) => n + 1);
-		this.#set({ ...now, state: "working" });
+		this.#set({ ...now, state: "working", canContinue: false });
 		return { status: "accepted" as const, message: "", operationId: "continue-1" };
 	}
 	async checkContinue(operationId: string) {
@@ -404,7 +485,7 @@ class ScriptedChat implements SessionChatSource {
 }
 
 const scriptedChat = new ScriptedChat();
-const day = { ...openDay(), feedback: mirrorFeedback(feedback), chat: mirrorSessionChat(scriptedChat) };
+const day = { ...openDay(), feedback: mirrorFeedback(feedback), chat: mirrorSessionChat(scriptedChat), artifacts };
 
 const NEXT: Next[] = ["unknown", "reject"];
 
@@ -437,6 +518,19 @@ mount(() => (
 				label="Triage new mission"
 				onPress={() => feedback.finishTriage({ next: "new-mission", goal: "Make plans show their people" })}
 			/>
+			<Action
+				label="Triage prototype"
+				onPress={() =>
+					feedback.finishTriage({
+						next: "prototype",
+						detail: "Where a plan row shows who works on the task.",
+						directions: ["Inline owner chips", "An owner column"],
+					})
+				}
+			/>
+			<Action label="Prototype asks" onPress={() => feedback.prototype("asks")} />
+			<Action label="Prototype chose" onPress={() => feedback.prototype("chose")} />
+			<Text testID="mockup-reads">{`Mockup reads: [${mockupReads().join(",")}]`}</Text>
 			<Action
 				label="Save and reopen"
 				onPress={() => {
