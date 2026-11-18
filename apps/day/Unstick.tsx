@@ -165,7 +165,7 @@ function RepairAgent(props: {
 	return (
 		<View testID="repair" class="gap-2 border-t border-border pt-3">
 			<If when={r()?.state === "looking"}>
-				<View class="flex-row items-center gap-2">
+				<View class="flex-row items-start gap-2">
 					<Text testID="repair-looking" class="flex-1 text-sm text-muted-foreground">
 						An agent is looking. This takes about a minute.
 					</Text>
@@ -183,7 +183,14 @@ function RepairAgent(props: {
 			</If>
 			<If when={shown()}>
 				<View testID="repair-proposal" class="gap-2">
-					<Text class="text-xs text-faint">{`The agent's view · ${p()?.certainty ?? ""} certainty`}</Text>
+					<View class="flex-row items-start gap-3">
+						<Text class="min-w-0 flex-1 text-xs text-faint">{`The agent's view · ${p()?.certainty ?? ""} certainty`}</Text>
+						<OpenChatAction
+							label="Open planning repair chat"
+							accessibilityLabel="Open planning repair chat"
+							onPress={() => openChat(r()?.chatId ?? "", "Plan")}
+						/>
+					</View>
 					<Text testID="repair-cause" class="text-sm text-foreground">
 						{p()?.cause ?? ""}
 					</Text>
@@ -220,11 +227,6 @@ function RepairAgent(props: {
 							<Action testID="repair-report" label="Report with Feedback" onPress={report} />
 						</If>
 						<Action label="Not now" disabled={props.busy} onPress={props.hide} />
-						<OpenChatAction
-							label="Open planning repair chat"
-							accessibilityLabel="Open planning repair chat"
-							onPress={() => openChat(r()?.chatId ?? "", "Plan")}
-						/>
 					</View>
 				</View>
 			</If>

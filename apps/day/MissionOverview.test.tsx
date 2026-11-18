@@ -6,6 +6,34 @@ import { expect, open, test } from "nsh/test";
 const desktop = { platform: "macos", width: 1100, height: 1400 } as const;
 const FIXTURE = "./MissionOverviewFixture.tsx";
 
+test("chat actions follow long headers before body content at normal and narrow widths", async () => {
+	for (const width of [720, 1100]) {
+		const app = await open(FIXTURE, { ...desktop, width });
+		await app.press("Long chat titles");
+		await app.waitFor("id:now-chat-search-3");
+		const words = app.texts();
+		expect(words.indexOf("Open coordinator chat") < words.findIndex((word) => word.endsWith("tasks done"))).toBe(
+			true,
+		);
+		const cardWords = app.texts();
+		const title = "Integration tests on Linux across large workspaces on every supported platform";
+		expect(cardWords.indexOf(title) < cardWords.indexOf("Open agent chat")).toBe(true);
+		expect(cardWords.indexOf("Open agent chat") < cardWords.indexOf("Running the Linux test suite.")).toBe(true);
+		await app.press("id:now-chat-search-3");
+		await app.waitFor("Read only. Reading it sends nothing and changes nothing.");
+		await app.press("id:back");
+		await app.press("id:situation-paused");
+		// An assigned Next chat stays separate from the row disclosure.
+		expect(app.shows("id:next-chat-search-4")).toBe(true);
+		await app.press("id:next-search-4");
+		await app.waitFor("Open the release pull request with the benchmark chart.");
+		await app.press("id:next-search-4");
+		expect(app.shows("Open the release pull request with the benchmark chart.")).toBe(false);
+		expect(app.shows("id:next-chat-search-4")).toBe(true);
+		app.dispose();
+	}
+});
+
 type App = Awaited<ReturnType<typeof open>>;
 
 async function opened(): Promise<App> {

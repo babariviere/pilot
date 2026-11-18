@@ -179,6 +179,35 @@ async function feedback() {
 const counts = (app: { texts(): string[] }) => app.texts().find((t) => t.startsWith("Sends:"));
 const steps = (app: { texts(): string[] }) => app.texts().find((t) => t.startsWith("Steps:"));
 
+test("both feedback header chats open their own history without sending at narrow and normal widths", async () => {
+	for (const width of [720, 1100]) {
+		const app = await feedback();
+		await app.setViewport(width, 1600);
+		await chooseProject(app);
+		await sendWords(app, "A long feedback title about chat icons staying on the top right of every card. ".repeat(3));
+		await app.press("id:feedback-open-triage-f1");
+		await app.waitFor("Triage this feedback.");
+		await app.press("id:back");
+		expect(steps(app)).toBe("Steps: [triage]");
+		await app.press("Triage fix");
+		await app.press("id:feedback-fix-f1");
+		await app.waitFor("id:feedback-open-fix-f1");
+		await app.press("Triage asks");
+		expect(app.shows("id:feedback-open-triage-f1")).toBe(true);
+		await app.press("id:feedback-open-fix-f1");
+		await app.waitFor("I added the assignee to each plan row.");
+		await app.press("id:back");
+		await app.waitFor("id:feedback-open-fix-f1");
+		await app.press("id:feedback-open-triage-f1");
+		await app.waitFor("Triage this feedback.");
+		await app.press("id:back");
+		expect(steps(app)).toBe("Steps: [triage,fix]");
+		expect(counts(app)).toBe("Sends: 1 · Checks: 0");
+		expect(app.shows("Continues: 0")).toBe(true);
+		app.dispose();
+	}
+});
+
 test("an uncertain item can be checked after another Send without clearing a new draft", async () => {
 	const app = await feedback();
 	await app.press("Next unknown");

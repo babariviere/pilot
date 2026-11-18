@@ -128,7 +128,8 @@ unrelated feedback. Put-aside drafts survive reopening; Resume draft swaps rathe
 overwrites your current words. Checking an earlier item never clears a different draft.
 Open the triage chat or Open the fix chat shows that chat read only: your messages, Pilot's replies,
 one line per tool step and whether it works, finished or failed. A chat started from New, and a
-mission's coordinator, task and working chats on its overview, open the same way. Reading a chat sends
+mission's coordinator, task and working chats on its overview, open the same way. Chat actions sit at the top
+right of their headers, separate from actions that start work. Reading a chat sends
 nothing.
 A stopped chat shows **Continue**. It asks the agent once to pick up where it stopped, or to ask a lost
 question again. A Continue that Pilot could not confirm shows Check and is never sent again.

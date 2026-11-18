@@ -475,12 +475,12 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 									else={
 										<View class="flex-row items-center gap-2.5 py-1.5">
 											<Mark kind="done" />
-											<Text class="flex-1 text-sm text-foreground">{`A chat in ${projectName(chatView(), o().projectId)}`}</Text>
+											<Text class="min-w-0 flex-1 text-sm text-foreground">{`A chat in ${projectName(chatView(), o().projectId)}`}</Text>
 											<Text class="text-xs text-faint">Works on its own</Text>
 										</View>
 									}
 								>
-									<View class="flex-row items-center gap-3 py-1.5">
+									<View class="flex-row items-start gap-3 py-1.5">
 										<Text class="flex-1 text-sm text-foreground">{`A chat in ${projectName(chatView(), o().projectId)}`}</Text>
 										<Text class="text-xs text-faint">Works on its own</Text>
 										<OpenChatAction

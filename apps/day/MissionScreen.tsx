@@ -522,10 +522,18 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine; place?: "res
 	};
 	return (
 		<View class="gap-1 border-t border-border py-3">
-			<View class="flex-row items-baseline gap-3">
+			<View class="flex-row items-start gap-3">
 				<Text class="w-7 text-xs text-faint">{`#${props.task.number}`}</Text>
-				<Text class="flex-1 text-sm text-foreground">{props.task.title}</Text>
+				<Text class="min-w-0 flex-1 text-sm text-foreground">{props.task.title}</Text>
 				<Text class="text-xs text-muted-foreground">{word()}</Text>
+				<If when={props.task.sessionId && props.day.chat}>
+					<OpenChatAction
+						label="Open agent chat"
+						testID={id(`task-chat-${props.task.id}`)}
+						accessibilityLabel={`Open agent chat for #${props.task.number} ${props.task.title}, read only. Opening it sends nothing.`}
+						onPress={() => openMemberChat(props.page, props.task.sessionId ?? "")}
+					/>
+				</If>
 			</View>
 			<If when={props.task.report && !folded()}>
 				<View selectable class="gap-0.5 pl-10">
@@ -576,16 +584,6 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine; place?: "res
 							onPress={() => open.set(!open())}
 						/>
 					</If>
-				</View>
-			</If>
-			<If when={props.task.sessionId && props.day.chat}>
-				<View class="flex-row pl-10 pt-1">
-					<OpenChatAction
-						label="Open agent chat"
-						testID={id(`task-chat-${props.task.id}`)}
-						accessibilityLabel={`Open agent chat for #${props.task.number} ${props.task.title}, read only. Opening it sends nothing.`}
-						onPress={() => openMemberChat(props.page, props.task.sessionId ?? "")}
-					/>
 				</View>
 			</If>
 		</View>
@@ -906,7 +904,7 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf;
 		<View ref={props.anchor.root} class="gap-10">
 			<View class="gap-3">
 				<View class="flex-row items-start gap-4">
-					<View class="flex-1 gap-2">
+					<View class="min-w-0 flex-1 gap-2">
 						<MissionTitle day={props.day} page={props.page} />
 						<View class="flex-row flex-wrap items-center gap-x-2 gap-y-1">
 							<MissionStatus row={row()} />
@@ -924,6 +922,14 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf;
 						<RenameButton page={props.page} />
 						<PauseButton page={props.page} />
 						<ArchiveButton page={props.page} />
+						<If when={props.page.coordinatorSessionId && props.day.chat}>
+							<OpenChatAction
+								label="Open coordinator chat"
+								testID="mission-coordinator-chat"
+								accessibilityLabel="Open coordinator chat, read only. Opening it sends nothing."
+								onPress={() => openMemberChat(props.page, props.page.coordinatorSessionId ?? "")}
+							/>
+						</If>
 					</View>
 				</View>
 				<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
@@ -953,16 +959,6 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf;
 				<FreshnessNote day={props.day} />
 				<Control day={props.day} page={props.page} />
 				<ArchiveConfirm day={props.day} page={props.page} />
-				<If when={props.page.coordinatorSessionId && props.day.chat}>
-					<View class="flex-row">
-						<OpenChatAction
-							label="Open coordinator chat"
-							testID="mission-coordinator-chat"
-							accessibilityLabel="Open coordinator chat, read only. Opening it sends nothing."
-							onPress={() => openMemberChat(props.page, props.page.coordinatorSessionId ?? "")}
-						/>
-					</View>
-				</If>
 			</View>
 
 			<Problems

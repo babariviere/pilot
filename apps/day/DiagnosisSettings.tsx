@@ -345,8 +345,8 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 				</If>
 				<Each of={(s()?.chats.items ?? []).slice(0, all() ? 100 : 5)} key={(c) => c.sessionId}>
 					{(chat) => (
-						<View class="flex-row items-baseline gap-3 border-t border-border py-2">
-							<Text class="flex-1 text-sm text-foreground">{chat().title || "Pilot diagnostics"}</Text>
+						<View class="flex-row items-start gap-3 border-t border-border py-2">
+							<Text class="min-w-0 flex-1 text-sm text-foreground">{chat().title || "Pilot diagnostics"}</Text>
 							<Text class="text-xs text-muted-foreground">{chat().status}</Text>
 							<OpenChatAction
 								label="Open diagnosis chat"

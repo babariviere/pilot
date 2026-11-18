@@ -70,18 +70,20 @@ export function PreviousMission(props: {
 						<Each of={history()?.oldTasks ?? []} key={(t) => t.id}>
 							{(t) => (
 								<View class="gap-1">
-									<Text class="text-sm text-foreground">{`#${t().number} ${t().title} (${t().status})`}</Text>
+									<View class="flex-row items-start gap-3">
+										<Text class="min-w-0 flex-1 text-sm text-foreground">{`#${t().number} ${t().title} (${t().status})`}</Text>
+										<If when={t().sessionId && props.canReadChats}>
+											<OpenChatAction
+												label="Open saved chat"
+												testID={`previous-chat-${t().id}`}
+												accessibilityLabel={`Open saved chat for #${t().number} ${t().title}, read only. This starts nothing.`}
+												onPress={() =>
+													openChat(t().sessionId ?? "", history()?.oldTitle ?? "Previous mission")
+												}
+											/>
+										</If>
+									</View>
 									<Text class="text-sm text-muted-foreground">{t().body ?? ""}</Text>
-									<If when={t().sessionId && props.canReadChats}>
-										<OpenChatAction
-											label="Open saved chat"
-											testID={`previous-chat-${t().id}`}
-											accessibilityLabel={`Open saved chat for #${t().number} ${t().title}, read only. This starts nothing.`}
-											onPress={() =>
-												openChat(t().sessionId ?? "", history()?.oldTitle ?? "Previous mission")
-											}
-										/>
-									</If>
 								</View>
 							)}
 						</Each>

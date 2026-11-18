@@ -23,6 +23,7 @@ const situation = signal<Situation>("running");
 const step = signal(0);
 /** The page's kept scroll offset, read on "Where" so reading it changes nothing on screen. */
 const where = signal("");
+const longTitles = signal(false);
 
 function task(
 	id: string,
@@ -174,8 +175,18 @@ function page(original: MissionPage): MissionPage {
 	}
 	return {
 		...original,
-		row,
-		tasks: tasks(now),
+		row: longTitles()
+			? { ...row, title: "Faster search across large workspaces with long project and mission names" }
+			: row,
+		tasks: tasks(now).map((t) =>
+			longTitles()
+				? {
+						...t,
+						title: `${t.title} across large workspaces on every supported platform`,
+						sessionId: t.sessionId ?? "w-search",
+					}
+				: t,
+		),
 		tasksKnown: now !== "unread",
 		brief: "Search must answer in under 200 ms for workspaces with 50,000 files.",
 		decisions: ["Linux and macOS only for this release.", "Keep the old index until the new one is checked."],
@@ -214,6 +225,7 @@ mount(() => (
 	<View class="flex-1">
 		<View class="flex-row flex-wrap items-center gap-1 border-b border-border px-4 py-2">
 			<Text class="text-xs text-muted-foreground">Mock data · situation</Text>
+			<Action label="Long chat titles" onPress={() => longTitles.set(true)} />
 			<Each of={SITUATIONS} key={(s) => s}>
 				{(s) => <Action label={s()} testID={`situation-${s()}`} onPress={() => choose(s())} />}
 			</Each>

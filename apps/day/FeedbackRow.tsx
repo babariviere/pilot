@@ -73,12 +73,18 @@ function Line(props: {
 	mark: Parameters<typeof Mark>[0]["kind"];
 	text: string;
 	children?: JSX.Element;
+	action?: JSX.Element;
 }) {
 	return (
 		<View testID={props.testID} class="gap-1.5">
-			<MarkLine kind={props.mark}>
-				<Text class="text-sm leading-relaxed text-foreground">{props.text}</Text>
-			</MarkLine>
+			<View class="flex-row items-start gap-3">
+				<View class="min-w-0 flex-1">
+					<MarkLine kind={props.mark}>
+						<Text class="text-sm leading-relaxed text-foreground">{props.text}</Text>
+					</MarkLine>
+				</View>
+				{props.action}
+			</View>
 			{props.children}
 		</View>
 	);
@@ -292,6 +298,11 @@ export function FeedbackRow(props: {
 						testID={`feedback-triage-${props.item.id}`}
 						mark={running(t()) ? (chatState(t()) === "question" ? "needs" : "moving") : "unknown"}
 						text={chatLine(t())}
+						action={
+							<If when={props.day.chat}>
+								<ChatLink day={props.day} item={props.item} step={t()} />
+							</If>
+						}
 					>
 						<If when={steps().answer && !question()}>
 							<View selectable>
@@ -300,7 +311,9 @@ export function FeedbackRow(props: {
 								</Text>
 							</View>
 						</If>
-						<ChatLink day={props.day} item={props.item} step={t()} />
+						<If when={!props.day.chat}>
+							<ChatLink day={props.day} item={props.item} step={t()} />
+						</If>
 					</Line>
 				)}
 			</Each>
@@ -384,8 +397,15 @@ export function FeedbackRow(props: {
 						testID={`feedback-fixing-${props.item.id}`}
 						mark={running(f()) ? "moving" : chatState(f()) === "done" ? "ready" : "unknown"}
 						text={chatLine(f())}
+						action={
+							<If when={props.day.chat}>
+								<ChatLink day={props.day} item={props.item} step={f()} />
+							</If>
+						}
 					>
-						<ChatLink day={props.day} item={props.item} step={f()} />
+						<If when={!props.day.chat}>
+							<ChatLink day={props.day} item={props.item} step={f()} />
+						</If>
 					</Line>
 				)}
 			</Each>

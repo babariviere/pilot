@@ -13,7 +13,7 @@ import type { Day } from "./day";
 import { restoreScroll, scrollOf } from "./kept";
 import { goHome } from "./nav";
 import { OpenChatAction } from "./OpenChatAction";
-import { Action, Disclosure, ExpandableRow, glide, Mark, Panel, SectionTitle } from "./ui";
+import { Action, Disclosure, DividedRow, glide, Mark, Panel, Pressable, SectionTitle } from "./ui";
 import { focused, focusFront, todayPlace } from "./view";
 import { provenance, stateOf, taskWord, type WorkState, workMark, workWord } from "./words";
 
@@ -219,7 +219,7 @@ function WorkStatus(props: { state: WorkState }) {
 function ChatLink(props: { day: Day; page: MissionPage; task: TaskLine; lane: Lane }) {
 	return (
 		<If when={props.task.sessionId && props.day.chat}>
-			<View class="flex-row pt-1">
+			<View class="flex-row">
 				<OpenChatAction
 					label="Open agent chat"
 					testID={`${props.lane}-chat-${props.task.id}`}
@@ -260,12 +260,15 @@ function NowCard(props: { day: Day; page: MissionPage; task: TaskLine }) {
 	const target = laneFocus(props.task.id, "now");
 	return (
 		<Panel testID={`now-${t().id}`} tone="card" size="lg" class="gap-2">
-			<View selectable class="gap-2">
-				<View class="flex-row flex-wrap items-baseline gap-x-2 gap-y-1">
+			<View class="flex-row items-start gap-3">
+				<View selectable class="min-w-0 flex-1 flex-row flex-wrap items-baseline gap-x-2 gap-y-1">
 					<Text class="text-xs text-faint">{`#${t().number}`}</Text>
 					<Text class="min-w-40 flex-1 text-base font-semibold text-foreground">{t().title}</Text>
 					<WorkStatus state={stateOf(t())} />
 				</View>
+				<ChatLink day={props.day} page={props.page} task={t()} lane="now" />
+			</View>
+			<View selectable class="gap-2">
 				<Reasons task={t()} />
 				<If when={t().report}>
 					<Text class="text-sm text-muted-foreground">{t().report?.summary ?? ""}</Text>
@@ -281,7 +284,6 @@ function NowCard(props: { day: Day; page: MissionPage; task: TaskLine }) {
 				<Prerequisites task={t()} />
 			</View>
 			<Details task={t()} lane="now" target={target} />
-			<ChatLink day={props.day} page={props.page} task={t()} lane="now" />
 		</Panel>
 	);
 }
@@ -292,15 +294,8 @@ function NextRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
 	const open = () => !!openWork()[t().id];
 	const target = laneFocus(props.task.id, "next");
 	return (
-		<ExpandableRow
+		<DividedRow
 			open={open()}
-			anchor={target.anchor}
-			onFocus={target.onFocus}
-			onBlur={target.onBlur}
-			testID={`next-${t().id}`}
-			accessibilityLabel={`#${t().number} ${t().title}, ${workWord(stateOf(t()))}. ${open() ? "Hide" : "Show"} its details.`}
-			onToggle={() => toggleWork(t().id, target)}
-			summaryClass="flex-row items-baseline gap-3 px-1 py-2 hover:bg-accent"
 			content={
 				<View class="gap-1.5 pb-3 pl-10">
 					<View selectable class="gap-1.5">
@@ -313,14 +308,29 @@ function NextRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
 							{(t().body ?? "") || "No details are recorded for this task."}
 						</Text>
 					</View>
-					<ChatLink day={props.day} page={props.page} task={t()} lane="next" />
 				</View>
 			}
 		>
-			<Text class="w-7 text-xs text-faint">{`#${t().number}`}</Text>
-			<Text class="flex-1 text-sm text-foreground">{t().title}</Text>
-			<Text class="text-xs text-muted-foreground">{workWord(stateOf(t()))}</Text>
-		</ExpandableRow>
+			<View class="flex-row items-start gap-3">
+				<Pressable
+					anchor={target.anchor}
+					onFocus={target.onFocus}
+					onBlur={target.onBlur}
+					testID={`next-${t().id}`}
+					accessibilityLabel={`#${t().number} ${t().title}, ${workWord(stateOf(t()))}. ${open() ? "Hide" : "Show"} its details.`}
+					expanded={open()}
+					onPress={() => toggleWork(t().id, target)}
+					class="min-w-0 flex-1 flex-row items-start gap-3 rounded-md px-1 py-2 hover:bg-accent"
+				>
+					<Text class="w-7 text-xs text-faint">{`#${t().number}`}</Text>
+					<View class="min-w-0 flex-1 gap-1">
+						<Text class="text-sm text-foreground">{t().title}</Text>
+						<Text class="text-xs text-muted-foreground">{workWord(stateOf(t()))}</Text>
+					</View>
+				</Pressable>
+				<ChatLink day={props.day} page={props.page} task={t()} lane="next" />
+			</View>
+		</DividedRow>
 	);
 }
 
@@ -330,14 +340,16 @@ function BlockedItem(props: { day: Day; page: MissionPage; task: TaskLine }) {
 	const target = laneFocus(props.task.id, "blocked");
 	return (
 		<Panel testID={`blocked-${t().id}`} tone="card" size="md" class="gap-1.5">
+			<View class="flex-row items-start gap-3">
+				<Text class="min-w-0 flex-1 text-xs font-semibold text-foreground">{workWord(stateOf(t()))}</Text>
+				<ChatLink day={props.day} page={props.page} task={t()} lane="blocked" />
+			</View>
 			<View selectable class="gap-1">
-				<Text class="text-xs font-semibold text-foreground">{workWord(stateOf(t()))}</Text>
 				<Text class="text-sm text-foreground">{`#${t().number} ${t().title}`}</Text>
 				<Reasons task={t()} class="text-xs text-muted-foreground" />
 				<Prerequisites task={t()} />
 			</View>
 			<Details task={t()} lane="blocked" target={target} />
-			<ChatLink day={props.day} page={props.page} task={t()} lane="blocked" />
 		</Panel>
 	);
 }
@@ -462,8 +474,8 @@ export function MissionWork(props: { day: Day; page: MissionPage; anchor?: Conte
 							</Text>
 							<Each of={others()} key={(c) => c.id}>
 								{(c) => (
-									<View class="flex-row flex-wrap items-baseline gap-x-3 gap-y-1 py-1">
-										<Text class="flex-1 text-sm text-foreground">{c().title}</Text>
+									<View class="flex-row items-start gap-3 py-1">
+										<Text class="min-w-0 flex-1 text-sm text-foreground">{c().title}</Text>
 										<Text class="text-xs text-faint">{`since ${c().since}`}</Text>
 										<If when={props.day.chat}>
 											<OpenChatAction
