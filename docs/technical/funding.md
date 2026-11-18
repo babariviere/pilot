@@ -55,7 +55,10 @@ earlier charges counted.
 
 The runtime guard runs after payload hooks, including native extension hooks.
 It reads the final output cap, reserves a maximum, rechecks subscription and Stop
-signals, and only then returns the payload to the provider. Funded requests use
+signals, and only then returns the payload to the provider. When the payload has
+no verified cap, the worker sends the hold reason instead. The daemon refuses it
+only while limits are on, so limits off never hold a request for its bound.
+Funded requests use
 no hidden provider retries, generated model fallback list or SDK continuation reuse.
 The guard suppresses the SDK's generated fallback list before extension hooks;
 an extension that changes the priced model or adds fallback models is refused.
@@ -75,9 +78,12 @@ overrun records the charge and blocks the affected adapter's future requests.
 
 The qualified payload-cap paths are Anthropic Messages, OpenAI Responses and
 OpenAI Completions. Hosted tools and multiple completions without a qualified
-price/bound are refused. In particular, this SDK's Codex Responses path has no
-qualified output cap and is held before HTTP. This does not silently choose a
-different model or patch the SDK.
+price/bound are refused. The ChatGPT Codex backend (subscription OAuth only)
+refuses `max_output_tokens`, so its only bound is the model's own output maximum.
+For Codex Responses the daemon reserves its canonical catalog `maxTokens`, priced
+at catalog value like other subscription work. Other APIs without a payload cap
+(Azure Responses, Google, Vertex, Bedrock, Mistral, pi-messages) are held before HTTP.
+This does not silently choose a different model or patch the SDK.
 
 ## Independent holds and reviews
 

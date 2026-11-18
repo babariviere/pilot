@@ -1,6 +1,6 @@
 /** Background completions share the same request ledger as chats, not a second usage sum. */
 import { randomUUID } from "node:crypto";
-import { fundingOutputBound, fundingPayload, fundingUsage } from "../../kernel/src/funding-runtime.ts";
+import { fundingBound, fundingPayload, fundingUsage } from "../../kernel/src/funding-runtime.ts";
 import { subscriptionLimitReport } from "../../kernel/src/subscription-limit.ts";
 import type { BackgroundAttribution, CompletionRuntime } from "./background-usage.ts";
 import type { Funding } from "./funding.ts";
@@ -37,7 +37,7 @@ export function fundingBackground(
 							provider: physical.provider,
 							model: physical.id,
 							api: physical.api,
-							outputTokens: fundingOutputBound(physical.api, final, physical.id),
+							...fundingBound(physical.api, final, physical.id, physical.maxTokens),
 						},
 					});
 					options?.signal?.throwIfAborted();

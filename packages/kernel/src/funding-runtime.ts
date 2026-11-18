@@ -13,10 +13,15 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { FundingTokens } from "@pilot/protocol";
 
 export interface FundingAdmission {
-	reserve(id: string, model: Model<Api>, outputTokens: number): Promise<void>;
+	reserve(id: string, model: Model<Api>, bound: FundingBound): Promise<void>;
 	settle(id: string, usage: FundingTokens): Promise<void>;
 }
+/** A final payload's output bound, or why it has none. The daemon refuses `hold` only while limits are on. */
+export type FundingBound = { outputTokens: number } | { hold: string };
 const guarded = Symbol("funding guarded request");
+/** A caller's own output limit. Like a missing bound, a larger bound is held only while limits are on. */
+export const fundingOutputLimit = Symbol("funding output limit");
+export type FundingStreamOptions = ModelsSimpleStreamOptions & { [fundingOutputLimit]?: number };
 /** Fund the chosen model only. Suppress the SDK's generated automatic fallback list, not saved settings. */
 export function fundingPayload(payload: unknown, model: Model<Api>): unknown {
 	if (
@@ -33,8 +38,19 @@ export function fundingPayload(payload: unknown, model: Model<Api>): unknown {
 	delete single.fallbacks;
 	return single;
 }
+/**
+ * APIs whose backend refuses a request output cap, so the model's own output maximum is the only bound.
+ * The ChatGPT Codex backend (subscription OAuth only) answers `max_output_tokens` with "Unsupported parameter".
+ * The daemon reserves its canonical catalog maximum for these. Pay-per-token APIs still need a payload cap.
+ */
+export const modelLimitedOutputApis: ReadonlySet<string> = new Set(["openai-codex-responses"]);
 /** Inspect the final payload after extension hooks, not the caller's suggested output limit. */
-export function fundingOutputBound(api: string, payload: unknown, expectedModel?: string): number {
+export function fundingOutputBound(
+	api: string,
+	payload: unknown,
+	expectedModel?: string,
+	modelMaxTokens?: number,
+): number {
 	const p = payload as Record<string, unknown> | undefined;
 	if (expectedModel !== undefined && p?.model !== expectedModel)
 		throw new Error("Allowance hold: final payload changed the priced model");
@@ -54,10 +70,24 @@ export function fundingOutputBound(api: string, payload: unknown, expectedModel?
 				? p?.max_output_tokens
 				: api === "openai-completions"
 					? (p?.max_completion_tokens ?? p?.max_tokens)
-					: undefined;
+					: modelLimitedOutputApis.has(api)
+						? modelMaxTokens
+						: undefined;
 	if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 1)
 		throw new Error("Allowance hold: this provider request has no verified output bound");
 	return raw;
+}
+export function fundingBound(
+	api: string,
+	payload: unknown,
+	expectedModel: string,
+	modelMaxTokens: number,
+): FundingBound {
+	try {
+		return { outputTokens: fundingOutputBound(api, payload, expectedModel, modelMaxTokens) };
+	} catch (e) {
+		return { hold: e instanceof Error ? e.message : "Allowance hold: request bound unavailable" };
+	}
 }
 export function fundingUsage(message: AssistantMessage): FundingTokens | undefined {
 	if (!["stop", "length", "toolUse"].includes(message.stopReason)) return;
@@ -83,7 +113,7 @@ export function installFundingRuntime(runtime: ModelRuntime, admission: FundingA
 		const wrapped = (
 			model: Model<Api>,
 			context: Context,
-			options?: ModelsSimpleStreamOptions & { [guarded]?: boolean },
+			options?: FundingStreamOptions & { [guarded]?: boolean },
 		) => {
 			if (options?.[guarded]) return original(model, context, options);
 			const out = createAssistantMessageEventStream();
@@ -99,7 +129,13 @@ export function installFundingRuntime(runtime: ModelRuntime, admission: FundingA
 							const single = fundingPayload(payload, physical);
 							const final = (await options?.onPayload?.(single, physical)) ?? single;
 							const id = randomUUID();
-							await admission.reserve(id, physical, fundingOutputBound(physical.api, final, physical.id));
+							let bound = fundingBound(physical.api, final, physical.id, physical.maxTokens);
+							const limit = options?.[fundingOutputLimit];
+							if (limit !== undefined && "outputTokens" in bound && bound.outputTokens > limit)
+								bound = {
+									hold: `Allowance hold: output limit is ${limit} tokens; got ${bound.outputTokens}. Choose a model that supports this bound.`,
+								};
+							await admission.reserve(id, physical, bound);
 							await subscription.wait(physical.provider, options?.signal);
 							options?.signal?.throwIfAborted();
 							reserved = { id, provider: physical.provider, model: physical.id };

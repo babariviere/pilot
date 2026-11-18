@@ -65,12 +65,12 @@ export function installCredentialBrokerHooks(options: { descendants?: boolean } 
 			ownModelCatalog(runtime);
 			if (client?.endpoint.metered)
 				installFundingRuntime(runtime, {
-					reserve: async (id, model, outputTokens) => {
+					reserve: async (id, model, bound) => {
 						await client.request({
 							op: "funding-reserve",
 							namespace: "pi",
 							key: id,
-							value: { provider: model.provider, model: model.id, api: model.api, outputTokens },
+							value: { provider: model.provider, model: model.id, api: model.api, ...bound },
 						});
 					},
 					settle: async (id, usage) => {

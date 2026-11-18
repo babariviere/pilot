@@ -1,5 +1,6 @@
 /** Canonical pricing and caller attribution for inherited worker capabilities. */
 import type { CredentialRequest } from "@pilot/kernel/credential-rpc";
+import { modelLimitedOutputApis } from "../../kernel/src/funding-runtime.ts";
 import type { FundingOwner, FundingRate } from "../../protocol/src/funding.ts";
 import type { Funding } from "./funding.ts";
 import type { SharedCatalogService } from "./shared-model-catalog.ts";
@@ -19,7 +20,12 @@ export function fundingRequests(
 				: funding.settle(scope, request.key, request.value as FundingRate);
 		// Limits off: no price lookup, reservation or refusal. Subscription holds are checked elsewhere.
 		if (!(await funding.enabled())) return funding.skip(request.key);
-		const p = request.value as { provider: string; model: string; api: string; outputTokens: number };
+		const p = request.value as { provider: string; model: string; api: string; outputTokens: number; hold?: unknown };
+		// Limits on: a request without a verified output bound is held, with the worker's reason when it gave one.
+		if (p && p.outputTokens === undefined && typeof p.hold === "string")
+			throw new Error(
+				p.hold.startsWith("Allowance hold:") ? p.hold.slice(0, 200) : "Allowance hold: request bound unavailable",
+			);
 		if (
 			!p ||
 			typeof p.provider !== "string" ||
@@ -65,7 +71,8 @@ export function fundingRequests(
 				provider: p.provider,
 				model: p.model,
 				inputTokens: model.contextWindow,
-				outputTokens: p.outputTokens,
+				// No request cap exists here: reserve the canonical model maximum, whatever the worker reported.
+				outputTokens: modelLimitedOutputApis.has(model.api) ? model.maxTokens : p.outputTokens,
 				rate,
 				tiers,
 			},
