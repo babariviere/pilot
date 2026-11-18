@@ -387,3 +387,62 @@ fn acknowledgement_save_failure_keeps_exact_evidence_but_stays_unknown_until_col
     assert_eq!(stats["sessions"], 1);
     close(b);
 }
+
+#[test]
+fn recovery_uses_the_displayed_failed_chat_and_cold_receipt_lookup_never_replays() {
+    let mut f = Fixture::new();
+    let b = f.bridge();
+    let list = projects(&f, &b);
+    let choice = select(&f, &b, &list[0], "build");
+    let created = create(&f, &b, &choice);
+    let session = created["value"]["outcome"]["receipt"]["result"]["sessionId"].clone();
+    f.stats("fail-chats");
+    // No displayed chat yet: the host cannot invent a recovery target from the request.
+    let args = json!({"sessionId":session,"message":"  Keep the copy.\nFix CSV only. 🐦  "});
+    assert_eq!(
+        f.call(&b, "day.chat.recover", args.clone())["error"],
+        "stale"
+    );
+    let read = f.call(
+        &b,
+        "day.chat.read",
+        json!({"sessionId":session,"older":false}),
+    );
+    assert_eq!(read["value"]["snapshot"]["state"], "failed", "{read}");
+    f.stats("lost");
+    let lost = f.call(&b, "day.chat.recover", args.clone());
+    assert_eq!(lost["value"]["outcome"]["state"], "unknown", "{lost}");
+    let op = lost["value"]["outcome"]["operationId"].clone();
+    let again = f.call(&b, "day.chat.recover", args);
+    assert_eq!(again["value"]["outcome"]["operationId"], op);
+    assert_eq!(f.stats("stats")["posts"], 2, "one create and one recovery");
+    close(b);
+    let b = f.bridge();
+    let pending = f.call(
+        &b,
+        "day.chat.read",
+        json!({"sessionId":session,"older":false}),
+    );
+    assert_eq!(
+        pending["value"]["snapshot"]["pendingRecovery"]["operationId"], op,
+        "{pending}"
+    );
+    assert_eq!(
+        pending["value"]["snapshot"]["pendingRecovery"]["submittedText"],
+        "  Keep the copy.\nFix CSV only. 🐦  "
+    );
+    let checked = f.call(&b, "day.chat.check", json!({"operationId":op}));
+    assert_eq!(
+        checked["value"]["outcome"]["submittedText"],
+        "  Keep the copy.\nFix CSV only. 🐦  "
+    );
+    assert_eq!(
+        checked["value"]["outcome"]["state"], "accepted",
+        "{checked}"
+    );
+    let stats = f.stats("stats");
+    assert_eq!(stats["posts"], 2);
+    assert_eq!(stats["sessions"], 1);
+    assert_eq!(stats["external"], 0);
+    close(b);
+}

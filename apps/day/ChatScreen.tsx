@@ -5,16 +5,126 @@
 // reading earlier rows and leaving send nothing; while the page is open,
 // Pilot reads the chat again as it changes.
 // A stopped chat offers Continue: one explicit press sends fixed words once.
-import { cleanup, keymap, Scroll, signal, Text, View } from "nsh";
+import { cleanup, Keyboard, keymap, Scroll, signal, Text, View } from "nsh";
 import { ChatTranscript } from "./ChatRows";
 import { closeChat } from "./chatView";
 import { DiagnosisReply } from "./DiagnosisSettings";
 import type { Day } from "./day";
+import { RECOVERY_INPUT_BYTES, recoveryBytes, recoveryNote, setRecoveryNote } from "./recoveryDraft";
 import type { ContinueResult, SessionChat, SessionChatMirror } from "./sessionChat";
-import { Action, type MarkKind, MarkLine, Page, PageTitle } from "./ui";
+import { Action, type MarkKind, MarkLine, Page, PageTitle, TextField } from "./ui";
+
+/** Explicit recovery, never a new chat, clone, grant or allowance. */
+function RecoveryRow(props: { mirror: SessionChatMirror; sessionId: string; restartOnly: boolean }) {
+	const editing = signal(!!recoveryNote(props.sessionId));
+	const sending = signal(false);
+	const result = signal<ContinueResult | null>(props.mirror.chat()?.pendingRecovery ?? null);
+	let submitted = result()?.submittedText ?? "";
+	const unknown = () => result()?.status === "unknown";
+	const text = () => recoveryNote(props.sessionId);
+	const tooLarge = () => recoveryBytes(text()) > RECOVERY_INPUT_BYTES;
+	const go = async (message: string) => {
+		if (sending() || unknown()) return;
+		Keyboard.dismiss();
+		submitted = message;
+		sending.set(true);
+		try {
+			const r = await props.mirror.source.recoverChat!(props.sessionId, message);
+			submitted = r.submittedText ?? message;
+			result.set(r);
+			if (r.status === "accepted" && text() === submitted) setRecoveryNote(props.sessionId, "");
+		} finally {
+			sending.set(false);
+		}
+	};
+	const check = async () => {
+		const id = result()?.operationId ?? props.mirror.chat()?.pendingRecovery?.operationId;
+		if (sending() || !id) return;
+		sending.set(true);
+		try {
+			const r = await props.mirror.source.checkContinue(id);
+			submitted = r.submittedText ?? submitted;
+			result.set(r);
+			if (r.status === "accepted" && text() === submitted) setRecoveryNote(props.sessionId, "");
+		} finally {
+			sending.set(false);
+		}
+	};
+	return (
+		<View class="gap-3">
+			<Text class="text-sm text-muted-foreground">
+				Retry continues in this chat with its existing access and remaining allowance.
+			</Text>
+			<If
+				when={unknown()}
+				else={
+					<View class="flex-row gap-2">
+						<Action
+							label={sending() ? "Sending…" : "Retry"}
+							testID="chat-retry"
+							disabled={sending()}
+							onPress={() => void go("")}
+						/>
+						<If when={!props.restartOnly}>
+							<Action
+								label="Correct follow-up…"
+								testID="chat-correct"
+								disabled={sending()}
+								onPress={() => editing.set(true)}
+							/>
+						</If>
+					</View>
+				}
+			>
+				<Action
+					label={sending() ? "Checking…" : "Check"}
+					testID="chat-recovery-check"
+					disabled={sending() || !(result()?.operationId ?? props.mirror.chat()?.pendingRecovery?.operationId)}
+					onPress={() => void check()}
+				/>
+			</If>
+			<If when={editing() && !unknown() && !props.restartOnly}>
+				<View class="gap-2">
+					<TextField
+						testID="chat-recovery-note"
+						accessibilityLabel="Corrected follow-up"
+						multiline
+						rows={3}
+						value={text()}
+						onChange={({ value }) => setRecoveryNote(props.sessionId, value)}
+						disabled={sending()}
+					/>
+					<View class="flex-row gap-2">
+						<Action
+							label="Send follow-up"
+							testID="chat-recovery-send"
+							disabled={sending() || !text().trim() || tooLarge()}
+							onPress={() => void go(text())}
+						/>
+						<Action
+							label="Cancel"
+							disabled={sending()}
+							onPress={() => {
+								Keyboard.dismiss();
+								editing.set(false);
+							}}
+						/>
+					</View>
+					<If when={tooLarge()}>
+						<Text class="text-xs text-muted-foreground">{`This follow-up is ${recoveryBytes(text())} bytes. The limit is ${RECOVERY_INPUT_BYTES}; shorten it before sending. Your draft is kept.`}</Text>
+					</If>
+				</View>
+			</If>
+			<If when={result()?.message}>
+				<Text class="text-xs text-muted-foreground">{result()?.message ?? ""}</Text>
+			</If>
+		</View>
+	);
+}
 
 /** The chat's state as one quiet line and its mark. */
 function stateLine(chat: SessionChat | null): { mark: MarkKind; text: string } | null {
+	if (chat?.archived) return { mark: "still", text: "Archived. This view is read-only." };
 	switch (chat?.state) {
 		case "working":
 			return { mark: "moving", text: "Working." };
@@ -106,7 +216,9 @@ export function ChatScreen(props: { day: Day; sessionId: string }) {
 					<Text class="text-sm text-muted-foreground">
 						{chat()?.specialist
 							? "Read-only specialist. Its findings are an assessment, not a verified cause. Reading sends nothing."
-							: "Read only. Reading it sends nothing and changes nothing."}
+							: mirror.source.recoverChat && chat()?.state === "failed" && !chat()?.archived
+								? "Reading sends nothing. Recovery starts only when you choose it."
+								: "Read only. Reading it sends nothing and changes nothing."}
 					</Text>
 					<If when={state()}>
 						<If when={!chat()?.specialist && chat()?.sourcePath}>
@@ -123,8 +235,43 @@ export function ChatScreen(props: { day: Day; sessionId: string }) {
 						<MarkLine testID="chat-state" kind={state()?.mark ?? "still"}>
 							<Text class="text-sm text-foreground">{state()?.text ?? ""}</Text>
 						</MarkLine>
-						<If when={chat()?.state === "stopped" && !chat()?.specialist}>
+						<If
+							when={
+								chat()?.state === "stopped" &&
+								!chat()?.specialist &&
+								!chat()?.recoveryBlocked &&
+								!chat()?.archived &&
+								!mirror.source.recoverChat
+							}
+						>
 							<ContinueRow mirror={mirror} sessionId={props.sessionId} />
+						</If>
+						<If
+							when={
+								(chat()?.state === "failed" || chat()?.state === "stopped" || chat()?.pendingRecovery) &&
+								(!chat()?.recoveryBlocked || chat()?.pendingRecovery) &&
+								!chat()?.specialist &&
+								!chat()?.archived &&
+								mirror.source.recoverChat
+							}
+						>
+							<RecoveryRow
+								mirror={mirror}
+								sessionId={props.sessionId}
+								restartOnly={chat()?.restartOnly === true}
+							/>
+						</If>
+						<If when={chat()?.workspaceKept}>
+							<View testID="chat-final-archive-wait" class="gap-1 border-t border-border pt-3">
+								<Text class="text-sm text-foreground">Working copy kept</Text>
+								<Text class="text-xs text-muted-foreground">
+									Final archive is unavailable until required review and saved delivery can be verified. Your
+									project folder is never deleted.
+								</Text>
+							</View>
+						</If>
+						<If when={chat()?.state === "failed" && chat()?.recoveryBlocked}>
+							<Text class="text-sm text-muted-foreground">{chat()?.recoveryBlocked ?? ""}</Text>
 						</If>
 					</If>
 				</View>

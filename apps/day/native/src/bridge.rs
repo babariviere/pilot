@@ -27,6 +27,7 @@ pub const METHODS: &[&str] = &[
     "day.chat.create",
     "day.chat.check",
     "day.chat.continue",
+    "day.chat.recover",
     "day.chat.read",
     "day.chat.snapshot",
     "day.chat.close",
@@ -255,6 +256,7 @@ pub(crate) enum Command {
     ChatCheck(String),
     /// Continue one stopped chat: the daemon sends its fixed words once.
     ChatContinue(String),
+    ChatRecover(crate::host::new_chat::Recovery),
     /// Opens a chat Pilot started and reads its newest rows, or older ones. Passive.
     ChatRead {
         session: String,
@@ -519,6 +521,14 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 session: r.session_id,
                 older: r.older,
             }
+        }
+        "day.chat.recover" => {
+            let r: crate::host::new_chat::Recovery = exact(args)?;
+            mission(&r.session_id)?;
+            if r.message.len() > crate::host::new_chat::RECOVERY_INPUT_BYTES {
+                return Err(Error::Invalid);
+            }
+            C::ChatRecover(r)
         }
         "day.chat.continue" => {
             #[derive(Deserialize)]

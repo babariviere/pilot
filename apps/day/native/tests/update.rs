@@ -71,6 +71,7 @@ fn view() -> SavedView {
             "note\ni1\nq1\n1\nToo technical.".into(),
             "ask\ni1/q1\n\n0\nWhat is NSH?".into(),
         ],
+        recovery_notes: vec!["chat-1\n  Corrected scope 日本語\nKeep the copy. ".into()],
         feedback_answers: vec!["triage-1/42\n1,2\n  Exact answer 👩🏽‍💻\nsecond line ".into()],
     }
 }
@@ -93,6 +94,22 @@ fn deferred_feedback_round_trips_and_old_windows_default_to_none() {
         invalid.feedback_later = vec![key.into()];
         assert!(!invalid.feedback_valid(), "{key}");
     }
+}
+
+#[test]
+fn recovery_drafts_round_trip_and_old_windows_have_none() {
+    let original = view();
+    let mut json = serde_json::to_value(&original).unwrap();
+    let restored: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert_eq!(restored.recovery_notes, original.recovery_notes);
+    assert!(restored.recovery_notes_valid());
+    assert!(restored.text_bytes() >= original.recovery_notes[0].len());
+    json.as_object_mut().unwrap().remove("recoveryNotes");
+    let old: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert!(old.recovery_notes.is_empty());
+    let mut invalid = original;
+    invalid.recovery_notes = vec!["../user-folder\nno".into()];
+    assert!(!invalid.recovery_notes_valid());
 }
 
 #[test]

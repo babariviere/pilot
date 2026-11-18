@@ -41,6 +41,7 @@ import {
 } from "./preferencesView";
 import { restoreProjectSetup, savedProjectSetup } from "./projectSetup";
 import { restoreQuestionHelp, savedQuestionHelp } from "./QuestionHelp";
+import { restoreRecoveryNotes, savedRecoveryNotes } from "./recoveryDraft";
 import { captureRitualView, resetRitualView, restoreRitualView, ritualRoute } from "./ritualView";
 import { restoreSlackDraft, savedSlackDraft } from "./slackDraft";
 import { captureThreadView, forgetThreads, restoreThreadView, threadRoute } from "./threadView";
@@ -123,6 +124,7 @@ export function captureView(today?: Today): SavedView {
 		...thread,
 		...feedback,
 		questionHelp: savedQuestionHelp(),
+		recoveryNotes: savedRecoveryNotes(),
 	};
 }
 
@@ -154,6 +156,7 @@ export async function saveForms(day: Day, plans?: Plans): Promise<FormSave> {
 
 /** A fresh window clears only the same view-local state as before. */
 export function startFresh() {
+	restoreRecoveryNotes([]);
 	resetTodayView();
 	resetPlanningView();
 	resetInterviewView();
@@ -176,6 +179,7 @@ export function startFresh() {
 
 /** Restores drafts and disclosures without user intent. Changes may passively read. */
 export function restoreView(view: SavedView, changes?: Changes, today?: Today, linear = false, settings = false) {
+	restoreRecoveryNotes(view.recoveryNotes ?? []);
 	restoreMissionPlace(view);
 	restorePlanningPlace(view);
 	restoreChangesView(view, changes);

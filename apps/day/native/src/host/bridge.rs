@@ -271,6 +271,7 @@ async fn run(
             | Command::ChatCreate(_)
             | Command::ChatCheck(_)
             | Command::ChatContinue(_)
+            | Command::ChatRecover(_)
     ) {
         return super::new_chat::handle(t, journal, shared, epoch, &call.command, &call.gate).await;
     }
@@ -429,6 +430,15 @@ async fn run(
     if let Command::ChatRead { session, older } = &call.command {
         // Passive. A failed read keeps what shows; the chat says why.
         let _ = super::session_chat::read(t, shared, session, *older).await;
+        if let Some(chat) = shared
+            .session_chat
+            .lock()
+            .expect("native session chat poisoned")
+            .as_mut()
+            .filter(|c| c.session == *session && c.reason.is_empty())
+        {
+            chat.pending_recovery = super::new_chat::pending_recovery(t, journal, session);
+        }
         shared.open()?;
         call.command
             .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
@@ -511,7 +521,8 @@ async fn run(
         | Command::ChatSelect(_)
         | Command::ChatCreate(_)
         | Command::ChatCheck(_)
-        | Command::ChatContinue(_) => {
+        | Command::ChatContinue(_)
+        | Command::ChatRecover(_) => {
             unreachable!("handled standalone chat command")
         }
         Command::IntakeRead

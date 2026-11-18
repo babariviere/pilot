@@ -20,5 +20,12 @@ Reading archived history does not restore the chat or start work.
 Archiving is not a workspace backup. Generated outputs can be removed and safe
 archived workspaces reclaimed. See [workspace retention](workspaces.md#archive-and-restore).
 
+New private coding copies started through Day's durable start path are an exception: Pilot
+keeps their files, including build outputs and leftovers, through recovery and required review.
+Recovery also protects an older private copy when you explicitly retry it in Day. This protection
+survives reversible archive, restore, provider continuation and service restart. Final archive and
+its cleanup remain unavailable until saved delivery and required reviews can be verified. Idle
+unloading releases the agent process after about ten minutes, not its saved state or files.
+
 On macOS, use **⌘K** to find destinations and available actions, **⌘L** to focus
 the composer, and **⌘,** for Settings.

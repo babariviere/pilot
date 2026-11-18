@@ -86,6 +86,7 @@ impl PlanningRecord {
                         | "thread-reference"
                         | "thread-send"
                         | "chat-continue"
+                        | "chat-recover"
                 )
             )
             || o["payload"]
@@ -113,7 +114,7 @@ impl PlanningRecord {
         if o["kind"] == "native-chat-create" {
             super::new_chat::validate_record(o)?;
         }
-        if o["kind"] == super::new_chat::CONTINUE {
+        if o["kind"] == super::new_chat::CONTINUE || o["kind"] == super::new_chat::RECOVER {
             super::new_chat::validate_continue(o)?;
         }
         if o["kind"] == super::preferences::KIND {
@@ -228,6 +229,7 @@ fn record_pinned(
                     | "thread-reference"
                     | "thread-send"
                     | "chat-continue"
+                    | "chat-recover"
             )
         )
         || (!matches!(
@@ -257,6 +259,7 @@ fn record_pinned(
                     | "thread-reference"
                     | "thread-send"
                     | "chat-continue"
+                    | "chat-recover"
                     | "revision-pause"
                     | "revision-resume"
                     | "mission-replan-finish"
@@ -409,7 +412,7 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
             return Err(Error::Unknown);
         }
     }
-    if op["kind"] == super::new_chat::CONTINUE
+    if (op["kind"] == super::new_chat::CONTINUE || op["kind"] == super::new_chat::RECOVER)
         && r["state"] == "accepted"
         && (r["result"]["sessionId"] != op["targetId"]
             || r["result"]["operationId"] != op["operationId"])

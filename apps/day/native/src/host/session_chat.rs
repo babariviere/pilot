@@ -38,6 +38,13 @@ pub(crate) struct ChatState {
     /// The chat's own reason for its state, such as why it failed.
     pub state_reason: String,
     pub specialist: bool,
+    pub archived: bool,
+    pub workspace_kept: bool,
+    pub restart_only: bool,
+    pub recovery_blocked: String,
+    pub updated_at: u64,
+    pub input_generation: u64,
+    pub pending_recovery: Option<Value>,
     pub pages: Pages,
     pub reading: bool,
     /// Why the last read failed. Empty after a good read.
@@ -58,8 +65,8 @@ impl ChatState {
             "reading":self.reading,"reason":self.reason});
         let chat = crate::plan_activity::chat(&rows);
         json!({"sessionId":self.session,"title":self.title,"state":self.state,
-            "stateReason":self.state_reason,"specialist":self.specialist,"rows":chat.rows,"more":chat.more,
-            "reading":chat.reading,"reason":chat.reason,"sourcePath":self.source_path,"sourceLabel":self.source_label})
+            "stateReason":self.state_reason,"specialist":self.specialist,"archived":self.archived,"workspaceKept":self.workspace_kept,"restartOnly":self.restart_only,"rows":chat.rows,"more":chat.more,
+            "reading":chat.reading,"reason":chat.reason,"sourcePath":self.source_path,"sourceLabel":self.source_label,"pendingRecovery":self.pending_recovery,"recoveryBlocked":self.recovery_blocked})
     }
 }
 
@@ -434,6 +441,14 @@ async fn read_chat(
                     state.project = read.project.clone();
                     state.title = one_line(&read.session["title"], LINE_CHARS).unwrap_or_default();
                     state.specialist = read.session["role"] == "diagnostics";
+                    state.archived = read.session["archivedAt"].is_number();
+                    state.workspace_kept = read.session["workspaceCustody"] == "review";
+                    state.restart_only = read.session["canRetryStartup"] == true;
+                    state.recovery_blocked =
+                        one_line(&read.session["recoveryBlockedReason"], LINE_CHARS)
+                            .unwrap_or_default();
+                    state.updated_at = read.session["updatedAt"].as_u64().unwrap_or(0);
+                    state.input_generation = read.session["inputGeneration"].as_u64().unwrap_or(0);
                     state.source_path = read.session["cwd"]
                         .as_str()
                         .filter(|s| s.len() <= 4096)

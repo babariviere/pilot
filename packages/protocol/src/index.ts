@@ -413,6 +413,10 @@ export interface SessionSummary {
 	workspaceBehind?: string;
 	/** Epoch ms when the working directory was reclaimed. Its pinned jj snapshot can be restored on resume. */
 	workspaceReclaimedAt?: number;
+	/** Final archive is blocked; preserve this native coding copy through recovery and required review. */
+	workspaceCustody?: "review";
+	/** A preparation/configuration failure cannot safely recover by sending another message. */
+	recoveryBlockedReason?: string;
 	/** Last safe-cleanup failure. History remains available and the workspace is not discarded unsafely. */
 	workspaceCleanupError?: string;
 	/** Exact origin branch selected for an Ask snapshot or resolved as a Build base, when known. */

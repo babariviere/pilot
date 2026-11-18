@@ -31,18 +31,59 @@ fn is_chat(r: &planning::PlanningRecord) -> bool {
 }
 /// Continue: one fixed follow-up to one stopped chat. The daemon writes the words.
 pub(super) const CONTINUE: &str = "chat-continue";
+pub(super) const RECOVER: &str = "chat-recover";
+/// Mirrors standalone creation's queued-input budget. The page shows byte counts before sending.
+pub(crate) const RECOVERY_INPUT_BYTES: usize = 12_000;
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct Recovery {
+    pub session_id: String,
+    pub message: String,
+}
 /// A Continue record carries no choice, so its binding is a fixed digest.
 const CONTINUE_BINDING: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 fn is_continue(r: &planning::PlanningRecord) -> bool {
-    r.operation["kind"] == CONTINUE
+    r.operation["kind"] == CONTINUE || r.operation["kind"] == RECOVER
+}
+pub(super) fn pending_recovery(t: &Transport, journal: &Journal, session: &str) -> Option<Value> {
+    journal
+        .planning
+        .values()
+        .find(|r| {
+            same_home(&r.source, &t.source)
+                && is_continue(r)
+                && r.pending()
+                && r.mission() == session
+        })
+        .map(summary)
+}
+fn publish_recovery(t: &Transport, journal: &Journal, shared: &Shared, session: &str) {
+    if let Some(chat) = shared
+        .session_chat
+        .lock()
+        .expect("native session chat poisoned")
+        .as_mut()
+        .filter(|c| c.session == session)
+    {
+        chat.pending_recovery = pending_recovery(t, journal, session);
+    }
 }
 /// A saved Continue names exactly one chat, as its target and its payload.
 pub(super) fn validate_continue(op: &Value) -> Result<(), Error> {
     let p: Value = serde_json::from_str(op["payload"].as_str().ok_or(Error::Storage)?)
         .map_err(|_| Error::Storage)?;
     let session = p["sessionId"].as_str().unwrap_or("");
-    if p.as_object().is_none_or(|o| o.len() != 2)
-        || p["purpose"] != CONTINUE
+    let recovery = op["kind"] == RECOVER;
+    if (!recovery && op["kind"] != CONTINUE)
+        || p.as_object()
+            .is_none_or(|o| o.len() != if recovery { 5 } else { 2 })
+        || p["purpose"] != op["kind"]
+        || (recovery
+            && p["message"]
+                .as_str()
+                .is_none_or(|s| s.len() > RECOVERY_INPUT_BYTES))
+        || (recovery && p["updatedAt"].as_u64().is_none())
+        || (recovery && p["inputGeneration"].as_u64().is_none())
         || !super::valid_id(session)
         || op["targetId"] != session
         || op["bindingId"] != CONTINUE_BINDING
@@ -297,11 +338,19 @@ pub(super) async fn handle(
                     return Ok(unsaved_receipt(journal, &record));
                 }
             }
+            if is_continue(&record) {
+                publish_recovery(t, journal, shared, record.mission());
+            }
             Ok(
                 json!({"snapshot":null,"operations":operations(t,journal),"outcome":summary(&record)}),
             )
         }
-        Command::ChatContinue(session) => {
+        Command::ChatContinue(_) | Command::ChatRecover(_) => {
+            let (session, message) = match command {
+                Command::ChatContinue(session) => (session, None),
+                Command::ChatRecover(r) => (&r.session_id, Some(&r.message)),
+                _ => unreachable!(),
+            };
             if !super::valid_id(session) {
                 return Err(Error::Invalid);
             }
@@ -315,13 +364,29 @@ pub(super) async fn handle(
                 return Ok(json!({"snapshot":null,"outcome":summary(prior)}));
             }
             check()?;
-            let mut record = planning::record(
-                &t.source,
-                session.clone(),
-                CONTINUE_BINDING.into(),
-                json!({"purpose":CONTINUE,"sessionId":session}),
-            )?;
+            let payload = match message {
+                Some(message) => {
+                    let chat = shared
+                        .session_chat
+                        .lock()
+                        .expect("native session chat poisoned");
+                    let c = chat
+                        .as_ref()
+                        .filter(|c| {
+                            c.session == *session
+                                && c.reason.is_empty()
+                                && !c.archived
+                                && matches!(c.state, "failed" | "stopped")
+                        })
+                        .ok_or(Error::Stale)?;
+                    json!({"purpose":RECOVER,"sessionId":session,"message":message,"updatedAt":c.updated_at,"inputGeneration":c.input_generation})
+                }
+                None => json!({"purpose":CONTINUE,"sessionId":session}),
+            };
+            let mut record =
+                planning::record(&t.source, session.clone(), CONTINUE_BINDING.into(), payload)?;
             journal.save_planning(record.clone())?;
+            publish_recovery(t, journal, shared, session);
             if let Err(e) = t.local().and_then(|_| check()) {
                 record.not_sent = true;
                 journal.save_planning(record)?;
@@ -333,6 +398,7 @@ pub(super) async fn handle(
                     return Ok(unsaved_receipt(journal, &record));
                 }
             }
+            publish_recovery(t, journal, shared, session);
             Ok(json!({"snapshot":null,"outcome":summary(&record)}))
         }
         _ => Err(Error::Invalid),
@@ -347,8 +413,11 @@ fn unsaved_receipt(journal: &mut Journal, record: &planning::PlanningRecord) -> 
     json!({"snapshot":null,"outcome":outcome})
 }
 fn summary(r: &planning::PlanningRecord) -> Value {
+    let payload: Value =
+        serde_json::from_str(r.operation["payload"].as_str().unwrap_or("")).unwrap_or(Value::Null);
     json!({"operationId":r.id(),"draftId":r.mission(),"state":if r.not_sent {"not-sent"} else {
-        r.receipt.as_ref().and_then(|r| r["state"].as_str()).unwrap_or("unknown")},"receipt":r.receipt})
+        r.receipt.as_ref().and_then(|r| r["state"].as_str()).unwrap_or("unknown")},"receipt":r.receipt,
+        "submittedText":if r.operation["kind"] == RECOVER {payload["message"].as_str()} else {None}})
 }
 
 #[cfg(test)]

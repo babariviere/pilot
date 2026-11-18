@@ -605,6 +605,10 @@ interface SessionMeta extends OutcomeMeta {
 	archivedAt?: number;
 	/** Coordinator organization excludes automatic cleanup, including after restore/rearchive. User reclaim is separate. */
 	coordinatorArchivePreservesWorkspace?: boolean;
+	/** Native work keeps its copy until separately verified final archive. Never supplied by a client. */
+	workspaceCustody?: "review";
+	/** Exact native startup-retry admission, committed with initializing and the original outbox. */
+	startupRecoveryOperationId?: string;
 	/** User pin, independent of activity and manual archival. */
 	pinned?: boolean;
 	/** Restoring gives an inactive chat a new week without changing its activity ordering. */
@@ -4228,6 +4232,17 @@ ${run.excerpt}`,
 	}
 
 	private temporaryStorageSweepAt = 0;
+	private keepsWorkingContext(meta: SessionMeta): boolean {
+		return meta.workspaceCustody === "review" || meta.coordinatorArchivePreservesWorkspace === true;
+	}
+
+	/** Recovery adopts preservation only, never permission to delete or replay work. */
+	async preserveWorkingContext(id: string): Promise<void> {
+		const meta = this.require(id);
+		if (!meta.workspace && !meta.preparing) return;
+		meta.workspaceCustody = "review";
+		await this.save(meta, undefined, undefined, true);
+	}
 
 	/** Slow maintenance, never a chat-list read. Unknown folders and saved artifacts are kept. */
 	private async cleanArchivedTemporaryStorage(): Promise<void> {
@@ -4247,7 +4262,7 @@ ${run.excerpt}`,
 					meta.continuedTo ||
 					meta.continuationPending ||
 					meta.coordinatorView ||
-					meta.coordinatorArchivePreservesWorkspace ||
+					this.keepsWorkingContext(meta) ||
 					this.archiveTransitions.has(meta.id) ||
 					this.workspaceMaintenance.has(meta.id) ||
 					this.workers.has(meta.id)
@@ -4331,7 +4346,7 @@ ${run.excerpt}`,
 			if (
 				meta.continuedTo ||
 				meta.coordinatorView ||
-				meta.coordinatorArchivePreservesWorkspace ||
+				this.keepsWorkingContext(meta) ||
 				!meta.workspace ||
 				meta.archivedAt === undefined ||
 				hasActivePullRequest(meta)
@@ -4467,6 +4482,10 @@ ${run.excerpt}`,
 				.then(async () => {
 					const meta = this.require(id);
 					if (this.closing) throw new Conflict("pilotd is shutting down");
+					if (meta.workspaceCustody === "review") {
+						if (staleBefore !== undefined) return this.summary(meta);
+						throw new Conflict("Required review and final archive must finish before deleting this working copy");
+					}
 					if (staleBefore !== undefined && meta.coordinatorArchivePreservesWorkspace) return this.summary(meta);
 					if (staleBefore !== undefined && (meta.archivedAt === undefined || meta.archivedAt > staleBefore))
 						return this.summary(meta);
@@ -4559,7 +4578,7 @@ ${run.excerpt}`,
 					if (this.closing) throw new Conflict("pilotd is shutting down");
 					if (
 						meta.archivedAt === undefined ||
-						meta.coordinatorArchivePreservesWorkspace ||
+						this.keepsWorkingContext(meta) ||
 						(meta.workspacePrunedAt !== undefined && meta.workspacePrunedAt > Date.now() - DAY_MS) ||
 						meta.workspaceRecovery ||
 						!meta.workspace ||
@@ -7590,6 +7609,7 @@ ${run.excerpt}`,
 			throw new Conflict("Chat already continued elsewhere");
 		// The workspace moves, so its coordinator cleanup exclusion moves with it, including journal recovery.
 		if (source.coordinatorArchivePreservesWorkspace) target.coordinatorArchivePreservesWorkspace = true;
+		if (source.workspaceCustody === "review") target.workspaceCustody = "review";
 		source.continuedTo = target.id;
 		delete source.working;
 		delete source.initializing;
@@ -10044,6 +10064,7 @@ ${run.excerpt}`,
 			cwd,
 			...(project ? { projectId: project.id } : {}),
 			...(preparing ? { preparing } : {}),
+			...(admission && preparing && mode === "build" ? { workspaceCustody: "review" as const } : {}),
 			...(preparing && mode === "build" && project && !request.missionId && !request.role && !coordinator
 				? { retainedScope: { version: 2 as const, sessionId: id, projectId: project.id } }
 				: {}),
@@ -10541,6 +10562,7 @@ ${run.excerpt}`,
 		try {
 			if (this.closing) throw new Error("pilotd is shutting down");
 			if (meta.failure) throw new Error(meta.failure);
+			admissionGuard?.();
 			if (meta.nextAttemptModel && !staleGeneration && (!explicitModelRecovery || report || inputOrigin(requestId)))
 				throw new Conflict("Saved next-attempt model requires explicit user recovery");
 			if (meta.nextAttemptModel && !staleGeneration && explicitModelRecovery && !report && !inputOrigin(requestId)) {
@@ -10660,7 +10682,10 @@ ${run.excerpt}`,
 	}
 
 	/** Retry worker initialization, without forking history or replacing queued input IDs. */
-	async retryStartup(id: string): Promise<SessionSummary> {
+	async retryStartup(
+		id: string,
+		recovery?: { operationId: string; admissionGuard: () => void },
+	): Promise<SessionSummary> {
 		this.assertHistoryWritable(this.require(id));
 		const end = this.updateGate.begin();
 		let locked = false;
@@ -10670,6 +10695,8 @@ ${run.excerpt}`,
 		});
 		try {
 			const meta = this.require(id);
+			recovery?.admissionGuard();
+			if (recovery) this.assertMissionWorkOpen(id);
 			if (this.closing) throw new Error("pilotd is shutting down");
 			if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before retrying startup");
 			if (this.changingModels.has(id) || this.archiveTransitions.has(id))
@@ -10701,15 +10728,18 @@ ${run.excerpt}`,
 				});
 				delete meta.recoveryStopped;
 			}
+			recovery?.admissionGuard();
+			if (recovery) this.assertMissionWorkOpen(id);
 			this.activateNextModel(meta);
 			delete meta.failure;
 			delete meta.inputError;
 			this.kernelErrors.delete(id);
 			clearOutcome(meta);
 			meta.initializing = true;
+			if (recovery) meta.startupRecoveryOperationId = recovery.operationId;
 			meta.updatedAt = Date.now();
 			// A restart here resumes initialization on load, with the same durable outbox.
-			await this.save(meta);
+			await this.save(meta, undefined, undefined, !!recovery);
 			this.emit(meta);
 			this.nextWorkerLaunchReason.set(id, "startup_retry");
 			await this.start(id, true);
@@ -10731,6 +10761,27 @@ ${run.excerpt}`,
 				!meta.workspaceRecovery &&
 				meta.archivedAt === undefined,
 		);
+	}
+
+	/** Reconcile only a committed admission. Never clear a failure, requeue input or start a worker. */
+	async startupRecoveryAdmitted(id: string, operationId: string): Promise<boolean> {
+		const meta = this.require(id);
+		await this.saving.get(id);
+		const file = await open(join(this.dir(id), "meta.json"), "r");
+		try {
+			const saved = JSON.parse(await file.readFile("utf8")) as SessionMeta;
+			if (saved.id !== id || saved.startupRecoveryOperationId !== operationId) return false;
+			await file.sync();
+		} finally {
+			await file.close();
+		}
+		const dir = await open(this.dir(id), "r");
+		try {
+			await dir.sync();
+		} finally {
+			await dir.close();
+		}
+		return meta.startupRecoveryOperationId === operationId;
 	}
 
 	/** The idle chat's last run failed in automatic handoff, and nothing else blocks an explicit user retry. */
@@ -12837,6 +12888,8 @@ ${run.excerpt}`,
 					} else {
 						if (meta.cwd !== join(this.dir(id), "workspace"))
 							throw new Error("Invalid session workspace destination");
+						if (meta.workspaceCustody === "review" && existsSync(meta.cwd))
+							throw new Error("Interrupted coding copy kept. Inspect the existing files before preparing another copy.");
 						// Unregister linked jj/Git workspaces before removing an interrupted preparation.
 						if (!this.factories.workspace && (plan.jj === true || existsSync(join(plan.source, ".jj"))))
 							await this.sharedWorkspaces.discardPartial(meta.cwd, plan.source);
@@ -14887,6 +14940,10 @@ ${run.excerpt}`,
 					}
 				: {}),
 			...(meta.workspaceReclaimedAt !== undefined ? { workspaceReclaimedAt: meta.workspaceReclaimedAt } : {}),
+			...(meta.workspaceCustody === "review" ? { workspaceCustody: "review" as const } : {}),
+			...(meta.preparing || (meta.failure && !this.canRetryStartup(meta))
+				? { recoveryBlockedReason: "Repair setup or configuration before retrying. Existing files are kept." }
+				: {}),
 			...(meta.workspaceCleanupError ? { workspaceCleanupError: meta.workspaceCleanupError } : {}),
 			...(paused ? { sleepPaused: true } : {}),
 			...(workHolds.length ? { workHolds } : {}),
@@ -16077,6 +16134,8 @@ ${run.excerpt}`,
 			persisted.missionUserStopGeneration = meta.missionUserStopGeneration;
 			// Preserve the immutable execution ceiling across queued lifecycle snapshots.
 			persisted.executionPermission = meta.executionPermission;
+			// Older lifecycle snapshots cannot drop the recovery/review preservation fence.
+			persisted.workspaceCustody = meta.workspaceCustody;
 			// Captured lifecycle snapshots must never resurrect an earlier enabled grant.
 			if (meta.insightsOwner) persisted.insightsOwner = structuredClone(meta.insightsOwner);
 			else delete persisted.insightsOwner;

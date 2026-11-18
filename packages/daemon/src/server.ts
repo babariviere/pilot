@@ -94,7 +94,7 @@ import { isThreadOperation } from "./mission-threads.ts";
 import type { MissionStore } from "./missions.ts";
 import { MODEL_CONTROLS } from "./model-controls.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
-import { CHAT_CONTINUE } from "./native-chat.ts";
+import { CHAT_CONTINUE, CHAT_RECOVER } from "./native-chat.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
 import { isIntakeOperation } from "./native-intake.ts";
 import { isNativePlanningOperation, PlanningInventoryCapacity } from "./native-mission-planning.ts";
@@ -1228,7 +1228,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					end();
 				}
 			}
-			if (operation?.kind === CHAT_CONTINUE) {
+			if (operation?.kind === CHAT_CONTINUE || operation?.kind === CHAT_RECOVER) {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native chat continue unavailable");
 				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);

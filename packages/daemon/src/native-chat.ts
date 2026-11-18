@@ -9,6 +9,9 @@ const id = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]
 const digest = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
 /** Native operation kind: one fixed follow-up to one stopped chat, sent once. */
 export const CHAT_CONTINUE = "chat-continue";
+export const CHAT_RECOVER = "chat-recover";
+export const RETRY_TEXT =
+	"The user asked you to retry after this chat failed. Continue the original work within its existing scope, access and remaining allowance.";
 /** What Continue sends. The window cannot supply other words. */
 export const CONTINUE_TEXT =
 	"The user asked you to continue after this chat stopped. If you were waiting on an answer, that question was lost: ask it again. Otherwise pick up where you stopped.";
@@ -32,7 +35,15 @@ interface Dependencies {
 	projects: Pick<ProjectStore, "list" | "require">;
 	sessions: Pick<
 		SessionManager,
-		"spawnDurable" | "selectTaskModel" | "activeFunding" | "get" | "sendDurable" | "lookupNativeAttentionInput"
+		| "spawnDurable"
+		| "selectTaskModel"
+		| "activeFunding"
+		| "get"
+		| "sendDurable"
+		| "lookupNativeAttentionInput"
+		| "preserveWorkingContext"
+		| "retryStartup"
+		| "startupRecoveryAdmitted"
 	>;
 }
 export class NativeChat {
@@ -217,19 +228,34 @@ export class NativeChat {
 		return { allowanceMicros: funding.quickFixDefaultMicros, fundingRequired: true };
 	}
 	/** Exact Continue envelope: this host, payload `{purpose, sessionId}` aimed at that chat. */
-	private continueRequest(op: DurableOperation): string {
+	private continueRequest(op: DurableOperation): {
+		sessionId: string;
+		message: string;
+		updatedAt?: number;
+		inputGeneration?: number;
+	} {
 		let p: Record<string, unknown>;
 		try {
 			p = JSON.parse(op.payload);
 		} catch {
 			throw new OperationRejected("Invalid continue payload");
 		}
+		// Same queued-input budget as standalone creation; corrections cannot enlarge journal/model input.
+		if (op.kind === CHAT_RECOVER && p && typeof p.message === "string" && Buffer.byteLength(p.message) > 12000)
+			throw new OperationRejected(
+				`Corrected follow-up is ${Buffer.byteLength(p.message)} bytes; limit is 12000. Shorten it before sending`,
+			);
 		if (
-			op.kind !== CHAT_CONTINUE ||
+			(op.kind !== CHAT_CONTINUE && op.kind !== CHAT_RECOVER) ||
 			!p ||
 			typeof p !== "object" ||
-			Object.keys(p).sort().join() !== "purpose,sessionId" ||
-			p.purpose !== CHAT_CONTINUE ||
+			Object.keys(p).sort().join() !==
+				(op.kind === CHAT_RECOVER ? "inputGeneration,message,purpose,sessionId,updatedAt" : "purpose,sessionId") ||
+			p.purpose !== op.kind ||
+			(op.kind === CHAT_RECOVER && (typeof p.message !== "string" || Buffer.byteLength(p.message) > 12000)) ||
+			(op.kind === CHAT_RECOVER && (!Number.isSafeInteger(p.updatedAt) || (p.updatedAt as number) < 0)) ||
+			(op.kind === CHAT_RECOVER &&
+				(!Number.isSafeInteger(p.inputGeneration) || (p.inputGeneration as number) < 0)) ||
 			!id(p.sessionId) ||
 			op.targetId !== p.sessionId ||
 			!digest(op.bindingId) ||
@@ -239,7 +265,18 @@ export class NativeChat {
 			!sameHost(op.destination, this.deps.journal.destination)
 		)
 			throw new OperationRejected("Invalid continue intent");
-		return p.sessionId;
+		return {
+			sessionId: p.sessionId,
+			...(op.kind === CHAT_RECOVER
+				? { updatedAt: p.updatedAt as number, inputGeneration: p.inputGeneration as number }
+				: {}),
+			message:
+				op.kind === CHAT_CONTINUE
+					? CONTINUE_TEXT
+					: (p.message as string).trim()
+						? (p.message as string)
+						: RETRY_TEXT,
+		};
 	}
 	async lookupContinue(op: DurableOperation) {
 		this.continueRequest(op);
@@ -247,19 +284,53 @@ export class NativeChat {
 	}
 	/** Sends CONTINUE_TEXT once to a stopped chat. Re-entry only reads whether the chat accepted it. */
 	async continueChat(op: DurableOperation, firstEntry: boolean) {
-		const sessionId = this.continueRequest(op);
+		const { sessionId, message, updatedAt, inputGeneration } = this.continueRequest(op);
 		if (!firstEntry) {
-			if (await this.deps.sessions.lookupNativeAttentionInput(sessionId, op.operationId))
+			if (
+				(op.kind === CHAT_RECOVER &&
+					(await this.deps.sessions.startupRecoveryAdmitted(sessionId, op.operationId))) ||
+				(await this.deps.sessions.lookupNativeAttentionInput(sessionId, op.operationId))
+			)
 				return { sessionId, operationId: op.operationId };
 			throw new Error("Continue outcome is unknown; it is never sent again");
 		}
 		const chat = this.deps.sessions.get(sessionId);
 		if (!chat || chat.archivedAt || chat.continuedTo) throw new OperationRejected("This chat can no longer continue");
-		if (chat.outcome !== "stopped" || chat.working) throw new OperationRejected("Only a stopped chat can continue");
+		if (op.kind === CHAT_RECOVER && chat.recoveryBlockedReason)
+			throw new OperationRejected(chat.recoveryBlockedReason);
+		if (updatedAt !== undefined && (chat.updatedAt !== updatedAt || (chat.inputGeneration ?? 0) !== inputGeneration))
+			throw new OperationRejected("This chat changed; read it again before recovery");
+		if (
+			chat.working ||
+			(op.kind === CHAT_CONTINUE
+				? chat.outcome !== "stopped"
+				: chat.outcome !== "failed" && chat.outcome !== "stopped")
+		)
+			throw new OperationRejected("Only a failed or stopped chat can recover");
 		if (chat.sleepPaused || chat.offlinePaused || chat.subscriptionPause)
 			throw new OperationRejected("This chat is paused");
-		await this.deps.sessions.sendDurable(sessionId, CONTINUE_TEXT, "followUp", op.operationId, {
-			inputGeneration: chat.inputGeneration ?? 0,
+		const admissionGuard = () => {
+			const now = this.deps.sessions.get(sessionId);
+			if (
+				!now ||
+				now.updatedAt !== updatedAt ||
+				(now.inputGeneration ?? 0) !== inputGeneration ||
+				now.working ||
+				now.archivedAt !== undefined
+			)
+				throw new OperationRejected("This chat changed during recovery; nothing new was sent");
+		};
+		if (op.kind === CHAT_RECOVER && chat.canRetryStartup) {
+			if (message !== RETRY_TEXT) throw new OperationRejected("Retry startup before sending a corrected follow-up");
+			await this.deps.sessions.preserveWorkingContext(sessionId);
+			await this.deps.sessions.retryStartup(sessionId, { operationId: op.operationId, admissionGuard });
+			return { sessionId, operationId: op.operationId };
+		}
+		if (op.kind === CHAT_RECOVER) await this.deps.sessions.preserveWorkingContext(sessionId);
+		await this.deps.sessions.sendDurable(sessionId, message, "followUp", op.operationId, {
+			inputGeneration: inputGeneration ?? chat.inputGeneration ?? 0,
+			explicitModelRecovery: op.kind === CHAT_RECOVER,
+			...(updatedAt !== undefined ? { admissionGuard } : {}),
 		});
 		return { sessionId, operationId: op.operationId };
 	}

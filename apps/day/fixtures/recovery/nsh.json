@@ -1,0 +1,8 @@
+{
+	"name": "Recovery projection test",
+	"id": "test.day.recovery-projection",
+	"theme": "../../theme.json",
+	"capabilities": {
+		"host": ["day.chat.read", "day.chat.snapshot", "day.chat.close"]
+	}
+}

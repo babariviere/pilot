@@ -444,6 +444,7 @@ pub(crate) fn validate_view(view: &SavedView) -> Result<(), Error> {
         || !view.preferences_valid()
         || !view.threads_valid()
         || !view.question_help_valid()
+        || !view.recovery_notes_valid()
         || !view.feedback_valid()
         || view.chat.as_ref().is_some_and(|c| !c.validate())
         || (!view.today_project.is_empty() && !crate::host::valid_id(&view.today_project))

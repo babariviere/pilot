@@ -408,6 +408,9 @@ pub struct SavedView {
     /// one sends nothing, and it stays with its own interview and question.
     #[prop(default)]
     pub question_help: Vec<String>,
+    /// Unsent corrected follow-ups as "<session>\n<exact text>". Restore never sends.
+    #[prop(default)]
+    pub recovery_notes: Vec<String>,
 }
 
 impl SavedView {
@@ -428,6 +431,7 @@ impl SavedView {
             .chain(&self.feedback_drafts)
             .chain(&self.feedback_later)
             .chain(&self.question_help)
+            .chain(&self.recovery_notes)
             .map(String::len)
             .sum::<usize>();
         self.goal.len()
@@ -473,6 +477,7 @@ impl SavedView {
             + self.feedback_drafts.len()
             + self.feedback_later.len()
             + self.question_help.len()
+            + self.recovery_notes.len()
     }
 
     /// Whether its offsets are plain, non-negative numbers.
@@ -481,6 +486,15 @@ impl SavedView {
             .iter()
             .all(|y| y.is_finite() && *y >= 0.0 && *y <= 10_000_000.0)
             && self.start <= self.end
+    }
+
+    pub fn recovery_notes_valid(&self) -> bool {
+        let mut ids = std::collections::HashSet::new();
+        // Existing VIEW_ENTRIES/VIEW_LIMIT cover the journal's count and byte cost.
+        self.recovery_notes.iter().all(|line| {
+            line.split_once('\n')
+                .is_some_and(|(id, _)| crate::host::valid_id(id) && ids.insert(id))
+        })
     }
 
     /// Whether `linear` is empty, or names one project and at most one issue by their IDs.
@@ -1092,6 +1106,7 @@ impl UpdateDesk {
                 || !view.preferences_valid()
                 || !view.threads_valid()
                 || !view.question_help_valid()
+                || !view.recovery_notes_valid()
                 || !view.feedback_valid())
         {
             self.bump();

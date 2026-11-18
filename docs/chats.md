@@ -27,9 +27,15 @@ jobs keep running, but their results wait with the other held inputs, so the cha
 not working. Stop also withdraws an open question. Send another message
 or explicitly send held inputs to continue. Stop does not undo changes already made.
 On macOS, **⌘.** stops the open chat's working agent.
-In Day, a stopped chat shows **Continue**, which sends one fixed follow-up (native operation
+Day's **Continue** action sends one fixed follow-up to a stopped chat (native operation
 `chat-continue`, payload `{purpose, sessionId}`; the daemon writes the words and refuses a chat that
 is not stopped). A lost reply is checked by exact input lookup, never sent again.
+
+Day also offers **Retry** and **Correct follow-up…** for failed or stopped chats. Both keep
+the same chat, source copy, access and remaining allowance. A startup failure offers Retry
+only, keeping its original queued inputs. Correction drafts survive window saves and reopen
+without sending. An uncertain attempt stays **Check** only; no previous tool effect is replayed.
+Older service versions may refuse these recovery controls.
 
 ## Read and review
 

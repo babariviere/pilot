@@ -24,6 +24,11 @@ export type SessionChat = {
 	/** The chat's own reason for its state, such as why it failed. */
 	stateReason: string;
 	specialist?: boolean;
+	archived?: boolean;
+	workspaceKept?: boolean;
+	restartOnly?: boolean;
+	recoveryBlocked?: string;
+	pendingRecovery?: ContinueResult | null;
 	/** Rows read so far, oldest first. */
 	rows: ChatRow[];
 	/** Whether earlier rows can be read. */
@@ -49,6 +54,8 @@ export interface SessionChatSource {
 	close(sessionId: string): void;
 	/** Asks stopped chat `sessionId` to continue. The service writes the words and sends them once. */
 	continueChat(sessionId: string): Promise<ContinueResult>;
+	/** Retry or corrected words, in this same failed/stopped chat. Empty means Retry. */
+	recoverChat?(sessionId: string, message: string): Promise<ContinueResult>;
 	/** Reads one Continue's exact receipt. Nothing is sent again. */
 	checkContinue(operationId: string): Promise<ContinueResult>;
 	dispose(): void;
@@ -59,14 +66,22 @@ export type ContinueResult = {
 	status: "accepted" | "rejected" | "unknown";
 	message: string;
 	operationId?: string;
+	/** Exact words from the native operation, used only to clear an unchanged acknowledged draft. */
+	submittedText?: string;
 };
 
 const CONTINUE_UNKNOWN = "Pilot does not know if Continue reached this chat. It will not send it again.";
 
-function continueOutcome(x: unknown): ContinueResult {
-	const o = x as { operationId?: unknown; state?: unknown; receipt?: { reason?: unknown } | null } | null;
+function continueOutcome(x: unknown, recovery = false): ContinueResult {
+	const o = x as {
+		operationId?: unknown;
+		submittedText?: unknown;
+		state?: unknown;
+		receipt?: { reason?: unknown } | null;
+	} | null;
 	const operationId = typeof o?.operationId === "string" ? o.operationId : undefined;
-	if (o?.state === "accepted") return { status: "accepted", message: "", operationId };
+	const submittedText = typeof o?.submittedText === "string" ? o.submittedText : undefined;
+	if (o?.state === "accepted") return { status: "accepted", message: "", operationId, submittedText };
 	if (o?.state === "rejected" || o?.state === "not-sent") {
 		const reason = typeof o.receipt?.reason === "string" ? o.receipt.reason : "";
 		return {
@@ -75,13 +90,23 @@ function continueOutcome(x: unknown): ContinueResult {
 			operationId,
 		};
 	}
-	return { status: "unknown", message: CONTINUE_UNKNOWN, operationId };
+	return {
+		status: "unknown",
+		message: recovery ? CONTINUE_UNKNOWN.replace("Continue", "Recovery") : CONTINUE_UNKNOWN,
+		operationId,
+		submittedText,
+	};
 }
 
-function refusedContinue(refusal: Refusal): ContinueResult {
+function refusedContinue(refusal: Refusal, recovery = false): ContinueResult {
 	switch (refusal) {
 		case "lost":
-			return { status: "unknown", message: `${CONTINUE_UNKNOWN} Press Continue again to find it.` };
+			return {
+				status: "unknown",
+				message: recovery
+					? "Recovery is Unknown. Reopen this chat to find its saved attempt. Nothing will be sent again."
+					: `${CONTINUE_UNKNOWN} Press Continue again to find it.`,
+			};
 		case "offline":
 			return { status: "rejected", message: "Pilot could not reach its service. Nothing was sent." };
 		case "busy":
@@ -105,6 +130,11 @@ function chatOf(x: unknown, sessionId: string): SessionChat | null {
 		state: (c.state ?? "unknown") as SessionChatState,
 		stateReason: typeof c.stateReason === "string" ? c.stateReason : "",
 		specialist: c.specialist === true,
+		archived: c.archived === true,
+		workspaceKept: c.workspaceKept === true,
+		restartOnly: c.restartOnly === true,
+		recoveryBlocked: typeof c.recoveryBlocked === "string" ? c.recoveryBlocked : "",
+		pendingRecovery: c.pendingRecovery ? continueOutcome(c.pendingRecovery, true) : null,
 		rows: c.rows,
 		more: c.more === true,
 		reading: c.reading === true,
@@ -144,6 +174,7 @@ export class ConnectedSessionChat implements SessionChatSource {
 	async #read(sessionId: string, older: boolean) {
 		const prior = this.#chat?.sessionId === sessionId ? this.#chat : null;
 		this.#chat = {
+			...prior,
 			sessionId,
 			title: prior?.title ?? "",
 			state: prior?.state ?? "unknown",
@@ -196,6 +227,12 @@ export class ConnectedSessionChat implements SessionChatSource {
 		if (!r.ok) return refusedContinue(r.refusal);
 		void this.refresh();
 		return continueOutcome(r.value.outcome);
+	}
+	async recoverChat(sessionId: string, message: string): Promise<ContinueResult> {
+		const r = await call<unknown>(this.#window, "day.chat.recover", { sessionId, message });
+		void this.refresh();
+		if (!r.ok) return refusedContinue(r.refusal, true);
+		return continueOutcome(r.value.outcome, true);
 	}
 
 	async checkContinue(operationId: string): Promise<ContinueResult> {

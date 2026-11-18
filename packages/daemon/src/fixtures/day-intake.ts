@@ -218,6 +218,22 @@ for await (const line of createInterface({ input: process.stdin })) {
 	const c = JSON.parse(line);
 	if (c.action === "quit") break;
 	if (c.action === "lost") lost = true;
+	if (c.action === "fail-chats") {
+		// Synthetic failed turns with no workers. Preserve identity, source and saved inputs.
+		// biome-ignore lint/complexity/useLiteralKeys: lifecycle fixture boundary
+		for (const meta of f.sessions["metas"].values()) {
+			Object.assign(meta, {
+				outcome: "failed",
+				outcomeReason: "Provider unavailable",
+				working: false,
+				pending: [],
+				initializing: undefined,
+				updatedAt: Date.now(),
+			});
+			// biome-ignore lint/complexity/useLiteralKeys: lifecycle fixture boundary
+			await f.sessions["save"](meta);
+		}
+	}
 	if (c.action === "fail-save") failSave = true;
 	if (c.action === "restore-ledger") await chmod(ledger, 0o600);
 	if (c.action === "deny") denied = true;
