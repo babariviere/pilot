@@ -142,7 +142,12 @@ export async function fixture(t: TestContext, options: SessionManagerOptions = {
 			undefined,
 			{ worker, title: async () => undefined }, // Deliberately DO NOT inject workspace: exercise default shared creation.
 			{ runner: async (file, args) => (file === "git" && args[0] === "branch" ? "" : "[]") },
-			offlineSessionOptions({ idleParkMs: Number.POSITIVE_INFINITY, ...options, ...overrides }),
+			offlineSessionOptions({
+				idleParkMs: Number.POSITIVE_INFINITY,
+				workspaceRetentionMs: DAY,
+				...options,
+				...overrides,
+			}),
 		);
 		managers.push(value);
 		await value.load();

@@ -9,6 +9,7 @@ import { test } from "node:test";
 import { ArtifactStore } from "@pilot/artifacts";
 import type { SessionSummary } from "@pilot/protocol";
 import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.ts";
+import { loadConfig } from "./config.ts";
 import { Conflict } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
 import { TerminalManager } from "./terminals.ts";
@@ -33,57 +34,37 @@ test("default creation shares a daemon-owned jj repository between sessions with
 	await f.assertSourceUnchanged();
 });
 
-test("manual reclaim is immediate, retains history/artifacts, and restart restore preserves exact dirty jj state", async (t) => {
-	const f = await fixture(t);
+test("archive immediately discards private work without snapshots, keeping history and published artifacts", async (t) => {
+	const f = await fixture(t, { workspaceRetentionMs: loadConfig({}).workspaceRetentionMs });
 	const created = await f.spawn();
 	await assert.rejects(f.sessions.reclaimWorkspace(created.id), /Archive/);
-	await writeFile(join(created.cwd, "tracked.txt"), "unpushed commit\n");
-	jj(created.cwd, "commit", "-m", "local unpushed work");
-	jj(created.cwd, "bookmark", "create", "agent-unpushed", "-r", "@-");
-	await writeFile(join(created.cwd, "tracked.txt"), "dirty after commit\n");
-	await writeFile(join(created.cwd, "new.txt"), "new dirty file\n");
-	const dirty = jj(created.cwd, "log", "--no-graph", "-r", "@", "-T", "change_id ++ commit_id");
-	const commit = jj(created.cwd, "log", "--no-graph", "-r", "agent-unpushed", "-T", "commit_id");
-	const base = f.sessions.changeBase(created.id).base;
-	const workspaceMeta = structuredClone((await f.stored(created.id)).workspace);
+	await writeFile(join(created.cwd, "tracked.txt"), "unpublished work");
+	await writeFile(join(created.cwd, "ignored-secret"), "discard too");
 	const directory = join(f.home, "sessions", created.id);
 	await seedHistory(directory);
 	const store = new LegacyArtifactFixture(directory, { sessionId: created.id, projectId: f.project.id });
-	const artifact = await store.create({ title: "Retained", kind: "html", source: "<p>revision one</p>" });
-	await store.update(artifact.id, { title: "Retained", kind: "html", source: "<p>revision two</p>" }, 1);
+	const artifact = await store.create({ title: "Saved", kind: "html", source: "<p>published</p>" });
+	const snapshot = t.mock.method(f.sessions["sharedWorkspaces"], "snapshot", async () => {
+		throw new Error("must not snapshot");
+	});
 	const archived = await f.sessions.archive(created.id);
-	const before = f.workers.length;
-	await f.sessions.reclaimWorkspace(created.id);
+	assert.ok(archived.archivedAt);
+	assert.ok(archived.workspaceDiscardedAt);
 	assert.equal(existsSync(created.cwd), false);
-	assert.equal(f.sessions.get(created.id)?.archivedAt, archived.archivedAt);
-	assert.equal(f.sessions["workers"].has(created.id), false);
-	assert.equal(f.workers[0]?.closed, true);
-	const reclaimed = await f.stored(created.id);
-	assert.equal(reclaimed.workspaceRecovery?.phase, "reclaimed");
-	assert.ok(reclaimed.workspaceReclaimedAt);
-	assert.deepEqual(reclaimed.workspace, workspaceMeta);
+	assert.equal(snapshot.mock.callCount(), 0);
+	assert.equal((await f.stored(created.id)).workspaceRecovery, undefined);
+	assert.equal((await f.stored(created.id)).workspaceDiscard?.phase, "discarded");
 	await assertHistory(f.sessions, created.id);
-	assert.equal((await f.sessions.artifact(created.id, artifact.id, 1)).source, "<p>revision one</p>");
-	assert.equal((await f.sessions.artifacts(created.id))[0]?.revision, 2);
-	assert.equal(f.workers.length, before, "cold reads must not reopen a worker");
+	assert.equal((await f.sessions.artifact(created.id, artifact.id)).source, "<p>published</p>");
 	await f.sessions.shutdown();
 	const restarted = await f.manager();
 	await assertHistory(restarted, created.id);
-	assert.throws(() => restarted.assertWritable(created.id), Conflict);
-	assert.throws(() => restarted.changeBase(created.id), Conflict);
-	await assert.rejects(restarted.send(created.id, "cannot resume reclaimed work"), Conflict);
-	await restarted.restore(created.id);
-	assert.equal(restarted.get(created.id)?.archivedAt, undefined);
-	assert.equal(await readFile(join(created.cwd, "tracked.txt"), "utf8"), "dirty after commit\n");
-	assert.equal(await readFile(join(created.cwd, "new.txt"), "utf8"), "new dirty file\n");
-	assert.equal(jj(created.cwd, "log", "--no-graph", "-r", "@", "-T", "change_id ++ commit_id"), dirty);
-	assert.equal(jj(created.cwd, "log", "--no-graph", "-r", "agent-unpushed", "-T", "commit_id"), commit);
-	assert.equal(restarted.changeBase(created.id).base, base);
-	const restored = await f.stored(created.id);
-	assert.equal(restored.workspaceRecovery, undefined);
-	assert.equal(restored.workspaceReclaimedAt, undefined);
-	assert.equal(restored.workspaceCleanupError, undefined);
-	assert.equal(f.workers.length, before, "restoration never starts a worker");
+	await assert.rejects(restarted.restore(created.id), /permanently discarded/);
+	await assert.rejects(restarted.send(created.id, "resume"), /permanently discarded/);
+	assert.throws(() => restarted.assertWritable(created.id), /permanently discarded/);
+	assert.equal(existsSync(created.cwd), false);
+	await restarted.reclaimWorkspace(created.id);
+	assert.equal((await f.stored(created.id)).workspaceDiscard?.at, archived.workspaceDiscardedAt);
 	await f.assertSourceUnchanged();
 });
 
@@ -116,7 +97,7 @@ test("NSH scratch survives archive and idle reclaim; explicit cleanup drains wor
 	assert.equal((await f.sessions.artifact(created.id, published.id, 1)).nsh?.rendering, undefined);
 });
 
-test("ignored files do not block reclamation, while tracked edits survive restore", async (t) => {
+test("ignored and tracked files are permanently discarded", async (t) => {
 	const f = await fixture(t);
 	const created = await f.spawn();
 	await writeFile(join(created.cwd, "tracked.txt"), "dirty and valuable\n");
@@ -128,10 +109,9 @@ test("ignored files do not block reclamation, while tracked edits survive restor
 	assert.ok(stored.archivedAt);
 	assert.equal(stored.workspaceCleanupError, undefined);
 	assert.ok(stored.workspaceReclaimedAt);
-	assert.equal(stored.workspaceRecovery?.phase, "reclaimed");
-	await f.sessions.restore(created.id);
+	assert.equal(stored.workspaceDiscard?.phase, "discarded");
+	await assert.rejects(f.sessions.restore(created.id), /permanently discarded/);
 	assert.equal(existsSync(join(created.cwd, "ignored-secret")), false);
-	assert.equal(await readFile(join(created.cwd, "tracked.txt"), "utf8"), "dirty and valuable\n");
 	await f.assertSourceUnchanged();
 });
 
@@ -157,7 +137,7 @@ test("cached open and draft PRs block manual and automatic reclaim, while merged
 		await f.sessions["save"](meta);
 		await assert.rejects(f.sessions.reclaimWorkspace(meta.id), Conflict);
 	}
-	const snapshot = t.mock.method(f.sessions["sharedWorkspaces"], "snapshot");
+	const snapshot = t.mock.method(f.sessions["sharedWorkspaces"], "discard");
 	await f.sessions["reclaimArchivedWorkspaces"]();
 	assert.equal(snapshot.mock.callCount(), 0, "cached live PRs must be skipped before snapshotting");
 	for (const created of [first, second]) {
@@ -172,8 +152,8 @@ test("cached open and draft PRs block manual and automatic reclaim, while merged
 	assert.equal(existsSync(first.cwd), false, "merged PR is eligible for manual reclaim");
 	await f.sessions["reclaimArchivedWorkspaces"]();
 	assert.equal(existsSync(second.cwd), false, "closed PR is eligible for automatic reclaim");
-	assert.equal((await f.stored(first.id)).workspaceRecovery?.phase, "reclaimed");
-	assert.equal((await f.stored(second.id)).workspaceRecovery?.phase, "reclaimed");
+	assert.equal((await f.stored(first.id)).workspaceDiscard?.phase, "discarded");
+	assert.equal((await f.stored(second.id)).workspaceDiscard?.phase, "discarded");
 	assert.equal(snapshot.mock.callCount(), 2);
 	await f.assertSourceUnchanged();
 });
@@ -227,19 +207,15 @@ test("HTTP reclaim-workspace enforces method, origin and active-session guards, 
 	}
 });
 
-test("restoring a reclaimed workspace tells the next kernel which jj change it was recreated from", async (t) => {
-	const f = await fixture(t);
-	const created = await f.spawn();
-	await f.sessions.archive(created.id);
-	await f.sessions.reclaimWorkspace(created.id);
-	const recovery = (await f.stored(created.id)).workspaceRecovery!;
-	await f.sessions.restore(created.id);
-	const reset = (await f.stored(created.id)).workspaceReset;
-	assert.equal(reset?.changeId, recovery.changeId);
-	assert.equal(reset?.commitId, recovery.commitId);
-	await f.sessions.send(created.id, "continue after restore");
-	assert.deepEqual(f.specs.at(-1)?.pilot?.workspaceReset, reset);
-	await f.sessions.stop(created.id);
-	await f.sessions.archive(created.id);
-	assert.equal((await f.stored(created.id)).workspaceReset, undefined, "a new archival clears the old notice");
+test("human archive, not the kernel done outcome, authorizes discard", async (t) => {
+	const f = await fixture(t, { workspaceRetentionMs: 0 });
+	const chat = await f.spawn();
+	const meta = f.sessions["metas"].get(chat.id)!;
+	meta.outcome = "done";
+	await f.sessions["save"](meta);
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.ok(existsSync(chat.cwd));
+	assert.equal(f.sessions.get(chat.id)?.archivedAt, undefined);
+	await f.sessions.archive(chat.id);
+	assert.equal(existsSync(chat.cwd), false);
 });

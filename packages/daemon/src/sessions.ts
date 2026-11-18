@@ -102,6 +102,7 @@ import {
 import { DiagnosticLogReader, type DiagnosticLogReaderOptions } from "./diagnostic-logs.ts";
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { DiagnosticRepairProjectStore, diagnosticRepairTitle, repairHost } from "./diagnostic-repair-project.ts";
+import { discardDirectory } from "./discard-directory.ts";
 import { Conflict, NotFound, PublishedStartRefused, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import {
@@ -415,7 +416,7 @@ export interface SessionManagerOptions {
 	subscriptionUsage?: false | ((onChange: (provider: SubscriptionProvider) => void) => SubscriptionUsageSource);
 	startupTimeoutMs?: number;
 	commandTimeoutMs?: number;
-	/** Reclaim shared workspaces, and prune legacy clones, this long after archival. Defaults to 1 day; Infinity disables. */
+	/** Automatic private workspace discard delay. Defaults to immediate; Infinity disables automatic discard. */
 	workspaceRetentionMs?: number;
 	/**
 	 * Automatic work (mission notices, PR follow-ups) waits this long after a kernel crash or IPC failure,
@@ -578,6 +579,8 @@ interface SessionMeta extends OutcomeMeta {
 	coordinatorView?: { originalCwd: string; path: string; scratch: string; head: string; repository: string };
 	/** Persisted before removal. Never discard this record until restoration has succeeded. */
 	workspaceRecovery?: WorkspaceRecovery & { phase: "removing" | "reclaimed" | "restoring" };
+	/** Permanent execution fence, durable before deletion. Never cleared by restore or new input. */
+	workspaceDiscard?: { at: number; phase: "removing" | "discarded" };
 	workspaceReclaimedAt?: number;
 	workspaceCleanupError?: string;
 	/** Regenerable outputs of the workspace were deleted during this archival. Cleared on restore. */
@@ -2537,7 +2540,7 @@ export class SessionManager {
 			if (meta) this.emit(meta);
 		});
 		this.credentials = options.credentials;
-		this.workspaceRetentionMs = options.workspaceRetentionMs ?? DAY_MS;
+		this.workspaceRetentionMs = options.workspaceRetentionMs ?? 0;
 		this.sharedWorkspaces = new SharedWorkspaceStore(home);
 		this.reviewSnapshots = new ReviewSnapshotStore(
 			join(home, "review-snapshots.sqlite"),
@@ -4348,34 +4351,16 @@ ${run.excerpt}`,
 			if (
 				meta.continuedTo ||
 				meta.coordinatorView ||
+				this.isMissionCoordinator(meta.id) ||
 				this.keepsWorkingContext(meta) ||
 				!meta.workspace ||
 				meta.archivedAt === undefined ||
 				hasActivePullRequest(meta)
 			)
 				continue;
-			const audit = this.workspaceAudits.get(meta.id);
-			if (
-				meta.workspaceRecovery?.phase === "reclaimed" &&
-				audit?.archivedAt === meta.archivedAt &&
-				Date.now() - audit.at < DAY_MS
-			)
-				continue;
-			// Shared workspaces are removed after retention. Until then, and for legacy clones that are never
-			// removed, only regenerable dependency and build outputs go, as soon as the chat is archived.
-			const reclaim =
-				meta.workspace.shared !== undefined &&
-				meta.archivedAt <= staleBefore &&
-				(meta.workspaceRecovery?.phase !== "reclaimed" || existsSync(meta.cwd));
-			const prune =
-				!reclaim &&
-				(meta.workspacePrunedAt === undefined || meta.workspacePrunedAt <= Date.now() - DAY_MS) &&
-				!meta.workspaceRecovery &&
-				meta.mode !== "ask" &&
-				meta.cwd === join(this.dir(meta.workspaceOriginId ?? meta.id), "workspace");
+			if (meta.archivedAt > staleBefore && meta.workspaceDiscard?.phase !== "discarded") continue;
 			try {
-				if (prune) await this.pruneWorkspace(meta.id);
-				else if (reclaim) await this.reclaimWorkspace(meta.id, staleBefore);
+				if (meta.workspaceDiscard?.phase !== "discarded") await this.reclaimWorkspace(meta.id, staleBefore);
 				await this.auditWorkspaceLeftovers(meta);
 				this.workspaceCleanupBackoff.delete(meta.id);
 			} catch (error) {
@@ -4392,9 +4377,7 @@ ${run.excerpt}`,
 				const retry = paused
 					? "automatic retries paused until daemon restart"
 					: `retrying in ${delay / 60_000} minutes`;
-				console.warn(
-					`pilotd: could not ${prune ? "prune" : "reclaim"} workspace for ${meta.id}: ${error}; ${retry}`,
-				);
+				console.warn(`pilotd: could not discard workspace for ${meta.id}: ${error}; ${retry}`);
 			}
 		}
 	}
@@ -4471,7 +4454,7 @@ ${run.excerpt}`,
 		return false;
 	}
 
-	/** Keep conversation storage and a pinned jj snapshot; remove only the private working directory. */
+	/** Permanently discard private work, keeping conversation storage and published artifacts. */
 	async reclaimWorkspace(id: string, staleBefore?: number): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		try {
@@ -4493,13 +4476,13 @@ ${run.excerpt}`,
 						return this.summary(meta);
 					if (meta.archivedAt === undefined)
 						throw new Conflict("Archive the session before reclaiming its workspace");
-					if (meta.coordinatorView)
+					if (meta.coordinatorView || this.isMissionCoordinator(id))
 						throw new Conflict("The read-only project view is shared and cannot be reclaimed per chat");
-					if (!meta.workspace?.shared) throw new Conflict("Only shared jj workspaces can be reclaimed");
+					if (!meta.workspace) throw new Conflict("Only private workspaces can be discarded");
 					if (hasActivePullRequest(meta))
 						throw new Conflict("Workspaces with an open pull request cannot be reclaimed");
-					const alreadyReclaimed = meta.workspaceRecovery?.phase === "reclaimed" && !existsSync(meta.cwd);
-					if (alreadyReclaimed && staleBefore !== undefined) return this.summary(meta);
+					const alreadyDiscarded = meta.workspaceDiscard?.phase === "discarded";
+					if (alreadyDiscarded && staleBefore !== undefined) return this.summary(meta);
 					this.assertWorkspaceQuiescent(meta);
 					try {
 						const worker = this.workers.get(id);
@@ -4515,31 +4498,30 @@ ${run.excerpt}`,
 						}
 						this.assertWorkspaceQuiescent(meta);
 						this.assertOwnedWorkspace(meta);
-						if (!meta.workspaceRecovery) {
-							const snapshot = await this.sharedWorkspaces.snapshot(
-								meta.cwd,
-								meta.workspace.shared,
-								join(this.dir(id), "workspace-recovery"),
-							);
-							meta.workspaceRecovery = { ...snapshot, phase: "removing" };
-							// The restore recipe must be durable before any files disappear.
-							await this.save(meta);
-						}
+						await this.assertDiscardPath(meta);
+						meta.workspaceDiscard ??= { at: Date.now(), phase: "removing" };
+						// Re-sync on every retry too. A failed write must never authorize deletion.
+						await this.save(meta, undefined, undefined, true);
 						this.assertWorkspaceQuiescent(meta);
-						if (!alreadyReclaimed)
-							await this.sharedWorkspaces.remove(meta.cwd, meta.workspace.shared, meta.workspaceRecovery);
-						// Explicit workspace cleanup only, after worker/capture input release. No idle,
-						// archive or restart deletion. Published revisions are outside scratch.
+						await this.assertDiscardPath(meta);
+						if (!alreadyDiscarded) {
+							if (meta.workspace.shared) await this.sharedWorkspaces.discard(meta.cwd, meta.workspace.shared);
+							else await discardDirectory(meta.cwd);
+						}
+						// Old recovery payloads are private workspace data, not published artifacts.
+						await rm(join(this.dir(id), "workspace-recovery"), { recursive: true, force: true });
+						// Scratch has separate explicit-user cleanup authority.
 						if (staleBefore === undefined) {
 							this.assertWorkspaceQuiescent(meta);
 							await rm(join(this.dir(id), "scratch"), { recursive: true, force: true });
 						}
-						meta.workspaceRecovery.phase = "reclaimed";
+						delete meta.workspaceRecovery;
+						meta.workspaceDiscard.phase = "discarded";
 						meta.workspaceReclaimedAt ??= Date.now();
 						delete meta.workspaceCleanupError;
 						this.workspaceCleanupBackoff.delete(id);
 						this.coldSnapshots.delete(id);
-						await this.save(meta);
+						await this.save(meta, undefined, undefined, true);
 						this.emit(meta);
 						return this.summary(meta);
 					} catch (error) {
@@ -4641,6 +4623,8 @@ ${run.excerpt}`,
 
 	private assertWorkspaceQuiescent(meta: SessionMeta): void {
 		this.assertNotContinued(meta);
+		if (meta.workspaceCustody === "review")
+			throw new Conflict("Required review and final archive must finish before deleting this working copy");
 		const worker = this.workers.get(meta.id);
 		if (
 			this.closing ||
@@ -4661,6 +4645,42 @@ ${run.excerpt}`,
 			throw new Conflict(
 				"Session is in use; close viewers, terminals and live work before reclaiming its workspace",
 			);
+	}
+
+	/** Reject directory aliases before recursive deletion, including continued workspace origins. */
+	private async assertDiscardPath(meta: SessionMeta): Promise<void> {
+		this.assertOwnedWorkspace(meta);
+		const origin = meta.workspaceOriginId ?? meta.id;
+		for (const other of this.metas.values())
+			if (other.id !== meta.id && !other.continuedTo && other.cwd === meta.cwd)
+				throw new Conflict("Workspace has another current owner");
+		if (!meta.workspace?.shared) {
+			for (const name of [".git", ".jj/repo"]) {
+				const entry = await lstat(join(meta.cwd, name)).catch((error: NodeJS.ErrnoException) => {
+					if (error.code !== "ENOENT") throw error;
+					return undefined;
+				});
+				if (entry && (!entry.isDirectory() || entry.isSymbolicLink()))
+					throw new Error("Linked workspace cannot be discarded as a private clone");
+			}
+		}
+		const home = await realpath(this.home);
+		for (const id of new Set([origin, meta.id]))
+			if ((await realpath(this.dir(id))) !== join(home, "sessions", id))
+				throw new Error("Unsafe session workspace parent");
+		for (const path of [meta.cwd, join(this.dir(meta.id), "workspace-recovery")]) {
+			const entry = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+				if (error.code !== "ENOENT") throw error;
+				return undefined;
+			});
+			if (entry && (!entry.isDirectory() || entry.isSymbolicLink()))
+				throw new Error("Unsafe private workspace directory");
+		}
+	}
+
+	private assertWorkspaceNotDiscarded(meta: SessionMeta): void {
+		if (meta.workspaceDiscard)
+			throw new Conflict("This chat's private workspace was permanently discarded. Start a new chat.");
 	}
 
 	private assertOwnedWorkspace(meta: SessionMeta): void {
@@ -4730,57 +4750,6 @@ ${run.excerpt}`,
 			scratch: canonical(scope.scratch),
 			members: members.map((member) => ({ ...member, path: canonical(member.path) })),
 		};
-	}
-
-	private async restoreWorkspace(meta: SessionMeta): Promise<void> {
-		const releaseWorkspace = this.holdWorkspace(meta.id);
-		try {
-			await this.restoreWorkspaceHeld(meta);
-		} finally {
-			releaseWorkspace();
-		}
-	}
-
-	private async restoreWorkspaceHeld(meta: SessionMeta): Promise<void> {
-		const recovery = meta.workspaceRecovery;
-		if (!recovery) return;
-		if (!["removing", "reclaimed", "restoring"].includes(recovery.phase))
-			throw new Error("Invalid workspace recovery state");
-		this.assertOwnedWorkspace(meta);
-		if (!meta.workspace?.shared) throw new Error("Missing shared repository for workspace restoration");
-		await this.unparked(meta.id);
-		if (
-			this.hasWorkspaceProcess(meta.id) ||
-			this.workers.has(meta.id) ||
-			meta.working ||
-			meta.kernelRestartPending ||
-			meta.initializing ||
-			meta.preparing ||
-			meta.pending?.length
-		)
-			throw new Conflict("Close live work and terminals before restoring the workspace");
-		if (recovery.phase === "removing") await this.sharedWorkspaces.remove(meta.cwd, meta.workspace.shared, recovery);
-		meta.workspaceRecovery = { ...recovery, phase: "restoring" };
-		await this.save(meta);
-		await this.sharedWorkspaces.restore(
-			meta.cwd,
-			meta.workspace.shared,
-			recovery,
-			join(this.dir(meta.id), "workspace-recovery"),
-		);
-		delete meta.workspaceRecovery;
-		delete meta.workspaceReclaimedAt;
-		delete meta.workspaceCleanupError;
-		meta.workspaceReset = { at: Date.now(), changeId: recovery.changeId, commitId: recovery.commitId };
-		this.coldSnapshots.delete(meta.id);
-		try {
-			await this.save(meta);
-		} catch (error) {
-			// Retry restoration idempotently if committing its final state failed.
-			meta.workspaceRecovery = { ...recovery, phase: "restoring" };
-			delete meta.workspaceReset;
-			throw error;
-		}
 	}
 
 	onChange(listener: (session: SessionSummary) => void): () => void {
@@ -6686,7 +6655,7 @@ ${run.excerpt}`,
 		}
 	}
 
-	/** Keep history available; archived shared working directories can later be reclaimed and restored. */
+	/** Keep history available; discard eligible private workspace work immediately. */
 	async archive(id: string): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		try {
@@ -6743,6 +6712,7 @@ ${run.excerpt}`,
 			meta.updatePaused ||
 			meta.continuationPending ||
 			meta.workspaceRecovery ||
+			meta.workspaceDiscard ||
 			this.scheduledMessages.has(id) ||
 			this.runFinishing.has(id) ||
 			this.postRunTasks.has(id) ||
@@ -6936,16 +6906,9 @@ ${run.excerpt}`,
 						Date.now() < this.mergeArchiveTarget(meta)!.mergedAt + DAY_MS)
 				)
 					return this.summary(meta);
-				if (!archived && meta.workspaceRecovery) {
-					try {
-						await this.restoreWorkspace(meta);
-					} catch (error) {
-						meta.workspaceCleanupError = (error instanceof Error ? error.message : String(error)).slice(0, 512);
-						await this.save(meta);
-						this.emit(meta);
-						throw error;
-					}
-				}
+				if (!archived) this.assertWorkspaceNotDiscarded(meta);
+				if (!archived && meta.workspaceRecovery)
+					throw new Conflict("This chat's private workspace can no longer be restored. Start a new chat.");
 				// Retry the linked mission write even if the chat archive already committed.
 				if ((meta.archivedAt !== undefined) === archived) {
 					if (archived && coordinatorMissionId === undefined && this.missions?.archiveCoordinator?.(id))
@@ -7013,7 +6976,44 @@ ${run.excerpt}`,
 			if (this.archiveTransitions.get(id)?.promise === promise) this.archiveTransitions.delete(id);
 		};
 		void promise.then(clear, clear);
-		return promise;
+		return promise.then(async (summary) => {
+			if (
+				!archived ||
+				summary.archivedAt === undefined ||
+				organization ||
+				!Number.isFinite(this.workspaceRetentionMs) ||
+				this.workspaceRetentionMs > 0
+			)
+				return summary;
+			const meta = this.require(id);
+			if (
+				!meta.workspace ||
+				meta.coordinatorView ||
+				this.isMissionCoordinator(id) ||
+				this.keepsWorkingContext(meta) ||
+				meta.archivedAt !== summary.archivedAt
+			)
+				return summary;
+			try {
+				const cleaned = await this.reclaimWorkspace(id, Date.now());
+				return {
+					...summary,
+					...(cleaned.workspaceDiscardedAt !== undefined
+						? { workspaceDiscardedAt: cleaned.workspaceDiscardedAt }
+						: {}),
+					...(cleaned.workspaceReclaimedAt !== undefined
+						? { workspaceReclaimedAt: cleaned.workspaceReclaimedAt }
+						: {}),
+				};
+			} catch (error) {
+				// Archive is already committed. Busy work defers deletion, never bypasses guards.
+				if (!(error instanceof Conflict)) console.warn(`pilotd: archive workspace discard failed: ${error}`);
+				return {
+					...summary,
+					...(meta.workspaceCleanupError ? { workspaceCleanupError: meta.workspaceCleanupError } : {}),
+				};
+			}
+		});
 	}
 
 	/** Bound/agent-owned PRs only. A discovered reference is not attached work. */
@@ -7946,6 +7946,7 @@ ${run.excerpt}`,
 		if (meta.mode === "ask") throw new Conflict("Ask sessions are read-only");
 		if (this.isMissionCoordinator(id) || meta.coordinatorView)
 			throw new Conflict("The coordinator has a read-only source view and no Changes pane");
+		this.assertWorkspaceNotDiscarded(meta);
 		if (meta.workspaceRecovery || this.workspaceMaintenance.has(id))
 			throw new Conflict("Restore the archived session before accessing its workspace");
 	}
@@ -10673,6 +10674,7 @@ ${run.excerpt}`,
 		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
 		const transition = this.archiveTransitions.get(id);
 		if (transition) await transition.promise;
+		this.assertWorkspaceNotDiscarded(meta);
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before sending a message");
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (inputGeneration !== undefined && inputGeneration !== (meta.inputGeneration ?? 0)) {
@@ -13453,6 +13455,7 @@ ${run.excerpt}`,
 			throw new Conflict("Saved next-attempt model requires explicit user recovery");
 		if (meta.recoveryStopped) throw new Conflict("Recovery is stopped. Send a new message to continue.");
 		if (meta.preparing) throw new Error("Session workspace is still preparing");
+		this.assertWorkspaceNotDiscarded(meta);
 		if (meta.workspaceRecovery) throw new Conflict("Restore the archived session before starting its worker");
 		if (this.isMissionCoordinator(id) !== !!meta.coordinatorView)
 			throw new Conflict("This chat's workspace role is still changing");
@@ -15170,6 +15173,7 @@ ${run.excerpt}`,
 					}
 				: {}),
 			...(meta.workspaceReclaimedAt !== undefined ? { workspaceReclaimedAt: meta.workspaceReclaimedAt } : {}),
+			...(meta.workspaceDiscard ? { workspaceDiscardedAt: meta.workspaceDiscard.at } : {}),
 			...(meta.workspaceCustody === "review" ? { workspaceCustody: "review" as const } : {}),
 			...(meta.preparing || (meta.failure && !this.canRetryStartup(meta))
 				? { recoveryBlockedReason: "Repair setup or configuration before retrying. Existing files are kept." }
@@ -16429,6 +16433,8 @@ ${run.excerpt}`,
 			const autoArchivedPullRequest = archive?.autoArchivedPullRequest ?? meta.autoArchivedPullRequest;
 			if (autoArchivedPullRequest !== undefined) persisted.autoArchivedPullRequest = autoArchivedPullRequest;
 			// Lifecycle/PR writes captured before a workspace transition cannot erase its restore recipe.
+			if (meta.workspaceDiscard) persisted.workspaceDiscard = meta.workspaceDiscard;
+			else delete persisted.workspaceDiscard;
 			if (meta.workspaceRecovery) persisted.workspaceRecovery = meta.workspaceRecovery;
 			else delete persisted.workspaceRecovery;
 			if (meta.workspaceReclaimedAt !== undefined) persisted.workspaceReclaimedAt = meta.workspaceReclaimedAt;

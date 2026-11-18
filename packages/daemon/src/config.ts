@@ -18,7 +18,7 @@ export interface DaemonConfig {
 	mcpSetupReadOnly?: boolean;
 	/** Close idle, unwatched session kernels after this many milliseconds. */
 	idleParkMs?: number;
-	/** Archived shared-workspace retention. Infinity disables automatic reclamation. */
+	/** Private workspace discard delay. Defaults to immediate; Infinity disables automatic cleanup. */
 	workspaceRetentionMs?: number;
 }
 
@@ -30,7 +30,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
 	if (idleParkMs !== undefined && !(idleParkMs > 0))
 		throw new Error(`Invalid PILOT_IDLE_PARK_MS: ${env.PILOT_IDLE_PARK_MS}`);
 	const retentionDays =
-		env.PILOT_WORKSPACE_RETENTION_DAYS === undefined ? 1 : Number(env.PILOT_WORKSPACE_RETENTION_DAYS);
+		env.PILOT_WORKSPACE_RETENTION_DAYS === undefined ? 0 : Number(env.PILOT_WORKSPACE_RETENTION_DAYS);
 	if (
 		env.PILOT_WORKSPACE_RETENTION_DAYS === "" ||
 		!Number.isFinite(retentionDays) ||
@@ -48,6 +48,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
 		...(env.PILOT_MODEL_SCOPE_READ_ONLY === "1" ? { modelScopeReadOnly: true } : {}),
 		...(env.PILOT_MCP_SETUP_READ_ONLY === "1" ? { mcpSetupReadOnly: true } : {}),
 		...(idleParkMs !== undefined ? { idleParkMs } : {}),
-		workspaceRetentionMs: retentionDays === 0 ? Number.POSITIVE_INFINITY : retentionDays * 86_400_000,
+		// Preserve the explicit legacy opt-out without making the absent variable disable cleanup.
+		workspaceRetentionMs:
+			env.PILOT_WORKSPACE_RETENTION_DAYS !== undefined && retentionDays === 0
+				? Number.POSITIVE_INFINITY
+				: retentionDays * 86_400_000,
 	};
 }

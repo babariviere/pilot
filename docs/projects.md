@@ -17,8 +17,9 @@ Use a chat's row menu to rename, pin, archive, or restore it. **Archive** in the
 project selector lets you search archived chats and read their saved history.
 Reading archived history does not restore the chat or start work.
 
-Archiving is not a workspace backup. Generated outputs can be removed and safe
-archived workspaces reclaimed. See [workspace retention](workspaces.md#archive-and-restore).
+Archiving is not a workspace backup. Eligible private workspace files are permanently
+discarded, without a recovery snapshot. History and published artifacts stay available.
+See [archive and restore](workspaces.md#archive-and-restore).
 
 New private coding copies started through Day's durable start path are an exception: Pilot
 keeps their files, including build outputs and leftovers, through recovery and required review.

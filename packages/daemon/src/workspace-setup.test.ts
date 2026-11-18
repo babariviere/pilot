@@ -78,7 +78,7 @@ test("setup failure is retained and reported without failing or withholding the 
 	assert.equal(f.workers.flatMap((w) => w.requests).filter((r) => r.type === "input").length, 1);
 });
 
-test("snapshot restore runs setup again, without starting a model or touching the source checkout", async (t) => {
+test("permanent discard never runs restore setup or starts a model", async (t) => {
 	const f = await fixture(t, { automationsEnabled: () => true });
 	await f.projects.updateAutomations(f.project.id, {
 		expectedRevision: 0,
@@ -88,13 +88,12 @@ test("snapshot restore runs setup again, without starting a model or touching th
 	await f.sessions.archive(chat.id);
 	await f.sessions.reclaimWorkspace(chat.id);
 	const before = f.workers.length;
-	await f.sessions.restore(chat.id);
-	await f.sessions["workspaceSetups"].get(chat.id)?.done;
-	assert.equal(await readFile(join(chat.cwd, "node_modules/ready"), "utf8"), "ready");
-	assert.equal(f.workers.length, before, "restore setup runs in the daemon, not a model");
+	await assert.rejects(f.sessions.restore(chat.id), /permanently discarded/);
+	assert.equal(existsSync(chat.cwd), false);
+	assert.equal(f.workers.length, before);
 	assert.deepEqual(
 		f.sessions.get(chat.id)?.automationRuns?.map((run) => run.trigger),
-		["workspace.created", "workspace.restored"],
+		["workspace.created"],
 	);
 	await f.assertSourceUnchanged();
 });

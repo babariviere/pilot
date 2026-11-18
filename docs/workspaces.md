@@ -66,12 +66,37 @@ Any supported app merge action requires your confirmation.
 
 ## Archive and restore
 
-Archiving preserves the conversation, but generated outputs such as `node_modules`
-and Rust `target` can be deleted immediately. Safe archived jj workspaces may later
-be reclaimed and restored from saved snapshots. Dependencies may need reinstalling.
+Archiving preserves the conversation and published artifact versions. It permanently
+discards an eligible private workspace immediately, including tracked, untracked and
+ignored files. Pilot does not save a recovery snapshot. A discarded chat cannot resume
+execution or restore its workspace. Start a new chat for more work.
 
-Track files you need to keep. Ignored files are not a general-purpose backup.
-Reading archived history does not restore a workspace or start an agent.
+Open pull requests, live workers or subprocesses, viewers and terminals can defer deletion.
+Daemon maintenance retries existing archived workspaces, including older private clones,
+without the former one-day retention period. Direct project folders, shared read-only
+views and workspaces transferred to another chat are not deleted. Coordinator-organized
+workers keep their explicit workspace-preservation protection against automatic cleanup.
+Native coding copies in required-review custody stay protected from automatic and
+explicit deletion until their existing review and final-archive gates permit it.
+Read-only generated directories inside an owned private workspace can be made writable
+for deletion. Cleanup does not follow symlinks or change their external targets.
+
+This immediate default applies when `PILOT_WORKSPACE_RETENTION_DAYS` is unset. For
+compatibility, an explicit positive value still delays automatic deletion by that many
+days, and explicit `0` still disables automatic deletion. Neither setting permits snapshot
+restoration or changes the explicit permanent-discard route.
+
+Publish artifacts or save work elsewhere before archiving. Reading archived history
+does not restore a workspace or start an agent. A model's Done report and Day's human
+Done assessment are not chat archival and do not themselves discard workspace files.
+
+The existing guarded `POST /api/sessions/:id/reclaim-workspace` route now performs permanent
+discard, including old recovery payloads and their private archive refs. It can explicitly
+clean a coordinator-preserved archived workspace. This needs an updated daemon; an older
+installed daemon still uses its snapshot-based reclamation. No UI rebuild is needed to
+call an already-running daemon's route, but editing this checkout does not update it.
+Old recovery snapshots cannot restore workspaces on the updated daemon, even before the
+maintenance pass deletes their payloads. Shared revision history and bookmarks are not removed.
 
 ## Temporary files
 

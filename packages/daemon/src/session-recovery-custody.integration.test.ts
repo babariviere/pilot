@@ -4,10 +4,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { fixture, seedHistory } from "./testing/session-workspace.ts";
+import { deferred, fixture, seedHistory } from "./testing/session-workspace.ts";
 
 test("native coding copies keep all files through archive, inactivity and restart while final archive waits", async (t) => {
-	const f = await fixture(t);
+	const f = await fixture(t, { workspaceRetentionMs: 0 });
 	const id = randomUUID();
 	await f.sessions.spawnDurable({ projectId: f.project.id, message: "Keep the original context" }, id, randomUUID());
 	await f.sessions["starting"].get(id);
@@ -33,6 +33,28 @@ test("native coding copies keep all files through archive, inactivity and restar
 	await reopened.restore(id);
 	assert.equal(reopened.get(id)?.cwd, chat.cwd);
 	await f.assertSourceUnchanged();
+});
+
+test("review custody arriving during subprocess inspection blocks permanent discard", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	await f.sessions.archive(chat.id);
+	const entered = deferred();
+	const release = deferred();
+	t.after(() => release.resolve());
+	t.mock.method(f.workers[0]!, "hasChildren", async () => {
+		entered.resolve();
+		await release.promise;
+		return false;
+	});
+	const refused = assert.rejects(f.sessions.reclaimWorkspace(chat.id), /review|final archive/);
+	await entered.promise;
+	await f.sessions.preserveWorkingContext(chat.id);
+	release.resolve();
+	await refused;
+	assert.equal(await readFile(join(chat.cwd, "tracked.txt"), "utf8"), "base\n");
+	assert.equal((await f.stored(chat.id)).workspaceDiscard, undefined);
+	assert.equal((await f.stored(chat.id)).workspaceCustody, "review");
 });
 
 test("cold recovery never discards an interrupted native preparation's original files", async (t) => {

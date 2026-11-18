@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { SessionPullRequest } from "@pilot/protocol";
+import { discardDirectory } from "./discard-directory.ts";
 import { type JjCaptureScope, JjOwnershipStore, jjRepositoryIdentity } from "./jj-ownership.ts";
 import { workerScope } from "./jj-ownership-contract.ts";
 import { mergedPullRequestHead } from "./pr-auto-rebase.ts";
@@ -57,7 +58,7 @@ export interface WorkspaceRecovery {
 
 interface Binding {
 	path: string;
-	state: "creating" | "ready" | "removing" | "removed" | "restoring";
+	state: "creating" | "ready" | "removing" | "removed" | "restoring" | "discarding" | "discarded";
 	initialCommitId?: string;
 	restoreCommitId?: string;
 	creationBaseId?: string;
@@ -1467,6 +1468,39 @@ export class SharedWorkspaceStore {
 		}
 		await copyFile(join(source, sourcePath), target, constants.COPYFILE_EXCL);
 		await chmod(target, 0o600);
+	}
+
+	/** Permanent deletion, without snapshotting files or pinning a recovery commit. */
+	async discard(cwd: string, shared: SharedWorkspace): Promise<void> {
+		if ((await canonical(cwd)) !== cwd) throw new Error("Unsafe shared workspace path");
+		return this.queue(shared.repository, async () => {
+			const binding = await this.owned(shared, cwd);
+			const registered = await this.registered(shared);
+			if (registered && registered.path !== cwd) throw new Error("jj workspace path binding mismatch");
+			if (binding.state !== "discarding" && binding.state !== "discarded") {
+				if (registered && (await stat(cwd))) await this.jjChild(cwd, shared);
+				if (!registered && (await stat(cwd)) && binding.state !== "removing")
+					throw new Error("Unregistered workspace requires review before discard");
+			}
+			binding.state = "discarding";
+			await atomicJson(this.bindingPath(shared), binding);
+			const directory = await open(dirname(this.bindingPath(shared)), "r");
+			try {
+				await directory.sync();
+			} finally {
+				await directory.close();
+			}
+			// Forget never snapshots or touches child files. The durable binding admits partial-rm retries.
+			if (registered)
+				await this.jj(
+					["--ignore-working-copy", "workspace", "forget", shared.name],
+					await this.control(shared.repository),
+				);
+			await discardDirectory(cwd);
+			await this.runner("git", ["update-ref", "-d", `refs/pilot/archive/${shared.name}`], shared.repository);
+			binding.state = "discarded";
+			await atomicJson(this.bindingPath(shared), binding);
+		});
 	}
 
 	async remove(cwd: string, shared: SharedWorkspace, recovery: WorkspaceRecovery): Promise<void> {

@@ -411,8 +411,10 @@ export interface SessionSummary {
 	workspaceBase?: string;
 	workspaceUpdatedAt?: number;
 	workspaceBehind?: string;
-	/** Epoch ms when the working directory was reclaimed. Its pinned jj snapshot can be restored on resume. */
+	/** Legacy reclamation timestamp. A discard marker takes precedence over recovery metadata. */
 	workspaceReclaimedAt?: number;
+	/** Permanent workspace discard admission time. This chat cannot resume execution. */
+	workspaceDiscardedAt?: number;
 	/** Final archive is blocked; preserve this native coding copy through recovery and required review. */
 	workspaceCustody?: "review";
 	/** A preparation/configuration failure cannot safely recover by sending another message. */

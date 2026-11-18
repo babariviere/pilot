@@ -35,9 +35,9 @@ not proof that an earlier authorization was absent.
 
 ## Workspace preservation and durability
 
-Ordinary archive has two cleanup consequences in `reclaimArchivedWorkspaces`: immediate
-pruning of regenerable outputs, and shared-workspace reclamation after retention. Reusing
-only `archivedAt` would therefore grant deletion indirectly.
+Ordinary archive now permanently discards eligible private workspace files without a
+snapshot. `reclaimArchivedWorkspaces` also cleans older archived workspaces without the
+former one-day delay. Reusing only `archivedAt` would therefore grant deletion indirectly.
 
 Coordinator organization instead durably writes `coordinatorArchivePreservesWorkspace`
 alongside archive state. The sweep skips marked workspaces; queued prune and automatic
@@ -50,8 +50,10 @@ implement this exclusion.
 
 This is an automatic-cleanup exclusion, not a claim that an archive flag alone preserves
 data. Coordinator archive also skips scratch removal, cancellation and flow mutations.
-Existing explicit user archive/restore and manual workspace reclamation remain available;
-manual reclamation is a separate destructive user operation, not exposed by these actions.
+Existing explicit user archive/restore remain available while the workspace is preserved.
+Manual workspace reclamation is now permanent discard, a separate destructive user operation
+not exposed by these actions. Its durable discard marker blocks later coordinator organization
+and user restoration, input admission and worker startup. It never restores the old snapshot.
 There is no coordinator action to remove the exclusion or invoke retirement/deletion.
 
 Metadata temporary-file flush, rename and directory sync complete before a successful ACK.
