@@ -19,8 +19,9 @@ a complete catalog and live working reads from every selected project.
 
 `WorkingNow.tsx` renders the selected hairline layout below Needs you. Four rows
 show initially; Show all keeps its choice through Back. `OpenChatAction.tsx`
-owns the shared chat-bubbles action, with an Open chat tooltip and a caller-owned
-accessible name. Existing chat destinations now use it too. Opening uses the
+owns the shared chat-bubbles action with a caller-owned accessible name. Named
+chat rows use the icon and an Open chat tooltip. Other destinations show explicit
+labels, such as Open coordinator chat or Open triage chat. Opening uses the
 existing read-only chat page. Native chat reads check the chat's project against
 the accessible catalog before and after history I/O, without changing the
 window's project, draft, subscriptions or execution. Access loss clears old chat

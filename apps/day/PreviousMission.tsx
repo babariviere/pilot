@@ -74,8 +74,9 @@ export function PreviousMission(props: {
 									<Text class="text-sm text-muted-foreground">{t().body ?? ""}</Text>
 									<If when={t().sessionId && props.canReadChats}>
 										<OpenChatAction
+											label="Open saved chat"
 											testID={`previous-chat-${t().id}`}
-											accessibilityLabel={`Read the saved chat for #${t().number} ${t().title}. This starts nothing.`}
+											accessibilityLabel={`Open saved chat for #${t().number} ${t().title}, read only. This starts nothing.`}
 											onPress={() =>
 												openChat(t().sessionId ?? "", history()?.oldTitle ?? "Previous mission")
 											}

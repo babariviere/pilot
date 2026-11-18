@@ -760,6 +760,7 @@ test("the fix and triage chats open read only with their rows and state; Back an
 	await chooseProject(app);
 	await sendWords(app, "The plan page hides who is working");
 	await app.waitFor("id:feedback-open-triage-f1");
+	expect(app.shows("id:feedback-open-triage-f1 >> text:Open triage chat")).toBe(true);
 	await app.press("id:feedback-open-triage-f1");
 	await app.waitFor("Triage this feedback.");
 	expect(app.shows("id:chat-state")).toBe(true);
@@ -771,6 +772,7 @@ test("the fix and triage chats open read only with their rows and state; Back an
 	await app.waitFor("id:feedback-fix-f1");
 	await app.press("id:feedback-fix-f1");
 	await app.waitFor("id:feedback-open-fix-f1");
+	expect(app.shows("id:feedback-open-fix-f1 >> text:Open fix chat")).toBe(true);
 	expect(app.shows("text:Fix chat: pilot://chat/fix-1")).toBe(false);
 	await app.press("id:feedback-open-fix-f1");
 	await app.waitFor("I added the assignee to each plan row.");

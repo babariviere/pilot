@@ -7,6 +7,10 @@ test("open chat pair mission", async () => {
 	const app = await open("./MissionOverviewFixture.tsx", desktop);
 	await app.waitFor("id:now-search-3");
 	await app.screenshot("output/open-chat-mission.png");
+	await app.press("id:now-chat-search-3");
+	await app.waitFor("Read only. Reading it sends nothing and changes nothing.");
+	await app.press("id:back");
+	await app.waitFor("id:now-search-3");
 });
 
 test("open chat pair feedback", async () => {

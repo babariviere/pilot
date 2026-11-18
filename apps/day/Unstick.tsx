@@ -170,6 +170,7 @@ function RepairAgent(props: {
 						An agent is looking. This takes about a minute.
 					</Text>
 					<OpenChatAction
+						label="Open planning repair chat"
 						accessibilityLabel="Open planning repair chat"
 						onPress={() => openChat(r()?.chatId ?? "", "Plan")}
 					/>
@@ -220,6 +221,7 @@ function RepairAgent(props: {
 						</If>
 						<Action label="Not now" disabled={props.busy} onPress={props.hide} />
 						<OpenChatAction
+							label="Open planning repair chat"
 							accessibilityLabel="Open planning repair chat"
 							onPress={() => openChat(r()?.chatId ?? "", "Plan")}
 						/>

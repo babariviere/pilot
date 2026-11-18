@@ -221,8 +221,9 @@ function ChatLink(props: { day: Day; page: MissionPage; task: TaskLine; lane: La
 		<If when={props.task.sessionId && props.day.chat}>
 			<View class="flex-row pt-1">
 				<OpenChatAction
+					label="Open agent chat"
 					testID={`${props.lane}-chat-${props.task.id}`}
-					accessibilityLabel={`Open the chat of #${props.task.number} ${props.task.title}, read only. Opening it sends nothing.`}
+					accessibilityLabel={`Open agent chat for #${props.task.number} ${props.task.title}, read only. Opening it sends nothing.`}
 					onPress={() => openMemberChat(props.page, props.task.sessionId ?? "")}
 				/>
 			</View>

@@ -34,5 +34,9 @@ test("finished replacement history is readable without execution", async () => {
 	expect(app.shows("Keep original importer history.")).toBe(true);
 	expect(app.shows("D1: Preserve exact bytes")).toBe(true);
 	expect(app.shows("#1 Unfinished import tests (blocked)")).toBe(true);
+	expect(app.shows("id:previous-chat-old-task >> text:Open saved chat")).toBe(true);
+	expect(app.shows("label:Open saved chat for #1 Unfinished import tests, read only. This starts nothing.")).toBe(
+		true,
+	);
 	expect(app.shows("Finish sends: 0 · Checks: 0")).toBe(true);
 });

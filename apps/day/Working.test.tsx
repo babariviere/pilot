@@ -15,6 +15,7 @@ test("Today shows mission and standalone activity across projects with explicit 
 	expect(app.shows("website · Standalone chat · Task or purpose not available")).toBe(true);
 	expect(app.shows("How should finished work reach you?")).toBe(true);
 	expect(app.shows("label:Open chat “Native activity” in pilot")).toBe(true);
+	expect(app.shows("id:working-open-mission-agent >> text:Open chat")).toBe(false);
 	await app.press("Duplicate read");
 	expect(app.texts().filter((t) => t === "Native activity").length).toBe(1);
 	await app.press("Change task");

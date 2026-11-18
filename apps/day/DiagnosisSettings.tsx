@@ -349,6 +349,7 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 							<Text class="flex-1 text-sm text-foreground">{chat().title || "Pilot diagnostics"}</Text>
 							<Text class="text-xs text-muted-foreground">{chat().status}</Text>
 							<OpenChatAction
+								label="Open diagnosis chat"
 								accessibilityLabel="Open diagnosis chat"
 								onPress={() => openChat(chat().sessionId, "Settings")}
 							/>

@@ -107,6 +107,12 @@ test("a Next row opens in place, and the map opens from its row with Back keepin
 
 test("a task's chat opens read only from its card, and Back keeps the goal and spec open", async () => {
 	const app = await opened();
+	expect(app.shows("id:mission-coordinator-chat >> text:Open coordinator chat")).toBe(true);
+	expect(app.shows("id:now-chat-search-3 >> text:Open agent chat")).toBe(true);
+	expect(app.shows("label:Open coordinator chat, read only. Opening it sends nothing.")).toBe(true);
+	expect(
+		app.shows("label:Open agent chat for #3 Integration tests on Linux, read only. Opening it sends nothing."),
+	).toBe(true);
 	await app.press("id:mission-section-goal");
 	await app.waitFor("id:mission-brief");
 	for (const text of [

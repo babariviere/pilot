@@ -45,7 +45,7 @@ import { openMission } from "./view";
  */
 function ChatLink(props: { day: Day; item: FeedbackItem; step: ChatStep }) {
 	const kind = () => props.step.kind;
-	const label = () => (kind() === "triage" ? "Open the triage chat" : "Open the fix chat");
+	const label = () => (kind() === "triage" ? "Open triage chat" : "Open fix chat");
 	return (
 		<If
 			when={props.day.chat}
@@ -57,6 +57,7 @@ function ChatLink(props: { day: Day; item: FeedbackItem; step: ChatStep }) {
 		>
 			<View class="flex-row">
 				<OpenChatAction
+					label={label()}
 					testID={`feedback-open-${kind()}-${props.item.id}`}
 					accessibilityLabel={`${label()}, read only. Opening it sends nothing.`}
 					onPress={() => openChat(props.step.sessionId, "Feedback")}

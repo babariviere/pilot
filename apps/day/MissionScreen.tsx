@@ -581,8 +581,9 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine; place?: "res
 			<If when={props.task.sessionId && props.day.chat}>
 				<View class="flex-row pl-10 pt-1">
 					<OpenChatAction
+						label="Open agent chat"
 						testID={id(`task-chat-${props.task.id}`)}
-						accessibilityLabel={`Open the chat of #${props.task.number} ${props.task.title}, read only. Opening it sends nothing.`}
+						accessibilityLabel={`Open agent chat for #${props.task.number} ${props.task.title}, read only. Opening it sends nothing.`}
 						onPress={() => openMemberChat(props.page, props.task.sessionId ?? "")}
 					/>
 				</View>
@@ -955,8 +956,9 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf;
 				<If when={props.page.coordinatorSessionId && props.day.chat}>
 					<View class="flex-row">
 						<OpenChatAction
+							label="Open coordinator chat"
 							testID="mission-coordinator-chat"
-							accessibilityLabel="Open the mission coordinator's chat, read only. Opening it sends nothing."
+							accessibilityLabel="Open coordinator chat, read only. Opening it sends nothing."
 							onPress={() => openMemberChat(props.page, props.page.coordinatorSessionId ?? "")}
 						/>
 					</View>

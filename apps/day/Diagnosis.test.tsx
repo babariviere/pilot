@@ -45,6 +45,7 @@ test("clear requires explicit confirmation and keeps writer uncertainty", async 
 });
 test("opening diagnosis does not start a model and follow-up drafts stay", async () => {
 	const app = await open("./DiagnosisFixture.tsx", desktop);
+	expect(app.shows("text:Open diagnosis chat")).toBe(true);
 	await app.press("id:diagnosis-ask");
 	expect(app.enabled("id:diagnosis-start")).toBe(false);
 	await app.type("id:diagnosis-question", "Why is planning waiting?");

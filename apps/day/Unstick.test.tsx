@@ -26,6 +26,7 @@ test("Have an agent look starts one read-only agent; its fix shows with what it 
 	expect(app.shows("Have an agent look")).toBe(true);
 	await app.press("id:repair-start");
 	await app.waitFor("id:repair-looking");
+	expect(app.shows("text:Open planning repair chat")).toBe(true);
 	expect(app.shows("id:repair-start")).toBe(false);
 	await app.press("id:agent-done");
 	await app.waitFor("id:repair-proposal");
