@@ -13,7 +13,7 @@
 // - status: Mark, MarkLine, Notice
 // - data: KeyCap, KeyHint, EvidenceList, EvidenceChip, Bars, Track
 // - tabs: TabRow, TabItem
-// - diff: PatchDiff
+// - diff: PatchDiff, ReviewDiff
 // - icon: Icon
 // - motion: Arrive, FadeIn, createPanelMotion, glide
 export * from "./button";

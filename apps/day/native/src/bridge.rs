@@ -80,6 +80,9 @@ pub const METHODS: &[&str] = &[
     "day.delivery.reopen",
     "day.delivery.check",
     "day.delivery.work",
+    "day.resultReview",
+    "day.resultReview.id",
+    "day.resultReview.check",
     "day.artifacts.read",
     "day.artifacts.source",
     "day.today.read",
@@ -316,6 +319,9 @@ pub(crate) enum Command {
     DeliveryWrite(crate::host::delivery::Write),
     DeliveryCheck(String),
     DeliveryWork(crate::host::delivery_work::Request),
+    ResultReview(crate::host::result_review::Request),
+    ResultReviewId,
+    ResultReviewCheck(String),
     Today,
     Mission(String),
     Pause(crate::model::PauseIntent),
@@ -869,6 +875,27 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: crate::host::delivery_work::Request = exact(args)?;
             r.validate()?;
             C::DeliveryWork(r)
+        }
+        "day.resultReview" => {
+            let r: crate::host::result_review::Request = exact(args)?;
+            r.validate()?;
+            C::ResultReview(r)
+        }
+        "day.resultReview.id" => {
+            if args != json!({}) {
+                return Err(Error::Invalid);
+            }
+            C::ResultReviewId
+        }
+        "day.resultReview.check" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Lookup {
+                operation_id: String,
+            }
+            let r: Lookup = exact(args)?;
+            mission(&r.operation_id)?;
+            C::ResultReviewCheck(r.operation_id)
         }
         "day.intake.triage" | "day.intake.start" => {
             let r: crate::host::intake::Intent = exact(args)?;

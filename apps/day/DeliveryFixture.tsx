@@ -12,11 +12,14 @@ import { ScriptedDelivery } from "./deliveryDemo";
 import { mirrorDelivery } from "./deliveryFeed";
 import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
 import { openDay } from "./mockFeeds";
+import { resultReviewDemo } from "./resultReviewDemo";
 import { ToCheck } from "./ToCheck";
 import { Action } from "./ui";
 import { captureView, restoreView, startFresh } from "./windowState";
 
 const source = new ScriptedDelivery();
+const review = resultReviewDemo();
+const showReview = signal(false);
 const day = { ...openDay(), delivery: mirrorDelivery(source) };
 /** Shows one mission's To check, as its overview does, instead of Today's. */
 const missionOnly = signal(false);
@@ -46,7 +49,7 @@ mount(() => {
 					}
 				>
 					<Each of={deliveryRoute() ? [deliveryRoute() as DeliveryPlace] : []} key={(p) => p.key}>
-						{(p) => <DeliveryScreen day={day} place={p()} />}
+						{(p) => <DeliveryScreen day={day} place={p()} reviewSource={showReview() ? review : undefined} />}
 					</Each>
 				</If>
 				{/* As in the app: one artifact in the whole window, over the page, until closed. */}
@@ -60,6 +63,15 @@ mount(() => {
 					<Text testID="reads">{`Source reads: [${source.reads().join(" ")}]`}</Text>
 					<Text testID="work-reads">{`Work reads: ${source.workReads().length}`}</Text>
 					<View class="flex-row flex-wrap gap-1">
+						<Action
+							label="Show private review fixture"
+							onPress={() => {
+								showReview.set(true);
+								const result = source.works.get("task/mock-project/native/native-4");
+								if (result) result.reviewQueue = "later";
+								source.publish();
+							}}
+						/>
 						<Action label="Mission native" onPress={() => missionOnly.set(!missionOnly())} />
 						<Action label="Refuse work" onPress={() => (source.refuseWork = "unavailable")} />
 						<Action label="Lose next answer" onPress={() => (source.script.loseNext = true)} />

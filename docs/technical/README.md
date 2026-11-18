@@ -81,6 +81,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Native Today intake, triage and Start receipts](day-intake.md)
 - [Project-pinned standalone New chat](day-new-chat.md)
 - [Explicit user verification and delivered outputs (host-only)](day-user-verification.md)
+- [Private result comments and exact saved code context](day-result-comments.md)
 - [Captured result artifact reads](day-captured-artifacts.md): exact native-user source-text reads without execution or acceptance.
 - [Captured NSH source foundation](nsh-artifact-source.md): immutable scratch-file capture and source-only compiler boundary; execution stays refused.
 - [Proposed native Review and durable diff annotations](mission-native-review.md)

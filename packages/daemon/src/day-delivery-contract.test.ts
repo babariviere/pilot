@@ -18,7 +18,7 @@ const view: (v: DeliveredWork) => NativeView = (v) => v;
 type Fields = Exclude<keyof DeliveredWork, "pullRequests" | "artifacts">;
 const canonicalFields: (v: NativeView) => Pick<DeliveredWork, Fields> = (v) => v;
 const list: (v: DeliveredWorkList) => DeliveryList = (v) => v;
-const listFields: (v: DeliveryList) => Omit<DeliveredWorkList, "items"> = (v) => v;
+const listFields: (v: DeliveryList) => Omit<DeliveredWorkList, "items" | "selected"> = (v) => v;
 
 test("Day wire view keeps canonical identities, assessments and receipt pairs", () => {
 	const v: VerificationSubject = { kind: "chat", projectId: "project", sessionId: "session" };

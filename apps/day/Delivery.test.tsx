@@ -154,7 +154,7 @@ test("To check lists delivered results; the page shows the report, outputs and f
 	expect(app.shows("Native desktop app · PR merged · release not tracked")).toBe(true);
 	await openCsv(app);
 	expect(app.shows("History loads 50 older messages while a reply streams. Scroll position holds.")).toBe(true);
-	expect(app.shows("This is the agent's account. It is not done until you say so.")).toBe(true);
+	expect(app.shows("The agent's account is evidence, not your acceptance.")).toBe(true);
 	expect(app.shows("PR #431 · Load older messages while streaming")).toBe(true);
 	expect(app.shows("History capture")).toBe(true);
 	expect(app.texts().includes("Says it finished. Commit 4a1c9e0.")).toBe(true);

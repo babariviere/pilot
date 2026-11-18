@@ -21,6 +21,74 @@ fn checked(f: &Fixture, b: &Bridge, id: &Value) -> Value {
 const NOTE: &str = "  Keep exact bytes 👩🏽‍💻\nThis is not deployed.  ";
 
 #[test]
+fn private_comments_survive_bridge_reopen_and_only_exact_receipts_settle() {
+    let mut f = fixture();
+    let b = f.bridge();
+    let page = read_delivery(&f, &b, "task");
+    let request = |kind: &str, edit: Value| json!({"subject":page["subject"],"deliveryId":page["deliveryId"],"kind":kind,"snapshotId":null,"edit":edit});
+    let read = f.call(&b, "day.resultReview", request("read", Value::Null));
+    assert_eq!(read["value"]["snapshot"]["data"]["revision"], 0, "{read}");
+    let edit = json!({"operationId":"private-comment-1","deliveryId":page["deliveryId"],"expectedRevision":0,"kind":"comment","body":NOTE,"anchor":{"kind":"section","section":"checks"}});
+    let saved = f.call(&b, "day.resultReview", request("save", edit.clone()));
+    assert_eq!(saved["value"]["snapshot"]["state"], "saved", "{saved}");
+    close(b);
+    let b = f.bridge();
+    let read = f.call(&b, "day.resultReview", request("read", Value::Null));
+    assert_eq!(
+        read["value"]["snapshot"]["data"]["entries"][0]["body"], NOTE,
+        "{read}"
+    );
+    let check = f.call(
+        &b,
+        "day.resultReview.check",
+        json!({"operationId":"private-comment-1"}),
+    );
+    assert_eq!(
+        check["value"]["snapshot"]["receipt"]["body"], NOTE,
+        "{check}"
+    );
+    let repeated = f.call(&b, "day.resultReview", request("save", edit));
+    assert_eq!(
+        repeated["error"], "unknown",
+        "Native never resends a journaled save: {repeated}"
+    );
+    let now = read_delivery(&f, &b, "task");
+    assert!(now["verification"].is_null());
+    let stale = json!({"operationId":"stale-comment","deliveryId":page["deliveryId"],"expectedRevision":0,"kind":"comment","body":"Other window","anchor":{"kind":"general"}});
+    let refused = f.call(&b, "day.resultReview", request("save", stale));
+    assert_eq!(
+        refused["value"]["snapshot"]["state"], "rejected",
+        "{refused}"
+    );
+    let check = f.call(
+        &b,
+        "day.resultReview.check",
+        json!({"operationId":"stale-comment"}),
+    );
+    assert_eq!(check["value"]["snapshot"]["state"], "rejected", "{check}");
+    let next = json!({"operationId":"next-comment","deliveryId":page["deliveryId"],"expectedRevision":1,"kind":"comment","body":"Fresh read","anchor":{"kind":"general"}});
+    let saved = f.call(&b, "day.resultReview", request("save", next));
+    assert_eq!(
+        saved["value"]["snapshot"]["state"], "saved",
+        "Refusal must not hold the next save: {saved}"
+    );
+    close(b);
+    let moved = f.stats("move-port");
+    f.info["source"]["port"] = moved["port"].clone();
+    let b = f.bridge();
+    let check = f.call(
+        &b,
+        "day.resultReview.check",
+        json!({"operationId":"private-comment-1"}),
+    );
+    assert_eq!(
+        check["value"]["snapshot"]["state"], "saved",
+        "Historical receipt survives a transport-only port move: {check}"
+    );
+    close(b);
+}
+
+#[test]
 fn passive_list_starts_fresh_and_keeps_the_cutoff_after_reopen() {
     let mut f = fixture();
     let b = f.bridge();

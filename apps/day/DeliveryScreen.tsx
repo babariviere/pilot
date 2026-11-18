@@ -76,6 +76,8 @@ import {
 import { keepField, keepScroll } from "./kept";
 import { OutputComparison } from "./OutputComparison";
 import { pageScroll, scrolled } from "./onScreen";
+import { ResultReviewPanel } from "./ResultReviewPanel";
+import type { ResultReviewSource } from "./resultReview";
 import {
 	Action,
 	CheckboxRow,
@@ -144,6 +146,27 @@ function Report(props: { work: DeliveredWork }) {
 		!w().completion && !w().nonCodeDelivery && !w().submission && !w().outcome && !w().workerDelivery;
 	return (
 		<Panel testID="delivery-report" size="lg" selectable class="gap-3">
+			<Said
+				label="Outcome"
+				text={
+					w().workerDelivery?.summary ??
+					w().submission?.claim ??
+					w().chatReport?.answer ??
+					w().outcome?.reason ??
+					""
+				}
+			/>
+			<Said label="Goal and scope" text={w().scope ?? ""} />
+			<Said label="Task state (not acceptance)" text={w().taskState ?? ""} />
+			<Said
+				label="Risks and limits"
+				text={
+					w().submission?.limitations ||
+					w().nonCodeDelivery?.limitations ||
+					w().chatReport?.limits ||
+					"No separate risk statement was provided."
+				}
+			/>
 			<Text class="text-xs text-faint">The agent reports</Text>
 			<If when={w().completion}>
 				<Text class="text-xs text-faint">
@@ -154,12 +177,7 @@ function Report(props: { work: DeliveredWork }) {
 			</If>
 			<If when={w().nonCodeDelivery}>
 				<Said label="Checks it ran" text={w().nonCodeDelivery?.checks ?? ""} />
-				<Said label="Limits" text={w().nonCodeDelivery?.limitations ?? ""} />
 				<Said label="It points to" text={refs()} />
-			</If>
-			<If when={w().submission}>
-				<Said label="It says" text={w().submission?.claim ?? ""} />
-				<Said label="Limits" text={w().submission?.limitations ?? ""} />
 			</If>
 			<If when={w().workerDelivery}>
 				<View testID="delivery-worker-report" class="gap-3">
@@ -167,7 +185,6 @@ function Report(props: { work: DeliveredWork }) {
 						The worker's delivery report. No coordinator runs this mission: marking it done finishes the task, and
 						Pilot starts the next ready tasks.
 					</Text>
-					<Said label="It says" text={w().workerDelivery?.summary ?? ""} />
 					<Said label="Checks it ran" text={w().workerDelivery?.checks ?? ""} />
 					<Said label="Open issues" text={w().workerDelivery?.issues ?? ""} />
 					<Said label="Next step" text={w().workerDelivery?.nextStep ?? ""} />
@@ -188,9 +205,7 @@ function Report(props: { work: DeliveredWork }) {
 			</If>
 			<If when={w().outcome && w().chatReport}>
 				<View testID="delivery-chat-report" class="gap-3">
-					<Said label="Answer" text={w().chatReport?.answer ?? ""} />
 					<Said label="How it knows" text={w().chatReport?.howItKnows ?? ""} />
-					<Said label="Limits" text={w().chatReport?.limits ?? ""} />
 					<Said label="Next step for you" text={w().chatReport?.nextStep ?? ""} />
 					<Said
 						label="Links"
@@ -212,7 +227,13 @@ function Report(props: { work: DeliveredWork }) {
 			<If when={nothing()}>
 				<Text class="text-sm text-muted-foreground">No report with this result.</Text>
 			</If>
-			<Text class="text-xs text-faint">This is the agent's account. It is not done until you say so.</Text>
+			<Text class="text-xs text-faint">The agent's account is evidence, not your acceptance.</Text>
+			<If when={w().revisionRecipientSessionId}>
+				<Text class="text-xs text-muted-foreground">
+					Send back routes revisions through this mission's coordinator, with your saved context. Independent work
+					continues.
+				</Text>
+			</If>
 		</Panel>
 	);
 }
@@ -1041,7 +1062,7 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
  * The page of one delivered result, over Today or a mission. Opening it
  * reads the result; that read sends, settles and records nothing.
  */
-export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
+export function DeliveryScreen(props: { day: Day; place: DeliveryPlace; reviewSource?: ResultReviewSource }) {
 	const mirror = props.day.delivery as DeliveryMirror;
 	const key = props.place.key;
 	const entry = () => mirror.view().entries[key];
@@ -1149,6 +1170,15 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 							<View class="gap-10">
 								<Report work={w()} />
 								<Screens mirror={mirror} work={w()} fresh={fresh()} resultKey={props.place.key} />
+								<ResultReviewPanel
+									source={props.reviewSource}
+									work={w()}
+									fresh={fresh()}
+									onLater={() => {
+										void mirror.source.readSaved();
+										closeDelivery();
+									}}
+								/>
 								<Outputs mirror={mirror} place={props.place} work={w()} fresh={fresh()} anchors={anchors} />
 								<If when={w().deliveryId}>
 									<AgentWorkPanel mirror={mirror} place={props.place} work={w()} fresh={fresh()} />

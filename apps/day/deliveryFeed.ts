@@ -545,7 +545,7 @@ export class ConnectedDelivery implements DeliverySource {
 			return;
 		}
 		this.#project = list.projectId;
-		this.#discovered = list.items.map((i) => i.subject);
+		this.#discovered = [...(list.selected ?? []), ...list.items].map((i) => i.subject);
 		this.#nextCursor = list.nextCursor;
 		this.#discovery = {
 			complete: list.complete && after === undefined,
@@ -554,11 +554,15 @@ export class ConnectedDelivery implements DeliverySource {
 			reason:
 				list.currentness === "stale"
 					? "Deliveries changed during this read. Look again for the latest results."
-					: after === undefined
-						? ""
-						: "Showing later results. Earlier results are still pending, not accepted.",
+					: list.selectedUnavailable
+						? "Some selected older results could not be read. Their selections and history are kept."
+						: list.selectedMore
+							? "More than 20 older results were selected. Open them from their missions; none were accepted or removed."
+							: after === undefined
+								? ""
+								: "Showing later results. Earlier results are still pending, not accepted.",
 		};
-		for (const item of list.items) {
+		for (const item of [...(list.selected ?? []), ...list.items]) {
 			const key = deliveryKey(item.subject);
 			if (snapshotOf(item.snapshot) && order > (this.#applied.get(key) ?? 0)) {
 				this.#entries.set(key, {

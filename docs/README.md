@@ -25,6 +25,17 @@ Today To check discovers new mission deliveries from a saved first-use cutoff.
 To check is part of Needs you on Today, and a mission's overview lists its own results to check.
 Older work stays in missions, without being accepted or deleted. Your saved
 checks stay available. Other projects' results are read-only in this window.
+Result pages keep private general, section and code-line comments. Code changes shows
+saved old/new sources with line numbers, never a live working copy. A comparison must
+be linked evidence or match the owner's explicitly reported committed revision; otherwise
+the page says no matching comparison is available. Old comments keep their original
+excerpt and code context, with uncertain locations labeled after a new result.
+My notes stay personal. Prepare revision request copies saved comments and their context
+into Send back for you to review and send; it excludes personal notes and posts nothing
+to GitHub. Saving a comment or reading evidence never accepts a result.
+Later keeps a result behind other pending results. Add to review queue explicitly selects
+older work without accepting it or importing the rest of its history. Independent work continues.
+Unconfirmed private saves offer Check saved comment, which reads only the original receipt.
 A result's Agent work section (folded until Show, or opened from a task linked in a thread) lists
 the changes its agent owns, the chat's saved pushes and pull requests, and what Pilot saw on GitHub.
 A push with no saved result stays Unknown. It is Pilot's record, not the agent's report or your check.

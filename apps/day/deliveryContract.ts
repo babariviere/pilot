@@ -32,6 +32,7 @@ export interface UserVerificationLookup {
 			expectedRevision: number;
 			action: "done" | "send_back" | "reopen";
 			note: string;
+			revisionRecipientSessionId?: string;
 		};
 		verification: UserVerification;
 		state: "pending" | "accepted";
@@ -49,6 +50,10 @@ export interface DeliveredWork {
 	ownerSessionId: string | null;
 	/** A standalone chat's own title, from the service. */
 	title?: string;
+	scope?: string;
+	taskState?: string;
+	reviewQueue?: "later" | "selected";
+	revisionRecipientSessionId?: string;
 	completion?: { commit: string; checks: string; issues: string };
 	nonCodeDelivery?: { kind: "non-code"; references: Evidence[]; checks: string; limitations: string };
 	submissionId?: string;
@@ -141,4 +146,7 @@ export type DeliveryList = {
 	more: boolean;
 	currentness: "live" | "stale";
 	items: { subject: VerificationSubject; title: string; snapshot: DeliveredWork; sourceSequence: number }[];
+	selected?: { subject: VerificationSubject; title: string; snapshot: DeliveredWork }[];
+	selectedMore?: boolean;
+	selectedUnavailable?: boolean;
 };

@@ -104,6 +104,7 @@ import { isAllowedOrigin } from "./origin.ts";
 import { PlanningActivityNotices } from "./planning-activity.ts";
 import { AutomationsRevisionConflict, EnvironmentRevisionConflict, expandHome } from "./projects.ts";
 import { PTY_INPUT_CHUNK } from "./pty-input.ts";
+import { ResultReviews } from "./result-reviews.ts";
 import { isRetiredDevboxOperation } from "./retired-devboxes.ts";
 import { RuntimeResources } from "./runtime-admission.ts";
 import { projectScreenPairs } from "./screen-pairs.ts";
@@ -1889,6 +1890,43 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					[String(req.headers["x-pilot-github-capability"])],
 				),
 			);
+		}
+		if (
+			parts[1] === "projects" &&
+			((parts[3] === "missions" && parts[5] === "tasks" && parts[7] === "delivered-work" && parts[8] === "review") ||
+				(parts[3] === "chats" && parts[5] === "delivered-work" && parts[6] === "review"))
+		) {
+			res.setHeader("cache-control", "no-store");
+			if (!nativeAuthority || !userVerifications || !missions)
+				throw new ServiceUnavailable("Private result review unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			const subject: import("@pilot/protocol").VerificationSubject =
+				parts[3] === "missions"
+					? { kind: "task", projectId: parts[2]!, missionId: parts[4]!, taskId: parts[6]! }
+					: { kind: "chat", projectId: parts[2]!, sessionId: parts[4]! };
+			const service = new ResultReviews({
+				store: missions.store,
+				deliveries: userVerifications,
+				reader: feedbackReader,
+			});
+			const tail = parts.slice(parts[3] === "missions" ? 9 : 7);
+			if (tail.length === 0 && req.method === "GET") {
+				const before = url.searchParams.get("beforeRevision");
+				if (
+					[...url.searchParams.keys()].some((k) => k !== "beforeRevision") ||
+					url.searchParams.getAll("beforeRevision").length > 1 ||
+					(before !== null && !/^[1-9][0-9]*$/.test(before))
+				)
+					throw new HttpError(400, "Unexpected review query");
+				return json(res, 200, await service.read(subject, before === null ? undefined : Number(before)));
+			}
+			if (tail.length === 0 && req.method === "PUT")
+				return json(res, 200, await service.save(subject, await readJson(req, 32 * 1024)));
+			if (tail.length === 2 && tail[0] === "operations" && req.method === "GET")
+				return json(res, 200, await service.lookup(subject, tail[1]!));
+			if (tail.length === 2 && tail[0] === "diff" && req.method === "GET")
+				return json(res, 200, await service.diff(subject, tail[1]!));
+			throw new HttpError(405, "Unsupported private review action");
 		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "delivered-work") {
 			res.setHeader("cache-control", "no-store");

@@ -12,8 +12,14 @@ CREATE TABLE IF NOT EXISTS user_verification_intents (
 );
 CREATE INDEX IF NOT EXISTS user_verification_pending ON user_verification_intents(subject_key);
 CREATE TABLE IF NOT EXISTS delivery_discovery_baselines (
- id INTEGER PRIMARY KEY CHECK(id=1), source_sequence INTEGER NOT NULL
+	id INTEGER PRIMARY KEY CHECK(id=1), source_sequence INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS result_review_entries (
+ operation_id TEXT PRIMARY KEY, subject_key TEXT NOT NULL, revision INTEGER NOT NULL,
+ request_hash TEXT NOT NULL, record TEXT NOT NULL, UNIQUE(subject_key,revision)
+);
+CREATE INDEX IF NOT EXISTS result_review_project ON result_review_entries(json_extract(record,'$.subject.projectId'),json_extract(record,'$.kind'),subject_key,revision);
+CREATE TABLE IF NOT EXISTS result_review_rejections(operation_id TEXT PRIMARY KEY,subject_key TEXT NOT NULL,request_hash TEXT NOT NULL,record TEXT NOT NULL);
 `;
 /** Derived source index only. Payloads and assessments stay in their canonical tables. */
 export const DELIVERY_SOURCE_SCHEMA = `
@@ -43,6 +49,126 @@ export class UserVerificationStore {
 	private readonly port: Port;
 	constructor(port: Port) {
 		this.port = port;
+	}
+	reviewPage(key: string, before: number): import("../../protocol/src/result-review.ts").ResultReviewEntry[] {
+		return this.port
+			.all(
+				"SELECT record FROM result_review_entries WHERE subject_key=? AND revision<? ORDER BY revision DESC LIMIT 21",
+				key,
+				before,
+			)
+			.map((r) => JSON.parse(String(r.record)));
+	}
+	latestReview(key: string): import("../../protocol/src/result-review.ts").ResultReviewEntry | null {
+		const row = this.port.one(
+			"SELECT record FROM result_review_entries WHERE subject_key=? ORDER BY revision DESC LIMIT 1",
+			key,
+		);
+		return row ? JSON.parse(String(row.record)) : null;
+	}
+	personalReviewNote(key: string): string {
+		const row = this.port.one(
+			"SELECT record FROM result_review_entries WHERE subject_key=? AND json_extract(record,'$.kind')='note' ORDER BY revision DESC LIMIT 1",
+			key,
+		);
+		return row ? JSON.parse(String(row.record)).body : "";
+	}
+	originalReviewAnchor(
+		key: string,
+		snapshot: string,
+	): import("../../protocol/src/result-review.ts").ResultReviewEntry | null {
+		const row = this.port.one(
+			"SELECT record FROM result_review_entries WHERE subject_key=? AND json_extract(record,'$.anchor.snapshotId')=? AND json_extract(record,'$.anchor.kind')='lines' ORDER BY revision LIMIT 1",
+			key,
+			snapshot,
+		);
+		return row ? JSON.parse(String(row.record)) : null;
+	}
+	reviewSelections(project: string): import("../../protocol/src/result-review.ts").ResultReviewEntry[] {
+		return this.port
+			.all(
+				`SELECT record FROM result_review_entries e WHERE json_extract(record,'$.subject.projectId')=?
+		AND json_extract(record,'$.kind') IN ('select','later') AND revision=(SELECT MAX(revision) FROM result_review_entries q
+		WHERE q.subject_key=e.subject_key AND json_extract(q.record,'$.kind') IN ('select','later')) ORDER BY revision DESC LIMIT 21`,
+				project,
+			)
+			.map((r) => JSON.parse(String(r.record)));
+	}
+	reviewOperation(key: string, operation: string) {
+		const r = this.port.one(
+			"SELECT record,request_hash FROM result_review_entries WHERE subject_key=? AND operation_id=?",
+			key,
+			operation,
+		);
+		return r
+			? {
+					entry: JSON.parse(String(r.record)) as import("../../protocol/src/result-review.ts").ResultReviewEntry,
+					hash: String(r.request_hash),
+				}
+			: null;
+	}
+	reviewQueue(key: string, delivery: string | null): "later" | "selected" | undefined {
+		const row = this.port.one(
+			"SELECT record FROM result_review_entries WHERE subject_key=? AND json_extract(record,'$.deliveryId')=? AND json_extract(record,'$.kind') IN ('later','select') ORDER BY revision DESC LIMIT 1",
+			key,
+			delivery,
+		);
+		if (!row) return undefined;
+		return JSON.parse(String(row.record)).kind === "later" ? "later" : "selected";
+	}
+	reviewRejection(key: string, operation: string) {
+		const row = this.port.one(
+			"SELECT record,request_hash FROM result_review_rejections WHERE subject_key=? AND operation_id=?",
+			key,
+			operation,
+		);
+		return row
+			? {
+					entry: JSON.parse(
+						String(row.record),
+					) as import("../../protocol/src/result-review.ts").ResultReviewRejection,
+					hash: String(row.request_hash),
+				}
+			: null;
+	}
+	rejectReview(
+		key: string,
+		hash: string,
+		record: import("../../protocol/src/result-review.ts").ResultReviewRejection,
+		revalidate: () => void,
+	) {
+		this.port.transaction(() => {
+			revalidate();
+			this.port.run(
+				"INSERT INTO result_review_rejections VALUES(?,?,?,?)",
+				record.operationId,
+				key,
+				hash,
+				JSON.stringify(record),
+			);
+		});
+	}
+	saveReview(
+		key: string,
+		hash: string,
+		entry: import("../../protocol/src/result-review.ts").ResultReviewEntry,
+		revalidate: () => void,
+	) {
+		this.port.transaction(() => {
+			revalidate();
+			if (Number(this.port.one("SELECT COUNT(*) n FROM result_review_entries")!.n) >= 16384)
+				throw new OperationRejected("Private review receipt storage is full");
+			if ((this.latestReview(key)?.revision ?? 0) !== entry.expectedRevision)
+				throw new OperationRejected("Review changed; refresh first");
+			this.port.run(
+				"INSERT INTO result_review_entries VALUES(?,?,?,?,?)",
+				entry.operationId,
+				key,
+				entry.revision,
+				hash,
+				JSON.stringify(entry),
+			);
+		});
 	}
 	sourceCursor(): number {
 		return Number(this.port.one("SELECT sequence FROM delivery_source_clock WHERE id=1")!.sequence);

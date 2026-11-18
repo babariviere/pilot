@@ -1,7 +1,46 @@
 // A read-only diff of one exact patch.
-import { Text } from "nsh";
+import { type JSX, Text } from "nsh";
+import type { DiffAnnotation, DiffLineRange } from "nsh/base";
 import { Button, type DiffFile, DiffView, type DiffViewClasses, type DiffViewRef } from "nsh/base";
-import { FOCUS_RING } from "./button";
+import { Action, FOCUS_RING } from "./button";
+
+export type { DiffAnnotation, DiffLineRange } from "nsh/base";
+
+/** Saved two-text comparison with private annotations. Callers own selections and comment bodies. */
+export function ReviewDiff(props: {
+	before: string;
+	after: string;
+	language: string;
+	annotations: DiffAnnotation[];
+	onSelection: (range: DiffLineRange | null) => void;
+	onComment: (range: DiffLineRange) => void;
+	renderAnnotation: (annotation: DiffAnnotation) => JSX.Element;
+}) {
+	return (
+		<DiffView
+			testID="review-diff"
+			oldValue={props.before}
+			newValue={props.after}
+			language={props.language}
+			layout="unified"
+			indicators="classic"
+			inline="word"
+			softWrap
+			classes={DIFF_CLASSES}
+			class="flex-1 min-h-0"
+			onLineSelectionChange={({ range }) => props.onSelection(range)}
+			annotations={props.annotations}
+			renderAddAnnotation={(range) => (
+				<Action
+					label="Comment"
+					accessibilityLabel="Comment on these code lines"
+					onPress={() => props.onComment(range)}
+				/>
+			)}
+			renderAnnotation={(annotation) => props.renderAnnotation(annotation)}
+		/>
+	);
+}
 
 /**
  * The diff's parts. `lineSelected` is drawn over the selected rows' code,

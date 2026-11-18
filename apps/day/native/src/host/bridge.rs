@@ -376,6 +376,25 @@ async fn run(
             .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
         return Ok(json!({"snapshot":snapshot,"outcome":null}));
     }
+    if matches!(call.command, Command::ResultReviewId) {
+        return Ok(
+            json!({"snapshot":{"operationId":uuid::Uuid::new_v4().to_string()},"outcome":null}),
+        );
+    }
+    if matches!(
+        call.command,
+        Command::ResultReview(_) | Command::ResultReviewCheck(_)
+    ) {
+        let snapshot = match &call.command {
+            Command::ResultReview(r) => {
+                super::result_review::handle(t, journal, shared, r, &call.gate).await?
+            }
+            Command::ResultReviewCheck(id) => super::result_review::check(t, journal, id).await?,
+            _ => unreachable!(),
+        };
+        shared.open()?;
+        return Ok(json!({"snapshot":snapshot,"outcome":null}));
+    }
     if let Command::ArtifactSource(request) = &call.command {
         let snapshot = super::artifacts::source(t, request).await?;
         shared.open()?;
@@ -502,6 +521,9 @@ async fn run(
         Command::TodayScope(_) => unreachable!("handled scoped Today read"),
         Command::DeliveryArtifact(_) => unreachable!("handled captured artifact read"),
         Command::DeliveryWork(_) => unreachable!("handled agent work read"),
+        Command::ResultReview(_) | Command::ResultReviewCheck(_) | Command::ResultReviewId => {
+            unreachable!("handled private review")
+        }
         Command::ArtifactsRead(_) | Command::ArtifactSource(_) => {
             unreachable!("handled artifact read")
         }

@@ -9,11 +9,11 @@ import type {
 } from "./index.ts";
 import type { MissionDeliveryScreens } from "./mission-reports.ts";
 
-/** Explicit native user assessment only. Never task status or execution authority. */
-export type VerificationSubject =
-	| { kind: "task"; projectId: string; missionId: string; taskId: string }
-	| { kind: "chat"; projectId: string; sessionId: string };
+import type { VerificationSubject } from "./verification-subject.ts";
 
+export type { VerificationSubject } from "./verification-subject.ts";
+
+/** Explicit native user assessment only. Never task status or execution authority. */
 export interface UserVerification {
 	version: 1;
 	subject: VerificationSubject;
@@ -34,6 +34,8 @@ export interface UserVerificationIntent {
 	expectedRevision: number;
 	action: "done" | "send_back" | "reopen";
 	note: string;
+	/** Send-back destination shown by the native app. Absent means the delivery's owner (legacy). */
+	revisionRecipientSessionId?: string;
 }
 
 /** Both receipts must match the saved immutable operation before displaying success. */
@@ -60,6 +62,11 @@ export interface DeliveredWork {
 	ownerSessionId: string | null;
 	/** A standalone chat's own title. Tasks are named by their mission's records instead. */
 	title?: string;
+	scope?: string;
+	taskState?: string;
+	reviewQueue?: "later" | "selected";
+	/** Existing same-mission coordinator for revision routing; otherwise the owner receives it. */
+	revisionRecipientSessionId?: string;
 	completion?: MissionCodeCompletion;
 	nonCodeDelivery?: MissionNonCodeDelivery;
 	/** Identity of the latest canonical evidence submission, not its review judgement. */
@@ -126,6 +133,9 @@ export interface DeliveredWorkList {
 	more: boolean;
 	currentness: "live" | "stale";
 	items: Array<{ subject: VerificationSubject; title: string; snapshot: DeliveredWork; sourceSequence: number }>;
+	selected?: Array<{ subject: VerificationSubject; title: string; snapshot: DeliveredWork }>;
+	selectedMore?: boolean;
+	selectedUnavailable?: boolean;
 }
 
 /** A job chat's own report of its answer. The agent's words, not Pilot's check. */

@@ -44,6 +44,9 @@ pub(super) struct Cache {
 }
 
 pub(super) struct Journal {
+    // Private review traffic has its own fsynced ledger and quota, never the planning/acceptance budget.
+    review_file: Option<Box<Journal>>,
+    pub result_reviews: BTreeMap<String, super::result_review::Record>,
     pub knowledge: BTreeMap<String, super::knowledge::Record>,
     pub losses: BTreeMap<String, super::update_loss::Record>,
     pub windows: BTreeMap<String, super::window::SavedWindow>,
@@ -65,6 +68,7 @@ pub(super) struct Journal {
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum Entry {
+    ResultReview(Box<super::result_review::Record>),
     Knowledge(Box<super::knowledge::Record>),
     Loss(Box<super::update_loss::Record>),
     Window(Box<super::window::SavedWindow>),
@@ -96,6 +100,10 @@ impl Journal {
     }
     pub fn is_failed(&self) -> bool {
         self.failed
+            || self
+                .review_file
+                .as_ref()
+                .is_some_and(|file| file.is_failed())
     }
     pub fn save_ritual(&mut self, record: super::ritual::Record) -> Result<(), Error> {
         record.validate()?;
@@ -120,12 +128,18 @@ impl Journal {
         self.failed = true;
     }
     pub fn finish(&self) -> Result<(), Error> {
-        if self.failed {
+        if self.is_failed() {
             return Err(Error::Storage);
+        }
+        if let Some(file) = &self.review_file {
+            file.finish()?;
         }
         self.file.sync_all().map_err(|_| Error::Storage)
     }
     pub fn open(path: PathBuf) -> Result<Self, Error> {
+        Self::open_inner(path, true)
+    }
+    fn open_inner(path: PathBuf, with_reviews: bool) -> Result<Self, Error> {
         let mut file = OpenOptions::new()
             .read(true)
             .append(true)
@@ -158,6 +172,7 @@ impl Journal {
             return Err(Error::Storage);
         }
         let mut records: BTreeMap<String, Record> = BTreeMap::new();
+        let mut result_reviews: BTreeMap<String, super::result_review::Record> = BTreeMap::new();
         let mut knowledge: BTreeMap<String, super::knowledge::Record> = BTreeMap::new();
         let mut planning: BTreeMap<String, PlanningRecord> = BTreeMap::new();
         let mut attention: BTreeMap<String, AttentionRecord> = BTreeMap::new();
@@ -170,6 +185,20 @@ impl Journal {
         for line in body.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
             let entry: Entry = serde_json::from_slice(line).map_err(|_| Error::Storage)?;
             let record = match entry {
+                Entry::ResultReview(record) => {
+                    record.validate()?;
+                    if result_reviews
+                        .get(&record.review_operation)
+                        .map_or(record.receipt.is_some(), |old| !record.follows(old))
+                    {
+                        return Err(Error::Storage);
+                    }
+                    result_reviews.insert(record.review_operation.clone(), *record);
+                    if result_reviews.len() > MAX_OPERATIONS {
+                        return Err(Error::Storage);
+                    }
+                    continue;
+                }
                 Entry::Knowledge(record) => {
                     record.validate()?;
                     if knowledge
@@ -428,7 +457,28 @@ impl Journal {
         }
         file.sync_all().map_err(|_| Error::Storage)?;
         sync_parent(&path)?;
+        let review_file = if with_reviews {
+            Some(Box::new(Self::open_inner(
+                path.with_extension("result-review"),
+                false,
+            )?))
+        } else {
+            None
+        };
+        if let Some(reviews) = &review_file {
+            for (id, record) in &reviews.result_reviews {
+                if result_reviews
+                    .get(id)
+                    .is_some_and(|prior| !record.follows(prior))
+                {
+                    return Err(Error::Storage);
+                }
+                result_reviews.insert(id.clone(), record.clone());
+            }
+        }
         Ok(Self {
+            review_file,
+            result_reviews,
             knowledge,
             losses,
             windows,
@@ -480,6 +530,59 @@ impl Journal {
         self.append(&record)?;
         self.knowledge
             .insert(record.knowledge_operation.clone(), record);
+        Ok(())
+    }
+
+    pub fn save_result_review(
+        &mut self,
+        record: super::result_review::Record,
+    ) -> Result<(), Error> {
+        record.validate()?;
+        if self
+            .result_reviews
+            .get(&record.review_operation)
+            .map_or(record.receipt.is_some(), |old| !record.follows(old))
+        {
+            return Err(Error::Stale);
+        }
+        if !self.result_reviews.contains_key(&record.review_operation)
+            && self.result_reviews.len() >= MAX_OPERATIONS
+        {
+            return Err(Error::Capacity);
+        }
+        let mut reserved = 0u64;
+        for pending in self
+            .result_reviews
+            .values()
+            .filter(|r| r.receipt.is_none() && r.review_operation != record.review_operation)
+        {
+            reserved = reserved
+                .checked_add(pending.terminal_reservation()?)
+                .ok_or(Error::Capacity)?;
+        }
+        if record.receipt.is_none() {
+            reserved = reserved
+                .checked_add(record.terminal_reservation()?)
+                .ok_or(Error::Capacity)?;
+        }
+        let bytes = self
+            .review_file
+            .as_ref()
+            .map_or(self.bytes, |file| file.bytes);
+        let append = serde_json::to_vec(&record)
+            .map_err(|_| Error::Storage)?
+            .len() as u64
+            + 1;
+        if bytes.saturating_add(append).saturating_add(reserved) > MAX_LEDGER {
+            return Err(Error::Capacity);
+        }
+        if let Some(file) = &mut self.review_file {
+            file.append(&record)?;
+        } else {
+            self.append(&record)?;
+        }
+        self.result_reviews
+            .insert(record.review_operation.clone(), record);
         Ok(())
     }
 
@@ -694,4 +797,48 @@ fn sync_parent(path: &Path) -> Result<(), Error> {
     File::open(path.parent().ok_or(Error::Storage)?)
         .and_then(|f| f.sync_all())
         .map_err(|_| Error::Storage)
+}
+
+#[cfg(test)]
+mod review_capacity_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_pending_review_reserves_settlement_space_without_using_planning_capacity() {
+        let dir = std::env::temp_dir().join(format!("review-capacity-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let source: Source = serde_json::from_value(json!({"profile":dir,"port":1234,
+            "home":{"daemonId":"daemon","lineageId":"lineage"},"project_id":"project","project_path":dir})).unwrap();
+        let request: super::super::result_review::Request = serde_json::from_value(json!({"subject":{"kind":"chat","projectId":"project","sessionId":"owner"},"deliveryId":"a".repeat(64),"kind":"save","snapshotId":null,"edit":{"operationId":"review-one","deliveryId":"a".repeat(64),"expectedRevision":0,"kind":"comment","body":"Keep this","anchor":{"kind":"general"}}})).unwrap();
+        let record = super::super::result_review::Record {
+            review_operation: "review-one".into(),
+            source: source.clone(),
+            request,
+            receipt: None,
+        };
+        let mut journal = Journal::open(dir.join("journal")).unwrap();
+        let pending_bytes = serde_json::to_vec(&record).unwrap().len() as u64 + 1;
+        // Accounting fault injection: earlier valid entries consumed this space. Parser recovery is covered separately.
+        let used = MAX_LEDGER - record.terminal_reservation().unwrap() - pending_bytes - 1;
+        let file = journal.review_file.as_mut().unwrap();
+        file.file.set_len(used).unwrap();
+        file.bytes = used;
+        journal.save_result_review(record.clone()).unwrap();
+        let mut other = record.clone();
+        other.review_operation = "review-two".into();
+        other.request.edit.as_mut().unwrap()["operationId"] = json!("review-two");
+        assert_eq!(journal.save_result_review(other), Err(Error::Capacity));
+        let mut settled = record;
+        settled.receipt = Some(
+            json!({"subject":settled.request.subject,"operationId":"review-one","deliveryId":"a".repeat(64),"expectedRevision":0,"kind":"comment","body":"Keep this","anchor":{"kind":"general"},"revision":1,"ownerSessionId":"owner","at":1}),
+        );
+        journal.save_result_review(settled).unwrap();
+        let pin = serde_json::from_value(json!({"ownerSessionId":"owner"})).unwrap();
+        let planning = super::super::planning::verification_record(&source,"target".into(),"a".repeat(64),
+            json!({"purpose":"user-verification","subject":{"kind":"chat","projectId":"project","sessionId":"owner"},"deliveryId":"a".repeat(64),"expectedRevision":0,"action":"done","note":""}),pin).unwrap();
+        journal.save_planning(planning).unwrap();
+        drop(journal);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

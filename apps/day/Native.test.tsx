@@ -5,6 +5,21 @@ import { expect, open, test } from "nsh/test";
 
 const DECIDE = "id:decision >> role:button[Decide]";
 
+test("result review: outcome and visible code comments captured", async () => {
+	const app = await open("./DeliveryFixture.tsx", { platform: "macos", width: 1100, height: 1400 });
+	await app.waitFor("id:to-check");
+	if (app.shows("Show private review fixture")) await app.press("Show private review fixture");
+	await app.wait(400);
+	await app.screenshot("output/result-review-queue-light.png");
+	await app.press("id:check-task.mock-project.native.native-4");
+	await app.waitFor("id:delivery-report");
+	await app.wait(400);
+	await app.screenshot("output/result-review-outcome-light.png");
+	await app.scroll("id:delivery", 550);
+	await app.wait(400);
+	await app.screenshot("output/result-review-code-light.png");
+});
+
 test("question help: background, an answered question and waiting notes, captured", async () => {
 	const app = await open("./QuestionHelpFixture.tsx", { platform: "macos", width: 1100, height: 1300 });
 	await app.press("id:help-first >> More context");

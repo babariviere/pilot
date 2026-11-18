@@ -84,6 +84,7 @@ pub(crate) struct Write {
     expected_revision: u64,
     owner_session_id: Option<String>,
     note: String,
+    revision_recipient_session_id: Option<String>,
     #[serde(skip)]
     pub action: String,
 }
@@ -98,6 +99,10 @@ impl Write {
                 .as_ref()
                 .is_some_and(|id| !valid_id(id))
             || !valid_note(&self.action, &self.note)
+            || self
+                .revision_recipient_session_id
+                .as_ref()
+                .is_some_and(|id| self.action != "send_back" || !valid_id(id))
         {
             return Err(Error::Invalid);
         }
@@ -180,6 +185,8 @@ fn output_capabilities(shared: &Shared) -> Value {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Pin {
     owner_session_id: Option<String>,
+    #[serde(default)]
+    recipient_session_id: Option<String>,
 }
 
 fn payload(op: &Value) -> Result<Value, Error> {
@@ -191,7 +198,10 @@ pub(super) fn validate_record(r: &planning::PlanningRecord) -> Result<(), Error>
     let subject: Subject =
         serde_json::from_value(p["subject"].clone()).map_err(|_| Error::Storage)?;
     subject.validate().map_err(|_| Error::Storage)?;
-    if p.as_object().is_none_or(|o| o.len() != 6)
+    if p.as_object().is_none_or(|o| o.len() != 6 && o.len() != 7)
+        || p.get("revisionRecipientSessionId").is_some_and(|s| {
+            s.as_str().is_none_or(|id| !valid_id(id)) || p["action"] != "send_back"
+        })
         || p["purpose"] != "user-verification"
         || subject.project() != r.source.project()?.project_id
         || p["deliveryId"] != r.operation["bindingId"]
@@ -205,6 +215,10 @@ pub(super) fn validate_record(r: &planning::PlanningRecord) -> Result<(), Error>
             .is_none_or(|s| !valid_note(p["action"].as_str().unwrap_or(""), s))
         || pin
             .owner_session_id
+            .as_ref()
+            .is_some_and(|id| !valid_id(id))
+        || pin
+            .recipient_session_id
             .as_ref()
             .is_some_and(|id| !valid_id(id))
         || r.setup_digest.is_some()
@@ -264,7 +278,11 @@ fn exact(mut pair: Value, op: &Value, pin: &Pin) -> Result<Value, Error> {
         return Err(Error::Unknown);
     }
     if p["action"] == "send_back" {
-        let owner = pin.owner_session_id.as_ref().ok_or(Error::Unknown)?;
+        let owner = pin
+            .recipient_session_id
+            .as_ref()
+            .or(pin.owner_session_id.as_ref())
+            .ok_or(Error::Unknown)?;
         if v["messageReceipt"]
             != json!({"sessionId":owner,"requestId":op["operationId"],"state":"admitted"})
         {
@@ -277,17 +295,19 @@ fn exact(mut pair: Value, op: &Value, pin: &Pin) -> Result<Value, Error> {
     Ok(pair)
 }
 fn selected(r: &planning::PlanningRecord, source: &Source) -> bool {
+    receipt_source(&r.source, source) && r.operation["kind"] == "user-verification"
+}
+pub(super) fn receipt_source(saved: &Source, source: &Source) -> bool {
     // Port/path are live transport/configuration, not receipt identity. A cold
     // daemon can move ports; historical lookup still pins profile, lineage and
     // exact project/subject. It can never send the old envelope again.
-    r.source.profile == source.profile
-        && r.source.home == source.home
-        && r.source
+    saved.profile == source.profile
+        && saved.home == source.home
+        && saved
             .project
             .as_ref()
             .zip(source.project.as_ref())
             .is_some_and(|(a, b)| a.project_id == b.project_id)
-        && r.operation["kind"] == "user-verification"
 }
 fn summary(r: &planning::PlanningRecord) -> Value {
     let p = payload(&r.operation).unwrap_or(Value::Null);
@@ -394,6 +414,25 @@ fn validate_list(v: &Value, project: &str) -> Result<(), Error> {
         return Err(Error::Invalid);
     }
     let mut previous = baseline;
+    if let Some(selected) = v.get("selected") {
+        let rows = selected.as_array().ok_or(Error::Invalid)?;
+        if rows.len() > 20 {
+            return Err(Error::Invalid);
+        }
+        for item in rows {
+            let s: Subject =
+                serde_json::from_value(item["subject"].clone()).map_err(|_| Error::Invalid)?;
+            s.validate()?;
+            if s.project() != project
+                || item["title"].as_str().is_none()
+                || item["snapshot"]["reviewQueue"] != "selected"
+                    && item["snapshot"]["reviewQueue"] != "later"
+            {
+                return Err(Error::Invalid);
+            }
+            validate_snapshot(&item["snapshot"], &s)?;
+        }
+    }
     for item in items {
         let s: Subject =
             serde_json::from_value(item["subject"].clone()).map_err(|_| Error::Invalid)?;
@@ -489,16 +528,32 @@ pub(super) async fn handle(
             {
                 return Err(Error::Stale);
             }
+            if w.action == "send_back"
+                && w.revision_recipient_session_id
+                    .as_deref()
+                    .or(w.owner_session_id.as_deref())
+                    != v["revisionRecipientSessionId"]
+                        .as_str()
+                        .or(v["ownerSessionId"].as_str())
+            {
+                return Err(Error::Stale);
+            }
             check()?;
+            let mut intent = json!({"purpose":"user-verification","subject":subject,"deliveryId":w.delivery_id,
+                "expectedRevision":w.expected_revision,"action":w.action,"note":w.note});
+            if let Some(recipient) = &w.revision_recipient_session_id {
+                intent["revisionRecipientSessionId"] = json!(recipient);
+            }
             let mut r = planning::verification_record(
                 &t.source,
                 w.target_id.clone(),
                 w.delivery_id.clone(),
-                json!({
-                "purpose":"user-verification","subject":subject,"deliveryId":w.delivery_id,
-                "expectedRevision":w.expected_revision,"action":w.action,"note":w.note}),
+                intent,
                 Pin {
                     owner_session_id: w.owner_session_id.clone(),
+                    recipient_session_id: v["revisionRecipientSessionId"]
+                        .as_str()
+                        .map(str::to_owned),
                 },
             )?;
             journal.save_planning(r.clone())?;
@@ -683,8 +738,22 @@ mod tests {
             op,
             Pin {
                 owner_session_id: Some("owner".into()),
+                recipient_session_id: None,
             },
         )
+    }
+    #[test]
+    fn coordinator_receipt_is_pinned_without_changing_legacy_owner_receipts() {
+        let (mut pair, op, mut pin) = pair();
+        pin.recipient_session_id = Some("coordinator".into());
+        assert!(matches!(
+            exact(pair.clone(), &op, &pin),
+            Err(Error::Unknown)
+        ));
+        pair["verificationReceipt"]["verification"]["messageReceipt"]["sessionId"] =
+            json!("coordinator");
+        pair["receipt"]["result"]["messageReceipt"]["sessionId"] = json!("coordinator");
+        assert_eq!(exact(pair, &op, &pin).unwrap()["state"], "accepted");
     }
     #[test]
     fn only_exact_terminal_receipt_pairs_and_admitted_message_settle() {

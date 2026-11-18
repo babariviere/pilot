@@ -73,19 +73,53 @@ export class UserVerifications {
 		await this.deps.store.durable();
 		this.deps.projects.require(projectId);
 		const more = candidates.length > 20;
-		const unchanged = observed.every((shown) => {
-			const now = this.readNow(shown.subject);
-			const pending =
-				now.pendingOperationId ??
-				(shown.verificationReceiptState === "unknown" ? (now.verification?.operationId ?? null) : null);
-			return (
-				now.deliveryId === shown.deliveryId &&
-				now.ownerSessionId === shown.ownerSessionId &&
-				now.verificationRevision === shown.verificationRevision &&
-				pending === shown.pendingOperationId
+		const unchanged = () =>
+			observed.every((shown) => {
+				const now = this.readNow(shown.subject);
+				const pending =
+					now.pendingOperationId ??
+					(shown.verificationReceiptState === "unknown" ? (now.verification?.operationId ?? null) : null);
+				return (
+					now.deliveryId === shown.deliveryId &&
+					now.ownerSessionId === shown.ownerSessionId &&
+					now.verificationRevision === shown.verificationRevision &&
+					now.reviewQueue === shown.reviewQueue &&
+					pending === shown.pendingOperationId
+				);
+			});
+		const selections = source.reviewSelections(projectId);
+		const selected: NonNullable<DeliveredWorkList["selected"]> = [];
+		let selectedUnavailable = false;
+		for (const entry of selections.slice(0, 20)) {
+			let snapshot: DeliveredWork;
+			try {
+				snapshot = await this.read(entry.subject);
+			} catch {
+				selectedUnavailable = true;
+				continue;
+			}
+			observed.push(snapshot);
+			if (
+				snapshot.deliveryId !== entry.deliveryId ||
+				(snapshot.verificationCurrent && snapshot.verification?.state !== "open")
+			)
+				continue;
+			selected.push({
+				subject: entry.subject,
+				snapshot,
+				title:
+					entry.subject.kind === "task"
+						? this.deps.store.task(entry.subject.missionId, entry.subject.taskId).title
+						: (snapshot.title ?? "Standalone result"),
+			});
+		}
+		await this.deps.store.durable();
+		this.deps.projects.require(projectId);
+		const currentness = source.sourceCursor() === through && unchanged() ? "live" : "stale";
+		if (Buffer.byteLength(JSON.stringify({ items, selected })) > 1024 * 1024)
+			throw new OperationRejected(
+				"Delivery discovery including selected older work exceeds 1 MiB; inspect individual results in their missions",
 			);
-		});
-		const currentness = source.sourceCursor() === through && unchanged ? "live" : "stale";
 		return {
 			version: 1,
 			projectId,
@@ -96,6 +130,9 @@ export class UserVerifications {
 			complete: !more && currentness === "live",
 			currentness,
 			items,
+			selected,
+			selectedMore: selections.length > 20,
+			selectedUnavailable,
 		};
 	}
 	private subject(s: VerificationSubject) {
@@ -115,7 +152,9 @@ export class UserVerifications {
 		this.subject(subject);
 		this.deps.projects.require(subject.projectId);
 		let ownerSessionId: string | null = null;
+		let revisionRecipientSessionId: string | undefined;
 		let title: string | undefined;
+		let scope: string | undefined, taskState: string | undefined;
 		let identity: unknown = null;
 		let outputs: Pick<
 			DeliveredWork,
@@ -134,7 +173,14 @@ export class UserVerifications {
 			const mission = this.deps.store.require(subject.missionId);
 			if (mission.projectId !== subject.projectId) throw new OperationRejected("Task belongs to another project");
 			const task = this.deps.store.task(subject.missionId, subject.taskId);
+			title = task.title;
+			scope = task.body;
+			taskState = task.status;
 			ownerSessionId = task.sessionId ?? null;
+			// Routing follows the assigned coordinator, not their current availability.
+			// Admission refuses a missing/retired recipient instead of bypassing them.
+			if (mission.coordinatorSessionId && !this.deps.store.plannedWithoutCoordinator(subject.missionId))
+				revisionRecipientSessionId = mission.coordinatorSessionId;
 			outputs = this.deps.store.taskOutputs(subject.missionId, subject.taskId);
 			// The current worker's latest named screens. A later report without them does not hide them.
 			const screensReport = task.sessionId
@@ -222,13 +268,18 @@ export class UserVerifications {
 		const deliveryId = identity ? payloadHash(canonicalJSON({ subject, ownerSessionId, identity })) : null;
 		const key = verificationKey(subject),
 			verification = this.deps.store.userVerifications.current(key);
+		const queue = this.deps.store.userVerifications.reviewQueue(key, deliveryId);
 		return {
 			version: 1,
 			subject,
 			targetId: key,
 			deliveryId,
 			ownerSessionId,
+			...(revisionRecipientSessionId ? { revisionRecipientSessionId } : {}),
 			...(title ? { title } : {}),
+			...(scope ? { scope } : {}),
+			...(taskState ? { taskState } : {}),
+			...(queue ? { reviewQueue: queue } : {}),
 			...outputs,
 			production: "not_tracked",
 			verification,
@@ -309,7 +360,12 @@ export class UserVerifications {
 			!p ||
 			typeof p !== "object" ||
 			Array.isArray(p) ||
-			Object.keys(p).sort().join() !== "action,deliveryId,expectedRevision,note,purpose,subject" ||
+			Object.keys(p)
+				.filter((k) => k !== "revisionRecipientSessionId")
+				.sort()
+				.join() !== "action,deliveryId,expectedRevision,note,purpose,subject" ||
+			(p.revisionRecipientSessionId !== undefined &&
+				(p.action !== "send_back" || !id(p.revisionRecipientSessionId))) ||
 			p.purpose !== "user-verification" ||
 			op.kind !== p.purpose ||
 			!hash(p.deliveryId) ||
@@ -361,7 +417,9 @@ export class UserVerifications {
 				: current.verificationCurrent && current.verification?.state !== "open"
 		)
 			throw new OperationRejected("Reopen a checked result before changing its assessment");
-		const sessionId = current.ownerSessionId;
+		const sessionId = current.revisionRecipientSessionId ?? current.ownerSessionId;
+		if (p.action === "send_back" && (p.revisionRecipientSessionId ?? current.ownerSessionId) !== sessionId)
+			throw new OperationRejected("Revision recipient changed; refresh before sending");
 		const missionId = p.subject.kind === "task" ? p.subject.missionId : undefined;
 		const workHeld = () =>
 			!!missionId &&
@@ -383,7 +441,7 @@ export class UserVerifications {
 				chat.subscriptionPause ||
 				workHeld())
 		)
-			throw new OperationRejected("Owning chat is unavailable or held; no automatic restore or resume");
+			throw new OperationRejected("Revision recipient is unavailable or held; no automatic restore or resume");
 		const reservation = {
 			operation: op,
 			operationId: op.operationId,
@@ -413,6 +471,7 @@ export class UserVerifications {
 			const live = this.readNow(p.subject);
 			if (
 				live.deliveryId !== p.deliveryId ||
+				(p.action === "send_back" && (live.revisionRecipientSessionId ?? live.ownerSessionId) !== sessionId) ||
 				live.verificationRevision !== p.expectedRevision ||
 				live.pendingOperationId !== op.operationId ||
 				(p.subject.kind === "task" &&
@@ -432,7 +491,7 @@ export class UserVerifications {
 					(now.inputGeneration ?? 0) !== (chat!.inputGeneration ?? 0) ||
 					workHeld()
 				)
-					throw new Error("Owning chat changed or is held; Check only");
+					throw new Error("Revision recipient changed or is held; Check only");
 			}
 		};
 		try {

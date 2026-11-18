@@ -18,9 +18,80 @@ import { MissionReports } from "./mission-reports.ts";
 import { MissionStore } from "./missions.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
+import { ResultReviews } from "./result-reviews.ts";
 import { FINAL_REPLY_CHARS, UserVerifications } from "./user-verification.ts";
 
 const host = { hostId: "daemon", daemonId: "daemon", lineageId: "lineage" };
+
+test("older results enter the queue only by explicit selection; Later and private notes do not accept or send", async (t) => {
+	const f = await fixture(t);
+	f.deliver();
+	const first = await f.service.list(f.project.id);
+	assert.equal(first.items.length, 0);
+	assert.deepEqual(first.selected, []);
+	const reviews = new ResultReviews({
+		store: f.store,
+		deliveries: f.service,
+		reader: () => {
+			throw Error("No retained comparison");
+		},
+	});
+	const shown = await f.service.read(f.subject);
+	await reviews.save(f.subject, {
+		operationId: "select-old",
+		deliveryId: shown.deliveryId!,
+		expectedRevision: 0,
+		kind: "select",
+		body: "",
+		anchor: { kind: "general" },
+	});
+	assert.equal((await f.service.list(f.project.id)).selected?.[0]?.snapshot.reviewQueue, "selected");
+	await reviews.save(f.subject, {
+		operationId: "later-old",
+		deliveryId: shown.deliveryId!,
+		expectedRevision: 1,
+		kind: "later",
+		body: "",
+		anchor: { kind: "general" },
+	});
+	assert.equal((await f.service.list(f.project.id)).selected?.[0]?.snapshot.reviewQueue, "later");
+	await reviews.save(f.subject, {
+		operationId: "personal",
+		deliveryId: shown.deliveryId!,
+		expectedRevision: 2,
+		kind: "note",
+		body: "Only for me",
+		anchor: { kind: "general" },
+	});
+	assert.equal((await f.service.read(f.subject)).verification, null);
+	assert.equal(f.sends.length, 0);
+});
+
+test("Later on pre-cutoff work is itself an explicit selection, without a separate Add step", async (t) => {
+	const f = await fixture(t);
+	f.deliver();
+	await f.service.list(f.project.id);
+	const shown = await f.service.read(f.subject);
+	const reviews = new ResultReviews({
+		store: f.store,
+		deliveries: f.service,
+		reader: () => {
+			throw Error("No source");
+		},
+	});
+	await reviews.save(f.subject, {
+		operationId: "direct-later",
+		deliveryId: shown.deliveryId!,
+		expectedRevision: 0,
+		kind: "later",
+		body: "",
+		anchor: { kind: "general" },
+	});
+	const queue = await f.service.list(f.project.id);
+	assert.equal(queue.items.length, 0);
+	assert.equal(queue.selected?.[0]?.snapshot.reviewQueue, "later");
+	assert.equal(f.sends.length, 0);
+});
 function operation(
 	page: DeliveredWork,
 	action: UserVerificationIntent["action"] = "done",
@@ -33,6 +104,9 @@ function operation(
 		expectedRevision: page.verificationRevision,
 		action,
 		note,
+		...(action === "send_back" && page.revisionRecipientSessionId
+			? { revisionRecipientSessionId: page.revisionRecipientSessionId }
+			: {}),
 	});
 	return {
 		schemaVersion: 1,
@@ -49,6 +123,75 @@ function operation(
 		payloadHash: payloadHash(payload),
 	};
 }
+
+test("revision requests go to the current coordinator with exact context, never a replacement worker", async (t) => {
+	const f = await fixture(t);
+	f.deliver();
+	const get = f.sessions.get;
+	const worker = get("worker")!;
+	f.sessions.get = (id) => (id === "completion-lead" ? { ...worker, id: "completion-lead", mode: "build" } : get(id));
+	const page = await f.service.read(f.subject);
+	assert.equal(page.revisionRecipientSessionId, "completion-lead");
+	const context = "Saved comment line-1\nOriginal src/export.ts, new lines 42–44\nCheck keyboard cancel";
+	const op = operation(page, "send_back", context);
+	await f.run(op);
+	assert.deepEqual(
+		f.sends.map((s) => ({ id: s.id, message: s.message })),
+		[{ id: "completion-lead", message: context }],
+	);
+	const receipt = await f.service.lookup(op);
+	assert.equal(receipt.verificationReceipt?.verification.messageReceipt?.sessionId, "completion-lead");
+	assert.equal(f.store.task(f.mission.id, f.task.id).status, "done");
+});
+
+test("changing revision routing invalidates an old acceptance envelope before any message is sent", async (t) => {
+	const f = await fixture(t);
+	f.deliver();
+	const get = f.sessions.get,
+		worker = get("worker")!;
+	f.sessions.get = (id) => (id === "completion-lead" ? { ...worker, id: "completion-lead" } : get(id));
+	const shown = await f.service.read(f.subject);
+	f.store.update(f.mission.id, { coordinatorSessionId: "worker" });
+	assert.equal((await f.run(operation(shown, "send_back", "Earlier route"))).state, "rejected");
+	assert.equal(f.sends.length, 0);
+});
+
+test("coordinator availability never invalidates accepted result content", async (t) => {
+	const f = await fixture(t);
+	f.deliver();
+	const before = await f.service.read(f.subject);
+	await f.run(operation(before));
+	const get = f.sessions.get,
+		worker = get("worker")!;
+	f.sessions.get = (id) => (id === "completion-lead" ? { ...worker, id: "completion-lead" } : get(id));
+	const routed = await f.service.read(f.subject);
+	assert.equal(routed.deliveryId, before.deliveryId);
+	assert.equal(routed.verificationCurrent, true);
+	assert.equal(routed.revisionRecipientSessionId, "completion-lead");
+});
+
+test("an archived coordinator stays the pinned destination and is never bypassed or resumed", async (t) => {
+	const f = await fixture(t);
+	f.deliver();
+	const get = f.sessions.get,
+		worker = get("worker")!;
+	f.sessions.get = (id) => (id === "completion-lead" ? { ...worker, id: "completion-lead", archivedAt: 1 } : get(id));
+	const shown = await f.service.read(f.subject);
+	assert.equal(shown.revisionRecipientSessionId, "completion-lead");
+	assert.equal((await f.run(operation(shown, "send_back", "Wait for coordinator"))).state, "rejected");
+	assert.equal(f.sends.length, 0);
+});
+
+test("a missing coordinator remains pinned instead of falling back to the worker", async (t) => {
+	const f = await fixture(t);
+	f.deliver();
+	const get = f.sessions.get;
+	f.sessions.get = (id) => (id === "completion-lead" ? undefined : get(id));
+	const shown = await f.service.read(f.subject);
+	assert.equal(shown.revisionRecipientSessionId, "completion-lead");
+	assert.equal((await f.run(operation(shown, "send_back", "Keep context"))).state, "rejected");
+	assert.equal(f.sends.length, 0);
+});
 async function fixture(t: TestContext) {
 	const home = await mkdtemp(join(tmpdir(), "user-verification-"));
 	const projects = new ProjectStore(home);
@@ -77,7 +220,7 @@ async function fixture(t: TestContext) {
 	let lastReply: string | undefined;
 	let report: ChatReport | undefined;
 	const sessions = {
-		get: (id: string) => (id === chat.id ? structuredClone(chat) : undefined),
+		get: (id: string) => (id === chat.id || id === "completion-lead" ? { ...structuredClone(chat), id } : undefined),
 		async chatReport(id: string) {
 			return id === chat.id ? structuredClone(report) : undefined;
 		},
@@ -181,7 +324,7 @@ test("Done, Send back and Reopen are immutable revisions, not task/merge/release
 	const note = "  Keep exact note 🐦\nPlease fix the result.  ";
 	const back = operation(await f.service.read(f.subject), "send_back", note);
 	assert.equal((await f.run(back)).state, "accepted");
-	assert.deepEqual(f.sends, [{ id: "worker", message: note, operationId: back.operationId }]);
+	assert.deepEqual(f.sends, [{ id: "completion-lead", message: note, operationId: back.operationId }]);
 	assert.equal((await f.service.read(f.subject)).verification?.messageReceipt?.requestId, back.operationId);
 	assert.deepEqual(f.store.task(f.mission.id, f.task.id), before);
 	await f.reopenStorage();

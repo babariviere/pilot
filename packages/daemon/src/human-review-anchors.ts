@@ -109,6 +109,19 @@ function lines(bytes: Uint8Array) {
 	return { b, offsets, count };
 }
 const bytesHash = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
+/** Inclusive one-based original lines, including their newline bytes. No phantom line after a final LF. */
+export function lineExcerpt(bytes: Uint8Array, startLine: number, endLine: number): Uint8Array {
+	const ls = lines(bytes);
+	if (
+		!Number.isSafeInteger(startLine) ||
+		!Number.isSafeInteger(endLine) ||
+		startLine < 1 ||
+		endLine < startLine ||
+		endLine > ls.count
+	)
+		throw new Error("Invalid original line range");
+	return ls.b.subarray(ls.offsets[startLine - 1], ls.offsets[endLine]);
+}
 const sliceHash = (ls: ReturnType<typeof lines>, start: number, end: number) =>
 	bytesHash(ls.b.subarray(ls.offsets[start], ls.offsets[Math.min(ls.count, end)]));
 export function lineRange(

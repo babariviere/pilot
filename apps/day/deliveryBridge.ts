@@ -81,6 +81,9 @@ export function assessDelivery(
 		expectedRevision: shown.verificationRevision,
 		ownerSessionId: shown.ownerSessionId,
 		note,
+		...(action === "send_back" && shown.revisionRecipientSessionId
+			? { revisionRecipientSessionId: shown.revisionRecipientSessionId }
+			: {}),
 	});
 }
 

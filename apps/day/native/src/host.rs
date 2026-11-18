@@ -32,6 +32,7 @@ mod planning_chat;
 mod power;
 pub(crate) mod preferences;
 pub(crate) mod projects;
+pub(crate) mod result_review;
 pub mod ritual;
 mod session_chat;
 pub(crate) mod slack_controls;

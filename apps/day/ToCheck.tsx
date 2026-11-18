@@ -36,7 +36,8 @@ export function checkRows(v: DeliveryView, missionId?: string): DeliveryEntry[] 
 				) ||
 					(!!e.snapshot?.pendingOperationId && !v.unsettled.some((o) => o.key === e.key))) &&
 				!v.sending.includes(e.key),
-		);
+		)
+		.sort((a, b) => Number(a.snapshot?.reviewQueue === "later") - Number(b.snapshot?.reviewQueue === "later"));
 }
 
 /** How many results and unconfirmed checks wait for the user. Needs you counts them. */

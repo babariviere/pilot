@@ -4,14 +4,18 @@ import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
+import { MissionReports } from "./mission-reports.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
+import { OperationJournal } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
+import { ResultReviews } from "./result-reviews.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { fixture, jj } from "./testing/shared-workspace.ts";
+import { UserVerifications } from "./user-verification.ts";
 
 test("real session host custody admits a committed checkpoint and rejects project, repository, worker and membership changes", async (t) => {
 	const f = fixture();
@@ -85,6 +89,67 @@ test("real session host custody admits a committed checkpoint and rejects projec
 		assert.equal("enrollmentProjectId" in snapshot, false, "legacy v1 snapshot body has no project marker");
 		assert.equal((await fetch(`${root}/${selected.snapshotId}/patch`)).status, 200);
 		const entry = snapshot.after.find((e) => e.path === "a.txt")!;
+		// A new Day worker report, not an explicit legacy evidence submission, finds this genuine committed capture.
+		t.mock.method(store, "plannedWithoutCoordinator", () => true);
+		const journal = new OperationJournal(join(home, "review-operations"), {
+			hostId: "daemon",
+			daemonId: "daemon",
+			lineageId: "lineage",
+		});
+		const verifications = new UserVerifications({ store, journal, projects, sessions });
+		await verifications.list(project.id);
+		const reports = new MissionReports(store),
+			token = reports.source(mission.id, id, task.id);
+		await reports.write(mission.id, id, {
+			version: 1,
+			reportId: "captured-result",
+			taskId: task.id,
+			source: token.source,
+			expectedPreviousId: token.expectedPreviousId,
+			movement: "moving",
+			summary: "Keep export content",
+			nextStep: "Review the original code",
+			evidence: ["Committed source"],
+			delivery: { commit: selected.request.head.commitId, checks: "Fixture checks", issues: "No release" },
+		});
+		const subject = { kind: "task" as const, projectId: project.id, missionId: mission.id, taskId: task.id };
+		const delivered = await verifications.read(subject);
+		assert.equal(delivered.submission, undefined);
+		assert.ok(delivered.workerDelivery);
+		const reviews = new ResultReviews({ store, deliveries: verifications, reader: () => reader });
+		assert.deepEqual((await reviews.read(subject)).snapshots, [selected.snapshotId]);
+		const code = await reviews.diff(subject, selected.snapshotId);
+		assert.equal(code.files.find((file) => file.path === "a.txt")?.after?.text, "session retained\n");
+		const comment = await reviews.save(subject, {
+			operationId: "captured-comment",
+			deliveryId: delivered.deliveryId!,
+			expectedRevision: 0,
+			kind: "comment",
+			body: "Keep this newline",
+			anchor: {
+				kind: "lines",
+				snapshotId: selected.snapshotId,
+				side: "after",
+				path: "a.txt",
+				start: 1,
+				end: 1,
+				blobSha256: entry.sha256,
+				excerpt: "client text is not trusted",
+			},
+		});
+		assert.equal(comment.anchor.kind, "lines");
+		if (comment.anchor.kind !== "lines") throw Error("Expected source anchor");
+		assert.equal(comment.anchor.excerpt, "session retained\n");
+		await reviews.save(subject, {
+			operationId: "captured-later",
+			deliveryId: delivered.deliveryId!,
+			expectedRevision: 1,
+			kind: "later",
+			body: "",
+			anchor: { kind: "general" },
+		});
+		assert.equal((await verifications.list(project.id)).selected?.[0]?.snapshot.reviewQueue, "later");
+		assert.equal((await verifications.read(subject)).verification, null);
 		const source = await fetch(`${root}/${selected.snapshotId}/source?side=after&path=a.txt&sha256=${entry.sha256}`);
 		assert.equal(source.status, 200);
 		assert.deepEqual(await source.json(), { snapshotId: selected.snapshotId, text: "session retained\n" });

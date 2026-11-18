@@ -17,6 +17,7 @@ import type {
 	VerificationSubject,
 } from "./deliveryFeed";
 import { deliveryKey, subjectOf, workOf } from "./deliveryFeed";
+import { captureReviewDrafts, restoreReviewDrafts } from "./resultReview";
 import { glide } from "./ui";
 
 /** The result open on its page, and the title Pilot knows for it. */
@@ -106,14 +107,18 @@ type SavedDeliveryView = Pick<import("pilot-day/native").SavedView, "delivery" |
 export function captureDeliveryView(): SavedDeliveryView {
 	return {
 		delivery: deliveryRoute()?.key ?? "",
-		notes: Object.entries(backNotes())
-			.filter(([, note]) => note !== "")
-			.map(([key, note]) => `${key}\n${note}`),
+		notes: [
+			...Object.entries(backNotes())
+				.filter(([, note]) => note !== "")
+				.map(([key, note]) => `${key}\n${note}`),
+			...captureReviewDrafts(),
+		],
 		reminders: savedReminders(),
 	};
 }
 
 export function restoreDeliveryView(view: SavedDeliveryView) {
+	restoreReviewDrafts(view.notes ?? []);
 	const delivery = view.delivery ? subjectOf(view.delivery) : null;
 	hideInspection();
 	deliveryRoute.set(delivery ? { key: view.delivery ?? "", subject: delivery, title: "" } : null);
@@ -128,6 +133,7 @@ export function restoreDeliveryView(view: SavedDeliveryView) {
 }
 
 export function resetDeliveryView() {
+	restoreReviewDrafts([]);
 	deliveryRoute.set(null);
 	deliveryTitles.set({});
 	backNotes.set({});
