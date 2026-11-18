@@ -357,9 +357,21 @@ export interface FailedModelResponse extends FailedModelRequest {
 	session: SessionSummary;
 }
 
+/** A chat's place in the coding queue now. Read only: it grants, reserves and starts nothing. */
+export interface CodingQueueView {
+	/** "slots": every coding slot it may use is taken. "files": it waits for another task's shared files. */
+	kind: "slots" | "files";
+	/** 1-based place among chats waiting for the same project's slots, in the order the slots go to them. */
+	position: number;
+	/** Titles of at most 3 chats or tasks that hold the slots now, or for "files" the task it waits for. */
+	holders: string[];
+}
+
 export interface SessionSummary {
 	/** Saved input is waiting for a coding slot, not a failed or admitted run. */
 	codingQueueReason?: string;
+	/** Where a chat waiting for a coding slot is in line, beside codingQueueReason. Passive; it starts nothing. */
+	codingQueue?: CodingQueueView;
 	/** Monotonic explicit-Stop fence for opt-in durable native sends. */
 	inputGeneration?: number;
 	/** Passive progress for manually started sequential chat flows. */
@@ -462,6 +474,29 @@ export interface SessionSummary {
 	canRetryStartup?: boolean;
 	/** The last run failed in automatic handoff. POST /api/sessions/:id/retry-handoff starts one fresh run. */
 	canRetryHandoff?: boolean;
+	/**
+	 * Continue (the native `chat-continue` operation) can send its one fixed follow-up: the chat is idle and was
+	 * stopped (an outcome or a mission User Stop hold), its last run failed and a new turn is safe, or it waits for a
+	 * reply (`waitsForReply`). Omitted otherwise.
+	 */
+	canContinue?: true;
+	/**
+	 * A mission builder ended its turn with its task open, no new delivery and no question, even after Pilot's one
+	 * automatic reminder: it likely asks the user something in prose. Reply or Continue moves it. Omitted otherwise.
+	 */
+	waitsForReply?: true;
+	/**
+	 * A research or prototype chat's question or failure that no longer needs the user: its plan is published, its map
+	 * question is resolved, or a newer chat for that question took over. Its outcome stays; the chat stays readable.
+	 */
+	questionSettled?: true;
+	/**
+	 * Pilot started this chat for a map question (research or prototype). Its finished results are the planner's: they
+	 * never count as unread for the user. Its questions and failures still do until the plan settles them.
+	 */
+	mapExplorer?: true;
+	/** The user dismissed this failed outcome from Needs you. A later outcome shows again. */
+	failureDismissed?: true;
 	outcome?: SessionOutcome;
 	outcomeAt?: number;
 	outcomeReason?: string;
@@ -770,6 +805,8 @@ export interface Project {
 	automations?: import("./automations.ts").ProjectAutomations;
 	/** This host's own environment layer, never synced. Edited through PUT /api/projects/:id/environment/override. */
 	environmentOverride?: import("./environment.ts").ProjectEnvironmentOverride;
+	/** Other projects whose read-only main view this project's chats may read. Project IDs, in the user's order. */
+	linkedProjects?: string[];
 	createdAt: number;
 }
 
@@ -787,8 +824,11 @@ export interface ProjectOrigin {
 
 /** Build may modify its workspace; Ask is read-only. Omitted mode defaults to Build. */
 export type ChatMode = "build" | "ask";
-/** Runtime-enforced specialist profile. Omitted means an ordinary chat. */
-export type SessionRole = "diagnostics" | "insights";
+/**
+ * Runtime-enforced specialist profile. Omitted means an ordinary chat. "screen" is a read-only Ask chat bound to
+ * one Day window, with the ui_* tools (docs/technical/day-screen-agent.md).
+ */
+export type SessionRole = "diagnostics" | "insights" | "screen";
 
 /** Trusted host-owned authority. Never accepted from chat text, spawn payloads or schedules. */
 export interface InsightsBinding {
@@ -1040,6 +1080,8 @@ export interface ProjectRequest {
 	workspace?: WorkspaceMode;
 	requirePullRequest?: boolean;
 	tracking?: ProjectTrackingConfig;
+	/** Replaces the linked project list. An empty list removes every link. */
+	linkedProjects?: string[];
 }
 
 /** Missions: a goal spanning several chats of one project. State is daemon-owned. */
@@ -1601,7 +1643,8 @@ export type NeedsYouReasonKind =
 	| "no_pr"
 	| "long_job"
 	| "mcp"
-	| "tool_stall";
+	| "tool_stall"
+	| "waits";
 
 /**
  * One reason per row. Not-reviewed age is formatted by clients from the row's `at`.
@@ -1611,6 +1654,7 @@ export type NeedsYouReasonKind =
  * `asks`: in a session summary, the live run is suspended in ask_user until the user replies; live-only. Elsewhere it
  * also names a turn that ended on a question.
  * `no_pr`: cached workspace changes exist, but no pull request has been created or attached.
+ * `waits`: a mission chat ended its turn with no result and no question (SessionSummary.waitsForReply).
  */
 export interface NeedsYouReason {
 	kind: NeedsYouReasonKind;
@@ -1640,12 +1684,16 @@ export interface DashboardNeedsYouItem {
 	countsInBadge?: false;
 	/** `failed` and `unread`. */
 	outcome?: SessionOutcome;
+	/** The chat can take one Continue (see SessionSummary.canContinue). */
+	canContinue?: true;
 	/** Failure or stop reason, one short line. */
 	reason?: string;
 	/** Shared attention vocabulary for metadata, tooltips and accessibility. */
 	attentionReason: NeedsYouReason;
 	/** `question`: blocked tasks plus open comments awaiting the user. */
 	count?: number;
+	/** `waits`: the chat's last message, at most a few screens. Only the Day overview fills it. */
+	says?: string;
 	/** Epoch ms: completion time, mission update time, or the item's scheduled time. Newest first within a kind. */
 	at: number;
 }
@@ -2175,6 +2223,8 @@ export type ServerMessage =
 	| { type: "diagnostics.next-control"; control: import("./telemetry.ts").NextDiagnosticsControl }
 	| { type: "diagnostics.read"; dispatch: import("./diagnostic-context.ts").DiagnosticReadDispatch }
 	| { type: "mission-catalog.changed" }
+	/** Notice only: a screen agent request waits for this Day window. Read it with GET /api/screen/requests. */
+	| { type: "screen.requested"; windowId: string }
 	/** Invalidation only: a planning coordinator's tool steps changed. Read the planning page again. */
 	| { type: "planning.activity"; missionId: string }
 	/** Invalidation only. Read the current checkpoint through authenticated GET /api/runtime-update. */
@@ -2272,6 +2322,7 @@ export type { PowerSettings, PowerStatus } from "./power.ts";
 export type * from "./project-preferences.ts";
 export type * from "./repositories.ts";
 export type * from "./schedules.ts";
+export type * from "./screen-agent.ts";
 export type * from "./setup.ts";
 export type * from "./shared-context.ts";
 export type * from "./subscription-refresh.ts";

@@ -9,6 +9,8 @@
 //! saved receipt once and nothing is sent again.
 #![allow(dead_code)]
 include!("support/intake_fixture.rs");
+#[path = "support/app_source.rs"]
+mod app_source;
 use nsh_core::prelude::*;
 use std::path::Path;
 
@@ -24,7 +26,7 @@ fn entry() -> PathBuf {
         if (name.ends_with(".ts") || name.ends_with(".tsx") || name == "theme.json")
             && !name.ends_with(".test.tsx")
         {
-            std::fs::copy(&path, dir.join(&name)).unwrap();
+            app_source::copy(&path, &dir.join(&name));
         }
     }
     // Shared chrome imports its packaged SVGs. Keep this isolated source copy

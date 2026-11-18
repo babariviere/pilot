@@ -6,7 +6,7 @@ import { checkDecision, laterDecision, needsCheck, saveDecisionDraft } from "./c
 import type { Day } from "./day";
 import { type InterviewRead, InterviewRenderer, type InterviewSource } from "./InterviewRenderer";
 import { Action, ToggleChip } from "./ui";
-import { anchors, focusFront, messages, replies, setFor } from "./view";
+import { anchors, focusFront, holdFront, messages, replies, setFor } from "./view";
 
 const SECTIONS: Record<string, QuestionSection> = {
 	outcome: "outcome",
@@ -188,6 +188,10 @@ export function InterviewCard(props: { day: Day; decision: Decision; later: bool
 					break;
 				case "help":
 					if (command.help === "context") toggleContext(command.questionId);
+					break;
+				case "focus":
+					// Answering this round keeps it in front while it waits.
+					holdFront(id);
 					break;
 			}
 		},

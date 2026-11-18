@@ -326,11 +326,20 @@ fn operations(t: &Transport, journal: &Journal) -> Vec<Value> {
         .map(summary)
         .collect()
 }
+/// A subject of another project than the one the window acts on now: the
+/// window moved after the screen asked (a project switch). That request is
+/// out of date, not a lost identity, so it is refused as Stale and never
+/// fails the new project's reads. No request is sent for it.
+pub(super) fn in_scope(t: &Transport, s: &Subject) -> Result<(), Error> {
+    if s.project() != t.source.project()?.project_id {
+        return Err(Error::Stale);
+    }
+    Ok(())
+}
+
 pub(super) async fn read(t: &Transport, s: &Subject) -> Result<Value, Error> {
     s.validate()?;
-    if s.project() != t.source.project()?.project_id {
-        return Err(Error::Identity);
-    }
+    in_scope(t, s)?;
     t.gate(false).await?;
     let v = t.get(&s.path()).await?;
     validate_snapshot(&v, s)?;
@@ -508,9 +517,7 @@ pub(super) async fn handle(
         }
         Command::DeliveryWrite(w) => {
             w.validate()?;
-            if w.subject.project() != t.source.project()?.project_id {
-                return Err(Error::Identity);
-            }
+            in_scope(t, &w.subject)?;
             let subject = serde_json::to_value(&w.subject).map_err(|_| Error::Invalid)?;
             if journal.planning.values().any(|r| {
                 selected(r, &t.source)
@@ -642,6 +649,42 @@ fn settle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window moved from project "one" to "two" while the screen still
+    /// asked about a result of "one": that read is dropped as Stale (never
+    /// Identity, which fails every read of the window) and sends nothing.
+    #[tokio::test]
+    async fn a_read_of_the_previous_project_after_a_switch_is_stale_and_sends_nothing() {
+        let focused = |project: &str| {
+            Transport::new(crate::host::Source {
+                profile: "/synthetic-profile".into(),
+                // No profile and nothing listens here: a read that goes on fails.
+                port: 1,
+                home: crate::contract::Home {
+                    daemon_id: "daemon".into(),
+                    lineage_id: "lineage".into(),
+                },
+                project: Some(crate::host::Project {
+                    project_id: project.into(),
+                    project_path: format!("/{project}"),
+                }),
+            })
+            .unwrap()
+        };
+        let old: Subject = serde_json::from_value(
+            json!({"kind":"task","projectId":"one","missionId":"m","taskId":"t"}),
+        )
+        .unwrap();
+        assert_eq!(read(&focused("two"), &old).await, Err(Error::Stale));
+        // The same read while the window still acts on "one" passes the scope check
+        // and goes on (to fail here on the missing profile, never as Stale).
+        assert_ne!(read(&focused("one"), &old).await, Err(Error::Stale));
+        // Only Identity, Offline and Storage fail the window's reads (host/bridge.rs).
+        assert!(!matches!(
+            Error::Stale,
+            Error::Identity | Error::Offline | Error::Storage
+        ));
+    }
 
     #[test]
     fn delivery_list_is_bounded_scoped_and_never_accepts_unknown_as_done() {

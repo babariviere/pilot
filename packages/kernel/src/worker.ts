@@ -238,6 +238,8 @@ export function runKernelWorker(): void {
 		callDaemon<JsonValue>((callId) => ({ type: "insights.backlog.call", callId, request }));
 	const readCoordinatorSources: import("./coordinator-sources.ts").ReadCoordinatorSources = (signal) =>
 		callDaemon((callId) => ({ type: "source.scope", callId }), signal, false);
+	const readReferenceSources: import("./reference-sources.ts").ReadReferenceSources = (signal) =>
+		callDaemon((callId) => ({ type: "source.references", callId }), signal, false);
 	const callMemory: import("./memory-tools.ts").MemoryCall = (action, args, operationId) =>
 		callDaemon<JsonValue>((callId) => ({ type: "memory.call", callId, operationId, action, args }));
 	const callKnowledge: import("./knowledge-tools.ts").KnowledgeCall = (action, args, operationId) =>
@@ -259,6 +261,8 @@ export function runKernelWorker(): void {
 		}));
 	const callDiagnosticContext: import("./diagnostic-context-tool.ts").DiagnosticContextCall = (request, signal) =>
 		callDaemon((callId) => ({ type: "diagnostics.context.call", callId, request }), signal);
+	const callScreen: import("./screen-tools.ts").ScreenCall = (operation, signal) =>
+		callDaemon((callId) => ({ type: "screen.call", callId, operation }), signal);
 	const callDiagnosticHistory: DiagnosticHistoryCall = (sessionId, before, limit) =>
 		callDaemon((callId) => ({
 			type: "diagnostics.history.call",
@@ -488,6 +492,7 @@ export function runKernelWorker(): void {
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
 			command.type === "chatReport.result" ||
+			command.type === "screen.result" ||
 			command.type === "diagnostics.result" ||
 			command.type === "diagnostics.context.result" ||
 			command.type === "diagnostics.history.result" ||
@@ -497,7 +502,8 @@ export function runKernelWorker(): void {
 			command.type === "usage-history.result" ||
 			command.type === "usage-history.epoch.result" ||
 			command.type === "artifact.reference.result" ||
-			command.type === "source.scope.result"
+			command.type === "source.scope.result" ||
+			command.type === "source.references.result"
 		) {
 			const call = daemonCalls.get(command.callId);
 			daemonCalls.delete(command.callId);
@@ -616,6 +622,7 @@ export function runKernelWorker(): void {
 					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
 					callMission,
 					readCoordinatorSources,
+					readReferenceSources,
 					callMemory,
 					callKnowledge,
 					callInsightsBacklog,
@@ -626,6 +633,7 @@ export function runKernelWorker(): void {
 					callDiagnostics,
 					callDiagnosticHistory,
 					callDiagnosticContext,
+					callScreen,
 					callDiagnosticLogs,
 					callRepairProposal,
 					readArtifactReference: (id, revision) =>

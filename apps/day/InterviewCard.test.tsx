@@ -59,7 +59,9 @@ test("drafts and fields survive reopening but never answer a new round", async (
 });
 
 test("all forty questions use the same See all and bounded scroll", async () => {
-	const app = await open("./InterviewCardFixture.tsx", { ...desktop, width: 620, height: 800 });
+	// A drag moves 10 points a display frame: on the system clock 16,000 points take about 27 s
+	// of real time. The manual clock runs those frames at once; rendering is not the cost.
+	const app = await open("./InterviewCardFixture.tsx", { ...desktop, width: 620, height: 800, clock: {} });
 	await app.press("Large round");
 	await app.waitFor("Question 1 of 40 · 0 answered");
 	expect(app.shows("id:question-q39")).toBe(false);

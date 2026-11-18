@@ -16,7 +16,8 @@ pub struct ChatChoice {
     pub project_path: String,
     /// Exact saved project configuration digest.
     pub context_digest: String,
-    /// Explicit permission choice: ask (read only) or build (project defaults).
+    /// Explicit permission choice: ask (read only), build (project defaults) or screen (a
+    /// read-only screen agent chat that reads and uses the window bound to it).
     pub mode: String,
     /// Model selected by the existing task-model policy.
     pub model: String,
@@ -39,7 +40,7 @@ impl ChatChoice {
             && self.project_path.len() <= 4096
             && self.context_digest.len() == 64
             && self.context_digest.bytes().all(|b| b.is_ascii_hexdigit())
-            && matches!(self.mode.as_str(), "ask" | "build")
+            && matches!(self.mode.as_str(), "ask" | "build" | "screen")
             && !self.model.is_empty()
             && self.model.len() <= 256
             && self.thinking.len() <= 128

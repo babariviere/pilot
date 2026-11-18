@@ -98,6 +98,8 @@ impl PlanningRecord {
                         | "thread-send"
                         | "chat-continue"
                         | "chat-recover"
+                        | "chat-dismiss"
+                        | "chat-reply"
                 )
             )
             || o["payload"]
@@ -125,7 +127,11 @@ impl PlanningRecord {
         if o["kind"] == "native-chat-create" {
             super::new_chat::validate_record(o)?;
         }
-        if o["kind"] == super::new_chat::CONTINUE || o["kind"] == super::new_chat::RECOVER {
+        if o["kind"] == super::new_chat::CONTINUE
+            || o["kind"] == super::new_chat::RECOVER
+            || o["kind"] == super::new_chat::DISMISS
+            || o["kind"] == super::new_chat::REPLY
+        {
             super::new_chat::validate_continue(o)?;
         }
         if o["kind"] == super::preferences::KIND {
@@ -249,6 +255,8 @@ fn record_pinned(
                     | "thread-send"
                     | "chat-continue"
                     | "chat-recover"
+                    | "chat-dismiss"
+                    | "chat-reply"
             )
         )
         || (!matches!(
@@ -281,6 +289,8 @@ fn record_pinned(
                     | "thread-send"
                     | "chat-continue"
                     | "chat-recover"
+                    | "chat-dismiss"
+                    | "chat-reply"
                     | "revision-pause"
                     | "revision-resume"
                     | "mission-replan-finish"
@@ -434,7 +444,10 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
             return Err(Error::Unknown);
         }
     }
-    if (op["kind"] == super::new_chat::CONTINUE || op["kind"] == super::new_chat::RECOVER)
+    if (op["kind"] == super::new_chat::CONTINUE
+        || op["kind"] == super::new_chat::RECOVER
+        || op["kind"] == super::new_chat::DISMISS
+        || op["kind"] == super::new_chat::REPLY)
         && r["state"] == "accepted"
         && (r["result"]["sessionId"] != op["targetId"]
             || r["result"]["operationId"] != op["operationId"])

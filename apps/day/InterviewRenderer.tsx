@@ -28,6 +28,8 @@ export type InterviewAnswerView = {
 	text: string;
 	unsaved: boolean;
 	message: string;
+	/** Words written for an earlier wording of the question. Pilot did not send them. */
+	kept?: string;
 };
 export type InterviewRead = {
 	interview: Interview;
@@ -251,6 +253,24 @@ function QuestionView(props: {
 					<Text class="text-xs text-muted-foreground">{`Your earlier answer: ${q().earlier}`}</Text>
 				</Panel>
 			</If>
+			<If when={!locked() && answerView(props.source, q()).kept}>
+				<Panel size="sm" class="gap-0.5">
+					<Text class="text-sm text-needs-ink">
+						This question changed before your words were saved. Pilot did not send them.
+					</Text>
+					<Text class="text-xs text-muted-foreground">{`Your words: ${answerView(props.source, q()).kept ?? ""}`}</Text>
+					<LinkAction
+						label="Use these words"
+						onPress={() =>
+							props.source.dispatch({
+								kind: "edit",
+								questionId: q().id,
+								text: answerView(props.source, q()).kept ?? "",
+							})
+						}
+					/>
+				</Panel>
+			</If>
 			<View class="gap-0.5" accessibilityLabel="Suggested answers">
 				<Each of={q().choices} key={(c) => c.id}>
 					{(c) => (
@@ -375,9 +395,9 @@ function submitLine(interview: Interview): string {
 		case "submitting":
 			return "Submitting your answers…";
 		case "checking":
-			return "Checking. This only reads; it sends nothing again.";
+			return "Checking that your answers arrived…";
 		case "unknown":
-			return "Pilot sent your answers but heard nothing back. It will not send them again until it checks.";
+			return "Pilot could not confirm your answers yet. It will not send them again. Check again only reads.";
 		case "submitted":
 			return "Submitted. These answers are fixed.";
 		default:
@@ -489,13 +509,15 @@ function Answers(props: { source: InterviewSource; anchor?: (node: ViewRef) => v
 						</If>
 					}
 				>
-					<Action
-						variant="primary"
-						label="Check again"
-						disabled={iv().submit === "checking"}
-						anchor={(node) => props.anchor?.(node)}
-						onPress={() => props.source.dispatch({ kind: "check" })}
-					/>
+					{/* Pilot checks by itself first; the button is the fallback after its tries. */}
+					<If when={iv().submit !== "checking"}>
+						<Action
+							variant="primary"
+							label="Check again"
+							anchor={(node) => props.anchor?.(node)}
+							onPress={() => props.source.dispatch({ kind: "check" })}
+						/>
+					</If>
 				</If>
 				<If when={iv().submit === "open" && unanswered()}>
 					<Action

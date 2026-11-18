@@ -79,9 +79,14 @@ fn two_project_creation_saved_draft_lost_ack_and_exact_cold_lookup_never_retarge
     wrong["projectId"] = other["projectId"].clone();
     assert_eq!(create(&f, &b, &wrong)["error"], "stale");
     let old = select(&f, &b, other, "build");
+    // Renaming the project moves its setup digest, not the chat's own setup: the
+    // chat starts under the current digest without asking the user again.
     f.stats("change-other");
-    let stale = create(&f, &b, &old);
-    assert_eq!(stale["error"], "stale", "{stale}");
+    let renamed = create(&f, &b, &old);
+    assert_eq!(
+        renamed["value"]["outcome"]["state"], "accepted",
+        "{renamed}"
+    );
     let list = projects(&f, &b);
     let other = list
         .iter()
@@ -131,8 +136,8 @@ fn two_project_creation_saved_draft_lost_ack_and_exact_cold_lookup_never_retarge
     deleted["draftId"] = json!(uuid::Uuid::new_v4().to_string());
     assert_eq!(create(&f, &b, &deleted)["error"], "stale");
     let stats = f.stats("stats");
-    assert_eq!(stats["sessions"], 2);
-    assert_eq!(stats["posts"], 2);
+    assert_eq!(stats["sessions"], 3);
+    assert_eq!(stats["posts"], 3);
     assert_eq!(stats["lookups"], 1);
     assert_eq!(stats["external"], 0);
     close(b);

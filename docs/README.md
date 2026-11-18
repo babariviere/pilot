@@ -48,8 +48,9 @@ After your first Start work, marking a task's result done finishes the task, and
 tasks that are ready, within the worker limit, Pause and Stop. A merged pull request of a task finishes it too.
 Coding work has two slots per isolated-copy project and four across Pilot. A project using your folder has
 one writer. Waiting shows dependency, capacity and uncertain-start reasons. An uncertain start keeps its slot;
-Pilot checks the original attempt instead of starting it again. Reviewed file scopes can run independently;
-shared or undeclared scopes take turns. Check combined changes before marking the result done.
+Pilot checks the original attempt instead of starting it again. Only tasks with overlapping declared files take
+turns; others run side by side. A chat that already ran never waits in this queue again. Check combined changes
+before marking the result done.
 Pause blocks new starts while agents save and stop. Pausing stays visible until confirmed.
 An agent's question offers Open discussion: recent context from that same agent, with the same reply and draft.
 Opening it creates no agent or second request. Ordinary thread comments queue; Interrupt… asks first, then
@@ -81,7 +82,9 @@ a read-only view of the old agreement, decisions, tasks, saved links and recent 
 Today also shows Working now below Needs you: active mission and standalone chats across the projects you can
 access. Each row names its project and current task, or says the purpose is unavailable. Chat bubbles open the
 exact chat without sending anything; Back keeps your Today draft and place. Show all reveals rows beyond four.
-Queued, waiting, held and finished chats stay out of this list. Earlier or unavailable reads never claim live work.
+Waiting, held and finished chats stay out of this list. Chats waiting for a coding slot show under it in Waiting,
+with their place in line and the chats using the slots; the chat page, feedback and task results say the same.
+Earlier or unavailable reads never claim live work.
 A mission's overview leads with its work: Now shows current work (working, in review, held or waiting
 for you), Next lists the plan's queue in order, and Blockers shows tasks that wait for earlier work,
 a Pause and decisions for you. Queued in plan is not a start: Pilot still checks permission, limits and holds.
@@ -108,6 +111,8 @@ Other projects' context and unrelated files are not included.
 Questions use the same form as interviews, with suggestions and your own words. Check answers,
 then Submit answers sends once; choosing or typing only keeps a draft. Start fix, linking a mission and
 Plan a new mission are your own steps; only you mark feedback resolved.
+When the look or behavior is unclear, the triage proposes a prototype. Start prototype makes 2-3 mockups,
+writes no code and asks you to choose on the feedback item; your choice, with its mockup, becomes the fix.
 Remove deletes one item and its steps after you confirm. Its chats and missions stay.
 Today's Needs you shows one question at a time. Other feedback waits under Up next; selecting it
 keeps the current question unanswered. Later keeps feedback aside across reopening this window;
@@ -126,13 +131,21 @@ Show earlier reads older items. A missing save reply holds only that item and it
 Check reads its receipt without sending again. Write another leaves it there while you send
 unrelated feedback. Put-aside drafts survive reopening; Resume draft swaps rather than
 overwrites your current words. Checking an earlier item never clears a different draft.
+
+The screen agent (Day): press Cmd+J, or choose Ask about this window in Cmd+K, to ask an agent about the
+window you are looking at. It reads the window's controls, takes a picture of it and can use its controls, but
+it never sends, starts, approves or saves anything in Pilot: it tells you which control to press. Point lets you
+click the control you mean first. Make feedback drafts feedback from the conversation; Send feedback is yours,
+and the conversation becomes that feedback's triage. Esc hides the bar; the conversation stays with the window.
 Open the triage chat or Open the fix chat shows that chat read only: your messages, Pilot's replies,
 one line per tool step and whether it works, finished or failed. A chat started from New, and a
 mission's coordinator, task and working chats on its overview, open the same way. Chat actions sit at the top
 right of their headers, separate from actions that start work. Reading a chat sends
 nothing.
-A stopped chat shows **Continue**. It asks the agent once to pick up where it stopped, or to ask a lost
-question again. A Continue that Pilot could not confirm shows Check and is never sent again.
+A stopped chat, or a failed one that is safe to retry, shows **Continue**, on its page, on Today's
+**Needs a look** and on a task result that has nothing yet. It asks the agent once to pick up where it
+stopped, or to ask a lost question again. A Continue that Pilot could not confirm shows Check and is never
+sent again. **Dismiss** takes a failed chat off Needs a look and sends nothing to it.
 
 | Feature                                         | Guide                                         |
 | ----------------------------------------------- | --------------------------------------------- |

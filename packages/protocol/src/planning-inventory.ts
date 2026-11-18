@@ -12,6 +12,11 @@ export interface PlanningInventoryItem {
 	planRevision: number | null;
 	/** The old mission this one re-plans, when it was planned as a re-plan. */
 	replaces?: MissionSuccessorLink;
+	/**
+	 * Planning is stuck: nothing moves without the user. `reply` when the planner ended its turn while the plan is
+	 * open, with its last message in `plannerSays` (it may be a request to the user in prose).
+	 */
+	stuck?: { line: string; reply?: true; plannerSays?: string };
 }
 
 /** A successful inventory is complete. Capacity and authority failures are non-2xx, not empty lists. */

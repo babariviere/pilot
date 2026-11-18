@@ -11,7 +11,7 @@ import { DATABASE_CONTROLS, DatabaseControls } from "./database-controls.ts";
 import { DeliveredArtifacts } from "./delivered-artifact.ts";
 import { diagnosticContextResponse } from "./diagnostic-context.ts";
 import { DIAGNOSTICS_CONTROLS, DiagnosticsControls } from "./diagnostics-controls.ts";
-import { Conflict, ServiceUnavailable } from "./errors.ts";
+import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import type { GitHubImportService } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
 import { GlobalUpdatePreparation } from "./global-update-preparation.ts";
@@ -35,7 +35,7 @@ import type { MissionStore } from "./missions.ts";
 import { MODEL_CONTROLS, ModelControls } from "./model-controls.ts";
 import type { ModelCatalog } from "./models.ts";
 import { NativeAttention } from "./native-attention.ts";
-import { CHAT_CONTINUE, NativeChat } from "./native-chat.ts";
+import { CHAT_CONTINUE, CHAT_DISMISS, CHAT_REPLY, NativeChat } from "./native-chat.ts";
 import { isIntakeOperation, NativeIntake } from "./native-intake.ts";
 import { isNativePlanningOperation, NativeMissionPlanning } from "./native-mission-planning.ts";
 import { NativeProjects, PROJECT_ACTION } from "./native-projects.ts";
@@ -55,6 +55,7 @@ import type { RuntimeContributor } from "./runtime-admission.ts";
 import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
 import { SCHEDULE_CONTROLS, ScheduleControls } from "./schedule-controls.ts";
 import type { ScheduleService } from "./schedules.ts";
+import { ScreenBroker } from "./screen-broker.ts";
 import { CommandRejected, type SessionManager } from "./sessions.ts";
 import type { SetupService } from "./setup.ts";
 import { SLACK_CONTROLS, SlackControls } from "./slack-controls.ts";
@@ -522,6 +523,8 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 			: undefined;
 	// Ready research questions start read-only research chats (D28), within existing limits.
 	planningWorkers?.startResearch();
+	// Builders whose turn ended with no result and no question before this start get their one reminder.
+	missions?.service.nudgeWaitingBuilders?.();
 	const missionThreads =
 		journal && missions
 			? new MissionThreads({ store: missions.store, journal, projects, sessions, workers: planningWorkers })
@@ -533,6 +536,16 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 			? new NativeIntake({ journal, tracking, projects, sessions, missions: missions?.store })
 			: undefined;
 	const nativeChat = journal ? new NativeChat({ journal, projects, sessions }) : undefined;
+	// Screen agent chats and the Day windows that answer them. Memory only.
+	const screen = new ScreenBroker({
+		requireScreenChat: (id) => {
+			const chat = sessions.get(id);
+			if (!chat) throw new NotFound("Unknown chat");
+			if (chat.role !== "screen") throw new Conflict("Only a screen agent chat can use a window");
+		},
+		readPicture: (ref) => attachments.read(ref),
+	});
+	sessions.screenCall = (sessionId, operation, signal) => screen.call(sessionId, operation, signal);
 	const nativeProjects =
 		journal && githubSetup && githubImport
 			? new NativeProjects({ journal, projects, setup: githubSetup, imports: githubImport })
@@ -734,6 +747,14 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 			if (!nativeChat) throw new Error("Continue outcome is unknown; Check only");
 			return nativeChat.continueChat(op, false);
 		}
+		if (op.kind === CHAT_REPLY) {
+			if (!nativeChat) throw new Error("Reply outcome is unknown; Check only");
+			return nativeChat.replyChat(op, false);
+		}
+		if (op.kind === CHAT_DISMISS) {
+			if (!nativeChat) throw new Error("Dismiss outcome is unknown; Check only");
+			return nativeChat.dismissChat(op, false);
+		}
 		if (isIntakeOperation(op.kind)) {
 			// Recovery is lookup-only; pending intake effects never enter again.
 			throw new Error("Intake outcome is unknown; check its saved receipt");
@@ -919,6 +940,7 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		modelControls,
 		diagnosticsControls,
 		scheduleControls,
+		screen,
 		close,
 	};
 }

@@ -416,6 +416,9 @@ pub fn problems(overview: &c::DayOverview) -> Vec<Problem> {
             let reason = &item.attention_reason;
             let cause = reason.detail.as_ref().filter(|s| !s.trim().is_empty()).or(item.reason.as_ref().filter(|s| !s.trim().is_empty())).cloned();
             let standalone = item.session_id.is_some() && item.mission_id.is_none();
+            let can_continue = item.session_id.is_some() && item.can_continue == Some(true);
+            let can_dismiss = item.session_id.is_some() && item.kind == "failed";
+            let can_reply = item.session_id.is_some() && reason.kind == "waits";
             let next_step = match reason.kind.as_str() {
                 "mcp" => "Sign in to the service named above, then check the originating work.",
                 "limit" => "Check the usage limit before choosing whether to continue.",
@@ -427,6 +430,9 @@ pub fn problems(overview: &c::DayOverview) -> Vec<Problem> {
                 "tool_stall" | "long_job" => "Inspect the running work before stopping or continuing it.",
                 "no_pr" if standalone => "Its chat finished with changes but no pull request. See the work, then mark it done or send it back.",
                 "no_pr" => "Its task finished with changes but no pull request. Open the mission to see the work.",
+                "waits" => "Reply to it, or Continue to let it go on without your words.",
+                _ if can_continue => "Continue asks it to try again, once. Or dismiss it.",
+                _ if can_dismiss => "Read its work to choose what to do next, or dismiss it.",
                 _ => "Inspect the originating work before choosing how to continue. Nothing is retried here.",
             };
             Problem {
@@ -438,6 +444,10 @@ pub fn problems(overview: &c::DayOverview) -> Vec<Problem> {
                 project_id: overview.project_id.clone(),
                 session_id: item.session_id.clone(),
                 task_id: None,
+                can_continue,
+                can_dismiss,
+                says: item.says.clone().filter(|s| can_reply && !s.trim().is_empty()),
+                can_reply,
             }
         }).collect()
     })
@@ -1418,6 +1428,8 @@ mod tests {
             mission_id: Some("native".into()),
             reason: None,
             counts_in_badge: None,
+            can_continue: None,
+            says: None,
             attention_reason: c::AttentionReason {
                 kind: reason.into(),
                 detail: Some(format!("Cause {id}")),
@@ -1463,6 +1475,83 @@ mod tests {
         assert!(desk.today().problems_known);
     }
 
+    /// A failed chat is never a dead end: Continue when the service says a retry
+    /// is safe, and Dismiss always. Other rows offer neither.
+    #[test]
+    fn failed_rows_offer_continue_and_dismiss() {
+        let mut overview = crate::fixture::world(crate::model::Scenario::Decisions)
+            .overview
+            .unwrap();
+        let row = |id: &str, kind: &str, can_continue: Option<bool>| c::NeedsYouItem {
+            id: id.to_owned(),
+            kind: kind.to_owned(),
+            title: id.to_owned(),
+            session_id: Some(format!("chat-{id}")),
+            can_continue,
+            attention_reason: c::AttentionReason {
+                kind: kind.into(),
+                detail: Some("Model request (x): Allowance hold".into()),
+            },
+            ..Default::default()
+        };
+        overview.dashboard.needs_you = Some(c::Section {
+            total: 3,
+            items: vec![
+                row("retry", "failed", Some(true)),
+                row("stuck", "failed", None),
+                row("asks", "asks", None),
+            ],
+        });
+        let rows = problems(&overview);
+        let flags: Vec<_> = rows
+            .iter()
+            .map(|p| (p.id.as_str(), p.can_continue, p.can_dismiss))
+            .collect();
+        assert_eq!(
+            flags,
+            [
+                ("retry", true, true),
+                ("stuck", false, true),
+                ("asks", false, false)
+            ]
+        );
+        assert!(
+            rows[0]
+                .next_step
+                .starts_with("Continue asks it to try again")
+        );
+        assert!(!rows[1].next_step.contains("Nothing is retried here"));
+    }
+
+    /// A chat that ended its turn with a request in prose shows its words, Reply and Continue.
+    #[test]
+    fn waiting_rows_offer_reply_with_the_last_message() {
+        let mut overview = crate::fixture::world(crate::model::Scenario::Decisions)
+            .overview
+            .unwrap();
+        overview.dashboard.needs_you = Some(c::Section {
+            total: 1,
+            items: vec![c::NeedsYouItem {
+                id: "session:w".into(),
+                kind: "question".into(),
+                title: "Builder".into(),
+                session_id: Some("w".into()),
+                mission_id: Some("m".into()),
+                can_continue: Some(true),
+                says: Some("Does the mockup look right?".into()),
+                attention_reason: c::AttentionReason {
+                    kind: "waits".into(),
+                    detail: Some("It may be waiting for your reply.".into()),
+                },
+                ..Default::default()
+            }],
+        });
+        let row = &problems(&overview)[0];
+        assert!(row.can_reply && row.can_continue && !row.can_dismiss);
+        assert_eq!(row.says.as_deref(), Some("Does the mockup look right?"));
+        assert!(row.next_step.starts_with("Reply to it"));
+    }
+
     #[test]
     fn problems_offer_only_readable_chat_results_and_no_filler() {
         let mut overview = crate::fixture::world(crate::model::Scenario::Decisions)
@@ -1477,6 +1566,8 @@ mod tests {
                 mission_id: mission.map(str::to_owned),
                 reason: None,
                 counts_in_badge: None,
+                can_continue: None,
+                says: None,
                 attention_reason: c::AttentionReason {
                     kind: kind.into(),
                     detail: detail.map(str::to_owned),

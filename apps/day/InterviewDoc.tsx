@@ -16,7 +16,7 @@ import {
 	unsaved,
 } from "./planCommands";
 import type { Plans } from "./planning";
-import { answerKey, answerMessages, planMessages, submitting } from "./planView";
+import { answerKey, answerMessages, keptAnswers, planMessages, submitting } from "./planView";
 import { HELP_KEYS, QuestionHelp, RoundNotes, toggleQuestionHelp } from "./QuestionHelp";
 
 export { place } from "./InterviewRenderer";
@@ -51,6 +51,7 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 						text: answerText(interview, q),
 						unsaved: unsaved(interview, q),
 						message: answerMessages()[answerKey(interview, q)] ?? "",
+						kept: keptAnswers()[answerKey(interview, q)],
 					},
 				]),
 			),

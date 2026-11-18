@@ -54,6 +54,8 @@ export interface SlackControls {
 	message(): string;
 	unknown(): { operationId: string }[];
 	read(offset?: number): Promise<void>;
+	/** Whether the last read failed. Pilot then reads again on its own (freshness.ts). */
+	readFailed?(): boolean;
 	write(action: "save" | "import" | "report" | "group", value: unknown, binding: string): Promise<boolean>;
 	check(id: string): Promise<void>;
 	setAside(id: string): Promise<void>;
@@ -63,7 +65,8 @@ export function connectedSlackControls(window: string, changed: () => void): Sla
 	const snapshot = signal<SlackSnapshot | null>(null),
 		busy = signal(false),
 		message = signal(""),
-		unknown = signal<{ operationId: string }[]>([]);
+		unknown = signal<{ operationId: string }[]>([]),
+		readFailed = signal(false);
 	let again = false;
 	async function request(name: string, args: unknown): Promise<boolean> {
 		if (busy()) {
@@ -73,10 +76,13 @@ export function connectedSlackControls(window: string, changed: () => void): Sla
 		busy.set(true);
 		try {
 			const r = await call<SlackSnapshot | null>(window, `day.slack.${name}`, args);
+			if (name === "read") readFailed.set(!r.ok);
 			if (!r.ok) {
 				message.set(
 					name === "read"
-						? "Slack could not be read. The last saved view stays visible."
+						? snapshot()
+							? ""
+							: "Slack could not be read yet. Pilot keeps trying."
 						: r.refusal === "stale"
 							? "Project settings changed. Read again; your draft stays."
 							: "Could not confirm this action. Read again and check its receipt. Nothing is sent again.",
@@ -123,6 +129,7 @@ export function connectedSlackControls(window: string, changed: () => void): Sla
 		busy,
 		message,
 		unknown,
+		readFailed,
 		read: async (offset = snapshot()?.reports?.offset ?? 0) => {
 			await request("read", { offset });
 		},

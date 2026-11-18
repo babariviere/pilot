@@ -174,7 +174,7 @@ pub(super) async fn read(
                     state.reason = if state.pages.rows.is_empty() {
                         "Pilot could not read the planning chat. Nothing was sent.".into()
                     } else {
-                        "Pilot could not read the newest part of the planning chat. What shows is from an earlier read.".into()
+                        "Pilot could not read the newest part of the planning chat.".into()
                     };
                 }
             }

@@ -1181,6 +1181,18 @@ test("workers on a user-coordinated mission show screen work before building it"
 		assert.doesNotMatch(missionPrompt(other), /Screen work/);
 });
 
+test("builders on a user-coordinated mission ask with ask_user, not prose, and deliver again after a send-back", () => {
+	assert.match(missionPrompt(mission), /Never end your turn with a request to the user in prose: ask with `ask_user`/);
+	assert.match(missionPrompt(mission), /sends your result back, change the work and deliver it again/);
+	for (const other of [
+		{ ...mission, coordinator: "self" as const },
+		{ ...mission, role: "explorer" as const },
+		{ ...mission, role: "reviewer" as const },
+		{ ...mission, thread: { topicId: "t", title: "Today agents" } },
+	])
+		assert.doesNotMatch(missionPrompt(other), /request to the user in prose/);
+});
+
 test("a thread chat interviews, shows mockups and hands off only after the user says yes", () => {
 	const prompt = missionPrompt({ ...mission, role: "explorer", thread: { topicId: "t", title: "Today agents" } });
 	assert.match(prompt, /thread chat for the thread "Today agents"/);

@@ -184,6 +184,16 @@ export class MissionControlStore {
 		);
 		return row ? JSON.parse(String(row.record)) : undefined;
 	}
+	/** The newest report from `sessionId` on this task with a delivery. One row parsed. */
+	latestDeliveryReport(missionId: string, taskId: string, sessionId: string): MissionReport | undefined {
+		const row = this.port.one(
+			"SELECT record FROM mission_reports WHERE mission_id=? AND task_id=? AND json_extract(record,'$.sessionId')=? AND json_extract(record,'$.write.delivery') IS NOT NULL ORDER BY rowid DESC LIMIT 1",
+			missionId,
+			taskId,
+			sessionId,
+		);
+		return row ? JSON.parse(String(row.record)) : undefined;
+	}
 	/** Each project task's latest report with screen pairs, per reporting chat, in one indexed read. */
 	projectScreensReports(projectId: string): MissionReport[] {
 		return this.port

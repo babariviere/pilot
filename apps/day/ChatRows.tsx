@@ -4,6 +4,7 @@
 // rows before what shows; it sends nothing.
 import { Text, View } from "nsh";
 import type { ChatRow } from "pilot-day/native";
+import { keepRead, staleLine } from "./freshness";
 import { Action, Mark, MarkLine } from "./ui";
 
 /** What the transcript needs of a chat as read. */
@@ -21,8 +22,22 @@ export function ChatTranscript(props: {
 	/** Said when the chat has no rows. */
 	emptyWords: string;
 	onEarlier: () => void;
+	/** Reads the chat's newest rows again: Pilot does so on its own after a failed read. */
+	read?: () => Promise<unknown>;
 }) {
 	const chat = () => props.chat;
+	const reads = keepRead(
+		() => props.read?.() ?? Promise.resolve(),
+		() => !!props.read && !!chat()?.reason,
+		() => (chat()?.rows.length ?? 0) > 0,
+	);
+	// With rows shown, a failed read says nothing until the shared old-data rule does.
+	const reason = () => {
+		const c = chat();
+		if (!c?.reason) return "";
+		if (c.rows.length === 0) return c.reason;
+		return reads.stale() ? staleLine(reads.readAt() ?? 0) : "";
+	};
 	return (
 		<View class="gap-3">
 			<If when={chat()?.more}>
@@ -35,10 +50,10 @@ export function ChatTranscript(props: {
 					/>
 				</View>
 			</If>
-			<If when={chat()?.reason}>
+			<If when={reason()}>
 				<MarkLine kind="unknown">
 					<Text testID={`${props.id}-off`} class="text-sm text-muted-foreground">
-						{chat()?.reason ?? ""}
+						{reason()}
 					</Text>
 				</MarkLine>
 			</If>

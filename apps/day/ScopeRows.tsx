@@ -34,6 +34,10 @@ export type TodayScope = {
 	showsOwn: () => boolean;
 	/** Other projects in the scope, read. Empty while unread or unavailable. */
 	others: () => ScopeProject[];
+	/** The chosen project's row in the scope read, when one project is chosen. */
+	chosen: () => ScopeProject | null;
+	/** The window moves to the chosen project, and its own read of it is on its way. */
+	arriving: () => boolean;
 	/** Whether rows name their project: All projects with other projects shown. */
 	tagged: () => boolean;
 	/** Every project the user can choose, by ID and name: the scope read's list, else New's. */
@@ -49,8 +53,6 @@ export function todayScope(day: Day, plans?: Plans): TodayScope {
 	if (day.scope && plans && untracked(() => plans.chats.view().availability) === "reading") {
 		void plans.chats.source.read();
 	}
-	// The native root names the project the window acts on in its scope read; else the project list does.
-	const own = () => day.scope?.view().snapshot?.own ?? chats()?.current ?? null;
 	// A profile-only window has no own-project rows. Its catalog still scopes Today.
 	const on = () => !!day.scope;
 	const scope = () => (on() ? todayProject() : "all");
@@ -58,12 +60,39 @@ export function todayScope(day: Day, plans?: Plans): TodayScope {
 		const s = day.scope?.view().snapshot;
 		return s && s.scope === scope() ? s : null;
 	};
+	// The project Today's own read is of. Empty when the read names none (mock worlds, test roots).
+	const desk = () => day.today().project ?? "";
+	// The project the window acts on: the one Today's own read is of. Else the
+	// native root names it in the read of this scope; else the project list.
+	// A scope read can be an earlier one kept for this scope, so its `own`
+	// may be older than Today's own read.
+	const own = () => (desk() || null) ?? snapshot()?.own ?? chats()?.current ?? null;
+	// Today's own read shows only under its own project: right after a switch,
+	// it may still hold the previous project's rows. A read naming none is trusted.
+	const deskIs = (id: string) => desk() === "" || desk() === id;
+	// ... and only once it holds a read of that project, not the empty one a switch starts with.
+	const deskReady = (id: string) => deskIs(id) && day.today().freshness.state !== "unreadable";
 	const name = (id: string) =>
 		snapshot()?.projects.find((p) => p.id === id)?.name ??
 		chats()?.projects.find((p) => p.projectId === id)?.name ??
 		"a project";
-	const showsOwn = () => !on() || (own() !== null && (scope() === "all" || scope() === own()));
-	const others = () => (snapshot()?.projects ?? []).filter((p) => p.selected && p.id !== own());
+	const showsOwn = () => {
+		if (!on()) return true;
+		const id = own();
+		return id !== null && (scope() === "all" || scope() === id) && deskReady(id);
+	};
+	// The window is moving to the chosen project: the root names it as the one
+	// the window acts on, but Today's own read of it has not landed yet.
+	const arriving = () =>
+		on() && scope() !== "all" && !showsOwn() && (snapshot()?.own === scope() || desk() === scope());
+	// Under All projects: every selected project but the window's own sections.
+	// Under one project: none while the window moves there (its own read
+	// follows), else that project read only, for a window that acts on another.
+	const others = () => {
+		if (scope() !== "all" && arriving()) return [];
+		const shown = showsOwn() ? own() : null;
+		return (snapshot()?.projects ?? []).filter((p) => p.selected && p.id !== shown);
+	};
 	const projects = () => {
 		const read = day.scope?.catalog() ?? [];
 		if (read.length > 0) return read;
@@ -76,6 +105,8 @@ export function todayScope(day: Day, plans?: Plans): TodayScope {
 		name,
 		showsOwn,
 		others,
+		arriving,
+		chosen: () => (scope() === "all" ? null : (snapshot()?.projects.find((p) => p.id === scope()) ?? null)),
 		tagged: () => scope() === "all" && others().length > 0,
 		projects,
 		offReason: () => {
@@ -184,12 +215,15 @@ export function ScopeNote(props: { day: Day; ctx: TodayScope }) {
 		if (props.ctx.showsOwn()) return `Showing ${name}.`;
 		if (!v || v.state === "reading") return `Reading ${name}…`;
 		if (!snapshot()) return `Pilot cannot show ${name} here. ${v.reason}`;
-		return `Showing ${name}.`;
+		if (!props.ctx.arriving()) return `Showing ${name}.`;
+		// The window moves to the chosen project; its own read is on its way.
+		return props.day.freshness?.warn() ? `Pilot could not read ${name} yet. It keeps trying.` : `Reading ${name}…`;
 	};
 	const elsewhere = () => {
 		if (all()) return "";
 		const v = view();
-		if (!v || v.state === "reading") return "";
+		// The first read of a switch counts nothing elsewhere yet: the complete read follows.
+		if (!v || v.state === "reading" || snapshot()?.partial) return "";
 		const line = snapshot()
 			? elsewhereLine(snapshot()?.outsideNeedsYou ?? null)
 			: "Pilot cannot count what needs you in other projects here yet.";
@@ -519,7 +553,7 @@ export function OtherToCheck(props: { ctx: TodayScope; nested?: boolean }) {
 			<View class="gap-1" testID="scope-to-check">
 				<If when={props.nested} else={<SectionTitle title="To check" />}>
 					<Text role="header" class="pb-0.5 text-xs font-medium text-muted-foreground">
-						To check in other projects
+						{props.ctx.scope() === "all" ? "To check in other projects" : "To check"}
 					</Text>
 				</If>
 				<Each of={shown()} key={(p) => p.id}>
@@ -546,7 +580,11 @@ export function OtherToCheck(props: { ctx: TodayScope; nested?: boolean }) {
 								</Text>
 							</If>
 							<If when={rows(p()).length > 0}>
-								<Text class="text-xs text-faint">Choose this project above to check its results here.</Text>
+								<Text class="text-xs text-faint">
+									{props.ctx.scope() === "all"
+										? "Choose this project above to check its results here."
+										: "This window acts on another project, so it cannot check these here."}
+								</Text>
 							</If>
 						</View>
 					)}
@@ -579,7 +617,7 @@ export function scopedHeadline(ctx: TodayScope): string {
 		const n = projects.reduce((sum, p) => sum + (p.needsYou.count ?? 0), 0);
 		return n === 0 ? "Nothing needs you." : needsWords(n, "across your projects");
 	}
-	const p = ctx.others()[0];
+	const p = ctx.chosen();
 	if (!p) return `${ctx.name(ctx.scope())} is not shown.`;
 	if (!p.today) return `${p.name} could not be read.`;
 	const n = p.needsYou.count;

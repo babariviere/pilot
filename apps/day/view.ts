@@ -251,10 +251,28 @@ export function queue(today: Today): Item[] {
 	];
 }
 
-/** The item in front: the one the user brought forward, else the first. */
+/**
+ * The card the user started answering (a field took the focus). It stays in
+ * front while it waits, so a new arrival or a read in another order never
+ * swaps it for another card under the user's typing.
+ */
+const engaged = signal<string | null>(null);
+
+/** The item in front: the one the user brought forward, else the one the user is answering, else the first. */
 export function front(today: Today): Item | undefined {
 	const all = queue(today);
-	return all.find((item) => item.id === focused()) ?? all[0];
+	return all.find((item) => item.id === focused()) ?? all.find((item) => item.id === engaged()) ?? all[0];
+}
+
+/** The user started answering card `id`: it keeps the front while it waits. */
+export function holdFront(id: string) {
+	if (engaged() !== id) engaged.set(id);
+}
+
+/** Lets the first waiting item take the front again, as after Later. */
+export function releaseFront() {
+	engaged.set(null);
+	focused.set(null);
 }
 
 /** Brings the item `step` places from the front forward, around the ends, and gives it the keyboard focus. */
@@ -324,7 +342,7 @@ export function resetTodayView() {
 	messages.set({});
 	asking.set({});
 	controlMessages.set({});
-	focused.set(null);
+	releaseFront();
 	route.set(null);
 	confirming.set(null);
 }

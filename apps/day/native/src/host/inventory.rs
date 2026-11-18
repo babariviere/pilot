@@ -63,12 +63,14 @@ impl NativeHost {
                         .as_ref()
                         .is_some_and(|(_, _, error)| error.is_some_and(|e| e != Error::Stale))
                 {
-                    "Planning read failed. Showing the earlier complete read; read again.".into()
+                    "Pilot could not read the missions in planning. It keeps trying.".into()
                 } else {
-                    "Reading changes. Showing the earlier complete planning read.".into()
+                    // An ordinary change: the next read follows, with nothing to say.
+                    String::new()
                 }
             } else {
-                "Planning missions could not be read. Read again; nothing was started.".into()
+                "Pilot could not read the missions in planning. It keeps trying; nothing was started."
+                    .into()
             },
             can_create: setup.is_some(),
             create_reason: if setup.is_some() {

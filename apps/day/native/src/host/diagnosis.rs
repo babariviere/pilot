@@ -268,6 +268,7 @@ async fn handle_inner(
             if !revoke && operations(t, j).iter().any(|r| r["pending"] == true) {
                 return Err(Error::Unknown);
             }
+            let mut binding = i.binding.clone();
             if revoke {
                 t.profile_gate().await?;
                 check()?;
@@ -277,7 +278,14 @@ async fn handle_inner(
                 let current = read(t).await?;
                 check()?;
                 if current["binding"] != i.binding {
-                    return Err(Error::Stale);
+                    // The binding also hashes every chat and model. When only those moved,
+                    // the settings the user edits are the same: save against the current read.
+                    binding = shared
+                        .shown_settings
+                        .rebind(KIND, &i.binding, &current, |v| {
+                            super::shown::without(v, &["chats", "models"])
+                        })
+                        .ok_or(Error::Stale)?;
                 }
                 let s = &current["settings"];
                 if s["localDiagnostics"] == false
@@ -294,12 +302,8 @@ async fn handle_inner(
             }
             let mut payload = serde_json::to_value(i).map_err(|_| Error::Invalid)?;
             payload["purpose"] = json!(KIND);
-            let mut r = planning::record(
-                &t.source,
-                "global-diagnostics".into(),
-                i.binding.clone(),
-                payload,
-            )?;
+            payload["binding"] = json!(binding);
+            let mut r = planning::record(&t.source, "global-diagnostics".into(), binding, payload)?;
             j.save_planning(r.clone())?;
             if let Err(e) = t.local().and_then(|_| check()) {
                 r.not_sent = true;
@@ -348,6 +352,9 @@ async fn handle_inner(
     } else {
         read(t).await
     };
+    if let Ok(v) = &snapshot {
+        shared.shown_settings.remember(KIND, v);
+    }
     if matches!(command, Command::DiagnosisRead) {
         check()?;
         return Ok(json!({"snapshot":snapshot?,"operations":operations(t,j)}));

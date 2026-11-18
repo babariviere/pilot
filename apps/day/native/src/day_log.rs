@@ -311,17 +311,32 @@ fn line(event: &str, fields: Value) -> Vec<u8> {
             | "js.warning" | "native.error" | "native.warning" | "ui.error" | "forms.unsaved" => {
                 event
             }
+            // How long a project switch took to show the chosen project, and
+            // why a scope read was refused.
+            "scope.switch" | "scope.read_refused" => event,
             _ => "other",
         }
         .into(),
     );
-    for key in ["generation", "protocol"] {
+    for key in ["generation", "protocol", "ms"] {
         if let Some(v) = fields
             .get(key)
             .filter(|v| v.as_u64().is_some_and(|n| n <= 9_007_199_254_740_991))
         {
             line.insert(key.into(), v.clone());
         }
+    }
+    if let Some(cause) = fields["cause"]
+        .as_str()
+        .filter(|c| matches!(*c, "catalog_changed" | "project_gone"))
+    {
+        line.insert("cause".into(), cause.into());
+    }
+    // A method or read name only, such as "day.delivery.read": letters and dots, never content.
+    if let Some(command) = fields["command"].as_str().filter(|c| {
+        !c.is_empty() && c.len() <= 48 && c.bytes().all(|b| b.is_ascii_alphabetic() || b == b'.')
+    }) {
+        line.insert("command".into(), command.into());
     }
     for key in ["wasConnected", "update"] {
         if let Some(v) = fields.get(key).filter(|v| v.is_boolean()) {

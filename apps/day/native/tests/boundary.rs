@@ -128,6 +128,8 @@ fn exports_are_feeds_and_the_local_exporter_without_transport_or_paths() {
     let mut without_read_context = ts.clone();
     for (name, field) in [
         ("ChatChoice", "  projectId: string;\n"),
+        // An uncertain creation names the project it was started in (the last field).
+        ("NewCreation", "\n  projectId: string;"),
         ("Problem", "  projectId: string;\n"),
         ("MissionPage", "  coordinatorSessionId?: string | null;\n"),
     ] {

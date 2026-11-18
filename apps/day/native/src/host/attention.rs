@@ -355,11 +355,12 @@ pub(super) async fn read(t: &Transport, shared: &Shared, epoch: u64) -> Result<V
         ) {
             *read = None;
         } else if let Some(value) = read.as_mut() {
-            value["readError"] = json!(if error == Error::Stale {
-                "Reading changes. Showing the earlier attention read."
-            } else {
-                "Attention read failed. Showing the earlier read, not a current list."
-            });
+            // A read that raced a newer change is not a failure: the moved
+            // epoch already marks this read as not current, and the next
+            // read follows.
+            if error != Error::Stale {
+                value["readError"] = json!("Pilot could not read what needs you.");
+            }
         }
         drop(read);
         shared.change(|_| ());
@@ -469,7 +470,161 @@ pub(super) async fn handle(
                     draft.value,
                 );
         }
-        super::Work::AttentionSend(mut request) => {
+        super::Work::AttentionSend(request) => {
+            // A refusal only because the read moved on (a mission notice raised the read fence, or
+            // the authority digest around the target moved) sends the same answer again, rebound
+            // to the newest read, as a new operation. A changed or gone target stops at once.
+            // Unknown never comes back here: it is never resent.
+            let mut request = request;
+            let mut epoch = epoch;
+            let mut attempt = 1;
+            loop {
+                match send_once(t, journal, shared, epoch, request.clone()).await {
+                    Err(Error::Stale) => {}
+                    other => return other,
+                }
+                // The window moved to another project: this answer is not sent there.
+                if shared
+                    .focus
+                    .lock()
+                    .expect("native focus poisoned")
+                    .as_ref()
+                    .is_some_and(|p| t.source.project.as_ref() != Some(p))
+                {
+                    return Err(Error::Stale);
+                }
+                let Some(wait) = retry_after(attempt) else {
+                    return Ok(shared.outcome(OutcomeStatus::Stale, exhausted(&request)));
+                };
+                tokio::time::sleep(wait).await;
+                attempt += 1;
+                // The newest read under the current fence; the target is checked again against it.
+                epoch = shared.epoch.load(std::sync::atomic::Ordering::SeqCst);
+                let current = read(t, shared, epoch).await?;
+                request = match rebind(&request, &current) {
+                    Ok(next) => next,
+                    Err(changed) => return Ok(shared.outcome(OutcomeStatus::Stale, changed)),
+                };
+            }
+        }
+        super::Work::AttentionCheck(id) => {
+            let mut record = journal
+                .attention
+                .get(&id)
+                .filter(|r| r.source == t.source)
+                .cloned()
+                .ok_or(Error::Unknown)?;
+            // Navigation has no durable OS-open receipt. Never repeat it, including on lookup.
+            if record.request["kind"] != "resource" && record.pending() {
+                t.gate(false).await?;
+                shared.open()?;
+                let reply = t.attention_call(&record.request, true).await?;
+                exact(&record.request, &reply)?;
+                record.receipt = Some(reply);
+                journal.save_attention(record.clone())?;
+                publish(shared, &record);
+            }
+            if record.pending() {
+                return Err(Error::Unknown);
+            }
+            return Ok(shared.outcome(
+                record_status(&record),
+                "Exact receipt lookup only. No send, navigation or continuation.",
+            ));
+        }
+        _ => return Err(Error::Invalid),
+    }
+    Ok(shared.outcome(
+        OutcomeStatus::Accepted,
+        "Attention read or draft saved. No completion or continuation.",
+    ))
+}
+
+/// How many times one user action is sent when only the surrounding read moved: the first send
+/// and two more. Each try costs two service reads; three tries cover a mission whose members are
+/// busy for about a second, and the user waits at most about 3 s before Pilot says so.
+const ATTEMPTS: u32 = 3;
+
+/// The pause before try "attempt" + 1, or None once every try is used.
+fn retry_after(attempt: u32) -> Option<std::time::Duration> {
+    (attempt < ATTEMPTS).then(|| std::time::Duration::from_millis(250 * u64::from(attempt)))
+}
+
+const ANSWER_GONE: &str =
+    "This question is no longer waiting. Nothing was sent; your answer stays.";
+const ANSWER_CHANGED: &str = "This question changed before Pilot could send your answer. Nothing was sent; your answer stays. Read it again.";
+const ACTION_CHANGED: &str = "This request changed before Pilot could send. Nothing was sent; your words stay. Read it again.";
+
+/// What Pilot says when every try met a read that had moved on again.
+fn exhausted(request: &Value) -> &'static str {
+    if matches!(request["kind"].as_str(), Some("answer" | "help")) {
+        "Pilot tried 3 times, but the mission kept changing around this question. Nothing was sent; your answer stays. Try again in a moment."
+    } else {
+        "Pilot tried 3 times, but the mission kept changing around this request. Nothing was sent; your words stay. Try again in a moment."
+    }
+}
+
+/// "request" bound to "read" when the exact target is unchanged: the same question (chat, entry,
+/// event and content) or the same action (id, revision and digest). Only the authority digest,
+/// which follows the mission and chat around it, may differ. Anything else says what changed.
+fn rebind(request: &Value, read: &Value) -> Result<Value, &'static str> {
+    let mut next = request.clone();
+    match request["kind"].as_str() {
+        Some(kind @ ("answer" | "help")) => {
+            let scope = if kind == "answer" {
+                &request["scope"]
+            } else {
+                &request["request"]["scope"]
+            };
+            let current = read["questions"]
+                .as_array()
+                .and_then(|q| q.iter().find(|q| q["scope"]["subject"] == scope["subject"]))
+                .map(|q| &q["scope"])
+                .ok_or(ANSWER_GONE)?;
+            if ["projectId", "eventId", "contentDigest"]
+                .iter()
+                .any(|k| current[*k] != scope[*k])
+            {
+                return Err(ANSWER_CHANGED);
+            }
+            if kind == "answer" {
+                next["scope"] = current.clone();
+            } else {
+                next["request"]["scope"] = current.clone();
+            }
+        }
+        Some(kind @ ("action" | "resource")) => {
+            let expected = if kind == "resource" {
+                &request["expected"]
+            } else {
+                &request["command"]["expected"]
+            };
+            let current = read["actions"]
+                .as_array()
+                .and_then(|a| a.iter().find(|a| a["record"]["id"] == expected["id"]))
+                .ok_or(ACTION_CHANGED)?;
+            if current["record"]["revision"] != expected["revision"]
+                || current["record"]["digest"] != expected["digest"]
+            {
+                return Err(ACTION_CHANGED);
+            }
+            next["authorityDigest"] = current["authorityDigest"].clone();
+        }
+        _ => return Err(ACTION_CHANGED),
+    }
+    Ok(next)
+}
+
+/// One try: qualify, journal with a new operation ID, re-read after fsync, then send once.
+async fn send_once(
+    t: &Transport,
+    journal: &mut super::Journal,
+    shared: &Shared,
+    epoch: u64,
+    mut request: Value,
+) -> Result<crate::model::IntentOutcome, Error> {
+    {
+        {
             let shown = shared
                 .attention
                 .lock()
@@ -538,14 +693,14 @@ pub(super) async fn handle(
             // Re-read after fsync; a queued event or permission change must stop a first send.
             let check = read(t, shared, epoch)
                 .await
-                .and_then(|r| qualifies(&record.request, &r));
+                .and_then(|r| qualifies(&record.request, &r))
+                .and_then(|()| shared.current(epoch));
             if let Err(e) = check {
                 record.not_sent = true;
                 journal.save_attention(record.clone())?;
                 publish(shared, &record);
                 return Err(e);
             }
-            shared.current(epoch)?;
             if let Ok(reply) = t.attention_call(&record.request, false).await
                 && exact(&record.request, &reply).is_ok()
             {
@@ -586,37 +741,7 @@ pub(super) async fn handle(
             let status = record_status(&record);
             return Ok(shared.outcome(status,"Exact attention result saved. Completion reports do not verify publication or start work."));
         }
-        super::Work::AttentionCheck(id) => {
-            let mut record = journal
-                .attention
-                .get(&id)
-                .filter(|r| r.source == t.source)
-                .cloned()
-                .ok_or(Error::Unknown)?;
-            // Navigation has no durable OS-open receipt. Never repeat it, including on lookup.
-            if record.request["kind"] != "resource" && record.pending() {
-                t.gate(false).await?;
-                shared.open()?;
-                let reply = t.attention_call(&record.request, true).await?;
-                exact(&record.request, &reply)?;
-                record.receipt = Some(reply);
-                journal.save_attention(record.clone())?;
-                publish(shared, &record);
-            }
-            if record.pending() {
-                return Err(Error::Unknown);
-            }
-            return Ok(shared.outcome(
-                record_status(&record),
-                "Exact receipt lookup only. No send, navigation or continuation.",
-            ));
-        }
-        _ => return Err(Error::Invalid),
     }
-    Ok(shared.outcome(
-        OutcomeStatus::Accepted,
-        "Attention read or draft saved. No completion or continuation.",
-    ))
 }
 
 fn record_status(record: &Record) -> crate::model::OutcomeStatus {
@@ -767,5 +892,54 @@ mod tests {
         );
         drop(journal);
         std::fs::remove_file(path).unwrap();
+    }
+
+    fn question(entry: u64, content: &str, authority: &str) -> Value {
+        json!({"scope":{"subject":{"kind":"question","sessionId":"s","entryId":entry},"projectId":"p",
+            "eventId":entry,"contentDigest":content,"authorityDigest":authority}})
+    }
+
+    #[test]
+    fn an_unchanged_question_is_rebound_to_the_newest_authority() {
+        let shown = json!({"questions":[question(12, "c", "a1")]});
+        let answer =
+            json!({"kind":"answer","scope":shown["questions"][0]["scope"],"message":"Yes"});
+        // Members worked: only the authority around the same question moved.
+        let moved = json!({"questions":[question(12, "c", "a2")]});
+        assert_eq!(qualifies(&answer, &moved), Err(Error::Stale));
+        let next = rebind(&answer, &moved).unwrap();
+        assert_eq!(next["scope"]["authorityDigest"], "a2");
+        assert_eq!(next["message"], "Yes");
+        assert_eq!(qualifies(&next, &moved), Ok(()));
+        // A help question about it is rebound the same way.
+        let help = json!({"kind":"help","request":{"kind":"simpler","scope":shown["questions"][0]["scope"]}});
+        assert_eq!(
+            rebind(&help, &moved).unwrap()["request"]["scope"]["authorityDigest"],
+            "a2"
+        );
+    }
+
+    #[test]
+    fn a_changed_or_gone_target_is_refused_and_says_what_changed() {
+        let answer =
+            json!({"kind":"answer","scope":question(12, "c", "a1")["scope"],"message":"Yes"});
+        let reworded = json!({"questions":[question(12, "other", "a1")]});
+        assert_eq!(rebind(&answer, &reworded), Err(ANSWER_CHANGED));
+        let answered = json!({"questions":[question(13, "c", "a1")]});
+        assert_eq!(rebind(&answer, &answered), Err(ANSWER_GONE));
+        let action = json!({"kind":"action","authorityDigest":"a1",
+            "command":{"kind":"progress","expected":{"id":"upload","revision":2,"digest":"d"}}});
+        let same = json!({"actions":[{"record":{"id":"upload","revision":2,"digest":"d"},"authorityDigest":"a2"}]});
+        assert_eq!(rebind(&action, &same).unwrap()["authorityDigest"], "a2");
+        let replaced = json!({"actions":[{"record":{"id":"upload","revision":3,"digest":"e"},"authorityDigest":"a2"}]});
+        assert_eq!(rebind(&action, &replaced), Err(ACTION_CHANGED));
+    }
+
+    #[test]
+    fn retries_stop_after_three_tries_with_a_clear_message() {
+        assert_eq!(retry_after(1), Some(std::time::Duration::from_millis(250)));
+        assert_eq!(retry_after(2), Some(std::time::Duration::from_millis(500)));
+        assert_eq!(retry_after(ATTEMPTS), None);
+        assert!(exhausted(&json!({"kind":"answer"})).starts_with("Pilot tried 3 times"));
     }
 }

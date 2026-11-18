@@ -7,6 +7,7 @@ import { signal } from "nsh";
 import { MAX_PREVIEWS } from "./artifactReads";
 import { type ArtifactSelection, artifactSelection, samePin } from "./deliveryArtifact";
 import type { PublicationRecord } from "./deliveryBridge";
+import { queueLine, queueOf } from "./codingQueue";
 import type {
 	AgentWork,
 	ArtifactLink,
@@ -562,6 +563,41 @@ export function prObservation(r: PR): string {
 			? `Checks failed${failed.names?.length ? `: ${failed.names.join(", ")}` : ""}.`
 			: `Readiness ${health.state}.`;
 	return `PR state last observed: ${at(pr?.checkedAt)}. ${checks}${health?.checkedAt ? ` Health last observed: ${at(health.checkedAt)}.` : ""} Saved observations may have changed.`;
+}
+
+/** The action that moves a chat with no result yet: open it, ask it to continue, answer it, or reply to it. */
+export type ChatMove = "open" | "continue" | "answer" | "reply";
+
+/**
+ * Where the chat behind a result with nothing delivered is, and the one action that moves it. Null with a result,
+ * or when Pilot cannot tell. A chat waiting for a reply shows even beside an earlier result: it has nothing new for
+ * the user to check. The service decides whether Continue applies.
+ */
+export function chatNow(work: DeliveredWork): { line: string; move: ChatMove } | null {
+	const c = work.chat;
+	if ((work.deliveryId && c?.state !== "waiting") || !work.ownerSessionId || !c) return null;
+	const why = c.reason ? `: ${c.reason}` : ".";
+	switch (c.state) {
+		case "working":
+			return { line: "Its chat is working on it.", move: "open" };
+		case "queued": {
+			const q = queueOf(c.queue);
+			return { line: q ? queueLine(q) : c.reason || "Its chat waits for a free coding slot.", move: "open" };
+		}
+		case "question":
+			return { line: "Its chat asks you a question and waits for your answer.", move: "answer" };
+		case "waiting":
+			return {
+				line: "Its chat ended its turn without a result or a question. It may be waiting for your reply.",
+				move: "reply",
+			};
+		case "stopped":
+			return { line: "Its chat stopped before it delivered.", move: c.canContinue ? "continue" : "open" };
+		case "failed":
+			return { line: `Its chat failed${why}`, move: c.canContinue ? "continue" : "open" };
+		default:
+			return { line: "Its chat is not working and delivered nothing here.", move: "open" };
+	}
 }
 
 /** What the agent says about its work: the first of the four lines. */

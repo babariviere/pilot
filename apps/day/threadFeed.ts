@@ -9,6 +9,7 @@
 // only looks up its receipt. Talking here never starts, approves, resumes or
 // stops work. A send the service accepted is not the coordinator's answer.
 import { type Signal, signal } from "nsh";
+import { AutoCheck } from "./autoCheck";
 import { call, type Refusal, type Reply } from "./bridge";
 import { glide } from "./ui";
 
@@ -1024,6 +1025,11 @@ export class ConnectedThreads implements ThreadsSource {
 	#again = new Set<string>();
 	#writing = new Set<string>();
 	#checking = new Set<string>();
+	// Writes whose reply was lost, by mission and operation: Pilot checks them by itself.
+	#auto = new AutoCheck(
+		(key) => this.#lookUp(key),
+		() => this.#publish(),
+	);
 	#topics = new TopicReads(
 		(missionId, topicId, before, sessionId) => this.#page(missionId, topicId, before, sessionId),
 		() => this.#publish(),
@@ -1056,7 +1062,13 @@ export class ConnectedThreads implements ThreadsSource {
 				reason,
 				failed,
 				snapshot: m.snapshot,
-				ops: m.ops.map((o): ThreadOp => (this.#checking.has(o.operationId) ? { ...o, state: "checking" } : o)),
+				ops: m.ops.map(
+					(o): ThreadOp =>
+						this.#checking.has(o.operationId) ||
+						(o.state === "unknown" && this.#auto.checking(opKey(id, o.operationId)))
+							? { ...o, state: "checking" }
+							: o,
+				),
 				writing: this.#writing.has(id),
 			};
 		}
@@ -1085,6 +1097,8 @@ export class ConnectedThreads implements ThreadsSource {
 	#apply(missionId: string, r: Reply<unknown>, isRead: boolean) {
 		const m = this.#mission(missionId);
 		if (r.ok) {
+			// The first answer after the service could not be reached: look the lost writes up again.
+			if (isRead && (m.refusal === "offline" || m.refusal === "lost")) this.#auto.restart();
 			const snapshot = snapshotOf(r.snapshot, missionId);
 			if (snapshot) {
 				m.snapshot = snapshot;
@@ -1093,10 +1107,30 @@ export class ConnectedThreads implements ThreadsSource {
 				m.refusal = "invalid";
 			}
 			const ops = opsOf(r.value.operations);
-			if (ops) m.ops = ops;
+			if (ops) {
+				m.ops = ops;
+				this.#followUnknown();
+			}
 		} else if (isRead) {
 			m.refusal = r.refusal;
 		}
+	}
+
+	/** Follows every write, in every mission read here, whose result is Unknown. */
+	#followUnknown() {
+		const keys: string[] = [];
+		for (const [id, m] of this.#missions)
+			for (const o of m.ops) if (o.state === "unknown") keys.push(opKey(id, o.operationId));
+		this.#auto.watch(keys);
+	}
+
+	/** One automatic Check: a receipt read only. It never sends the write again. */
+	async #lookUp(key: string): Promise<void> {
+		const [missionId, operationId] = key.split("\n") as [string, string];
+		const r = await call<unknown>(this.#window, "day.threads.check", { operationId });
+		if (this.#closed || !r.ok) return;
+		this.#apply(missionId, r, false);
+		this.#publish();
 	}
 
 	read(missionId: string): Promise<void> {
@@ -1210,8 +1244,14 @@ export class ConnectedThreads implements ThreadsSource {
 
 	dispose(): void {
 		this.#closed = true;
+		this.#auto.close();
 		this.#listeners.clear();
 	}
+}
+
+/** One write's key for the automatic checks. IDs never hold a line break. */
+function opKey(missionId: string, operationId: string): string {
+	return `${missionId}\n${operationId}`;
 }
 
 /** The exact entry an Original message names is not in what the service read. */

@@ -125,7 +125,7 @@ test("an unreadable list is not shown as empty, and an empty project says so", a
 	expect(app.shows("This is not the same as having none.")).toBe(true);
 	expect(app.shows("id:preferences-empty")).toBe(false);
 	await app.press("Empty project");
-	await app.press("id:preferences-read");
+	await app.press("Fixture read");
 	await app.waitFor("id:preferences-empty");
 	expect(app.shows("id:preferences-off")).toBe(false);
 });

@@ -475,10 +475,7 @@ fn freshness(read: Option<&Value>, local: &Local) -> Freshness {
         Some(r) => Freshness {
             state: FreshnessState::Stale,
             age: String::new(),
-            reason: r["readError"]
-                .as_str()
-                .unwrap_or("Reading changes. Showing the earlier attention read.")
-                .into(),
+            reason: r["readError"].as_str().unwrap_or("").into(),
         },
     }
 }

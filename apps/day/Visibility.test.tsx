@@ -6,7 +6,7 @@ const desktop = { platform: "macos", width: 1100, height: 1800 } as const;
 test("Today shows the cause, the next step and a way to the work", async () => {
 	const app = await open("./VisibilityFixture.tsx", desktop);
 	await app.waitFor("Some work needs a look.");
-	expect(app.shows("Unresolved work is shown above. Nothing is retried here.")).toBe(true);
+	expect(app.shows("Unresolved work is shown above. Pilot retries nothing on its own.")).toBe(true);
 	expect(app.shows("What needs you is not current. Read again before acting.")).toBe(false);
 	expect(app.shows("Native checks failed. The coordinator needs your help.")).toBe(true);
 	expect(app.texts().some((t) => t.startsWith("Diagnostic chat") || t.includes("no further cause"))).toBe(false);
@@ -21,9 +21,11 @@ test("Today shows the cause, the next step and a way to the work", async () => {
 	await app.waitFor("Earlier read. These problems may have changed.");
 	expect(app.shows("History work stopped")).toBe(true);
 	await app.press("role:button[Open the mission for History work stopped]");
-	await app.waitFor("Agent assessment, not verified progress or acceptance.");
-	expect(app.shows("Agent assessment, not verified progress or acceptance.")).toBe(true);
-	expect(app.texts().includes("https://github.com/mock/pilot/pull/431")).toBe(true);
+	// The mission's work lanes say whose words a report is (MissionWork.tsx).
+	await app.waitFor("Agent report · 1 h ago · agent words, not verified");
+	// Linked outputs sit with every task, folded until the user opens them.
+	await app.press("Tasks · 6");
+	await app.waitFor("text:https://github.com/mock/pilot/pull/431");
 });
 
 test("missing attention never claims an empty inbox", async () => {
@@ -32,6 +34,44 @@ test("missing attention never claims an empty inbox", async () => {
 	await app.press("Missing attention");
 	await app.waitFor("Pilot cannot read all unresolved problems. This is not the same as having none.");
 	expect(app.shows("That is everything for now. Pilot will tell you if something needs you.")).toBe(false);
+});
+
+test("a failed chat on Needs a look offers Continue when a retry is safe, and Dismiss", async () => {
+	const app = await open("./VisibilityFixture.tsx", desktop);
+	await app.waitFor("Export the audit log");
+	expect(app.shows("Model request (anthropic): Allowance hold. Check funding in Settings.")).toBe(true);
+	expect(app.shows("Next: Continue asks it to try again, once. Or dismiss it.")).toBe(true);
+	// Only a row the service says can continue offers Continue; any failed chat offers Dismiss.
+	expect(app.shows("id:problem-continue-session:held-chat")).toBe(true);
+	expect(app.shows("id:problem-dismiss-session:held-chat")).toBe(true);
+	expect(app.shows("id:problem-continue-session:broken-chat")).toBe(false);
+	expect(app.shows("id:problem-dismiss-session:broken-chat")).toBe(true);
+	expect(app.shows("id:problem-continue-failed-worker")).toBe(false);
+	expect(app.shows("id:problem-dismiss-failed-worker")).toBe(false);
+	await app.press("id:problem-continue-session:held-chat");
+	await app.waitFor("Synthetic read. Sent: continue held-chat");
+	expect(app.shows("Export the audit log")).toBe(false);
+	await app.press("id:problem-dismiss-session:broken-chat");
+	await app.waitFor("Synthetic read. Sent: continue held-chat, dismiss broken-chat");
+	expect(app.shows("Rename the settings page")).toBe(false);
+});
+
+test("a chat waiting for a reply shows its last message; Reply sends the user's words once, and Continue applies", async () => {
+	const app = await open("./VisibilityFixture.tsx", desktop);
+	await app.waitFor("id:chat-waits-waiting-chat");
+	expect(app.shows("id:chat-says-waiting-chat")).toBe(true);
+	expect(app.shows("The mockup is ready. Should the agent rows sit above Needs you?")).toBe(true);
+	expect(app.shows("id:chat-waits-continue-waiting-chat")).toBe(true);
+	expect(app.shows("id:problem-continue-session:waiting-chat")).toBe(false);
+	await app.type("id:chat-reply-waiting-chat", "Yes, above");
+	// A new read of the same row keeps the field, its focus and its words.
+	await app.keyboard.press("mod+shift+1");
+	await app.keyboard.press("x");
+	expect(app.value("id:chat-reply-waiting-chat")).toBe("Yes, abovex");
+	await app.press("id:chat-reply-send-waiting-chat");
+	await app.waitFor("Synthetic read. Sent: reply waiting-chat: Yes, abovex");
+	expect(app.shows("id:chat-reply-send-waiting-chat")).toBe(false);
+	expect(app.shows("id:chat-waits-sent-waiting-chat")).toBe(true);
 });
 
 test("only stale reports get the folded document mark", () => {

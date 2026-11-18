@@ -188,12 +188,11 @@ test("unavailable is never shown as none", async () => {
 	expect(empty.shows("To review")).toBe(false);
 });
 
-test("Read again only reads: unavailable stays unavailable, and an unconfirmed Later stays unconfirmed", async () => {
-	const readAgain = "role:button[Read kept changes again. This sends nothing.]";
+test("a read only reads: unavailable stays unavailable, and an unconfirmed Later stays unconfirmed", async () => {
 	const off = await open("./ChangesOff.tsx", desktop);
 	await off.waitFor("Pilot cannot show kept changes here.");
-	await off.press(readAgain);
-	await off.waitFor("Read again. Pilot still cannot show kept changes here.");
+	// Pilot reads again on its own (first after 2 s).
+	await off.waitFor("Pilot still cannot show kept changes here. It keeps trying.");
 	expect(off.shows("This is not the same as having none.")).toBe(true);
 	expect(off.shows("No kept changes yet. Pilot keeps a snapshot when an agent finishes a change.")).toBe(false);
 
@@ -205,7 +204,9 @@ test("Read again only reads: unavailable stays unavailable, and an unconfirmed L
 	await app.waitFor("Pilot sent it but heard nothing back. It sends nothing more until it checks.");
 	await app.press("role:button[Back to Changes]");
 	await app.waitFor("To review");
-	await app.press(readAgain);
+	// Coming back to the window reads the list again.
+	await app.setLifecycle("inactive");
+	await app.setLifecycle("active");
 	// Reopening the same snapshot after the read: still unconfirmed, nothing resent.
 	await app.press(`id:change-${docs.identity.snapshotId}`);
 	await app.waitFor("role:button[Check again]");

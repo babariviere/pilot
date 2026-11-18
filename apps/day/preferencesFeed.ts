@@ -5,6 +5,7 @@
 // names another project is refused there. Preferences are what the user
 // chose, never permission: nothing here starts work or grants an action.
 import { type Signal, signal } from "nsh";
+import { AutoCheck } from "./autoCheck";
 import { call, type Refusal, type Reply } from "./bridge";
 import type { ProjectPreference, ProjectPreferences } from "./preferencesContract";
 import { glide } from "./ui";
@@ -272,6 +273,11 @@ export class ConnectedPreferences implements PreferencesSource {
 	#refusal: Refusal | null = null;
 	#ops: Summary[] = [];
 	#checking = new Set<string>();
+	// Saves whose reply was lost: Pilot checks them by itself.
+	#auto = new AutoCheck(
+		(operationId) => this.#lookUp(operationId),
+		() => this.#publish(),
+	);
 	#reading: Promise<void> | null = null;
 	#again = false;
 	#asked = false;
@@ -288,11 +294,8 @@ export class ConnectedPreferences implements PreferencesSource {
 
 	view(): PreferencesView {
 		const s = this.#snapshot;
-		const reason = this.#refusal
-			? s
-				? `${preferencesReason(this.#refusal)} What shows is from Pilot's last read.`
-				: preferencesReason(this.#refusal)
-			: "";
+		// With preferences shown, the screen says nothing about a failed read until the shared old-data rule does.
+		const reason = this.#refusal ? preferencesReason(this.#refusal) : "";
 		return {
 			availability: s ? "live" : this.#refusal ? "unavailable" : this.#asked ? "reading" : "idle",
 			reason,
@@ -303,7 +306,7 @@ export class ConnectedPreferences implements PreferencesSource {
 				.filter((o) => o.state === "unknown" || o.state === "pending")
 				.map((o) => ({
 					operationId: o.operationId,
-					state: this.#checking.has(o.operationId) ? "checking" : "unknown",
+					state: this.#checking.has(o.operationId) || this.#auto.checking(o.operationId) ? "checking" : "unknown",
 					expectedRevision: o.expectedRevision,
 				})),
 			reading: this.#reading !== null,
@@ -331,6 +334,9 @@ export class ConnectedPreferences implements PreferencesSource {
 		const r = await call<unknown>(this.#window, name, args);
 		if (this.#closed) return r;
 		if (r.ok && order > this.#applied) {
+			// The first answer after the service could not be reached: look the lost saves up again.
+			if (name === "day.preferences.read" && (this.#refusal === "offline" || this.#refusal === "lost"))
+				this.#auto.restart();
 			const snapshot = snapshotOf(r.snapshot);
 			// A read for another project than the one shown never replaces it.
 			if (snapshot && (!this.#snapshot || snapshot.projectId === this.#snapshot.projectId)) {
@@ -340,7 +346,12 @@ export class ConnectedPreferences implements PreferencesSource {
 				this.#refusal = "invalid";
 			}
 			const ops = summariesOf(r.value.operations);
-			if (ops) this.#ops = ops;
+			if (ops) {
+				this.#ops = ops;
+				this.#auto.watch(
+					ops.filter((o) => o.state === "unknown" || o.state === "pending").map((o) => o.operationId),
+				);
+			}
 			this.#applied = order;
 		} else if (!r.ok && name === "day.preferences.read" && order > this.#applied) {
 			this.#refusal = r.refusal;
@@ -404,6 +415,12 @@ export class ConnectedPreferences implements PreferencesSource {
 		return outcomeOf(outcome, intent.projectId, id);
 	}
 
+	/** One automatic Check: a receipt read only. It never sends the save again. */
+	async #lookUp(operationId: string): Promise<void> {
+		const r = await this.#call("day.preferences.check", { operationId });
+		if (r.ok) this.#publish();
+	}
+
 	async check(operationId: string): Promise<SaveResult> {
 		if (this.#checking.has(operationId)) return refusedSave("busy");
 		const project = this.#snapshot?.projectId ?? "";
@@ -442,6 +459,7 @@ export class ConnectedPreferences implements PreferencesSource {
 
 	dispose(): void {
 		this.#closed = true;
+		this.#auto.close();
 		this.#listeners.clear();
 	}
 }

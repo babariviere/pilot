@@ -203,7 +203,7 @@ test("a replaced file refuses the old report, and a lost answer is only checked"
 	await app.clear("id:report");
 	await app.type("id:report", "Uploaded 1.4.3; the dashboard shows 1.4.3");
 	await app.press("role:button[Mark done]");
-	await app.waitFor("Pilot sent your report but heard nothing back. It will not send it again until it checks.");
+	await app.waitFor("Pilot could not confirm your report yet. It will not send it again. Check again only reads.");
 	expect(app.shows("role:button[Mark done]")).toBe(false);
 	await app.press("role:button[Check again]");
 	await app.waitFor(
@@ -217,7 +217,7 @@ test("a lost confirmation stays unknown and is only checked, never resent", asyn
 	const app = await open("./Trouble.tsx", desktop);
 	await app.waitFor("2 integration tests fail on Linux");
 	await app.press(DECIDE);
-	await app.waitFor("Pilot sent your answer but heard nothing back. It will not send it again until it checks.");
+	await app.waitFor("Pilot could not confirm your answer yet. It will not send it again. Check again only reads.");
 	expect(app.shows(DECIDE)).toBe(false);
 	await app.press("role:button[Check again]");
 	await app.waitFor("Checked Faster search: Your answer arrived.");

@@ -18,7 +18,7 @@ import { MockDayScreen, openDay } from "./mockFeeds";
 import { readingProbe } from "./ThreadScreen";
 import { ScriptedThreads, type ThreadsDemoNext } from "./threadDemo";
 import { mirrorThreads } from "./threadFeed";
-import { openThread } from "./threadView";
+import { openThread, refreshOpenThread } from "./threadView";
 import { Action } from "./ui";
 import { captureView, restoreView, startFresh } from "./windowState";
 
@@ -46,6 +46,8 @@ mount(() => (
 				{(n) => <Action label={`Next ${n()}`} onPress={() => threads.next.set(n())} />}
 			</Each>
 			<Action label="Hold" onPress={() => threads.held.set(true)} />
+			{/* A read as Pilot starts one on its own: a service change reads the open thread. */}
+			<Action label="Fixture read" onPress={() => refreshOpenThread(day.threads)} />
 			<Action label="Unreadable" onPress={() => threads.unreadable.set(true)} />
 			<Action
 				label="Denied"

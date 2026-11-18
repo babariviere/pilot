@@ -93,6 +93,8 @@ test("upstream content, required references and license stay byte-exact and attr
 	assert.match(PLANNING_SKILL_ADAPTATION, /initial question list with interview action questions/);
 	assert.match(PLANNING_SKILL_ADAPTATION, /Keep mission_plan plan-ask\/plan-review/);
 	assert.match(PLANNING_SKILL_ADAPTATION, /Notes.*cannot grant execution/);
+	// A request in prose leaves planning stuck: the user sees no question to answer.
+	assert.match(PLANNING_SKILL_ADAPTATION, /Never end a turn by asking the user something in prose/);
 	for (const boundary of [
 		/each opus-ui slice that adds or changes a screen needs a ui prototype question the user settles/,
 		/unmodified NSH TSX fixtures\/previews/,

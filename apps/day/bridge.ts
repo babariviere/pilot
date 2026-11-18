@@ -40,9 +40,12 @@ import type {
 	SubmitIntent,
 	Today,
 } from "pilot-day/native";
+import { AutoCheck } from "./autoCheck";
 import type { DayFeed, PlanningFeed } from "./feeds";
+import { type AutoRead, autoRead, type ReadResult } from "./freshness";
 import { olderThanList } from "./planCurrent";
 import { NO_PROGRESS, type RitualSource } from "./ritualFeed";
+import { agentActing, noteBlockedWrite, setBusyProbe } from "./ui/agent";
 
 /** Why the root refused a call, or "lost" when no reply came. */
 export type Refusal =
@@ -90,13 +93,40 @@ export function artifactPreviewsAvailable(): boolean {
 	return day?.artifactPreview === true;
 }
 
+/**
+ * Calls that only read, open or close what this window shows, or serve the screen agent itself. Every other
+ * call may write to Pilot, so a screen agent's step never sends one (docs/technical/day-screen-agent.md).
+ */
+const PASSIVE =
+	/\.(read|snapshot|check|checkNew|checkWork|checkRevision|inventory|inventorySnapshot|prepare|select|chat|chatSnapshot|history|source|list|scope|refresh|leave|close|preview|artifact|saved|results)$/;
+
+/** Whether call `name` only reads. */
+export function passiveCall(name: string): boolean {
+	return PASSIVE.test(name) || name.startsWith("day.screen.") || name === "day.log.event";
+}
+
+// The screen agent waits for calls its steps started (ui/agent.ts). Its own calls are not the page's work.
+const inFlight = new Set<Promise<unknown>>();
+setBusyProbe(() => (inFlight.size > 0 ? Promise.race(inFlight).then(() => undefined) : null));
+
 /** One exact call. It never throws; a lost reply is "lost", never a refusal. */
 export async function call<T>(window: string, name: string, args: unknown): Promise<Reply<T>> {
+	if (agentActing() && !passiveCall(name)) {
+		// The control the agent used would write to Pilot: only the person may. Nothing is sent.
+		noteBlockedWrite(name);
+		return { ok: false, refusal: "denied" };
+	}
 	let reply: unknown;
 	try {
 		// No deadline: the root always answers or closes the channel, and a
 		// timeout would turn an entered effect into a guess.
-		reply = await host.call(name, { version: 1, window, args }, { timeout: 0 });
+		const sent = host.call(name, { version: 1, window, args }, { timeout: 0 });
+		const tracked = name.startsWith("day.screen.") ? null : sent.catch(() => undefined);
+		if (tracked) {
+			inFlight.add(tracked);
+			void tracked.finally(() => inFlight.delete(tracked));
+		}
+		reply = await sent;
 	} catch (error) {
 		const code = (error as { code?: unknown }).code;
 		// A denied or missing method never reached the root: nothing happened.
@@ -132,7 +162,11 @@ export function refusalOutcome(refusal: Refusal, revision: number): IntentOutcom
 				"Pilot sent this but heard nothing back. It will not send it again; Check again only reads.",
 			);
 		case "stale":
-			return outcome("stale", "This changed since you read it. Nothing was sent; your words stay.");
+			// Rust already tried again where only the read around the target moved.
+			return outcome(
+				"stale",
+				"This changed before Pilot could send it. Nothing was sent; your words stay. Look again.",
+			);
 		case "busy":
 			return outcome("rejected", "Pilot is saving your work before it closes. Nothing was sent; try again after.");
 		case "closed":
@@ -168,22 +202,31 @@ export class ConnectedToday implements DayFeed {
 	#reading: Promise<void> | null = null;
 	#readVersion = 0;
 	#again = false;
+	// Answers and reports whose reply was lost: Pilot checks them by itself.
+	#auto = new AutoCheck(
+		(id) => this.#lookUp(id),
+		() => this.#publish(),
+	);
 
 	constructor(window: string, first: Today) {
 		this.#window = window;
 		this.#today = first;
+		this.#followUnknown();
 	}
 
 	snapshot(): Today {
 		const t = this.#today;
 		const later = this.#later.filter((id) => t.decisions.some((d) => d.id === id));
 		const rank = (id: string) => later.indexOf(id);
-		const decisions = [...t.decisions]
-			.sort((a, b) => rank(a.id) - rank(b.id))
-			.map((d) => (this.#sending.has(d.id) && d.delivery === "idle" ? { ...d, delivery: "sending" as const } : d));
-		const actions = t.actions.map((a) =>
-			this.#sending.has(a.id) && a.delivery === "idle" ? { ...a, delivery: "sending" as const } : a,
-		);
+		// While Pilot still looks an uncertain send up by itself, it shows as checking, not as a problem.
+		const shown = <T extends { id: string; delivery: string }>(item: T): T =>
+			this.#sending.has(item.id) && item.delivery === "idle"
+				? { ...item, delivery: "sending" }
+				: item.delivery === "unknown" && this.#auto.checking(item.id)
+					? { ...item, delivery: "checking" }
+					: item;
+		const decisions = [...t.decisions].sort((a, b) => rank(a.id) - rank(b.id)).map(shown);
+		const actions = t.actions.map(shown);
 		return { ...t, decisions, actions };
 	}
 
@@ -202,11 +245,41 @@ export class ConnectedToday implements DayFeed {
 	}
 
 	#take(today: Today | null | undefined) {
-		if (today && typeof today === "object") this.#today = today;
+		if (today && typeof today === "object") {
+			// A read equal to what shows changes nothing on screen.
+			if (JSON.stringify(today) === JSON.stringify(this.#today)) return;
+			// Back from a service that did not answer. A read that was only older (stale) is not a reconnect:
+			// those come and go while agents work, and each would start the used-up checks again.
+			const reconnected =
+				(this.#today.freshness?.state === "offline" || this.#today.freshness?.state === "unreadable") &&
+				today.freshness?.state === "live";
+			this.#today = today;
+			this.#followUnknown();
+			if (reconnected) this.#auto.restart();
+		}
 		this.#publish();
 	}
 
-	/** Reads Today again after an invalidation. Bursts collapse into one more read. */
+	/** Follows every decision and action whose send is Unknown. */
+	#followUnknown() {
+		const t = this.#today;
+		this.#auto.watch(
+			[...t.decisions, ...t.actions].filter((item) => item.delivery === "unknown").map((item) => item.id),
+		);
+	}
+
+	/** One automatic Check: a receipt read only. It never sends the answer again. */
+	async #lookUp(id: string): Promise<void> {
+		const action = this.#today.actions.some((a) => a.id === id);
+		const r = await call<Today>(this.#window, "day.attention.check", { id, action });
+		if (r.ok) this.#take(r.snapshot);
+	}
+
+	/**
+	 * Reads the root's cached Today again after an invalidation. Bursts
+	 * collapse into one more read. A failed read keeps what shows, unchanged:
+	 * the automatic service reads (freshness.ts) retry and decide when to warn.
+	 */
 	refresh(): Promise<void> {
 		if (this.#closed) return Promise.resolve();
 		this.#readVersion += 1;
@@ -226,19 +299,27 @@ export class ConnectedToday implements DayFeed {
 				if (this.#closed) return;
 				if (version !== this.#readVersion) continue;
 				if (r.ok) this.#take(r.snapshot);
-				else {
-					const reason = "Pilot could not read this window again. Showing the earlier read.";
-					this.#take({
-						...this.#today,
-						freshness: { ...this.#today.freshness, state: "stale", reason },
-						attention: { ...this.#today.attention, state: "stale", reason },
-					});
-				}
 			} while (this.#again);
 		})().finally(() => {
 			this.#reading = null;
 		});
 		return this.#reading;
+	}
+
+	/**
+	 * Asks the root to read Today from its service now. Passive: it sends no
+	 * intent. A refusal because the window is busy, closing or the read
+	 * raced a newer change is not a failed try.
+	 */
+	async serviceRead(): Promise<ReadResult> {
+		if (this.#closed) return "raced";
+		const r = await call<Today>(this.#window, "day.today.refresh", {});
+		if (this.#closed) return "raced";
+		if (r.ok) {
+			this.#take(r.snapshot);
+			return "current";
+		}
+		return r.refusal === "stale" || r.refusal === "busy" || r.refusal === "closed" ? "raced" : "failed";
 	}
 
 	mission(missionId: string): MissionPage | null {
@@ -445,6 +526,7 @@ export class ConnectedToday implements DayFeed {
 
 	dispose(): void {
 		this.#closed = true;
+		this.#auto.close();
 		if (this.#draftTimer !== undefined) clearTimeout(this.#draftTimer);
 		this.#listeners.clear();
 	}
@@ -528,13 +610,6 @@ export class ConnectedRituals implements RitualSource {
 
 /** Says a planning page is older than the latest read, as Rust says it for its own pages. */
 const OLDER = "This is an older read. Pilot checks again before it saves anything.";
-/**
- * How long a page may lag behind a change before it shows as older. A
- * normal re-read lands well within it, so the page keeps its focus and
- * stays editable instead of flickering on every change. Saves are still
- * checked by the root, which refuses one from an older page.
- */
-const OLDER_AFTER_MS = 4000;
 
 /**
  * The missions in planning as the root last read them. Complete earlier
@@ -585,8 +660,14 @@ export class ConnectedPlans implements PlanningFeed {
 	/** Pages a change may have made older, until they are read again. */
 	#older = new Set<string>();
 	/** Since when each page has not been current, while it is not. */
-	#lagSince = new Map<string, number>();
-	#lagTimer: ReturnType<typeof setTimeout> | null = null;
+	/**
+	 * The open page's automatic reads (freshness.ts). A page that is not
+	 * current stays as it was, editable and with no note, while Pilot reads it
+	 * again; it says it is older only by the shared rule (5 min and 3 failed
+	 * tries). Every save and submission still names the page it was made on,
+	 * and the root refuses one from a changed page.
+	 */
+	#pageReads: { missionId: string; auto: AutoRead } | null = null;
 	#inventory: Inventory = { state: "off", refusal: "unavailable" };
 	#inventoryReading: Promise<void> | null = null;
 	#inventoryVersion = 0;
@@ -601,6 +682,11 @@ export class ConnectedPlans implements PlanningFeed {
 	/** The open planning chat, by mission. Only one is open at a time. */
 	#chats = new Map<string, PlanChat>();
 	#chatOpen: string | null = null;
+	// Interview answers whose reply was lost: Pilot checks them by itself, by mission.
+	#auto = new AutoCheck(
+		(missionId) => this.#lookUp(missionId),
+		() => this.#publish(),
+	);
 
 	constructor(window: string, setup: Setup | null, refusal: Refusal | null = null) {
 		this.#window = window;
@@ -642,8 +728,47 @@ export class ConnectedPlans implements PlanningFeed {
 	#publish() {
 		if (this.#closed) return;
 		this.#revision += 1;
+		this.#followPage();
 		const planning = this.snapshot();
 		for (const listener of this.#listeners.values()) listener(planning);
+	}
+
+	/** The open page is current: its reads reset. It is not: an automatic read follows, with backoff. */
+	#followPage() {
+		const reads = this.#pageReads;
+		const read = reads ? this.#pages.get(reads.missionId) : undefined;
+		if (!reads || !read) return;
+		if (this.#current(reads.missionId, read)) reads.auto.current();
+		else reads.auto.behind();
+	}
+
+	/** Starts automatic reads for the page `missionId`, the one now open. */
+	#readPage(missionId: string) {
+		if (this.#pageReads?.missionId === missionId) return;
+		this.#pageReads?.auto.dispose();
+		const auto = autoRead(
+			async () => {
+				const r = await call<PlanPage>(this.#window, "day.plan.read", { missionId });
+				if (this.#closed || this.#selected !== missionId) return "raced";
+				if (r.ok) {
+					this.#take(missionId, r.snapshot);
+					return this.#current(missionId, r.snapshot) ? "current" : "failed";
+				}
+				return r.refusal === "stale" || r.refusal === "busy" || r.refusal === "closed" ? "raced" : "failed";
+			},
+			this.#pages.has(missionId) ? Date.now() : null,
+		);
+		this.#pageReads = { missionId, auto };
+	}
+
+	/** Reads the open page from its service now: the warning's Try now. */
+	readNow(): Promise<void> {
+		return this.#pageReads?.auto.now() ?? Promise.resolve();
+	}
+
+	/** The window came back: the open page is read again, at most every 30 s. */
+	focusRead(): void {
+		this.#pageReads?.auto.focus();
 	}
 	#starting = new Set<string>();
 	#unknownStarts = new Set<string>();
@@ -653,21 +778,49 @@ export class ConnectedPlans implements PlanningFeed {
 			this.#pages.set(missionId, page);
 			this.#pageAt.set(missionId, ++this.#reads);
 			this.#older.delete(missionId);
+			this.#followUnknown();
 		}
 		this.#publish();
+	}
+
+	/** Follows every opened page whose interview answers were sent and not confirmed. A save still on its way is not. */
+	#followUnknown() {
+		const unknown = [...this.#pages].filter(([, page]) => {
+			const iv = page.interview;
+			return iv && (iv.submit === "unknown" || (iv.unconfirmed && iv.submit === "open" && !this.#sendingTo(iv.id)));
+		});
+		this.#auto.watch(unknown.map(([missionId]) => missionId));
+	}
+
+	/** Whether a save of interview `id` is on its way from this window. */
+	#sendingTo(id: string): boolean {
+		return [...this.#saving].some((key) => key.startsWith(`${id}/`));
+	}
+
+	/** One automatic Check of a mission's interview: a receipt read only. It never sends again. */
+	async #lookUp(missionId: string): Promise<void> {
+		const interviewId = this.#pages.get(missionId)?.interview?.id;
+		if (!interviewId) return;
+		const r = await call<PlanPage | null>(this.#window, "day.plan.check", {
+			missionId,
+			intent: { interviewId },
+		});
+		if (r.ok) this.#take(missionId, r.snapshot);
 	}
 
 	/** Keeps a complete read; a refusal drops every row. A cached read that is not current keeps the earlier reason. */
 	#takeInventory(r: Reply<Planning>) {
 		const rows = r.ok ? inventoryRows(r.snapshot) : null;
-		if (rows && r.ok)
+		if (rows && r.ok) {
+			// The first good read after a failed one: the service is back, so the pages' checks start over.
+			if (this.#inventory.state === "off") this.#auto.restart();
 			this.#inventory = {
 				state: r.snapshot.availability === "stale" ? "stale" : "live",
 				rows,
 				at: ++this.#reads,
 				reason: r.snapshot.reason ?? "",
 			};
-		else if (!r.ok) this.#inventory = { state: "off", refusal: r.refusal };
+		} else if (!r.ok) this.#inventory = { state: "off", refusal: r.refusal };
 		else if (this.#inventory.state !== "off") this.#inventory = { state: "off", refusal: "unavailable" };
 		this.#publish();
 	}
@@ -716,24 +869,6 @@ export class ConnectedPlans implements PlanningFeed {
 	 * names a newer interview revision or round than the page shows. An
 	 * inventory that only lags behind a newer page read does not age it.
 	 */
-	/**
-	 * Whether a page that is not current has lagged for OLDER_AFTER_MS. Until
-	 * then it shows as it was; one timer publishes again when the time is up.
-	 */
-	#lagging(missionId: string): boolean {
-		if (this.#closed) return false;
-		const now = Date.now();
-		const since = this.#lagSince.get(missionId) ?? now;
-		this.#lagSince.set(missionId, since);
-		const left = since + OLDER_AFTER_MS - now;
-		if (left <= 0) return true;
-		this.#lagTimer ??= setTimeout(() => {
-			this.#lagTimer = null;
-			this.#publish();
-		}, left);
-		return false;
-	}
-
 	#current(missionId: string, page: PlanPage): boolean {
 		if (this.#older.has(missionId) || !page.fresh) return false;
 		const inventory = this.#inventory;
@@ -748,9 +883,9 @@ export class ConnectedPlans implements PlanningFeed {
 		const read = this.#pages.get(missionId);
 		if (!read) return null;
 		const current = this.#current(missionId, read);
-		if (current) this.#lagSince.delete(missionId);
-		// While a re-read is due, the page stays as it was: editable, without the older note.
-		const older = !current && this.#lagging(missionId);
+		// While Pilot reads it again, the page stays as it was: editable, without the older note.
+		const reads = this.#pageReads;
+		const older = !current && reads?.missionId === missionId && reads.auto.stale();
 		// The older-read words come first, so a page with its own note still says it is older.
 		let page = !older
 			? read.fresh
@@ -770,7 +905,17 @@ export class ConnectedPlans implements PlanningFeed {
 					canCheck: page.work.canCheck || this.#unknownStarts.has(missionId),
 				},
 			};
-		const iv = page.interview;
+		let iv = page.interview;
+		// While Pilot still looks the answers up by itself, they show as checking, not as a problem.
+		// A save still on its way is neither: it keeps the question open (below).
+		if (
+			iv &&
+			this.#auto.checking(missionId) &&
+			(iv.submit === "unknown" || (iv.unconfirmed && iv.submit === "open" && !this.#sendingTo(iv.id)))
+		) {
+			iv = { ...iv, submit: "checking" };
+			page = { ...page, interview: iv };
+		}
 		if (!iv || this.#saving.size === 0) return page;
 		const questions = iv.questions.map((q) =>
 			this.#saving.has(`${iv.id}/${q.id}`) ? { ...q, saving: "sending" as const } : q,
@@ -778,7 +923,7 @@ export class ConnectedPlans implements PlanningFeed {
 		// A save this window still waits for is on its way, not unconfirmed. Counting it
 		// would fix the interview during every save: the field turned read-only, losing
 		// focus, and the interview jumped to its review and back. A lost save stays unconfirmed.
-		const sending = [...this.#saving].some((key) => key.startsWith(`${iv.id}/`));
+		const sending = this.#sendingTo(iv.id);
 		return { ...page, interview: { ...iv, questions, unconfirmed: iv.unconfirmed && !sending } };
 	}
 
@@ -912,8 +1057,9 @@ export class ConnectedPlans implements PlanningFeed {
 
 	async open(missionId: string): Promise<PlanOutcome> {
 		this.#selected = missionId;
+		this.#readPage(missionId);
 		// Navigation does not renew a cached page. Until this read succeeds,
-		// its answers and Start must not look current even without a notice.
+		// it is not current; it shows as it was until the shared rule says it is old.
 		this.#older.add(missionId);
 		this.#publish();
 		const r = await call<PlanPage>(this.#window, "day.plan.read", { missionId });
@@ -976,12 +1122,16 @@ export class ConnectedPlans implements PlanningFeed {
 		return this.#outcome(r.outcome, missionId);
 	}
 
-	/** Asks the idle planning agent to continue. It names the planning state shown; a changed mission refuses it. */
-	async continuePlanning(intent: { missionId: string; feedback: string }): Promise<PlanOutcome> {
+	/**
+	 * Asks the idle planning agent to continue, with the user's reply to its last message as a note when given. It
+	 * names the planning state shown; a changed mission refuses it.
+	 */
+	async continuePlanning(intent: { missionId: string; feedback: string; note?: string }): Promise<PlanOutcome> {
 		const missionId = intent.missionId;
 		const r = await call<PlanPage | null>(this.#window, "day.plan.continue", {
 			missionId,
 			feedback: intent.feedback,
+			...(intent.note ? { note: intent.note } : {}),
 		});
 		if (!r.ok) {
 			void this.refresh();
@@ -1178,8 +1328,9 @@ export class ConnectedPlans implements PlanningFeed {
 
 	dispose(): void {
 		this.#closed = true;
-		if (this.#lagTimer !== null) clearTimeout(this.#lagTimer);
-		this.#lagTimer = null;
+		this.#auto.close();
+		this.#pageReads?.auto.dispose();
+		this.#pageReads = null;
 		this.#listeners.clear();
 	}
 }

@@ -120,6 +120,7 @@ export class NativeAttention {
 	}
 	private authority(projectId: string, sessionId: string) {
 		const { project, session: s, member } = this.session(projectId, sessionId);
+		const mission = s.missionId ? this.deps.store.require(s.missionId) : undefined;
 		return attentionDigest({
 			home: this.deps.home,
 			...(this.deps.executor instanceof ReadOnlyAttentionExecutor
@@ -142,10 +143,22 @@ export class NativeAttention {
 				outcome: s.outcome ?? null,
 				outcomeAt: s.outcomeAt ?? null,
 			},
-			mission: s.missionId
+			// Only the mission fields that decide who may act. Progress counts, the phase, the reason line
+			// and updatedAt change whenever any member works; with them every answer went stale while
+			// agents worked, though the question and its asker had not changed.
+			mission: mission
 				? {
-						mission: this.deps.store.require(s.missionId),
-						control: this.deps.store.controls.fenceCurrent(s.missionId),
+						mission: {
+							id: mission.id,
+							projectId: mission.projectId,
+							status: mission.status,
+							planningVersion: mission.planningVersion ?? null,
+							passiveLifecycle: mission.passiveLifecycle ?? false,
+							coordinatorSessionId: mission.coordinatorSessionId ?? null,
+							completedAt: mission.completedAt ?? null,
+							archivedAt: mission.archivedAt ?? null,
+						},
+						control: this.deps.store.controls.fenceCurrent(mission.id),
 					}
 				: null,
 		});
@@ -354,6 +367,7 @@ export class NativeAttention {
 					!s.role &&
 					!s.control &&
 					!s.continuedTo &&
+					!s.questionSettled &&
 					(s.outcome === "question" || s.attentionReason?.kind === "asks"),
 			);
 		if (candidates.length > 4096) fail("unavailable", "Attention read capacity reached (4096); nothing was evicted");

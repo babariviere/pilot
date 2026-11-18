@@ -8,7 +8,9 @@
 import { type Signal, signal } from "nsh";
 import type { Planning, Today } from "pilot-day/native";
 import { call, type Refusal } from "./bridge";
+import { type CodingQueue, queueOf } from "./codingQueue";
 import type { DeliveredWork, VerificationSubject } from "./deliveryContract";
+import { FAILED_TRIES, retryDelay, staleLine, staleWarning } from "./freshness";
 
 /** Passive results from another project. No actions can use that project's root. */
 export type ScopeResults = {
@@ -39,14 +41,28 @@ export type WorkingChat = {
 	purpose: string | null;
 	status: "working";
 };
-export type WorkingRead = { state: "live" | "stale" | "disconnected" | "failed" | "unavailable"; items: WorkingChat[] };
+/** A chat whose saved input waits for a coding slot. Not Needs you: it starts by itself. */
+export type WaitingChat = {
+	sessionId: string;
+	title: string;
+	missionId: string | null;
+	missionTitle: string | null;
+	queue: CodingQueue;
+};
+export type WorkingRead = {
+	state: "live" | "stale" | "disconnected" | "failed" | "unavailable";
+	items: WorkingChat[];
+	/** First in line first. Null or absent when Pilot does not know. */
+	waiting?: WaitingChat[] | null;
+};
 
 /** One project in a scope read. Only selected projects carry their sections. */
 export type ScopeProject = {
 	id: string;
 	name: string;
 	selected: boolean;
-	currentness: "live" | "stale" | "unavailable";
+	/** "reading" only in the first read of a switch: the complete read fills it in. */
+	currentness: "live" | "stale" | "unavailable" | "reading";
 	observedAt: string;
 	needsYou: ScopeCount;
 	today: Today | null;
@@ -67,6 +83,8 @@ export type ScopeSnapshot = {
 	catalogComplete: boolean;
 	/** Whether every selected project's sections were read. */
 	complete: boolean;
+	/** The first read of a switch: only the selected project was read; the others follow. */
+	partial: boolean;
 	projects: ScopeProject[];
 	/** What needs the user outside the scope. */
 	outsideNeedsYou: ScopeCount;
@@ -84,8 +102,15 @@ export type ScopeView = {
 
 /** The scope source. The connected window's asks its root; mock windows' is a script. */
 export interface ScopeSource {
-	/** Reads `scope` with `generation`. Passive: it sends, starts and moves nothing. */
-	read(scope: string, generation: number): Promise<{ ok: true; snapshot: unknown } | { ok: false; refusal: Refusal }>;
+	/**
+	 * Reads `scope` with `generation`. Passive: it sends, starts and moves nothing.
+	 * `selectedOnly` reads only the selected project, as the first read of a switch.
+	 */
+	read(
+		scope: string,
+		generation: number,
+		selectedOnly?: boolean,
+	): Promise<{ ok: true; snapshot: unknown } | { ok: false; refusal: Refusal }>;
 }
 
 /** A saved scope changes only the view, never native project authority. */
@@ -152,7 +177,10 @@ export function scopeOf(x: unknown): ScopeSnapshot | null {
 			typeof raw.id !== "string" ||
 			typeof raw.name !== "string" ||
 			typeof raw.selected !== "boolean" ||
-			(currentness !== "live" && currentness !== "stale" && currentness !== "unavailable") ||
+			(currentness !== "live" &&
+				currentness !== "stale" &&
+				currentness !== "unavailable" &&
+				currentness !== "reading") ||
 			!needs
 		)
 			return null;
@@ -186,6 +214,7 @@ export function scopeOf(x: unknown): ScopeSnapshot | null {
 		own: typeof s.own === "string" && s.own !== "" ? s.own : null,
 		catalogComplete: s.catalogComplete,
 		complete: s.complete,
+		partial: s.partial === true,
 		projects,
 		outsideNeedsYou: outside,
 	};
@@ -209,7 +238,35 @@ function workingOf(x: unknown): WorkingRead | null {
 		if (seen.has(r.sessionId)) return null;
 		seen.add(r.sessionId);
 	}
-	return w;
+	return { state: w.state, items: w.items, waiting: waitingOf((w as { waiting?: unknown }).waiting) };
+}
+
+/** Waiting rows, or null when they do not read. They never make the working list fail. */
+function waitingOf(x: unknown): WaitingChat[] | null {
+	if (!Array.isArray(x)) return null;
+	const rows: WaitingChat[] = [];
+	const seen = new Set<string>();
+	for (const r of x as Record<string, unknown>[]) {
+		const queue = r ? queueOf(r.queue) : null;
+		if (
+			!queue ||
+			typeof r.sessionId !== "string" ||
+			!r.sessionId ||
+			seen.has(r.sessionId) ||
+			typeof r.title !== "string" ||
+			![r.missionId, r.missionTitle].every((v) => v === null || typeof v === "string")
+		)
+			return null;
+		seen.add(r.sessionId);
+		rows.push({
+			sessionId: r.sessionId,
+			title: r.title,
+			missionId: (r.missionId as string | null) ?? null,
+			missionTitle: (r.missionTitle as string | null) ?? null,
+			queue,
+		});
+	}
+	return rows;
 }
 
 function resultsOf(x: unknown, project: string): ScopeResults | null {
@@ -238,8 +295,12 @@ export class ConnectedScope implements ScopeSource {
 	constructor(window: string) {
 		this.#window = window;
 	}
-	async read(scope: string, generation: number) {
-		const r = await call<unknown>(this.#window, "day.today.scope", { scope, generation });
+	async read(scope: string, generation: number, selectedOnly = false) {
+		const r = await call<unknown>(
+			this.#window,
+			"day.today.scope",
+			selectedOnly ? { scope, generation, selectedOnly } : { scope, generation },
+		);
 		return r.ok ? { ok: true as const, snapshot: r.snapshot } : { ok: false as const, refusal: r.refusal };
 	}
 }
@@ -255,11 +316,16 @@ export type ScopeMirror = {
 	catalog: Signal<{ id: string; name: string }[]>;
 	/** Reads `scope` again. Passive; an older answer never replaces a newer one. */
 	read: (scope: string) => Promise<void>;
+	/** Stops the automatic retry. */
+	close?: () => void;
 };
 
 // Generations increase on every read, also across a reload of the screens:
 // the root rejects an older one.
 let generation = Date.now();
+
+/** Refusals that pass: the service is down, slow, busy or changing. Pilot tries again by itself. */
+const PASSING = new Set<Refusal>(["offline", "unknown", "stale", "busy", "lost"]);
 
 /** Mirrors `source` for one window. */
 export function mirrorScope(source: ScopeSource): ScopeMirror {
@@ -272,6 +338,24 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 	// unchanged answer does not set the view again, so nothing redraws.
 	let shown = "";
 	let listed = "";
+	// The scope last asked for, and how many passing failures in a row it had.
+	let wanted = "";
+	let failures = 0;
+	let retry: ReturnType<typeof setTimeout> | null = null;
+	let closed = false;
+	const stopRetry = () => {
+		if (retry !== null) clearTimeout(retry);
+		retry = null;
+	};
+	// The last good read of each recent scope, so switching back shows it at
+	// once. At most 4: All projects and the 3 projects chosen last. Each read
+	// can be large (it holds every selected project's Today), so older ones go.
+	const goods = new Map<string, { key: string; snapshot: ScopeSnapshot; at: number }>();
+	const remember = (scope: string, good: { key: string; snapshot: ScopeSnapshot; at: number }) => {
+		goods.delete(scope);
+		goods.set(scope, good);
+		while (goods.size > 4) goods.delete(goods.keys().next().value as string);
+	};
 	const read = async (scope: string) => {
 		const mine = ++generation;
 		const epoch = invalidated;
@@ -281,12 +365,34 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 				? "stale"
 				: "reading",
 		);
-		// Another scope's rows never show while this one is read.
-		if (view().snapshot?.scope !== scope) view.set({ state: "reading", reason: "", snapshot: null });
-		const r = await source.read(scope, mine).catch(() => ({ ok: false as const, refusal: "invalid" as Refusal }));
+		// Switching to one project reads it alone first, so it shows at once;
+		// the complete read that follows fills in the other projects in place.
+		const first = scope !== wanted && scope !== "all";
+		if (scope !== wanted) {
+			// Another scope's rows never show while this one is read. Its own
+			// last good read, if any, shows meanwhile.
+			wanted = scope;
+			failures = 0;
+			const kept = goods.get(scope);
+			shown = kept ? kept.key : "";
+			if (view().snapshot?.scope !== scope)
+				view.set(
+					kept
+						? { state: "live", reason: "", snapshot: kept.snapshot }
+						: { state: "reading", reason: "", snapshot: null },
+				);
+		}
+		stopRetry();
+		const r = await source
+			.read(scope, mine, first)
+			.catch(() => ({ ok: false as const, refusal: "invalid" as Refusal }));
 		// A newer read was asked for: this answer means nothing now.
 		if (mine !== newest) return;
-		if (!r.ok) {
+		if (!r.ok && PASSING.has(r.refusal)) {
+			// A passing failure: the service is down, slow or busy. Pilot tries
+			// again with backoff. Rows of this scope stay without a note until
+			// they are old (freshness.ts); with none, it reads quietly, and says
+			// so only after 3 failed tries.
 			activity.set(
 				r.refusal === "offline"
 					? "disconnected"
@@ -294,34 +400,65 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 						? "stale"
 						: "failed",
 			);
+			if (r.refusal !== "stale" && r.refusal !== "busy") failures += 1;
 			const earlier = view().snapshot;
-			// An earlier read of the same scope stays, said to be earlier. Another scope's never shows.
+			const keep = earlier && earlier.scope === scope ? earlier : null;
+			const at = goods.get(scope)?.at ?? null;
+			const next: ScopeView = keep
+				? {
+						state: "live",
+						reason: staleWarning({ readAt: at, failures }, Date.now()) && at !== null ? staleLine(at) : "",
+						snapshot: keep,
+					}
+				: failures >= FAILED_TRIES
+					? { state: "unavailable", reason: scopeReason(r.refusal), snapshot: null }
+					: { state: "reading", reason: "", snapshot: null };
+			const v = view();
+			if (v.state !== next.state || v.reason !== next.reason || v.snapshot !== next.snapshot) view.set(next);
+			retry = setTimeout(() => {
+				retry = null;
+				if (!closed && wanted === scope && mine === newest) void read(scope);
+			}, retryDelay(failures));
+			return;
+		}
+		if (!r.ok) {
+			// A refusal that does not pass: the service cannot give this read.
+			// Rows from before would look current, so they go.
+			activity.set("failed");
 			const denied = r.refusal === "identity" || r.refusal === "denied";
-			const keep = !denied && earlier && earlier.scope === scope ? earlier : null;
+			goods.delete(scope);
+			shown = "";
 			if (denied) {
 				catalog.set([]);
 				listed = "";
+				goods.clear();
 			}
-			// A read that changed or waited meanwhile keeps the earlier rows quietly: the next read follows.
-			if (keep && (r.refusal === "stale" || r.refusal === "busy")) {
-				if (view().state !== "live" || view().reason !== "")
-					view.set({ state: "live", reason: "", snapshot: keep });
-				return;
-			}
-			view.set({
-				state: keep ? "live" : "unavailable",
-				reason: keep ? `${scopeReason(r.refusal)} What shows is Pilot's last read.` : scopeReason(r.refusal),
-				snapshot: keep,
-			});
+			view.set({ state: "unavailable", reason: scopeReason(r.refusal), snapshot: null });
 			return;
 		}
-		const snapshot = scopeOf(r.snapshot);
+		let snapshot = scopeOf(r.snapshot);
 		if (!snapshot || snapshot.scope !== scope || snapshot.generation !== mine) {
 			activity.set("failed");
 			view.set({ state: "unavailable", reason: scopeReason("invalid"), snapshot: null });
 			return;
 		}
+		if (snapshot.partial) {
+			// The other projects' rows of this scope's last good read stay until
+			// the complete read replaces them, so nothing flickers to "reading".
+			const kept = goods.get(scope)?.snapshot;
+			if (kept)
+				snapshot = {
+					...snapshot,
+					outsideNeedsYou: kept.outsideNeedsYou,
+					projects: snapshot.projects.map((p) =>
+						p.currentness === "reading" ? (kept.projects.find((k) => k.id === p.id) ?? p) : p,
+					),
+				};
+		}
 		const key = JSON.stringify({ ...snapshot, generation: 0 });
+		failures = 0;
+		// Only a complete read is kept as this scope's last good read.
+		if (!snapshot.partial) remember(scope, { key, snapshot, at: Date.now() });
 		const v = view();
 		if (key !== shown || v.state !== "live" || v.reason !== "") {
 			shown = key;
@@ -338,6 +475,8 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 		// Continuous streaming must not starve starts/stops/task changes. A
 		// read crossed by an event advances rows as earlier, never as live.
 		activity.set(epoch === invalidated ? "live" : "stale");
+		// The chosen project shows; now the complete read fills in the others.
+		if (snapshot.partial && mine === newest) void read(scope);
 	};
 	return {
 		view,
@@ -347,6 +486,10 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 		invalidate: () => {
 			invalidated++;
 			if (activity() === "live") activity.set("stale");
+		},
+		close: () => {
+			closed = true;
+			stopRetry();
 		},
 	};
 }

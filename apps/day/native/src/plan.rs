@@ -144,6 +144,12 @@ pub struct PlanRow {
     pub line: String,
     /// Whether it waits for the user.
     pub needs_you: bool,
+    /// The planning agent's last message, when it ended its turn while the plan
+    /// is open: it may be a request to the user. Empty otherwise.
+    pub planner_says: String,
+    /// The planning agent ended its turn while the plan is open and may wait
+    /// for the user's reply. Its planning page offers Reply and Continue.
+    pub reply: bool,
     /// Current passive row identity; absent on mock and legacy single-page projections.
     pub identity: Option<PlanIdentity>,
 }
@@ -1083,6 +1089,10 @@ pub struct ContinueIntent {
     /// Feedback on the current interview, word for word: Pilot redoes the round
     /// with it. Empty to only continue.
     pub feedback: String,
+    /// The user's reply to the planner's last message, word for word: Pilot's
+    /// planning agent gets it as a note and continues. Empty for none.
+    #[prop(default)]
+    pub note: String,
 }
 
 /// Why a mission's planning moves, waits or is stuck, read from saved state.
@@ -1100,6 +1110,11 @@ pub struct Unstick {
     pub checks: Vec<String>,
     /// Unstick's repair agent: a read-only chat that looks and proposes one fix.
     pub repair: Option<Repair>,
+    /// The planning agent ended its turn while the plan is open: it may wait for
+    /// the user's reply. Reply sends a note; Continue sends none.
+    pub reply: bool,
+    /// Its last message, in that case. Empty otherwise.
+    pub planner_says: String,
 }
 
 /// Whether planning moves.

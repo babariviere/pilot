@@ -82,7 +82,7 @@ import { DIAGNOSTIC_LOG_TOOL } from "./diagnostic-log-tool.ts";
 import { DIAGNOSTICS_TOOL } from "./diagnostics-tool.ts";
 import { createExplorationTools } from "./exploration-tools.ts";
 import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
-import { fundingOutputBound, fundingPayload } from "./funding-runtime.ts";
+import { type FundingStreamOptions, fundingOutputLimit, fundingPayload } from "./funding-runtime.ts";
 import { INSIGHTS_BACKLOG_TOOL } from "./insights-backlog-tool.ts";
 import { INSIGHTS_HISTORY_TOOL } from "./insights-history-tool.ts";
 import { createInterviewTool, createMissionInterviewPort } from "./interview-tool.ts";
@@ -107,8 +107,10 @@ import { type PerformanceSink, type PreparationMark, RequestTiming } from "./per
 import type { AskContext } from "./policy.ts";
 import { Posthorse } from "./posthorse.ts";
 import { QUESTION_STYLE } from "./question-style.ts";
+import { withReferenceSources } from "./reference-sources.ts";
 import { REPAIR_PROPOSAL_TOOL } from "./repair-proposal-tool.ts";
 import { SCOPED_METRICS_TOOL } from "./scoped-metrics-tool.ts";
+import { SCREEN_TOOL_NAMES } from "./screen-tools.ts";
 import { SHELL_STATUS_DETAIL, shellDeadline } from "./shell-deadline.ts";
 import type { SubagentBridge } from "./subagents.ts";
 import { type ReportSubscriptionLimit, subscriptionRecovery } from "./subscription-limit.ts";
@@ -130,6 +132,8 @@ export interface NativeAdapterOptions {
 	posthorseEligible?: () => boolean;
 	/** Trusted IPC-backed source admission, only for a daemon-managed coordinator worker. */
 	coordinatorSources?: import("./coordinator-sources.ts").ReadCoordinatorSources;
+	/** Host-resolved dependency and linked-project roots that read tools may open by absolute path. */
+	readReferenceSources?: import("./reference-sources.ts").ReadReferenceSources;
 	/** Host-selected new-flow interview only. No legacy auto-enrollment or worker wiring. */
 	missionInterview?: boolean;
 	/** Explicit host-only planning profile. Denies external writes and all execution tools. */
@@ -138,6 +142,8 @@ export interface NativeAdapterOptions {
 	diagnostics?: boolean;
 	/** Closed local Insights profile, never a Diagnostics exception. */
 	insights?: boolean;
+	/** Ask profile of a screen agent: Ask tools plus the ui_* tools and diagnostic_context. */
+	screen?: boolean;
 	/** Diagnostics-only grant for one host-admitted target's bounded history tool. */
 	diagnosticHistory?: boolean;
 	subscriptionPolicy?: string;
@@ -505,7 +511,9 @@ export class NativeAdapter {
 						DIAGNOSTIC_HISTORY_TOOL,
 						REPAIR_PROPOSAL_TOOL,
 					]
-				: ASK_TOOL_NAMES;
+				: options.screen
+					? [...ASK_TOOL_NAMES, ...SCREEN_TOOL_NAMES, DIAGNOSTIC_CONTEXT_TOOL]
+					: ASK_TOOL_NAMES;
 		const cwd = options.cwd;
 		const hasArtifacts = specialist
 			? false
@@ -696,7 +704,11 @@ export class NativeAdapter {
 						tools: allowedTools,
 						customTools: [
 							...(options.ask && !specialist
-								? await createAskTools(options.ask, { artifactSkill: hasArtifacts })
+								? withReferenceSources(
+										await createAskTools(options.ask, { artifactSkill: hasArtifacts }),
+										options.ask.source,
+										options.readReferenceSources,
+									)
 								: []),
 							...(options.askArtifacts && !specialist
 								? createArtifactTools({ ...options.askArtifacts, ask: true })
@@ -708,7 +720,13 @@ export class NativeAdapter {
 				: {
 						customTools: [
 							...(options.sessionOptions?.customTools ?? []),
-							...(!options.coordinatorSources ? createExplorationTools({ source: cwd }) : []),
+							...(!options.coordinatorSources
+								? withReferenceSources(
+										createExplorationTools({ source: cwd }),
+										cwd,
+										options.readReferenceSources,
+									)
+								: []),
 						],
 					}),
 			cwd,
@@ -1557,6 +1575,21 @@ export class NativeAdapter {
 			throw new Error(
 				`Clarification context holds at most 32768 UTF-8 bytes; got ${Buffer.byteLength(source)}. Use the original reply field instead.`,
 			);
+		const options: FundingStreamOptions = {
+			// A short explanation. The funding guard holds a larger bound only while limits are on.
+			signal,
+			maxTokens: outputLimit,
+			[fundingOutputLimit]: outputLimit,
+			maxRetries: 0,
+			disableContinuation: true,
+			onPayload: async (payload, physical) => {
+				const single = fundingPayload(payload, physical);
+				await guard();
+				signal.throwIfAborted();
+				if (this.session.model !== model) throw new Error("Clarification model changed");
+				return single;
+			},
+		};
 		return this.rawRequestStream(
 			() =>
 				this.session.modelRuntime.streamSimple(
@@ -1567,25 +1600,7 @@ export class NativeAdapter {
 						messages: [{ role: "user", content: source, timestamp: Date.now() }],
 						tools: [],
 					},
-					{
-						// A short explanation, priced through the worker's existing worst-case funding guard.
-						signal,
-						maxTokens: outputLimit,
-						maxRetries: 0,
-						disableContinuation: true,
-						onPayload: async (payload, physical) => {
-							const single = fundingPayload(payload, physical);
-							const actual = fundingOutputBound(physical.api, single, physical.id);
-							if (actual > outputLimit)
-								throw new Error(
-									`Clarification output limit is ${outputLimit} tokens; got ${actual}. Choose a model that supports this bound.`,
-								);
-							await guard();
-							signal.throwIfAborted();
-							if (this.session.model !== model) throw new Error("Clarification model changed");
-							return single;
-						},
-					},
+					options,
 				),
 			model,
 			signal,

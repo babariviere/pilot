@@ -263,16 +263,25 @@ pub(super) async fn handle(
             }
             let current = read_page(t, offset).await?;
             check()?;
+            let mut binding = i.binding.clone();
             if current["binding"] != i.binding {
-                return Err(Error::Stale);
+                // The binding hashes the whole project record, so any project edit moves it.
+                // When the Slack setup the user edits is the same, save against the current read.
+                binding = shared
+                    .shown_settings
+                    .rebind(KIND, &i.binding, &current, |v| {
+                        serde_json::json!([v["projectId"], v["config"]])
+                    })
+                    .ok_or(Error::Stale)?;
             }
             let mut payload = serde_json::to_value(i).map_err(|_| Error::Invalid)?;
             payload["purpose"] = json!(KIND);
+            payload["binding"] = json!(binding);
             payload["projectId"] = json!(t.source.project()?.project_id);
             let mut r = planning::record(
                 &t.source,
                 t.source.project()?.project_id.clone(),
-                i.binding.clone(),
+                binding,
                 payload,
             )?;
             j.save_planning(r.clone())?;
@@ -324,6 +333,9 @@ pub(super) async fn handle(
         v["canOpenUrl"] = json!(shared.url_opener.is_some());
         v
     });
+    if let Ok(v) = &snapshot {
+        shared.shown_settings.remember(KIND, v);
+    }
     if matches!(command, Command::SlackRead(_)) {
         check()?;
         return Ok(json!({"snapshot":snapshot?,"operations":summaries(t,j)}));

@@ -46,6 +46,10 @@ export type PlanningFeed = Pick<
 	"snapshot" | "onChange" | "page" | "open" | "plan" | "start" | "saveAnswer" | "submit" | "checkSubmit" | "dispose"
 > & {
 	readInventory?: () => Promise<void>;
+	/** Reads the open planning page from its service now: the old-data warning's Try now. */
+	readNow?: () => Promise<void>;
+	/** The window came back: reads the open planning page, at most every 30 s. */
+	focusRead?: () => void;
 	/** Passive canonical source read. Missing support is unavailable, never an empty record. */
 	readSource?: (request: MapSourceRequest) => Promise<MapSourceRead>;
 	canReadInventory?: () => boolean;

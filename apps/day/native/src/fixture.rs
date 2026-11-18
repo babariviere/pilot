@@ -306,6 +306,7 @@ fn overview(
         controls,
         mission_agents: None,
         working_now: None,
+        waiting_now: None,
     }
 }
 

@@ -439,10 +439,11 @@ export class MissionThreads {
 		} catch (e) {
 			throw new OperationRejected(String(e));
 		}
-		// All validation I/O precedes this fence. The journal already saved the exact operation.
+		// All validation I/O precedes this fence. The journal already saved the exact operation, but nothing was
+		// written yet: a source that moved meanwhile rejects it. A plain error here left it Unknown for good.
 		const check = (source: string) => {
 			this.envelope(op);
-			if (this.source(op.targetId) !== source) throw new Conflict("Topic source changed");
+			if (this.source(op.targetId) !== source) throw new OperationRejected("Topic source changed");
 		};
 		check(request.source);
 		const result = store.threads.write(op, () => {

@@ -463,6 +463,8 @@ impl Plan {
                 stage,
                 PlanStage::Questions | PlanStage::Review | PlanStage::Unknown
             ),
+            planner_says: String::new(),
+            reply: false,
             identity: None,
         }
     }

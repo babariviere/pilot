@@ -17,7 +17,7 @@ test("Slack settings disclose gaps, catch-up and delays; opening only reads", as
 	expect(app.shows("Delayed. Slack rate limit")).toBe(true);
 	expect(app.texts().some((t) => t.includes("Next read no earlier than"))).toBe(true);
 	await app.press("Unavailable");
-	expect(app.shows("Slack settings are unavailable. Read again; nothing has been changed.")).toBe(true);
+	expect(app.shows("Slack settings are unavailable. Pilot keeps trying; nothing has been changed.")).toBe(true);
 });
 test("imports remain available when tracking stops and do not add channels", async () => {
 	const app = await open("./SlackSettingsFixture.tsx", desktop);
@@ -40,7 +40,7 @@ test("drafts survive close and restore; stale project edits need fresh confirmat
 	expect(app.value("id:slack-url")).toBe(link);
 	await app.press("External change");
 	expect(app.enabled("id:slack-import")).toBe(false);
-	await app.press("id:slack-read");
+	await app.press("Fixture read");
 	await app.press("Keep my draft");
 	await app.press("Other project");
 	expect(app.shows("Your draft belongs to another project. It has not moved.")).toBe(true);

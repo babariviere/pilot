@@ -177,6 +177,58 @@ fn real_progress_later_and_user_report_are_durable_but_never_resume_or_publish()
     close(&again);
 }
 
+fn answer(view: &Value) -> Value {
+    json!({"kind":"answer","scope":view["questions"][0]["scope"],"message":"Reviewed package"})
+}
+fn stale(result: Result<IntentOutcome, Error>, says: &str) {
+    let outcome = result.unwrap();
+    assert_eq!(outcome.status, OutcomeStatus::Stale);
+    assert!(outcome.message.starts_with(says), "{}", outcome.message);
+}
+
+#[test]
+fn an_answer_whose_question_is_unchanged_is_sent_again_by_itself() {
+    let mut f = Fixture::new();
+    f.cmd("deliver", true);
+    let host = f.open();
+    let view = read(&host);
+    // Members work while it sends: the next two reads see the mission move.
+    f.cmd("churn", true);
+    status(
+        reply(host.send_attention(answer(&view))),
+        OutcomeStatus::Accepted,
+    );
+    let counts = f.cmd("stats", false);
+    assert_eq!(counts["posts"], 1, "sent once, after the read settled");
+    assert_eq!(counts["delivered"], 1);
+    close(&host);
+}
+
+#[test]
+fn an_answer_stops_after_three_tries_and_when_its_question_changed() {
+    let mut f = Fixture::new();
+    f.cmd("deliver", true);
+    let host = f.open();
+    let view = read(&host);
+    f.cmd("churn", false);
+    stale(
+        reply(host.send_attention(answer(&view))),
+        "Pilot tried 3 times",
+    );
+    f.cmd("calm", false);
+    let view = read(&host);
+    // The chat asked something else: the answer to the earlier question is not sent.
+    f.cmd("multi", true);
+    stale(
+        reply(host.send_attention(answer(&view))),
+        "This question is no longer waiting",
+    );
+    let counts = f.cmd("stats", false);
+    assert_eq!(counts["posts"], 0);
+    assert_eq!(counts["delivered"], 0);
+    close(&host);
+}
+
 #[test]
 fn lost_ack_and_cold_recovery_keep_exact_draft_and_only_lookup() {
     let mut f = Fixture::new();

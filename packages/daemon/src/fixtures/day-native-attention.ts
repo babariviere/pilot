@@ -20,6 +20,9 @@ let posts = 0,
 let hold = false,
 	release: (() => void) | undefined,
 	entered: (() => void) | undefined;
+// Reads left that see the mission moved on: the chat's authority changes, its question does not.
+let churn = 0,
+	delivered = 0;
 const sockets = new Set<WebSocket>();
 const wss = new WebSocketServer({ noServer: true });
 const proxy = createServer(async (req, res) => {
@@ -31,6 +34,10 @@ const proxy = createServer(async (req, res) => {
 		const intent = body.length ? JSON.parse(body.toString()) : null;
 		const lookup = path.endsWith("/receipt");
 		const sends = intent && (path.startsWith("/api/operations") || intent.kind !== "read") && !lookup;
+		if (intent?.kind === "read" && churn > 0) {
+			churn--;
+			f.session = { ...f.session, outcomeAt: (f.session.outcomeAt ?? 0) + 1 };
+		}
 		if (lookup) lookups++;
 		if (sends) {
 			posts++;
@@ -111,6 +118,14 @@ console.log(
 for await (const line of createInterface({ input: process.stdin })) {
 	const cmd = JSON.parse(line);
 	if (cmd.action === "lost") lost = true;
+	// true: the next two reads see the mission move; false: every read does.
+	if (cmd.action === "churn") churn = cmd.value ? 2 : 1_000_000;
+	if (cmd.action === "calm") churn = 0;
+	// Answers reach the chat: the input executor takes them.
+	if (cmd.action === "deliver")
+		f.sessions.sendDurable = async () => {
+			delivered++;
+		};
 	if (cmd.action === "missing") missing = cmd.value;
 	if (cmd.action === "mismatch") mismatch = cmd.value;
 	if (cmd.action === "file") await writeFile(f.file, cmd.value ? "new package" : "exact package");
@@ -158,7 +173,13 @@ for await (const line of createInterface({ input: process.stdin })) {
 	}
 	if (cmd.action === "quit") break;
 	console.log(
-		JSON.stringify({ posts, lookups, state: f.store.attention.humanAction("upload")?.state, sends: f.sends }),
+		JSON.stringify({
+			posts,
+			lookups,
+			state: f.store.attention.humanAction("upload")?.state,
+			sends: f.sends,
+			delivered,
+		}),
 	);
 }
 for (const ws of wss.clients) ws.terminate();

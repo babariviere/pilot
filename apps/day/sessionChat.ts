@@ -4,11 +4,15 @@
 // root last read (it reads the chat again as it changes, while it is open);
 // `day.chat.close` stops that. Reading sends nothing to the chat and
 // changes nothing. Only one chat is open at a time.
-// `day.chat.continue` is the one write: it asks a stopped chat to go on with
-// fixed words the service writes, sent once. `day.chat.check` reads its receipt.
+// `day.chat.continue` asks a stopped or failed chat to go on with fixed words
+// the service writes, sent once. `day.chat.dismiss` takes a failed chat off
+// Needs you and sends nothing to it. `day.chat.reply` sends the user's own
+// words, once, to a chat waiting for a reply. `day.chat.check` reads any of
+// these receipts.
 import { type Signal, signal } from "nsh";
 import type { ChatRow } from "pilot-day/native";
 import { call, type Refusal } from "./bridge";
+import { type CodingQueue, queueOf } from "./codingQueue";
 
 /** Where the chat is: working, asking, finished, failed, stopped, quiet, or not read yet. */
 export type SessionChatState = "unknown" | "working" | "question" | "done" | "failed" | "stopped" | "idle";
@@ -23,6 +27,12 @@ export type SessionChat = {
 	state: SessionChatState;
 	/** The chat's own reason for its state, such as why it failed. */
 	stateReason: string;
+	/** While it waits for a coding slot: its place in line and what holds the slots. */
+	queue?: CodingQueue | null;
+	/** The service says Continue can move it: stopped, or failed with a safe retry. */
+	canContinue?: boolean;
+	/** Its question no longer needs the user: the plan settled it. */
+	questionSettled?: boolean;
 	specialist?: boolean;
 	archived?: boolean;
 	workspaceKept?: boolean;
@@ -52,10 +62,14 @@ export interface SessionChatSource {
 	refresh(): Promise<void>;
 	/** Closes chat `sessionId` when it is open: it is no longer read or kept. */
 	close(sessionId: string): void;
-	/** Asks stopped chat `sessionId` to continue. The service writes the words and sends them once. */
+	/** Asks stopped or failed chat `sessionId` to continue. The service writes the words and sends them once. */
 	continueChat(sessionId: string): Promise<ContinueResult>;
 	/** Retry or corrected words, in this same failed/stopped chat. Empty means Retry. */
 	recoverChat?(sessionId: string, message: string): Promise<ContinueResult>;
+	/** Takes failed chat `sessionId` off Needs you, once. It sends nothing to the chat. */
+	dismissChat?(sessionId: string): Promise<ContinueResult>;
+	/** Sends the user's own words once to chat `sessionId`, which waits for a reply. */
+	replyChat?(sessionId: string, message: string): Promise<ContinueResult>;
 	/** Reads one Continue's exact receipt. Nothing is sent again. */
 	checkContinue(operationId: string): Promise<ContinueResult>;
 	dispose(): void;
@@ -71,8 +85,11 @@ export type ContinueResult = {
 };
 
 const CONTINUE_UNKNOWN = "Pilot does not know if Continue reached this chat. It will not send it again.";
+const REPLY_UNKNOWN = "Pilot does not know if your reply reached this chat. It will not send it again.";
 
-function continueOutcome(x: unknown, recovery = false): ContinueResult {
+const RECOVERY_UNKNOWN = CONTINUE_UNKNOWN.replace("Continue", "Recovery");
+
+function continueOutcome(x: unknown, unknown = CONTINUE_UNKNOWN): ContinueResult {
 	const o = x as {
 		operationId?: unknown;
 		submittedText?: unknown;
@@ -90,22 +107,18 @@ function continueOutcome(x: unknown, recovery = false): ContinueResult {
 			operationId,
 		};
 	}
-	return {
-		status: "unknown",
-		message: recovery ? CONTINUE_UNKNOWN.replace("Continue", "Recovery") : CONTINUE_UNKNOWN,
-		operationId,
-		submittedText,
-	};
+	return { status: "unknown", message: unknown, operationId, submittedText };
 }
 
-function refusedContinue(refusal: Refusal, recovery = false): ContinueResult {
+function refusedContinue(refusal: Refusal, unknown = CONTINUE_UNKNOWN): ContinueResult {
 	switch (refusal) {
 		case "lost":
 			return {
 				status: "unknown",
-				message: recovery
-					? "Recovery is Unknown. Reopen this chat to find its saved attempt. Nothing will be sent again."
-					: `${CONTINUE_UNKNOWN} Press Continue again to find it.`,
+				message:
+					unknown === RECOVERY_UNKNOWN
+						? "Recovery is Unknown. Reopen this chat to find its saved attempt. Nothing will be sent again."
+						: `${unknown} Press ${unknown === CONTINUE_UNKNOWN ? "Continue" : "Reply"} again to find it.`,
 			};
 		case "offline":
 			return { status: "rejected", message: "Pilot could not reach its service. Nothing was sent." };
@@ -129,12 +142,15 @@ function chatOf(x: unknown, sessionId: string): SessionChat | null {
 		sourceLabel: typeof c.sourceLabel === "string" ? c.sourceLabel : "",
 		state: (c.state ?? "unknown") as SessionChatState,
 		stateReason: typeof c.stateReason === "string" ? c.stateReason : "",
+		queue: queueOf(c.queue),
+		canContinue: c.canContinue === true,
+		questionSettled: c.questionSettled === true,
 		specialist: c.specialist === true,
 		archived: c.archived === true,
 		workspaceKept: c.workspaceKept === true,
 		restartOnly: c.restartOnly === true,
 		recoveryBlocked: typeof c.recoveryBlocked === "string" ? c.recoveryBlocked : "",
-		pendingRecovery: c.pendingRecovery ? continueOutcome(c.pendingRecovery, true) : null,
+		pendingRecovery: c.pendingRecovery ? continueOutcome(c.pendingRecovery, RECOVERY_UNKNOWN) : null,
 		rows: c.rows,
 		more: c.more === true,
 		reading: c.reading === true,
@@ -179,6 +195,7 @@ export class ConnectedSessionChat implements SessionChatSource {
 			title: prior?.title ?? "",
 			state: prior?.state ?? "unknown",
 			stateReason: prior?.stateReason ?? "",
+			queue: prior?.queue ?? null,
 			rows: prior?.rows ?? [],
 			more: prior?.more ?? false,
 			reading: true,
@@ -231,8 +248,21 @@ export class ConnectedSessionChat implements SessionChatSource {
 	async recoverChat(sessionId: string, message: string): Promise<ContinueResult> {
 		const r = await call<unknown>(this.#window, "day.chat.recover", { sessionId, message });
 		void this.refresh();
-		if (!r.ok) return refusedContinue(r.refusal, true);
-		return continueOutcome(r.value.outcome, true);
+		if (!r.ok) return refusedContinue(r.refusal, RECOVERY_UNKNOWN);
+		return continueOutcome(r.value.outcome, RECOVERY_UNKNOWN);
+	}
+
+	async dismissChat(sessionId: string): Promise<ContinueResult> {
+		const r = await call<unknown>(this.#window, "day.chat.dismiss", { sessionId });
+		if (!r.ok) return refusedContinue(r.refusal);
+		return continueOutcome(r.value.outcome);
+	}
+
+	async replyChat(sessionId: string, message: string): Promise<ContinueResult> {
+		const r = await call<unknown>(this.#window, "day.chat.reply", { sessionId, message });
+		if (!r.ok) return refusedContinue(r.refusal, REPLY_UNKNOWN);
+		void this.refresh();
+		return continueOutcome(r.value.outcome, REPLY_UNKNOWN);
 	}
 
 	async checkContinue(operationId: string): Promise<ContinueResult> {

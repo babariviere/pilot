@@ -29,7 +29,7 @@ impl Create {
 fn is_chat(r: &planning::PlanningRecord) -> bool {
     r.operation["kind"] == "native-chat-create"
 }
-/// Continue: one fixed follow-up to one stopped chat. The daemon writes the words.
+/// Continue: one fixed follow-up to one stopped or failed chat. The daemon writes the words.
 pub(super) const CONTINUE: &str = "chat-continue";
 pub(super) const RECOVER: &str = "chat-recover";
 /// Mirrors standalone creation's queued-input budget. The page shows byte counts before sending.
@@ -40,7 +40,13 @@ pub(crate) struct Recovery {
     pub session_id: String,
     pub message: String,
 }
-/// A Continue record carries no choice, so its binding is a fixed digest.
+/// Dismiss: take one failed chat off Needs you. It sends nothing to the chat.
+pub(super) const DISMISS: &str = "chat-dismiss";
+/// Reply: the user's own words to one chat waiting for a reply, sent once.
+pub(super) const REPLY: &str = "chat-reply";
+/// Most characters a Reply carries: the same as a new chat's first message.
+pub(crate) const REPLY_CHARS: usize = 12_000;
+/// A Continue, Recovery or Dismiss record carries no choice, so its binding is a fixed digest.
 const CONTINUE_BINDING: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 fn is_continue(r: &planning::PlanningRecord) -> bool {
     r.operation["kind"] == CONTINUE || r.operation["kind"] == RECOVER
@@ -68,16 +74,37 @@ fn publish_recovery(t: &Transport, journal: &Journal, shared: &Shared, session: 
         chat.pending_recovery = pending_recovery(t, journal, session);
     }
 }
-/// A saved Continue names exactly one chat, as its target and its payload.
+fn is_dismiss(r: &planning::PlanningRecord) -> bool {
+    r.operation["kind"] == DISMISS
+}
+fn is_reply(r: &planning::PlanningRecord) -> bool {
+    r.operation["kind"] == REPLY
+}
+/// The words a Reply may carry: not blank, at most REPLY_CHARS characters.
+pub(crate) fn valid_reply(message: &str) -> bool {
+    !message.trim().is_empty() && message.chars().count() <= REPLY_CHARS
+}
+/// A saved Continue, Recovery, Dismiss or Reply names exactly one chat, as its target and its payload. Only a Reply
+/// or a Recovery carries words.
 pub(super) fn validate_continue(op: &Value) -> Result<(), Error> {
     let p: Value = serde_json::from_str(op["payload"].as_str().ok_or(Error::Storage)?)
         .map_err(|_| Error::Storage)?;
     let session = p["sessionId"].as_str().unwrap_or("");
     let recovery = op["kind"] == RECOVER;
-    if (!recovery && op["kind"] != CONTINUE)
-        || p.as_object()
-            .is_none_or(|o| o.len() != if recovery { 5 } else { 2 })
+    let reply = op["kind"] == REPLY;
+    if !(op["kind"] == CONTINUE || op["kind"] == DISMISS || reply || recovery)
+        || p.as_object().is_none_or(|o| {
+            o.len()
+                != if recovery {
+                    5
+                } else if reply {
+                    3
+                } else {
+                    2
+                }
+        })
         || p["purpose"] != op["kind"]
+        || (reply && !p["message"].as_str().is_some_and(valid_reply))
         || (recovery
             && p["message"]
                 .as_str()
@@ -159,19 +186,28 @@ pub(super) async fn inventory(t: &Transport) -> Result<Value, Error> {
     Ok(v)
 }
 pub(super) async fn profile(t: &Transport, request: &Select) -> Result<Value, Error> {
-    if !super::valid_id(&request.project_id) || !matches!(request.mode.as_str(), "ask" | "build") {
+    let v = profile_now(t, &request.project_id, &request.mode).await?;
+    if v["contextDigest"] != request.context_digest {
+        return Err(Error::Stale);
+    }
+    Ok(v)
+}
+
+/// The project's chat setup for "mode" as it is now, with its current setup digest.
+pub(super) async fn profile_now(
+    t: &Transport,
+    project_id: &str,
+    mode: &str,
+) -> Result<Value, Error> {
+    if !super::valid_id(project_id) || !matches!(mode, "ask" | "build" | "screen") {
         return Err(Error::Invalid);
     }
     let v = t
         .get(&format!(
-            "/api/projects/{}/chat-profile?mode={}",
-            request.project_id, request.mode
+            "/api/projects/{project_id}/chat-profile?mode={mode}"
         ))
         .await?;
-    if v["projectId"] != request.project_id
-        || v["mode"] != request.mode
-        || v["contextDigest"] != request.context_digest
-    {
+    if v["projectId"] != project_id || v["mode"] != mode || !v["contextDigest"].is_string() {
         return Err(Error::Stale);
     }
     Ok(v)
@@ -273,16 +309,17 @@ pub(super) async fn handle(
                 return Err(Error::Stale);
             }
             inventory(t).await?;
-            let mut v = profile(
-                t,
-                &Select {
-                    project_id: choice.project_id.clone(),
-                    context_digest: choice.context_digest.clone(),
-                    mode: choice.mode.clone(),
-                },
-            )
-            .await?;
-            let mut expected = serde_json::to_value(choice).map_err(|_| Error::Invalid)?;
+            let mut v = profile_now(t, &choice.project_id, &choice.mode).await?;
+            // The chat's own setup (model, thinking, access, path) is what the user chose. The
+            // project's setup digest moves with any project edit; when only it moved, the chat
+            // starts under the current digest. Any other change is refused.
+            let mut current = choice.clone();
+            current.context_digest = v["contextDigest"]
+                .as_str()
+                .ok_or(Error::Invalid)?
+                .to_owned();
+            payload["contextDigest"] = json!(current.context_digest);
+            let mut expected = serde_json::to_value(&current).map_err(|_| Error::Invalid)?;
             expected
                 .as_object_mut()
                 .ok_or(Error::Invalid)?
@@ -301,7 +338,7 @@ pub(super) async fn handle(
             let mut record = planning::record(
                 &t.source,
                 choice.draft_id.clone(),
-                choice.context_digest.clone(),
+                current.context_digest.clone(),
                 payload,
             )?;
             journal.save_planning(record.clone())?;
@@ -324,7 +361,10 @@ pub(super) async fn handle(
             let mut record = journal
                 .planning
                 .get(id)
-                .filter(|r| same_home(&r.source, &t.source) && (is_chat(r) || is_continue(r)))
+                .filter(|r| {
+                    same_home(&r.source, &t.source)
+                        && (is_chat(r) || is_continue(r) || is_dismiss(r) || is_reply(r))
+                })
                 .cloned()
                 .ok_or(Error::Unknown)?;
             // Receipt lookup remains possible after deletion/configuration changes.
@@ -345,27 +385,50 @@ pub(super) async fn handle(
                 json!({"snapshot":null,"operations":operations(t,journal),"outcome":summary(&record)}),
             )
         }
-        Command::ChatContinue(_) | Command::ChatRecover(_) => {
-            let (session, message) = match command {
-                Command::ChatContinue(session) => (session, None),
-                Command::ChatRecover(r) => (&r.session_id, Some(&r.message)),
+        Command::ChatContinue(_)
+        | Command::ChatRecover(_)
+        | Command::ChatDismiss(_)
+        | Command::ChatReply { .. } => {
+            let session = match command {
+                Command::ChatContinue(session)
+                | Command::ChatDismiss(session)
+                | Command::ChatReply { session, .. } => session,
+                Command::ChatRecover(r) => &r.session_id,
                 _ => unreachable!(),
             };
             if !super::valid_id(session) {
                 return Err(Error::Invalid);
             }
-            // An uncertain Continue holds its chat: it is shown for Check, never sent again.
+            let (kind, payload) = match command {
+                Command::ChatDismiss(_) => {
+                    (DISMISS, json!({"purpose":DISMISS,"sessionId":session}))
+                }
+                Command::ChatReply { message, .. } if valid_reply(message) => (
+                    REPLY,
+                    json!({"purpose":REPLY,"sessionId":session,"message":message}),
+                ),
+                Command::ChatReply { .. } => return Err(Error::Invalid),
+                // The Recovery payload reads the open chat after check() below.
+                Command::ChatRecover(_) => (RECOVER, Value::Null),
+                _ => (CONTINUE, json!({"purpose":CONTINUE,"sessionId":session})),
+            };
+            // An uncertain Continue, Recovery, Dismiss or Reply holds its chat: it is shown for Check, never sent again.
+            // Continue and Recovery hold each other.
             if let Some(prior) = journal.planning.values().find(|r| {
                 same_home(&r.source, &t.source)
-                    && is_continue(r)
+                    && (if kind == CONTINUE || kind == RECOVER {
+                        is_continue(r)
+                    } else {
+                        r.operation["kind"] == kind
+                    })
                     && r.pending()
                     && r.mission() == session.as_str()
             }) {
                 return Ok(json!({"snapshot":null,"outcome":summary(prior)}));
             }
             check()?;
-            let payload = match message {
-                Some(message) => {
+            let payload = match command {
+                Command::ChatRecover(r) => {
                     let chat = shared
                         .session_chat
                         .lock()
@@ -379,9 +442,9 @@ pub(super) async fn handle(
                                 && matches!(c.state, "failed" | "stopped")
                         })
                         .ok_or(Error::Stale)?;
-                    json!({"purpose":RECOVER,"sessionId":session,"message":message,"updatedAt":c.updated_at,"inputGeneration":c.input_generation})
+                    json!({"purpose":RECOVER,"sessionId":session,"message":r.message,"updatedAt":c.updated_at,"inputGeneration":c.input_generation})
                 }
-                None => json!({"purpose":CONTINUE,"sessionId":session}),
+                _ => payload,
             };
             let mut record =
                 planning::record(&t.source, session.clone(), CONTINUE_BINDING.into(), payload)?;
@@ -461,6 +524,45 @@ mod tests {
         ] {
             assert_eq!(validate_continue(&forged), Err(Error::Storage), "{forged}");
         }
+        // Dismiss has the same shape under its own kind; a purpose of the other kind is forged.
+        let mut dismiss = op(
+            "s1",
+            json!({"purpose":DISMISS,"sessionId":"s1"}),
+            CONTINUE_BINDING,
+        );
+        dismiss["kind"] = json!(DISMISS);
+        assert_eq!(validate_continue(&dismiss), Ok(()));
+        dismiss["kind"] = json!(CONTINUE);
+        assert_eq!(validate_continue(&dismiss), Err(Error::Storage));
+        // A Reply carries the user's words, and only a Reply does.
+        let mut reply = op(
+            "s1",
+            json!({"purpose":REPLY,"sessionId":"s1","message":"Postgres"}),
+            CONTINUE_BINDING,
+        );
+        reply["kind"] = json!(REPLY);
+        assert_eq!(validate_continue(&reply), Ok(()));
+        for message in [
+            json!(""),
+            json!("  "),
+            json!(1),
+            json!("x".repeat(REPLY_CHARS + 1)),
+        ] {
+            let mut forged = op(
+                "s1",
+                json!({"purpose":REPLY,"sessionId":"s1","message":message}),
+                CONTINUE_BINDING,
+            );
+            forged["kind"] = json!(REPLY);
+            assert_eq!(validate_continue(&forged), Err(Error::Storage), "{forged}");
+        }
+        let mut wordless = op(
+            "s1",
+            json!({"purpose":REPLY,"sessionId":"s1"}),
+            CONTINUE_BINDING,
+        );
+        wordless["kind"] = json!(REPLY);
+        assert_eq!(validate_continue(&wordless), Err(Error::Storage));
     }
 
     #[test]
@@ -476,5 +578,22 @@ mod tests {
             planning::exact(receipt(json!({"sessionId":"s2","operationId":"op"})), &o).is_err()
         );
         assert!(planning::exact(receipt(json!({"sessionId":"s1","operationId":"x"})), &o).is_err());
+    }
+    #[test]
+    fn a_screen_agent_chat_is_a_chat_mode() {
+        let mut choice = ChatChoice {
+            draft_id: uuid::Uuid::new_v4().to_string(),
+            project_id: "p".into(),
+            project_path: "/repo".into(),
+            context_digest: "a".repeat(64),
+            mode: "screen".into(),
+            model: "fake/model".into(),
+            thinking: "high".into(),
+            allowance_micros: None,
+            funding_required: None,
+        };
+        assert!(choice.validate());
+        choice.mode = "watch".into();
+        assert!(!choice.validate());
     }
 }

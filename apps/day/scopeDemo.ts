@@ -55,7 +55,7 @@ export class ScriptedScope implements ScopeSource {
 		next?.();
 	}
 
-	async read(scope: string, generation: number) {
+	async read(scope: string, generation: number, selectedOnly = false) {
 		this.reads.set(this.reads() + 1);
 		if (this.script.hold) await new Promise<void>((resolve) => this.#held.push(resolve));
 		if (this.script.unavailable) return { ok: false as const, refusal: "unavailable" as Refusal };
@@ -111,7 +111,14 @@ export class ScriptedScope implements ScopeSource {
 				errors: readable ? {} : { today: "Pilot could not reach billing's coordinator." },
 			};
 		});
-		const outside = rows.filter((r) => !r.selected);
+		// The first read of a switch, as the native root answers it: the other projects follow.
+		const first = selectedOnly && scope !== "all";
+		const shown = first
+			? rows.map((r) =>
+					r.selected ? r : { ...r, currentness: "reading", needsYou: { count: null, complete: false } },
+				)
+			: rows;
+		const outside = shown.filter((r) => !r.selected);
 		const unknown = outside.some((r) => r.needsYou.count === null);
 		return {
 			ok: true as const,
@@ -121,8 +128,9 @@ export class ScriptedScope implements ScopeSource {
 				generation,
 				own: this.script.own,
 				catalogComplete: true,
-				complete: rows.every((r) => !r.selected || r.currentness === "live"),
-				projects: rows,
+				complete: shown.every((r) => !r.selected || r.currentness === "live"),
+				partial: first,
+				projects: shown,
 				outsideNeedsYou: unknown
 					? { count: null, complete: false }
 					: { count: outside.reduce((n, r) => n + (r.needsYou.count ?? 0), 0), complete: true },

@@ -55,6 +55,9 @@ test("an issue opens its mission, or its request in New; Escape goes back to Tod
 	const app = await page();
 	await app.press("id:linear-issue-ln-219");
 	await app.press("id:linear-mission-ln-219");
+	// The mission page keeps its goal folded under "Goal and spec" (MissionScreen.tsx).
+	await app.waitFor("id:mission-section-goal");
+	await app.press("id:mission-section-goal");
 	await app.waitFor("Show search results in under 200 ms for large workspaces.");
 	expect(app.shows("id:linear")).toBe(false);
 	await app.keyboard.press("escape");
@@ -83,11 +86,11 @@ test("an incomplete read says how many issues it does not show", async () => {
 	expect(app.shows("id:linear-complete")).toBe(false);
 });
 
-test("source trouble keeps the saved issues and says so; Read again only reads", async () => {
+test("source trouble keeps the saved issues and says so; a read only reads", async () => {
 	const app = await page("trouble");
 	await app.waitFor("Linear needs you to sign in again. These are the issues it saved before.");
 	expect(app.shows("id:linear-issue-ln-219")).toBe(true);
-	await app.press("id:linear-read");
+	await app.press("Fixture read");
 	await app.waitFor("Reads: 2");
 });
 
@@ -109,13 +112,15 @@ test("an unreadable first read shows nothing guessed; a later read keeps the las
 	expect(app.shows("This is not the same as having none.")).toBe(true);
 	expect(app.shows("id:linear-issue-ln-219")).toBe(false);
 	await app.press("role:button[Mode saved]");
-	await app.press("id:linear-read");
+	await app.press("Fixture read");
 	await app.waitFor("id:linear-issue-ln-219");
 	expect(app.shows("id:linear-off")).toBe(false);
 	await app.press("role:button[Mode unreadable]");
-	await app.press("id:linear-read");
-	await app.waitFor("Pilot could not reach its service. What shows is from Pilot's last read.");
+	await app.press("Fixture read");
+	// The issues stay, with no note: only the shared old-data rule warns.
+	await app.wait(200);
 	expect(app.shows("id:linear-issue-ln-219")).toBe(true);
+	expect(app.shows("id:linear-off")).toBe(false);
 });
 
 test("without an active cycle, the page says Pilot saved the open issues", async () => {
@@ -168,7 +173,7 @@ test("a restored page never shows another project's issues in its place", async 
 	await app.press("Save and reopen");
 	await app.waitFor("Kept: [mock-project/ln-219]");
 	await app.press("role:button[Mode other project]");
-	await app.press("id:linear-read");
+	await app.press("Fixture read");
 	await app.waitFor("id:linear-other-project");
 	expect(app.shows("Nothing is shown. This is not the same as having none.")).toBe(true);
 	expect(app.shows("id:linear-issue-ln-219")).toBe(false);
@@ -191,14 +196,14 @@ test("a restored issue that is no longer shown says so and opens nothing else", 
 	await app.press("Save and reopen");
 	await app.waitFor("Kept: [mock-project/ln-231]");
 	await app.press("role:button[Mode overflow]");
-	await app.press("id:linear-read");
+	await app.press("Fixture read");
 	await app.waitFor("The issue you had open is not among the issues shown here.");
 	await app.press("role:button[Mode saved]");
-	await app.press("id:linear-read");
+	await app.press("Fixture read");
 	await app.waitFor("id:linear-detail-ln-231");
 	expect(app.shows("id:linear-issue-gone")).toBe(false);
 	await app.press("id:linear-issue-ln-226");
 	await app.press("role:button[Mode no cycle]");
-	await app.press("id:linear-read");
+	await app.press("Fixture read");
 	await app.waitFor("The issue you had open is not in Pilot's saved copy now.");
 });

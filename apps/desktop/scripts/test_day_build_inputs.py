@@ -206,6 +206,25 @@ fi
         self.assertEqual(result.stdout, "fresh\n")
         self.assertTrue((isolated / "runner").exists())
 
+    def test_day_wrappers_preserve_cargo_debug_defaults_and_overrides(self):
+        report = 'printf "%s:%s:%s\\n" "${CARGO_PROFILE_DEV_DEBUG-unset}" "${CARGO_PROFILE_TEST_DEBUG-unset}" "${CARGO_PROFILE_RELEASE_DEBUG-unset}"\n'
+        self.tools["cargo"].write_text("#!/bin/sh\n" + report)
+        self.tools["nsh"].write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo "nsh 0.5.0 (f4d68f7)"; else\n'
+                                     + report + 'fi\n')
+        base = {"PATH": str(self.tools["cargo"].parent) + ":/usr/bin:/bin",
+                "NSH_DAY_CLI": str(self.tools["nsh"])}
+        for selection in ({}, {"NSH_DAY_REAL_CARGO": str(self.tools["cargo"])}):
+            for wrapper, args in (("scripts/cargo", ["build", "--release"]), ("nsh.sh", ["--help"])):
+                for overrides, expected in (({}, "unset:unset:unset\n"),
+                                            ({"CARGO_PROFILE_DEV_DEBUG": "2", "CARGO_PROFILE_TEST_DEBUG": "1",
+                                              "CARGO_PROFILE_RELEASE_DEBUG": "line-tables-only"},
+                                             "2:1:line-tables-only\n")):
+                    with self.subTest(selection=selection, wrapper=wrapper, overrides=overrides):
+                        result = subprocess.run([str(bundle.ROOT / "apps/day" / wrapper), *args],
+                                                env=base | selection | overrides,
+                                                capture_output=True, text=True, check=True)
+                        self.assertEqual(result.stdout, expected)
+
     def test_selected_xcode_survives_the_isolated_build_environment(self):
         selected = "/Applications/Xcode_26.2.app/Contents/Developer"
         env = day.environment(self.root, self.tools, {"DEVELOPER_DIR": selected}, None)

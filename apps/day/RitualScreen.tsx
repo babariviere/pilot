@@ -7,6 +7,7 @@ import { effect, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
 import type { DoneEntry, MissionRow } from "pilot-day/native";
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
+import { todayWarning } from "./freshness";
 import { keepScroll } from "./kept";
 import {
 	greeting,
@@ -27,8 +28,8 @@ import type { Rituals } from "./ritualFeed";
 import { backFromStandup, closeRitual, openStandup, ritualRoute, START_STEPS, startStep } from "./ritualView";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
 import { Action, Mark, type MarkKind, MarkLine, Notice, Page, SectionTitle } from "./ui";
-import { focused, focusFront, type Item, queue } from "./view";
-import { freshnessLine, provenance } from "./words";
+import { focusFront, type Item, queue, releaseFront } from "./view";
+import { provenance } from "./words";
 
 const STEPS = ["Since you looked", "Needs you", "Coming up today"].slice(0, START_STEPS);
 
@@ -252,7 +253,7 @@ function StartDay(props: { day: Day; rituals: Rituals }) {
 	// answers nothing: the user decides on Today's card.
 	const decideNow = async () => {
 		if (!(await finish("done"))) return;
-		focused.set(null);
+		releaseFront();
 		focusFront.set(true);
 	};
 	const primary = () => {
@@ -438,7 +439,7 @@ function EndDay(props: { day: Day; rituals: Rituals }) {
 /** Standup notes from Today's read and the recap's results: done, next and waiting. Select the text to copy it. */
 function Standup(props: { day: Day; rituals: Rituals }) {
 	const today = () => props.day.today();
-	const note = () => freshnessLine(today().freshness);
+	const note = () => todayWarning(props.day.freshness, today().freshness);
 	keymap.bind("escape", backFromStandup);
 	return (
 		<View testID="standup-notes" class="gap-6">

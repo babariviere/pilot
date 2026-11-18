@@ -169,11 +169,13 @@ async fn run(phase: &str, source: Source, ledger: PathBuf) {
             assert!(d.help_unavailable.is_some());
             assert_eq!(d.options[0].label, "Reviewed package");
             assert!(!a.can_open, "no root opener, no link button");
-            // Unavailable help and a link without an opener send nothing.
+            // Asking now goes to the asking chat as a clarification (always available);
+            // an empty question is refused and sends nothing. A link without an opener
+            // sends nothing either.
             let ask = AskIntent {
                 decision_id: d.id.clone(),
                 revision: d.revision,
-                question: "Why?".into(),
+                question: "   ".into(),
             };
             assert_eq!(
                 status(TodayFeed::ask(feed.clone(), ask).await),

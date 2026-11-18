@@ -211,3 +211,152 @@ test("Continue sends its fixed words once, only to a stopped chat, and a lost re
 	const sent = (saved.pending as { content: string }[]).filter((p) => p.content === CONTINUE_TEXT);
 	assert.equal(sent.length, 1, "Continue is sent once");
 });
+test("Continue also takes a User Stop hold and a safe failed run; Dismiss takes a failure out of Needs you", async (t) => {
+	const f = await nativeIntakeFixture();
+	t.after(() => f.close());
+	const headers = { "x-pilot-github-capability": f.capability, "content-type": "application/json" };
+	const post = async (op: DurableOperation) =>
+		(await fetch(`${f.root}/api/operations`, { method: "POST", headers, body: JSON.stringify(op) })).json();
+	const envelope = (kind: string, targetId: string, request: Record<string, unknown>, bindingId: string) => {
+		const payload = JSON.stringify(request);
+		return {
+			schemaVersion: 1,
+			operationId: randomUUID(),
+			producerId: randomUUID(),
+			sequence: 1,
+			origin: { ...f.host, hostId: "local" },
+			destination: f.host,
+			kind,
+			targetId,
+			payload,
+			payloadHash: payloadHash(payload),
+			bindingId,
+			bindingGeneration: 1,
+		} as DurableOperation;
+	};
+	const selection = await (
+		await fetch(`${f.root}/api/projects/${f.project.id}/chat-profile?mode=build`, { headers })
+	).json();
+	const create = async () => {
+		const draftId = randomUUID();
+		const created = await post(
+			envelope(
+				"native-chat-create",
+				draftId,
+				{ ...selection, purpose: "native-chat-create", draftId, message: "Fix the parser" },
+				selection.contextDigest,
+			),
+		);
+		assert.equal(created.state, "accepted", JSON.stringify(created));
+		return created.result.sessionId as string;
+	};
+	const op = (kind: string, target: string) =>
+		envelope(kind, target, { purpose: kind, sessionId: target }, "0".repeat(64));
+	type Meta = { outcome?: string; outcomeAt?: number; pending?: unknown[]; missionUserStopGeneration?: number };
+	const metas = (f.sessions as unknown as { metas: Map<string, Meta> }).metas;
+	const idle = (id: string, fields: Meta) =>
+		Object.assign(metas.get(id)!, { pending: [], working: false, initializing: undefined, ...fields });
+	const sent = async (id: string) =>
+		(
+			JSON.parse(await readFile(join(f.home, "sessions", id, "meta.json"), "utf8")).pending as { content: string }[]
+		).filter((p) => p.content === CONTINUE_TEXT).length;
+
+	// A mission chat the user stopped has no outcome, only the User Stop hold. Continue still shows and works.
+	const held = await create();
+	idle(held, { outcome: undefined, missionUserStopGeneration: 1 });
+	assert.equal(f.sessions.get(held)?.canContinue, true);
+	const go = await post(op("chat-continue", held));
+	assert.equal(go.state, "accepted", JSON.stringify(go));
+	assert.equal(await sent(held), 1);
+	assert.equal(metas.get(held)!.missionUserStopGeneration, undefined, "the user's Continue clears the hold");
+
+	// A failed run with no tool in flight takes one retry.
+	const failed = await create();
+	idle(failed, { outcome: "failed", outcomeAt: Date.now() });
+	assert.equal(f.sessions.get(failed)?.canContinue, true);
+	// Dismiss first: it sends nothing and takes the failure out of Needs you.
+	const dismissed = await post(op("chat-dismiss", failed));
+	assert.equal(dismissed.state, "accepted", JSON.stringify(dismissed));
+	assert.equal(f.sessions.get(failed)?.failureDismissed, true);
+	assert.equal(await sent(failed), 0);
+	assert.equal((await post(op("chat-continue", failed))).state, "accepted");
+	assert.equal(await sent(failed), 1);
+
+	// A finished chat takes neither.
+	const done = await create();
+	idle(done, { outcome: "done", outcomeAt: Date.now() });
+	assert.equal(f.sessions.get(done)?.canContinue, undefined);
+	assert.equal((await post(op("chat-continue", done))).state, "rejected");
+	assert.equal((await post(op("chat-dismiss", done))).state, "rejected");
+	assert.equal(await sent(done), 0);
+});
+
+test("Reply sends the user's own words once, only to a chat waiting for a reply", async (t) => {
+	const f = await nativeIntakeFixture();
+	t.after(() => f.close());
+	const headers = { "x-pilot-github-capability": f.capability, "content-type": "application/json" };
+	const post = async (op: DurableOperation, lookup = false) =>
+		(
+			await fetch(`${f.root}/api/operations${lookup ? "/receipt" : ""}`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify(op),
+			})
+		).json();
+	const envelope = (kind: string, targetId: string, request: Record<string, unknown>, bindingId: string) => {
+		const payload = JSON.stringify(request);
+		return {
+			schemaVersion: 1,
+			operationId: randomUUID(),
+			producerId: randomUUID(),
+			sequence: 1,
+			origin: { ...f.host, hostId: "local" },
+			destination: f.host,
+			kind,
+			targetId,
+			payload,
+			payloadHash: payloadHash(payload),
+			bindingId,
+			bindingGeneration: 1,
+		} as DurableOperation;
+	};
+	const selection = await (
+		await fetch(`${f.root}/api/projects/${f.project.id}/chat-profile?mode=build`, { headers })
+	).json();
+	const draftId = randomUUID();
+	const created = await post(
+		envelope(
+			"native-chat-create",
+			draftId,
+			{ ...selection, purpose: "native-chat-create", draftId, message: "Fix the parser" },
+			selection.contextDigest,
+		),
+	);
+	assert.equal(created.state, "accepted", JSON.stringify(created));
+	const sessionId = created.result.sessionId as string;
+	const reply = (message: unknown, extra: Record<string, unknown> = {}) =>
+		envelope("chat-reply", sessionId, { purpose: "chat-reply", sessionId, message, ...extra }, "0".repeat(64));
+	const metas = (f.sessions as unknown as { metas: Map<string, Record<string, unknown>> }).metas;
+	Object.assign(metas.get(sessionId)!, { outcome: "done", pending: [], working: false, initializing: undefined });
+	const sent = async () =>
+		(
+			JSON.parse(await readFile(join(f.home, "sessions", sessionId, "meta.json"), "utf8")).pending as {
+				content: string;
+			}[]
+		).filter((p) => p.content === "Postgres, please.").length;
+	// A finished chat that does not wait for a reply refuses it.
+	assert.equal((await post(reply("Postgres, please."))).state, "rejected");
+	const real = f.sessions.get.bind(f.sessions);
+	t.mock.method(f.sessions, "get", (id: string) => {
+		const chat = real(id);
+		return chat && id === sessionId ? { ...chat, waitsForReply: true as const } : chat;
+	});
+	for (const bad of [reply(""), reply(42), reply("x".repeat(12_001)), reply("ok", { note: "x" })])
+		assert.equal((await post(bad)).state ?? "rejected", "rejected");
+	const op = reply("Postgres, please.");
+	const receipt = await post(op);
+	assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+	assert.deepEqual(await post(op, true), receipt);
+	assert.deepEqual(await post(op), receipt);
+	assert.equal(await sent(), 1, "Reply is sent once");
+});

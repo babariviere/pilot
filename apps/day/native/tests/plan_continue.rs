@@ -61,10 +61,40 @@ fn a_round_waiting_for_answers_takes_only_a_comment() {
     assert!(plan_host::continue_request(&waiting, &intent("m1", "Plainer, please")).is_ok());
 }
 
+#[test]
+fn a_reply_to_the_planner_goes_as_a_note_and_its_last_words_show() {
+    let mut stuck = read(true);
+    stuck["unstick"] = json!({"state":"stuck","line":"It may be waiting for your reply.","fix":"continue",
+        "checks":[],"reply":true,"plannerSays":"Which database?"});
+    let page = plan_host::page(&stuck, &[], &Local::default());
+    let u = page.unstick.expect("unstick");
+    assert!(u.reply);
+    assert_eq!(u.planner_says, "Which database?");
+    let reply = ContinueIntent {
+        note: "Use Postgres.".into(),
+        ..intent("m1", "")
+    };
+    let (_, request) = plan_host::continue_request(&stuck, &reply).expect("a reply sends");
+    assert_eq!(
+        request,
+        json!({"purpose":"plan-continue","note":"Use Postgres."})
+    );
+    // A reply is not a comment on a waiting round, and has a size limit.
+    let mut waiting = stuck.clone();
+    waiting["continuePlanning"]["feedbackOnly"] = json!(true);
+    assert!(plan_host::continue_request(&waiting, &reply).is_err());
+    let long = ContinueIntent {
+        note: "x".repeat(2001),
+        ..intent("m1", "")
+    };
+    assert!(plan_host::continue_request(&stuck, &long).is_err());
+}
+
 fn intent(mission: &str, feedback: &str) -> ContinueIntent {
     ContinueIntent {
         mission_id: mission.into(),
         feedback: feedback.into(),
+        note: String::new(),
     }
 }
 

@@ -29,6 +29,8 @@ export interface DiagnosisControls {
 	message(): string;
 	operations(): DiagnosisOperation[];
 	read(): Promise<void>;
+	/** Whether the last read failed. Pilot then reads again on its own (freshness.ts). */
+	readFailed?(): boolean;
 	write(
 		action: "save" | "clear" | "start" | "send",
 		value: unknown,
@@ -40,7 +42,8 @@ export function connectedDiagnosisControls(window: string): DiagnosisControls {
 	const snapshot = signal<DiagnosisSnapshot | null>(null),
 		busy = signal(false),
 		message = signal(""),
-		operations = signal<DiagnosisOperation[]>([]);
+		operations = signal<DiagnosisOperation[]>([]),
+		readFailed = signal(false);
 	let lost = false;
 	function receive(r: { snapshot: DiagnosisSnapshot | null; value: Record<string, unknown> }) {
 		if (r.snapshot) snapshot.set(r.snapshot);
@@ -53,12 +56,13 @@ export function connectedDiagnosisControls(window: string): DiagnosisControls {
 		busy.set(true);
 		try {
 			const r = await call<DiagnosisSnapshot>(window, "day.diagnosis.read", {});
+			readFailed.set(!r.ok);
 			if (r.ok) {
 				receive(r);
 				message.set("");
 			} else {
 				if (snapshot()) snapshot.set({ ...snapshot()!, binding: "" });
-				message.set("Diagnostics settings could not be read. Read again before changing them.");
+				message.set("Diagnostics settings could not be read. Pilot keeps trying; changes wait until it can.");
 			}
 		} finally {
 			busy.set(false);
@@ -140,5 +144,5 @@ export function connectedDiagnosisControls(window: string): DiagnosisControls {
 			busy.set(false);
 		}
 	}
-	return { snapshot, busy, message, operations, read, write, check };
+	return { snapshot, busy, message, operations, read, readFailed, write, check };
 }

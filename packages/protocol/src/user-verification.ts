@@ -60,6 +60,20 @@ export interface DeliveredWork {
 	/** Opaque OperationJournal target. Use unchanged; clients need not reproduce canonical hashing. */
 	targetId: string;
 	ownerSessionId: string | null;
+	/**
+	 * Where the owning chat is, while there is no delivered result: so the page can offer the action that moves it.
+	 * `queued` waits for a coding slot; `canContinue` as in SessionSummary. `waiting` is SessionSummary.waitsForReply,
+	 * shown even with an earlier result, with the chat's last message in `says` (full reads only). Omitted with a
+	 * result or without a chat.
+	 */
+	chat?: {
+		state: "working" | "queued" | "question" | "waiting" | "stopped" | "failed" | "done" | "idle";
+		reason?: string;
+		/** With `queued`: its place in line and what holds the slots. */
+		queue?: import("./index.ts").CodingQueueView;
+		canContinue?: true;
+		says?: string;
+	};
 	/** A standalone chat's own title. Tasks are named by their mission's records instead. */
 	title?: string;
 	scope?: string;

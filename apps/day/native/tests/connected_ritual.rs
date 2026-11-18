@@ -15,6 +15,8 @@
 //! cannot be read said as such.
 //! `support/ritual_joined.rs` joins those two sides over a readable synthetic
 //! HTTP/WS service: real Connected.tsx, Bridge, host clock and durable journal.
+#[path = "support/app_source.rs"]
+mod app_source;
 use nsh_core::{platform::Lifecycle, prelude::*};
 use nsh_engine::{EngineConfig, HostCall, HostChannel};
 use nsh_testing::{Headless, compile_tsx};
@@ -403,7 +405,7 @@ fn entry() -> PathBuf {
         if (name.ends_with(".ts") || name.ends_with(".tsx") || name == "theme.json")
             && !name.ends_with(".test.tsx")
         {
-            std::fs::copy(&path, dir.join(&name)).unwrap();
+            app_source::copy(&path, &dir.join(&name));
         }
     }
     // The component library lives in ui/; screens import it as "./ui".

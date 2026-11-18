@@ -2,6 +2,7 @@ import type {
 	DeliveredWork,
 	DeliveredWorkList,
 	DurableOperation,
+	SessionSummary,
 	UserVerificationIntent,
 	UserVerificationLookup,
 	VerificationSubject,
@@ -19,11 +20,42 @@ export const verificationKey = (subject: VerificationSubject) => payloadHash(can
  * is cut and says so, and the chat keeps it whole. It keeps each result read small, since Day reads it when it opens.
  */
 export const FINAL_REPLY_CHARS = 16_000;
+
+/**
+ * Where a chat with no delivered result is, from its summary, so the page can name the action that moves it. A chat
+ * waiting for a reply shows even with an earlier result: it has nothing new for the user to check.
+ */
+export function chatState(chat: SessionSummary | undefined): DeliveredWork["chat"] {
+	if (!chat || chat.archivedAt !== undefined) return undefined;
+	const reason = chat.outcomeReason ?? chat.error;
+	const state: NonNullable<DeliveredWork["chat"]>["state"] = chat.codingQueueReason
+		? "queued"
+		: chat.working || chat.state === "working" || chat.state === "starting"
+			? "working"
+			: chat.outcome === "question" || chat.attentionReason?.kind === "asks"
+				? "question"
+				: chat.waitsForReply
+					? "waiting"
+					: chat.outcome === "stopped" || chat.workHolds?.includes("User Stop hold")
+						? "stopped"
+						: chat.outcome === "failed" || chat.state === "failed"
+							? "failed"
+							: chat.outcome === "done"
+								? "done"
+								: "idle";
+	return {
+		state,
+		...(state === "queued" ? { reason: chat.codingQueueReason } : reason && state === "failed" ? { reason } : {}),
+		...(state === "queued" && chat.codingQueue ? { queue: chat.codingQueue } : {}),
+		...(chat.canContinue ? { canContinue: true as const } : {}),
+	};
+}
 interface Dependencies {
 	store: MissionStore;
 	journal: OperationJournal;
 	projects: Pick<ProjectStore, "require">;
-	sessions: Pick<SessionManager, "get" | "sendDurable" | "lastAssistantReply" | "chatReport">;
+	sessions: Pick<SessionManager, "get" | "sendDurable" | "lastAssistantReply" | "chatReport"> &
+		Partial<Pick<SessionManager, "waitingSays">>;
 }
 
 /** User assessment is independent of agent completion, review, task status and production. */
@@ -266,6 +298,8 @@ export class UserVerifications {
 			}
 		}
 		const deliveryId = identity ? payloadHash(canonicalJSON({ subject, ownerSessionId, identity })) : null;
+		const owner = ownerSessionId ? this.deps.sessions.get(ownerSessionId) : undefined;
+		const chat = !deliveryId || owner?.waitsForReply ? chatState(owner) : undefined;
 		const key = verificationKey(subject),
 			verification = this.deps.store.userVerifications.current(key);
 		const queue = this.deps.store.userVerifications.reviewQueue(key, deliveryId);
@@ -276,6 +310,7 @@ export class UserVerifications {
 			deliveryId,
 			ownerSessionId,
 			...(revisionRecipientSessionId ? { revisionRecipientSessionId } : {}),
+			...(chat ? { chat } : {}),
 			...(title ? { title } : {}),
 			...(scope ? { scope } : {}),
 			...(taskState ? { taskState } : {}),
@@ -315,8 +350,14 @@ export class UserVerifications {
 			chatId && !chatReport
 				? await this.deps.sessions.lastAssistantReply(chatId, FINAL_REPLY_CHARS + 1).catch(() => undefined)
 				: undefined;
+		// A chat waiting for a reply shows its last message, so the user can answer it here.
+		const says =
+			current.chat?.state === "waiting" && current.ownerSessionId
+				? await this.deps.sessions.waitingSays?.(current.ownerSessionId)
+				: undefined;
 		return {
 			...current,
+			...(says && current.chat ? { chat: { ...current.chat, says } } : {}),
 			...(chatReport ? { chatReport } : {}),
 			...(reply?.trim()
 				? {

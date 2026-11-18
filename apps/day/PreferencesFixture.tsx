@@ -28,6 +28,8 @@ mount(() => (
 				{(n) => <Action label={`Next ${n()}`} onPress={() => preferences.next.set(n())} />}
 			</Each>
 			<Action label="Unreadable" onPress={() => preferences.mode.set("unreadable")} />
+			{/* A read as Pilot starts one on its own (a change, the window coming back). */}
+			<Action label="Fixture read" onPress={() => void day.preferences.source.read()} />
 			<Action label="History pages of 2" onPress={() => preferences.page.set(2)} />
 			<Action label="History fails" onPress={() => preferences.historyFails.set(true)} />
 			<Action label="Empty project" onPress={() => preferences.empty()} />

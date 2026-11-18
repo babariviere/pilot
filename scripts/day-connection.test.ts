@@ -59,7 +59,10 @@ registerHooks({
 				shortCircuit: true,
 				source: `export const host = globalThis.__dayLifecycleHost;
 export function signal(value) { const read = () => value; read.set = v => { value = v }; read.update = f => { value = f(value) }; return read; }
-export function effect() {}`,
+export function effect() {}
+export function cleanup() {}
+export function untracked(read) { return read() }
+export function lifecycle() { return "active" }`,
 			};
 		if (url === "test:day-presentation")
 			return {
@@ -110,7 +113,7 @@ test("opening coalesces retries, keeps startup once and acknowledges only the la
 	assert.equal(count("day.flush.ack"), 1);
 	assert.deepEqual(
 		[...timers.values()].map((t) => t.delay),
-		[1000],
+		[2000], // The shared backoff (freshness.ts): 2 s first, so a read an event started lands first.
 	);
 	void connection.readAgain();
 	await settle();
@@ -143,6 +146,8 @@ const today = (size = 0) => ({
 	notMoving: [],
 	unreported: [],
 	intake: { requests: [] },
+	freshness: { state: "live", age: "", reason: "" },
+	attention: { state: "live", age: "", reason: "" },
 });
 
 test("a refused saved view disposes its entire attempt before retry", async () => {
@@ -236,13 +241,15 @@ test("a refused saved view disposes its entire attempt before retry", async () =
 	}
 });
 
-test("automatic retry delays and warning exhaustion preserve the startup owner", async () => {
+test("automatic retry delays and the warning after 3 tries preserve the startup owner", async () => {
 	reset();
 	replies.set("day.today.read", () => ({ version: 1, error: "offline" }));
 	const connection = await import(`${dayModule("connection")}?retry-budget`);
 	await settle();
-	for (const delay of [1000, 2000, 4000, 8000, 16000]) {
-		assert.equal(connection.connection().state, "waiting");
+	// The shared backoff, capped at one read a minute. It looks like opening for 3 tries,
+	// then says why nothing shows, and keeps trying by itself ("Live data in the UI").
+	for (const [n, delay] of [2000, 4000, 8000, 16000, 32000, 60000].entries()) {
+		assert.equal(connection.connection().state, n < 3 ? "waiting" : "none");
 		assert.equal(timers.size, 1);
 		const [id, timer] = [...timers][0];
 		assert.equal(timer.delay, delay);
@@ -251,10 +258,10 @@ test("automatic retry delays and warning exhaustion preserve the startup owner",
 		await settle();
 	}
 	assert.equal(connection.connection().state, "none");
-	assert.equal(count("day.today.read"), 6);
+	assert.equal(count("day.today.read"), 7);
 	assert.equal(count("day.attention.read"), 1);
 	assert.equal(count("day.ritual.read"), 1);
-	assert.equal(timers.size, 0);
+	assert.equal(timers.size, 1, "it keeps trying");
 });
 
 test("admission retains one graph through invalidations and flush, then closes it once", async () => {
@@ -337,7 +344,8 @@ test("synthetic large-session invalidation bursts and navigation resolution", as
 	answer(ok(today(5000)));
 	await settle();
 	assert.equal(count("day.today.read"), 2, "one catch-up read, not one per event");
-	answer(ok(today(5000)));
+	// A newer read: one equal to what shows publishes nothing ("Live data in the UI").
+	answer(ok({ ...today(5000), revision: 2 }));
 	await reading;
 	assert.equal(published, 1, "invalidated reply never publishes");
 	navigate();

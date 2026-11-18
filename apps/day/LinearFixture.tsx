@@ -68,6 +68,8 @@ mount(() => (
 	<View class="flex-1">
 		<View class="flex-row flex-wrap items-center gap-1 px-6 pt-2">
 			<Text testID="reads">{`Reads: ${linear.reads()}`}</Text>
+			{/* A read as Pilot starts one on its own (a change, the window coming back). */}
+			<Action label="Fixture read" onPress={() => void day.linear.source.read()} />
 			<Each of={MODES} key={(m) => m[0]}>
 				{(m) => <Action label={`Mode ${m()[0]}`} onPress={() => linear.mode.set(m()[1])} />}
 			</Each>

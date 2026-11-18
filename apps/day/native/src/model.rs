@@ -903,6 +903,16 @@ pub struct Problem {
     /// The mission task behind the row, named on its mission page. Its
     /// result page opens through the task.
     pub task_id: Option<String>,
+    /// Its chat can take one Continue (the service says it is stopped, or
+    /// failed with a safe retry). Continue is sent once, on a press.
+    pub can_continue: bool,
+    /// A failed chat: Dismiss takes it off Needs you. It sends nothing to the chat.
+    pub can_dismiss: bool,
+    /// A chat that ended its turn with no result and no question: its last
+    /// message, word for word. It may ask the user something.
+    pub says: Option<String>,
+    /// Reply sends the user's own words to that chat, once.
+    pub can_reply: bool,
 }
 
 /// One result since the user last looked.
@@ -1097,6 +1107,10 @@ pub struct Today {
     pub attention: Freshness,
     /// New requests from Slack and Linear, from the missions' read.
     pub intake: Intake,
+    /// The project this read is of. A screen shows it only under that
+    /// project, so another project's rows never show under a new choice.
+    /// Empty when the read names no project (mock worlds).
+    pub project: String,
 }
 
 /// Answer a decision in the user's own words, with or without a pick.

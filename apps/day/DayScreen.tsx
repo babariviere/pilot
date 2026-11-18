@@ -87,6 +87,8 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 		const now = lifecycle();
 		if (now === "active" && was !== "active") {
 			untracked(() => {
+				// Today's service read too, at most every 30 s (freshness.ts).
+				props.day.freshness?.focus();
 				void rituals.refresh();
 				// Results waiting for a check, looked at again. Passive.
 				void props.day.delivery?.source.readSaved();

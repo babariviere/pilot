@@ -123,6 +123,7 @@ impl WindowOwner {
         configuration.host = bridge.channel();
         crate::macos_artifact::register(main, &configuration.components, &configuration.host);
         let view = nsh_platform_macos::AppView::new(main, configuration);
+        crate::macos_screen::register(&bridge, &view);
         Self {
             view,
             bridge,

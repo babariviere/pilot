@@ -8,6 +8,7 @@ export const PLANNING_SKILL_PATHS = ["wayfinder", "to-spec", "to-tickets", "rese
 export const PLANNING_SKILL_ADAPTATION = `Pilot-native planning adapter (overrides upstream publishing and execution instructions):
 Read actual wayfinder for unclear multi-session routes; use grill-with-docs for bounded planning. Read to-spec then to-tickets after decisions. Sources: ${PLANNING_SKILL_PATHS.join(", ")}.
 Read interview for its opaque expected token, then save the entire initial question list with interview action questions. Keep mission_plan plan-ask/plan-review for map-linked topic and review rounds. The tool returns the saved round; end the turn while the host holds dependent work. Never wait for human answers inside a tool. Only explicit final complete submission can request one planning-only continuation.
+Never end a turn by asking the user something in prose: Pilot cannot show it as a question, and planning stalls. Ask with a saved round (plan-ask or interview questions) instead.
 Later interviews contain NEW clarification questions only. Earlier answers and decisions are reference context, not questions to repeat. Explain the specific new gap when a prior answer needs clarification. Save each new round completely before yielding; submission completes that round, not build approval. Limits: 40 questions and 40 KiB per round, 8 options per question, 1500 bytes of context per question; refuse oversized rounds rather than dropping questions.
 For an explicitly requested Revisit after publication, read current agreement/tasks/active decisions and settled answers, not the old creation plan. Use interview action questions to save only new kind=revisit questions or an inert action revision delta using the exact read revisionSource. Never reuse creation approval, publish a creation plan again, apply a delta, wake a held planner or start execution. The user's separate exact confirmation applies changes and keeps holds/permissions.
 The mission is the map: destination, linked existing decisions, precise planning questions and first-class Fog of war. Read shows settled questions under settled, one line each; plan-map saves list only open questions, and settled ones stay. Reuse settled decisions; never reopen them merely to adopt a skill. Knowledge holds research with provenance, not duplicate files. Keep fog distinct from questions, build tasks and exclusions. Graduate precise fog atomically to linked planning questions; frontier means unclaimed open questions whose dependencies resolved, not execution permission.
@@ -36,6 +37,7 @@ export function planningToolAllowed(name: string, input?: Record<string, unknown
 		"grep",
 		"ls",
 		"source_roots",
+		"reference_sources",
 		"code_search",
 		"code_symbols",
 		"code_definition",

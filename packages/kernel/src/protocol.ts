@@ -309,6 +309,12 @@ export type KernelCommand =
 			result?: import("./coordinator-sources.ts").CoordinatorSources;
 			error?: string;
 	  }
+	| {
+			type: "source.references.result";
+			callId: string;
+			result?: import("./reference-sources.ts").ReferenceSource[];
+			error?: string;
+	  }
 	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "knowledge.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "insights.backlog.result"; callId: string; result?: JsonValue; error?: string }
@@ -316,6 +322,8 @@ export type KernelCommand =
 	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "chatReport.result"; callId: string; result?: JsonValue; error?: string }
+	/** The bound Day window's answer to a screen.call. For a screenshot: ScreenPictureData. */
+	| { type: "screen.result"; callId: string; result?: JsonValue; error?: string }
 	| {
 			type: "diagnostics.context.result";
 			callId: string;
@@ -439,6 +447,8 @@ export type KernelPacket =
 	| { type: "insights.backlog.call"; callId: string; request: unknown }
 	/** No caller-supplied identity or roots. Only the supervised coordinator may request its current scope. */
 	| { type: "source.scope"; callId: string }
+	/** pilotd resolves this session's project dependency and linked-project roots. No caller-supplied roots. */
+	| { type: "source.references"; callId: string }
 	| {
 			type: "memory.call";
 			callId: string;
@@ -471,6 +481,8 @@ export type KernelPacket =
 	| { type: "diagnostics.call"; callId: string; sessionId?: string; limit?: number }
 	| { type: "diagnostics.context.call"; callId: string; request: import("@pilot/protocol").DiagnosticContextRequest }
 	| { type: "diagnostics.context.cancel"; callId: string }
+	/** A ui_* tool call of a screen agent chat, answered by screen.result. Cancelled like a context read. */
+	| { type: "screen.call"; callId: string; operation: import("@pilot/protocol").ScreenOperation }
 	/** Explicitly granted target-history read. Caller identity and target scope come from the supervised worker. */
 	| { type: "diagnostics.history.call"; callId: string; sessionId: string; before?: number; limit?: number }
 	/** Fixed-host Pilot log inventory/search/excerpts. No caller-supplied paths or host/session selectors. */

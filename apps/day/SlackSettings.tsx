@@ -1,4 +1,5 @@
 import { effect, Text, untracked, View } from "nsh";
+import { keepRead } from "./freshness";
 import type { SlackControls, SlackSnapshot } from "./slackControls";
 import { safeSlackLink, slackDraft, splitSlackNames } from "./slackDraft";
 import { Action, Field, Picker, SectionTitle } from "./ui";
@@ -19,6 +20,12 @@ export function SlackSettings(props: { controls: SlackControls }) {
 	effect(() => {
 		untracked(() => void c.read());
 	});
+	// Pilot reads again on its own after a failed read, and when the window comes back.
+	const reads = keepRead(
+		() => c.read(),
+		() => c.readFailed?.() ?? false,
+		() => !!c.snapshot(),
+	);
 	effect(() => {
 		const s = c.snapshot();
 		if (s)
@@ -52,9 +59,11 @@ export function SlackSettings(props: { controls: SlackControls }) {
 				<SectionTitle title="Slack intake" />
 				<Text class="text-sm text-muted-foreground">Project: {s()?.projectName ?? "Unavailable"}</Text>
 			</View>
-			<View class="flex-row">
-				<Action label="Read again" testID="slack-read" disabled={c.busy()} onPress={() => void c.read()} />
-			</View>
+			<If when={reads.warn()}>
+				<View class="flex-row">
+					<Action label="Try now" testID="slack-read" disabled={c.busy()} onPress={() => void reads.now()} />
+				</View>
+			</If>
 			<If when={c.message()}>
 				<Text testID="slack-message" class="text-sm text-needs-ink">
 					{c.message()}
@@ -87,7 +96,7 @@ export function SlackSettings(props: { controls: SlackControls }) {
 			</Each>
 			<If when={!s()}>
 				<Text class="text-sm text-muted-foreground">
-					Slack settings are unavailable. Read again; nothing has been changed.
+					Slack settings are unavailable. Pilot keeps trying; nothing has been changed.
 				</Text>
 			</If>
 			<If when={s()}>

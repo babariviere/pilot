@@ -97,7 +97,7 @@ impl HistoryRequest {
 
 /// One explicit user write, against the exact source the window showed.
 /// The host picks the operation ID and, for a new topic, the topic ID.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Intent {
     mission_id: String,
@@ -226,7 +226,8 @@ pub(super) fn validate_record(op: &Value) -> Result<(), Error> {
 }
 
 /// Only an accepted receipt whose topic shows this exact effect settles a write.
-/// A send also needs the planning admission of this same operation.
+/// A send also needs its delivery: the thread chat that took it, the planning
+/// admission of this same operation, or the queued mark of a message saved to wait.
 pub(super) fn exact_result(op: &Value, r: &Value) -> Result<(), Error> {
     let p = payload(op).map_err(|_| Error::Unknown)?;
     let topic = &r["result"]["topic"];
@@ -240,11 +241,15 @@ pub(super) fn exact_result(op: &Value, r: &Value) -> Result<(), Error> {
             .as_array()
             .is_some_and(|refs| refs.contains(&p["reference"])),
         Some("thread-send") => {
-            // Sent now (its admission) or saved to wait for the planning agent (queued).
+            // Taken by the thread chat, sent to the planning agent (its admission),
+            // or saved to wait for it (queued).
             topic["inputs"]
                 .as_array()
                 .is_some_and(|inputs| inputs.iter().any(|i| i["operationId"] == id))
-                && (r["result"]["admission"]["admissionId"] == op["operationId"]
+                && (r["result"]["chat"]["sessionId"]
+                    .as_str()
+                    .is_some_and(valid_id)
+                    || r["result"]["admission"]["admissionId"] == op["operationId"]
                     || r["result"]["queued"] == true)
         }
         _ => false,
@@ -685,6 +690,19 @@ fn refused(reason: &str) -> Value {
     json!({"operationId":Value::Null,"purpose":Value::Null,"topicId":Value::Null,"state":"refused","reason":reason})
 }
 
+/// A message or a new thread does not depend on the other threads. When the mission's thread
+/// list moved since the window read it (another thread's reply, a message sent before), the
+/// write goes against the newest read, and `qualify` still checks this thread. A disposition or a
+/// link stays bound to the exact read shown.
+fn rebind(intent: &Intent, current: &Value) -> Option<Intent> {
+    let source = current["source"].as_str().filter(|s| is_source(s))?;
+    (source != intent.source && matches!(intent.purpose.as_str(), "thread-send" | "thread-create"))
+        .then(|| Intent {
+            source: source.to_owned(),
+            ..intent.clone()
+        })
+}
+
 /// Checks the intent against the fresh read the host just made. None: send it.
 fn qualify(intent: &Intent, current: &Value) -> Result<Option<&'static str>, Error> {
     if current["source"] != intent.source.as_str() {
@@ -778,6 +796,8 @@ pub(super) async fn handle(
             }
             let current = read(t, &mission).await?;
             check()?;
+            let rebound = rebind(intent, &current);
+            let intent = rebound.as_ref().unwrap_or(intent);
             if let Some(reason) = qualify(intent, &current)? {
                 return Ok(
                     json!({"snapshot":current,"operations":summaries(t,journal,&mission),"outcome":refused(reason)}),
@@ -1001,6 +1021,15 @@ mod tests {
         let mut queued = intent_only.clone();
         queued["result"]["queued"] = json!(true);
         assert_eq!(exact_result(&op, &queued), Ok(()));
+        // A message the thread chat took is proven by its saved input and that chat.
+        let mut chat = intent_only.clone();
+        chat["result"]["chat"] = json!({"sessionId":"f19a1d14-ca59-491f-be59-4281716b31af"});
+        assert_eq!(exact_result(&op, &chat), Ok(()));
+        chat["result"]["chat"] = json!({"sessionId":"not an id"});
+        assert_eq!(exact_result(&op, &chat), Err(Error::Unknown));
+        chat["result"]["chat"] = json!({"sessionId":"f19a1d14-ca59-491f-be59-4281716b31af"});
+        chat["result"]["topic"]["inputs"] = json!([]);
+        assert_eq!(exact_result(&op, &chat), Err(Error::Unknown));
         let d = json!({"purpose":"thread-disposition","source":SOURCE,"topicId":"t","disposition":"later"});
         let op = json!({"operationId":"d","kind":"thread-disposition","targetId":"m","payload":d.to_string()});
         let later = json!({"result":{"topic":{"id":"t","missionId":"m","disposition":"later"}}});
@@ -1042,6 +1071,38 @@ mod tests {
         )
         .unwrap();
         assert!(qualify(&other, &view(true, "open")).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_message_goes_against_the_newest_thread_list_when_its_thread_is_unchanged() {
+        let send = intent(json!({"missionId":"m","source":SOURCE,"purpose":"thread-send","topicId":"t","text":"x"})).unwrap();
+        // Another thread moved the mission's thread list: this thread is still open.
+        let mut moved = view(true, "open");
+        moved["source"] = json!("b".repeat(64));
+        let next = rebind(&send, &moved).unwrap();
+        assert_eq!(next.source, "b".repeat(64));
+        assert_eq!(qualify(&next, &moved), Ok(None));
+        // This thread was set aside or is gone: still refused, and says why.
+        let mut later = view(true, "later");
+        later["source"] = json!("b".repeat(64));
+        assert!(
+            qualify(&rebind(&send, &later).unwrap(), &later)
+                .unwrap()
+                .is_some()
+        );
+        let mut gone = moved.clone();
+        gone["topics"] = json!([]);
+        assert_eq!(
+            qualify(&rebind(&send, &gone).unwrap(), &gone),
+            Err(Error::Stale)
+        );
+        // A disposition stays bound to the read shown.
+        let discard = intent(json!({"missionId":"m","source":SOURCE,"purpose":"thread-disposition","topicId":"t","disposition":"discarded"})).unwrap();
+        assert!(rebind(&discard, &moved).is_none());
+        assert!(
+            rebind(&send, &view(true, "open")).is_none(),
+            "same read: nothing to rebind"
+        );
     }
 
     #[test]

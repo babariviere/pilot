@@ -11,6 +11,7 @@ import { DayLine } from "./DayLine";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { FeedbackIncoming, feedbackFocus, incomingFeedback, newFeedback } from "./FeedbackIncoming";
+import { everRead, todayWarning } from "./freshness";
 import { Incoming } from "./Incoming";
 import { todayScrollTo } from "./kept";
 import { goSchedules } from "./nav";
@@ -55,7 +56,7 @@ import {
 } from "./ui";
 import { focused, focusFront, front, type Item, move, openMission, placeRow, queue, todayPlace } from "./view";
 import { WorkingNow } from "./WorkingNow";
-import { freshnessLine, provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
+import { provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
 
 function actionFor(decision: Decision | undefined): string {
 	if (!decision) return "";
@@ -72,7 +73,8 @@ function headline(day: Day): string {
 	if (today.problems.length > 0) return "Some work needs a look.";
 	if (!today.problemsKnown) return "Your last read.";
 	if (day.databases?.snapshot()?.agents.some((a) => !!a.request)) return "Database access needs your approval.";
-	if (today.attention.state !== "live" && (today.headline.startsWith("Nothing needs you") || today.notes.length > 0)) {
+	// What needs the user was never read: an all-clear headline would be a guess.
+	if (!everRead(today.attention.state) && (today.headline.startsWith("Nothing needs you") || today.notes.length > 0)) {
 		return "Your last read.";
 	}
 	const left = today.decisions.length + today.actions.length;
@@ -183,16 +185,11 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 	const first = () => (feedbackTurn(props.day) ? undefined : front(props.day.today()));
 	const rest = () => items().filter((item) => item.id !== first()?.id);
 	const decisions = () => props.day.today().decisions;
-	const attention = () => props.day.today().attention;
-	// What needs the user has its own read. A note shows only when it says
-	// more than the missions' freshness note above.
-	const attentionNote = () => {
-		const a = attention();
-		const f = props.day.today().freshness;
-		if (a.state === "live" || (a.state === f.state && a.reason === f.reason)) return "";
-		return a.reason;
-	};
-	const readable = () => attention().state === "live";
+	// What needs the user has its own read. While a refresh runs or after a
+	// failed one, the cards from the last good read stay, answerable: Rust
+	// checks each answer again before it sends. Only a read that never worked
+	// says so, so an unread list never looks empty.
+	const readable = () => everRead(props.day.today().attention.state);
 	// Results to check are part of what needs the user: they count here and list below the cards.
 	const checks = () => toCheckCount(props.day);
 	// A focus request with no card to take it lapses, so a later arrival
@@ -215,11 +212,6 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 			<If when={props.ctx.tagged()}>
 				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
 			</If>
-			<View testID="attention-note" class="flex-row items-center gap-2.5 py-1">
-				<Text class="flex-1 text-xs text-muted-foreground">
-					{attentionNote() || (readable() ? "Attention read is up to date." : "Attention read is not current.")}
-				</Text>
-			</View>
 			<Each of={props.day.today().notes} key={(note) => note}>
 				{(note) => (
 					<View class="flex-row items-center gap-2.5 rounded-xl bg-ok-soft px-4 py-3">
@@ -234,8 +226,8 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 					<If
 						when={readable()}
 						else={
-							<Text class="text-base text-foreground">
-								What needs you is not current. Pilot must read it again.
+							<Text testID="attention-unread" class="text-base text-foreground">
+								Pilot has not read what needs you yet. It keeps trying; nothing here is guessed.
 							</Text>
 						}
 					>
@@ -411,19 +403,29 @@ function Missions(props: { day: Day; ctx: TodayScope; plans?: Plans }) {
 	);
 }
 
-/** One stable status location. Ordinary invalidation is not a failure block. */
+/**
+ * The one old-data warning (freshness.ts). Nothing shows while reads work or
+ * a normal refresh runs: the last good read stays and updates in place.
+ */
 export function FreshnessNote(props: { day: Day }) {
-	const freshness = () => props.day.today().freshness;
+	const warning = () => todayWarning(props.day.freshness, props.day.today().freshness);
 	return (
-		<View testID="freshness" class="flex-row items-center gap-2.5 py-1">
-			<Text class="flex-1 text-xs text-muted-foreground">
-				{freshness().state === "live"
-					? "Mission read is up to date."
-					: freshness().state === "stale" && freshness().reason === "Read changed. Refresh before acting."
-						? "Reading mission changes. Showing the earlier read."
-						: freshnessLine(freshness()) || freshness().reason}
-			</Text>
-		</View>
+		<If when={warning()}>
+			<Notice
+				testID="freshness"
+				text={warning()}
+				action={
+					<If when={props.day.freshness}>
+						<Action
+							label="Try now"
+							testID="freshness-try"
+							accessibilityLabel="Read from Pilot's service now. This sends nothing."
+							onPress={() => void props.day.freshness?.now()}
+						/>
+					</If>
+				}
+			/>
+		</If>
 	);
 }
 
@@ -444,19 +446,20 @@ function Unreadable(props: { day: Day }) {
 /**
  * Missions in planning, those waiting for the user first. Hidden when the
  * list is read and empty; a list that could not be read says so and shows
- * no rows, so it never looks like having none. Read again only reads.
+ * no rows, so it never looks like having none. Pilot reads it again on its
+ * own; an earlier read stays, with no note, while a newer one comes.
  */
 function Planning(props: { plans: Plans; ctx: TodayScope }) {
 	const planning = () => props.plans.planning();
 	const off = () => planning().availability === "unavailable";
-	const stale = () => planning().availability === "stale";
 	const rows = () => {
 		if (off()) return [];
 		const all = planning().plans;
 		return [...all.filter((p) => p.needsYou), ...all.filter((p) => !p.needsYou)];
 	};
 	const readInventory = props.plans.feed.readInventory?.bind(props.plans.feed);
-	// Not offered when reading again cannot help: the service changed, or Pilot is closing.
+	// Only while nothing could be read; not offered when reading again cannot
+	// help: the service changed, or Pilot is closing.
 	const canReadAgain = () => {
 		planning();
 		return !!readInventory && (props.plans.feed.canReadInventory?.() ?? true);
@@ -476,9 +479,11 @@ function Planning(props: { plans: Plans; ctx: TodayScope }) {
 			<View testID="planning" class="gap-1">
 				<View class="pb-1">
 					<SectionTitle title="Planning" count={rows().length}>
-						<Text testID="planning-status" class="text-xs text-faint">
-							{stale() ? "Earlier read" : off() ? "Unavailable" : "Up to date"}
-						</Text>
+						<If when={off()}>
+							<Text testID="planning-status" class="text-xs text-faint">
+								Unavailable
+							</Text>
+						</If>
 					</SectionTitle>
 				</View>
 				<If when={off()}>
@@ -498,13 +503,9 @@ function Planning(props: { plans: Plans; ctx: TodayScope }) {
 						</If>
 					</Notice>
 				</If>
-				<If when={!off()}>
+				<If when={!off() && rows().length === 0}>
 					<Text testID="planning-note" class="text-xs text-muted-foreground">
-						{stale()
-							? planning().reason
-							: rows().length === 0
-								? "No missions in planning."
-								: "Planning read is up to date."}
+						No missions in planning.
 					</Text>
 				</If>
 				<Each of={rows()} key={(p) => p.missionId}>
@@ -528,6 +529,23 @@ function Planning(props: { plans: Plans; ctx: TodayScope }) {
 									</View>
 								</RowLink>
 								<Text class="text-sm text-muted-foreground">{p().line}</Text>
+								<If when={p().plannerSays}>
+									<View testID={`plan-says-${id}`} selectable class="gap-0.5 pt-1">
+										<Text class="text-xs text-faint">Its last message</Text>
+										<Text class="text-sm leading-relaxed text-foreground">{p().plannerSays}</Text>
+									</View>
+								</If>
+								<If when={p().reply}>
+									<View class="-ml-3 flex-row pt-1">
+										<Action
+											variant="outline"
+											testID={`plan-reply-${id}`}
+											label="Reply or continue"
+											accessibilityLabel={`Open the planning of ${p().title} to reply to Pilot's planning agent or ask it to continue.`}
+											onPress={() => openPlan(id)}
+										/>
+									</View>
+								</If>
 							</View>
 						);
 					}}
@@ -732,7 +750,8 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 								<Problems
 									rows={today().problems}
 									known={today().problemsKnown}
-									earlier={today().freshness.state !== "live"}
+									earlier={todayWarning(props.day.freshness, today().freshness) !== ""}
+									chat={props.day.chat?.source}
 								/>
 								<WorkingNow day={props.day} ctx={ctx} />
 								<If when={ctx.tagged()}>
@@ -746,10 +765,10 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 								<ComingUp day={props.day} ctx={ctx} />
 
 								<Text class="border-t border-border pt-5 text-xs text-faint">
-									{today().attention.state !== "live" || !today().problemsKnown
-										? "What needs you is not current. Read again before acting."
+									{!everRead(today().attention.state) || !today().problemsKnown
+										? "Pilot could not read everything that needs you yet. It keeps trying."
 										: today().problems.length > 0
-											? "Unresolved work is shown above. Nothing is retried here."
+											? "Unresolved work is shown above. Pilot retries nothing on its own."
 											: "That is everything for now. Pilot will tell you if something needs you."}
 								</Text>
 							</View>

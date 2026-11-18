@@ -6,11 +6,19 @@ import { expect, open, test } from "nsh/test";
 const desktop = { platform: "macos", width: 1100, height: 1200 } as const;
 const COUNTS = (s: number, n: number, c: number) => `Selects: ${s} · Sends: ${n} · Checks: ${c}`;
 
-test("a standalone coding queue shows its service reason without offering Continue", async () => {
+test("a standalone coding queue shows its place in line without offering Continue", async () => {
 	const app = await open("./QueuedChatFixture.tsx", desktop);
-	await app.waitFor("Waiting for a Pilot coding slot (4 of 4 occupied).");
+	await app.waitFor("Waiting for a coding slot · 2nd in line · slots used by Search index, Export tests, Docs pass");
 	expect(app.shows("id:chat-continue")).toBe(false);
 	expect(app.shows("Not working now.")).toBe(false);
+});
+
+test("an explorer chat whose question the plan settled does not say it waits for an answer", async () => {
+	const app = await open("./SettledQuestionFixture.tsx", desktop);
+	await app.waitFor("This question no longer needs you. The plan settled it.");
+	expect(app.shows("It asks a question and waits for an answer.")).toBe(false);
+	// The chat stays readable.
+	expect(app.shows("Keep the mission moving.")).toBe(true);
 });
 
 async function ready() {

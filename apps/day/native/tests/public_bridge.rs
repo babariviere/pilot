@@ -18,6 +18,21 @@ struct Fixture {
     bridge: Bridge,
     host: NativeHost,
 }
+/// A selected profile that names the synthetic home, with no daemon behind it.
+fn write_profile(profile: &std::path::Path) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::create_dir(profile).unwrap();
+    std::fs::write(profile.join("daemon-id"), "synthetic-daemon").unwrap();
+    std::fs::write(profile.join("storage-lineage"), "synthetic-lineage").unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(profile.join("github-app-capability"))
+        .unwrap();
+    write!(file, "{}", json!({"daemonId":"synthetic-daemon","lineageId":"synthetic-lineage","token":"a".repeat(64)})).unwrap();
+}
 impl Fixture {
     fn new() -> Self {
         Self::at_port(1)
@@ -29,19 +44,7 @@ impl Fixture {
         let path = std::env::temp_dir().join(format!("day-channel-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&path).unwrap();
         if configured {
-            use std::os::unix::fs::OpenOptionsExt;
-            let profile = path.join("missing-profile");
-            std::fs::create_dir(&profile).unwrap();
-            std::fs::write(profile.join("daemon-id"), "synthetic-daemon").unwrap();
-            std::fs::write(profile.join("storage-lineage"), "synthetic-lineage").unwrap();
-            use std::io::Write;
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(profile.join("github-app-capability"))
-                .unwrap();
-            write!(file, "{}", json!({"daemonId":"synthetic-daemon","lineageId":"synthetic-lineage","token":"a".repeat(64)})).unwrap();
+            write_profile(&path.join("missing-profile"));
         }
         let host = NativeHost::open(
             Source {
@@ -63,6 +66,17 @@ impl Fixture {
             path,
             bridge: Bridge::new(DayRoot::new(host.clone())),
             host,
+        }
+    }
+    /// Makes the next read fail differently from the last: with a profile it
+    /// reaches no daemon (Offline), without one it has no source (Unavailable).
+    /// A failure equal to the one shown sends no notice, so tests alternate.
+    fn profile(&self, present: bool) {
+        let profile = self.path.join("missing-profile");
+        if present {
+            write_profile(&profile);
+        } else {
+            let _ = std::fs::remove_dir_all(&profile);
         }
     }
     fn app(&self, body: &str, capabilities: Value) -> Headless {
@@ -243,12 +257,14 @@ fn a_valid_read_is_projected_without_credential_or_context_injection() {
     let result = f.run("return await call('day.today.read');", Fixture::caps());
     assert_eq!(result["version"], 1);
     assert!(result["value"]["snapshot"]["moving"].is_array(), "{result}");
+    // Every read names the scope it is of, so a screen can drop it after a switch
+    // ("Live data in the UI"). The project ID is that scope, not a credential.
+    assert_eq!(result["value"]["snapshot"]["project"], "synthetic-project");
     let encoded = result.to_string();
     for secret in [
         "missing-profile",
         "synthetic-daemon",
         "synthetic-lineage",
-        "synthetic-project",
         f.path.to_str().unwrap(),
     ] {
         assert!(
@@ -279,11 +295,16 @@ host.on('day.changed', event => { if(event.window!==window) throw new Error('wro
 host.on('fixture.read', async () => { await call('day.today.read'); shown.set('reset'); });
 shown.set('ready');
 return await new Promise(()=>{});"#,Fixture::caps());
-    // The missing synthetic source fails locally. No daemon or network is used.
-    let _ = f.host.refresh().recv_blocking();
-    app.wait_for("text:events:1").unwrap();
-    for _ in 0..100 {
+    // The synthetic source fails locally. No daemon is used. Each read fails
+    // differently from the one before, so each is a change worth a notice.
+    let fail = |n: usize| {
+        f.profile(n % 2 == 1);
         let _ = f.host.refresh().recv_blocking();
+    };
+    fail(1);
+    app.wait_for("text:events:1").unwrap();
+    for n in 2..=101 {
+        fail(n);
     }
     app.run_for(Duration::from_millis(20)).unwrap();
     assert!(app.screen().shows("events:1"));
@@ -292,7 +313,7 @@ return await new Promise(()=>{});"#,Fixture::caps());
         .send("fixture.read", Value::Null)
         .unwrap();
     app.wait_for("reset").unwrap();
-    let _ = f.host.refresh().recv_blocking();
+    fail(102);
     app.wait_for("text:events:2").unwrap();
     drop(app);
 }
@@ -406,6 +427,8 @@ host.on('day.changed', async () => {
 await call('day.today.read'); shown.set('ready'); return await new Promise(()=>{});"#, Fixture::caps());
     app.wait_for("ready").unwrap();
     for n in 1..=3 {
+        // Each read fails differently from the one before: an equal failure sends no notice.
+        f.profile(n % 2 == 1);
         let _ = f.host.refresh().recv_blocking();
         app.wait_for(&format!("text:events:{n}")).unwrap();
         app.run_for(Duration::from_millis(100)).unwrap();

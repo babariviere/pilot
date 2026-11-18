@@ -4,14 +4,16 @@
 // What the chat says is its own report, not a checked result. Opening,
 // reading earlier rows and leaving send nothing; while the page is open,
 // Pilot reads the chat again as it changes.
-// A stopped chat offers Continue: one explicit press sends fixed words once.
+// A chat the service says can continue (stopped, or failed with a safe retry)
+// offers Continue: one explicit press sends fixed words once.
 import { cleanup, Keyboard, keymap, Scroll, signal, Text, View } from "nsh";
 import { ChatTranscript } from "./ChatRows";
 import { closeChat } from "./chatView";
+import { queueLine } from "./codingQueue";
 import { DiagnosisReply } from "./DiagnosisSettings";
 import type { Day } from "./day";
 import { RECOVERY_INPUT_BYTES, recoveryBytes, recoveryNote, setRecoveryNote } from "./recoveryDraft";
-import type { ContinueResult, SessionChat, SessionChatMirror } from "./sessionChat";
+import type { ContinueResult, SessionChat, SessionChatMirror, SessionChatSource } from "./sessionChat";
 import { Action, type MarkKind, MarkLine, Page, PageTitle, TextField } from "./ui";
 
 /** Explicit recovery, never a new chat, clone, grant or allowance. */
@@ -129,7 +131,9 @@ function stateLine(chat: SessionChat | null): { mark: MarkKind; text: string } |
 		case "working":
 			return { mark: "moving", text: "Working." };
 		case "question":
-			return { mark: "needs", text: "It asks a question and waits for an answer." };
+			return chat.questionSettled
+				? { mark: "still", text: "This question no longer needs you. The plan settled it." }
+				: { mark: "needs", text: "It asks a question and waits for an answer." };
 		case "done":
 			return { mark: "done", text: "Done. What it says below is its own report, not a checked result." };
 		case "failed":
@@ -137,25 +141,33 @@ function stateLine(chat: SessionChat | null): { mark: MarkKind; text: string } |
 		case "stopped":
 			return { mark: "still", text: chat?.stateReason ? `Stopped: ${chat.stateReason}` : "Stopped." };
 		case "idle":
-			return { mark: "still", text: chat?.stateReason || "Not working now." };
+			return { mark: "still", text: chat?.queue ? queueLine(chat.queue) : chat?.stateReason || "Not working now." };
 		default:
 			return null;
 	}
 }
 
-/** Continue for a stopped chat, sent once. An unknown send is checked, never sent again. */
-function ContinueRow(props: { mirror: SessionChatMirror; sessionId: string }) {
+/** Continue for a stopped or failed chat, sent once. An unknown send is checked, never sent again. */
+export function ContinueRow(props: {
+	source: SessionChatSource;
+	sessionId: string;
+	failed?: boolean;
+	/** After the service took it, so the page can read again. */
+	onSent?: () => void;
+}) {
 	const sending = signal(false);
 	const result = signal<ContinueResult | null>(null);
 	const unknown = () => (result()?.status === "unknown" ? (result()?.operationId ?? null) : null);
 	const go = async () => {
 		sending.set(true);
-		result.set(await props.mirror.source.continueChat(props.sessionId));
+		const r = await props.source.continueChat(props.sessionId);
+		result.set(r);
 		sending.set(false);
+		if (r.status === "accepted") props.onSent?.();
 	};
 	const check = async (operationId: string) => {
 		sending.set(true);
-		const r = await props.mirror.source.checkContinue(operationId);
+		const r = await props.source.checkContinue(operationId);
 		result.set(r.status === "accepted" ? null : r);
 		sending.set(false);
 	};
@@ -185,7 +197,9 @@ function ContinueRow(props: { mirror: SessionChatMirror; sessionId: string }) {
 					)}
 				</If>
 				<Text class="flex-1 text-xs text-faint">
-					Asks it to pick up where it stopped, or to ask a lost question again. Sent once.
+					{props.failed
+						? "Asks it to try again from where it failed. Sent once."
+						: "Asks it to pick up where it stopped, or to ask a lost question again. Sent once."}
 				</Text>
 			</View>
 			<If when={result()?.message}>
@@ -237,14 +251,22 @@ export function ChatScreen(props: { day: Day; sessionId: string }) {
 						</MarkLine>
 						<If
 							when={
-								chat()?.state === "stopped" &&
+								chat()?.canContinue &&
 								!chat()?.specialist &&
 								!chat()?.recoveryBlocked &&
 								!chat()?.archived &&
-								!mirror.source.recoverChat
+								// Where Retry shows below, it is the one way to move a failed or stopped chat.
+								!(
+									mirror.source.recoverChat &&
+									(chat()?.state === "failed" || chat()?.state === "stopped" || chat()?.pendingRecovery)
+								)
 							}
 						>
-							<ContinueRow mirror={mirror} sessionId={props.sessionId} />
+							<ContinueRow
+								source={mirror.source}
+								sessionId={props.sessionId}
+								failed={chat()?.state === "failed"}
+							/>
 						</If>
 						<If
 							when={
@@ -281,6 +303,7 @@ export function ChatScreen(props: { day: Day; sessionId: string }) {
 					readingWords="Reading this chat…"
 					emptyWords="This chat has no messages yet."
 					onEarlier={() => void mirror.source.earlier()}
+					read={() => mirror.source.refresh()}
 				/>
 				<If when={chat()?.specialist && props.day.diagnosis}>
 					<DiagnosisReply controls={props.day.diagnosis!} sessionId={props.sessionId} />

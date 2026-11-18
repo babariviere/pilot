@@ -12,6 +12,7 @@ import { ConnectionSettings } from "./ConnectionSettings";
 import { DatabaseSettings } from "./DatabaseSettings";
 import { DiagnosisSettings } from "./DiagnosisSettings";
 import type { Day } from "./day";
+import { keepRead, staleLine } from "./freshness";
 import { KnowledgeSection } from "./KnowledgeSection";
 import { keepField, keepScroll } from "./kept";
 import { ModelSettingsSection } from "./ModelSettings";
@@ -55,6 +56,12 @@ const discardAsk = signal(false);
 function Preferences(props: { mirror: PreferencesMirror }) {
 	const v = (): PreferencesView => props.mirror.view();
 	const read = (): ProjectPreferences | null => v().preferences;
+	// Pilot reads again on its own after a failed read, and when the window comes back.
+	const reads = keepRead(
+		() => props.mirror.source.read(),
+		() => !!v().reason,
+		() => !!read(),
+	);
 	const name = () => v().projectName || "this project";
 	/** A kept draft for another project than this window's: shown, never saved here. */
 	const elsewhere = () => {
@@ -180,14 +187,16 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 				<Text testID="preferences-project" class="flex-1 text-sm font-medium text-foreground">
 					{v().projectName || (read() ? "This window's project" : "")}
 				</Text>
-				<Action
-					label={v().reading ? "Reading…" : "Read again"}
-					icon="refresh"
-					testID="preferences-read"
-					disabled={v().reading}
-					accessibilityLabel="Read this project's preferences again. This sends nothing."
-					onPress={() => void props.mirror.source.read()}
-				/>
+				<If when={reads.warn()}>
+					<Action
+						label={v().reading ? "Reading…" : "Try now"}
+						icon="refresh"
+						testID="preferences-read"
+						disabled={v().reading}
+						accessibilityLabel="Read this project's preferences again. This sends nothing."
+						onPress={() => void reads.now()}
+					/>
+				</If>
 			</View>
 			<If when={elsewhere()}>
 				<Notice
@@ -223,10 +232,14 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 					</View>
 				</Notice>
 			</If>
-			<If when={v().reason}>
+			<If when={v().reason && (!read() || reads.stale())}>
 				<Notice
 					testID="preferences-off"
-					text={read() ? v().reason : `Pilot cannot show this project's preferences. ${v().reason}`}
+					text={
+						read()
+							? staleLine(reads.readAt() ?? 0)
+							: `Pilot cannot show this project's preferences. ${v().reason}`
+					}
 					detail={read() ? undefined : "This is not the same as having none."}
 				/>
 			</If>
@@ -234,17 +247,19 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 				{(o) => (
 					<Notice
 						testID="preferences-unknown"
-						text="Pilot does not know if your last change was saved."
+						text={
+							o().state === "checking"
+								? "Checking that your last change was saved…"
+								: "Pilot does not know if your last change was saved."
+						}
 						detail="It will not send it again. Check only reads its result. Your text stays here."
 					>
-						<View class="flex-row">
-							<Action
-								label={o().state === "checking" ? "Checking…" : "Check"}
-								testID="preferences-check"
-								disabled={o().state === "checking"}
-								onPress={() => void check(o().operationId)}
-							/>
-						</View>
+						{/* Pilot checks by itself first; the button is the fallback after its tries. */}
+						<If when={o().state !== "checking"}>
+							<View class="flex-row">
+								<Action label="Check" testID="preferences-check" onPress={() => void check(o().operationId)} />
+							</View>
+						</If>
 					</Notice>
 				)}
 			</Each>

@@ -15,6 +15,7 @@ import { type ContentAnchor, createContentAnchor } from "./contentAnchor";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
 import { openFeedback } from "./feedbackView";
+import { todayWarning } from "./freshness";
 import { keepScroll, restoreScroll, scrollOf } from "./kept";
 import { MigrationControls } from "./MigrationControls";
 import { forgetWorkFocus, limited, MissionWork, MoreRows, openMemberChat } from "./MissionWork";
@@ -965,7 +966,8 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf;
 				rows={props.page.problems}
 				known={props.day.today().problemsKnown}
 				inMission
-				earlier={props.page.freshness.state !== "live"}
+				earlier={todayWarning(props.day.freshness, props.page.freshness) !== ""}
+				chat={props.day.chat?.source}
 			/>
 
 			<MissionWork day={props.day} page={props.page} anchor={props.anchor} />

@@ -9,6 +9,7 @@ import type { DeliveryMirror } from "./deliveryFeed";
 import type { DiagnosisControls } from "./diagnosisControls";
 import type { FeedbackMirror } from "./feedbackFeed";
 import type { DayFeed } from "./feeds";
+import type { AutoRead } from "./freshness";
 import type { IntakeMirror } from "./intakeFeed";
 import type { LinearMirror } from "./linearFeed";
 import type { ModelControls } from "./modelControls";
@@ -81,6 +82,11 @@ export type Day = {
 	chat?: SessionChatMirror;
 	/** Pilot's pause for sleep and its Resume. Without it the header never shows the pause. */
 	power?: PowerControls;
+	/**
+	 * The window's automatic service reads and the one old-data rule. Without
+	 * it (mock worlds) Today never warns that its data is old.
+	 */
+	freshness?: AutoRead;
 	/** Stops listening and frees the feed. */
 	close: () => void;
 };
@@ -90,10 +96,19 @@ export function mirrorDay(
 	feed: DayFeed,
 	features: Pick<
 		Day,
-		"intake" | "delivery" | "linear" | "scope" | "preferences" | "threads" | "feedback" | "artifacts" | "chat"
+		| "intake"
+		| "delivery"
+		| "linear"
+		| "scope"
+		| "preferences"
+		| "threads"
+		| "feedback"
+		| "artifacts"
+		| "chat"
+		| "freshness"
 	> = {},
 ): Day {
-	const { intake, delivery, linear, scope, preferences, threads, feedback, artifacts, chat } = features;
+	const { intake, delivery, linear, scope, preferences, threads, feedback, artifacts, chat, freshness } = features;
 	const today = signal(feed.snapshot());
 	const stop = feed.onChange((next) => {
 		// Items that arrive or leave, and missions that change group, glide to
@@ -113,8 +128,10 @@ export function mirrorDay(
 		feedback,
 		artifacts,
 		chat,
+		freshness,
 		close: () => {
 			stop();
+			freshness?.dispose();
 			feed.dispose();
 			intake?.close();
 			delivery?.close();
@@ -123,6 +140,7 @@ export function mirrorDay(
 			threads?.close();
 			feedback?.close();
 			chat?.close();
+			scope?.close?.();
 		},
 	};
 }

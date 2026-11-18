@@ -8,6 +8,7 @@ fn request(scope: &str, generation: u64) -> Request {
     Request {
         scope: scope.into(),
         generation,
+        selected_only: false,
     }
 }
 
@@ -25,6 +26,7 @@ fn overview() -> DayOverview {
         controls: Vec::new(),
         mission_agents: None,
         working_now: None,
+        waiting_now: None,
     }
 }
 
@@ -186,6 +188,12 @@ struct Peer {
 }
 impl Peer {
     fn new(deny_two: bool, change_catalog: bool) -> Self {
+        Self::with(deny_two, change_catalog, 2, 0)
+    }
+
+    /// `projects` projects ("one" to "five"), each request answered after
+    /// `delay` ms, every connection on its own thread as a real daemon serves them.
+    fn with(deny_two: bool, change_catalog: bool, projects: usize, delay: u64) -> Self {
         use std::{
             io::{BufRead, BufReader, Read, Write},
             os::unix::fs::OpenOptionsExt,
@@ -211,9 +219,9 @@ impl Peer {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let log = calls.clone();
         let thread = std::thread::spawn(move || {
-            let mut inventories = 0;
+            let inventories = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             for stream in listener.incoming() {
-                let mut stream = stream.unwrap();
+                let stream = stream.unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut first = String::new();
                 reader.read_line(&mut first).unwrap();
@@ -221,81 +229,97 @@ impl Peer {
                 if route == "/stop" {
                     break;
                 }
-                let mut size = 0;
-                let mut authorized = false;
-                loop {
-                    let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
-                    if line == "\r\n" {
-                        break;
+                let log = log.clone();
+                let inventories = inventories.clone();
+                std::thread::spawn(move || {
+                    let mut stream = stream;
+                    let mut size = 0;
+                    let mut authorized = false;
+                    loop {
+                        let mut line = String::new();
+                        reader.read_line(&mut line).unwrap();
+                        if line == "\r\n" {
+                            break;
+                        }
+                        let lower = line.to_lowercase();
+                        if lower.starts_with("content-length:") {
+                            size = line.split(':').nth(1).unwrap().trim().parse().unwrap();
+                        }
+                        if lower.starts_with("x-pilot-github-capability:") {
+                            authorized = line.contains(&"a".repeat(64));
+                        }
                     }
-                    let lower = line.to_lowercase();
-                    if lower.starts_with("content-length:") {
-                        size = line.split(':').nth(1).unwrap().trim().parse().unwrap();
-                    }
-                    if lower.starts_with("x-pilot-github-capability:") {
-                        authorized = line.contains(&"a".repeat(64));
-                    }
-                }
-                let mut body = vec![0; size];
-                reader.read_exact(&mut body).unwrap();
-                let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-                log.lock().unwrap().push((
-                    format!("{} {route}", first.split_whitespace().next().unwrap()),
-                    body.clone(),
-                ));
-                let mut status = 200;
-                let value = if !authorized {
-                    status = 403;
-                    json!({})
-                } else if route == "/api/hello" {
-                    json!({"daemonId":"daemon","lineageId":"lineage","minimumClientProtocolVersion":1,"protocolVersion":1,
-                        "capabilities":{"independentExecution":true,"dayOverview":1,"nativeAttention":1}})
-                } else if route == "/api/native-projects" {
-                    inventories += 1;
-                    json!({"version":1,"complete":true,"projects":[
-                        {"projectId":"one","projectPath":"/one","name":"One","contextDigest":"a".repeat(64)},
-                        {"projectId":"two","projectPath":"/two","name":if change_catalog && inventories>1 {"Changed"} else {"Two"},"contextDigest":"b".repeat(64)}]})
-                } else if route == "/api/native-attention" {
-                    assert_eq!(
-                        body["kind"], "read",
-                        "only passive native attention may POST"
-                    );
-                    json!({"ok":true,"value":{"version":1,"projectId":body["projectId"],"questions":[],"actions":[]}})
-                } else {
-                    let project = route.split('/').nth(3).unwrap_or("");
-                    if deny_two && project == "two" {
+                    let mut body = vec![0; size];
+                    reader.read_exact(&mut body).unwrap();
+                    let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                    log.lock().unwrap().push((
+                        format!("{} {route}", first.split_whitespace().next().unwrap()),
+                        body.clone(),
+                    ));
+                    let mut status = 200;
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                    let value = if !authorized {
                         status = 403;
                         json!({})
-                    } else if route.ends_with("/planning-inventory") {
-                        json!({"version":1,"status":"available","projectId":project,"limit":100,"total":0,"items":[]})
-                    } else if route.ends_with("/day") {
-                        let mut v = overview();
-                        v.project_id = project.into();
-                        v.dashboard.missions = Section {
-                            total: 1,
-                            items: vec![crate::contract::DashboardMission {
-                                id: format!("mission-{project}"),
-                                title: format!("Mission {project}"),
-                                ..Default::default()
-                            }],
-                        };
-                        let mut value = serde_json::to_value(v).unwrap();
-                        value["dashboard"]["projectId"] = json!(project);
-                        value["workingNow"] = json!([{"sessionId":format!("chat-{project}"),"title":"Working chat","missionId":null,"missionTitle":null,"purpose":null,"status":"working"}]);
-                        value
-                    } else if route.ends_with("/intake") {
-                        status = 503;
-                        json!({})
-                    } else if route.ends_with("/delivered-work") {
-                        json!({"version":1,"projectId":project,"baseline":{"mode":"start_fresh","sourceSequence":5},
-                            "sourceCursor":5,"complete":true,"more":false,"nextCursor":null,"currentness":"live","items":[]})
+                    } else if route == "/api/hello" {
+                        json!({"daemonId":"daemon","lineageId":"lineage","minimumClientProtocolVersion":1,"protocolVersion":1,
+                        "capabilities":{"independentExecution":true,"dayOverview":1,"nativeAttention":1}})
+                    } else if route == "/api/native-projects" {
+                        let n = inventories.fetch_add(1, Ordering::SeqCst) + 1;
+                        let mut rows = vec![
+                            json!({"projectId":"one","projectPath":"/one","name":"One","contextDigest":"a".repeat(64)}),
+                            json!({"projectId":"two","projectPath":"/two","name":if change_catalog && n>1 {"Changed"} else {"Two"},"contextDigest":"b".repeat(64)}),
+                        ];
+                        for id in ["three", "four", "five"]
+                            .into_iter()
+                            .take(projects.saturating_sub(2))
+                        {
+                            rows.push(json!({"projectId":id,"projectPath":format!("/{id}"),"name":id,"contextDigest":"c".repeat(64)}));
+                        }
+                        json!({"version":1,"complete":true,"projects":rows})
+                    } else if route == "/api/native-attention" {
+                        assert_eq!(
+                            body["kind"], "read",
+                            "only passive native attention may POST"
+                        );
+                        json!({"ok":true,"value":{"version":1,"projectId":body["projectId"],"questions":[],"actions":[]}})
                     } else {
-                        json!({"id":project,"path":format!("/{project}")})
-                    }
-                };
-                let data = value.to_string();
-                write!(stream,"HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{data}",data.len()).unwrap();
+                        let project = route.split('/').nth(3).unwrap_or("");
+                        if deny_two && project == "two" {
+                            status = 403;
+                            json!({})
+                        } else if route.ends_with("/planning-inventory") {
+                            json!({"version":1,"status":"available","projectId":project,"limit":100,"total":0,"items":[]})
+                        } else if route.ends_with("/day") {
+                            let mut v = overview();
+                            v.project_id = project.into();
+                            v.dashboard.missions = Section {
+                                total: 1,
+                                items: vec![crate::contract::DashboardMission {
+                                    id: format!("mission-{project}"),
+                                    title: format!("Mission {project}"),
+                                    ..Default::default()
+                                }],
+                            };
+                            let mut value = serde_json::to_value(v).unwrap();
+                            value["dashboard"]["projectId"] = json!(project);
+                            value["workingNow"] = json!([{"sessionId":format!("chat-{project}"),"title":"Working chat","missionId":null,"missionTitle":null,"purpose":null,"status":"working"}]);
+                            value["waitingNow"] = json!([{"sessionId":format!("queued-{project}"),"title":"Queued chat","missionId":null,"missionTitle":null,
+                            "queue":{"kind":"slots","position":2,"holders":["Working chat"]}}]);
+                            value
+                        } else if route.ends_with("/intake") {
+                            status = 503;
+                            json!({})
+                        } else if route.ends_with("/delivered-work") {
+                            json!({"version":1,"projectId":project,"baseline":{"mode":"start_fresh","sourceSequence":5},
+                            "sourceCursor":5,"complete":true,"more":false,"nextCursor":null,"currentness":"live","items":[]})
+                        } else {
+                            json!({"id":project,"path":format!("/{project}")})
+                        }
+                    };
+                    let data = value.to_string();
+                    write!(stream,"HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{data}",data.len()).unwrap();
+                });
             }
         });
         let transport = Transport::new(Source {
@@ -330,6 +354,46 @@ impl Drop for Peer {
     }
 }
 
+/// Time from a switch to the selected project's rows, with 5 projects and a
+/// peer that answers each request after 30 ms. Prints; asserts nothing on time.
+#[tokio::test]
+#[ignore = "timing: run with --ignored --nocapture"]
+async fn switch_timing_with_five_projects_at_30_ms_a_request() {
+    let peer = Peer::with(false, false, 5, 30);
+    let journal = Journal::open(peer.path.join("journal")).unwrap();
+    let mut first = request("three", 1);
+    first.selected_only = true;
+    let start = std::time::Instant::now();
+    let shown = read_projects(&peer.transport, &journal, &first, true, || Ok(()))
+        .await
+        .unwrap();
+    let selected = start.elapsed().as_millis();
+    assert_eq!(shown["partial"], true);
+    let rows = shown["projects"].as_array().unwrap();
+    assert_eq!(rows.len(), 5, "every project, in catalog order");
+    assert_eq!(rows[2]["id"], "three");
+    assert_eq!(rows[2]["today"]["unreported"][0]["id"], "mission-three");
+    assert!(
+        rows.iter()
+            .filter(|r| r["id"] != "three")
+            .all(|r| r["currentness"] == "reading" && r["needsYou"]["count"].is_null())
+    );
+    let start = std::time::Instant::now();
+    let read = read_projects(
+        &peer.transport,
+        &journal,
+        &request("three", 1),
+        true,
+        || Ok(()),
+    )
+    .await
+    .unwrap();
+    let full = start.elapsed().as_millis();
+    assert_eq!(read["projects"].as_array().unwrap().len(), 5);
+    assert_eq!(read["partial"], false);
+    println!("scope switch timing: selected project {selected} ms, full read {full} ms");
+}
+
 #[tokio::test]
 async fn scope_read_checks_configured_access_and_never_sends_work_or_changes_source() {
     let peer = Peer::new(false, false);
@@ -351,6 +415,10 @@ async fn scope_read_checks_configured_access_and_never_sends_work_or_changes_sou
     assert_eq!(projects[0]["errors"]["intake"], "Unavailable");
     assert_eq!(projects[0]["working"]["state"], "live");
     assert_eq!(projects[0]["working"]["items"][0]["sessionId"], "chat-one");
+    assert_eq!(
+        projects[0]["working"]["waiting"][0]["queue"],
+        json!({"kind":"slots","position":2,"holders":["Working chat"]})
+    );
     assert!(projects[1]["working"].is_null());
     assert_eq!(peer.transport.source, source);
     assert_eq!(
@@ -540,11 +608,45 @@ async fn denied_project_and_changed_catalog_never_publish_earlier_rows_as_curren
     drop(peer);
     let peer = Peer::new(false, true);
     let journal = Journal::open(peer.path.join("journal")).unwrap();
+    // An ordinary change (a name) during the read is Stale: read again, not lost access.
     assert_eq!(
         read_projects(&peer.transport, &journal, &request("all", 1), true, || Ok(
             ()
         ))
         .await,
-        Err(Error::Identity)
+        Err(Error::Stale)
+    );
+}
+
+#[test]
+fn only_the_selected_project_gone_or_moved_is_identity() {
+    let list = |rows: Value| json!({"version":1,"complete":true,"projects":rows});
+    let one = json!({"projectId":"one","projectPath":"/one","name":"One"});
+    let two = json!({"projectId":"two","projectPath":"/two","name":"Two"});
+    let before = list(json!([one, two]));
+    let renamed = list(json!([one, {"projectId":"two","projectPath":"/two","name":"Renamed"}]));
+    let moved = list(json!([one, {"projectId":"two","projectPath":"/moved","name":"Two"}]));
+    let gone = list(json!([one]));
+    assert_eq!(catalog_change(&before, &before, &request("two", 1)), None);
+    assert_eq!(
+        catalog_change(&before, &renamed, &request("two", 1)),
+        Some(Error::Stale)
+    );
+    assert_eq!(
+        catalog_change(&before, &moved, &request("two", 1)),
+        Some(Error::Identity)
+    );
+    assert_eq!(
+        catalog_change(&before, &gone, &request("two", 1)),
+        Some(Error::Identity)
+    );
+    // Another project gone while one is selected, or any change under All projects: read again.
+    assert_eq!(
+        catalog_change(&before, &gone, &request("one", 1)),
+        Some(Error::Stale)
+    );
+    assert_eq!(
+        catalog_change(&before, &gone, &request("all", 1)),
+        Some(Error::Stale)
     );
 }

@@ -11,7 +11,8 @@ import type { ChatChoice } from "pilot-day/native";
 import { call, type Refusal, type Reply } from "./bridge";
 
 /** What a new chat may do: Ask reads only; Build uses the project's own workspace and limits. */
-export type ChatMode = "ask" | "build";
+/** Read-only ask, a build chat, or the screen agent of one window (screenAgent.ts). */
+export type ChatMode = "ask" | "build" | "screen";
 
 /** One project of the profile, as Pilot read it. The ID is the identity; names can repeat. */
 export type ChatProject = { projectId: string; projectPath: string; name: string; contextDigest: string };
@@ -261,11 +262,8 @@ export class ConnectedChats implements ChatSource {
 		});
 		const sent = this.#ops.filter((o) => o.state !== "not-sent");
 		const settledState = (o: Summary) => o.state === "accepted" || o.state === "rejected";
-		const reason = this.#refusal
-			? this.#projects
-				? `${projectsReason(this.#refusal)} What shows is from Pilot's last read.`
-				: projectsReason(this.#refusal)
-			: "";
+		// With projects shown, a failed read says nothing until the shared old-data rule does.
+		const reason = this.#refusal ? projectsReason(this.#refusal) : "";
 		return {
 			availability: this.#projects ? "live" : this.#refusal ? "unavailable" : "reading",
 			reason,

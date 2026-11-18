@@ -11,6 +11,8 @@
 //! sent again.
 #![allow(dead_code)]
 include!("support/intake_fixture.rs");
+#[path = "support/app_source.rs"]
+mod app_source;
 use nsh_core::prelude::*;
 use nsh_engine::HostCall;
 use std::path::Path;
@@ -39,7 +41,7 @@ fn entry() -> PathBuf {
         if (name.ends_with(".ts") || name.ends_with(".tsx") || name == "theme.json")
             && !name.ends_with(".test.tsx")
         {
-            std::fs::copy(&path, dir.join(&name)).unwrap();
+            app_source::copy(&path, &dir.join(&name));
         }
     }
     std::fs::write(
@@ -94,6 +96,19 @@ fn wait_text(app: &mut Headless, text: &str) {
     }
 }
 
+/// Waits for task `task`'s row on its mission page. The page lists its tasks
+/// folded (MissionScreen.tsx): open them when the row is not shown.
+fn task_row(app: &mut Headless, task: &str) {
+    let row = format!("id:check-result-{task}");
+    if !has(app, &row) {
+        wait(app, "id:mission-section-tasks");
+        if !has(app, &row) {
+            app.press("id:mission-section-tasks").unwrap();
+        }
+    }
+    wait(app, &row);
+}
+
 /// Waits until `selector` no longer shows.
 fn gone(app: &mut Headless, selector: &str) {
     let deadline = std::time::Instant::now() + WAIT;
@@ -123,8 +138,6 @@ fn flush(app: &mut Headless, bridge: &Bridge) {
     }
 }
 
-const CHECK: &str =
-    "role:button[Check whether it happened. This reads Pilot's saved answer and sends nothing.]";
 const NOTE: &str = "  Keep exact bytes 👩🏽‍💻\nThis is not deployed.  ";
 
 #[test]
@@ -149,7 +162,7 @@ fn delivered_task_checked_from_its_mission_sent_back_once_and_a_lost_answer_stay
     // earlier delivery. To check says it is reading, then has nothing to show.
     gone(&mut app, "id:to-check");
     app.press(&format!("id:mission-{mission}")).unwrap();
-    wait(&mut app, &format!("id:check-result-{task_id}"));
+    task_row(&mut app, &task_id);
     app.press(&format!("id:check-result-{task_id}")).unwrap();
     wait(&mut app, "id:your-check");
     // The agent's account, its outputs and four separate lines.
@@ -194,7 +207,7 @@ fn delivered_task_checked_from_its_mission_sent_back_once_and_a_lost_answer_stay
     assert_eq!(app.screen().input_text("id:send-back-note"), Ok(Some(NOTE)));
     // Explicitly return to Today to find the reopened result in To check.
     app.press("id:back").unwrap();
-    wait(&mut app, &format!("id:check-result-{task_id}"));
+    task_row(&mut app, &task_id);
     app.press("id:back").unwrap();
     wait(&mut app, "id:to-check");
     wait(&mut app, &row);
@@ -202,34 +215,28 @@ fn delivered_task_checked_from_its_mission_sent_back_once_and_a_lost_answer_stay
     wait(&mut app, "id:your-check");
     wait(&mut app, "id:send-back-note");
     assert_eq!(app.screen().input_text("id:send-back-note"), Ok(Some(NOTE)));
-    // Its answer is lost: saved, sent once, then only checked.
+    // Its answer is lost: saved and sent once. Pilot then looks it up by itself
+    // (a receipt read only) and never sends the note again.
     f.stats("lost");
     app.press("id:send-back").unwrap();
-    wait(&mut app, "id:delivery-unknown");
-    wait_text(&mut app, "Not confirmed. Check only.");
+    wait_text(
+        &mut app,
+        "You sent this back. The agent has your note; its next result shows on Today to check.",
+    );
     assert!(!has(&app, "id:mark-done"));
     let stats = f.stats("stats");
     assert_eq!(stats["posts"], 3);
+    assert_eq!(stats["lookups"], 1, "one automatic receipt read");
     assert_eq!(stats["messages"].as_array().unwrap().len(), 1);
     assert_eq!(stats["messages"][0]["content"], NOTE);
     app.press("id:back").unwrap();
-    wait(&mut app, "id:to-check");
     flush(&mut app, &bridge);
     close_window(app, bridge);
 
-    // Another cold reopen still says so on Today and offers Check only.
+    // A cold reopen has nothing left to check and sends nothing.
     let bridge = f.bridge();
     let mut app = open(&entry, &bridge);
-    wait(
-        &mut app,
-        "Sending back “A task in Synthetic result” is not confirmed.",
-    );
     gone(&mut app, &row);
-    app.press(CHECK).unwrap();
-    wait(
-        &mut app,
-        "Sent “A task in Synthetic result” back. The agent has your note.",
-    );
     let stats = f.stats("stats");
     assert_eq!(stats["posts"], 3, "Check never sends the note again");
     assert_eq!(stats["lookups"], 1);
@@ -294,7 +301,7 @@ fn a_press_opens_the_exact_pull_request_once_and_ticked_reminders_are_saved_with
     let mut app = open(&entry, &bridge);
     wait(&mut app, &format!("id:mission-{mission}"));
     app.press(&format!("id:mission-{mission}")).unwrap();
-    wait(&mut app, &format!("id:check-result-{task_id}"));
+    task_row(&mut app, &task_id);
     app.press(&format!("id:check-result-{task_id}")).unwrap();
     wait(&mut app, "id:your-check");
     wait(
@@ -311,7 +318,7 @@ fn a_press_opens_the_exact_pull_request_once_and_ticked_reminders_are_saved_with
     let mut app = open(&entry, &bridge);
     wait(&mut app, &format!("id:mission-{mission}"));
     app.press(&format!("id:mission-{mission}")).unwrap();
-    wait(&mut app, &format!("id:check-result-{task_id}"));
+    task_row(&mut app, &task_id);
     app.press(&format!("id:check-result-{task_id}")).unwrap();
     wait(&mut app, &button);
     let baseline = f.stats("stats");
@@ -361,7 +368,7 @@ fn a_press_opens_the_exact_pull_request_once_and_ticked_reminders_are_saved_with
     let mut app = open(&entry, &bridge);
     wait(&mut app, "id:your-check");
     app.press("id:back").unwrap();
-    wait(&mut app, &format!("id:check-result-{task_id}"));
+    task_row(&mut app, &task_id);
     app.press("id:back").unwrap();
     wait(&mut app, &format!("id:mission-{mission}"));
     app.wait(Duration::from_millis(300)).unwrap();
@@ -388,7 +395,7 @@ fn result(app: &mut Headless, subject: &Value) {
         wait(app, &format!("id:mission-{mission}"));
         app.press(&format!("id:mission-{mission}")).unwrap();
     }
-    wait(app, &row);
+    task_row(app, task);
     app.press(&row).unwrap();
     wait(app, "id:your-check");
 }
@@ -531,10 +538,7 @@ fn connected_inspect_cold_open_keeps_drafts_and_navigation_but_not_source() {
     );
     // The mission's detail is not read until the overlay closes.
     app.press("id:back").unwrap();
-    wait(
-        &mut app,
-        &format!("id:check-result-{}", task["taskId"].as_str().unwrap()),
-    );
+    task_row(&mut app, task["taskId"].as_str().unwrap());
     app.press("id:back").unwrap();
     app.press("role:button[New]").unwrap();
     wait(&mut app, "id:goal");

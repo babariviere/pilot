@@ -7,7 +7,6 @@ import {
 	asking,
 	chosen,
 	drafts,
-	focused,
 	focusFront,
 	focusInput,
 	type Help,
@@ -18,6 +17,7 @@ import {
 	picked,
 	picks,
 	questionText,
+	releaseFront,
 	replies,
 	replyTarget,
 	replyText,
@@ -160,7 +160,7 @@ export function laterDecision(day: Day, decision: Decision) {
 	if (outcome.status === "accepted") {
 		saveDecisionDraft(day, decision, true);
 		day.feed.flushDrafts();
-		focused.set(null);
+		releaseFront();
 		focusFront.set(true);
 	}
 }
@@ -233,7 +233,7 @@ export async function laterAction(day: Day, action: HumanAction) {
 	const outcome = await day.feed.actionLater({ actionId: action.id, revision: action.revision });
 	say(action.id, outcome.message);
 	if (outcome.status === "accepted") {
-		focused.set(null);
+		releaseFront();
 		focusFront.set(true);
 	}
 }

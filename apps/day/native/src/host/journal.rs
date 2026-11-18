@@ -665,6 +665,16 @@ impl Journal {
         Ok(())
     }
 
+    /// Saved writes that may have been sent: every control, planning and attention
+    /// record not marked as not sent, and every knowledge record. A write that adds
+    /// one is never run again automatically.
+    pub fn sent_writes(&self) -> usize {
+        self.records.values().filter(|r| !r.not_sent).count()
+            + self.planning.values().filter(|r| !r.not_sent).count()
+            + self.attention.values().filter(|r| !r.not_sent).count()
+            + self.knowledge.len()
+    }
+
     fn count(&self) -> usize {
         self.knowledge.len()
             + self.losses.len()

@@ -52,6 +52,7 @@ import {
 	focusInput,
 	front,
 	helpOpen,
+	holdFront,
 	messages,
 	pickChanged,
 	picked,
@@ -79,11 +80,11 @@ function deliveryLine(decision: Decision): string {
 		case "sending":
 			return "Sending your answer…";
 		case "checking":
-			return "Checking. This only reads; it changes nothing.";
+			return "Checking that your answer arrived…";
 		case "unknown":
 			return decision.kind === "unknown"
 				? ""
-				: "Pilot sent your answer but heard nothing back. It will not send it again until it checks.";
+				: "Pilot could not confirm your answer yet. It will not send it again. Check again only reads.";
 		default:
 			return "";
 	}
@@ -215,6 +216,8 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 		anchors.get(id)?.()?.focus();
 	};
 	const bindEscape = () => {
+		// Answering this card keeps it in front while it waits.
+		holdFront(id);
 		stopEscape?.();
 		stopEscape = keymap.bind("escape", leaveField, { when: "always" });
 	};
@@ -529,16 +532,18 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 						/>
 					}
 				>
-					<Action
-						variant="primary"
-						label="Check again"
-						shortcut={COMMIT_KEY}
-						anchor={(node) => {
-							commitButton = node;
-						}}
-						disabled={d().delivery === "checking"}
-						onPress={() => void checkDecision(props.day, d())}
-					/>
+					{/* Pilot checks by itself first; the button is the fallback after its tries. */}
+					<If when={d().delivery === "unknown"}>
+						<Action
+							variant="primary"
+							label="Check again"
+							shortcut={COMMIT_KEY}
+							anchor={(node) => {
+								commitButton = node;
+							}}
+							onPress={() => void checkDecision(props.day, d())}
+						/>
+					</If>
 				</If>
 				<If when={props.later}>
 					<Action

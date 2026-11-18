@@ -112,6 +112,24 @@ test("decision references require canonical IDs in the current mission", async (
 	assert.equal(f.inputs.length, 0);
 });
 
+test("a thread list that moves while a write is checked rejects it, never leaving it Unknown", async (t) => {
+	const f = await fixture(t);
+	const decision = f.store.addDecision(f.missionId, "Keep history");
+	const link = await f.request({ purpose: "thread-reference", reference: { kind: "decision", id: decision.id } });
+	const other = await f.request({ purpose: "thread-create", title: "Another thread" }, randomUUID());
+	const threads = f.threads as unknown as { reference: (...args: unknown[]) => Promise<void> };
+	const reference = threads.reference.bind(f.threads);
+	// Another thread is created while this link is still being checked.
+	t.mock.method(threads, "reference", async (...args: unknown[]) => {
+		await reference(...args);
+		assert.equal((await f.execute(other)).state, "accepted");
+	});
+	const receipt = await f.execute(link);
+	assert.equal(receipt.state, "rejected");
+	assert.match(String(receipt.reason), /Topic source changed/);
+	assert.equal(f.store.threads.get(f.missionId, f.topicId).references.length, 0);
+});
+
 /** Thread chats without a model: Pilot's spawn, send and archive are recorded, and a chat joins the mission like a real one. */
 function threadChats(t: TestContext, f: Awaited<ReturnType<typeof fixture>>) {
 	const live = new Map<string, SessionSummary>();

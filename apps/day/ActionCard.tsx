@@ -20,7 +20,7 @@ import { COMMIT_KEY } from "./DecisionCard";
 import type { Day } from "./day";
 import { keepField } from "./kept";
 import { Action, InlineAction, Mark, Panel, TextField } from "./ui";
-import { anchors, focusFront, focusInput, messages, reports, reportText, setFor } from "./view";
+import { anchors, focusFront, focusInput, holdFront, messages, reports, reportText, setFor } from "./view";
 
 function verb(asked: ActionAsk | null | undefined): string {
 	if (asked === "complete") return "your report";
@@ -34,9 +34,9 @@ function deliveryLine(action: HumanAction): string {
 		case "sending":
 			return `Sending ${verb(action.asked)}…`;
 		case "checking":
-			return "Checking. This only reads; it changes nothing.";
+			return `Checking that ${verb(action.asked)} arrived…`;
 		case "unknown":
-			return `Pilot sent ${verb(action.asked)} but heard nothing back. It will not send it again until it checks.`;
+			return `Pilot could not confirm ${verb(action.asked)} yet. It will not send it again. Check again only reads.`;
 		default:
 			return "";
 	}
@@ -195,6 +195,7 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 						saveActionDraft(props.day, a());
 					}}
 					onFocus={() => {
+						holdFront(id);
 						reportField.focus();
 						stopEscape?.();
 						stopEscape = keymap.bind("escape", leave, { when: "always" });
@@ -240,13 +241,15 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 						/>
 					}
 				>
-					<Action
-						variant="primary"
-						label="Check again"
-						shortcut={COMMIT_KEY}
-						disabled={a().delivery === "checking"}
-						onPress={() => void checkAction(props.day, a())}
-					/>
+					{/* Pilot checks by itself first; the button is the fallback after its tries. */}
+					<If when={a().delivery === "unknown"}>
+						<Action
+							variant="primary"
+							label="Check again"
+							shortcut={COMMIT_KEY}
+							onPress={() => void checkAction(props.day, a())}
+						/>
+					</If>
 				</If>
 				<Action
 					label="Save progress"

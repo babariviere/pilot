@@ -45,7 +45,12 @@ fn a_global_offline_window_settles_instead_of_refreshing_its_own_failures() {
     let entry = entry();
     let mut app = open(&entry, &bridge);
     let result = (|| {
-        app.wait_for_within("Pilot could not reach its service.", Duration::from_secs(3))?;
+        // The scope reads quietly first; it says why only after 3 tries
+        // failed (2 s, then 4 s apart).
+        app.wait_for_within(
+            "Pilot could not reach its service.",
+            Duration::from_secs(15),
+        )?;
         let revision = host.snapshot().revision;
         app.wait(Duration::from_millis(200))?;
         assert_eq!(
@@ -69,8 +74,9 @@ fn unknown_empty_attention_is_not_a_fresh_headline_or_an_all_clear_footer() {
     let entry = entry();
     let root = FakeRoot::new();
     let mut today = serde_json::to_value(Desk::new(Scenario::Quiet).today()).unwrap();
-    today["attention"]["state"] = json!("stale");
-    today["attention"]["reason"] = json!("Reading changes. Showing the earlier attention read.");
+    // Never read: an ordinary refresh of an earlier read shows that read as it is.
+    today["attention"]["state"] = json!("unreadable");
+    today["attention"]["reason"] = json!("Pilot has not read what needs you yet.");
     root.reply("day.today.read", today);
     root.reply("day.plan.inventory", inventory(vec![]));
     let mut app = open_on(&entry, root.channel.clone());
@@ -107,7 +113,7 @@ fn status_nodes(app: &Headless) -> Vec<(String, NodeId, Bounds<Points>)> {
         .into_iter()
         .filter_map(|node| {
             let id = node.test_id.as_deref()?;
-            ["freshness", "attention-note", "planning"]
+            ["freshness", "planning"]
                 .contains(&id)
                 .then(|| (id.to_owned(), node.id, node.bounds))
         })
@@ -155,7 +161,8 @@ fn automatic_refresh_races_and_outage_recovery_keep_today_stable_and_send_nothin
     }
     app.wait(Duration::from_millis(100)).unwrap();
     let initial = status_nodes(&app);
-    assert_eq!(initial.len(), 3, "status regions must have stable owners");
+    // Only Planning: the old-data warning shows only after 5 minutes and 3 failed tries.
+    assert_eq!(initial.len(), 1, "status regions must have stable owners");
     for _ in 0..5 {
         f.cmd("hold-day", true);
         f.cmd("notice", true);
@@ -188,12 +195,13 @@ fn automatic_refresh_races_and_outage_recovery_keep_today_stable_and_send_nothin
     pump(&mut app, || {
         host.snapshot().freshness.state == FreshnessState::Unavailable
     });
-    assert!(contains(&app, "Daemon read is unavailable"));
-    assert!(!app.shows("Nothing needs you. Pilot keeps going on its own."));
+    // A short outage shows the last read as it was, with no note.
+    assert!(!contains(&app, "Daemon read is unavailable"));
+    assert!(!has(&app, "id:freshness"));
     for _ in 0..3 {
         f.cmd("notice", true);
         app.wait(Duration::from_millis(100)).unwrap();
-        assert!(contains(&app, "Daemon read is unavailable"));
+        assert!(!contains(&app, "Daemon read is unavailable"));
     }
     f.cmd("read-outage", false);
     f.cmd("notice", true);

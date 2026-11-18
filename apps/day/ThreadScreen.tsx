@@ -9,10 +9,23 @@
 // cannot take one, the page says why and nothing is sent. A sent message is
 // not the coordinator's answer. A lost answer stays Unknown: Check only
 // reads it, and the words stay until the service accepted them.
-import { cleanup, effect, keymap, Scroll, type ScrollRef, type Signal, signal, Text, View, type ViewRef } from "nsh";
+import {
+	cleanup,
+	effect,
+	keymap,
+	Scroll,
+	type ScrollRef,
+	type Signal,
+	signal,
+	Text,
+	untracked,
+	View,
+	type ViewRef,
+} from "nsh";
 import { Dialog } from "nsh/base";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
+import { keepRead, staleLine } from "./freshness";
 import { keepField, keepScroll, restoreScroll, scrollOf } from "./kept";
 import {
 	type Catalog,
@@ -101,6 +114,18 @@ async function send(
 /** Writes on this mission whose result Pilot does not know, with Check. They block other writes. */
 function Unsettled(props: { mirror: ThreadsMirror; missionId: string; ops: ThreadOp[]; testID: string }) {
 	const key = () => draftKey(props.missionId, "check");
+	// Pilot checks unconfirmed writes by itself. A message it proves the service took is no
+	// longer an unsent draft: clear those exact words, as a manual Check does.
+	const unsure = new Set<string>();
+	effect(() => {
+		for (const o of props.mirror.mission(props.missionId).ops) {
+			if (o.state === "unknown" || o.state === "checking") unsure.add(o.operationId);
+			else if (unsure.delete(o.operationId) && o.state === "accepted" && o.purpose === "thread-send") {
+				const words = draftKey(props.missionId, o.topicId);
+				if (untracked(() => threadDrafts()[words]) === o.text) clearDraft(words);
+			}
+		}
+	});
 	const words = (o: ThreadOp) => {
 		if (o.purpose === "thread-send") return `Message not confirmed: “${o.text ?? ""}”`;
 		if (o.purpose === "thread-create") return "A new thread is not confirmed.";
@@ -117,30 +142,34 @@ function Unsettled(props: { mirror: ThreadsMirror; missionId: string; ops: Threa
 								<Text class="text-sm text-foreground">{words(o())}</Text>
 							</MarkLine>
 							<Text class="pl-4 text-xs text-muted-foreground">
-								Pilot sent it but heard nothing back. It will not send it again. Check reads what happened.
+								{o().state === "checking"
+									? "Checking that it arrived…"
+									: "Pilot could not confirm it yet. It will not send it again. Check only reads."}
 							</Text>
-							<View class="flex-row pl-3">
-								<Action
-									label={o().state === "checking" ? "Checking…" : "Check"}
-									icon="refresh"
-									testID={`thread-check-${o().operationId}`}
-									disabled={o().state === "checking"}
-									accessibilityLabel="Check what happened to it. This reads only and sends nothing again."
-									onPress={async () => {
-										const op = o();
-										const r = await props.mirror.source.check(props.missionId, op.operationId);
-										// Words the service proved it took are no longer unsent.
-										const words = draftKey(props.missionId, op.topicId);
-										if (
-											r.status === "accepted" &&
-											op.purpose === "thread-send" &&
-											threadDrafts()[words] === op.text
-										)
-											clearDraft(words);
-										setMessage(key(), r.message);
-									}}
-								/>
-							</View>
+							{/* Pilot checks by itself first; the button is the fallback after its tries. */}
+							<If when={o().state !== "checking"}>
+								<View class="flex-row pl-3">
+									<Action
+										label="Check"
+										icon="refresh"
+										testID={`thread-check-${o().operationId}`}
+										accessibilityLabel="Check what happened to it. This reads only and sends nothing again."
+										onPress={async () => {
+											const op = o();
+											const r = await props.mirror.source.check(props.missionId, op.operationId);
+											// Words the service proved it took are no longer unsent.
+											const words = draftKey(props.missionId, op.topicId);
+											if (
+												r.status === "accepted" &&
+												op.purpose === "thread-send" &&
+												threadDrafts()[words] === op.text
+											)
+												clearDraft(words);
+											setMessage(key(), r.message);
+										}}
+									/>
+								</View>
+							</If>
 						</View>
 					)}
 				</Each>
@@ -156,6 +185,12 @@ function Unsettled(props: { mirror: ThreadsMirror; missionId: string; ops: Threa
 
 /** What the read could not show, never as "no threads". */
 function Unreadable(props: { mirror: ThreadsMirror; missionId: string; m: MissionThreads }) {
+	// Pilot reads again on its own; Try now shows after 3 failed tries.
+	const reads = keepRead(
+		() => props.mirror.source.read(props.missionId),
+		() => props.m.availability === "unavailable",
+		() => false,
+	);
 	return (
 		<View testID="threads-off" class="gap-2">
 			<MarkLine kind="unknown">
@@ -163,15 +198,17 @@ function Unreadable(props: { mirror: ThreadsMirror; missionId: string; m: Missio
 					{`${props.m.reason} Threads are not shown; this is not the same as having none.`}
 				</Text>
 			</MarkLine>
-			<View class="flex-row pl-3">
-				<Action
-					label="Read again"
-					icon="refresh"
-					testID="threads-read"
-					accessibilityLabel="Read this mission's threads again. This sends nothing."
-					onPress={() => void props.mirror.source.read(props.missionId)}
-				/>
-			</View>
+			<If when={reads.warn()}>
+				<View class="flex-row pl-3">
+					<Action
+						label="Try now"
+						icon="refresh"
+						testID="threads-read"
+						accessibilityLabel="Read this mission's threads again. This sends nothing."
+						onPress={() => void reads.now()}
+					/>
+				</View>
+			</If>
 		</View>
 	);
 }
@@ -342,6 +379,12 @@ export function MissionThreadsSection(props: { day: Day; missionId: string; head
 	const mirror = props.day.threads as ThreadsMirror;
 	const m = () => mirror.mission(props.missionId);
 	if (m().availability !== "live") void mirror.source.read(props.missionId);
+	// Pilot reads again on its own after a failed read; with threads shown, it says nothing until the old-data rule does.
+	const reads = keepRead(
+		() => mirror.source.read(props.missionId),
+		() => m().failed !== "" || m().availability === "unavailable",
+		() => !!m().snapshot,
+	);
 	const topics = () => m().snapshot?.topics ?? [];
 	const shown = () => {
 		const all = topics();
@@ -373,8 +416,8 @@ export function MissionThreadsSection(props: { day: Day; missionId: string; head
 				}
 			>
 				<View>
-					<If when={m().reason}>
-						<Text class="pb-2 text-xs text-muted-foreground">{m().reason}</Text>
+					<If when={m().reason && reads.stale()}>
+						<Text class="pb-2 text-xs text-muted-foreground">{staleLine(reads.readAt() ?? 0)}</Text>
 					</If>
 					<If when={topics().length === 0}>
 						<Text testID="threads-empty" class="border-t border-border py-3 text-sm text-muted-foreground">
@@ -1123,6 +1166,13 @@ function Conversation(props: {
 	place: ReadingPlace;
 }) {
 	const c = () => props.mirror.state().conversations[historyKey(props.missionId, props.topic.id)];
+	// Pilot reads the conversation again on its own after a failed read. With messages shown, it says
+	// nothing until the old-data rule does.
+	const conversationReads = keepRead(
+		() => props.mirror.source.history(props.missionId, props.topic.id),
+		() => !!c()?.reason,
+		() => (c()?.messages.length ?? 0) > 0,
+	);
 	const now = Date.now();
 	// Any change of the threads' state may move what is above the viewport (a page, a placed or answered message,
 	// a new link). Start the check here; layout callbacks repeat it once native frames have changed.
@@ -1152,22 +1202,26 @@ function Conversation(props: {
 	}
 	return (
 		<View testID="thread-conversation" class="gap-6" onLayout={() => void props.place.changed()}>
-			<If when={c()?.reason}>
+			<If when={c()?.reason && ((c()?.messages.length ?? 0) === 0 || conversationReads.stale())}>
 				<View class="gap-2">
 					<MarkLine kind="unknown">
 						<Text testID="thread-conversation-off" role="alert" class="text-sm text-foreground">
-							{c()?.reason ?? ""}
+							{(c()?.messages.length ?? 0) === 0
+								? (c()?.reason ?? "")
+								: staleLine(conversationReads.readAt() ?? 0)}
 						</Text>
 					</MarkLine>
-					<View class="flex-row pl-3">
-						<Action
-							label="Read again"
-							icon="refresh"
-							testID="thread-conversation-read"
-							accessibilityLabel="Read this thread's conversation again. This sends nothing."
-							onPress={() => void props.mirror.source.history(props.missionId, props.topic.id)}
-						/>
-					</View>
+					<If when={conversationReads.warn()}>
+						<View class="flex-row pl-3">
+							<Action
+								label="Try now"
+								icon="refresh"
+								testID="thread-conversation-read"
+								accessibilityLabel="Read this thread's conversation again. This sends nothing."
+								onPress={() => void conversationReads.now()}
+							/>
+						</View>
+					</If>
 				</View>
 			</If>
 			<If when={c()?.availability === "live" && !c()?.complete}>
@@ -1454,6 +1508,11 @@ function Composer(props: {
  */
 function Absent(props: { mirror: ThreadsMirror; missionId: string; m: MissionThreads }) {
 	const failed = () => props.m.availability === "unavailable" || (props.m.snapshot !== null && props.m.failed !== "");
+	const reads = keepRead(
+		() => props.mirror.source.read(props.missionId),
+		failed,
+		() => !!props.m.snapshot,
+	);
 	const words = () => {
 		if (props.m.availability === "unavailable") return `${props.m.reason} Your words for this thread stay.`;
 		if (!props.m.snapshot) return "Reading this thread…";
@@ -1473,14 +1532,14 @@ function Absent(props: { mirror: ThreadsMirror; missionId: string; m: MissionThr
 					</Text>
 				</View>
 			</If>
-			<If when={props.m.availability === "unavailable" || props.m.snapshot}>
+			<If when={reads.warn()}>
 				<View class="flex-row">
 					<Action
-						label="Read again"
+						label="Try now"
 						icon="refresh"
 						testID="threads-read"
 						accessibilityLabel="Read this mission's threads again. This sends nothing."
-						onPress={() => void props.mirror.source.read(props.missionId)}
+						onPress={() => void reads.now()}
 					/>
 				</View>
 			</If>
@@ -1495,6 +1554,17 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 	const m = () => mirror.mission(props.missionId);
 	void mirror.source.read(props.missionId);
 	void mirror.source.history(props.missionId, props.topicId);
+	// The thread and its conversation, read again on its own after a failed read and when the window comes back.
+	const threadReads = keepRead(
+		async () => {
+			await Promise.all([
+				mirror.source.read(props.missionId),
+				mirror.source.history(props.missionId, props.topicId),
+			]);
+		},
+		() => m().failed !== "",
+		() => !!m().snapshot,
+	);
 	const topic = (): Topic | null => m().snapshot?.topics.find((t) => t.id === props.topicId) ?? null;
 	const key = () => draftKey(props.missionId, props.topicId);
 	// Escape closes an open link list first, then goes back to the mission.
@@ -1582,22 +1652,12 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 											· Started by you. Talking here never starts, approves or stops work.
 										</Text>
 										<View class="flex-1" />
-										<Action
-											label="Read again"
-											icon="refresh"
-											testID="threads-read-again"
-											accessibilityLabel="Read this thread, its conversation and its activity again. This sends nothing."
-											onPress={() => {
-												void mirror.source.read(props.missionId);
-												void mirror.source.history(props.missionId, t().id);
-											}}
-										/>
 									</View>
 								</View>
-								<If when={m().reason}>
+								<If when={m().reason && threadReads.stale()}>
 									<MarkLine testID="thread-stale" kind="unknown">
 										<Text role="alert" class="text-sm text-muted-foreground">
-											{m().reason}
+											{staleLine(threadReads.readAt() ?? 0)}
 										</Text>
 									</MarkLine>
 								</If>

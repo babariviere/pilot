@@ -71,7 +71,7 @@ import type { DaemonServices } from "./daemon-services.ts";
 import { DATABASE_CONTROLS } from "./database-controls.ts";
 import { DatabaseSettingsError } from "./databases.ts";
 import { dayMissionAgents } from "./day-mission-agents.ts";
-import { dayWorking } from "./day-working.ts";
+import { dayWaiting, dayWorking } from "./day-working.ts";
 import { awaitDiagnosticRead } from "./diagnostic-context.ts";
 import { DIAGNOSTICS_CONTROLS, isDiagnosticsRevocation, validateDiagnosticsIntent } from "./diagnostics-controls.ts";
 import { EnvironmentApprovalRequired } from "./environment-profile.ts";
@@ -95,7 +95,7 @@ import { isThreadOperation } from "./mission-threads.ts";
 import type { MissionStore } from "./missions.ts";
 import { MODEL_CONTROLS } from "./model-controls.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
-import { CHAT_CONTINUE, CHAT_RECOVER } from "./native-chat.ts";
+import { CHAT_CONTINUE, CHAT_DISMISS, CHAT_RECOVER, CHAT_REPLY } from "./native-chat.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
 import { isIntakeOperation } from "./native-intake.ts";
 import { isNativePlanningOperation, PlanningInventoryCapacity } from "./native-mission-planning.ts";
@@ -392,6 +392,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		modelControls,
 		diagnosticsControls,
 		scheduleControls,
+		screen,
 	} = services;
 	const {
 		config: _config,
@@ -1305,17 +1306,19 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					end();
 				}
 			}
-			if (operation?.kind === CHAT_CONTINUE || operation?.kind === CHAT_RECOVER) {
+			if (operation?.kind === CHAT_CONTINUE || operation?.kind === CHAT_RECOVER || operation?.kind === CHAT_REPLY) {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native chat continue unavailable");
 				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await nativeChat.lookupContinue(operation);
+				const send = (op: DurableOperation, firstEntry: boolean) =>
+					op.kind === CHAT_REPLY ? nativeChat.replyChat(op, firstEntry) : nativeChat.continueChat(op, firstEntry);
 				if (parts[2] === "receipt" && saved?.state === "pending") {
 					// A lost answer: read whether the chat accepted that exact input. Never sent again.
 					const end = mutations.begin({ kind: "operation", id: operation.operationId });
 					try {
-						return json(res, 200, await journal.execute(operation, (op) => nativeChat.continueChat(op, false)));
+						return json(res, 200, await journal.execute(operation, (op) => send(op, false)));
 					} finally {
 						end();
 					}
@@ -1323,10 +1326,24 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
 				const end = mutations.begin({ kind: "operation", id: operation.operationId });
 				try {
+					return json(res, 200, await journal.execute(operation, (op, entry) => send(op, entry.firstEntry)));
+				} finally {
+					end();
+				}
+			}
+			if (operation?.kind === CHAT_DISMISS) {
+				res.setHeader("cache-control", "no-store");
+				if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native chat dismiss unavailable");
+				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				const saved = await nativeChat.lookupContinue(operation);
+				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
 					return json(
 						res,
 						200,
-						await journal.execute(operation, (op, entry) => nativeChat.continueChat(op, entry.firstEntry)),
+						await journal.execute(operation, (op, entry) => nativeChat.dismissChat(op, entry.firstEntry)),
 					);
 				} finally {
 					end();
@@ -2528,6 +2545,33 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				),
 			);
 		}
+		// Screen agent: the Day window that answers each screen chat and its waiting requests. Native authority only.
+		if (parts[1] === "screen" && (parts[2] === "bindings" || parts[2] === "requests") && parts.length <= 4) {
+			res.setHeader("cache-control", "no-store");
+			if (!nativeAuthority || !screen) throw new ServiceUnavailable("Screen agent unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			const done = () => {
+				res.writeHead(204);
+				res.end();
+			};
+			if (parts[2] === "bindings" && parts.length === 3 && req.method === "PUT") {
+				screen.bind(await readJson(req, 1024));
+				return done();
+			}
+			if (parts[2] === "bindings" && parts.length === 4 && req.method === "DELETE") {
+				screen.unbind(decodeURIComponent(parts[3]!));
+				return done();
+			}
+			const windowId = url.searchParams.get("windowId") ?? "";
+			if (parts[2] === "requests" && parts.length === 3 && req.method === "GET")
+				return json(res, 200, { requests: screen.requests(windowId) });
+			// 256 KiB: the largest snapshot answer in the design. A picture is uploaded, not sent here.
+			if (parts[2] === "requests" && parts.length === 4 && req.method === "POST") {
+				screen.answer(windowId, decodeURIComponent(parts[3]!), await readJson(req, 256 * 1024));
+				return done();
+			}
+			throw new HttpError(404, "Not found");
+		}
 		// Explicit project choices. User writes require native authority; never runtime permissions.
 		if (parts[1] === "projects" && parts[3] === "preferences" && parts.length <= 6) {
 			const preferences = missions?.knowledge?.preferences;
@@ -3003,6 +3047,15 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				observedAt = Date.now(),
 				list = missions.store.list(projectId);
 			const dashboard = dashboards.dashboard(projectId, Number.MAX_SAFE_INTEGER);
+			// Chats waiting for a reply show their last message, so Today can offer Reply beside it.
+			const needsYou = await Promise.all(
+				dashboard.needsYou.items.map(async (item) => {
+					if (item.attentionReason.kind !== "waits" || !item.sessionId) return item;
+					const says = await sessions.waitingSays(item.sessionId);
+					return says ? { ...item, says } : item;
+				}),
+			);
+			const chats = sessions.list({ projectId });
 			const overview: import("@pilot/protocol").DayOverview = {
 				version: 1,
 				projectId,
@@ -3010,6 +3063,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				complete: true,
 				dashboard: {
 					...dashboard,
+					needsYou: { ...dashboard.needsYou, items: needsYou },
 					missions: {
 						...dashboard.missions,
 						items: dashboard.missions.items.map((m) => ({ ...m, ...missions.store.successorLinks(m.id) })),
@@ -3019,11 +3073,12 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				controls: list.map((mission) => missions.store.controls.current(mission.id)),
 				workingNow: dayWorking(
 					projectId,
-					sessions.list({ projectId }),
+					chats,
 					list,
 					list.filter((m) => m.status === "active").flatMap((m) => missions.store.tasks(m.id)),
 					new Set(list.filter((m) => missions.store.controls.current(m.id).held).map((m) => m.id)),
 				),
+				waitingNow: dayWaiting(projectId, chats, list),
 				missionAgents: dayMissionAgents(
 					projectId,
 					new Set(dashboard.missions.items.map((mission) => mission.id)),
@@ -3712,6 +3767,8 @@ export function createDaemonServer(services: DaemonServices): Server & {
 	};
 	// A durable change only invalidates native state. Never publish proposal paths or drive maintenance here.
 	const stopRuntimeUpdateWatch = liveUpdate?.service.onChange(() => broadcast({ type: "runtime-update.changed" }));
+	// A screen agent request waits for a Day window. The notice names only the window; it reads the request itself.
+	const stopScreenNotices = screen?.onRequested((windowId) => broadcast({ type: "screen.requested", windowId }));
 	// Open planning pages read again while a planning coordinator works. A notice names only the mission.
 	const planningNotices = new PlanningActivityNotices((missionId) =>
 		broadcast({ type: "planning.activity", missionId }),
@@ -3726,6 +3783,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		: undefined;
 	server.once("close", () => {
 		stopRuntimeUpdateWatch?.();
+		stopScreenNotices?.();
 		stopPlanningActivity?.();
 		planningNotices.close();
 	});

@@ -105,11 +105,26 @@ fn open(entry: &Path, bridge: &Bridge) -> Headless {
 
 /// One window on `channel`, under the same exact-name grant as a bridge's.
 fn open_on(entry: &Path, channel: HostChannel) -> Headless {
+    open_with(entry, channel, nsh_core::time::Clock::system())
+}
+
+/// Like `open_on`, on a manual clock: the app's time moves only as the test
+/// waits, so a test can let minutes pass for the old-data rule.
+fn open_on_clock(entry: &Path, channel: HostChannel) -> Headless {
+    open_with(
+        entry,
+        channel,
+        nsh_core::time::Clock::manual(std::time::SystemTime::now()),
+    )
+}
+
+fn open_with(entry: &Path, channel: HostChannel, clock: nsh_core::time::Clock) -> Headless {
     let bundle = restrict(compile_tsx(entry, &ui_sets()).expect("Connected.tsx builds")).unwrap();
     let config = EngineConfig {
         ui_sets: ui_sets(),
         viewport: Size::new(Points(1100.0), Points(1400.0)),
         host: channel,
+        clock,
         ..EngineConfig::new(bundle)
     };
     Headless::start(config).expect("the engine starts")
@@ -155,12 +170,23 @@ fn choose_project(app: &mut Headless, f: &Fixture) {
     app.press(&format!("text:{name}")).unwrap();
 }
 
+/// The user leaves the window and comes back: Pilot reads the open page again.
+fn come_back(app: &mut Headless) {
+    app.set_environment("setLifecycle(inactive)", |e| {
+        e.lifecycle = nsh_core::platform::Lifecycle::Inactive
+    })
+    .unwrap();
+    app.set_environment("setLifecycle(active)", |e| {
+        e.lifecycle = nsh_core::platform::Lifecycle::Active
+    })
+    .unwrap();
+}
+
 /// Waits until a new mission's page finished its own first read. A read that
 /// lands after the fixture writes the round would show that round at once.
 fn first_planning_read(app: &mut Headless) {
     app.wait_until("first planning read", WAIT, |s| {
-        s.enabled("label:Read this mission's planning again. This sends nothing.")
-            .unwrap_or(false)
+        s.matches("id:plan-read").unwrap_or(false)
     })
     .unwrap();
 }
@@ -345,12 +371,8 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
     f.cmd("quiet", true);
     f.cmd("generate", true);
     f.cmd("held", false);
-    wait(
-        &mut app,
-        "label:Read this mission's planning again. This sends nothing.",
-    );
-    app.press("label:Read this mission's planning again. This sends nothing.")
-        .unwrap();
+    // With its notices quiet, coming back to the window reads the page again.
+    come_back(&mut app);
     wait(&mut app, "id:interview");
     assert!(!app.screen().enabled("id:submit").unwrap_or(false));
 
@@ -504,12 +526,9 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
     f.cmd("generate", true);
     let held = f.cmd("held", false);
     assert!(held["heldEvents"].as_u64().unwrap() > 0);
-    wait(
-        &mut app,
-        "label:Read this mission's planning again. This sends nothing.",
-    );
-    app.press("label:Read this mission's planning again. This sends nothing.")
-        .unwrap();
+    // No service event comes while they are held: coming back to the window
+    // reads the page again by itself.
+    come_back(&mut app);
     wait(&mut app, "Question 1 of 2 · 0 answered");
     app.wait_until("held round read", WAIT, |s| {
         s.enabled("id:choice-outcome-yes").unwrap_or(false)
@@ -519,19 +538,12 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
     f.cmd("block-plan-read", true);
     f.cmd("hold-events", false);
     f.cmd("entered", false);
-    // A change alone never flickers the page: while its re-read is due, it
-    // stays editable and says nothing. Only a read that lags shows as older.
+    // A change never flickers the page: while its re-read waits, it stays
+    // editable and says nothing. Saves name the page they were made on; only
+    // the shared rule (5 minutes, 3 failed tries) makes it older.
     app.wait(Duration::from_millis(1000)).unwrap();
     assert!(!app.shows(OLDER), "no older note within the grace");
     assert!(app.screen().enabled("id:choice-outcome-yes").unwrap());
-    wait(&mut app, OLDER);
-    assert!(!app.screen().enabled("id:choice-outcome-yes").unwrap());
-    app.press_key("1").unwrap();
-    assert_eq!(
-        f.cmd("stats", false)["posts"],
-        before_answer,
-        "Stale keyboard input sends nothing"
-    );
     f.cmd("release", false);
     app.wait_until("fresh after terminal notices", WAIT, |s| {
         !s.shows(OLDER) && s.enabled("id:choice-outcome-yes").unwrap_or(false)
@@ -608,9 +620,21 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
     f.cmd("lost", true);
     app.press("role:button[Start task]").unwrap();
     wait(&mut app, "role:button[Check Start]");
-    let working = f.cmd("stats", false)["workingSession"]
+    // Check Start shows once Day journals the Start, before its send reaches
+    // the service. Wait for the service's answer (the one the fixture loses).
+    let end = std::time::Instant::now() + WAIT;
+    let mut stats = f.cmd("stats", false);
+    while stats["lostReply"].is_null() {
+        assert!(
+            std::time::Instant::now() < end,
+            "Start never reached the service: {stats}"
+        );
+        app.wait(Duration::from_millis(50)).unwrap();
+        stats = f.cmd("stats", false);
+    }
+    let working = stats["workingSession"]
         .as_str()
-        .unwrap()
+        .unwrap_or_else(|| panic!("no working session: {stats}"))
         .to_owned();
     app.press("label:Pilot. Go to Today").unwrap();
     wait(&mut app, &format!("id:working-{working}"));
@@ -636,8 +660,19 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
     );
     f.cmd("build-generate", true);
     assert_eq!(f.cmd("reported", false)["workers"], 2);
+    // The chat finishes first (as the daemon saved it), then leaves Working now.
+    // Checking the screen alone passed early when the row was only scrolled
+    // off, and the restart below then found a chat still working.
+    let end = std::time::Instant::now() + WAIT;
+    while f.cmd("stats", false)["workingNow"] != false {
+        assert!(
+            std::time::Instant::now() < end,
+            "the build chat never finished"
+        );
+        app.wait(Duration::from_millis(50)).unwrap();
+    }
     app.wait_until("finished chat leaves Working now", WAIT, |s| {
-        !s.shows(&format!("id:working-{working}"))
+        !s.matches(&format!("id:working-{working}")).unwrap_or(false)
     })
     .unwrap();
     close(app, bridge);
@@ -1019,7 +1054,9 @@ fn inventory(rows: Vec<PlanRow>) -> Value {
 fn not_current() -> Value {
     serde_json::to_value(Planning {
         availability: PlanAvailability::Unavailable,
-        reason: "Planning missions could not be read. Read again; nothing was started.".into(),
+        reason:
+            "Pilot could not read the missions in planning. It keeps trying; nothing was started."
+                .into(),
         ..Planning::default()
     })
     .unwrap()
@@ -1032,6 +1069,8 @@ fn plan_row(id: &str, title: &str, stage: PlanStage, identity: PlanIdentity) -> 
         stage,
         line: "Interview answers needed".into(),
         needs_you: matches!(stage, PlanStage::Questions | PlanStage::Review),
+        planner_says: String::new(),
+        reply: false,
         identity: Some(identity),
     }
 }
@@ -1232,7 +1271,7 @@ fn a_planning_row_opens_its_exact_interview_and_a_page_older_than_the_list_says_
     root.reply("day.plan.inventorySnapshot", row(identity.clone()));
     root.reply("day.plan.read", page.clone());
     root.reply("day.plan.snapshot", page.clone());
-    let mut app = open_on(&entry, root.channel.clone());
+    let mut app = open_on_clock(&entry, root.channel.clone());
 
     // The row opens that mission's own saved interview, read by its exact ID.
     wait(&mut app, "id:plan-export");
@@ -1264,10 +1303,21 @@ fn a_planning_row_opens_its_exact_interview_and_a_page_older_than_the_list_says_
     );
     assert!(!app.shows(OLDER));
 
-    // A failed reopen is stale even without any invalidation or newer row.
+    // A failed reopen shows the earlier read as it was, still answerable,
+    // while Pilot tries again. Only when it is 5 minutes old and 3 tries
+    // failed does it say the page is older and stop taking answers.
     app.press("label:Pilot. Go to Today").unwrap();
     root.refuse("day.plan.read", "unavailable");
     app.press("id:plan-export").unwrap();
+    wait(&mut app, "id:interview");
+    app.wait(Duration::from_secs(1)).unwrap();
+    assert!(!app.shows(OLDER), "no older note while Pilot tries again");
+    assert!(
+        app.screen()
+            .enabled("id:choice-what-messages")
+            .unwrap_or(false)
+    );
+    app.wait(Duration::from_secs(6 * 60)).unwrap();
     wait(&mut app, OLDER);
     wait(
         &mut app,
@@ -1301,6 +1351,7 @@ fn a_planning_row_opens_its_exact_interview_and_a_page_older_than_the_list_says_
     root.changed();
     app.wait(Duration::from_millis(200)).unwrap();
     app.press("id:plan-export").unwrap();
+    app.wait(Duration::from_secs(6 * 60)).unwrap();
     wait(&mut app, OLDER);
     wait(
         &mut app,
@@ -1351,7 +1402,7 @@ fn a_cached_snapshot_from_before_a_later_notice_cannot_renew_the_interview() {
     );
     root.reply("day.plan.read", page.clone());
     root.reply("day.plan.snapshot", page.clone());
-    let mut app = open_on(&entry, root.channel.clone());
+    let mut app = open_on_clock(&entry, root.channel.clone());
     wait(&mut app, "id:plan-export");
     app.press("id:plan-export").unwrap();
     wait(&mut app, "id:interview");
@@ -1364,6 +1415,7 @@ fn a_cached_snapshot_from_before_a_later_notice_cannot_renew_the_interview() {
     }
     let calls = root.count("day.plan.snapshot");
     root.refuse("day.plan.snapshot", "stale");
+    root.refuse("day.plan.read", "unavailable");
     let reads = root.count("day.today.read");
     root.changed();
     // The same notice refreshes Today and planning. Once Today's read is
@@ -1381,6 +1433,12 @@ fn a_cached_snapshot_from_before_a_later_notice_cannot_renew_the_interview() {
         assert!(std::time::Instant::now() < deadline);
         app.wait(Duration::from_millis(50)).unwrap();
     }
+    // Not current, but shown as it was while Pilot reads it again: no note,
+    // still answerable. Only 5 minutes and 3 failed tries make it older.
+    app.wait(Duration::from_secs(1)).unwrap();
+    assert!(!app.shows(OLDER));
+    assert!(app.screen().enabled("id:choice-what-messages").unwrap());
+    app.wait(Duration::from_secs(6 * 60)).unwrap();
     wait(&mut app, OLDER);
     assert!(app.shows(OLDER));
     assert!(!app.screen().enabled("id:choice-what-messages").unwrap());

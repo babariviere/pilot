@@ -48,6 +48,18 @@ export interface DeliveredWork {
 	deliveryId: string | null;
 	targetId: string;
 	ownerSessionId: string | null;
+	/**
+	 * Where the owning chat is while there is no result, so the page offers the action that moves it. `waiting` (it
+	 * ended its turn with no result and no question) shows even beside an earlier result, with its last message.
+	 */
+	chat?: {
+		state: "working" | "queued" | "question" | "waiting" | "stopped" | "failed" | "done" | "idle";
+		reason?: string;
+		/** With `queued`: its place in line and what holds the slots. */
+		queue?: import("./codingQueue").CodingQueue;
+		canContinue?: true;
+		says?: string;
+	};
 	/** A standalone chat's own title, from the service. */
 	title?: string;
 	scope?: string;

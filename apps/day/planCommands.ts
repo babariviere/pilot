@@ -17,6 +17,7 @@ import {
 	chatChoice,
 	drop,
 	goalDraft,
+	keptAnswers,
 	newBusy,
 	newMessage,
 	openPlan,
@@ -138,6 +139,16 @@ function send(plans: Plans, key: string): Promise<void> {
 			at.text = text;
 			at.chosen = choice === CLEARED ? null : (choice ?? null);
 			drop(answerMessages, key);
+		} else if (outcome.status === "stale" && shown.get(key) === at && reworded(plans, at)) {
+			// The question changed while these words waited to save. Sending them again would
+			// answer the new wording with words written for the old one; every later flush did,
+			// and each refusal blocked closing. Keep them beside the question for the user instead.
+			if (answerDrafts()[key] === text) {
+				if (text.trim() !== "") put(keptAnswers, key, text);
+				drop(answerDrafts, key);
+			}
+			if (answerPicks()[key] === choice) drop(answerPicks, key);
+			drop(answerMessages, key);
 		} else {
 			put(answerMessages, key, outcome.message);
 		}
@@ -162,6 +173,14 @@ function schedule(plans: Plans, key: string) {
 	);
 }
 
+/** Whether the page now shows a different wording of the question `at` names, in the same interview. */
+function reworded(plans: Plans, at: Shown): boolean {
+	const interview = plans.feed.page(at.missionId)?.interview;
+	if (interview?.id !== at.interviewId) return false;
+	const question = interview.questions.find((q) => q.id === at.questionId);
+	return question !== undefined && question.digest !== at.digest;
+}
+
 /** Saves one answer now, skipping the wait. */
 export function saveNow(plans: Plans, key: string): Promise<void> {
 	const timer = timers.get(key);
@@ -176,6 +195,8 @@ export function saveNow(plans: Plans, key: string): Promise<void> {
 export function editAnswer(plans: Plans, missionId: string, interview: Interview, question: Question, value: string) {
 	returnToQuestion(interview, question);
 	const key = remember(missionId, interview, question);
+	// Words kept from an earlier wording are used once the user puts them back.
+	if (keptAnswers()[key] === value) drop(keptAnswers, key);
 	put(answerDrafts, key, value);
 	schedule(plans, key);
 }

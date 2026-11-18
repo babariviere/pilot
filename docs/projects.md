@@ -30,3 +30,12 @@ unloading releases the agent process after about ten minutes, not its saved stat
 
 On macOS, use **⌘K** to find destinations and available actions, **⌘L** to focus
 the composer, and **⌘,** for Settings.
+
+## Code outside the project
+
+Agents can read, but not change, two kinds of code outside the project:
+
+- **Dependencies.** The exact versions your `go.mod`, `Cargo.lock` or package lock pins, from your local
+  Go, Cargo and `node_modules` caches. Nothing to set up; a dependency that is not downloaded is not offered.
+- **Linked projects.** In **Settings → Projects**, open **Also reads** under a project and tick other Pilot
+  projects. That project's agents can then read their main branch. Untick to stop.

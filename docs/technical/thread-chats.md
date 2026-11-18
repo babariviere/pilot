@@ -25,7 +25,9 @@ Each open mission thread has its own **thread chat**. It replaces sending thread
    links, artifacts, map, answers and replaced. It has no write action. `thread` reads its own thread, including
    the messages it had with the planning agent before thread chats (`earlier`).
 3. **Interview and mockups.** Its prompt (`MissionContext.thread`) asks it to interview one question at a time
-   with suggested answers, and to publish NSH mockups for screen work in its own `scratch/artifacts/`.
+   with suggested answers, and to publish NSH mockups for screen work in its own `scratch/artifacts/`. Each question
+   shows in the thread conversation with its suggested answers; the user answers with an ordinary thread message.
+   Day settles a send by its saved input and the chat that took it (`result.chat.sessionId`).
 4. **Handoff.** When the user agrees, it asks whether to send the work to the planner, and only after a yes calls
    `mission handoff` with a summary and tasks (title, outcome, acceptance, dependencies, chosen mockup). Pilot checks
    each mockup is one of the chat's artifacts, saves the handoff on the thread, and queues it once

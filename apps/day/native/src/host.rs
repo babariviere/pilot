@@ -36,7 +36,9 @@ pub(crate) mod projects;
 pub(crate) mod result_review;
 pub mod ritual;
 pub(crate) mod schedules;
+pub(crate) mod screen;
 mod session_chat;
+mod shown;
 pub(crate) mod slack_controls;
 pub(crate) mod threads;
 pub(crate) mod today_scope;
@@ -135,6 +137,8 @@ pub(crate) fn valid_id(s: &str) -> bool {
 struct Shared {
     /// Latest feedback page, refreshed by daemon events after the first read.
     feedback: Mutex<Option<Result<serde_json::Value, Error>>>,
+    /// Settings reads this window showed, for writes whose binding moved around them.
+    shown_settings: shown::Shown,
     saved_window: Mutex<Option<window::SavedWindow>>,
     chat_choice: Mutex<Option<crate::new_chat::ChatChoice>>,
     schedule_choice: Mutex<Option<String>>,
@@ -182,6 +186,12 @@ struct Shared {
     database_wanted: AtomicBool,
     /// Pilot's pause for sleep, from the service's latest power frame: `{paused, since}`.
     power: Mutex<serde_json::Value>,
+    /// The screen agent's binding, waiting requests and pictures of this window.
+    screen: Mutex<screen::State>,
+    /// The project the Desk holds reads of. Written after the Desk is
+    /// replaced, and read before it, so a Today never names a project whose
+    /// rows it does not hold.
+    shown_project: Mutex<String>,
 }
 impl Shared {
     fn change<R>(&self, f: impl FnOnce(&mut Desk) -> R) -> R {
@@ -208,7 +218,9 @@ impl Shared {
     }
     fn invalidate(&self, state: FreshnessState) {
         self.epoch.fetch_add(1, Ordering::SeqCst);
-        self.change(|desk| desk.lose_read(state, "Read changed. Refresh before acting."));
+        // An ordinary change: the next read follows. The window says nothing
+        // about it; only the shared old-data rule warns (freshness.ts).
+        self.change(|desk| desk.lose_read(state, ""));
     }
     fn current(&self, epoch: u64) -> Result<(), Error> {
         self.open()?;
@@ -349,6 +361,7 @@ impl NativeHost {
     pub(crate) fn bridge(
         &self,
         command: crate::bridge::Command,
+        name: &'static str,
         window: String,
         gate: Arc<Mutex<crate::bridge::Gate>>,
         reply: Box<dyn FnOnce(Result<serde_json::Value, Error>) + Send>,
@@ -369,6 +382,7 @@ impl NativeHost {
         }
         let call = bridge::Call {
             command,
+            name,
             window,
             gate,
             host: self.clone(),
@@ -472,6 +486,7 @@ impl NativeHost {
             saved_window: Mutex::new(None),
             chat_choice: Mutex::new(None),
             schedule_choice: Mutex::new(None),
+            shown_settings: shown::Shown::default(),
             updates: Mutex::new(updates::State::new(None).snapshot()),
             app_controller: Mutex::new(None),
             startup_ready: AtomicBool::new(false),
@@ -503,6 +518,14 @@ impl NativeHost {
             database_cache: Mutex::new(None),
             database_wanted: AtomicBool::new(false),
             power: Mutex::new(power::view(&serde_json::Value::Null)),
+            screen: Mutex::default(),
+            shown_project: Mutex::new(
+                source
+                    .project
+                    .as_ref()
+                    .map(|p| p.project_id.clone())
+                    .unwrap_or_default(),
+            ),
         });
         let (requests, rx) = async_channel::bounded(16);
         let owner_source = source.clone();
@@ -522,7 +545,7 @@ impl NativeHost {
                     rt.block_on(run(transport, journal, state.clone(), rx, day, updates))
                 })();
                 if let Err(e) = result {
-                    fail(&state, e);
+                    fail(&state, e, "startup");
                 }
                 result
             })
@@ -987,6 +1010,92 @@ async fn read_planning(
     shared.change(|_| ());
     Ok(view)
 }
+/// One try of a planning write: qualify, journal with a new operation ID, re-read after
+/// fsync, then send once. A refusal before the send is Stale; after it, never resent.
+async fn write_interview(
+    t: &Transport,
+    journal: &mut Journal,
+    shared: &Shared,
+    epoch: u64,
+    mission: &str,
+    digest: &str,
+    request: &serde_json::Value,
+) -> Result<IntentOutcome, Error> {
+    if journal
+        .planning
+        .values()
+        .any(|r| planning::in_scope(&r.source, &t.source) && r.mission() == mission && r.pending())
+    {
+        return Err(Error::Unknown);
+    }
+    let mut record = planning::record(
+        &t.source,
+        mission.to_owned(),
+        digest.to_owned(),
+        request.clone(),
+    )?;
+    qualify_planning(t, shared, epoch, &mission, &digest, &request).await?;
+    journal.save_planning(record.clone())?;
+    publish_planning(shared, &record);
+    // A fence that moved after the re-read also marks the record as not sent, never pending.
+    let qualified = qualify_planning(t, shared, epoch, &mission, &digest, &request)
+        .await
+        .and_then(|()| shared.current(epoch));
+    if let Err(e) = qualified {
+        record.not_sent = true;
+        journal.save_planning(record.clone())?;
+        publish_planning(shared, &record);
+        return Err(e);
+    }
+    match t.planning_operation(&record.operation, false).await {
+        Ok(receipt) => {
+            record.receipt = Some(receipt);
+            // Preserve an exact volatile ACK even when local receipt saving fails.
+            if journal.save_planning(record.clone()).is_err() {
+                journal.poison();
+                publish_planning(shared, &record);
+                return Ok(shared.outcome(
+                    OutcomeStatus::Unknown,
+                    "Receipt saving failed. Check the saved operation; do not resend.",
+                ));
+            }
+            publish_planning(shared, &record);
+            let status = planning_status(&record);
+            // Re-read saved progress without marking unrelated Today data offline/stale.
+            // A raced/closed read leaves the prior planning snapshot explicitly stale.
+            let next = shared.epoch.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
+            if shared.open().is_ok() {
+                let _ = read_planning(t, shared, next, &mission).await;
+            }
+            return Ok(shared.outcome(
+                status,
+                if request["purpose"] == "plan-start" {
+                    "Start recorded. Admission is separate from progress; read the agent report."
+                } else if request["purpose"] == "plan-question-ask" {
+                    "Asked. The answer shows here."
+                } else if request["purpose"] == "plan-repair-start" {
+                    "An agent is looking. Its fix shows here."
+                } else if request["purpose"] == "plan-continue" && request.get("note").is_some() {
+                    "Sent. Pilot continues planning with this note."
+                } else if request["purpose"] == "plan-continue" && request.get("feedback").is_some()
+                {
+                    "Sent. Pilot redoes these questions with your feedback."
+                } else if request["purpose"] == "plan-continue" {
+                    "Pilot continues planning. It asks you when it needs you."
+                } else {
+                    "Saved planning action. This does not start work."
+                },
+            ));
+        }
+        Err(_) => {
+            return Ok(shared.outcome(
+                OutcomeStatus::Unknown,
+                "No exact acknowledgement. Check the saved operation; do not resend.",
+            ));
+        }
+    }
+}
+
 async fn qualify_planning(
     t: &Transport,
     shared: &Shared,
@@ -1120,6 +1229,7 @@ fn sync_focus(
         "focus.changed",
         serde_json::json!({"project":project.project_id}),
     );
+    let project_id = project.project_id.clone();
     let t = root.focus(project);
     *shared
         .database_cache
@@ -1144,6 +1254,10 @@ fn sync_focus(
         .expect("planning inventory poisoned") = None;
     *shared.detail.lock().expect("native detail poisoned") = None;
     *shared.desk.lock().expect("native Desk poisoned") = Desk::native();
+    *shared
+        .shown_project
+        .lock()
+        .expect("native shown project poisoned") = project_id.clone();
     restore_project(journal, shared, &t.source)?;
     *focused = Some(t);
     Ok(true)
@@ -1199,12 +1313,14 @@ fn restore_project(journal: &Journal, shared: &Shared, source: &Source) -> Resul
     Ok(())
 }
 
-fn fail(shared: &Shared, error: Error) {
+/// `command` names what failed in the log line: a bridge method such as
+/// `day.delivery.read`, or the worker's own read (`refresh`, `connection`).
+fn fail(shared: &Shared, error: Error, command: &str) {
     let chat_denied = error == Error::Identity && session_chat::deny(shared);
     if error != Error::Stale {
         crate::day_log::event(
             "read.failed",
-            serde_json::json!({"error":error.to_string()}),
+            serde_json::json!({"error":error.to_string(),"command":command}),
         );
     }
     // Failed authoritative reads age all projections, not just missions.
@@ -1233,7 +1349,7 @@ fn fail(shared: &Shared, error: Error) {
         _ => FreshnessState::Unavailable,
     };
     let reason = if error == Error::Stale {
-        "Read changed. Refresh before acting."
+        ""
     } else {
         "Daemon read is unavailable. Saved operations are never resent."
     };
@@ -1302,6 +1418,7 @@ async fn run(
     let (invalidated, events) = async_channel::bounded(1);
     diagnosis::restore_log_hold(&root, &journal).await;
     let ws = tokio::spawn(watch(t.source.clone(), shared.clone(), invalidated));
+    let screen_requests = tokio::spawn(screen::serve(t.source.clone(), shared.clone()));
     let mut events_open = true;
     // A global window's focused project. Its transport carries that project's
     // checks; the root keeps the window, update, ritual and scope reads.
@@ -1361,7 +1478,7 @@ async fn run(
                 {
                     // A changed card or an unsupported attention read must not
                     // mark the missions' read or its controls stale.
-                } else if let Err(e) = result && !matches!(e, Error::Unknown | Error::Busy | Error::Closed) { fail(&shared, e); }
+                } else if let Err(e) = result && !matches!(e, Error::Unknown | Error::Busy | Error::Closed) { fail(&shared, e, "native.request"); }
                 let changed = {
                     let mut view = shared.updates.lock().expect("native updates poisoned");
                     let next = updates.snapshot();
@@ -1376,7 +1493,7 @@ async fn run(
                     && let Some(t) = &focused
                 {
                     let epoch = shared.epoch.load(Ordering::SeqCst);
-                    if let Err(e) = refresh(t, &journal, &shared, epoch, None).await { fail(&shared, e); }
+                    if let Err(e) = refresh(t, &journal, &shared, epoch, None).await { fail(&shared, e, "focus.refresh"); }
                 }
                 // The update projection is a passive snapshot. This does not
                 // trigger another service read on a change notification.
@@ -1391,7 +1508,7 @@ async fn run(
                     if shared.connected.load(Ordering::SeqCst) { planning_live(t, &shared, epoch).await; }
                 } else if shared.connected.load(Ordering::SeqCst) && let Err(e) = refresh(t, &journal, &shared, epoch, None).await {
                     if e != Error::Stale { crate::day_log::event("refresh.failed", serde_json::json!({"trigger":"daemon-event","error":e.to_string()})); }
-                    fail(&shared, e);
+                    fail(&shared, e, "event.refresh");
                 }
             }
             _ = clock.tick(), if day.is_some() => {
@@ -1402,6 +1519,9 @@ async fn run(
     }
     ws.abort();
     let _ = ws.await;
+    screen_requests.abort();
+    let _ = screen_requests.await;
+    screen::close(t, &shared).await;
     diagnosis::log_controls(&root.source, &serde_json::Value::Null, false).await;
     // Worker exit occurs only after journal and all entered request futures return.
     shared.change(|desk| desk.lose_read(FreshnessState::Stale, "Native host closed."));
@@ -1521,11 +1641,11 @@ async fn handle(
     epoch: u64,
     work: Work,
 ) -> Result<IntentOutcome, Error> {
-    // A queued passive detail read carries no displayed action authority.
+    // A queued passive read carries no displayed action authority.
     // Start from the latest epoch; every GET and the final publication still requalify it.
     let epoch = if matches!(
         &work,
-        Work::Detail(_) | Work::PlanningInventory | Work::PlanningChat { .. }
+        Work::Detail(_) | Work::PlanningInventory | Work::PlanningChat { .. } | Work::Refresh
     ) {
         shared.open()?;
         shared.epoch.load(Ordering::SeqCst)
@@ -1546,6 +1666,8 @@ async fn handle(
             | Work::PreparePlanning
             | Work::AttentionCheck(_)
             | Work::Changes(changes::Work::Check(_))
+            // Its own tries check the read fence, so one moved before it starts is retried too.
+            | Work::WriteInterview { .. }
     ) {
         shared.open()?;
     } else {
@@ -1602,62 +1724,50 @@ async fn handle(
             digest,
             request,
         } => {
-            if journal.planning.values().any(|r| {
-                planning::in_scope(&r.source, &t.source) && r.mission() == mission && r.pending()
-            }) {
-                return Err(Error::Unknown);
-            }
-            let mut record =
-                planning::record(&t.source, mission.clone(), digest.clone(), request.clone())?;
-            qualify_planning(t, shared, epoch, &mission, &digest, &request).await?;
-            journal.save_planning(record.clone())?;
-            publish_planning(shared, &record);
-            if let Err(e) = qualify_planning(t, shared, epoch, &mission, &digest, &request).await {
-                record.not_sent = true;
-                journal.save_planning(record.clone())?;
-                publish_planning(shared, &record);
-                return Err(e);
-            }
-            shared.current(epoch)?;
-            match t.planning_operation(&record.operation, false).await {
-                Ok(receipt) => {
-                    record.receipt = Some(receipt);
-                    // Preserve an exact volatile ACK even when local receipt saving fails.
-                    if journal.save_planning(record.clone()).is_err() {
-                        journal.poison();
-                        publish_planning(shared, &record);
-                        return Ok(shared.outcome(
-                            OutcomeStatus::Unknown,
-                            "Receipt saving failed. Check the saved operation; do not resend.",
-                        ));
-                    }
-                    publish_planning(shared, &record);
-                    let status = planning_status(&record);
-                    // Re-read saved progress without marking unrelated Today data offline/stale.
-                    // A raced/closed read leaves the prior planning snapshot explicitly stale.
-                    let next = shared.epoch.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
-                    if shared.open().is_ok() {
-                        let _ = read_planning(t, shared, next, &mission).await;
-                    }
-                    return Ok(shared.outcome(status, if request["purpose"] == "plan-start" {
-                        "Start recorded. Admission is separate from progress; read the agent report."
-                    } else if request["purpose"] == "plan-question-ask" {
-                        "Asked. The answer shows here."
-                    } else if request["purpose"] == "plan-repair-start" {
-                        "An agent is looking. Its fix shows here."
-                    } else if request["purpose"] == "plan-continue" && request.get("note").is_some() {
-                        "Sent. Pilot continues planning with this note."
-                    } else if request["purpose"] == "plan-continue" && request.get("feedback").is_some() {
-                        "Sent. Pilot redoes these questions with your feedback."
-                    } else if request["purpose"] == "plan-continue" {
-                        "Pilot continues planning. It asks you when it needs you."
-                    } else { "Saved planning action. This does not start work." }));
+            // What the user consented to: the planning read they acted on. A write refused
+            // only because the read around it moved goes again, bound to the newest read and
+            // as a new operation, when that is unchanged (plan_host::rebind). 3 tries at most,
+            // as for every other write; a changed consent is refused and says what changed.
+            let shown = shared
+                .planning
+                .lock()
+                .expect("native planning poisoned")
+                .get(&mission)
+                .map(|(_, read)| read.clone());
+            let (mut epoch, mut digest, mut request) = (epoch, digest, request);
+            let mut attempt = 1;
+            loop {
+                match write_interview(t, journal, shared, epoch, &mission, &digest, &request).await
+                {
+                    Err(Error::Stale) => {}
+                    other => return other,
                 }
-                Err(_) => {
+                if attempt == 3 {
                     return Ok(shared.outcome(
-                        OutcomeStatus::Unknown,
-                        "No exact acknowledgement. Check the saved operation; do not resend.",
+                        OutcomeStatus::Stale,
+                        "Pilot tried 3 times, but the mission kept changing around this. Nothing was sent. Try again in a moment.",
                     ));
+                }
+                tokio::time::sleep(Duration::from_millis(250 * attempt)).await;
+                attempt += 1;
+                let moved = shared.epoch.load(Ordering::SeqCst) != epoch;
+                epoch = shared.epoch.load(Ordering::SeqCst);
+                let fresh = match read_planning(t, shared, epoch, &mission).await {
+                    Ok(fresh) => fresh,
+                    Err(Error::Stale) => continue,
+                    Err(e) => return Err(e),
+                };
+                match crate::plan_host::rebind(&request, shown.as_ref(), &fresh) {
+                    // Nothing around it moved: the target itself changed.
+                    crate::plan_host::Rebind::Same if !moved => return Err(Error::Stale),
+                    crate::plan_host::Rebind::Same => {}
+                    crate::plan_host::Rebind::To(next_digest, next) => {
+                        digest = next_digest;
+                        request = next;
+                    }
+                    crate::plan_host::Rebind::Changed(what) => {
+                        return Ok(shared.outcome(OutcomeStatus::Stale, what));
+                    }
                 }
             }
         }
@@ -1722,6 +1832,7 @@ async fn handle(
             if !valid_id(&mission) || !valid_id(&successor) {
                 return Err(Error::Invalid);
             }
+            let epoch = live_desk(t, journal, shared, epoch).await;
             let open = {
                 let desk = shared.desk.lock().expect("native Desk poisoned");
                 desk.today().freshness.state == FreshnessState::Live
@@ -1789,6 +1900,7 @@ async fn handle(
             {
                 return Err(Error::Unknown);
             }
+            let epoch = live_desk(t, journal, shared, epoch).await;
             let (coordinator, before) = {
                 let desk = shared.desk.lock().expect("native Desk poisoned");
                 if desk.today().freshness.state != FreshnessState::Live {
@@ -1834,13 +1946,15 @@ async fn handle(
             };
             journal.save(record.clone())?; // sync_all before any POST admission
             shared.change(|desk| desk.native_pending(&mission, &record.command, Delivery::Sending));
-            if let Err(e) = qualify(t, shared, epoch, &mission, &record.command, &before).await {
+            let qualified = qualify(t, shared, epoch, &mission, &record.command, &before)
+                .await
+                .and_then(|()| shared.current(epoch));
+            if let Err(e) = qualified {
                 record.not_sent = true;
                 journal.save(record)?;
                 shared.change(|desk| desk.native_cancel(&mission));
                 return Err(e);
             }
-            shared.current(epoch)?;
             let result = t.post(&mission, &record.command).await;
             // Never lose a matched ACK merely because a later Stop/event arrived.
             // It is historical. A fresh read, not that receipt, governs new controls.
@@ -1852,7 +1966,7 @@ async fn handle(
                         desk.native_receipt(receipt);
                         desk.native_pending(&mission, &record.command, Delivery::Unknown);
                     });
-                    fail(shared, Error::Storage);
+                    fail(shared, Error::Storage, "control.receipt");
                     return Ok(shared.outcome(OutcomeStatus::Unknown, "The daemon answered, but its receipt could not be saved. Keep this operation; do not resend."));
                 }
                 shared.change(|desk| {
@@ -1871,7 +1985,7 @@ async fn handle(
             shared.invalidate(FreshnessState::Stale);
             let next = shared.epoch.load(Ordering::SeqCst);
             if let Err(e) = refresh(t, journal, shared, next, Some(&mission)).await {
-                fail(shared, e);
+                fail(shared, e, "control.refresh");
             }
             return Ok(shared.outcome(
                 if journal
@@ -1913,7 +2027,7 @@ async fn handle(
                         desk.native_receipt(receipt);
                         desk.native_pending(&mission, &record.command, Delivery::Unknown);
                     });
-                    fail(shared, Error::Storage);
+                    fail(shared, Error::Storage, "control.receipt");
                     return Ok(shared.outcome(
                         OutcomeStatus::Unknown,
                         "The exact receipt could not be saved. Nothing will be resent.",
@@ -1970,6 +2084,11 @@ async fn lifecycle(
             }
         }
     } else {
+        let epoch = if action == A::Archive {
+            live_desk(t, journal, shared, epoch).await
+        } else {
+            epoch
+        };
         if action == A::Archive {
             let listed = {
                 let desk = shared.desk.lock().expect("native Desk poisoned");
@@ -2061,6 +2180,7 @@ async fn rename(
             }
         }
     } else {
+        let epoch = live_desk(t, journal, shared, epoch).await;
         let listed = {
             let desk = shared.desk.lock().expect("native Desk poisoned");
             desk.today().freshness.state == FreshnessState::Live
@@ -2098,6 +2218,27 @@ async fn rename(
             "Not renamed: the mission keeps its title. Nothing was sent again.",
         )
     })
+}
+
+/// Reads Today again when the shown read is not live, and returns the read fence to
+/// check against: the newest one after that read. A mission control checks the mission
+/// in the newest read: a read that is still coming in is not a change to the mission,
+/// and refusing there made the user press again while agents worked.
+async fn live_desk(t: &Transport, journal: &Journal, shared: &Shared, epoch: u64) -> u64 {
+    let live = shared
+        .desk
+        .lock()
+        .expect("native Desk poisoned")
+        .today()
+        .freshness
+        .state
+        == FreshnessState::Live;
+    if live {
+        return epoch;
+    }
+    let next = shared.epoch.load(Ordering::SeqCst);
+    let _ = refresh(t, journal, shared, next, None).await;
+    shared.epoch.load(Ordering::SeqCst)
 }
 
 fn validate_action(before: &c::Control, command: &ControlCommand) -> Result<(), Error> {
@@ -2163,7 +2304,7 @@ async fn watch(source: Source, shared: Arc<Shared>, invalidated: Sender<()>) {
             );
             shared.invalidate(FreshnessState::Offline);
             if let Err(e) = result {
-                fail(&shared, e);
+                fail(&shared, e, "connection");
             }
             shared.full_refresh.store(true, Ordering::SeqCst);
             let _ = invalidated.try_send(());
@@ -2255,6 +2396,8 @@ async fn watch_once(
                 // The channel holds one wakeup, so bursts cost one read.
                 // Pilot paused work for sleep, or resumed it.
                 Some("power") => power::observe(shared, &v["power"]),
+                // A screen agent chat asks a window. A notice only: the window reads its requests.
+                Some("screen.requested") => screen::requested(shared, &v),
                 Some("session" | "sessions" | "dashboard" | "mcp") => {
                     shared.full_refresh.store(true, Ordering::SeqCst);
                     let _ = invalidated.try_send(());

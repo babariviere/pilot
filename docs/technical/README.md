@@ -49,9 +49,11 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Posthorse context management](posthorse.md)
 - [Small project preferences and canonical context](project-preferences.md)
 - [User feedback: saved words about Pilot, agent triage and the user's steps](user-feedback.md)
+- [Day screen agent: reading and using a window, then feedback (design only)](day-screen-agent.md)
 - [Passive model and thinking defaults](model-defaults.md)
 - [Shared context and independent task execution](shared-context.md)
 - [Narrow coordinator repository inspection (design only)](coordinator-repository-inspection.md)
+- [Reference sources: dependencies and linked projects](reference-sources.md)
 
 ## Missions, delivery, and review
 

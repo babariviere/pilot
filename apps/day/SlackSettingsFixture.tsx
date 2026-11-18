@@ -78,6 +78,8 @@ mount(() => (
 			<Text>{`Sends: ${sends()}, reads: ${reads()}, checks: ${checks()}, imports: ${imports()}`}</Text>
 			<View class="flex-row flex-wrap gap-2">
 				<Action label="Toggle Settings" onPress={() => shown.set(!shown())} />
+				{/* A read as Pilot starts one on its own (a change, the window coming back). */}
+				<Action label="Fixture read" onPress={() => void controls.read()} />
 				<Action label="Restore draft" onPress={() => restoreSlackDraft(savedSlackDraft())} />
 				<Action label="External change" onPress={() => snapshot.set({ ...snapshot()!, binding: "c".repeat(64) })} />
 				<Action

@@ -64,8 +64,14 @@ let readOutage = false,
 	holdDay = false;
 let dayRelease: (() => void) | undefined, dayEntered: (() => void) | undefined;
 let effects = 0;
+let lostReply: unknown = null;
+/** Every write the proxy saw: its kind and the daemon's answer, in order. */
+const writes: Array<{ kind: string; status: number; state: unknown }> = [];
+/** The last error the proxy answered 500 for, so a failed write says why. */
+let proxyError: string | null = null;
 const wss = new WebSocketServer({ noServer: true });
 const proxy = createServer(async (req, res) => {
+	const request = `${req.method} ${req.url}`;
 	try {
 		const chunks: Buffer[] = [];
 		for await (const chunk of req) chunks.push(chunk);
@@ -136,6 +142,12 @@ const proxy = createServer(async (req, res) => {
 			...(bytes.length ? { body: bytes } : {}),
 		});
 		const body = await response.json();
+		if (writing)
+			writes.push({
+				kind: (JSON.parse(bytes.toString()) as DurableOperation).kind,
+				status: response.status,
+				state: body.state ?? null,
+			});
 		if (holdDay && req.url?.endsWith("/day")) {
 			holdDay = false;
 			await new Promise<void>((resolve) => {
@@ -157,6 +169,13 @@ const proxy = createServer(async (req, res) => {
 		}
 		if (writing && lost) {
 			lost = false;
+			// What the daemon answered before the reply was lost: which write, and was it admitted.
+			lostReply = {
+				kind: (JSON.parse(bytes.toString()) as DurableOperation).kind,
+				status: response.status,
+				state: body.state ?? null,
+				reason: body.reason ?? body.error ?? null,
+			};
 			req.socket.destroy();
 			return;
 		}
@@ -168,6 +187,7 @@ const proxy = createServer(async (req, res) => {
 		res.writeHead(response.status, { "content-type": "application/json" }).end(JSON.stringify(body));
 	} catch (error) {
 		console.error(error);
+		proxyError = `${request}: ${error instanceof Error ? error.message : String(error)}`;
 		res.writeHead(500).end();
 	}
 });
@@ -303,7 +323,17 @@ try {
 				goal: enrollment && JSON.parse(enrollment.payload).goal,
 				tasks: id ? f.store.tasks(id).length : 0,
 				workers: f.specs.length,
+				lostReply,
+				writes,
+				proxyError,
 				workingSession: id ? f.store.planningWorkers.get(id)?.start?.sessionId : null,
+				// Whether that build chat still works, as the daemon saved it.
+				workingNow: (() => {
+					const session = id ? f.store.planningWorkers.get(id)?.start?.sessionId : undefined;
+					return session
+						? ((f.sessions.get(session) as { working?: boolean } | undefined)?.working ?? null)
+						: null;
+				})(),
 			}),
 		);
 	}

@@ -16,6 +16,9 @@
 import { cleanup, effect, keymap, Scroll, signal, Text, untracked, View, type ViewRef } from "nsh";
 import { ArtifactBody, ArtifactTools, closeFullFor, InFullNote, inFull, openFull, paneLine } from "./ArtifactViewer";
 import { artifactPreviewsAvailable } from "./bridge";
+import { ContinueRow } from "./ChatScreen";
+import { ChatWaits } from "./ChatWaits";
+import { openChat } from "./chatView";
 import type { Day } from "./day";
 import { artifactSelection } from "./deliveryArtifact";
 import type { AgentWork, OwnedChange } from "./deliveryBridge";
@@ -40,6 +43,7 @@ import {
 	attemptsOf,
 	backNotes,
 	backOpen,
+	chatNow,
 	checkLine,
 	closeDelivery,
 	type DeliveryPlace,
@@ -74,16 +78,19 @@ import {
 	workOnOpen,
 } from "./deliveryView";
 import { keepField, keepScroll } from "./kept";
+import { goHome } from "./nav";
 import { OutputComparison } from "./OutputComparison";
 import { pageScroll, scrolled } from "./onScreen";
 import { ResultReviewPanel } from "./ResultReviewPanel";
 import type { ResultReviewSource } from "./resultReview";
+import type { SessionChatMirror } from "./sessionChat";
 import {
 	Action,
 	CheckboxRow,
 	ExpandableRow,
 	glide,
 	Mark,
+	MarkLine,
 	Notice,
 	Page,
 	PageTitle,
@@ -760,6 +767,66 @@ function AgentWorkPanel(props: { mirror: DeliveryMirror; place: DeliveryPlace; w
 	);
 }
 
+/**
+ * Where the chat is while nothing is delivered, with the one action that moves it: Open chat, Continue (sent
+ * once, only when the service says it can), Answer (questions are answered on Today) or, for a chat that ended its
+ * turn with no result and no question, its last message with Reply and Continue.
+ */
+function ChatNow(props: { day: Day; work: DeliveredWork; placeKey: string; reread: () => void }) {
+	const now = () => chatNow(props.work);
+	const id = () => props.work.ownerSessionId ?? "";
+	return (
+		<If when={now()}>
+			{(n) => (
+				<Panel testID="delivery-chat-now" class="gap-2">
+					<MarkLine
+						kind={n().move === "open" && props.work.chat?.state === "working" ? "moving" : "needs"}
+						testID="delivery-chat-line"
+					>
+						<Text class="text-sm text-foreground">{n().line}</Text>
+					</MarkLine>
+					<If when={n().move === "continue" && props.day.chat}>
+						<ContinueRow
+							source={(props.day.chat as SessionChatMirror).source}
+							sessionId={id()}
+							failed={props.work.chat?.state === "failed"}
+							onSent={props.reread}
+						/>
+					</If>
+					<If when={n().move === "reply" && props.day.chat}>
+						<ChatWaits
+							chat={(props.day.chat as SessionChatMirror).source}
+							sessionId={id()}
+							says={props.work.chat?.says}
+							canContinue={props.work.chat?.canContinue === true}
+							place={`delivery/${props.placeKey}`}
+							onSent={props.reread}
+						/>
+					</If>
+					<View class="-ml-3 flex-row gap-2">
+						<If when={n().move === "answer"}>
+							<Action
+								variant="outline"
+								testID="delivery-chat-answer"
+								label="Answer"
+								accessibilityLabel="Answer its question on Today, where Pilot shows what needs you."
+								onPress={goHome}
+							/>
+						</If>
+						<Action
+							variant={n().move === "open" ? "outline" : "plain"}
+							testID="delivery-chat-open"
+							label="Open chat"
+							accessibilityLabel="Open its chat, read only. Opening it sends nothing."
+							onPress={() => openChat(id(), "Result")}
+						/>
+					</View>
+				</Panel>
+			)}
+		</If>
+	);
+}
+
 /** The four lines: the agent, the pull request, production and the user's check. Never one merged state. */
 function Stands(props: { work: DeliveredWork; unsettled: DeliveryOp | undefined }) {
 	const merged = () => ownPullRequests(props.work).some((r) => r.pullRequest?.state === "merged");
@@ -877,22 +944,30 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
 			<If when={unsettled()}>
 				<Notice
 					testID="delivery-unknown"
-					text={unsettled() ? unsettledLine(unsettled() as DeliveryOp, props.title) : ""}
+					text={
+						unsettled()?.checking
+							? "Checking that it arrived…"
+							: unsettled()
+								? unsettledLine(unsettled() as DeliveryOp, props.title)
+								: ""
+					}
 					action={
-						<Action
-							label={unsettled()?.checking ? "Checking…" : "Check"}
-							testID="delivery-check"
-							accessibilityLabel="Check whether it happened. This reads Pilot's saved answer and sends nothing."
-							disabled={unsettled()?.checking === true}
-							onPress={() => {
-								const op = unsettled();
-								if (!op) return;
-								say("");
-								void props.mirror.source.check(op.operationId).then((r) => {
-									if (r.status !== "accepted") say(r.message);
-								});
-							}}
-						/>
+						// Pilot checks by itself first; the button is the fallback after its tries.
+						<If when={!unsettled()?.checking}>
+							<Action
+								label="Check"
+								testID="delivery-check"
+								accessibilityLabel="Check whether it happened. This reads Pilot's saved answer and sends nothing."
+								onPress={() => {
+									const op = unsettled();
+									if (!op) return;
+									say("");
+									void props.mirror.source.check(op.operationId).then((r) => {
+										if (r.status !== "accepted") say(r.message);
+									});
+								}}
+							/>
+						</If>
 					}
 				>
 					<If when={unsettled()?.note}>
@@ -1168,6 +1243,12 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace; reviewSo
 					<Each of={work() ? [work() as DeliveredWork] : []} key={(w) => w.deliveryId ?? "none"}>
 						{(w) => (
 							<View class="gap-10">
+								<ChatNow
+									day={props.day}
+									work={w()}
+									placeKey={props.place.key}
+									reread={() => void mirror.source.read(props.place.subject)}
+								/>
 								<Report work={w()} />
 								<Screens mirror={mirror} work={w()} fresh={fresh()} resultKey={props.place.key} />
 								<ResultReviewPanel

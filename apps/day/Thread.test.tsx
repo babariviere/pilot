@@ -96,7 +96,7 @@ test("a long message shows every word, and a pending message says it awaits a re
 	await app.waitFor("id:message-reply-s-coordinator:15");
 	expect(app.texts()).toContain("Reply status unknown");
 	await app.press("Turn ended");
-	await app.press("id:threads-read-again");
+	await app.press("Fixture read");
 	await app.waitFor("The turn ended without a reply");
 	expect(app.shows("Awaiting a reply")).toBe(false);
 	await app.press("Coordinator replies");
@@ -216,7 +216,7 @@ test("a late page lands only in its own thread; live replies keep earlier pages,
 	expect(app.value("id:thread-reply")).toBe("Keep me");
 	// A read that answers late, after the user moved to another thread.
 	await app.press("Hold reads");
-	await app.press("id:threads-read-again");
+	await app.press("Fixture read");
 	await app.press("id:back");
 	await app.press("id:thread-search-release");
 	await app.waitFor("id:thread-conversation");
@@ -239,20 +239,20 @@ test("a conversation read that fails is never shown as empty; a later failure ke
 	expect(app.shows("Pilot could not reach its service to read this thread's conversation.")).toBe(true);
 	expect(app.shows("id:thread-conversation-empty")).toBe(false);
 	await app.press("Pages work");
-	await app.press("id:thread-conversation-read");
+	await app.press("Fixture read");
 	await app.waitFor("Do we need PDFs in the first version?");
 	expect(app.shows("id:thread-conversation-off")).toBe(false);
 	await app.type("id:thread-reply", "Keep me");
 	await app.press("Pages fail");
-	await app.press("id:threads-read-again");
-	await app.waitFor(
-		"Pilot could not reach its service to read this thread's conversation. What shows is from Pilot's last read.",
-	);
+	await app.press("Fixture read");
+	// The messages stay, with no note: only the shared old-data rule warns.
+	await app.wait(200);
+	expect(app.shows("id:thread-conversation-off")).toBe(false);
 	expect(app.shows("Do we need PDFs in the first version?")).toBe(true);
 	expect(app.value("id:thread-reply")).toBe("Keep me");
 	await app.press("Pages work");
 	await app.press("Unlinked replies");
-	await app.press("id:thread-conversation-read");
+	await app.press("Fixture read");
 	await app.waitFor("id:thread-unlinked");
 	expect(app.shows("id:thread-conversation-off")).toBe(false);
 	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
@@ -427,7 +427,7 @@ test("a held coordinator saves the message to wait and shows it there, sending n
 	const app = await thread();
 	await app.type("id:thread-reply", "Keep me");
 	await app.press("Hold");
-	await app.press("id:threads-read-again");
+	await app.press("Fixture read");
 	await app.waitFor("id:thread-will-wait");
 	await app.press("id:thread-send");
 	// It shows in the conversation, in its order, with no original yet: Pilot invents none.
@@ -444,7 +444,7 @@ test("a held coordinator saves the message to wait and shows it there, sending n
 	expect(counts(app)).toBe("Writes: 1 · Sends: 0 · Checks: 0");
 });
 
-test("a thread missing from the last read shows why the next read failed, with Read again, and keeps that read", async () => {
+test("a thread missing from the last read shows why the next read failed, and keeps that read", async () => {
 	const app = await mission();
 	await app.press("Open a gone thread");
 	await app.waitFor("id:thread-absent");
@@ -452,7 +452,7 @@ test("a thread missing from the last read shows why the next read failed, with R
 	expect(app.shows("This thread is not in the latest read. Your words for it stay.")).toBe(true);
 	expect(app.shows("id:thread-absent-failed")).toBe(false);
 	await app.press("Unreadable");
-	await app.press("id:threads-read");
+	await app.press("Fixture read");
 	await app.waitFor("id:thread-absent-failed");
 	expect(
 		app.shows(
@@ -461,17 +461,16 @@ test("a thread missing from the last read shows why the next read failed, with R
 	).toBe(true);
 	expect(app.shows("This thread is not in the latest read. Your words for it stay.")).toBe(false);
 	await app.press("Denied");
-	await app.press("id:threads-read");
+	await app.press("Fixture read");
 	await app.waitFor(
 		"This Pilot service cannot show mission threads yet. This thread is not in Pilot's last read, so Pilot cannot show it now. Your words for it stay.",
 	);
-	expect(app.shows("id:threads-read")).toBe(true);
-	// The mission still shows its whole earlier read, marked as such.
+	// The mission still shows its whole earlier read, with no note until the shared old-data rule.
 	await app.press("id:back");
 	await app.waitFor("id:mission-threads");
 	expect(app.shows("Which file types are in scope?")).toBe(true);
 	expect(app.shows("This Pilot service cannot show mission threads yet. What shows is from Pilot's last read.")).toBe(
-		true,
+		false,
 	);
 	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
 });
@@ -484,7 +483,7 @@ test("a stale or refused send changes nothing and keeps the words", async () => 
 	await app.waitFor("This mission's threads changed since you read them. Nothing was sent; your words stay.");
 	expect(app.value("id:thread-reply")).toBe("Keep me");
 	await app.press("Next reject");
-	await app.press("id:threads-read-again");
+	await app.press("Fixture read");
 	await app.press("id:thread-send");
 	await app.waitFor("id:thread-message");
 	expect(app.texts().some((t) => t.startsWith("Pilot's service refused it:"))).toBe(true);
@@ -617,14 +616,14 @@ test("Escape puts a new thread's title away before leaving the mission; the titl
 	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
 });
 
-test("a thread read that fails after an earlier one says what shows is from the last read", async () => {
+test("a thread read that fails after an earlier one keeps the last read, with no note", async () => {
 	const app = await thread();
 	await app.type("id:thread-reply", "Keep me");
 	expect(app.shows("id:thread-stale")).toBe(false);
 	await app.press("Unreadable");
-	await app.press("id:threads-read-again");
-	await app.waitFor("id:thread-stale");
-	expect(app.shows("Pilot could not reach its service. What shows is from Pilot's last read.")).toBe(true);
+	await app.press("Fixture read");
+	await app.wait(200);
+	expect(app.shows("id:thread-stale")).toBe(false);
 	expect(app.shows("Do we need PDFs in the first version?")).toBe(true);
 	expect(app.value("id:thread-reply")).toBe("Keep me");
 	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");

@@ -57,6 +57,12 @@ export const answerDrafts = signal<Record<string, string>>({});
 export const answerPicks = signal<Record<string, string | null>>({});
 /** The last message a save returned, by answer key. */
 export const answerMessages = signal<Record<string, string>>({});
+/**
+ * Words written for an earlier wording of a question, by answer key. Pilot
+ * stopped saving them when the question changed: they answer the old
+ * wording, so only the user can reuse them. They never block closing.
+ */
+export const keptAnswers = signal<Record<string, string>>({});
 /** The last message a submission or check returned, by mission. */
 export const planMessages = signal<Record<string, string>>({});
 /** Whether a submission waits for its saves and its answer, by interview. */
@@ -133,6 +139,7 @@ export function resetPlanningView() {
 	answerDrafts.set({});
 	answerPicks.set({});
 	answerMessages.set({});
+	keptAnswers.set({});
 	planMessages.set({});
 	submitting.set({});
 	fogOpen.set({});

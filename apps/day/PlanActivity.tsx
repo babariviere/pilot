@@ -86,6 +86,7 @@ function PlanChatView(props: { plans: Plans; missionId: string }) {
 				readingWords="Reading the planning chat…"
 				emptyWords="The planning agent has no messages yet."
 				onEarlier={() => void feed.readChat?.(id, true)}
+				read={() => feed.readChat?.(id, false) ?? Promise.resolve()}
 			/>
 		</View>
 	);

@@ -122,9 +122,11 @@ import {
 	watchQueue,
 } from "./queue.ts";
 import { refActivity } from "./ref-activity.ts";
+import { createReferenceSourcesTool } from "./reference-sources.ts";
 import { createRepairDiagnosticsTools } from "./repair-diagnostics-tools.ts";
 import { createRepairProposalTool, type RepairProposalCall } from "./repair-proposal-tool.ts";
 import { createScopedMetricsTool } from "./scoped-metrics-tool.ts";
+import { createScreenTools } from "./screen-tools.ts";
 import { createSlackStatusTool, SLACK_STATUS_TOOL, type SlackStatusCall } from "./slack-status-tool.ts";
 import { findInputReceipt, openSessionStorage } from "./storage.ts";
 import { SubagentBridge, type SubagentCommand } from "./subagents.ts";
@@ -208,6 +210,7 @@ export interface KernelSessionHooks {
 	/** Executes a `mission` tool call in pilotd. Without it, the tool is not registered. */
 	callMission?: MissionCall;
 	readCoordinatorSources?: import("./coordinator-sources.ts").ReadCoordinatorSources;
+	readReferenceSources?: import("./reference-sources.ts").ReadReferenceSources;
 	callMemory?: MemoryCall;
 	/** Executes a `knowledge` tool call in pilotd. Registered for writable project chats only. */
 	callKnowledge?: import("./knowledge-tools.ts").KnowledgeCall;
@@ -223,6 +226,8 @@ export interface KernelSessionHooks {
 	/** Reads bounded host-local diagnostics through pilotd without touching target workers or transcripts. */
 	callDiagnostics?: DiagnosticsCall;
 	callDiagnosticContext?: DiagnosticContextCall;
+	/** Asks the Day window bound to a screen agent chat. Registered for role "screen" only. */
+	callScreen?: import("./screen-tools.ts").ScreenCall;
 	/** Reads bounded history only for an explicitly authorized diagnostic target. */
 	callDiagnosticHistory?: DiagnosticHistoryCall;
 	/** Reads fixed-catalogue Pilot logs on the diagnostics specialist's admitted host. */
@@ -345,8 +350,10 @@ export class KernelSession {
 				throw new Error("Configuration-only startup cannot activate recovery or continuation");
 			spec = { ...spec, stopOnOpen: true };
 		}
-		if (spec.role !== undefined && spec.role !== "diagnostics" && spec.role !== "insights")
+		if (spec.role !== undefined && spec.role !== "diagnostics" && spec.role !== "insights" && spec.role !== "screen")
 			throw new Error("Invalid specialist profile");
+		if (spec.role === "screen" && (!spec.pilot?.ask || spec.pilot.role !== "screen" || !spec.projectId))
+			throw new Error("A screen agent requires a read-only project chat");
 		if (spec.role === "insights") {
 			const b = spec.insightsBinding;
 			const owner = spec.insightsOwnerBinding;
@@ -762,8 +769,13 @@ export class KernelSession {
 						}
 					: {}),
 				ask: spec.pilot?.ask,
+				// Ordinary project chats only. Specialist roles keep their closed tool sets.
+				...(!spec.role && spec.projectId && hooks.readReferenceSources
+					? { readReferenceSources: hooks.readReferenceSources }
+					: {}),
 				diagnostics: spec.role === "diagnostics",
 				insights: spec.role === "insights",
+				screen: spec.role === "screen",
 				diagnosticHistory: spec.role === "diagnostics",
 				agentDir: spec.agentDir,
 				trustDirectory: spec.trustDirectory,
@@ -803,6 +815,14 @@ export class KernelSession {
 					...(spec.role === "insights" && !spec.insightsOwnerBinding && hooks.callDiagnosticContext
 						? [createInsightsHistoryTool(hooks.callDiagnosticContext)]
 						: []),
+					...(spec.role === "screen" && hooks.callScreen
+						? [
+								...createScreenTools(hooks.callScreen),
+								...(hooks.callDiagnosticContext
+									? [createDiagnosticContextTool(hooks.callDiagnosticContext)]
+									: []),
+							]
+						: []),
 					...(spec.repairDiagnostics && hooks.callDiagnostics && hooks.callDiagnosticLogs
 						? createRepairDiagnosticsTools(spec.repairDiagnostics, {
 								diagnostics: hooks.callDiagnostics,
@@ -825,6 +845,9 @@ export class KernelSession {
 						: []),
 					...missionTools,
 					questionTool,
+					...(!spec.role && spec.projectId && hooks.readReferenceSources
+						? [createReferenceSourcesTool(hooks.readReferenceSources)]
+						: []),
 					...(interviewTool ? [interviewTool] : []),
 					...(!spec.pilot?.ask ? [createTodoTool(callTodo, () => spec.sessionId)] : []),
 					...(!spec.pilot?.ask && hooks.callSlackStatus ? [createSlackStatusTool(hooks.callSlackStatus)] : []),

@@ -7,19 +7,26 @@ import type { SessionManager } from "./sessions.ts";
 
 const id = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(v);
 const digest = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
-/** Native operation kind: one fixed follow-up to one stopped chat, sent once. */
+/** Native operation kind: one fixed follow-up to one stopped or failed chat, sent once. */
 export const CHAT_CONTINUE = "chat-continue";
 export const CHAT_RECOVER = "chat-recover";
 export const RETRY_TEXT =
 	"The user asked you to retry after this chat failed. Continue the original work within its existing scope, access and remaining allowance.";
+/** Native operation kind: take one chat's failed outcome out of Needs you. Sends nothing to the chat. */
+export const CHAT_DISMISS = "chat-dismiss";
+/** Native operation kind: the user's own words to one chat waiting for a reply, sent once as ordinary input. */
+export const CHAT_REPLY = "chat-reply";
+/** Most characters a Reply carries: the same as a new chat's first message, which the user also types. */
+const REPLY_CHARS = 12_000;
 /** What Continue sends. The window cannot supply other words. */
 export const CONTINUE_TEXT =
-	"The user asked you to continue after this chat stopped. If you were waiting on an answer, that question was lost: ask it again. Otherwise pick up where you stopped.";
+	"The user asked you to continue after this chat stopped or failed. If you were waiting on an answer, that question was lost: ask it again. Otherwise pick up where you stopped.";
 export interface Selection {
 	projectId: string;
 	projectPath: string;
 	contextDigest: string;
-	mode: "ask" | "build";
+	/** "screen": a read-only Ask chat with role "screen", bound to one Day window. */
+	mode: "ask" | "build" | "screen";
 	model: string;
 	thinking: string;
 	allowanceMicros?: number | null;
@@ -44,6 +51,7 @@ interface Dependencies {
 		| "preserveWorkingContext"
 		| "retryStartup"
 		| "startupRecoveryAdmitted"
+		| "dismissFailure"
 	>;
 }
 export class NativeChat {
@@ -67,7 +75,8 @@ export class NativeChat {
 	}
 	/** Catalog selection only. Does not open a worker or send a provider request. */
 	async prepare(projectId: string, mode: string): Promise<Selection> {
-		if (mode !== "ask" && mode !== "build") throw new OperationRejected("Choose Ask or Build explicitly");
+		if (mode !== "ask" && mode !== "build" && mode !== "screen")
+			throw new OperationRejected("Choose Ask or Build explicitly");
 		const before = this.project(projectId);
 		const p = this.deps.projects.require(projectId);
 		const model = await this.deps.sessions.selectTaskModel(p.path, p.model);
@@ -103,7 +112,7 @@ export class NativeChat {
 			typeof p.projectPath !== "string" ||
 			!p.projectPath.startsWith("/") ||
 			p.projectPath.length > 4096 ||
-			!["ask", "build"].includes(p.mode) ||
+			!["ask", "build", "screen"].includes(p.mode) ||
 			typeof p.model !== "string" ||
 			!p.model ||
 			p.model.length > 256 ||
@@ -193,7 +202,8 @@ export class NativeChat {
 		return this.deps.sessions.spawnDurable(
 			{
 				projectId: p.projectId,
-				mode: p.mode,
+				mode: p.mode === "screen" ? "ask" : p.mode,
+				...(p.mode === "screen" ? { role: "screen" as const } : {}),
 				model: p.model,
 				thinking: p.thinking,
 				message,
@@ -227,10 +237,17 @@ export class NativeChat {
 			throw new OperationRejected("Set a quick-fix default in Funding before starting this work");
 		return { allowanceMicros: funding.quickFixDefaultMicros, fundingRequired: true };
 	}
-	/** Exact Continue envelope: this host, payload `{purpose, sessionId}` aimed at that chat. */
-	private continueRequest(op: DurableOperation): {
+	/** Exact Continue, Recover or Dismiss envelope: this host, payload `{purpose, sessionId}` aimed at that chat. */
+	private continueRequest(op: DurableOperation): string {
+		return this.chatRequest(op).sessionId;
+	}
+	/**
+	 * Continue, Recover, Dismiss or Reply envelope. A Reply carries the user's words in `message`. A Recover carries
+	 * the words to send (RETRY_TEXT when empty) and the chat version the user read.
+	 */
+	private chatRequest(op: DurableOperation): {
 		sessionId: string;
-		message: string;
+		message?: string;
 		updatedAt?: number;
 		inputGeneration?: number;
 	} {
@@ -245,17 +262,23 @@ export class NativeChat {
 			throw new OperationRejected(
 				`Corrected follow-up is ${Buffer.byteLength(p.message)} bytes; limit is 12000. Shorten it before sending`,
 			);
+		const reply = op.kind === CHAT_REPLY;
+		const recover = op.kind === CHAT_RECOVER;
 		if (
-			(op.kind !== CHAT_CONTINUE && op.kind !== CHAT_RECOVER) ||
+			(op.kind !== CHAT_CONTINUE && op.kind !== CHAT_DISMISS && !reply && !recover) ||
 			!p ||
 			typeof p !== "object" ||
 			Object.keys(p).sort().join() !==
-				(op.kind === CHAT_RECOVER ? "inputGeneration,message,purpose,sessionId,updatedAt" : "purpose,sessionId") ||
+				(recover
+					? "inputGeneration,message,purpose,sessionId,updatedAt"
+					: reply
+						? "message,purpose,sessionId"
+						: "purpose,sessionId") ||
 			p.purpose !== op.kind ||
-			(op.kind === CHAT_RECOVER && (typeof p.message !== "string" || Buffer.byteLength(p.message) > 12000)) ||
-			(op.kind === CHAT_RECOVER && (!Number.isSafeInteger(p.updatedAt) || (p.updatedAt as number) < 0)) ||
-			(op.kind === CHAT_RECOVER &&
-				(!Number.isSafeInteger(p.inputGeneration) || (p.inputGeneration as number) < 0)) ||
+			(reply && (typeof p.message !== "string" || !p.message.trim() || [...p.message].length > REPLY_CHARS)) ||
+			(recover && (typeof p.message !== "string" || Buffer.byteLength(p.message) > 12000)) ||
+			(recover && (!Number.isSafeInteger(p.updatedAt) || (p.updatedAt as number) < 0)) ||
+			(recover && (!Number.isSafeInteger(p.inputGeneration) || (p.inputGeneration as number) < 0)) ||
 			!id(p.sessionId) ||
 			op.targetId !== p.sessionId ||
 			!digest(op.bindingId) ||
@@ -265,26 +288,28 @@ export class NativeChat {
 			!sameHost(op.destination, this.deps.journal.destination)
 		)
 			throw new OperationRejected("Invalid continue intent");
-		return {
-			sessionId: p.sessionId,
-			...(op.kind === CHAT_RECOVER
-				? { updatedAt: p.updatedAt as number, inputGeneration: p.inputGeneration as number }
-				: {}),
-			message:
-				op.kind === CHAT_CONTINUE
-					? CONTINUE_TEXT
-					: (p.message as string).trim()
-						? (p.message as string)
-						: RETRY_TEXT,
-		};
+		if (recover)
+			return {
+				sessionId: p.sessionId,
+				updatedAt: p.updatedAt as number,
+				inputGeneration: p.inputGeneration as number,
+				message: (p.message as string).trim() ? (p.message as string) : RETRY_TEXT,
+			};
+		return { sessionId: p.sessionId, ...(reply ? { message: p.message as string } : {}) };
 	}
 	async lookupContinue(op: DurableOperation) {
 		this.continueRequest(op);
 		return this.deps.journal.lookup(op);
 	}
-	/** Sends CONTINUE_TEXT once to a stopped chat. Re-entry only reads whether the chat accepted it. */
+	/**
+	 * Sends CONTINUE_TEXT once to a chat whose summary allows it (`canContinue`: stopped, under a mission User Stop
+	 * hold, or failed with a safe retry). Re-entry only reads whether the chat accepted it.
+	 */
 	async continueChat(op: DurableOperation, firstEntry: boolean) {
-		const { sessionId, message, updatedAt, inputGeneration } = this.continueRequest(op);
+		const request = this.chatRequest(op);
+		if (op.kind !== CHAT_CONTINUE && op.kind !== CHAT_RECOVER) throw new OperationRejected("Invalid continue intent");
+		const { sessionId, updatedAt, inputGeneration } = request;
+		const message = op.kind === CHAT_RECOVER ? (request.message ?? RETRY_TEXT) : CONTINUE_TEXT;
 		if (!firstEntry) {
 			if (
 				(op.kind === CHAT_RECOVER &&
@@ -296,19 +321,17 @@ export class NativeChat {
 		}
 		const chat = this.deps.sessions.get(sessionId);
 		if (!chat || chat.archivedAt || chat.continuedTo) throw new OperationRejected("This chat can no longer continue");
-		if (op.kind === CHAT_RECOVER && chat.recoveryBlockedReason)
-			throw new OperationRejected(chat.recoveryBlockedReason);
-		if (updatedAt !== undefined && (chat.updatedAt !== updatedAt || (chat.inputGeneration ?? 0) !== inputGeneration))
-			throw new OperationRejected("This chat changed; read it again before recovery");
-		if (
-			chat.working ||
-			(op.kind === CHAT_CONTINUE
-				? chat.outcome !== "stopped"
-				: chat.outcome !== "failed" && chat.outcome !== "stopped")
-		)
-			throw new OperationRejected("Only a failed or stopped chat can recover");
+		if (op.kind === CHAT_RECOVER) {
+			if (chat.recoveryBlockedReason) throw new OperationRejected(chat.recoveryBlockedReason);
+			if (chat.updatedAt !== updatedAt || (chat.inputGeneration ?? 0) !== inputGeneration)
+				throw new OperationRejected("This chat changed; read it again before recovery");
+			if (chat.working || (chat.outcome !== "failed" && chat.outcome !== "stopped"))
+				throw new OperationRejected("Only a failed or stopped chat can recover");
+		}
 		if (chat.sleepPaused || chat.offlinePaused || chat.subscriptionPause)
 			throw new OperationRejected("This chat is paused");
+		if (op.kind === CHAT_CONTINUE && !chat.canContinue)
+			throw new OperationRejected("Only a stopped chat, or a failed one that is safe to retry, can continue");
 		const admissionGuard = () => {
 			const now = this.deps.sessions.get(sessionId);
 			if (
@@ -329,8 +352,45 @@ export class NativeChat {
 		if (op.kind === CHAT_RECOVER) await this.deps.sessions.preserveWorkingContext(sessionId);
 		await this.deps.sessions.sendDurable(sessionId, message, "followUp", op.operationId, {
 			inputGeneration: inputGeneration ?? chat.inputGeneration ?? 0,
-			explicitModelRecovery: op.kind === CHAT_RECOVER,
+			// Recovery, or Continue after a failed run, applies the saved next-attempt model.
+			explicitModelRecovery: op.kind === CHAT_RECOVER || chat.outcome === "failed",
 			...(updatedAt !== undefined ? { admissionGuard } : {}),
+		});
+		return { sessionId, operationId: op.operationId };
+	}
+	/** Dismisses the chat's failed outcome from Needs you. Idempotent: re-entry sets the same mark. */
+	async dismissChat(op: DurableOperation, _firstEntry: boolean) {
+		const sessionId = this.continueRequest(op);
+		if (op.kind !== CHAT_DISMISS) throw new OperationRejected("Invalid dismiss intent");
+		const chat = this.deps.sessions.get(sessionId);
+		if (!chat || chat.archivedAt) throw new OperationRejected("This chat is gone or archived");
+		if (!(await this.deps.sessions.dismissFailure(sessionId)))
+			throw new OperationRejected("This chat has no failed result to dismiss");
+		return { sessionId, operationId: op.operationId };
+	}
+	/**
+	 * Sends the user's words once, as ordinary input, to a chat waiting for a reply (SessionSummary.waitsForReply)
+	 * or to a screen agent chat.
+	 * Re-entry only reads whether the chat accepted it.
+	 */
+	async replyChat(op: DurableOperation, firstEntry: boolean) {
+		const { sessionId, message } = this.chatRequest(op);
+		if (op.kind !== CHAT_REPLY || message === undefined) throw new OperationRejected("Invalid reply intent");
+		if (!firstEntry) {
+			if (await this.deps.sessions.lookupNativeAttentionInput(sessionId, op.operationId))
+				return { sessionId, operationId: op.operationId };
+			throw new Error("Reply outcome is unknown; it is never sent again");
+		}
+		const chat = this.deps.sessions.get(sessionId);
+		if (!chat || chat.archivedAt || chat.continuedTo)
+			throw new OperationRejected("This chat can no longer take a reply");
+		if (chat.sleepPaused || chat.offlinePaused || chat.subscriptionPause)
+			throw new OperationRejected("This chat is paused");
+		// The screen agent bar is a conversation: the user may write whenever its window is open.
+		if (!chat.waitsForReply && chat.role !== "screen")
+			throw new OperationRejected("This chat no longer waits for a reply");
+		await this.deps.sessions.sendDurable(sessionId, message, "followUp", op.operationId, {
+			inputGeneration: chat.inputGeneration ?? 0,
 		});
 		return { sessionId, operationId: op.operationId };
 	}

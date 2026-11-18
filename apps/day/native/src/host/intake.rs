@@ -260,9 +260,14 @@ pub(super) async fn handle(
             }
             let snapshot = read(t).await?;
             check()?;
-            if snapshot["contextDigest"] != intent.context_digest {
-                return Err(Error::Stale);
-            }
+            // The item is the target: its id, revision and state, checked below. The
+            // project's setup digest around it can move with any project edit; the write
+            // then names the current one instead of making the user press again.
+            let context = snapshot["contextDigest"]
+                .as_str()
+                .filter(|d| d.len() == 64)
+                .ok_or(Error::Invalid)?
+                .to_owned();
             let item = snapshot["sources"]
                 .as_array()
                 .ok_or(Error::Invalid)?
@@ -305,7 +310,7 @@ pub(super) async fn handle(
                 return Err(Error::Stale);
             }
             let mut request = json!({"purpose":if start {"intake-start"} else {"intake-triage"},
-                "projectId":t.source.project()?.project_id,"itemId":intent.item_id,"revision":intent.revision,"contextDigest":intent.context_digest});
+                "projectId":t.source.project()?.project_id,"itemId":intent.item_id,"revision":intent.revision,"contextDigest":context});
             if start {
                 request["sessionId"] = json!(uuid::Uuid::new_v4().to_string());
                 if let Some(mission) = &intent.mission_id {
@@ -314,14 +319,13 @@ pub(super) async fn handle(
             } else {
                 request["state"] = json!(intent.state);
             }
-            let mut record = planning::record(
-                &t.source,
-                intent.item_id.clone(),
-                intent.context_digest.clone(),
-                request,
-            )?;
+            let mut record = planning::record(&t.source, intent.item_id.clone(), context, request)?;
             journal.save_planning(record.clone())?;
-            check()?;
+            if let Err(e) = check() {
+                record.not_sent = true;
+                journal.save_planning(record)?;
+                return Err(e);
+            }
             // No async gap, retry or recreation between the durable record and this sole POST.
             let mut saved = true;
             if let Ok(receipt) = t.planning_operation(&record.operation, false).await {

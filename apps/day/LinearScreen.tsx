@@ -11,6 +11,7 @@
 import { effect, keymap, Scroll, type ScrollRef, signal, Text, View, type ViewRef } from "nsh";
 import type { MissionRow } from "pilot-day/native";
 import type { Day } from "./day";
+import { keepRead, staleLine } from "./freshness";
 import { openRequest } from "./Incoming";
 import { keepScroll } from "./kept";
 import type { LinearMirror, LinearView } from "./linearFeed";
@@ -322,6 +323,12 @@ export function LinearScreen(props: { day: Day }) {
 		const r = v().read;
 		return !!r && linearProject() !== null && r.projectId !== linearProject();
 	};
+	// Pilot reads again on its own while the last read failed, and when the window comes back.
+	const reads = keepRead(
+		() => mirror.source.read(),
+		() => !!v().reason && !other(),
+		() => !!read(),
+	);
 	// A restored offset waits for the rows it scrolled through; until then the kept offset stays.
 	let waiting = scroll.contentOffset.y > 0 ? scroll.contentOffset.y : null;
 	const scroller = signal<ScrollRef | null>(null);
@@ -355,14 +362,16 @@ export function LinearScreen(props: { day: Day }) {
 								{read() ? savedLine(read() as SavedLinearRead) : ""}
 							</Text>
 						</If>
-						<Action
-							label={v().reading ? "Reading…" : "Read again"}
-							icon="refresh"
-							testID="linear-read"
-							disabled={v().reading}
-							accessibilityLabel="Read Pilot's saved Linear issues again. This sends nothing and does not ask Linear."
-							onPress={() => void mirror.source.read()}
-						/>
+						<If when={reads.warn()}>
+							<Action
+								label={v().reading ? "Reading…" : "Try now"}
+								icon="refresh"
+								testID="linear-read"
+								disabled={v().reading}
+								accessibilityLabel="Read Pilot's saved Linear issues again. This sends nothing and does not ask Linear."
+								onPress={() => void reads.now()}
+							/>
+						</If>
 					</View>
 				</View>
 				<If when={other()}>
@@ -372,10 +381,15 @@ export function LinearScreen(props: { day: Day }) {
 						detail="Nothing is shown. This is not the same as having none."
 					/>
 				</If>
-				<If when={v().reason && !other()}>
+				{/* With issues shown, a failed read says nothing until the shared old-data rule does. */}
+				<If when={v().reason && !other() && (!read() || reads.stale())}>
 					<Notice
 						testID="linear-off"
-						text={read() ? v().reason : `Pilot cannot show your Linear issues here. ${v().reason}`}
+						text={
+							read()
+								? staleLine(reads.readAt() ?? 0)
+								: `Pilot cannot show your Linear issues here. ${v().reason}`
+						}
 						detail={read() ? undefined : "This is not the same as having none."}
 					/>
 				</If>

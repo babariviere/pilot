@@ -33,7 +33,11 @@ registerHooks({
 				format: "module",
 				shortCircuit: true,
 				source: `export const host = globalThis.__refreshHost;
-export function signal(value) { const read = () => value; read.set = (v) => { value = v }; read.update = (f) => { value = f(value) }; return read; }`,
+export function signal(value) { const read = () => value; read.set = (v) => { value = v }; read.update = (f) => { value = f(value) }; return read; }
+export function effect() {}
+export function cleanup() {}
+export function untracked(read) { return read() }
+export function lifecycle() { return "active" }`,
 			};
 		return next(url, context);
 	},
@@ -99,7 +103,10 @@ test("a slow explicit inventory read cannot overwrite a newer cached projection"
 	assert.deepEqual(feed.snapshot().plans, [row]);
 });
 
-test("a refused cached Today read keeps data but never claims fresh empty attention", async () => {
+// "Live data in the UI": a failed background read keeps the last good data as it
+// was. Whether to warn is the automatic reads' rule (freshness.ts: older than 5
+// minutes and 3 failed tries), not one failed refresh.
+test("a refused cached Today read keeps the last good data unchanged", async () => {
 	const initial = {
 		revision: 4,
 		decisions: [],
@@ -112,7 +119,7 @@ test("a refused cached Today read keeps data but never claims fresh empty attent
 	for (let n = 0; n < 3; n++) {
 		answers.set("day.today.read", { error: "offline" });
 		await feed.refresh();
-		assert.notEqual(feed.snapshot().attention.state, "live", "failed read claimed fresh empty attention");
+		assert.deepEqual(feed.snapshot().attention, initial.attention, "a failed read changed what shows");
 		assert.equal(feed.snapshot().revision, 4, "a failed read must not invent a new data revision");
 	}
 	answers.set("day.today.read", initial);

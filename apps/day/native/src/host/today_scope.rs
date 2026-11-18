@@ -11,9 +11,16 @@ use crate::{
     plan::{PlanAvailability, Planning},
     plan_host,
 };
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex, atomic::Ordering};
+
+/// At most this many project or delivery reads at a time, on the window's
+/// own worker. It limits the load one switch puts on the service; 4 reads of
+/// the 5 projects measured at once cut a switch from about 1.8 s to its slowest
+/// project (see today_scope_tests.rs).
+const READS_AT_ONCE: usize = 4;
 
 #[cfg(test)]
 fn selected_transport(t: &Transport, project: &Value) -> Result<Transport, Error> {
@@ -25,6 +32,10 @@ fn selected_transport(t: &Transport, project: &Value) -> Result<Transport, Error
 pub(crate) struct Request {
     pub scope: String,
     pub generation: u64,
+    /// The first read of a switch: only the selected project, so it shows at
+    /// once. The complete read that follows fills in the other projects.
+    #[serde(default, rename = "selectedOnly")]
+    pub selected_only: bool,
 }
 impl Request {
     pub(crate) fn validate(&self) -> Result<(), Error> {
@@ -264,17 +275,21 @@ async fn results(t: &Transport, journal: &Journal) -> Value {
             subjects.insert(subject.to_string(), s);
         }
     }
-    let mut items = Vec::new();
-    // Same candidate limit as the existing delivery feed. No unbounded fanout.
-    for subject in subjects.values().take(20) {
-        let unsettled =
-            serde_json::to_value(subject).is_ok_and(|s| uncertain.contains(&s.to_string()));
-        let value = super::delivery::read(t, subject).await;
-        items.push(match value {
-            Ok(snapshot) => json!({"subject":subject,"snapshot":snapshot,"currentness":"live","unsettled":unsettled}),
-            Err(error) => json!({"subject":subject,"snapshot":null,"currentness":"unavailable","unsettled":unsettled,"reason":error.to_string()}),
-        });
-    }
+    // Same candidate limit as the existing delivery feed. No unbounded fanout:
+    // at most READS_AT_ONCE requests at a time, on this same worker, in order.
+    let uncertain = &uncertain;
+    let mut items: Vec<Value> = futures_util::stream::iter(subjects.values().take(20))
+        .map(|subject| async move {
+            let unsettled =
+                serde_json::to_value(subject).is_ok_and(|s| uncertain.contains(&s.to_string()));
+            match super::delivery::read(t, subject).await {
+                Ok(snapshot) => json!({"subject":subject,"snapshot":snapshot,"currentness":"live","unsettled":unsettled}),
+                Err(error) => json!({"subject":subject,"snapshot":null,"currentness":"unavailable","unsettled":unsettled,"reason":error.to_string()}),
+            }
+        })
+        .buffered(READS_AT_ONCE)
+        .collect()
+        .await;
     let discovered = super::delivery::list(t, &super::delivery::List::default()).await;
     match discovered {
         Ok(v) => {
@@ -307,12 +322,21 @@ pub(super) async fn read(
 ) -> Result<Value, Error> {
     // Large profiles or an unresponsive project cannot hold the shared worker
     // indefinitely. A deadline refuses the read, never supplies empty counts.
-    tokio::time::timeout(
+    let started = std::time::Instant::now();
+    let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         read_inner(t, journal, shared, request, gate),
     )
     .await
-    .map_err(|_| Error::Offline)?
+    .map_err(|_| Error::Offline)?;
+    // The first read of a switch: how long the chosen project took to show.
+    if request.selected_only && result.is_ok() {
+        crate::day_log::event(
+            "scope.switch",
+            json!({"ms":u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)}),
+        );
+    }
+    result
 }
 
 async fn read_inner(
@@ -329,18 +353,15 @@ async fn read_inner(
         shared.open()?;
         request.current(&gate.lock().expect("bridge gate poisoned"))
     };
-    let mut value = read_projects(
-        t,
-        journal,
-        request,
-        shared.connected.load(Ordering::SeqCst),
-        check,
-    )
-    .await?;
     // A global window acts on the one project the user chose here. The focus
-    // stays when All projects is chosen again; it never sends anything.
+    // moves first, before the slow per-project reads: a read that times out
+    // under load must not leave the window on the previous project. Only the
+    // newest choice moves it. It stays when All projects is chosen again; it
+    // never sends anything.
     if t.source.project.is_none() && request.scope != "all" {
+        check()?;
         let catalog = new_chat::inventory(t).await?;
+        check()?;
         let project = catalog["projects"]
             .as_array()
             .and_then(|rows| rows.iter().find(|p| p["projectId"] == request.scope))
@@ -351,6 +372,15 @@ async fn read_inner(
             project_path: path.into(),
         });
     }
+    let live = shared.connected.load(Ordering::SeqCst);
+    // A project list that changed during the reads (a name, a digest) is read
+    // again at once, one time; the newest generation still wins.
+    let mut value = match read_projects(t, journal, request, live, check).await {
+        Err(Error::Stale) if check().is_ok() => {
+            read_projects(t, journal, request, live, check).await?
+        }
+        other => other?,
+    };
     let own = match &t.source.project {
         Some(p) => Some(p.project_id.clone()),
         None => shared
@@ -385,107 +415,181 @@ async fn read_projects(
     if request.scope != "all" && !projects.iter().any(|p| p["projectId"] == request.scope) {
         return Err(Error::Invalid);
     }
-    let mut rows = Vec::new();
-    let mut bytes = 1024usize;
-    // Serial on the existing worker. Scope never spawns another worker or daemon.
-    for project in projects {
-        check()?;
-        let selected = request.includes(project["projectId"].as_str().ok_or(Error::Invalid)?);
-        let pt = t.for_project(project)?;
-        // Each canonical service performs its existing project/owner/access checks.
-        let overview = async {
-            pt.gate(false).await?;
-            pt.overview().await
-        }
-        .await;
-        let attention = attention::snapshot(&pt)
-            .await
-            .and_then(|v| scoped_attention(v, &pt.source.project()?.project_id, live));
-        check()?;
-        let today = projection(
-            &pt,
-            journal,
-            overview.as_ref().ok(),
-            attention.as_ref().ok(),
-            live,
-        );
-        let planning = pt.planning_inventory().await.and_then(|v| {
-            if v["projectId"] != pt.source.project()?.project_id {
-                return Err(Error::Identity);
-            }
-            Ok(Planning {
-                availability: if live {
-                    PlanAvailability::Live
+    let first = request.selected_only && request.scope != "all";
+    // The selected project first, then the others: its rows are the ones a
+    // switch waits for. At most READS_AT_ONCE projects are read at a time, on
+    // this same worker. Scope never spawns another worker or daemon.
+    let mut order: Vec<(usize, &Value)> = projects.iter().enumerate().collect();
+    order.sort_by_key(|(_, p)| !request.includes(p["projectId"].as_str().unwrap_or("")));
+    let read: Vec<(usize, Result<Value, Error>)> = futures_util::stream::iter(order)
+        .map(|(at, project)| {
+            let check = &check;
+            async move {
+                let selected = match project["projectId"].as_str() {
+                    Some(id) => request.includes(id),
+                    None => return (at, Err(Error::Invalid)),
+                };
+                let row = if first && !selected {
+                    // Read in the second, complete read: unknown here, never zero.
+                    Ok(reading_row(project))
                 } else {
-                    PlanAvailability::Stale
-                },
-                plans: plan_host::inventory_rows(&v)?,
-                ..Planning::default()
-            })
-        });
-        check()?;
-        let n = count(
-            overview.as_ref().ok(),
-            attention.as_ref().ok(),
-            &today,
-            live,
-        )
-        .zip(planning.as_ref().ok())
-        .map(|(n, p)| n + p.plans.iter().filter(|p| p.needs_you).count());
-        let mut row = json!({"id":project["projectId"],"name":project["name"],"selected":selected,
-            "currentness":if n.is_some() {"live"} else if !live && overview.is_ok() {"stale"} else {"unavailable"},
-            "observedAt":overview.as_ref().ok().map(|v| v.observed_at),"needsYou":needs(n),
-            "today":null,"planning":null,"intake":null,"results":null,"working":null,
-            "canAct":false,"errors":{}});
-        if let Err(error) = &overview {
-            row["errors"]["today"] = json!(error.to_string());
-        }
-        if let Err(error) = &attention {
-            row["errors"]["attention"] = json!(error.to_string());
-        }
-        if let Err(error) = &planning {
-            row["errors"]["planning"] = json!(error.to_string());
-        }
-        let denied = matches!(overview, Err(Error::Identity))
-            || matches!(attention, Err(Error::Identity))
-            || matches!(planning, Err(Error::Identity));
-        if selected && !denied {
-            row["working"] = working(overview.as_ref().ok(), live);
-            row["today"] = serde_json::to_value(today).map_err(|_| Error::Invalid)?;
-            match planning {
-                Ok(v) => row["planning"] = serde_json::to_value(v).map_err(|_| Error::Invalid)?,
-                Err(_) => {}
+                    project_row(t, journal, project, selected, live, check).await
+                };
+                (at, row)
             }
-            match intake::read(&pt).await {
-                Ok(v) => row["intake"] = v,
-                Err(error) => row["errors"]["intake"] = json!(error.to_string()),
-            }
-            row["results"] = results(&pt, journal).await;
-            if !live {
-                for item in row["results"]["items"].as_array_mut().into_iter().flatten() {
-                    item["currentness"] = json!("stale");
-                }
-            }
-            label_sections(&mut row, project);
-        }
+        })
+        .buffered(READS_AT_ONCE)
+        .collect()
+        .await;
+    let mut rows = vec![Value::Null; projects.len()];
+    let mut bytes = 1024usize;
+    for (at, row) in read {
+        let row = row?;
         bytes =
             bytes.saturating_add(serde_json::to_vec(&row).map_err(|_| Error::Invalid)?.len() + 1);
         if bytes > crate::bridge::MAX_RESPONSE - 1024 {
             return Err(Error::Capacity);
         }
-        rows.push(row);
+        rows[at] = row;
     }
-    // Project removal/configuration/permission changes during I/O cannot publish
-    // the earlier selection. Inventory never selects models or creates a chat.
-    if new_chat::inventory(t).await? != catalog {
-        // This may be access removal, not just a harmless activity race.
-        return Err(Error::Identity);
+    if !first {
+        // A project removed, moved or no longer allowed during the reads cannot
+        // publish the earlier list. Inventory never selects models or creates a chat.
+        if let Some(error) = catalog_change(&catalog, &new_chat::inventory(t).await?, request) {
+            crate::day_log::event(
+                "scope.read_refused",
+                json!({"error":error.to_string(),"cause":if error == Error::Identity {"project_gone"} else {"catalog_changed"}}),
+            );
+            return Err(error);
+        }
     }
     check()?;
     Ok(
         json!({"version":1,"scope":request.scope,"generation":request.generation,
-        "catalogComplete":true,"complete":false,"outsideNeedsYou":outside(&rows),"projects":rows}),
+        "catalogComplete":true,"complete":false,"partial":first,"outsideNeedsYou":outside(&rows),"projects":rows}),
     )
+}
+
+/// How the project list changed during a read, if it did. The selected
+/// project gone or moved is Identity: what shows is no longer that project.
+/// Any other change (a name, a digest, another project) is Stale: read again.
+fn catalog_change(before: &Value, after: &Value, request: &Request) -> Option<Error> {
+    if before == after {
+        return None;
+    }
+    if request.scope != "all" {
+        let find = |c: &Value| {
+            c["projects"]
+                .as_array()
+                .and_then(|rows| rows.iter().find(|p| p["projectId"] == request.scope))
+                .map(|p| p["projectPath"].clone())
+        };
+        if find(after).is_none() || find(after) != find(before) {
+            return Some(Error::Identity);
+        }
+    }
+    Some(Error::Stale)
+}
+
+/// A project the first read of a switch leaves for the complete read: its
+/// counts are unknown, said as reading, never as zero or as unreadable.
+fn reading_row(project: &Value) -> Value {
+    json!({"id":project["projectId"],"name":project["name"],"selected":false,"currentness":"reading",
+        "observedAt":null,"needsYou":needs(None),"today":null,"planning":null,"intake":null,
+        "results":null,"working":null,"canAct":false,"errors":{}})
+}
+
+/// One project's row. Its reads go out together; each canonical service
+/// performs its existing project, owner and access checks.
+async fn project_row(
+    t: &Transport,
+    journal: &Journal,
+    project: &Value,
+    selected: bool,
+    live: bool,
+    check: &impl Fn() -> Result<(), Error>,
+) -> Result<Value, Error> {
+    check()?;
+    let pt = t.for_project(project)?;
+    let (overview, attention, planning) = futures_util::join!(
+        async {
+            pt.gate(false).await?;
+            pt.overview().await
+        },
+        async {
+            attention::snapshot(&pt)
+                .await
+                .and_then(|v| scoped_attention(v, &pt.source.project()?.project_id, live))
+        },
+        pt.planning_inventory(),
+    );
+    check()?;
+    let today = projection(
+        &pt,
+        journal,
+        overview.as_ref().ok(),
+        attention.as_ref().ok(),
+        live,
+    );
+    let planning = planning.and_then(|v| {
+        if v["projectId"] != pt.source.project()?.project_id {
+            return Err(Error::Identity);
+        }
+        Ok(Planning {
+            availability: if live {
+                PlanAvailability::Live
+            } else {
+                PlanAvailability::Stale
+            },
+            plans: plan_host::inventory_rows(&v)?,
+            ..Planning::default()
+        })
+    });
+    let n = count(
+        overview.as_ref().ok(),
+        attention.as_ref().ok(),
+        &today,
+        live,
+    )
+    .zip(planning.as_ref().ok())
+    .map(|(n, p)| n + p.plans.iter().filter(|p| p.needs_you).count());
+    let mut row = json!({"id":project["projectId"],"name":project["name"],"selected":selected,
+        "currentness":if n.is_some() {"live"} else if !live && overview.is_ok() {"stale"} else {"unavailable"},
+        "observedAt":overview.as_ref().ok().map(|v| v.observed_at),"needsYou":needs(n),
+        "today":null,"planning":null,"intake":null,"results":null,"working":null,
+        "canAct":false,"errors":{}});
+    if let Err(error) = &overview {
+        row["errors"]["today"] = json!(error.to_string());
+    }
+    if let Err(error) = &attention {
+        row["errors"]["attention"] = json!(error.to_string());
+    }
+    if let Err(error) = &planning {
+        row["errors"]["planning"] = json!(error.to_string());
+    }
+    let denied = matches!(overview, Err(Error::Identity))
+        || matches!(attention, Err(Error::Identity))
+        || matches!(planning, Err(Error::Identity));
+    if selected && !denied {
+        row["working"] = working(overview.as_ref().ok(), live);
+        row["today"] = serde_json::to_value(today).map_err(|_| Error::Invalid)?;
+        if let Ok(v) = planning {
+            row["planning"] = serde_json::to_value(v).map_err(|_| Error::Invalid)?;
+        }
+        let (intake, results) = futures_util::join!(intake::read(&pt), results(&pt, journal));
+        match intake {
+            Ok(v) => row["intake"] = v,
+            Err(error) => row["errors"]["intake"] = json!(error.to_string()),
+        }
+        row["results"] = results;
+        if !live {
+            for item in row["results"]["items"].as_array_mut().into_iter().flatten() {
+                item["currentness"] = json!("stale");
+            }
+        }
+        label_sections(&mut row, project);
+    }
+    Ok(row)
 }
 
 /// Project/identity checks happened on the enclosing overview. No per-chat reads or subscriptions.
@@ -507,7 +611,23 @@ fn working(overview: Option<&DayOverview>, live: bool) -> Value {
     if !live {
         return json!({"state":"disconnected","items":[]});
     }
-    json!({"state":"live","items":items})
+    json!({"state":"live","items":items,"waiting":waiting(o)})
+}
+
+/// Chats waiting for a coding slot, or null when the service did not say or
+/// a row does not read. Waiting rows never make the working list fail.
+fn waiting(o: &DayOverview) -> Value {
+    let Some(rows) = &o.waiting_now else {
+        return Value::Null;
+    };
+    let mut seen = std::collections::HashSet::new();
+    if rows
+        .iter()
+        .any(|r| !valid_id(&r.session_id) || !r.queue.valid() || !seen.insert(&r.session_id))
+    {
+        return Value::Null;
+    }
+    json!(rows)
 }
 
 #[cfg(test)]

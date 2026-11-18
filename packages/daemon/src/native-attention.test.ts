@@ -373,3 +373,16 @@ test("answer ingress journals once; uncertain/cold recovery only looks up, never
 	assert.equal((await post(true)).status, 400); // invalid authority cannot expose an old receipt.
 	assert.notEqual((await (await post(true)).json()).state, "accepted");
 });
+
+test("mission progress keeps a question's authority; a change of who acts does not", async (t) => {
+	const f = await nativeAttentionFixture();
+	t.after(() => f.close());
+	const before = (await f.read()).questions[0]!.scope;
+	// Members working move the mission's counts, phase and updatedAt. The question and its asker are the same.
+	f.store.update(f.mission.id, { title: "Isolated attention, renamed", goal: "Keep going" });
+	assert.deepEqual((await f.read()).questions[0]!.scope, before);
+	const other = randomUUID();
+	f.store.join(other, f.mission.id);
+	f.store.update(f.mission.id, { coordinatorSessionId: other });
+	assert.notEqual((await f.read()).questions[0]!.scope.authorityDigest, before.authorityDigest);
+});

@@ -14,6 +14,12 @@ mod credentials;
 
 pub(super) const MAX_BODY: usize = 16 * 1024 * 1024;
 
+/// How long one operation send waits for the service's receipt before it is Unknown. An answer
+/// to a parked chat waits for the chat to start: pilotd.log showed 10-11 s from admission to
+/// receipt on a cold start, plus event-loop stalls up to 3.9 s, so the 15 s default left no room
+/// and turned delivered answers into Unknown. 60 s is four times the worst seen; a lookup stays 15 s.
+const OPERATION_SEND: Duration = Duration::from_secs(60);
+
 pub(super) struct Transport {
     pub client: reqwest::Client,
     pub source: Source,
@@ -394,7 +400,7 @@ impl Transport {
         lookup: bool,
     ) -> Result<Value, Error> {
         let token = self.local()?;
-        let r = self
+        let mut request = self
             .client
             .post(self.url(if lookup {
                 "/api/operations/receipt"
@@ -403,10 +409,11 @@ impl Transport {
             }))
             .header("x-pilot-github-capability", token)
             .header("content-type", "application/json")
-            .body(serde_json::to_vec(operation).map_err(|_| Error::Invalid)?)
-            .send()
-            .await
-            .map_err(|_| Error::Unknown)?;
+            .body(serde_json::to_vec(operation).map_err(|_| Error::Invalid)?);
+        if !lookup {
+            request = request.timeout(OPERATION_SEND);
+        }
+        let r = request.send().await.map_err(|_| Error::Unknown)?;
         let v = body(r).await.map_err(|_| Error::Unknown)?;
         self.local().map_err(|_| Error::Unknown)?;
         Ok(v)

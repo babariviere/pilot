@@ -6,6 +6,7 @@
 // counts as the user's check, and a read that already says Done never
 // settles a command: only the command's own matching receipts do.
 import { type Signal, signal } from "nsh";
+import { AutoCheck } from "./autoCheck";
 import type { Refusal } from "./bridge";
 import { type ArtifactLink, artifactSelection, type CapturedArtifact, readDeliveryArtifact } from "./deliveryArtifact";
 import {
@@ -386,6 +387,11 @@ export class ConnectedDelivery implements DeliverySource {
 	#mine: string[] = [];
 	#sending = new Set<string>();
 	#checking = new Set<string>();
+	// Checks of a result whose reply was lost: Pilot looks them up by itself.
+	#auto = new AutoCheck(
+		(operationId) => this.#lookUp(operationId),
+		() => this.#publish(),
+	);
 	#reading: Promise<void> | null = null;
 	#again = false;
 	#listeners = new Map<number, (view: DeliveryView) => void>();
@@ -408,7 +414,7 @@ export class ConnectedDelivery implements DeliverySource {
 		const op = (o: DeliveryOperation): DeliveryOp => ({
 			...o,
 			key: deliveryKey(o.subject),
-			checking: this.#checking.has(o.operationId),
+			checking: this.#checking.has(o.operationId) || (o.state === "unknown" && this.#auto.checking(o.operationId)),
 		});
 		const settled = this.#mine
 			.map((id) => this.#ops.find((o) => o.operationId === id))
@@ -450,6 +456,7 @@ export class ConnectedDelivery implements DeliverySource {
 			if (order > this.#opsApplied) {
 				this.#ops = opsOf(reply.operations) ?? this.#ops;
 				this.#opsApplied = order;
+				this.#auto.watch(this.#ops.filter((o) => o.state === "unknown").map((o) => o.operationId));
 			}
 			const snapshot = snapshotOf(reply.snapshot);
 			if (snapshot) {
@@ -607,7 +614,11 @@ export class ConnectedDelivery implements DeliverySource {
 				const order = ++this.#sent;
 				const reply = await readSavedDeliveries(this.#window);
 				this.#apply(order, reply);
-				if (order >= this.#opsApplied) this.#saved = reply.ok ? "live" : "unavailable";
+				if (order >= this.#opsApplied) {
+					// The first good read after a failed one: the service is back, so look again.
+					if (reply.ok && this.#saved === "unavailable") this.#auto.restart();
+					this.#saved = reply.ok ? "live" : "unavailable";
+				}
 				const project = reply.ok ? (reply.snapshot as { projectId?: unknown } | null)?.projectId : null;
 				if (typeof project === "string") this.#project = project;
 				await this.#discover();
@@ -660,6 +671,17 @@ export class ConnectedDelivery implements DeliverySource {
 		glide();
 		this.#publish();
 		return outcomeResult(op);
+	}
+
+	/** One automatic Check: a receipt read only. It never sends the check again. */
+	async #lookUp(operationId: string): Promise<void> {
+		const was = this.#ops.find((o) => o.operationId === operationId);
+		const order = ++this.#sent;
+		const reply = await checkDelivery(this.#window, operationId);
+		if (this.#closed) return;
+		this.#apply(order, reply);
+		this.#publish();
+		if (reply.ok && was) void this.read(was.subject);
 	}
 
 	async check(operationId: string): Promise<DeliveryResult> {
@@ -741,6 +763,7 @@ export class ConnectedDelivery implements DeliverySource {
 
 	dispose(): void {
 		this.#closed = true;
+		this.#auto.close();
 		this.#listeners.clear();
 	}
 }

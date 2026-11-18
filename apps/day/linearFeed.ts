@@ -75,11 +75,7 @@ export class ConnectedLinear implements LinearSource {
 	}
 
 	view(): LinearView {
-		const reason = this.#refusal
-			? this.#read
-				? `${linearReason(this.#refusal)} What shows is from Pilot's last read.`
-				: linearReason(this.#refusal)
-			: "";
+		const reason = this.#refusal ? linearReason(this.#refusal) : "";
 		return {
 			availability: this.#read ? "live" : this.#refusal ? "unavailable" : this.#asked ? "reading" : "idle",
 			reason,

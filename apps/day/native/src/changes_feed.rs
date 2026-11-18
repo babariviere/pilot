@@ -298,7 +298,7 @@ impl ChangesFeed {
             status: OutcomeStatus::Accepted,
             revision: list.revision,
             message: if list.availability == ChangesAvailability::Unavailable {
-                "Read again. Pilot still cannot show kept changes here.".into()
+                "Pilot still cannot show kept changes here. It keeps trying.".into()
             } else {
                 String::new()
             },

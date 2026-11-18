@@ -327,11 +327,23 @@ pub(super) async fn handle(
             }
             let current = read(t).await?;
             check()?;
+            let mut binding = i.binding.clone();
             if current["binding"] != i.binding {
-                return Err(Error::Stale);
+                // The binding also hashes the chats that need funding. When only lists of
+                // other chats and runs moved, the settings the user edits are the same.
+                binding = shared
+                    .shown_settings
+                    .rebind(KIND, &i.binding, &current, |v| {
+                        super::shown::without(
+                            v,
+                            &["runs", "failed", "failedCount", "providers", "fundedWork"],
+                        )
+                    })
+                    .ok_or(Error::Stale)?;
             }
             let mut payload = serde_json::to_value(i).map_err(|_| Error::Invalid)?;
             payload["purpose"] = json!(KIND);
+            payload["binding"] = json!(binding);
             payload["projectId"] = t
                 .source
                 .project
@@ -344,7 +356,7 @@ pub(super) async fn handle(
                 .as_ref()
                 .map(|p| p.project_id.clone())
                 .unwrap_or_else(|| "global-models".into());
-            let mut r = planning::record(&t.source, target, i.binding.clone(), payload)?;
+            let mut r = planning::record(&t.source, target, binding, payload)?;
             j.save_planning(r.clone())?;
             if let Err(e) = t.local().and_then(|_| check()) {
                 r.not_sent = true;
@@ -384,6 +396,9 @@ pub(super) async fn handle(
         _ => return Err(Error::Invalid),
     }
     let snapshot = read(t).await;
+    if let Ok(v) = &snapshot {
+        shared.shown_settings.remember(KIND, v);
+    }
     if matches!(command, Command::ModelsRead) {
         check()?;
         return Ok(json!({"snapshot":snapshot?,"operations":summaries(t,j)}));

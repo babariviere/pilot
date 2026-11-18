@@ -35,6 +35,10 @@ pub struct DayOverview {
     /// Absent on older services: unknown activity, not an empty list.
     #[serde(default)]
     pub working_now: Option<Vec<WorkingChat>>,
+    /// Chats waiting for a coding slot, first in line first. Absent on
+    /// older services: unknown, not an empty list.
+    #[serde(default)]
+    pub waiting_now: Option<Vec<WaitingChat>>,
 }
 
 /// Host-authored activity. No admission or lifecycle authority.
@@ -47,6 +51,40 @@ pub struct WorkingChat {
     pub mission_title: Option<String>,
     pub purpose: Option<String>,
     pub status: String,
+}
+
+/// A chat's place in the coding queue. Read only: no admission authority.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodingQueue {
+    /// "slots" or "files".
+    pub kind: String,
+    /// 1-based place in line for the same project's slots.
+    pub position: u32,
+    /// At most 3 titles of what holds the slots, or the task it waits for.
+    pub holders: Vec<String>,
+}
+
+impl CodingQueue {
+    /// A known kind, a place from 1 and at most 3 named holders.
+    pub fn valid(&self) -> bool {
+        matches!(self.kind.as_str(), "slots" | "files")
+            && self.position >= 1
+            && self.holders.len() <= 3
+            && self.holders.iter().all(|h| !h.is_empty())
+    }
+}
+
+/// A chat whose saved input waits for a coding slot. Host-authored; it
+/// grants nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitingChat {
+    pub session_id: String,
+    pub title: String,
+    pub mission_id: Option<String>,
+    pub mission_title: Option<String>,
+    pub queue: CodingQueue,
 }
 
 /// Passive, project-scoped session facts. Never an execution grant.
@@ -105,6 +143,10 @@ pub struct NeedsYouItem {
     pub reason: Option<String>,
     pub attention_reason: AttentionReason,
     pub counts_in_badge: Option<bool>,
+    /// The chat can take one Continue: stopped, or failed with a safe retry.
+    pub can_continue: Option<bool>,
+    /// `waits` rows: the chat's last message, word for word.
+    pub says: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

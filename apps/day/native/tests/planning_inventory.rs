@@ -74,6 +74,23 @@ fn complete_inventory_maps_plan_rows_without_an_open_page() {
     );
 }
 
+#[test]
+fn a_stuck_planner_needs_the_user_with_its_last_words() {
+    let mut stuck = item("one", "planning", false);
+    stuck["stuck"] = json!({"line":"Pilot's planning agent ended its turn while the plan is still open. It may be waiting for your reply.",
+        "reply":true,"plannerSays":"Which database should the export use?"});
+    let rows =
+        plan_host::inventory_rows(&inventory(vec![stuck, item("two", "planning", false)])).unwrap();
+    assert!(rows[0].needs_you, "stuck planning needs the user");
+    assert!(rows[0].reply);
+    assert!(rows[0].line.contains("may be waiting for your reply"));
+    assert_eq!(
+        rows[0].planner_says,
+        "Which database should the export use?"
+    );
+    assert!(!rows[1].needs_you && !rows[1].reply && rows[1].planner_says.is_empty());
+}
+
 struct Fixture {
     child: Child,
     input: ChildStdin,

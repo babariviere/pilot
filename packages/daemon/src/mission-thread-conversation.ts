@@ -33,6 +33,26 @@ export function threadBatch(entry: EntryRecord): { operationId: string; inputIds
 }
 
 /** Only explicit original links or ownership of a dedicated chat establish topic membership. */
+/**
+ * A thread chat's question as plain words: the question, its context and suggested answers. The user answers
+ * with an ordinary thread message, so the thread must show the question.
+ */
+export function threadQuestionText(data: unknown): string {
+	if (!data || typeof data !== "object" || Array.isArray(data)) return "";
+	const q = data as { question?: unknown; context?: unknown; options?: unknown };
+	if (typeof q.question !== "string" || !q.question.trim()) return "";
+	const parts = [q.question.trim()];
+	if (typeof q.context === "string" && q.context.trim()) parts.push(q.context.trim());
+	const options = (Array.isArray(q.options) ? q.options : []).flatMap((o) => {
+		if (!o || typeof o !== "object" || typeof o.label !== "string" || !o.label.trim()) return [];
+		const detail = typeof o.detail === "string" && o.detail.trim() ? `: ${o.detail.trim()}` : "";
+		return [`- ${o.label.trim()}${o.suggested === true ? " (suggested)" : ""}${detail}`];
+	});
+	if (options.length) parts.push(options.join("\n"));
+	parts.push("Reply in this thread with your choice or your own answer.");
+	return parts.join("\n\n");
+}
+
 export function threadConversationEntries(
 	topic: MissionThread,
 	sessionId: string,
@@ -118,6 +138,10 @@ export function threadConversationEntries(
 					return [];
 				}
 				role = "you";
+			} else if (chat && entry.kind === "pilot.question") {
+				// The thread chat waits for this answer: show it, or the thread looks stuck.
+				role = "chat";
+				text = threadQuestionText(entry.data);
 			} else {
 				if (entry.kind !== "pi.user" && entry.kind !== "pi.assistant") return [];
 				role = entry.kind === "pi.user" ? "you" : chat ? "chat" : "coordinator";

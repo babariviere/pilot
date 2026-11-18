@@ -17,6 +17,7 @@ import { ConnectedDelivery, deliveryKey, mirrorDelivery, type VerificationSubjec
 import { deliveryTitles } from "./deliveryView";
 import { connectedDiagnosisControls } from "./diagnosisControls";
 import { ConnectedFeedback, mirrorFeedback } from "./feedbackFeed";
+import { autoRead, FAILED_TRIES, retryDelay } from "./freshness";
 import { ConnectedIntake, type IntakeMirror, mirrorIntake } from "./intakeFeed";
 import { ConnectedLinear, mirrorLinear } from "./linearFeed";
 import { connectedModelControls } from "./modelControls";
@@ -108,11 +109,9 @@ let planFeed: ConnectedPlans | null = null;
 let feedbackFeed: ConnectedFeedback | null = null;
 let connectedFeeds: OpeningFeeds | null = null;
 let pendingFlush: number | null = null;
-/** The next automatic read after a passing failure, and its delay. */
+/** The next automatic read after a passing failure, and how many failed in a row. */
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let retries = 0;
-/** 1 + 2 + 4 + 8 + 16 s: about 30 s, more than a service needs to start. */
-const RETRIES = 5;
 let scopeReading = false;
 let scopeAgain = false;
 
@@ -337,6 +336,24 @@ async function connect() {
 		// stream invalidations.
 		const feedback = new ConnectedFeedback(window);
 		void feedback.read();
+		// Today's automatic service reads: after a failure, with backoff, and
+		// when the window comes back. Today shows its last good read meanwhile.
+		const freshness = autoRead(
+			() => today.serviceRead(),
+			first.snapshot.freshness.state === "live" ? Date.now() : null,
+		);
+		// Another project's read starts its own age: the previous one's never counts for it.
+		let project = first.snapshot.project ?? "";
+		const follow = (next: Today) => {
+			if ((next.project ?? "") !== project) {
+				project = next.project ?? "";
+				freshness.restart(Date.now());
+			}
+			if (next.freshness.state === "live") freshness.current();
+			else freshness.behind();
+		};
+		follow(first.snapshot);
+		today.onChange(follow);
 		const day = mirrorDay(today, {
 			intake,
 			delivery: mirrorDelivery(deliveryFeed),
@@ -347,6 +364,7 @@ async function connect() {
 			feedback: mirrorFeedback(feedback),
 			artifacts: new ConnectedArtifacts(window),
 			chat: mirrorSessionChat(new ConnectedSessionChat(window)),
+			freshness,
 		});
 		feeds.day = day;
 		// New's projects are read when New opens; reading sends nothing.
@@ -402,21 +420,21 @@ async function connect() {
 
 /**
  * A window that could not open for a passing reason (its service is down or
- * still starting) waits and reads again on its own after 1 s, then 2, 4, 8 and
- * 16 s. Meanwhile it looks like opening: the warning shows only when Pilot will
- * not try again by itself. Changes from the root are not used for this: the
- * window's own startup reads cause them, and a service that becomes ready may
- * send none.
+ * still starting) reads again on its own, with the shared backoff
+ * (freshness.ts). For the first 3 tries it looks like opening; after that it
+ * says why nothing shows, and keeps trying. Changes from the root are not used
+ * for this: the window's own startup reads cause them, and a service that
+ * becomes ready may send none.
  */
 function retryLater() {
 	const now = connection();
-	if (now.state !== "none" || !now.canRead || retries >= RETRIES) {
+	if (now.state !== "none" || !now.canRead) {
 		if (now.state === "open") retries = 0;
 		return;
 	}
-	const delay = 1000 * 2 ** retries;
+	const delay = retryDelay(retries);
 	retries += 1;
-	connection.set({ state: "waiting" });
+	if (retries <= FAILED_TRIES) connection.set({ state: "waiting" });
 	if (retryTimer !== undefined) clearTimeout(retryTimer);
 	retryTimer = setTimeout(() => {
 		retryTimer = undefined;
@@ -426,7 +444,8 @@ function retryLater() {
 
 function read(): Promise<void> {
 	if (opening) return opening;
-	connection.set({ state: "opening" });
+	// Once the window says why nothing shows, a background try keeps saying it.
+	if (connection().state !== "none") connection.set({ state: "opening" });
 	opening = connect()
 		.catch(() => {
 			// An unexpected startup failure is not permission to run setup again.
@@ -445,13 +464,12 @@ function read(): Promise<void> {
 	return opening;
 }
 
-/** Read Again: reads at once, with a fresh set of automatic tries. */
+/** Try now: reads at once. Automatic tries go on after it. */
 export function readAgain(): Promise<void> {
 	const now = connection();
 	if (now.state !== "waiting" && (now.state !== "none" || !now.canRead)) return opening ?? Promise.resolve();
 	if (retryTimer !== undefined) clearTimeout(retryTimer);
 	retryTimer = undefined;
-	retries = 0;
 	return read();
 }
 

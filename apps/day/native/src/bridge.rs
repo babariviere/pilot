@@ -28,6 +28,8 @@ pub const METHODS: &[&str] = &[
     "day.chat.check",
     "day.chat.continue",
     "day.chat.recover",
+    "day.chat.dismiss",
+    "day.chat.reply",
     "day.chat.read",
     "day.chat.snapshot",
     "day.chat.close",
@@ -70,6 +72,11 @@ pub const METHODS: &[&str] = &[
     "day.feedback.send",
     "day.feedback.check",
     "day.feedback.step",
+    "day.screen.bind",
+    "day.screen.unbind",
+    "day.screen.take",
+    "day.screen.answer",
+    "day.screen.picture",
     "day.threads.read",
     "day.threads.history",
     "day.threads.write",
@@ -93,6 +100,7 @@ pub const METHODS: &[&str] = &[
     "day.artifacts.read",
     "day.artifacts.source",
     "day.today.read",
+    "day.today.refresh",
     "day.today.scope",
     "day.mission.read",
     "day.mission.pause",
@@ -207,6 +215,7 @@ pub struct Bridge {
     window: String,
     gate: Arc<Mutex<Gate>>,
     _notice: Arc<dyn Fn() + Send + Sync>,
+    _screen: Arc<dyn Fn() + Send + Sync>,
 }
 
 /// Native-only capability for this window's update feed. It uses the SAME
@@ -229,6 +238,7 @@ impl UpdateWindow {
         let (tx, rx) = async_channel::bounded(1);
         self.host.bridge(
             command,
+            "native.request",
             self.window.clone(),
             self.gate.clone(),
             Box::new(move |result| {
@@ -264,9 +274,16 @@ pub(crate) enum Command {
     ChatSelect(crate::host::new_chat::Select),
     ChatCreate(crate::host::new_chat::Create),
     ChatCheck(String),
-    /// Continue one stopped chat: the daemon sends its fixed words once.
+    /// Continue one stopped or failed chat: the daemon sends its fixed words once.
     ChatContinue(String),
     ChatRecover(crate::host::new_chat::Recovery),
+    /// Takes one failed chat off Needs you. Sends nothing to the chat.
+    ChatDismiss(String),
+    /// The user's own words to one chat waiting for a reply, sent once.
+    ChatReply {
+        session: String,
+        message: String,
+    },
     /// Opens a chat Pilot started and reads its newest rows, or older ones. Passive.
     ChatRead {
         session: String,
@@ -317,6 +334,19 @@ pub(crate) enum Command {
     FeedbackSend(crate::host::feedback::Intent),
     FeedbackCheck(String),
     FeedbackStep(crate::host::feedback::Step),
+    /// Binds this window to one screen agent chat. Replaces the window's earlier binding.
+    ScreenBind(String),
+    /// The screen agent bar closed for good: no chat may ask this window.
+    ScreenUnbind,
+    /// The snapshot, query and act requests TSX must answer now. Memory only.
+    ScreenTake,
+    /// TSX's answer to one request, sent once.
+    ScreenAnswer {
+        id: String,
+        answer: Value,
+    },
+    /// The last picture this window took for one chat. Memory only.
+    ScreenPicture(String),
     ThreadsRead(String),
     ThreadsHistory(crate::host::threads::HistoryRequest),
     ThreadsWrite(crate::host::threads::Intent),
@@ -337,6 +367,8 @@ pub(crate) enum Command {
     ResultReviewId,
     ResultReviewCheck(String),
     Today,
+    /// A fresh service read of Today and what it shows. Passive: sends no intent.
+    Refresh,
     Mission(String),
     Pause(crate::model::PauseIntent),
     Resume(crate::model::ResumeIntent),
@@ -550,7 +582,7 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             }
             C::ChatRecover(r)
         }
-        "day.chat.continue" => {
+        "day.chat.continue" | "day.chat.dismiss" => {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields, rename_all = "camelCase")]
             struct Chat {
@@ -558,7 +590,28 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             }
             let r: Chat = exact(args)?;
             mission(&r.session_id)?;
-            C::ChatContinue(r.session_id)
+            if name == "day.chat.dismiss" {
+                C::ChatDismiss(r.session_id)
+            } else {
+                C::ChatContinue(r.session_id)
+            }
+        }
+        "day.chat.reply" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Reply {
+                session_id: String,
+                message: String,
+            }
+            let r: Reply = exact(args)?;
+            mission(&r.session_id)?;
+            if !crate::host::new_chat::valid_reply(&r.message) {
+                return Err(Error::Invalid);
+            }
+            C::ChatReply {
+                session: r.session_id,
+                message: r.message,
+            }
         }
         "day.chat.snapshot" | "day.chat.close" => {
             #[derive(Deserialize)]
@@ -855,6 +908,47 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             r.validate()?;
             C::FeedbackStep(r)
         }
+        "day.screen.bind" | "day.screen.picture" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Chat {
+                session_id: String,
+            }
+            let r: Chat = exact(args)?;
+            mission(&r.session_id)?;
+            if name == "day.screen.bind" {
+                C::ScreenBind(r.session_id)
+            } else {
+                C::ScreenPicture(r.session_id)
+            }
+        }
+        "day.screen.unbind" | "day.screen.take" => {
+            if args != json!({}) {
+                return Err(Error::Invalid);
+            }
+            if name == "day.screen.take" {
+                C::ScreenTake
+            } else {
+                C::ScreenUnbind
+            }
+        }
+        "day.screen.answer" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Answer {
+                id: String,
+                answer: Value,
+            }
+            let r: Answer = exact(args)?;
+            mission(&r.id)?;
+            if !crate::host::screen::valid_answer(&r.answer) {
+                return Err(Error::Invalid);
+            }
+            C::ScreenAnswer {
+                id: r.id,
+                answer: r.answer,
+            }
+        }
         "day.threads.read" => {
             let r: crate::host::threads::ReadRequest = exact(args)?;
             mission(&r.mission_id)?;
@@ -1015,6 +1109,7 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             C::TodayScope(r)
         }
         "day.today.read"
+        | "day.today.refresh"
         | "day.window.read"
         | "day.plan.prepare"
         | "day.attention.read"
@@ -1029,6 +1124,7 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             }
             match name {
                 "day.today.read" => C::Today,
+                "day.today.refresh" => C::Refresh,
                 "day.window.read" => C::WindowRead,
                 "day.plan.prepare" => C::Prepare,
                 "day.plan.dismissNew" => C::DismissNew,
@@ -1367,6 +1463,8 @@ impl Command {
                     | Self::ModelsRecovery(_)
                     | Self::PreferencesHistory(_)
                     | Self::FeedbackRead(_)
+                    | Self::ScreenTake
+                    | Self::ScreenPicture(_)
                     | Self::ThreadsRead(_)
                     | Self::ThreadsHistory(_)
                     | Self::DeliveryRead(_)
@@ -1421,6 +1519,8 @@ impl Bridge {
                     let data = call.take_data();
                     let limit = if name == "day.feedback.image" {
                         crate::host::feedback::IMAGE_REQUEST
+                    } else if name == "day.screen.answer" {
+                        crate::host::screen::MAX_ANSWER + 4096
                     } else {
                         MAX_REQUEST
                     };
@@ -1453,6 +1553,7 @@ impl Bridge {
                         let wake_gate = state.clone();
                         host.bridge(
                             command,
+                            name,
                             selected.clone(),
                             state.clone(),
                             Box::new(move |result| {
@@ -1496,12 +1597,27 @@ impl Bridge {
             let _ = event_channel.send("day.changed", json!({"version":1,"window":event_window}));
         });
         root.host().notice(&notice);
+        // The screen agent's requests wait for this window. Same shape as day.changed, no data.
+        let screen_channel = channel.clone();
+        let screen_gate = gate.clone();
+        let screen_window = window.clone();
+        let screen: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            if screen_gate.lock().expect("bridge gate poisoned").closed {
+                return;
+            }
+            let _ = screen_channel.send(
+                "day.screen.requested",
+                json!({"version":1,"window":screen_window}),
+            );
+        });
+        root.host().screen_notice(&screen);
         Self {
             root,
             channel,
             window,
             gate,
             _notice: notice,
+            _screen: screen,
         }
     }
 
@@ -1514,6 +1630,15 @@ impl Bridge {
     /// Opaque identity for a native feed attached to this same root/window.
     pub fn window_identity(&self) -> &str {
         &self.window
+    }
+
+    /// The native owner's camera for this window's screen agent pictures.
+    #[cfg_attr(
+        not(all(target_os = "macos", feature = "macos-host")),
+        allow(dead_code)
+    )]
+    pub(crate) fn set_screen_picture(&self, taker: crate::host::screen::Taker) {
+        self.root.host().set_screen_picture(taker);
     }
 
     pub(crate) fn saved_capture(&self) -> Option<crate::host::window::SavedWindow> {
@@ -1774,6 +1899,7 @@ mod tests {
             Command::TodayScope(crate::host::today_scope::Request {
                 scope: "all".into(),
                 generation: 1,
+                selected_only: false,
             }),
         ] {
             let mut gate = Gate {
@@ -1877,18 +2003,38 @@ mod tests {
             flushing: true,
             ..Gate::default()
         };
-        let go = command("day.chat.continue", json!({"sessionId":"s-1"})).unwrap();
-        assert_eq!(go.admit(&flushing), Err(Error::Busy));
-        assert_eq!(go.admit(&Gate::default()), Ok(()));
+        for name in ["day.chat.continue", "day.chat.dismiss"] {
+            let go = command(name, json!({"sessionId":"s-1"})).unwrap();
+            assert_eq!(go.admit(&flushing), Err(Error::Busy));
+            assert_eq!(go.admit(&Gate::default()), Ok(()));
+            for args in [
+                json!({"sessionId":"../s"}),
+                json!({"sessionId":"s","message":"words"}),
+                json!({}),
+            ] {
+                assert!(command(name, args.clone()).is_err(), "{name} {args}");
+            }
+        }
+        assert!(matches!(
+            command("day.chat.dismiss", json!({"sessionId":"s-1"})),
+            Ok(Command::ChatDismiss(s)) if s == "s-1"
+        ));
+        let reply = command(
+            "day.chat.reply",
+            json!({"sessionId":"s-1","message":"Postgres"}),
+        )
+        .unwrap();
+        assert_eq!(reply.admit(&flushing), Err(Error::Busy));
+        assert!(
+            matches!(reply, Command::ChatReply { session, message } if session == "s-1" && message == "Postgres")
+        );
         for args in [
-            json!({"sessionId":"../s"}),
-            json!({"sessionId":"s","message":"words"}),
-            json!({}),
+            json!({"sessionId":"s-1"}),
+            json!({"sessionId":"s-1","message":"  "}),
+            json!({"sessionId":"../s","message":"words"}),
+            json!({"sessionId":"s-1","message":"words","extra":1}),
         ] {
-            assert!(
-                command("day.chat.continue", args.clone()).is_err(),
-                "{args}"
-            );
+            assert!(command("day.chat.reply", args.clone()).is_err(), "{args}");
         }
     }
 
@@ -1933,6 +2079,49 @@ mod tests {
                 "day.threads.check",
                 json!({"operationId":"op","resend":true}),
             ),
+        ] {
+            assert!(command(name, args.clone()).is_err(), "{name} {args}");
+        }
+    }
+    #[test]
+    fn screen_methods_are_exact_and_only_their_reads_pass_a_save() {
+        let gate = Gate {
+            flushing: true,
+            ..Gate::default()
+        };
+        let answer = json!({"ok":false,"error":"Needs a person: Send."});
+        for (name, args, passive) in [
+            ("day.screen.bind", json!({"sessionId":"s-1"}), false),
+            ("day.screen.unbind", json!({}), false),
+            ("day.screen.take", json!({}), true),
+            (
+                "day.screen.answer",
+                json!({"id":"r-1","answer":answer}),
+                false,
+            ),
+            ("day.screen.picture", json!({"sessionId":"s-1"}), true),
+        ] {
+            assert!(METHODS.contains(&name), "{name}");
+            let parsed = command(name, args).unwrap();
+            let admitted = parsed.admit(&gate);
+            assert_eq!(admitted.is_ok(), passive, "{name}");
+        }
+        for (name, args) in [
+            ("day.screen.bind", json!({})),
+            ("day.screen.bind", json!({"sessionId":"../s"})),
+            ("day.screen.bind", json!({"sessionId":"s","windowId":"w"})),
+            ("day.screen.unbind", json!({"sessionId":"s"})),
+            ("day.screen.take", json!({"windowId":"w"})),
+            ("day.screen.answer", json!({"id":"r","answer":{"ok":true}})),
+            (
+                "day.screen.answer",
+                json!({"id":"r","answer":{"ok":true,"value":1},"x":1}),
+            ),
+            (
+                "day.screen.answer",
+                json!({"id":"r/1","answer":{"ok":true,"value":1}}),
+            ),
+            ("day.screen.picture", json!({"sessionId":""})),
         ] {
             assert!(command(name, args.clone()).is_err(), "{name} {args}");
         }

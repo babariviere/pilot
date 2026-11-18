@@ -4,7 +4,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { type ConversationId, type EntryId, MemoryStorage } from "@earendil-works/pi-durable";
 import type { EntryRecord } from "@pilot/protocol";
 import type { MissionThread } from "../../protocol/src/mission-thread.ts";
-import { threadConversationEntries } from "./mission-thread-conversation.ts";
+import { threadConversationEntries, threadQuestionText } from "./mission-thread-conversation.ts";
 
 test("coordinator output needs explicit links, not adjacency or matching text", async () => {
 	const storage = new MemoryStorage();
@@ -115,4 +115,45 @@ test("coordinator output needs explicit links, not adjacency or matching text", 
 		{ requestId: "human", entryId: Number(user.id), answerId: Number(reply.id), status: "done" },
 	]);
 	assert.equal(human.length, 2, "exact human causal reply joins the dedicated topic");
+});
+
+test("a thread chat's open question shows in its conversation, and only there", async () => {
+	const storage = new MemoryStorage();
+	const question: EntryRecord = {
+		id: await storage.mintId<EntryId>(),
+		conversationId: await storage.mintId<ConversationId>(),
+		kind: "pilot.question",
+		model: [],
+		data: {
+			question: "How should Today show it?",
+			context: "Pick one.",
+			options: [
+				{ label: "Needs you card", detail: "Open the interview.", suggested: true },
+				{ label: "Mission badge only" },
+			],
+		},
+	};
+	const topic: MissionThread = {
+		version: 1,
+		id: "t",
+		missionId: "m",
+		projectId: "p",
+		ownerSessionId: "s",
+		title: "T",
+		revision: 1,
+		disposition: "open",
+		createdBy: { kind: "user", operationId: "create", host: { hostId: "local", daemonId: "d", lineageId: "l" } },
+		inputs: [],
+		references: [],
+	};
+	const [row, ...rest] = threadConversationEntries(topic, "chat", [question], true, new Set());
+	assert.equal(rest.length, 0);
+	assert.equal(row!.role, "chat");
+	assert.equal(
+		row!.text,
+		"How should Today show it?\n\nPick one.\n\n- Needs you card (suggested): Open the interview.\n- Mission badge only\n\nReply in this thread with your choice or your own answer.",
+	);
+	// The coordinator's own questions are not this thread's.
+	assert.equal(threadConversationEntries(topic, "s", [question], false, new Set()).length, 0);
+	assert.equal(threadQuestionText({ question: " " }), "");
 });

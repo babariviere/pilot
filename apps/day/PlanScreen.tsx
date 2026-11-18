@@ -2,7 +2,20 @@
 // map of what is still unknown, the proposed plan in full, and each step
 // from answers to work. Submitting, approving, publishing and starting work
 // are separate steps. Only the exact-plan confirmation starts one task.
-import { cleanup, computed, type JSX, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
+import {
+	cleanup,
+	computed,
+	effect,
+	type JSX,
+	keymap,
+	lifecycle,
+	Scroll,
+	signal,
+	Text,
+	untracked,
+	View,
+	type ViewRef,
+} from "nsh";
 import type {
 	Exploration,
 	FogArea,
@@ -28,7 +41,7 @@ import type { Plans } from "./planning";
 import { fogOpen, mapOpen, put, roundOpen, settledOpen } from "./planView";
 import { RevisitSection } from "./RevisitDoc";
 import { RoundPrototype } from "./RoundPrototype";
-import { Unstick } from "./Unstick";
+import { PlannerWaits, plannerWaits, Unstick } from "./Unstick";
 import {
 	Action,
 	Disclosure,
@@ -664,7 +677,10 @@ function Body(props: {
 						/>
 					</View>
 				</If>
-				<ContinuePlanning plans={props.plans} page={p()} />
+				<PlannerWaits plans={props.plans} page={p()} />
+				<If when={!plannerWaits(p())}>
+					<ContinuePlanning plans={props.plans} page={p()} />
+				</If>
 				<Unstick plans={props.plans} page={p()} />
 			</View>
 			<If when={asking() && props.artifacts}>
@@ -758,19 +774,29 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 		const p = page();
 		return chartOpen() && p?.available && p.route === "wayfinder" ? p : null;
 	};
+	// Pilot reads the page again on its own: after changes, with backoff after
+	// a failure, and when the window comes back. Try now shows only with the
+	// old-data warning, or while nothing could be read.
+	let was = untracked(lifecycle);
+	effect(() => {
+		const now = lifecycle();
+		if (now === "active" && was !== "active") untracked(() => props.plans.feed.focusRead?.());
+		was = now;
+	});
 	const readAgain = () => (
-		<If when={reading() === "failed" || (page() && (!page()?.fresh || page()?.stage === "planning"))}>
+		<If when={page() ? !page()?.fresh : reading() === "failed"}>
 			<Action
-				label={reading() === "reading" ? "Reading…" : "Read again"}
+				label={reading() === "reading" ? "Reading…" : "Try now"}
 				icon="refresh"
 				accessibilityLabel="Read this mission's planning again. This sends nothing."
 				disabled={reading() === "reading"}
-				onPress={() => void read()}
+				onPress={() => void (page() && props.plans.feed.readNow ? props.plans.feed.readNow() : read())}
 			/>
 		</If>
 	);
 	return (
-		<View class="flex-1">
+		// The test ID says whether the page's own read is still on its way. It shows nothing.
+		<View testID={reading() === "reading" ? "plan-reading" : "plan-read"} class="flex-1">
 			<Scroll
 				class="flex-1 bg-background"
 				accessibilityElementsHidden={fullChart() !== null}

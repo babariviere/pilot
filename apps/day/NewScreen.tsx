@@ -19,6 +19,7 @@ import type { ChatMode } from "./chatFeed";
 import { openChat } from "./chatView";
 import type { Day } from "./day";
 import { fundingAmount } from "./FundingSettings";
+import { keepRead } from "./freshness";
 import { keepField, keepScroll } from "./kept";
 import { newFundingDraft } from "./modelSettingsDraft";
 import { OpenChatAction } from "./OpenChatAction";
@@ -72,6 +73,12 @@ function fromRequest(r: { title: string; source: string } | null): string {
 function ProjectRow(props: { plans: Plans }) {
 	const chats = props.plans.chats;
 	const view = () => chats.view();
+	// Pilot lists the projects again on its own while it could not, and when the window comes back.
+	const projectReads = keepRead(
+		() => prepareChat(chats),
+		() => view().availability === "unavailable",
+		() => view().availability === "live",
+	);
 	const chosen = () => view().projects.find((p) => p.projectId === chatPick()?.projectId) ?? null;
 	const items = () => view().projects.map((p) => ({ value: p.projectId, title: p.name }));
 	const placeholder = () => (view().availability === "reading" ? "Reading projects…" : "Choose a project");
@@ -111,7 +118,9 @@ function ProjectRow(props: { plans: Plans }) {
 				<View testID="projects-off" class="flex-row items-center gap-2.5">
 					<Mark kind="unknown" />
 					<Text class="flex-1 text-sm text-muted-foreground">{`Pilot cannot list your projects here. ${view().reason}`}</Text>
-					<Action label="Read again" disabled={newBusy()} onPress={() => void prepareChat(chats)} />
+					<If when={projectReads.warn()}>
+						<Action label="Try now" disabled={newBusy()} onPress={() => void projectReads.now()} />
+					</If>
 				</View>
 			</If>
 			<If when={chatNote()}>
@@ -253,6 +262,14 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 	const chats = props.plans.chats;
 	const chatView = () => chats.view();
 	const off = () => !planning().canCreate;
+	// The planning setup, read again on its own while it is missing (backoff up to a minute) and when the window comes back.
+	const setupReads = keepRead(
+		async () => {
+			await props.plans.feed.prepareNew?.();
+		},
+		() => off() && !(props.plans.feed.canCheckNew?.() ?? false) && !!props.plans.feed.prepareNew,
+		() => !off(),
+	);
 	const chatsOff = () => chatView().availability === "unavailable";
 	const empty = () => goalDraft().trim() === "";
 	const canCheck = () => {
@@ -381,8 +398,8 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 						<Action label="Check status" disabled={newBusy()} onPress={() => void checkCreation(props.plans)} />
 					</View>
 				</If>
-				<If when={off() && !canCheck() && props.plans.feed.prepareNew}>
-					<Action label="Read again" disabled={newBusy()} onPress={() => void props.plans.feed.prepareNew?.()} />
+				<If when={setupReads.warn() && off() && !canCheck() && props.plans.feed.prepareNew}>
+					<Action label="Try now" disabled={newBusy()} onPress={() => void setupReads.now()} />
 				</If>
 				<Unconfirmed plans={props.plans} />
 				<If when={!confirmingStart()}>

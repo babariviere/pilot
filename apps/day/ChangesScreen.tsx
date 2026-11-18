@@ -28,6 +28,7 @@ import {
 	landingShort,
 	requestLine,
 } from "./changeWords";
+import { keepRead } from "./freshness";
 import { keepScroll } from "./kept";
 import {
 	Action,
@@ -173,6 +174,12 @@ function ChangeList(props: { changes: Changes }) {
 	const total = () => list().waiting.length + list().later.length + list().earlier.length;
 	keymap.bind("escape", backFromChanges);
 	const more = () => listMessage.set(props.changes.feed.more().message);
+	// Pilot reads the list again on its own while it cannot show it, and when the window comes back.
+	const reads = keepRead(
+		async () => readAgain(props.changes),
+		() => list().availability !== "available",
+		() => list().availability === "available",
+	);
 	const scroll = keepScroll("changes");
 	return (
 		<Scroll
@@ -185,16 +192,6 @@ function ChangeList(props: { changes: Changes }) {
 				<View class="gap-2">
 					<View class="flex-row items-start gap-4">
 						<PageTitle title="Changes" class="flex-1" />
-						<If when={list().availability === "available"}>
-							<View class="pt-1">
-								<Action
-									label="Read again"
-									icon="refresh"
-									accessibilityLabel="Read kept changes again. This sends nothing."
-									onPress={() => readAgain(props.changes)}
-								/>
-							</View>
-						</If>
 					</View>
 					<Text class="text-base leading-relaxed text-muted-foreground">
 						Finished work Pilot kept a snapshot of. Review it now or later, or reopen it to see what was said and
@@ -218,13 +215,15 @@ function ChangeList(props: { changes: Changes }) {
 								</Text>
 							</If>
 							<Text class="text-xs text-faint">This is not the same as having none.</Text>
-							<View class="flex-row pt-1">
-								<Action
-									label="Read again"
-									accessibilityLabel="Read kept changes again. This sends nothing."
-									onPress={() => readAgain(props.changes)}
-								/>
-							</View>
+							<If when={reads.warn()}>
+								<View class="flex-row pt-1">
+									<Action
+										label="Try now"
+										accessibilityLabel="Read kept changes again. This sends nothing."
+										onPress={() => void reads.now()}
+									/>
+								</View>
+							</If>
 						</Notice>
 					}
 				>
@@ -522,6 +521,12 @@ function Body(props: { changes: Changes; page: ChangePage }) {
 function NotShown(props: { changes: Changes; snapshotId: string }) {
 	const message = () => changeMessages()[props.snapshotId] ?? "";
 	const off = () => props.changes.list().availability !== "available";
+	// Pilot reads this snapshot again on its own while it cannot show it.
+	const reads = keepRead(
+		async () => openChange(props.changes, props.snapshotId),
+		() => !!message() || off(),
+		() => false,
+	);
 	return (
 		<View testID="change-not-shown" class="gap-2">
 			<Text class="text-base text-muted-foreground">
@@ -530,12 +535,12 @@ function NotShown(props: { changes: Changes; snapshotId: string }) {
 			<If when={off()}>
 				<Text class="text-sm text-muted-foreground">{props.changes.list().reason}</Text>
 			</If>
-			<If when={message() || off()}>
+			<If when={reads.warn()}>
 				<View class="flex-row">
 					<Action
-						label="Read again"
+						label="Try now"
 						accessibilityLabel="Read this kept snapshot again. This sends nothing."
-						onPress={() => openChange(props.changes, props.snapshotId)}
+						onPress={() => void reads.now()}
 					/>
 				</View>
 			</If>

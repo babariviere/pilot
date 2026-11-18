@@ -819,6 +819,8 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
             },
             checks: arr(&read["unstick"]["checks"]).iter().map(s).collect(),
             repair: read["repair"].is_object().then(|| repair(&read["repair"])),
+            reply: read["unstick"]["reply"] == true,
+            planner_says: s(&read["unstick"]["plannerSays"]),
         }),
     }
 }
@@ -836,6 +838,23 @@ pub fn continue_request(read: &Value, intent: &ContinueIntent) -> Result<(String
         return Err((
             OutcomeStatus::Rejected,
             "Pilot's planning agent is working, held or done planning. Nothing was sent.",
+        ));
+    }
+    let note = intent.note.trim();
+    if !note.is_empty() {
+        // A reply to the planner's last message goes as a note, like the repair agent's.
+        if !intent.feedback.trim().is_empty()
+            || read["continuePlanning"]["feedbackOnly"] == true
+            || note.chars().count() > 2000
+        {
+            return Err((
+                OutcomeStatus::Rejected,
+                "A reply needs 1 to 2000 characters, and no open questions waiting for answers. Nothing was sent.",
+            ));
+        }
+        return Ok((
+            s(&read["continuePlanning"]["contextDigest"]),
+            json!({"purpose":"plan-continue","note":intent.note}),
         ));
     }
     if intent.feedback.trim().is_empty() && read["continuePlanning"]["feedbackOnly"] == true {
@@ -969,6 +988,7 @@ pub fn repair_apply_request(
             &ContinueIntent {
                 mission_id: mission.into(),
                 feedback: String::new(),
+                note: String::new(),
             },
         ),
         Some("planner-note") => {
@@ -1025,6 +1045,113 @@ pub fn ask_request(read: &Value, intent: &QuestionAskIntent) -> Result<(String, 
         digest,
         json!({"purpose":"plan-question-ask","questionId":intent.question_id,"text":text}),
     ))
+}
+
+/// What a planning write refused as stale becomes against a newer read.
+#[derive(Debug, PartialEq)]
+pub enum Rebind {
+    /// Not a consent write: send it again as it is, if only the read fence moved.
+    Same,
+    /// What the user consented to is unchanged: send this, bound to the newer read.
+    To(String, Value),
+    /// What the user consented to changed: refuse, and say what changed.
+    Changed(&'static str),
+}
+
+const PLAN_CHANGED: &str =
+    "The plan changed since you chose to start it. Nothing was started. Read it again.";
+const START_GONE: &str = "Start is no longer available for this plan. Nothing was started.";
+const REVISIT_GONE: &str = "Revisit is no longer available for this mission. Nothing was sent.";
+const MISSION_CHANGED: &str = "This mission's plan or questions changed since you chose Revisit. Nothing was sent. Read it again.";
+const PROPOSAL_CHANGED: &str =
+    "This revision changed since you reviewed it. Nothing was sent. Read it again.";
+const AFFECTED_CHANGED: &str = "The work this revision affects changed since you reviewed it. Nothing was sent. Read it again.";
+const NOT_SHOWN: &str =
+    "Pilot cannot tell whether this changed since you read it. Nothing was sent. Read it again.";
+const PAUSE_CHANGED: &str = "The paused work changed since you read it. Nothing was resumed.";
+
+/// `request` against the newer planning read `fresh`, for a write refused only because the read
+/// around it moved. Start, Revisit and plan revisions are consent to one context, so they go
+/// again only when that is unchanged since `shown` (the read the user acted on): Start the same
+/// plan revision, digest and task; Revisit the same published plan and question set; a revision
+/// the same proposal id and digest and the same affected work. Then only the surrounding digest
+/// is rebound. Other writes keep their request.
+pub fn rebind(request: &Value, shown: Option<&Value>, fresh: &Value) -> Rebind {
+    let purpose = request["purpose"].as_str().unwrap_or("");
+    let consent = matches!(
+        purpose,
+        "plan-start"
+            | "plan-revisit"
+            | "revision-preview"
+            | "revision-confirm"
+            | "revision-pause"
+            | "revision-resume"
+    );
+    if !consent {
+        return Rebind::Same;
+    }
+    let Some(shown) = shown else {
+        return Rebind::Changed(NOT_SHOWN);
+    };
+    let r = &fresh["revision"];
+    let affected = || r["affectedSessions"] == shown["revision"]["affectedSessions"];
+    let rebound = || {
+        let mut next = request.clone();
+        next["source"] = r["source"].clone();
+        Rebind::To(s(&r["source"]), next)
+    };
+    match purpose {
+        "plan-start" => {
+            let start = &fresh["start"];
+            if start["available"] != true || fresh["capabilities"]["admission"] != 1 {
+                Rebind::Changed(START_GONE)
+            } else if start["revision"] != request["expectedRevision"]
+                || start["digest"] != request["planDigest"]
+                || start["taskId"] != request["taskId"]
+            {
+                Rebind::Changed(PLAN_CHANGED)
+            } else {
+                Rebind::To(s(&start["contextDigest"]), request.clone())
+            }
+        }
+        "plan-revisit" => {
+            let revisit = &fresh["revisit"];
+            if revisit["available"] != true {
+                Rebind::Changed(REVISIT_GONE)
+            } else if revisit["source"] != request["source"]
+                || fresh["view"]["interview"]["fence"] != shown["view"]["interview"]["fence"]
+            {
+                Rebind::Changed(MISSION_CHANGED)
+            } else {
+                Rebind::To(s(&revisit["contextDigest"]), request.clone())
+            }
+        }
+        "revision-resume" => {
+            if !arr(&r["workPauses"])
+                .iter()
+                .any(|p| p["operationId"] == request["pauseOperationId"] && p["state"] == "paused")
+            {
+                Rebind::Changed(PAUSE_CHANGED)
+            } else if !affected() {
+                Rebind::Changed(AFFECTED_CHANGED)
+            } else {
+                rebound()
+            }
+        }
+        _ => {
+            let p = &r["pending"]["proposal"];
+            if p["id"] != request["proposalId"]
+                || p["digest"] != request["digest"]
+                || (purpose == "revision-confirm" && r["pending"]["current"] != true)
+            {
+                Rebind::Changed(PROPOSAL_CHANGED)
+            } else if !affected() {
+                Rebind::Changed(AFFECTED_CHANGED)
+            } else {
+                rebound()
+            }
+        }
+    }
 }
 
 /// Only a press on the exact displayed published plan may prepare Start.
@@ -1104,19 +1231,27 @@ pub fn inventory_rows(read: &Value) -> Result<Vec<PlanRow>, crate::host::Error> 
             if item["needsYou"].as_bool() != Some(needs_you) {
                 return Err(Error::Invalid);
             }
-            let line = match stage {
+            // Stuck planning needs the user whatever its stage. Its line says why.
+            let stuck = item["stuck"].is_object();
+            let stage_line = match stage {
                 PlanStage::Questions => "Interview answers needed",
                 PlanStage::Review => "The plan is ready for your review",
                 PlanStage::Submitted => "Submitted. Pilot cannot continue from it here yet",
                 PlanStage::Published => "Published as tasks. Work admission is separate",
                 _ => "Pilot is working on the plan",
             };
+            let line = match item["stuck"]["line"].as_str() {
+                Some(l) if stuck && !l.trim().is_empty() => l.chars().take(300).collect(),
+                _ => stage_line.to_owned(),
+            };
             Ok(PlanRow {
                 mission_id: id.into(),
                 title: title.into(),
                 stage,
-                line: line.into(),
-                needs_you,
+                line,
+                needs_you: needs_you || stuck,
+                planner_says: s(&item["stuck"]["plannerSays"]),
+                reply: item["stuck"]["reply"] == true,
                 identity: Some(PlanIdentity {
                     interview_id: format!(
                         "{}-{}",
@@ -1159,6 +1294,8 @@ pub fn row(page: &PlanPage, title: &str) -> PlanRow {
             page.stage,
             PlanStage::Questions | PlanStage::Review | PlanStage::Unknown
         ),
+        planner_says: String::new(),
+        reply: false,
         identity: None,
     }
 }
@@ -1297,4 +1434,90 @@ pub fn submit_request(read: &Value, intent: &SubmitIntent) -> Result<(String, Va
         "expected": {"fence": iv["fence"], "revision": iv["revision"]},
     });
     Ok((s(&read["contextDigest"]), request))
+}
+
+#[cfg(test)]
+mod rebind_tests {
+    use super::*;
+
+    fn read(context: &str, plan: &str, set: u64, affected: Value) -> Value {
+        json!({
+            "start": {"available": true, "revision": 4, "digest": plan, "taskId": "t", "contextDigest": context},
+            "capabilities": {"admission": 1},
+            "revisit": {"available": true, "source": plan, "contextDigest": context},
+            "view": {"interview": {"fence": {"questionSetRevision": set}}},
+            "revision": {"source": context, "pending": {"current": true, "proposal": {"id": "p", "digest": plan}},
+                "affectedSessions": affected, "workPauses": [{"operationId": "w", "state": "paused"}]},
+        })
+    }
+
+    #[test]
+    fn consent_writes_go_again_only_when_what_the_user_agreed_to_is_unchanged() {
+        let shown = read("c1", "d1", 1, json!(["s"]));
+        // A mission notice moved only the context around the same plan, questions and work.
+        let moved = read("c2", "d1", 1, json!(["s"]));
+        let start =
+            json!({"purpose":"plan-start","expectedRevision":4,"planDigest":"d1","taskId":"t"});
+        assert_eq!(
+            rebind(&start, Some(&shown), &moved),
+            Rebind::To("c2".into(), start.clone())
+        );
+        let revisit = json!({"purpose":"plan-revisit","source":"d1"});
+        assert_eq!(
+            rebind(&revisit, Some(&shown), &moved),
+            Rebind::To("c2".into(), revisit.clone())
+        );
+        for purpose in ["revision-preview", "revision-confirm", "revision-pause"] {
+            let r = json!({"purpose":purpose,"proposalId":"p","digest":"d1","source":"c1"});
+            let Rebind::To(digest, next) = rebind(&r, Some(&shown), &moved) else {
+                panic!("{purpose} was not rebound");
+            };
+            assert_eq!((digest.as_str(), &next["source"]), ("c2", &json!("c2")));
+        }
+        let resume = json!({"purpose":"revision-resume","pauseOperationId":"w","source":"c1"});
+        assert!(matches!(
+            rebind(&resume, Some(&shown), &moved),
+            Rebind::To(..)
+        ));
+        // An ordinary save keeps its request; only the fence decides.
+        let save = json!({"purpose":"interview-save"});
+        assert_eq!(rebind(&save, Some(&shown), &moved), Rebind::Same);
+    }
+
+    #[test]
+    fn changed_consent_is_refused_and_says_what_changed() {
+        let shown = read("c1", "d1", 1, json!(["s"]));
+        let plan = read("c2", "d2", 1, json!(["s"]));
+        let start =
+            json!({"purpose":"plan-start","expectedRevision":4,"planDigest":"d1","taskId":"t"});
+        assert_eq!(
+            rebind(&start, Some(&shown), &plan),
+            Rebind::Changed(PLAN_CHANGED)
+        );
+        let questions = read("c2", "d1", 2, json!(["s"]));
+        let revisit = json!({"purpose":"plan-revisit","source":"d1"});
+        assert_eq!(
+            rebind(&revisit, Some(&shown), &questions),
+            Rebind::Changed(MISSION_CHANGED)
+        );
+        let confirm =
+            json!({"purpose":"revision-confirm","proposalId":"p","digest":"d1","source":"c1"});
+        assert_eq!(
+            rebind(&confirm, Some(&shown), &plan),
+            Rebind::Changed(PROPOSAL_CHANGED)
+        );
+        let work = read("c2", "d1", 1, json!(["s", "other"]));
+        assert_eq!(
+            rebind(&confirm, Some(&shown), &work),
+            Rebind::Changed(AFFECTED_CHANGED)
+        );
+        let mut resumed = read("c2", "d1", 1, json!(["s"]));
+        resumed["revision"]["workPauses"][0]["state"] = json!("resumed");
+        let resume = json!({"purpose":"revision-resume","pauseOperationId":"w","source":"c1"});
+        assert_eq!(
+            rebind(&resume, Some(&shown), &resumed),
+            Rebind::Changed(PAUSE_CHANGED)
+        );
+        assert_eq!(rebind(&start, None, &plan), Rebind::Changed(NOT_SHOWN));
+    }
 }

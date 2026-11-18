@@ -192,13 +192,13 @@ fn a_saved_view_refused_while_the_service_starts_is_read_again_without_a_loop() 
 }
 
 #[test]
-fn the_warning_shows_only_once_pilot_stops_trying_by_itself() {
+fn the_warning_shows_after_three_failed_retries_and_pilot_keeps_trying() {
     let entry = recovery_entry();
     let root = FakeRoot::new();
     root.refuse("day.today.read", "offline");
     let mut app = open_on(&entry, root.channel.clone());
-    // Five delayed reads (1 + 2 + 4 + 8 + 16 s) look like opening; then the
-    // warning and Read again show, and nothing reads by itself any more.
+    // Three delayed reads (2 + 4 + 8 s) look like opening; then the warning
+    // and Try now show. Pilot keeps trying, each wait longer (16 s next).
     until(&mut app, "first delayed read", || {
         root.count("day.today.read") == 2
     });
@@ -206,9 +206,13 @@ fn the_warning_shows_only_once_pilot_stops_trying_by_itself() {
     assert!(!app.shows("Pilot could not reach its service. Nothing is shown rather than a guess."));
     wait(&mut app, "id:connection-read");
     assert!(app.shows("Pilot could not reach its service. Nothing is shown rather than a guess."));
-    assert_eq!(root.count("day.today.read"), 6);
+    assert_eq!(root.count("day.today.read"), 4);
     app.wait(Duration::from_millis(1500)).unwrap();
-    assert_eq!(root.count("day.today.read"), 6, "no more automatic reads");
+    assert_eq!(root.count("day.today.read"), 4, "the next try waits longer");
+    assert!(
+        has(&app, "id:connection-read"),
+        "a background try keeps the warning"
+    );
     no_effects(&root);
     drop(app);
     std::fs::remove_dir_all(entry.parent().unwrap()).unwrap();

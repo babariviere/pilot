@@ -23,6 +23,7 @@ import {
 } from "./nav";
 import { stageMark, stageWord } from "./PlanScreen";
 import { offered, openRitual, openStandup, ritualEntry } from "./ritualView";
+import { screenAgentAvailable, screenAgentOpen } from "./screenAgentOpen";
 import { updateLabel } from "./UpdateScreen";
 import { KeyCap, KeyHint, Mark, type MarkKind } from "./ui";
 import { showUpdate, updateEntry, updateOpen } from "./updateView";
@@ -85,6 +86,19 @@ function entries(places: Places): Entry[] {
 	place("artifacts", "Artifacts", !!day.artifacts, goArtifacts, { here: at === "artifacts" });
 	place("feedback", "Feedback", !!day.feedback, goFeedback, { keywords: ["bug", "idea"], here: at === "feedback" });
 	place("schedules", "Schedules", !!day.schedules, goSchedules, { keywords: ["automation", "check-ins", "repair"] });
+	// Opens the screen agent's bar over this screen. It sends nothing until the person asks.
+	if (screenAgentAvailable()) {
+		list.push({
+			item: {
+				id: "screen-agent",
+				label: "Ask about this window",
+				group: "Go to",
+				keywords: ["screen agent", "debug", "bug"],
+				shortcut: "mod+j",
+			},
+			run: () => screenAgentOpen.set(true),
+		});
+	}
 	place("settings", "Settings", !!day.preferences, goSettings, {
 		keywords: ["preferences"],
 		shortcut: "mod+,",

@@ -466,6 +466,8 @@ test("a planning page is older only when a later list names a newer interview", 
 		stage: needsYou ? "questions" : "planning",
 		line: "",
 		needsYou,
+		plannerSays: "",
+		reply: false,
 		identity: { interviewId, interviewRevision, planRevision: null },
 	});
 	// The same interview: only a newer revision ages the page; one that lags does not.

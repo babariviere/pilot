@@ -10,6 +10,7 @@ import {
 	privacyDraft,
 	safeCollector,
 } from "./diagnosisDraft";
+import { keepRead } from "./freshness";
 import { keepField } from "./kept";
 import { OpenChatAction } from "./OpenChatAction";
 import { utf8Bytes } from "./preferencesFeed";
@@ -68,6 +69,12 @@ export function DiagnosisStatus(props: { controls: DiagnosisControls }) {
 export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 	const c = props.controls;
 	void c.read();
+	// Pilot reads again on its own after a failed read, and when the window comes back.
+	const reads = keepRead(
+		() => c.read(),
+		() => c.readFailed?.() ?? false,
+		() => !!c.snapshot(),
+	);
 	const questionField = keepField("diagnosis-question", () => "settings", diagnosisQuestion);
 	const details = signal(false),
 		clearing = signal(false),
@@ -114,12 +121,14 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 					This Mac and its connected service. Local collection never enables uploads.
 				</Text>
 			</View>
-			<Action
-				label={c.busy() ? "Reading…" : "Read again"}
-				testID="diagnosis-read"
-				disabled={c.busy()}
-				onPress={() => void c.read()}
-			/>
+			<If when={reads.warn()}>
+				<Action
+					label={c.busy() ? "Reading…" : "Try now"}
+					testID="diagnosis-read"
+					disabled={c.busy()}
+					onPress={() => void reads.now()}
+				/>
+			</If>
 			<If when={s()}>
 				<View>
 					<PrivacyRow
@@ -371,6 +380,11 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 export function DiagnosisReply(props: { controls: DiagnosisControls; sessionId: string }) {
 	const c = props.controls;
 	void c.read();
+	const reads = keepRead(
+		() => c.read(),
+		() => c.readFailed?.() ?? false,
+		() => !!c.snapshot(),
+	);
 	const text = () => diagnosisReplies()[props.sessionId] ?? "";
 	const replyField = keepField(`diagnosis-reply-${props.sessionId}`, () => "chat", text);
 	const send = async () => {
@@ -395,7 +409,9 @@ export function DiagnosisReply(props: { controls: DiagnosisControls; sessionId: 
 				rows={4}
 			/>
 			<View class="flex-row gap-2">
-				<Action label="Read controls again" disabled={c.busy()} onPress={() => void c.read()} />
+				<If when={reads.warn()}>
+					<Action label="Try now" disabled={c.busy()} onPress={() => void reads.now()} />
+				</If>
 				<Action
 					label="Send follow-up"
 					testID="diagnosis-send"

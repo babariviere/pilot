@@ -37,6 +37,14 @@ pub(crate) struct ChatState {
     pub state: &'static str,
     /// The chat's own reason for its state, such as why it failed.
     pub state_reason: String,
+    /// While it waits for a coding slot: its place in line and what holds
+    /// the slots, as the service says. Null otherwise.
+    pub queue: Value,
+    /// The service says it can take one Continue: stopped (also by a mission
+    /// User Stop hold), or failed with a safe retry.
+    pub can_continue: bool,
+    /// Its question no longer needs the user: the plan settled it (an explorer chat).
+    pub question_settled: bool,
     pub specialist: bool,
     pub archived: bool,
     pub workspace_kept: bool,
@@ -65,7 +73,8 @@ impl ChatState {
             "reading":self.reading,"reason":self.reason});
         let chat = crate::plan_activity::chat(&rows);
         json!({"sessionId":self.session,"title":self.title,"state":self.state,
-            "stateReason":self.state_reason,"specialist":self.specialist,"archived":self.archived,"workspaceKept":self.workspace_kept,"restartOnly":self.restart_only,"rows":chat.rows,"more":chat.more,
+            "stateReason":self.state_reason,"queue":self.queue,"canContinue":self.can_continue,
+            "questionSettled":self.question_settled,"specialist":self.specialist,"archived":self.archived,"workspaceKept":self.workspace_kept,"restartOnly":self.restart_only,"rows":chat.rows,"more":chat.more,
             "reading":chat.reading,"reason":chat.reason,"sourcePath":self.source_path,"sourceLabel":self.source_label,"pendingRecovery":self.pending_recovery,"recoveryBlocked":self.recovery_blocked})
     }
 }
@@ -336,9 +345,35 @@ pub(crate) fn page(history: &Value, cwd: &str, newest: bool) -> Result<Value, Er
         "more":more && oldest.is_some_and(|o| o > 1),"nextBefore":oldest}))
 }
 
+/// The service's queue view while the chat waits for a coding slot, or
+/// null. A view that does not read is left out, never guessed.
+pub(crate) fn queue(session: &Value) -> Value {
+    if session["codingQueueReason"]
+        .as_str()
+        .is_none_or(str::is_empty)
+    {
+        return Value::Null;
+    }
+    serde_json::from_value::<crate::contract::CodingQueue>(session["codingQueue"].clone())
+        .ok()
+        .filter(crate::contract::CodingQueue::valid)
+        .map(|mut q| {
+            for h in &mut q.holders {
+                *h = one_line(&json!(h), LINE_CHARS).unwrap_or_default();
+            }
+            json!(q)
+        })
+        .unwrap_or(Value::Null)
+}
+
 /// The chat's state, and its own reason for it, from its session record.
 pub(crate) fn status(session: &Value) -> (&'static str, String) {
     let reason = |key: &str| one_line(&session[key], LINE_CHARS).unwrap_or_default();
+    let queued = reason("codingQueueReason");
+    // Saved input waiting for a coding slot reports `working`, but nothing runs yet.
+    if !queued.is_empty() && session["state"] != "working" {
+        return ("idle", queued);
+    }
     let working = match session["working"].as_bool() {
         Some(w) => w,
         None => matches!(session["state"].as_str(), Some("working" | "starting")),
@@ -357,7 +392,6 @@ pub(crate) fn status(session: &Value) -> (&'static str, String) {
             },
         );
     }
-    let queued = reason("codingQueueReason");
     if !queued.is_empty() {
         return ("idle", queued);
     }
@@ -365,6 +399,13 @@ pub(crate) fn status(session: &Value) -> (&'static str, String) {
         Some("failed") => ("failed", reason("outcomeReason")),
         Some("question") => ("question", String::new()),
         Some("stopped") => ("stopped", reason("outcomeReason")),
+        // A mission chat the user stopped keeps no outcome, only this hold.
+        _ if session["workHolds"]
+            .as_array()
+            .is_some_and(|h| h.iter().any(|h| h == "User Stop hold")) =>
+        {
+            ("stopped", "You stopped it.".into())
+        }
         Some("done") => ("done", String::new()),
         _ => ("idle", String::new()),
     }
@@ -463,6 +504,9 @@ async fn read_chat(
                     }
                     .into();
                     (state.state, state.state_reason) = status(&read.session);
+                    state.queue = queue(&read.session);
+                    state.can_continue = read.session["canContinue"] == true;
+                    state.question_settled = read.session["questionSettled"] == true;
                     state.reason.clear();
                 }
                 Err(Error::Identity | Error::Unavailable) => {
@@ -474,7 +518,7 @@ async fn read_chat(
                     state.reason = if state.pages.rows.is_empty() {
                         "Pilot could not read this chat. Nothing was sent.".into()
                     } else {
-                        "Pilot could not read the newest part of this chat. What shows is from an earlier read.".into()
+                        "Pilot could not read the newest part of this chat.".into()
                     };
                 }
             }
@@ -724,8 +768,28 @@ mod tests {
 
     #[test]
     fn state_comes_from_the_session_with_its_reason() {
+        let queued = json!({"state":"idle","codingQueueReason":"Waiting for a project coding slot (2 of 2 occupied).",
+            "codingQueue":{"kind":"slots","position":2,"holders":["Search index","Export  tests"]}});
+        assert_eq!(
+            queue(&queued),
+            json!({"kind":"slots","position":2,"holders":["Search index","Export tests"]})
+        );
+        let mut started = queued.clone();
+        started["codingQueueReason"] = Value::Null;
+        assert!(queue(&started).is_null(), "no reason, no line");
+        let mut odd = queued.clone();
+        odd["codingQueue"]["position"] = json!(0);
+        assert!(
+            queue(&odd).is_null(),
+            "a view that does not read is left out"
+        );
         assert_eq!(status(&json!({"state":"idle","working":true})).0, "working");
         assert_eq!(status(&json!({"state":"working"})).0, "working");
+        // Saved input waiting for a coding slot is not running yet.
+        let queued = status(&json!({"state":"parked","working":true,
+            "codingQueueReason":"Waiting for a project coding slot (2 of 2 occupied)."}));
+        assert_eq!(queued.0, "idle");
+        assert!(queued.1.starts_with("Waiting for a project coding slot"));
         assert_eq!(
             status(&json!({"state":"idle","outcome":"failed","outcomeReason":"Tests  failed"})),
             ("failed", "Tests failed".into())
@@ -743,6 +807,11 @@ mod tests {
             "question"
         );
         assert_eq!(status(&json!({"state":"parked"})).0, "idle");
+        assert_eq!(
+            status(&json!({"state":"parked","workHolds":["User Stop hold"]})),
+            ("stopped", "You stopped it.".into()),
+            "a mission chat the user stopped has no outcome, only its hold"
+        );
         assert_eq!(
             status(
                 &json!({"state":"idle","outcome":"done","codingQueueReason":"Waiting for a Pilot coding slot (4 of 4 occupied)."})

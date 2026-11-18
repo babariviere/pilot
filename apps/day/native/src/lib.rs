@@ -11,6 +11,8 @@
 //! the headless fixture entries; the connected host never reads them.
 
 pub mod actions;
+#[cfg(unix)]
+pub mod artifact_check;
 pub mod artifact_export;
 #[cfg(unix)]
 pub mod artifact_runtime;
@@ -46,6 +48,8 @@ pub mod macos_artifact;
 mod macos_capture;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
 pub mod macos_host;
+#[cfg(all(target_os = "macos", feature = "macos-host"))]
+mod macos_screen;
 mod mission_work;
 pub mod model;
 pub mod new_chat;

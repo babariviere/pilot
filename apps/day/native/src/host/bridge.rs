@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex, atomic::Ordering};
 pub(super) struct Call {
     pub window: String,
     pub command: Command,
+    /// The bridge method that asked, such as `day.delivery.read`: named in a failed read's log line.
+    pub name: &'static str,
     pub gate: Arc<Mutex<Gate>>,
     pub host: NativeHost,
     pub reply: Box<dyn FnOnce(Result<Value, Error>) + Send>,
@@ -22,7 +24,16 @@ fn encode(value: impl Serialize) -> Result<Value, Error> {
     serde_json::to_value(value).map_err(|_| Error::Invalid)
 }
 fn today(host: &NativeHost) -> Today {
+    // The project first, then the Desk: see `Shared::shown_project`.
+    let project = host
+        .0
+        .shared
+        .shown_project
+        .lock()
+        .expect("native shown project poisoned")
+        .clone();
     let mut today = host.snapshot();
+    today.project = project;
     let missions = today
         .moving
         .iter()
@@ -110,6 +121,8 @@ pub(super) fn cached(
             | Command::ChatSnapshot(_)
             | Command::ChatClose(_)
             | Command::PowerRead
+            | Command::ScreenTake
+            | Command::ScreenPicture(_)
     ) {
         return None;
     }
@@ -121,6 +134,9 @@ pub(super) fn cached(
             Command::PlanSnapshot(id) => planning(host, id)?,
             Command::PlanChatSnapshot(id) => plan_chat(host, id)?,
             Command::ChatSnapshot(id) => session_chat(host, id),
+            Command::ScreenTake | Command::ScreenPicture(_) => {
+                super::screen::cached(&host.0.shared, command)
+            }
             Command::PowerRead => host
                 .0
                 .shared
@@ -164,7 +180,28 @@ pub(super) async fn handle(
     epoch: u64,
     call: Call,
 ) {
-    let result = run(root, t, journal, shared, updates, day, epoch, &call).await;
+    let sent = journal.sent_writes();
+    let mut result = run(root, t, journal, shared, updates, day, epoch, &call).await;
+    // A mission notice raises the read fence while agents work. A write refused only because the
+    // fence moved runs again under the new one: Rust rebuilds it from the newest read, checks the
+    // exact target again and journals a new operation. A refusal with the fence unchanged is a
+    // real change and stays refused. A try that saved a write which may have gone out is
+    // never run again, and neither is Unknown.
+    let mut epoch = epoch;
+    let mut attempt = 1;
+    while matches!(result, Err(Error::Stale))
+        && resends_when_read_moves(&call.command)
+        && journal.sent_writes() == sent
+    {
+        let now = shared.epoch.load(Ordering::SeqCst);
+        let Some(wait) = retry_after(now, epoch, attempt) else {
+            break;
+        };
+        tokio::time::sleep(wait).await;
+        attempt += 1;
+        epoch = shared.epoch.load(Ordering::SeqCst);
+        result = run(root, t, journal, shared, updates, day, epoch, &call).await;
+    }
     // Ritual progress is local, as on the native feed: its refusals stay
     // with the ritual and never mark the service read or controls failed.
     if !call.command.is_ritual()
@@ -172,9 +209,33 @@ pub(super) async fn handle(
     {
         // A bad item stays isolated; losing the source or journal invalidates
         // source-wide authority just as it does for native feed requests.
-        super::fail(shared, error);
+        super::fail(shared, error, call.name);
     }
     (call.reply)(result);
+}
+
+/// Writes on one exact target that Rust checks again on every try, which the read fence
+/// can refuse. Answers and action reports (host/attention.rs) and every planning write,
+/// Start, Revisit and plan revisions included (host.rs, plan_host::rebind), try again
+/// inside their own send, so they are not run again here.
+fn resends_when_read_moves(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::ThreadsWrite(_)
+            | Command::Pause(_)
+            | Command::Resume(_)
+            | Command::StopReplanning(_)
+            | Command::Lifecycle(..)
+            | Command::Rename(_)
+    )
+}
+
+/// The pause before running a refused write again, or None: the read fence did not move
+/// (the target itself changed), or 3 tries are used. Three tries cover the notices of about a
+/// second of agent work, and the user waits at most about 1 s more before Pilot says so.
+fn retry_after(now: u64, shown: u64, attempt: u32) -> Option<std::time::Duration> {
+    (now != shown && attempt < 3)
+        .then(|| std::time::Duration::from_millis(250 * u64::from(attempt)))
 }
 /// Ritual calls share the native feed's rules: reads sample the root's clock
 /// and write nothing, a visit or save needs the exact context and revision,
@@ -272,6 +333,8 @@ async fn run(
             | Command::ChatCheck(_)
             | Command::ChatContinue(_)
             | Command::ChatRecover(_)
+            | Command::ChatDismiss(_)
+            | Command::ChatReply { .. }
     ) {
         return super::new_chat::handle(t, journal, shared, epoch, &call.command, &call.gate).await;
     }
@@ -358,6 +421,13 @@ async fn run(
             | Command::FeedbackStep(_)
     ) {
         return super::feedback::handle(t, journal, shared, &call.command, &call.gate).await;
+    }
+    if matches!(
+        call.command,
+        Command::ScreenBind(_) | Command::ScreenUnbind | Command::ScreenAnswer { .. }
+    ) {
+        // The window's own selection: a binding names this window, not a focused project.
+        return super::screen::handle(root, shared, &call.command, &call.gate, &call.window).await;
     }
     if matches!(
         call.command,
@@ -560,7 +630,9 @@ async fn run(
         | Command::ChatCreate(_)
         | Command::ChatCheck(_)
         | Command::ChatContinue(_)
-        | Command::ChatRecover(_) => {
+        | Command::ChatRecover(_)
+        | Command::ChatDismiss(_)
+        | Command::ChatReply { .. } => {
             unreachable!("handled standalone chat command")
         }
         Command::IntakeRead
@@ -585,6 +657,11 @@ async fn run(
         | Command::FeedbackSend(_)
         | Command::FeedbackCheck(_)
         | Command::FeedbackStep(_) => unreachable!("handled feedback command"),
+        Command::ScreenBind(_)
+        | Command::ScreenUnbind
+        | Command::ScreenTake
+        | Command::ScreenAnswer { .. }
+        | Command::ScreenPicture(_) => unreachable!("handled screen agent command"),
         Command::ThreadsRead(_)
         | Command::ThreadsHistory(_)
         | Command::ThreadsWrite(_)
@@ -736,6 +813,7 @@ async fn run(
             Some(Work::CheckPlanning(id))
         }
         Command::DismissNew => Some(Work::DismissNew),
+        Command::Refresh => Some(Work::Refresh),
         Command::Attention => {
             shared.attention_wanted.store(true, Ordering::SeqCst);
             Some(Work::AttentionRead)
@@ -872,6 +950,7 @@ async fn run(
     // Returned views are projections only, never raw home/profile/operation envelopes.
     match &call.command {
         Command::Today
+        | Command::Refresh
         | Command::Attention
         | Command::Reply(_)
         | Command::Action { .. }
@@ -933,4 +1012,35 @@ async fn run(
         _ => {}
     }
     Ok(json!({"snapshot":value,"outcome":outcome.map(encode).transpose()?}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_write_runs_again_only_when_the_read_fence_moved_and_at_most_three_times() {
+        // A notice moved the fence: try again, a little later each time.
+        assert_eq!(
+            retry_after(4, 3, 1),
+            Some(std::time::Duration::from_millis(250))
+        );
+        assert_eq!(
+            retry_after(5, 4, 2),
+            Some(std::time::Duration::from_millis(500))
+        );
+        // The third try was the last.
+        assert_eq!(retry_after(6, 5, 3), None);
+        // Same fence: the target itself changed, so it stays refused.
+        assert_eq!(retry_after(3, 3, 1), None);
+        // Start tries again inside its own planning write (plan_host::rebind), not here.
+        assert!(!resends_when_read_moves(&Command::StartWork {
+            mission: "m".into(),
+            shown: Value::Null
+        }));
+        // An answer tries again inside its own send, so its tries stay 3 in all.
+        assert!(!resends_when_read_moves(&Command::Reply(
+            ReplyIntent::default()
+        )));
+    }
 }

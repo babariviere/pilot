@@ -1,4 +1,4 @@
-import type { MissionCodeCompletion, ProjectDashboard } from "./index.ts";
+import type { CodingQueueView, MissionCodeCompletion, ProjectDashboard } from "./index.ts";
 import type { MissionControl } from "./mission-controls.ts";
 
 /** One screen captured from the real app: image artifact IDs, Before at the landed commit's parent. No Before: new. */
@@ -88,6 +88,8 @@ export interface DayOverview {
 	missionAgents?: DayMissionAgent[];
 	/** Authoritative working chats, including standalone chats. Absent on older services means unknown. */
 	workingNow?: DayWorkingChat[];
+	/** Chats waiting for a coding slot, in line order. Absent on older services means unknown. */
+	waitingNow?: DayWaitingChat[];
 }
 
 /** Passive activity, never permission to execute. A missing purpose stays explicit. */
@@ -98,6 +100,15 @@ export interface DayWorkingChat {
 	missionTitle: string | null;
 	purpose: string | null;
 	status: "working";
+}
+
+/** A chat whose saved input waits for a coding slot. Passive: no admission or permission to start. */
+export interface DayWaitingChat {
+	sessionId: string;
+	title: string;
+	missionId: string | null;
+	missionTitle: string | null;
+	queue: CodingQueueView;
 }
 
 /** Existing session state only. No admission, capacity or permission to start is implied. */

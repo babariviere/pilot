@@ -227,6 +227,9 @@ async function fixture(t: TestContext) {
 		async lastAssistantReply(id: string, limit: number) {
 			return id === chat.id ? lastReply?.slice(0, limit) : undefined;
 		},
+		async waitingSays(id: string) {
+			return id === chat.id ? lastReply : undefined;
+		},
 		async sendDurable(
 			id: string,
 			message: string,
@@ -297,6 +300,46 @@ async function fixture(t: TestContext) {
 		reopenStorage,
 	};
 }
+
+test("a task with no result names where its chat is and whether Continue can move it", async (t) => {
+	const f = await fixture(t);
+	const chat = async () => (await f.service.read(f.subject)).chat;
+	assert.deepEqual(await chat(), { state: "idle" });
+	f.setChat({ working: true, state: "working" });
+	assert.deepEqual(await chat(), { state: "working" });
+	f.setChat({ working: false, state: "idle", codingQueueReason: "Waiting for a coding slot (2 running)" });
+	assert.deepEqual(await chat(), { state: "queued", reason: "Waiting for a coding slot (2 running)" });
+	const queue = { kind: "slots" as const, position: 2, holders: ["Search index"] };
+	f.setChat({ codingQueue: queue });
+	assert.deepEqual(await chat(), { state: "queued", reason: "Waiting for a coding slot (2 running)", queue });
+	f.setChat({ codingQueueReason: undefined, codingQueue: undefined, outcome: "question" });
+	assert.deepEqual(await chat(), { state: "question" });
+	// A mission chat the user stopped has no outcome, only its hold.
+	f.setChat({ outcome: undefined, workHolds: ["User Stop hold"], canContinue: true });
+	assert.deepEqual(await chat(), { state: "stopped", canContinue: true });
+	f.setChat({ workHolds: undefined, outcome: "failed", outcomeReason: "Model request: Allowance hold" });
+	assert.deepEqual(await chat(), { state: "failed", reason: "Model request: Allowance hold", canContinue: true });
+	// With a delivered result, the result speaks; the chat line goes.
+	f.deliver();
+	assert.equal(await chat(), undefined);
+});
+
+test("a chat waiting for a reply shows its last message, even beside an earlier result", async (t) => {
+	const f = await fixture(t);
+	const chat = async () => (await f.service.read(f.subject)).chat;
+	f.setReply("Does the mockup look right? Tell me and I will build it.");
+	f.setChat({ outcome: "done", waitsForReply: true, canContinue: true });
+	const waiting = {
+		state: "waiting",
+		canContinue: true,
+		says: "Does the mockup look right? Tell me and I will build it.",
+	};
+	assert.deepEqual(await chat(), waiting);
+	f.deliver();
+	assert.deepEqual(await chat(), waiting, "an earlier result has nothing new to check");
+	f.setChat({ waitsForReply: undefined, canContinue: undefined });
+	assert.equal(await chat(), undefined);
+});
 
 test("Done, Send back and Reopen are immutable revisions, not task/merge/release acceptance", async (t) => {
 	const f = await fixture(t);

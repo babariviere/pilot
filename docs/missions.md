@@ -90,6 +90,8 @@ When you authorize continued work, the coordinator can queue an exact next slice
 slot (maximum two). Only chats that can change code take a slot, reviewers included. Ask chats
 (explorers, task prototypes and thread chats) never wait for one. A worker finish wakes reconciliation without
 waiting for every other worker.
+A task chat that waits for you (its question, a reply, or your check of its result) gives its slot back.
+Its files still count, so work on the same files still waits.
 The coordinator checks fresh task scope, ownership and
 reports before closing work; a finished turn or published increment does not close a task.
 `get` shows queued starts and waiting reasons. Stop, Pause, changed scope/authority and
@@ -122,8 +124,14 @@ shows it over the whole page). A prototype chat has no time limit; its cost limi
 After the plan is published, a builder whose task needs a UI prototype asks Pilot for one itself. Pilot makes
 it in a read-only chat, links the mock to the task and sends it to the builder, which then asks you to choose.
 You do not confirm the prototype first; you answer once, when you choose.
+When a builder ends its turn with its task open, no new result and no question, Pilot reminds it once per
+message you send: ask with its question tool, deliver, or go on. If it still stops that way, it may be asking you
+something in prose. **Needs a look** on Today and the task's result page show its last message: **Reply** sends
+your words once; **Continue** sends none. Chats of archived missions leave Needs you.
 When Pilot's planning agent has stopped while the plan is still open, **Continue planning** under its
 status asks it to pick up where it stopped. It answers, approves and starts nothing.
+When it ended its turn with no question, it may be waiting for you: its planning page and Today's planning
+row show its last message. **Reply** sends your words to it as a note; **Continue** sends none.
 **Unstick**, under the same status, says whether planning moves, waits for you or is stuck, lists what
 Pilot checked, and offers at most one fix. Reading it changes nothing; the fix applies only on **Apply**.
 When there is no fix, report it with Feedback.

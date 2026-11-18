@@ -1,4 +1,6 @@
 //! Original sources through released NSH, the real native bridge and isolated daemon.
+#[path = "support/app_source.rs"]
+mod app_source;
 use nsh_core::prelude::*;
 use nsh_engine::EngineConfig;
 use nsh_testing::{Headless, compile_tsx};
@@ -62,7 +64,7 @@ impl Fixture {
             if (name.ends_with(".ts") || name.ends_with(".tsx") || name == "theme.json")
                 && !name.ends_with(".test.tsx")
             {
-                std::fs::copy(&path, dir.join(name)).unwrap();
+                app_source::copy(&path, &dir.join(name));
             }
         }
         // The component library lives in ui/; screens import it as "./ui".
