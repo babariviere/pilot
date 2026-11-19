@@ -311,6 +311,8 @@ with a canonical delivery that is not currently Done or Sent back.
 
 Next results/First results page only the automatic list, never the durable cutoff
 or saved Unknown checks. Later pages state that earlier results are still pending.
+A discovery page holds results that still wait for a check: the daemon passes over results already
+Done or Sent back, up to 200 per page, so pending results never hide behind a page of checked ones.
 `day.today.scope` merges the same bounded discovery with saved subjects for other
 configured projects. Their To check rows name their project and stay read-only;
 they cannot retarget this window's assessment/open/Check authority. Unavailable or

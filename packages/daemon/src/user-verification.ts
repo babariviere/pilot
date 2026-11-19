@@ -14,6 +14,8 @@ import type { SessionManager } from "./sessions.ts";
 
 const id = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(v);
 const hash = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
+/** How many delivered results one discovery page reads at most, checked or not. */
+const DISCOVERY_SCAN = 200;
 export const verificationKey = (subject: VerificationSubject) => payloadHash(canonicalJSON(subject));
 /**
  * How much of a finished chat's last reply a result shows: about four screens of text. An answer fits; a longer one
@@ -77,34 +79,47 @@ export class UserVerifications {
 		const through = source.sourceCursor();
 		if (after !== undefined && (after < baseline || after > through))
 			throw new OperationRejected("Invalid delivery discovery cursor");
-		const candidates = source.discoveryCandidates(projectId, after ?? baseline, through, 21);
 		const items: DeliveredWorkList["items"] = [];
 		const observed: DeliveredWork[] = [];
-		for (const c of candidates.slice(0, 20)) {
-			const subject: VerificationSubject = { kind: "task", projectId, missionId: c.missionId, taskId: c.taskId };
-			const snapshot = await this.read(subject);
-			observed.push(snapshot);
-			// Unknown/missing outer receipts never hide a pending check.
-			if (
-				snapshot.deliveryId &&
-				!(
-					snapshot.verificationCurrent &&
-					!snapshot.pendingOperationId &&
-					(snapshot.verification?.state === "done" || snapshot.verification?.state === "sent_back")
+		// A page holds results that still wait for a check. Results already checked are passed over, up to
+		// DISCOVERY_SCAN of them, so pending results do not hide behind pages of done ones.
+		let cursor = after ?? baseline;
+		let more = false;
+		let scanned = 0;
+		scan: for (;;) {
+			const candidates = source.discoveryCandidates(projectId, cursor, through, 21);
+			for (const c of candidates) {
+				if (items.length === 20 || scanned === DISCOVERY_SCAN) {
+					more = true;
+					break scan;
+				}
+				const subject: VerificationSubject = { kind: "task", projectId, missionId: c.missionId, taskId: c.taskId };
+				const snapshot = await this.read(subject);
+				observed.push(snapshot);
+				cursor = c.sequence;
+				scanned++;
+				// Unknown/missing outer receipts never hide a pending check.
+				if (
+					snapshot.deliveryId &&
+					!(
+						snapshot.verificationCurrent &&
+						!snapshot.pendingOperationId &&
+						(snapshot.verification?.state === "done" || snapshot.verification?.state === "sent_back")
+					)
 				)
-			)
-				items.push({
-					subject,
-					title: this.deps.store.task(c.missionId, c.taskId).title,
-					snapshot,
-					sourceSequence: c.sequence,
-				});
+					items.push({
+						subject,
+						title: this.deps.store.task(c.missionId, c.taskId).title,
+						snapshot,
+						sourceSequence: c.sequence,
+					});
+			}
+			if (candidates.length < 21) break;
 		}
 		if (Buffer.byteLength(JSON.stringify(items)) > 1024 * 1024)
 			throw new OperationRejected("Delivery discovery page exceeds capacity; inspect results in their missions");
 		await this.deps.store.durable();
 		this.deps.projects.require(projectId);
-		const more = candidates.length > 20;
 		const unchanged = () =>
 			observed.every((shown) => {
 				const now = this.readNow(shown.subject);
@@ -157,7 +172,7 @@ export class UserVerifications {
 			projectId,
 			baseline: { mode: "start_fresh", sourceSequence: baseline },
 			sourceCursor: through,
-			nextCursor: more ? candidates[19]!.sequence : null,
+			nextCursor: more ? cursor : null,
 			more,
 			complete: !more && currentness === "live",
 			currentness,

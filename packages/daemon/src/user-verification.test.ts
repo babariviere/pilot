@@ -472,6 +472,37 @@ test("discovery is bounded and page cursors never advance the cutoff or erase pe
 	await assert.rejects(f.service.list(f.project.id, Number.MAX_SAFE_INTEGER));
 	assert.equal(f.sends.length, 0);
 });
+test("discovery passes over checked results so pending ones show on the first page", async (t) => {
+	const f = await fixture(t);
+	await f.service.list(f.project.id);
+	const tasks = [];
+	for (let i = 0; i < 25; i++) {
+		const task = f.store.addTask(f.mission.id, { title: `Checked ${i}` });
+		f.store.completeTask(f.mission.id, task.id, "completion-lead", {
+			commit: "a".repeat(40),
+			checks: "Synthetic",
+			issues: "",
+		});
+		tasks.push(task);
+	}
+	for (const task of tasks) {
+		const subject = { kind: "task" as const, projectId: f.project.id, missionId: f.mission.id, taskId: task.id };
+		assert.equal((await f.run(operation(await f.service.read(subject)))).state, "accepted");
+	}
+	const pending = f.store.addTask(f.mission.id, { title: "Still to check" });
+	f.store.completeTask(f.mission.id, pending.id, "completion-lead", {
+		commit: "b".repeat(40),
+		checks: "Synthetic",
+		issues: "",
+	});
+	// Before, the first page held only checked results and said "more": the pending one hid behind it.
+	const page = await f.service.list(f.project.id);
+	assert.deepEqual(
+		page.items.map((i) => i.title),
+		["Still to check"],
+	);
+	assert.equal(page.more, false);
+});
 
 test("pre-cutoff definition, PR and status changes do not rediscover historical output", async (t) => {
 	const f = await fixture(t);
