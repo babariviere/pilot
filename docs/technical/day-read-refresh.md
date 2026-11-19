@@ -41,6 +41,17 @@ newer cached projection.
 - Keep read status in stable locations. Planning's connected empty state stays
   present, rather than alternating between no section and an error block.
   Existing keyed cards, drafts and page owners stay in place.
+- The window re-reads at most once a second after notices (`connection.ts` `refreshSoon`, trailing edge). Two
+  streaming chats send about ten `session` notices a second, and each window re-read sends about ten calls to
+  the native worker, which runs them one at a time.
+- The user's own sends (`day.attention.reply`, `.ask`, `.action`, `.check`) go to a separate queue that the
+  worker takes first (`host.rs` `next_request`), so an answer does not wait behind queued reads. It still waits
+  for the read already running.
+- An answer reads attention once before it is saved, not again after the fsync: the daemon checks the exact
+  target again before it takes the request. While its send waits for the receipt, its summary carries
+  `inFlight`, so the card says sending or asking instead of "no answer came back".
+- The service status on the update page is read again on a notice while it says offline or unknown: a first
+  read during the daemon's startup stall otherwise said "not answering" until Check again.
 
 HTTP 401/403 and a missing selected project are authority loss, not a transient
 service outage. An inventory HTTP 409 can mean the owner or membership fence

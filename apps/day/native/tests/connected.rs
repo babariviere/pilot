@@ -1190,7 +1190,8 @@ fn planning_inventory_is_read_once_and_never_shown_as_empty_when_it_is_not() {
         let cached = root.count("day.plan.inventorySnapshot");
         app.press("id:planning-off >> Read again").unwrap();
         wait(&mut app, reason);
-        app.wait(Duration::from_millis(300)).unwrap();
+        // The window re-reads at most once a second after notices (connection.ts REFRESH_GAP_MS).
+        app.wait(Duration::from_millis(1300)).unwrap();
         assert_eq!(root.count("day.plan.inventory"), before + 1);
         assert_eq!(root.count("day.plan.inventorySnapshot"), cached + 1);
         assert!(

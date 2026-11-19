@@ -18,6 +18,8 @@ export type Update = {
 	};
 	/** A mirror of Rust's view. Only the feed's listener sets it. */
 	service: Signal<ServiceView>;
+	/** Reads the service's status again, passively (no check, no preflight). Missing on the mock feed. */
+	readAgain?: () => Promise<void>;
 	/** Stops listening and frees the feed. */
 	close: () => void;
 };

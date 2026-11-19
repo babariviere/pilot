@@ -241,6 +241,43 @@ pub(super) fn publish(shared: &Shared, record: &Record) {
     shared.change(|_| ());
 }
 
+/// Marks a published operation as on its way (`"inFlight": true` on its summary) while this send waits
+/// for its receipt. Dropping it clears the mark, whatever the send returned. Only memory changes: the
+/// saved record is the same, so a crash still leaves it Unknown.
+struct InFlight<'a> {
+    shared: &'a Shared,
+    id: String,
+}
+
+impl<'a> InFlight<'a> {
+    fn start(shared: &'a Shared, id: &str) -> Self {
+        Self::mark(shared, id, true);
+        Self { shared, id: id.to_owned() }
+    }
+
+    fn mark(shared: &Shared, id: &str, on: bool) {
+        if let Some(Value::Object(op)) = shared
+            .attention_operations
+            .lock()
+            .expect("attention operations poisoned")
+            .get_mut(id)
+        {
+            if on {
+                op.insert("inFlight".into(), json!(true));
+            } else {
+                op.remove("inFlight");
+            }
+        }
+        shared.change(|_| ());
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        Self::mark(self.shared, &self.id, false);
+    }
+}
+
 impl NativeHost {
     /// Read-only native attention snapshot. Staleness is explicit, not a permission grant.
     pub fn attention_snapshot(&self) -> Option<Value> {
@@ -740,18 +777,14 @@ async fn send_once(
             let fresh = latest(t, shared).await?;
             qualifies(&record.request, &fresh)?;
             journal.save_attention(record.clone())?;
+            // On its way until this send returns: the card says sending or asking, not "no answer came
+            // back". A crash before the receipt leaves the saved record Unknown, as before.
             publish(shared, &record);
-            // Re-read after fsync: a question or action that changed meanwhile, or a permission change
-            // (in its authority digest), stops a first send. Other mission changes do not.
-            let check = latest(t, shared)
-                .await
-                .and_then(|r| qualifies(&record.request, &r));
-            if let Err(e) = check {
-                record.not_sent = true;
-                journal.save_attention(record.clone())?;
-                publish(shared, &record);
-                return Err(e);
-            }
+            let _in_flight = InFlight::start(shared, &record.id);
+            // No second read after the fsync: the read just before it names the exact target, and the
+            // daemon checks that target (question content, action revision and digest, authority
+            // digest) again before it takes the request. The extra read cost a whole attention read
+            // (often 1-2 s while agents work) on every answer.
             if let Ok(reply) = t.attention_call(&record.request, false).await
                 && exact(&record.request, &reply).is_ok()
             {
@@ -786,6 +819,7 @@ async fn send_once(
                     )?;
                 }
             }
+            publish(shared, &record);
             if record.pending() {
                 return Err(Error::Unknown);
             }

@@ -317,6 +317,9 @@ struct Handle {
     ledger: PathBuf,
     shared: Arc<Shared>,
     requests: Sender<Request>,
+    /// The user's own sends (answers, clarifications, action requests, their checks). The worker takes
+    /// them before queued reads, so an answer never waits behind the reads that agents' notices start.
+    writes: Sender<Request>,
     worker: Mutex<Worker>,
 }
 struct Worker {
@@ -327,6 +330,7 @@ impl Drop for Handle {
     fn drop(&mut self) {
         self.shared.closed.store(true, Ordering::SeqCst);
         self.requests.close();
+        self.writes.close();
         // No blocking UI destructor. An entered POST finishes on the worker;
         // its durable record survives even process termination. Native close joins.
     }
@@ -392,12 +396,20 @@ impl NativeHost {
         };
         let epoch = self.0.shared.epoch.load(Ordering::SeqCst);
         let (tx, _rx) = async_channel::bounded(1);
+        let urgent = matches!(
+            call.command,
+            crate::bridge::Command::Reply(_)
+                | crate::bridge::Command::Ask(_)
+                | crate::bridge::Command::Action { .. }
+                | crate::bridge::Command::AttentionCheck { .. }
+        );
         let request = Request {
             epoch,
             work: Work::Bridge(call),
             reply: tx,
         };
-        if let Err(e) = self.0.requests.try_send(request)
+        let queue = if urgent { &self.0.writes } else { &self.0.requests };
+        if let Err(e) = queue.try_send(request)
             && let Work::Bridge(call) = e.into_inner().work
         {
             (call.reply)(Err(if self.0.shared.open().is_err() {
@@ -530,6 +542,7 @@ impl NativeHost {
             ),
         });
         let (requests, rx) = async_channel::bounded(16);
+        let (writes, writes_rx) = async_channel::bounded(16);
         let owner_source = source.clone();
         let owner_ledger = ledger.clone();
         let state = shared.clone();
@@ -544,7 +557,7 @@ impl NativeHost {
                         .enable_all()
                         .build()
                         .map_err(|_| Error::Unavailable)?;
-                    rt.block_on(run(transport, journal, state.clone(), rx, day, updates))
+                    rt.block_on(run(transport, journal, state.clone(), rx, writes_rx, day, updates))
                 })();
                 if let Err(e) = result {
                     fail(&state, e, "startup");
@@ -557,6 +570,7 @@ impl NativeHost {
             ledger: owner_ledger,
             shared,
             requests,
+            writes,
             worker: Mutex::new(Worker {
                 thread: Some(worker),
                 result: None,
@@ -908,6 +922,7 @@ impl NativeHost {
     pub fn close(&self) -> Receiver<Result<(), Error>> {
         self.0.shared.closed.store(true, Ordering::SeqCst);
         self.0.requests.close();
+        self.0.writes.close();
         let host = self.clone();
         let (tx, rx) = async_channel::bounded(1);
         let failed = tx.clone();
@@ -1385,11 +1400,27 @@ fn fail(shared: &Shared, error: Error, command: &str) {
     }
 }
 
+/// The next request: the user's own sends first, then the queued reads and other calls in order.
+async fn next_request(
+    writes: &Receiver<Request>,
+    requests: &Receiver<Request>,
+) -> Result<Request, async_channel::RecvError> {
+    if let Ok(request) = writes.try_recv() {
+        return Ok(request);
+    }
+    tokio::select! {
+        biased;
+        Ok(request) = writes.recv() => Ok(request),
+        request = requests.recv() => request,
+    }
+}
+
 async fn run(
     root: Transport,
     mut journal: Journal,
     shared: Arc<Shared>,
     requests: Receiver<Request>,
+    writes: Receiver<Request>,
     day: Option<ritual::DaySource>,
     selection: Option<updates::Selection>,
 ) -> Result<(), Error> {
@@ -1452,7 +1483,7 @@ async fn run(
     loop {
         tokio::select! {
             biased;
-            request = requests.recv() => {
+            request = next_request(&writes, &requests) => {
                 let Ok(request) = request else { break; };
                 if matches!(&request.work, Work::Bridge(call) if matches!(call.command, crate::bridge::Command::LinearPublisher(_))) {
                     let Work::Bridge(call) = request.work else { unreachable!() };

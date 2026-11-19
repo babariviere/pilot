@@ -414,6 +414,9 @@ fn help_answers(ops: &[Value], id: &str, local: &Local) -> Vec<Answer> {
             let op_id = s(&op["id"]);
             let (state, answer) = if local.checking.contains(&op_id) {
                 (AnswerState::Checking, String::new())
+            } else if op["state"] == "unknown" && op["inFlight"] == true {
+                // Saved and on its way: the agent is still writing the answer.
+                (AnswerState::Asking, String::new())
             } else if op["state"] == "unknown" {
                 (AnswerState::Unknown, String::new())
             } else if clarification
@@ -553,6 +556,9 @@ pub fn project(
             Delivery::Sending
         } else if local.checking.contains(&id) {
             Delivery::Checking
+        } else if pending.is_some_and(|op| op["inFlight"] == true) {
+            // Saved and on its way: the send has not returned yet.
+            Delivery::Sending
         } else if pending.is_some() {
             Delivery::Unknown
         } else {
@@ -660,6 +666,10 @@ pub fn project(
         let earlier_report = earlier(saved, local, &drafts, &id, revision);
         let (delivery, asked) = match (local.sending.get(&id), pending) {
             (Some(Sending::Action(ask)), _) => (Delivery::Sending, Some(*ask)),
+            (_, Some(op)) if op["inFlight"] == true => (
+                Delivery::Sending,
+                Some(ask_of(&op["request"]["command"]["kind"])),
+            ),
             (_, Some(op)) if local.checking.contains(&id) => (
                 Delivery::Checking,
                 Some(ask_of(&op["request"]["command"]["kind"])),
@@ -963,6 +973,11 @@ mod tests {
         assert_eq!(view.decisions.len(), 1);
         assert_eq!(view.decisions[0].delivery, Delivery::Idle);
         assert_eq!(view.decisions[0].answers[0].state, AnswerState::Unknown);
+        // While its send waits for the agent's answer, it is being asked, not lost.
+        let mut asking = ops[0].clone();
+        asking["inFlight"] = json!(true);
+        let view = project(Some(&r), &[asking], &[], &[], &Local::default());
+        assert_eq!(view.decisions[0].answers[0].state, AnswerState::Asking);
         ops[0]["state"] = json!("acknowledged");
         ops[0]["receipt"] = json!({"ok":true,"value":{"state":"accepted","result":{
             "clarification":{"answer":"It avoids breaking callers."}}}});
@@ -1380,6 +1395,11 @@ mod tests {
         let view = project(Some(&r), &[], &[], &[], &local);
         assert_eq!(view.decisions[0].delivery, Delivery::Sending);
         assert_eq!(view.decisions[0].sent_options, picks(&["option-2"]));
+        // Saved and on its way (the send has not returned): sending, not "heard nothing back".
+        let ops = vec![json!({ "id": "op", "request": answer_request(&r, id, &[], "- Typecheck").unwrap(),
+            "receipt": null, "state": "unknown", "inFlight": true })];
+        let view = project(Some(&r), &ops, &[], &[], &Local::default());
+        assert_eq!(view.decisions[0].delivery, Delivery::Sending);
     }
 
     #[test]

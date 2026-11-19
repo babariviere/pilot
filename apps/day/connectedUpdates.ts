@@ -106,6 +106,13 @@ export async function connectedUpdates(window: string): Promise<Update | null> {
 	};
 	return {
 		service,
+		// The first read can meet the service while it is busy starting (pilotd.log showed a 16 s stall after
+		// a restart); that read said "not answering" until the user pressed Check again.
+		async readAgain() {
+			if (awaiting) return;
+			const result = await call<ServiceView>(window, "day.update.read", {});
+			if (result.ok && !awaiting) publish(result.snapshot);
+		},
 		feed: {
 			snapshot: () => service(),
 			onChange(listener) {

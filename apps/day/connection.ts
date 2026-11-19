@@ -173,6 +173,26 @@ function current(): boolean {
 	return false;
 }
 
+/** The least time between two window-wide re-reads that follow the service's notices. */
+const REFRESH_GAP_MS = 1000;
+let refreshedAt = 0;
+let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Re-reads the window after a notice, at most once a second. While agents stream, the service sends about ten
+ * notices a second; each re-read sends about ten calls to the native worker, which runs them one at a time, so an
+ * answer the user sent waited behind them. The last notice in a burst still gets its read.
+ */
+function refreshSoon() {
+	if (refreshTimer !== undefined) return;
+	const wait = Math.max(0, refreshedAt + REFRESH_GAP_MS - Date.now());
+	refreshTimer = setTimeout(() => {
+		refreshTimer = undefined;
+		refreshedAt = Date.now();
+		refresh();
+	}, wait);
+}
+
 function refresh() {
 	if (connection().state !== "open" || !current()) return;
 	const open = connection();
@@ -189,6 +209,10 @@ function refresh() {
 		open.state === "open" && settingsOpen() ? open.day.slack?.read() : undefined,
 		// The thread on screen reads its newest messages again: a chat's reply changes no thread revision.
 		open.state === "open" ? refreshOpenThread(open.day.threads) : undefined,
+		// A notice came, so the service answers: a status read while it was busy says so no longer.
+		open.state === "open" && open.update && ["offline", "unknown"].includes(open.update.service().state)
+			? open.update.readAgain?.()
+			: undefined,
 	]).catch((error: unknown) => {
 		console.error("Pilot could not read this window again:", error);
 	});
@@ -230,7 +254,7 @@ function flushPending() {
 // proof yet: keep the newest flush until the feeds/forms exist, never ACK empty.
 if (window) {
 	host.on("day.changed", (payload) => {
-		if (forWindow(payload, window)) refresh();
+		if (forWindow(payload, window)) refreshSoon();
 	});
 	host.on("day.flush", (payload) => {
 		if (!forWindow(payload, window) || typeof payload.generation !== "number") return;
@@ -475,4 +499,5 @@ export function readAgain(): Promise<void> {
 }
 
 void read();
+
 import { connectedWorkSearch } from "./workSearch";
