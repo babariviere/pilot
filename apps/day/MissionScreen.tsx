@@ -61,20 +61,22 @@ import {
 	setFor,
 	setRename,
 } from "./view";
-import { controlLine, memberWord, provenance, rowLine, stateOf, taskWord, workWord } from "./words";
+import { controlLine, memberWord, nextLine, provenance, rowLine, stateOf, taskWord, workWord } from "./words";
 
 function total(row: MissionRow): number {
 	const p = row.progress;
 	return p.done + p.review + p.active + p.blocked + p.todo;
 }
 
-/** Worker delivery facts from the canonical report, not task completion. */
+/** Worker delivery facts from the canonical report, not task completion. Not moving, they are partial work. */
 function ReportedOutput(props: { report: ReportLine }) {
 	return (
 		<If when={props.report.delivery}>
 			<View selectable class="gap-1">
 				<Text class="text-xs text-faint">
-					Worker delivery claim. Task completion and your check remain separate.
+					{props.report.movement === "notMoving"
+						? "Partial delivery. Not ready for your check until the work moves again."
+						: "Worker delivery claim. Task completion and your check remain separate."}
 				</Text>
 				<Text class="text-sm text-muted-foreground">
 					{props.report.delivery?.commit ? `Reported commit: ${props.report.delivery.commit}` : "No code changed."}
@@ -98,7 +100,7 @@ function Report(props: { report: ReportLine }) {
 		<View class="gap-2">
 			<Text class="text-base leading-relaxed text-foreground">{props.report.summary}</Text>
 			<If when={props.report.nextStep}>
-				<Text class="text-sm text-muted-foreground">{`Next: ${props.report.nextStep}`}</Text>
+				<Text class="text-sm text-muted-foreground">{nextLine(props.report)}</Text>
 			</If>
 			<ReportedOutput report={props.report} />
 			<EvidenceList items={props.report.evidence} testID="report-evidence" />
@@ -543,7 +545,9 @@ function Task(props: { day: Day; page: MissionPage; task: TaskLine; place?: "res
 				<View selectable class="gap-0.5 pl-10">
 					<Text class="text-sm text-muted-foreground">{props.task.report?.summary ?? ""}</Text>
 					<If when={props.task.report?.nextStep}>
-						<Text class="text-sm text-muted-foreground">{`Next: ${props.task.report?.nextStep}`}</Text>
+						<Text class="text-sm text-muted-foreground">
+							{props.task.report ? nextLine(props.task.report) : ""}
+						</Text>
 					</If>
 					<EvidenceList items={props.task.report?.evidence ?? []} testID={id(`task-evidence-${props.task.id}`)} />
 					<Text class="text-xs text-faint">{props.task.report ? provenance(props.task.report) : ""}</Text>

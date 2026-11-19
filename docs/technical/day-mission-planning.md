@@ -378,7 +378,13 @@ forgotten and tried again on a later change, at most once a minute. While a read
 planning page's Work step says why, and the daemon log names the reason once.
 
 A merged pull request that owns a task (`ownership` link) also finishes it in these missions, so its
-dependents start. Workers in these missions see the user as coordinator (`MissionContext.coordinator` is
+dependents start. It does so only when the PR is in the project's own GitHub repository and the task's newest
+report is not `not_moving`. The repository is the worker workspace's saved upstream, else the project folder's
+git remote (origin first, as `sourceRemote` picks). `ProjectRepositories` reads that remote from local git
+config, with no network: at startup for projects with active missions, and on a member's PR update.
+Otherwise the task keeps its status and the merge event says why: "PR #N merged; task #M stays <status>:
+<reason>". A PR in another repository is a prerequisite, not the task's delivery.
+Workers in these missions see the user as coordinator (`MissionContext.coordinator` is
 `user`): their prompt tells them to ask the user with `ask_user`, because no coordinator chat reads
 comments promptly. A task Pilot starts by rule says its dependencies were checked by the user.
 For screen work, a worker publishes an NSH mockup and names it in the question's `artifacts` (at most 3

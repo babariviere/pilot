@@ -54,6 +54,7 @@ import { DAY_INSIGHTS_ALLOWANCE_SCHEMA, DayInsightsAllowance } from "./day-insig
 import { DAY_INSIGHTS_SCHEMA, DayInsightsStore } from "./day-insights-store.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
+import { linkedPullRequest } from "./github-url.ts";
 import { HUMAN_REVIEW_SCHEMA, HumanReviewStore } from "./human-review-store.ts";
 import { INSIGHTS_SCHEMA, InsightsBacklog } from "./insights-backlog.ts";
 import { InsightsLegacyRecords } from "./insights-legacy.ts";
@@ -652,6 +653,11 @@ export function parseResourceUrl(raw: string): { url: string; kind: MissionResou
 export class MissionStore {
 	/** Replica projections are reused across unrelated mission/memory invalidations. At most one per binding. */
 	private readonly catalogReplicaCache = new Map<string, SharedMissionGroup[]>();
+	/**
+	 * The project's own GitHub repository ("host/owner/name"): the member chat's workspace upstream, else the project
+	 * folder's git remote read earlier. The mission service sets it; undefined means not known.
+	 */
+	projectRepository: (projectId: string, sessionId: string) => string | undefined = () => undefined;
 	private db: DatabaseSync;
 	private readonly listeners = new Set<
 		(missionId: string, passive?: boolean, preferenceOnly?: boolean, readModelOnly?: boolean) => void
@@ -841,9 +847,11 @@ export class MissionStore {
 		reportSaved: (report) => {
 			const task = this.task(report.missionId, report.write.taskId);
 			// No coordinator can complete this task, so the worker's delivery report is the result the user checks.
-			if (report.write.delivery && this.plannedWithoutCoordinator(report.missionId))
+			// A delivery that is not moving is partial: the user checks it only after a later delivery report.
+			const partial = !!report.write.delivery && report.write.movement === "not_moving";
+			if (report.write.delivery && !partial && this.plannedWithoutCoordinator(report.missionId))
 				this.userVerifications.recordSource(`report:${report.write.reportId}`, task.id);
-			const note = `Task #${task.number}: worker report ${report.write.reportId}${report.write.delivery ? " (scoped delivery)" : ""}. Read current task scope, owner, dependencies and report before changing status; not user acceptance.`;
+			const note = `Task #${task.number}: worker report ${report.write.reportId}${partial ? " (partial delivery, not moving)" : report.write.delivery ? " (scoped delivery)" : ""}. Read current task scope, owner, dependencies and report before changing status; not user acceptance.`;
 			this.event(
 				report.missionId,
 				"update",
@@ -2183,15 +2191,23 @@ export class MissionStore {
 					pr.url,
 				).map(taskFrom);
 				// No coordinator finishes tasks in a planned mission run by its planning chat: a merged owned PR does,
-				// so Pilot can start the tasks it unblocks. The user still checks the result.
+				// so Pilot can start the tasks it unblocks. The user still checks the result. A PR in another
+				// repository is a prerequisite, and a task whose worker says it is not moving is unfinished.
+				const kept: string[] = [];
 				if (pr.state === "merged" && this.plannedWithoutCoordinator(id))
-					for (const [i, task] of tasks.entries())
-						if (task.status !== "done" && task.status !== "dropped")
-							tasks[i] = this.updateTask(id, task.id, { status: "done" });
+					for (const [i, task] of tasks.entries()) {
+						if (task.status === "done" || task.status === "dropped") continue;
+						const reason = this.mergeKeepsTask(id, task, session.id, pr.url);
+						if (reason)
+							kept.push(
+								`PR #${pr.number} merged; task #${task.number} stays ${task.status.replace("_", " ")}: ${reason}`,
+							);
+						else tasks[i] = this.updateTask(id, task.id, { status: "done" });
+					}
 				const taskText = tasks.map(
 					(task) => `task #${task.number}${pr.state === "merged" && task.status === "done" ? " marked done" : ""}`,
 				);
-				const note = `PR #${pr.number}${pr.state === "merged" ? ` ${pr.title} merged` : " closed without merging"} (chat ${session.title}${taskText.length ? `, ${taskText.join(", ")}` : ""})`;
+				const note = `PR #${pr.number}${pr.state === "merged" ? ` ${pr.title} merged` : " closed without merging"} (chat ${session.title}${taskText.length ? `, ${taskText.join(", ")}` : ""})${kept.map((line) => `. ${line}`).join("")}`;
 				const doneIds = new Set(tasks.filter((task) => task.status === "done").map((task) => task.id));
 				const allTasks = this.tasks(id);
 				const allDoneIds = new Set(allTasks.filter((task) => task.status === "done").map((task) => task.id));
@@ -2245,6 +2261,26 @@ export class MissionStore {
 		});
 		if (changed && notify) this.changed(id);
 		return changed;
+	}
+
+	/**
+	 * Why a merged owned PR does not finish this task, or undefined when it does. It finishes the task only when the PR
+	 * is in the project's own GitHub repository and the task's newest report does not say it is not moving.
+	 */
+	private mergeKeepsTask(missionId: string, task: MissionTask, sessionId: string, url: string): string | undefined {
+		const own = this.projectRepository(this.require(missionId).projectId, sessionId)?.toLowerCase();
+		if (!own) return "Pilot does not know this project's GitHub repository";
+		let repository: string;
+		try {
+			repository = linkedPullRequest(url).repo.identity.toLowerCase();
+		} catch {
+			return "the PR is not a GitHub pull request URL Pilot can read";
+		}
+		if (repository !== own) return `the PR is in ${repository}, not this project's repository ${own}`;
+		const report = this.controls.latestReport(missionId, task.id);
+		if (report?.write.movement === "not_moving")
+			return `its latest report says it is not moving (next: ${report.write.nextStep})`;
+		return undefined;
 	}
 
 	/** Snapshot completed work once per run, before a new turn can change task state. */

@@ -783,6 +783,46 @@ test("a worker delivers a task that changes no code without a commit, and the us
 	assert.equal(f.store.task(f.mission.id, f.task.id).status, "done");
 });
 
+test("a delivery report that is not moving is progress, not a result the user checks", async (t) => {
+	const f = await fixture(t);
+	t.mock.method(f.store, "plannedWithoutCoordinator", () => true);
+	await f.service.list(f.project.id);
+	const reports = new MissionReports(f.store);
+	const write = (reportId: string, movement: "moving" | "not_moving" | "unknown") => {
+		const source = reports.source(f.mission.id, "worker", f.task.id);
+		return reports.write(f.mission.id, "worker", {
+			version: 1,
+			reportId,
+			taskId: f.task.id,
+			source: source.source,
+			expectedPreviousId: source.expectedPreviousId,
+			movement,
+			summary: "The consumer half is in place.",
+			nextStep: "wait for a published shared-schema release",
+			evidence: ["local build"],
+			delivery: { commit: "c".repeat(40), checks: "Local build", issues: "Needs the schema release" },
+		});
+	};
+	await write("ready", "moving");
+	const earlier = await f.service.read(f.subject);
+	assert.ok(earlier.deliveryId);
+	await write("waiting", "not_moving");
+	const page = await f.service.read(f.subject);
+	assert.equal(page.deliveryId, null, "a partial delivery is not a result");
+	assert.equal(page.workerDelivery, undefined);
+	assert.deepEqual((await f.service.list(f.project.id)).items, [], "To check and Needs you do not offer it");
+	const done = await f.run(operation(earlier));
+	assert.equal(done.state, "rejected", "Mark done on the earlier result is refused");
+	assert.match(done.state === "rejected" ? (done.reason ?? "") : "", /not ready to check.*not moving/);
+	assert.notEqual(f.store.task(f.mission.id, f.task.id).status, "done");
+	// A newer delivery that is moving or unknown is a result to check again.
+	await write("released", "unknown");
+	const again = await f.service.read(f.subject);
+	assert.ok(again.deliveryId);
+	assert.equal(again.workerDelivery?.reportId, "released");
+	assert.deepEqual((await f.service.list(f.project.id)).items[0]?.subject, f.subject);
+});
+
 test("a task's result shows the worker's latest named screens, and naming new ones is a new delivery", async (t) => {
 	const f = await fixture(t);
 	t.mock.method(f.store, "plannedWithoutCoordinator", () => true);

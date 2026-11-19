@@ -6239,6 +6239,16 @@ ${run.excerpt}`,
 		return meta ? { id: meta.id, title: meta.title } : undefined;
 	}
 
+	/** The GitHub repository ("host/owner/name") of a chat's saved workspace upstream. No git call. */
+	workspaceRepository(id: string): string | undefined {
+		const upstream = this.metas.get(id)?.workspace?.upstream;
+		try {
+			return upstream ? githubRepository(upstream.trim()).identity : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
 	private attachedPullRequest(meta: SessionMeta, url: string): boolean {
 		return (
 			[

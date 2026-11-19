@@ -295,10 +295,17 @@ export class UserVerifications {
 				};
 			// A planned mission whose coordinator is its planning chat has no one to complete tasks or read workers'
 			// requests. The current worker's latest delivery report is then the result, and its requests are shown.
+			// A delivery report that says not_moving is partial progress, not a result: the user does not check it.
 			if (this.deps.store.plannedWithoutCoordinator(subject.missionId)) {
 				const report = this.deps.store.controls.latestReport(subject.missionId, subject.taskId);
 				const delivery = report?.write.delivery;
-				if (!identity && report && delivery && report.sessionId === task.sessionId) {
+				if (
+					!identity &&
+					report &&
+					delivery &&
+					report.sessionId === task.sessionId &&
+					report.write.movement !== "not_moving"
+				) {
 					const { screens: _named, ...facts } = delivery;
 					outputs.workerDelivery = {
 						reportId: report.write.reportId,
@@ -490,6 +497,17 @@ export class UserVerifications {
 		const current = this.readNow(p.subject),
 			key = verificationKey(p.subject);
 		if (acknowledged.pendingOperationId) throw new OperationRejected("Prior verification is uncertain; Check only");
+		if (
+			current.deliveryId === null &&
+			p.subject.kind === "task" &&
+			this.deps.store.plannedWithoutCoordinator(p.subject.missionId)
+		) {
+			const report = this.deps.store.controls.latestReport(p.subject.missionId, p.subject.taskId);
+			if (report?.write.delivery && report.write.movement === "not_moving")
+				throw new OperationRejected(
+					`This task is not ready to check: its worker reports it is not moving (next: ${report.write.nextStep}). Check it after the worker reports a finished delivery.`,
+				);
+		}
 		if (
 			current.deliveryId !== p.deliveryId ||
 			current.verificationRevision !== p.expectedRevision ||

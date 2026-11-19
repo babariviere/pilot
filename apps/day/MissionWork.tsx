@@ -15,7 +15,7 @@ import { goHome } from "./nav";
 import { OpenChatAction } from "./OpenChatAction";
 import { Action, Disclosure, DividedRow, glide, Mark, Panel, Pressable, SectionTitle } from "./ui";
 import { focused, focusFront, todayPlace } from "./view";
-import { provenance, stateOf, taskWord, type WorkState, workMark, workWord } from "./words";
+import { nextLine, provenance, stateOf, taskWord, type WorkState, workMark, workWord } from "./words";
 
 type Lane = "now" | "next" | "blocked";
 
@@ -272,6 +272,11 @@ function NowCard(props: { day: Day; page: MissionPage; task: TaskLine }) {
 				<Reasons task={t()} />
 				<If when={t().report}>
 					<Text class="text-sm text-muted-foreground">{t().report?.summary ?? ""}</Text>
+					<If when={t().report?.movement === "notMoving" && t().report?.nextStep}>
+						<Text class="text-sm text-muted-foreground">
+							{t().report ? nextLine(t().report as NonNullable<TaskLine["report"]>) : ""}
+						</Text>
+					</If>
 					<Text class="text-xs text-faint">
 						{t().report
 							? `${provenance(t().report as NonNullable<TaskLine["report"]>)} · agent words, not verified`

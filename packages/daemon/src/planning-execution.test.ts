@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import type { SessionPullRequest, SessionSummary } from "@pilot/protocol";
 import { PublishedStartRefused } from "./errors.ts";
+import { MissionReports } from "./mission-reports.ts";
 import { MissionService } from "./mission-service.ts";
 import { publishedPlanningFixture } from "./published-planning.fixture.ts";
 
@@ -147,6 +149,12 @@ test("a merged PR that owns a planned task finishes it, and Pilot starts what it
 	});
 	const url = "https://github.com/o/r/pull/7";
 	f.store.addResource(f.missionId, { taskId: first!.id, url });
+	// The worker uses the project folder, so it has no saved upstream: the project folder's origin names the repository.
+	execFileSync("git", ["init", "-q", f.project.path]);
+	execFileSync("git", ["-C", f.project.path, "remote", "add", "origin", "git@github.com:o/r.git"]);
+	const service = new MissionService(f.store, f.sessions, f.projects);
+	t.after(() => service.dispose());
+	await service.readProjectRepositories();
 	const chat = { id: "worker-1", title: "Importer", state: "idle" } as SessionSummary;
 	const pr = (state: "open" | "merged"): SessionPullRequest => ({
 		number: 7,
@@ -164,6 +172,71 @@ test("a merged PR that owns a planned task finishes it, and Pilot starts what it
 	await f.workers.settleResearch();
 	assert.equal(f.store.task(f.missionId, first!.id).status, "done");
 	assert.deepEqual(admitted, [second!.id]);
+});
+
+test("a merged PR in another repository, or on a task that is not moving, leaves the task unfinished", async (t) => {
+	const f = await publishedPlanningFixture(t, { twoSlices: true });
+	const [first] = f.store.plans.get(f.missionId)!.publication!.tasks.map((p) => f.store.task(f.missionId, p.taskId));
+	t.mock.method(f.sessions, "planningIdentity", () => ({ inputGeneration: 0, permission: { level: "build" } }));
+	const admitted: string[] = [];
+	t.mock.method(f.sessions, "admitPublishedTask", async (_request: unknown, identity: { taskId: string }) => {
+		admitted.push(identity.taskId);
+		throw new Error("No task should start");
+	});
+	f.store.join("worker-1", f.missionId);
+	f.store.claimTask(f.missionId, first!.id, "worker-1");
+	const state = f.store.planningWorkers.get(f.missionId)!;
+	f.store.planningWorkers.change(f.missionId, state.revision, (s) => {
+		s.start = { operation: f.submit, sessionId: "worker-1", taskId: first!.id, admitted: true };
+	});
+	f.store.projectRepository = () => "github.com/o/r";
+	const chat = { id: "worker-1", title: "Importer", state: "idle" } as SessionSummary;
+	const merge = async (url: string, number: number) => {
+		f.store.addResource(f.missionId, { taskId: first!.id, url });
+		const pr = (state: "open" | "merged"): SessionPullRequest => ({
+			number,
+			url,
+			title: "Schema",
+			state,
+			checkedAt: Date.now() + 1000,
+			...(state === "merged" ? { mergedAt: Date.now() + 1000 } : {}),
+		});
+		f.store.recordMemberPullRequests(chat, [pr("open")]);
+		f.store.recordMemberPullRequests(chat, [pr("merged")]);
+		await f.workers.settleResearch();
+		return f.store
+			.activity(f.missionId, { kind: "update", limit: 100 })
+			.find((e) => e.text.includes(`PR #${number} `))?.text;
+	};
+	f.workers.startResearch();
+	// A prerequisite PR in another repository does not finish the task.
+	const other = await merge("https://github.com/stoikio/eventbus-schema/pull/239", 239);
+	assert.equal(f.store.task(f.missionId, first!.id).status, "in_progress");
+	assert.match(
+		other ?? "",
+		new RegExp(
+			`PR #239 merged; task #${first!.number} stays in progress: the PR is in github.com/stoikio/eventbus-schema, not this project's repository github.com/o/r`,
+		),
+	);
+	// An own-repository PR does not finish a task whose worker says it is not moving.
+	const reports = new MissionReports(f.store);
+	const source = reports.source(f.missionId, "worker-1", first!.id);
+	await reports.write(f.missionId, "worker-1", {
+		version: 1,
+		reportId: "waiting",
+		taskId: first!.id,
+		source: source.source,
+		expectedPreviousId: source.expectedPreviousId,
+		movement: "not_moving",
+		summary: "Consumer half is ready.",
+		nextStep: "wait for a published shared-schema release",
+		evidence: ["local build"],
+		delivery: { commit: "c".repeat(40), checks: "Local build", issues: "Needs the schema release" },
+	});
+	const own = await merge("https://github.com/o/r/pull/8", 8);
+	assert.equal(f.store.task(f.missionId, first!.id).status, "in_progress");
+	assert.match(own ?? "", /PR #8 merged; task #\d+ stays in progress: its latest report says it is not moving/);
+	assert.deepEqual(admitted, [], "nothing it blocks starts");
 });
 
 test("tasks a confirmed revision adds join the published plan and start by rule", async (t) => {

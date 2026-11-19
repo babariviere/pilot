@@ -127,6 +127,12 @@ export function provenance(report: ReportLine): string {
 	}
 }
 
+/** A report's next step. A report that is not moving says what the work waits for. */
+export function nextLine(report: Pick<ReportLine, "movement" | "nextStep">): string {
+	if (!report.nextStep) return "";
+	return `${report.movement === "notMoving" ? "Waiting" : "Next"}: ${report.nextStep}`;
+}
+
 /** A task's status, in words. */
 export function taskWord(status: TaskStatus): string {
 	switch (status) {

@@ -1,5 +1,5 @@
 import { expect, open, test } from "nsh/test";
-import { stateMark } from "./words";
+import { nextLine, stateMark } from "./words";
 
 const desktop = { platform: "macos", width: 1100, height: 1800 } as const;
 
@@ -90,4 +90,11 @@ test("only stale reports get the folded document mark", () => {
 	expect(stateMark({ state: "unreported", report: { ...report, currentness: "unavailable" } })).toBe("unreported");
 	expect(stateMark({ state: "stuck", report })).toBe("failed");
 	expect(stateMark({ state: "unconfirmed", report })).toBe("unknown");
+});
+
+test("a report that is not moving says what the work waits for", () => {
+	const step = "wait for a published shared-schema release";
+	expect(nextLine({ movement: "notMoving", nextStep: step })).toBe(`Waiting: ${step}`);
+	expect(nextLine({ movement: "moving", nextStep: step })).toBe(`Next: ${step}`);
+	expect(nextLine({ movement: "unknown", nextStep: "" })).toBe("");
 });

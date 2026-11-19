@@ -52,8 +52,11 @@ A push with no saved result stays Unknown. It is Pilot's record, not the agent's
 In a planned mission, a worker's delivery report reaches To check, also for work with no code such as a choice
 between mockups: you check it, and what the worker
 asks its coordinator shows on that page. Answer with Send back or a thread.
+A delivery report that says the work is not moving is partial: it stays out of To check, and the mission page
+shows what it waits for.
 After your first Start work, marking a task's result done finishes the task, and Pilot starts the next
-tasks that are ready, within the worker limit, Pause and Stop. A merged pull request of a task finishes it too.
+tasks that are ready, within the worker limit, Pause and Stop. A merged pull request of a task finishes it too,
+when it is in the project's own repository and the task's latest report does not say it is not moving.
 Coding work has two slots per isolated-copy project and four across Pilot. A project using your folder has
 one writer. Waiting shows dependency, capacity and uncertain-start reasons. An uncertain start keeps its slot;
 Pilot checks the original attempt instead of starting it again. Only tasks with overlapping declared files take

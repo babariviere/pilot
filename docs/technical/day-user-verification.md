@@ -64,7 +64,11 @@ typed read model. Important fields:
   `MissionStore.plannedWithoutCoordinator` missions treat the current task worker's latest report with
   `delivery` facts as the result: saving it records a `report:<id>` discovery source, and its report ID
   is the delivery identity. A task that changes no code (a decision, a mockup, research) delivers with no
-  `commit`, so it reaches To check too. No one else finishes tasks there, so the user's check moves the task: Done
+  `commit`, so it reaches To check too. A delivery report with movement `not_moving` is partial progress, not a
+  result: it records no discovery source and gives no `deliveryId`, so To check and Needs you leave it out and
+  Done on an earlier result is refused. Day shows it on the mission page as "Waiting: <nextStep>". A newer
+  delivery report that is `moving` or `unknown` makes the task checkable again. No one else finishes tasks there,
+  so the user's check moves the task: Done
   finishes it, and a send-back or reopen of a finished task puts it back in progress. The worker's open
   comments to the coordinator (no target chat, newest 10) show on the page, and the user answers with
   Send back or a thread. Pilot also queues no mission notices for these missions.

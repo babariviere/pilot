@@ -61,6 +61,7 @@ import { splitTicket } from "./mission-ticket-work.ts";
 import { type MissionActivityQuery, type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
 import { canonicalJSON } from "./operation-journal.ts";
 import { TASK_PROTOTYPE, type TaskPrototype } from "./planning-worker-store.ts";
+import { ProjectRepositories } from "./project-repositories.ts";
 import type { ProjectStore } from "./projects.ts";
 import { replacedMissionView } from "./replaced-mission.ts";
 import {
@@ -235,6 +236,8 @@ export class MissionService {
 	private readonly store: MissionStore;
 	private readonly sessions: SessionManager;
 	private readonly projects: ProjectStore;
+	/** Project folders' GitHub remotes, for members with no saved workspace upstream. */
+	private readonly repositories: ProjectRepositories;
 	private readonly deliverySnapshots?: Pick<ReviewSnapshotStore, "get">;
 	private readonly reviewProducerObserver?: (
 		recorderSessionId: string,
@@ -259,6 +262,9 @@ export class MissionService {
 		this.deliverySnapshots = deliverySnapshots;
 		this.reviewProducerObserver = reviewProducerObserver;
 		this.store = store;
+		this.repositories = new ProjectRepositories((id) => projects.get(id)?.path);
+		store.projectRepository = (projectId, sessionId) =>
+			sessions.workspaceRepository(sessionId) ?? this.repositories.get(projectId);
 		sessions.setInsightsBacklog(store.insights);
 		sessions.setInsightsWorkspaceStore(store.insightsWorkspace);
 		sessions.setInsightsOwnerStore(store.insightsOwner);
@@ -537,6 +543,10 @@ export class MissionService {
 						return chat ? [chat] : [];
 					},
 				);
+				// A chat with no saved upstream (a project using its folder) needs the project's remote. Read it now, so
+				// it is known when this PR merges.
+				for (const chat of members)
+					if (chat.projectId && !sessions.workspaceRepository(chat.id)) this.repositories.get(chat.projectId);
 				store.updatePullRequest(pr, members, (id) =>
 					store.members(id).flatMap((memberId) => sessions.ownedPullRequests(memberId)),
 				);
@@ -713,6 +723,15 @@ export class MissionService {
 	}
 
 	/** Resolve only persisted links. Never scan member stores or trust a worker-supplied owner/path. */
+	/**
+	 * Reads the git remotes of projects with active missions, before PR recovery can see a merge. Local reads only;
+	 * a project that fails stays unknown and is read again on its next PR update.
+	 */
+	async readProjectRepositories(): Promise<void> {
+		const ids = new Set(this.store.list().flatMap((m) => (m.status === "active" ? [m.projectId] : [])));
+		await Promise.all([...ids].map((id) => this.repositories.read(id)));
+	}
+
 	async readArtifactReference(
 		sessionId: string,
 		id: string,

@@ -387,6 +387,7 @@ async function resumeRuntime(): Promise<void> {
 			memoryObserverStarted = true;
 		}
 
+		await missionService.readProjectRepositories();
 		missionService.notices.start();
 		missionService.continuations.start();
 		schedules.start();
