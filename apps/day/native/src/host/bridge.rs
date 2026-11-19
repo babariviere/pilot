@@ -739,6 +739,7 @@ async fn run(
             unreachable!("handled project navigation")
         }
         Command::ScopedAttention(_) => unreachable!("handled exact cross-project attention"),
+        Command::LinearPublisher(_) => unreachable!("handled on the publisher lane"),
         Command::DeliveryArtifact(_) => unreachable!("handled captured artifact read"),
         Command::DeliveryWork(_) => unreachable!("handled agent work read"),
         Command::ResultReview(_) | Command::ResultReviewCheck(_) | Command::ResultReviewId => {

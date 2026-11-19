@@ -26,12 +26,14 @@ import { GitHubImportService } from "./github-import.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
 import { legacyRuntimeUpdateFrozen } from "./legacy-runtime-update.ts";
+import { linearPublishContext } from "./linear-publish-context.ts";
 import { createLinearSizePoller } from "./linear-size.ts";
 import { MissionLinearSource } from "./linear-source.ts";
 import { LiveUpdateService } from "./live-update.ts";
 import { daemonLogTail } from "./logging.ts";
 import { McpStatusService, workerProbe } from "./mcp-status.ts";
 import { MissionLinearPrChecks } from "./mission-linear-prs.ts";
+import { MissionLinearPublisher } from "./mission-linear-publisher.ts";
 import { MissionLinearSyncService } from "./mission-linear-sync.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
@@ -220,6 +222,11 @@ trackedItems.onChange((projectId) => {
 });
 // Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
+const linearPublisher = new MissionLinearPublisher(
+	missionStore.linearPublisher,
+	(projectId, missionId) => linearPublishContext(missionStore, projects, projectId, missionId),
+	sourceMcp,
+);
 const missionLinear = new MissionLinearSource(missionStore, sourceMcp);
 const linearSync = new MissionLinearSyncService(
 	missionStore,
@@ -423,6 +430,7 @@ const daemonServices = createDaemonServices({
 	telemetry,
 	githubSetup,
 	nativeAuthority: githubSetup.nativeAuthority,
+	linearPublisher,
 	githubImport,
 	environment,
 	bootstrap: runtimeOwner,

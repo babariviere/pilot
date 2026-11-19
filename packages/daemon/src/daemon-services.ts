@@ -107,6 +107,7 @@ export interface DaemonServiceDependencies {
 	liveUpdate?: RuntimeUpdateIntegration;
 	attentionExecutor?: ReadOnlyAttentionExecutor;
 	nativeAuthority?: Pick<import("./native-app-capability.ts").NativeAppCapability, "authenticate">;
+	linearPublisher?: import("./mission-linear-publisher.ts").MissionLinearPublisher;
 }
 
 /** Explicit boot composition. Installs execution bridges before session restoration and HTTP admission. */
@@ -920,6 +921,7 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		nativePlanning,
 		missionThreads,
 		nativeIntake,
+		linearPublisher: options.linearPublisher,
 		nativeChat,
 		nativeProjects,
 		userVerifications,

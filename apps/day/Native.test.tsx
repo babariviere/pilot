@@ -4,6 +4,27 @@
 import { expect, open, test } from "nsh/test";
 
 const DECIDE = "id:decision >> role:button[Decide]";
+test("Linear publisher fixture preview and interrupted write, captured", async () => {
+	const app = await open("./LinearPublisherFixture.tsx", { platform: "macos", width: 1000, height: 1000 });
+	await app.press("id:linear-publisher-open");
+	await app.waitFor("Billing Portal · Publishing off");
+	await app.press("Project setting");
+	await app.press("id:linear-publish-enable");
+	await app.waitFor("Billing Portal · Publishing on");
+	await app.press("Hide project setting");
+	await app.press("id:linear-publish-task-declines");
+	await app.press("id:linear-publish-task-retry");
+	await app.press("id:linear-publish-preview");
+	await app.waitFor("BIL-200 · Make failed payments recoverable");
+	await app.press("id:linear-publish-draft-declines");
+	await app.waitUntil(() => app.texts().some((text) => text.includes("Simulate a card decline")));
+	await app.wait(400);
+	await app.screenshot("output/linear-publisher-preview.png");
+	await app.press("id:linear-publish-confirm");
+	await app.waitFor("id:linear-publish-check");
+	await app.wait(400);
+	await app.screenshot("output/linear-publisher-interrupted.png");
+});
 
 test("result review: outcome and visible code comments captured", async () => {
 	const app = await open("./DeliveryFixture.tsx", { platform: "macos", width: 1100, height: 1400 });

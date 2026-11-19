@@ -17,6 +17,7 @@ pub(crate) mod intake;
 mod inventory;
 mod journal;
 pub(crate) mod knowledge;
+pub(crate) mod linear_publisher;
 pub(crate) mod migration;
 pub(crate) mod model_controls;
 #[cfg(target_os = "macos")]
@@ -1443,6 +1444,7 @@ async fn run(
         tokio::sync::oneshot::Sender<()>,
         tokio::task::JoinHandle<()>,
     )>;
+    let mut active_publisher: Option<tokio::task::JoinHandle<()>> = None;
     // Local clock refresh only. No daemon GET, visit, mark or automatic ritual.
     // An overdue tick runs after wake; missed ticks never build up a queue.
     let mut clock = tokio::time::interval(Duration::from_secs(30));
@@ -1452,6 +1454,15 @@ async fn run(
             biased;
             request = requests.recv() => {
                 let Ok(request) = request else { break; };
+                if matches!(&request.work, Work::Bridge(call) if matches!(call.command, crate::bridge::Command::LinearPublisher(_))) {
+                    let Work::Bridge(call) = request.work else { unreachable!() };
+                    if active_publisher.as_ref().is_some_and(|job| !job.is_finished()) {
+                        (call.reply)(Err(Error::Busy));
+                    } else {
+                        active_publisher = Some(tokio::spawn(linear_publisher::handle(root.search_reader(), shared.clone(), call)));
+                    }
+                    continue;
+                }
                 if matches!(&request.work, Work::Bridge(call) if matches!(call.command, crate::bridge::Command::Search(_))) {
                     if let Some((cancel, previous)) = active_search.take() {
                         let _ = cancel.send(());
@@ -1549,6 +1560,10 @@ async fn run(
     }
     if let Some((cancel, active)) = active_search {
         let _ = cancel.send(());
+        let _ = active.await;
+    }
+    if let Some(active) = active_publisher {
+        active.abort();
         let _ = active.await;
     }
     ws.abort();

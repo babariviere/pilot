@@ -52,3 +52,24 @@ Reassignment holds the affected work and marks contributing tasks delegated.
 When the issue returns to you, only the assignment hold clears. Canceled or
 duplicate issues hold affected work and ask for plan review. No tasks are
 dropped or transferred automatically.
+
+## Publish approved tasks
+
+On a mission, open **Publish tasks to Linear**. Choose a linked top-level
+issue and select approved tasks. Preview the exact issue text and blocking
+links. Enable **Allow publishing in this project** to make the final
+**Publish to Linear** action available. This uses the official Linear MCP
+connection and does not turn on status management.
+
+Pilot keeps each issue mapping. A later preview shows what changed, and edits
+made in Linear need separate reconciliation. Pilot can safely patch an existing
+description, but titles and cleared descriptions need a manual edit in Linear.
+Tasks removed from the plan keep their issues and links.
+
+For a revised task to be publishable, give it an explicit **Outcome** and
+**Acceptance criteria** in the approved plan. **Checks** can name specific
+verification steps. Keep code paths and internal instructions out of those
+sections.
+
+If Linear does not confirm a write, **Check status** only reads Linear. Pilot
+does not resend an unconfirmed write if it cannot verify the result.

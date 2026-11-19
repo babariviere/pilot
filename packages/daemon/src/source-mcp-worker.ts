@@ -64,6 +64,8 @@ const controller = new AbortController();
 class SetupError extends Error {}
 let connection: Connection | undefined;
 let closing: Promise<void> | undefined;
+let publishSent = false;
+let permitPublish: ((granted: boolean) => void) | undefined;
 // SDK connection.close() itself is not single-flight: a second close can miss the first transport's
 // pending stdio shutdown. Await the same close before replying or allowing daemon shutdown.
 const close = () => {
@@ -71,7 +73,12 @@ const close = () => {
 	closing ??= connection.close();
 	return closing;
 };
-parentPort!.on("message", () => {
+parentPort!.on("message", (message: unknown) => {
+	if (message === "permitPublish" || message === "denyPublish") {
+		permitPublish?.(message === "permitPublish");
+		return;
+	}
+	permitPublish?.(false);
 	controller.abort(new Error("MCP request cancelled or timed out"));
 	void close();
 });
@@ -84,6 +91,7 @@ let reply: {
 	failureCategory?: ReturnType<typeof sourceToolFailure>;
 	configuration?: boolean;
 	removalFailure?: SlackRemovalFailure;
+	notDispatched?: true;
 };
 try {
 	const { kind, tool: logicalTool, args } = workerData;
@@ -116,6 +124,37 @@ try {
 	if (config.getMcpToolExposure(entry.config, name) === "hidden") throw new SetupError("MCP tool is hidden");
 	if ("url" in entry.config && entry.config.auth)
 		throw new SetupError("Tracking requires MCP OAuth or configured headers, not a model provider login");
+	const publishing = kind === "linear" && String(logicalTool).startsWith("publish");
+	if (publishing) {
+		// Do not send approved plan text to a custom server configured under the same alias.
+		if (!("url" in entry.config) || new URL(entry.config.url).href !== "https://mcp.linear.app/mcp")
+			throw new SetupError("Publishing requires the official Linear MCP connection");
+		const nativeFetch = globalThis.fetch;
+		globalThis.fetch = async (input, init) => {
+			const target = input instanceof Request ? input.url : String(input);
+			if (target === "https://mcp.linear.app/mcp") {
+				if (logicalTool === "publishIssueWrite" && typeof init?.body === "string") {
+					const request = JSON.parse(init.body) as { method?: string };
+					if (request.method === "tools/call") {
+						// The SDK may retry on OAuth challenges or expired MCP sessions.
+						// A connector response is not proof that a write did not happen.
+						if (publishSent) throw new Error("Linear write cannot be replayed");
+						controller.signal.throwIfAborted();
+						const allowed = await new Promise<boolean>((resolve) => {
+							permitPublish = resolve;
+							parentPort!.postMessage({ publishReady: true });
+						});
+						permitPublish = undefined;
+						controller.signal.throwIfAborted();
+						if (!allowed) throw new Error("Publishing authority changed");
+						publishSent = true;
+					}
+				}
+				return nativeFetch(input, { ...init, redirect: "error" });
+			}
+			return nativeFetch(input, init);
+		};
+	}
 	connection = new runtime.McpServerConnection({
 		entry,
 		cwd: agentDir,
@@ -136,6 +175,7 @@ try {
 		!tool ||
 		(!removal &&
 			logicalTool !== "startIssue" &&
+			logicalTool !== "publishIssueWrite" &&
 			logicalTool !== "startSlack" &&
 			logicalTool !== "doneSlack" &&
 			(tool.annotations?.readOnlyHint === false || tool.annotations?.destructiveHint === true))
@@ -185,6 +225,7 @@ try {
 	const category = error instanceof SourceToolError ? error.category : sourceToolFailure(error);
 	// Never forward external tool text, config values, or transport errors that can contain secrets.
 	reply = {
+		...(workerData.tool === "publishIssueWrite" && !publishSent ? { notDispatched: true as const } : {}),
 		...(workerData.tool === "removeSlackEyes"
 			? {
 					removalFailure:

@@ -17,6 +17,7 @@ import { openDelivery } from "./deliveryView";
 import { openFeedback } from "./feedbackView";
 import { todayWarning } from "./freshness";
 import { keepScroll, restoreScroll, scrollOf } from "./kept";
+import { LinearPublisher } from "./LinearPublisher";
 import { MigrationControls } from "./MigrationControls";
 import { forgetWorkFocus, limited, MissionWork, MoreRows, openMemberChat } from "./MissionWork";
 import { OpenChatAction } from "./OpenChatAction";
@@ -1096,6 +1097,9 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf;
 							/>
 						}
 					/>
+				</If>
+				<If when={planned() && props.day.linear}>
+					<LinearPublisher missionId={row().id} />
 				</If>
 			</View>
 

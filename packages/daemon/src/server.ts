@@ -374,6 +374,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		nativePlanning,
 		missionThreads,
 		nativeIntake,
+		linearPublisher,
 		nativeChat,
 		nativeProjects,
 		userVerifications,
@@ -2108,6 +2109,19 @@ export function createDaemonServer(services: DaemonServices): Server & {
 						: { kind: "chat", projectId: parts[2]!, sessionId: parts[4]! },
 				),
 			);
+		}
+		if (parts[1] === "projects" && parts.length === 6 && parts[3] === "missions" && parts[5] === "linear-publisher") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "POST") throw new HttpError(405, "Use the native Linear publisher");
+			if (!nativeAuthority || !linearPublisher) throw new ServiceUnavailable("Native Linear publisher unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			const body = await readJson<unknown>(req);
+			const end = mutations.begin({ kind: "operation", id: randomUUID() });
+			try {
+				return json(res, 200, await linearPublisher.request(parts[2]!, parts[4]!, body));
+			} finally {
+				end();
+			}
 		}
 		if (parts[1] === "projects" && parts.length === 4 && (parts[3] === "intake" || parts[3] === "saved-linear")) {
 			res.setHeader("cache-control", "no-store");

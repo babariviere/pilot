@@ -8,6 +8,7 @@ import {
 	SlackRemovalError,
 	type SlackRemovalFailure,
 	SourceConfigurationError,
+	SourceNotDispatched,
 	SourceRateLimited,
 	SourceSignInRequired,
 	SourceToolError,
@@ -18,7 +19,13 @@ import { isWatchNotice } from "./worker-notice.ts";
 
 export interface SourceMcpClient {
 	close?(): Promise<void>;
-	call(kind: TrackedKind, tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<TrackingJson>;
+	call(
+		kind: TrackedKind,
+		tool: string,
+		args: Record<string, unknown>,
+		signal: AbortSignal,
+		beforeWrite?: () => void | Promise<void>,
+	): Promise<TrackingJson>;
 	/** Browser sign-in to the dedicated server, as `pi mcp login` does. Rejects with SourceSignInCancelled or
 	 * SourceSignInFailed. With again, signs in even when the stored credentials still work. */
 	signIn?(kind: TrackedKind, options: { again: boolean; signal: AbortSignal }): Promise<void>;
@@ -116,7 +123,17 @@ export class PiSourceMcpClient implements SourceMcpClient {
 		tool: string,
 		args: Record<string, unknown>,
 		signal: AbortSignal,
+		beforeWrite?: () => void | Promise<void>,
 	): Promise<TrackingJson> {
+		if (
+			tool === "publishIssueWrite" &&
+			(!beforeWrite ||
+				this.stopped ||
+				signal.aborted ||
+				this.callWorkers.size >= 2 ||
+				!validSourceArguments(tool, args))
+		)
+			throw new SourceNotDispatched("Linear publisher could not enter the connector.");
 		if (this.stopped) return Promise.reject(new Error("MCP client stopped"));
 		if (signal.aborted) return Promise.reject(signal.reason);
 		if (Buffer.byteLength(JSON.stringify(args)) > 256 * 1024)
@@ -138,9 +155,10 @@ export class PiSourceMcpClient implements SourceMcpClient {
 			const abort = () => worker.postMessage("abort");
 			const timer = setTimeout(abort, 60_000);
 			signal.addEventListener("abort", abort, { once: true });
-			worker.once(
+			let refusedDispatch = false;
+			worker.on(
 				"message",
-				(reply: {
+				async (reply: {
 					value?: TrackingJson;
 					error?: string;
 					signIn?: boolean;
@@ -149,11 +167,28 @@ export class PiSourceMcpClient implements SourceMcpClient {
 					failureCategory?: SourceToolFailure;
 					configuration?: boolean;
 					removalFailure?: SlackRemovalFailure;
+					publishReady?: true;
+					notDispatched?: true;
 				}) => {
+					if (isWatchNotice(reply)) return;
+					if (reply.publishReady) {
+						try {
+							signal.throwIfAborted();
+							await beforeWrite!();
+							signal.throwIfAborted();
+							worker.postMessage("permitPublish");
+						} catch {
+							refusedDispatch = true;
+							worker.postMessage("denyPublish");
+						}
+						return;
+					}
 					replied = true;
 					// Worker posts only after connection.close() and OAuth writes have settled.
 					this.callWorkers.delete(worker);
-					if (signal.aborted) reject(signal.reason);
+					if (refusedDispatch || (tool === "publishIssueWrite" && reply.notDispatched))
+						reject(new SourceNotDispatched("Linear did not receive the change."));
+					else if (signal.aborted) reject(signal.reason);
 					else if (reply.error)
 						reject(
 							reply.removalFailure

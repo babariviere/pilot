@@ -58,6 +58,7 @@ import { InsightsLegacyRecords } from "./insights-legacy.ts";
 import { INSIGHTS_OWNER_SCHEMA, InsightsOwnerStore } from "./insights-owner-store.ts";
 import { INSIGHTS_TRANSITION_SCHEMA, InsightsTransitionStore } from "./insights-transition-store.ts";
 import { INSIGHTS_WORKSPACE_SCHEMA, InsightsWorkspaceStore } from "./insights-workspace-store.ts";
+import { LINEAR_PUBLISHER_SCHEMA, LinearPublisherStore } from "./linear-publisher-store.ts";
 import type { SharedMissionGroup } from "./mission-catalog.ts";
 import {
 	type AllocationContextFence,
@@ -869,6 +870,12 @@ export class MissionStore {
 		run: (sql, ...params) => this.run(sql, ...params),
 		transaction: (work) => this.transaction(work, true),
 	});
+	readonly linearPublisher = new LinearPublisherStore({
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		durable: () => this.durable(),
+	});
 	/** Internal creation-only Day seam. No REST enrollment or legacy adoption. */
 	readonly planningWorkers = new PlanningWorkerStore({
 		one: (sql, ...params) => this.one(sql, ...params),
@@ -1018,6 +1025,7 @@ export class MissionStore {
 		this.db.exec(MISSION_INTERVIEW_SCHEMA);
 		this.db.exec(PLANNING_WORKER_SCHEMA);
 		this.db.exec(MISSION_PLAN_SCHEMA);
+		this.db.exec(LINEAR_PUBLISHER_SCHEMA);
 		this.db.exec(ATTENTION_SCHEMA);
 		this.db.exec(USER_VERIFICATION_SCHEMA);
 		if (!this.one("SELECT 1 FROM sqlite_master WHERE name='delivery_sources'")) {

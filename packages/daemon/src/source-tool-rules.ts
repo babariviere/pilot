@@ -9,6 +9,9 @@ export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | u
 	if (kind === "linear" && tool === "states") return "list_issue_statuses";
 	if (kind === "linear" && tool === "me") return "get_user";
 	if (kind === "linear" && tool === "startIssue") return "save_issue";
+	if (kind === "linear" && tool === "publishIssueRead") return "get_issue";
+	if (kind === "linear" && tool === "publishChildrenRead") return "list_issues";
+	if (kind === "linear" && tool === "publishIssueWrite") return "save_issue";
 	if (kind === "linear" && tool === "teams") return "list_teams";
 	if (kind === "slack" && tool === "history") return "slack_read_channel";
 	if (kind === "slack" && tool === "profile") return "slack_read_user_profile";
@@ -24,6 +27,36 @@ export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | u
 
 /** Write capabilities cannot edit other fields or write any other reaction. */
 export function validSourceArguments(tool: string, args: Record<string, unknown>): boolean {
+	if (tool === "publishIssueWrite") {
+		const uuid = (v: unknown) => typeof v === "string" && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(v);
+		const body = (v: unknown) => typeof v === "string" && v.length > 0 && v.length <= 20_000;
+		const title = (v: unknown) => typeof v === "string" && !!v.trim() && [...v].length <= 200;
+		const keys = Object.keys(args);
+		if (!("id" in args))
+			return (
+				keys.length === 4 && uuid(args.team) && uuid(args.parentId) && title(args.title) && body(args.description)
+			);
+		if (!uuid(args.id)) return false;
+		if ("blocks" in args)
+			return (
+				keys.length === 2 &&
+				Array.isArray(args.blocks) &&
+				args.blocks.length === 1 &&
+				uuid(args.blocks[0]) &&
+				args.blocks[0] !== args.id
+			);
+		const patch = args.patch as { op?: unknown; old_string?: unknown; new_string?: unknown }[] | undefined;
+		return (
+			keys.length === 2 &&
+			Array.isArray(patch) &&
+			patch.length === 1 &&
+			!!patch[0] &&
+			Object.keys(patch[0]).length === 3 &&
+			patch[0].op === "replace" &&
+			body(patch[0].old_string) &&
+			body(patch[0].new_string)
+		);
+	}
 	if (tool === "profile") return Object.keys(args).length === 1 && args.response_format === "detailed";
 	if (tool === "mentionsPrivate")
 		return (
@@ -66,6 +99,8 @@ export class SlackRemovalError extends Error {
 }
 export class SourceSignInRequired extends Error {}
 export class SourceConfigurationError extends Error {}
+/** The caller or connector proved tools/call did not leave this process. */
+export class SourceNotDispatched extends Error {}
 export type SourceToolFailure = "access_denied" | "not_found" | "tool_error";
 /** The tool itself reported an error (for example, no access to one channel). The server was reachable. */
 export class SourceToolError extends Error {
@@ -192,7 +227,9 @@ export function decodeMcpResult(
 	const json = JSON.stringify(value);
 	if (!json || Buffer.byteLength(json) > 512 * 1024) throw new Error("MCP response exceeds 512 KiB or is empty");
 	if (
-		["issue", "states", "startIssue"].includes(tool ?? "") &&
+		["issue", "states", "startIssue", "publishIssueRead", "publishChildrenRead", "publishIssueWrite"].includes(
+			tool ?? "",
+		) &&
 		value &&
 		typeof value === "object" &&
 		(("error" in value && !!value.error) ||

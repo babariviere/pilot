@@ -37,6 +37,12 @@ pub const METHODS: &[&str] = &[
     "day.intake.read",
     "day.linear.read",
     "day.linear.manage",
+    "day.linearPublisher.read",
+    "day.linearPublisher.preview",
+    "day.linearPublisher.check",
+    "day.linearPublisher.setting",
+    "day.linearPublisher.publish",
+    "day.linearPublisher.reconcile",
     "day.preferences.read",
     "day.knowledge.read",
     "day.knowledge.save",
@@ -179,7 +185,12 @@ pub fn restrict(mut bundle: nsh_engine::Bundle) -> Result<nsh_engine::Bundle, Er
         .collect();
     let mut grant = json!({"host":names, "picker": access.allows_picker(), "clipboard": access.allows_clipboard()});
     // A normal inspection window only. The bundle must declare it too.
-    if bundle.policy.declared.as_ref().is_some_and(|caps| caps.windows.is_some()) {
+    if bundle
+        .policy
+        .declared
+        .as_ref()
+        .is_some_and(|caps| caps.windows.is_some())
+    {
         grant["windows"] = json!({"kinds":["normal"],"levels":["normal"],"max":1});
     }
     bundle.policy.granted =
@@ -313,7 +324,10 @@ pub(crate) enum Command {
         session: String,
         older: bool,
     },
-    ChatLiveChanges { session: String, workspace: String },
+    ChatLiveChanges {
+        session: String,
+        workspace: String,
+    },
     /// The open chat as last read. No I/O.
     ChatSnapshot(String),
     /// The chat page closed. Local only: nothing is sent.
@@ -321,6 +335,7 @@ pub(crate) enum Command {
     IntakeRead,
     LinearRead,
     LinearManage(crate::host::intake::Management),
+    LinearPublisher(crate::host::linear_publisher::Request),
     PreferencesRead,
     KnowledgeRead(crate::host::knowledge::Read),
     KnowledgeSave(crate::host::knowledge::Edit),
@@ -611,7 +626,10 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: Read = exact(args)?;
             mission(&r.session_id)?;
             uuid::Uuid::parse_str(&r.workspace_key).map_err(|_| Error::Invalid)?;
-            C::ChatLiveChanges { session: r.session_id, workspace: r.workspace_key }
+            C::ChatLiveChanges {
+                session: r.session_id,
+                workspace: r.workspace_key,
+            }
         }
         "day.chat.recover" => {
             let r: crate::host::new_chat::Recovery = exact(args)?;
@@ -726,6 +744,16 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: crate::host::intake::Management = exact(args)?;
             r.validate()?;
             C::LinearManage(r)
+        }
+        "day.linearPublisher.read"
+        | "day.linearPublisher.preview"
+        | "day.linearPublisher.check"
+        | "day.linearPublisher.setting"
+        | "day.linearPublisher.publish"
+        | "day.linearPublisher.reconcile" => {
+            let r: crate::host::linear_publisher::Request = exact(args)?;
+            r.validate(name)?;
+            C::LinearPublisher(r)
         }
         "day.preferences.read" => {
             if args != json!({}) {
@@ -1194,7 +1222,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             if r.revision == 0 {
                 return Err(Error::Invalid);
             }
-            C::SearchKnowledge { project: r.project_id, id: r.id, revision: r.revision }
+            C::SearchKnowledge {
+                project: r.project_id,
+                id: r.id,
+                revision: r.revision,
+            }
         }
         "day.search.output" => {
             #[derive(serde::Deserialize)]
@@ -1206,7 +1238,10 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: Read = exact(args)?;
             id(&r.project_id)?;
             r.artifact.validate()?;
-            C::SearchOutput { project: r.project_id, request: r.artifact }
+            C::SearchOutput {
+                project: r.project_id,
+                request: r.artifact,
+            }
         }
         "day.today.read"
         | "day.today.refresh"
