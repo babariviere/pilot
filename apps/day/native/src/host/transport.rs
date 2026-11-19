@@ -30,6 +30,9 @@ pub(super) struct Transport {
     /// A global window's current project. Missions of other projects still
     /// resolve through their own project, as they do without a focus.
     pub focused: bool,
+    /// The hello of a gate already passed (`gate_once`). Only a Today scope row's short-lived
+    /// view keeps one, so its parallel reads share one check; every other view checks each call.
+    pub gated: std::sync::OnceLock<Value>,
 }
 
 impl Transport {
@@ -50,6 +53,7 @@ impl Transport {
             replanning: AtomicBool::new(false),
             planning_model: None,
             focused: false,
+            gated: std::sync::OnceLock::new(),
         })
     }
 
@@ -65,6 +69,7 @@ impl Transport {
             replanning: AtomicBool::new(false),
             planning_model: self.planning_model.clone(),
             focused: true,
+            gated: std::sync::OnceLock::new(),
         }
     }
 
@@ -100,6 +105,7 @@ impl Transport {
             replanning: AtomicBool::new(false),
             planning_model: None,
             focused: false,
+            gated: std::sync::OnceLock::new(),
             client: reqwest::Client::builder()
                 .no_proxy()
                 .retry(reqwest::retry::never())
@@ -224,6 +230,24 @@ impl Transport {
     }
 
     pub async fn gate(&self, controls: bool) -> Result<(), Error> {
+        if let Some(v) = self.gated.get() {
+            if controls && v["capabilities"]["missionControls"] != 1 {
+                return Err(Error::Unavailable);
+            }
+            return Ok(());
+        }
+        self.gate_hello(controls).await.map(|_| ())
+    }
+
+    /// Passes the gate once and keeps its hello: later gates on this view reuse it.
+    pub(super) async fn gate_once(&self) -> Result<(), Error> {
+        if self.gated.get().is_none() {
+            let _ = self.gated.set(self.gate_hello(false).await?);
+        }
+        Ok(())
+    }
+
+    async fn gate_hello(&self, controls: bool) -> Result<Value, Error> {
         self.source.project()?;
         let v = self.get("/api/hello").await?;
         self.controls
@@ -250,7 +274,7 @@ impl Transport {
         {
             return Err(Error::Identity);
         }
-        Ok(())
+        Ok(v)
     }
 
     pub async fn overview(&self) -> Result<DayOverview, Error> {

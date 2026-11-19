@@ -381,7 +381,11 @@ async fn read_current(t: &Transport, shared: &Shared, epoch: u64) -> Result<Valu
 /// Passive canonical read, without selecting a page or changing the root's cache.
 pub(super) async fn snapshot(t: &Transport) -> Result<Value, Error> {
     t.gate(false).await?;
-    if t.get("/api/hello").await?["capabilities"]["nativeAttention"] != 1 {
+    let hello = match t.gated.get() {
+        Some(hello) => hello.clone(),
+        None => t.get("/api/hello").await?,
+    };
+    if hello["capabilities"]["nativeAttention"] != 1 {
         return Err(Error::Unavailable);
     }
     let reply = t.attention_call(&json!({"version":1,"home":home(&t.source),"projectId":t.source.project()?.project_id,"kind":"read"}),false).await?;

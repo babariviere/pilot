@@ -394,6 +394,28 @@ async fn switch_timing_with_five_projects_at_30_ms_a_request() {
     println!("scope switch timing: selected project {selected} ms, full read {full} ms");
 }
 
+/// A switch's first read checks the daemon and the project once for the selected project's row,
+/// not once in each of its reads.
+#[tokio::test]
+async fn a_switch_checks_the_selected_project_once_for_all_its_reads() {
+    let peer = Peer::with(false, false, 3, 0);
+    let journal = Journal::open(peer.path.join("journal")).unwrap();
+    let mut first = request("two", 1);
+    first.selected_only = true;
+    let shown = read_projects(&peer.transport, &journal, &first, true, || Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(
+        shown["projects"][1]["today"]["unreported"][0]["id"],
+        "mission-two"
+    );
+    let calls = peer.calls.lock().unwrap();
+    let count = |route: &str| calls.iter().filter(|(c, _)| c == route).count();
+    // One for the project list, one for the row: before, each of the row's reads checked again.
+    assert_eq!(count("GET /api/hello"), 2, "{calls:?}");
+    assert_eq!(count("GET /api/projects/two"), 1, "{calls:?}");
+}
+
 #[tokio::test]
 async fn scope_read_checks_configured_access_and_never_sends_work_or_changes_source() {
     let peer = Peer::new(false, false);

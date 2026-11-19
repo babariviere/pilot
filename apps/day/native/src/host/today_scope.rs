@@ -353,6 +353,8 @@ async fn read_inner(
         shared.open()?;
         request.current(&gate.lock().expect("bridge gate poisoned"))
     };
+    // The project list the focus move read, so the rows do not wait for it a second time.
+    let mut catalog = None;
     // A global window acts on the one project the user chose here. The focus
     // moves first, before the slow per-project reads: a read that times out
     // under load must not leave the window on the previous project. Only the
@@ -360,9 +362,9 @@ async fn read_inner(
     // never sends anything.
     if t.source.project.is_none() && request.scope != "all" {
         check()?;
-        let catalog = new_chat::inventory(t).await?;
+        let read = new_chat::inventory(t).await?;
         check()?;
-        let project = catalog["projects"]
+        let project = read["projects"]
             .as_array()
             .and_then(|rows| rows.iter().find(|p| p["projectId"] == request.scope))
             .ok_or(Error::Stale)?;
@@ -371,11 +373,12 @@ async fn read_inner(
             project_id: request.scope.clone(),
             project_path: path.into(),
         });
+        catalog = Some(read);
     }
     let live = shared.connected.load(Ordering::SeqCst);
     // A project list that changed during the reads (a name, a digest) is read
     // again at once, one time; the newest generation still wins.
-    let mut value = match read_projects(t, journal, request, live, check).await {
+    let mut value = match read_projects_from(t, journal, request, live, check, catalog).await {
         Err(Error::Stale) if check().is_ok() => {
             read_projects(t, journal, request, live, check).await?
         }
@@ -409,8 +412,23 @@ async fn read_projects(
     live: bool,
     check: impl Fn() -> Result<(), Error>,
 ) -> Result<Value, Error> {
+    read_projects_from(t, journal, request, live, check, None).await
+}
+
+/// As `read_projects`, starting from a project list already read, when there is one.
+async fn read_projects_from(
+    t: &Transport,
+    journal: &Journal,
+    request: &Request,
+    live: bool,
+    check: impl Fn() -> Result<(), Error>,
+    catalog: Option<Value>,
+) -> Result<Value, Error> {
     check()?;
-    let catalog = new_chat::inventory(t).await?;
+    let catalog = match catalog {
+        Some(catalog) => catalog,
+        None => new_chat::inventory(t).await?,
+    };
     let projects = catalog["projects"].as_array().ok_or(Error::Invalid)?;
     if request.scope != "all" && !projects.iter().any(|p| p["projectId"] == request.scope) {
         return Err(Error::Invalid);
@@ -511,7 +529,10 @@ async fn project_row(
 ) -> Result<Value, Error> {
     check()?;
     let pt = t.for_project(project)?;
-    let (overview, attention, planning) = futures_util::join!(
+    // One identity and project check for all of this row's reads, which then go out together.
+    // A failed check is not kept: each read checks again and says why it failed.
+    let _ = pt.gate_once().await;
+    let (overview, attention, planning, more) = futures_util::join!(
         async {
             pt.gate(false).await?;
             pt.overview().await
@@ -522,6 +543,17 @@ async fn project_row(
                 .and_then(|v| scoped_attention(v, &pt.source.project()?.project_id, live))
         },
         pt.planning_inventory(),
+        // Only the selected project shows intake and results; they no longer wait for the rest.
+        async {
+            if selected {
+                Some(futures_util::join!(
+                    intake::read(&pt),
+                    results(&pt, journal)
+                ))
+            } else {
+                None
+            }
+        },
     );
     check()?;
     let today = projection(
@@ -576,7 +608,7 @@ async fn project_row(
         if let Ok(v) = planning {
             row["planning"] = serde_json::to_value(v).map_err(|_| Error::Invalid)?;
         }
-        let (intake, results) = futures_util::join!(intake::read(&pt), results(&pt, journal));
+        let (intake, results) = more.ok_or(Error::Invalid)?;
         match intake {
             Ok(v) => row["intake"] = v,
             Err(error) => row["errors"]["intake"] = json!(error.to_string()),
