@@ -754,6 +754,35 @@ function Replan(props: { day: Day; page: MissionPage }) {
 	);
 }
 
+/**
+ * A published plan whose next task can start. It uses only the planning page
+ * already read (no new read), and opens that page, where Start is on top.
+ */
+function ReadyToStart(props: { plans?: Plans; missionId: string }) {
+	const work = () => {
+		props.plans?.planning();
+		const w = props.plans?.feed.page(props.missionId)?.work;
+		return w?.canStart ? w : null;
+	};
+	return (
+		<If when={work()}>
+			<View testID="mission-ready" class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
+				<Text class="text-sm text-foreground">{`Ready to start: “${work()?.title ?? ""}”`}</Text>
+				<Action
+					testID="mission-open-start"
+					label="Open Start"
+					accessibilityLabel="Open the plan at Start work. Opening it starts nothing."
+					onPress={() => {
+						// Back from the plan comes to this page where it was.
+						restoreScroll(`mission/${props.missionId}`, scrollOf(`mission/${props.missionId}`));
+						openPlan(props.missionId);
+					}}
+				/>
+			</View>
+		</If>
+	);
+}
+
 function PlanLink(props: { plans: Plans; missionId: string; linearPlanReview: string[] }) {
 	const row = (): PlanRow | null => props.plans.planning().plans.find((p) => p.missionId === props.missionId) ?? null;
 	const page = () => {
@@ -972,6 +1001,7 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage; shelf: Shelf;
 				</If>
 				<FreshnessNote day={props.day} />
 				<Control day={props.day} page={props.page} />
+				<ReadyToStart plans={props.plans} missionId={row().id} />
 				<ArchiveConfirm day={props.day} page={props.page} />
 			</View>
 

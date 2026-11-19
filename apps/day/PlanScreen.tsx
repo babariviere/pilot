@@ -682,6 +682,10 @@ function Body(props: {
 					<ContinuePlanning plans={props.plans} page={p()} />
 				</If>
 				<Unstick plans={props.plans} page={p()} />
+				{/* Start sits above the long plan, so a published plan shows it without scrolling. */}
+				<If when={p().available}>
+					<StartWork plans={props.plans} page={p()} />
+				</If>
 			</View>
 			<If when={asking() && props.artifacts}>
 				<RoundPrototype page={p()} source={props.artifacts as ArtifactSource} />
@@ -716,7 +720,6 @@ function Body(props: {
 			</If>
 			<If when={p().available}>
 				<Steps steps={p().steps} />
-				<StartWork plans={props.plans} page={p()} />
 			</If>
 			<Rounds page={p()} />
 		</View>

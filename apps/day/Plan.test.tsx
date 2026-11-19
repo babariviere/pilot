@@ -701,3 +701,21 @@ test("activity times use the window's clock and a long quiet says what to do", (
 	);
 	expect(activityQuiet({ ...base, working: false }, QUIET_MS * 2)).toBe("");
 });
+
+test("a published plan shows Start work above the long plan, and the mission overview opens it there", async () => {
+	const app = await open("./PublishedStartFixture.tsx", desktop);
+	// The overview names the ready task from the planning page already read.
+	await app.waitFor("id:mission-ready");
+	expect(app.shows("Ready to start: “Check importer”")).toBe(true);
+	await app.press("id:mission-open-start");
+	await app.waitFor("id:proposal");
+	const texts = app.texts();
+	const start = texts.indexOf("Start work");
+	// One Start, before the plan's own text and the review below it.
+	expect(start).toBeGreaterThan(-1);
+	expect(texts.filter((t) => t === "Start work").length).toBe(1);
+	expect(start).toBeLessThan(texts.indexOf("How it is tested"));
+	expect(start).toBeLessThan(texts.indexOf("Should Pilot publish this plan as tasks?"));
+	await app.press("Start work");
+	await app.waitFor("Start “Check importer” as one background Build task?");
+});
