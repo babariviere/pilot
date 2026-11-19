@@ -108,7 +108,15 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 			acceptance: Type.Array(Type.String()),
 			storyIds: Type.Array(key),
 			dependsOn: Type.Array(key),
-			owners: Type.Array(Type.Union([Type.Literal("opus-ui"), Type.Literal("sol-backend")])),
+			profile: Type.Optional(
+				Type.String({
+					maxLength: 32,
+					description: "One work profile ID from read's profiles. Omit only when read lists none.",
+				}),
+			),
+			size: Type.Union([Type.Literal("large"), Type.Literal("small")], {
+				description: "large: risky, cross-cutting or design-heavy. small: contained.",
+			}),
 			files: Type.Optional(
 				Type.Array(Type.String(), {
 					description:

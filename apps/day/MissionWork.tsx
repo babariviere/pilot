@@ -11,9 +11,9 @@ import { type ContentAnchor, yieldAnchor } from "./contentAnchor";
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { restoreScroll, scrollOf } from "./kept";
-import { goHome } from "./nav";
+import { goHome, goSettings } from "./nav";
 import { OpenChatAction } from "./OpenChatAction";
-import { Action, Disclosure, DividedRow, glide, Mark, Panel, Pressable, SectionTitle } from "./ui";
+import { Action, Disclosure, DividedRow, glide, InlineAction, Mark, Panel, Pressable, SectionTitle } from "./ui";
 import { focused, focusFront, todayPlace } from "./view";
 import { nextLine, provenance, stateOf, taskWord, type WorkState, workMark, workWord } from "./words";
 
@@ -231,6 +231,32 @@ function ChatLink(props: { day: Day; page: MissionPage; task: TaskLine; lane: La
 	);
 }
 
+/**
+ * The task's model and why, such as "UI · large · Sol · preferred". Day has no per-task model choice, so Change
+ * opens Settings at Models, scrolled to the task's work profile with the keyboard focus on it.
+ */
+function TaskModel(props: { task: TaskLine; lane: Lane }) {
+	return (
+		<If when={props.task.modelLine ?? ""}>
+			<View class="flex-row flex-wrap items-center gap-x-2">
+				<Text testID={`${props.lane}-model-${props.task.id}`} class="text-xs text-faint">
+					{props.task.modelLine ?? ""}
+				</Text>
+				<InlineAction
+					label="Change"
+					testID={`${props.lane}-model-change-${props.task.id}`}
+					onPress={() =>
+						goSettings({
+							section: "models",
+							...(props.task.modelProfile ? { profile: props.task.modelProfile } : {}),
+						})
+					}
+				/>
+			</View>
+		</If>
+	);
+}
+
 /** The task's own words, as the mission records them. Opening them only reads. */
 function Details(props: { task: TaskLine; lane: Lane; target: Target }) {
 	const open = () => !!openWork()[props.task.id];
@@ -288,6 +314,7 @@ function NowCard(props: { day: Day; page: MissionPage; task: TaskLine }) {
 				</If>
 				<Prerequisites task={t()} />
 			</View>
+			<TaskModel task={t()} lane="now" />
 			<Details task={t()} lane="now" target={target} />
 		</Panel>
 	);
@@ -333,6 +360,9 @@ function NextRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
 						<Text class="text-xs text-muted-foreground">{workWord(stateOf(t()))}</Text>
 					</View>
 				</Pressable>
+				<View class="py-2">
+					<TaskModel task={t()} lane="next" />
+				</View>
 				<ChatLink day={props.day} page={props.page} task={t()} lane="next" />
 			</View>
 		</DividedRow>

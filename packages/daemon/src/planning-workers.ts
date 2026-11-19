@@ -14,6 +14,7 @@ import type {
 	DurableOperation,
 	MissionPlan,
 	MissionTask,
+	ModelRoute,
 	OperationReceipt,
 	PlanQuestion,
 	UserFeedbackWork,
@@ -50,6 +51,7 @@ import { replacedMissionView } from "./replaced-mission.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { SourceRegistry } from "./sources.ts";
 import { trace } from "./trace.ts";
+import { allowedProfiles, sliceRoute } from "./work-profiles.ts";
 import type { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
 export interface PlanningEnrollment {
@@ -88,6 +90,13 @@ interface Dependencies {
 	feedbackProposal?: (sessionId: string, prototype: boolean) => Promise<UserFeedbackWorkView["proposal"] | undefined>;
 }
 const hash = (value: unknown) => payloadHash(canonicalJSON(value));
+/**
+ * What a confirmed Start binds of its model. A profile route binds the profile and size, not the model: Pilot picks
+ * the least busy entry when the start runs, and that changes with every chat that starts or ends.
+ */
+function startBinding(selection: { model: string; thinking: string }, route: ModelRoute | undefined) {
+	return route?.source === "profile" ? { profile: route.profile?.id, size: route.size } : selection;
+}
 /**
  * Whether a mission may be planned from the feedback's exact triage or prototype, given its saved steps: that chat is
  * about this feedback in this project, the user has not resolved the feedback, and no mission came from that proposal.
@@ -2483,6 +2492,10 @@ export class PlanningWorkers {
 		});
 	}
 
+	private async allowedProfiles(projectId: string) {
+		return allowedProfiles(await this.deps.sessions.workProfiles(), this.deps.projects.require(projectId));
+	}
+
 	private services(binding: PlanningWorkerBinding, guard: () => void) {
 		const plans = new MissionPlans({
 			...this.deps,
@@ -2495,6 +2508,7 @@ export class PlanningWorkers {
 					thinking,
 				);
 			},
+			profiles: async () => (await this.allowedProfiles(binding.projectId)).map((p) => p.id),
 		});
 		const interviews = new MissionInterviews({
 			...this.deps,
@@ -2538,15 +2552,22 @@ export class PlanningWorkers {
 			};
 		const { plans, interviews } = this.services(binding, guard);
 		const published = !!this.deps.store.plans.get(binding.missionId)?.publication;
-		if (request.action === "read")
+		if (request.action === "read") {
+			// The profiles a slice may name, those this project allows: ID, name and what each covers. Never models.
+			const profiles = (await this.allowedProfiles(binding.projectId)).map(({ id, name, covers }) => ({
+				id,
+				name,
+				covers,
+			}));
 			return {
 				value:
 					published && request.revision === undefined
 						? await this.revisitContext(binding, guard)
 						: request.revision === undefined
-							? compactView(await plans.view(binding.missionId))
+							? { ...compactView(await plans.view(binding.missionId)), profiles }
 							: await plans.read(binding.missionId, request.revision),
 			};
+		}
 		if (request.action === "knowledge")
 			return { value: await plans.knowledge(binding.missionId, request.id, request.revision) };
 		if (request.action === "replaced") {
@@ -3042,7 +3063,7 @@ export class PlanningWorkers {
 							: "Start is not confirmed. Check only; do not start again.",
 			};
 		try {
-			const { pin, task, selection } = await this.nextStart(missionId);
+			const { pin, task, selection, route } = await this.nextStart(missionId);
 			return {
 				available: true as const,
 				state: "ready",
@@ -3053,7 +3074,8 @@ export class PlanningWorkers {
 				project: pin.project.name,
 				access: (pin.owner as { permission?: { level: string } }).permission?.level ?? "build",
 				...selection,
-				contextDigest: hash({ pin, selection }),
+				...(route ? { route } : {}),
+				contextDigest: hash({ pin, selection: startBinding(selection, route) }),
 				reason: "",
 			};
 		} catch (e) {
@@ -3102,13 +3124,15 @@ export class PlanningWorkers {
 				throw new Conflict("Task scope changed since its confirmed revision; no Start authority");
 		} else this.matchesSlice(pin, task);
 		this.deps.store.prepareTaskStart(missionId, [task.id]);
-		const selection = await this.deps.sessions.selectTaskModel(
-			pin.project.path,
-			task.preferredModel,
-			task.preferredThinking,
-		);
+		// A model set on the task wins, then the slice's profile and size, then the default.
+		const { route, ...selection } = await this.deps.sessions.selectStartModel(pin.project.id, {
+			model: task.preferredModel,
+			thinking: task.preferredThinking,
+			by: task.preferredModelSetBy === "user" ? "user" : "coordinator",
+			...sliceRoute(pin.plan, task.id),
+		});
 		if (hash(this.startPin(missionId)) !== hash(pin)) throw new Conflict("Start context changed");
-		return { pin, task, selection };
+		return { pin, task, selection, route };
 	}
 	/** A task published with the plan must still be its slice, as published. */
 	private matchesSlice(pin: ReturnType<PlanningWorkers["startPin"]>, task: MissionTask): void {
@@ -3220,7 +3244,7 @@ export class PlanningWorkers {
 		next: Awaited<ReturnType<PlanningWorkers["nextStart"]>>,
 	): Promise<boolean> {
 		const { store, sessions } = this.deps;
-		const { pin, task, selection } = next;
+		const { pin, task, selection, route } = next;
 		const operationId = randomUUID(),
 			sessionId = randomUUID();
 		const current = store.planningWorkers.get(missionId)!;
@@ -3270,6 +3294,7 @@ export class PlanningWorkers {
 		}
 		this.changeAutoStart(missionId, operationId, "admitted");
 		await store.durable();
+		if (route) await sessions.recordModelRoute(sessionId, route).catch(() => undefined);
 		this.executionWait(missionId, undefined);
 		await this.markRequestStarted(missionId, sessionId);
 		console.log(`pilotd: planning ${missionId} started #${task.number} ${task.title} by rule`);
@@ -3392,7 +3417,10 @@ export class PlanningWorkers {
 	private async startEntered(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
 		if (!firstEntry) return this.recoverStart(op);
 		const { store, sessions } = this.deps;
-		let pin: ReturnType<PlanningWorkers["startPin"]>, selection: { model: string; thinking: string }, taskId: string;
+		let pin: ReturnType<PlanningWorkers["startPin"]>,
+			selection: { model: string; thinking: string },
+			route: ModelRoute | undefined,
+			taskId: string;
 		try {
 			const request = JSON.parse(op.payload);
 			interviewExact(request, ["purpose", "expectedRevision", "planDigest", "taskId"]);
@@ -3413,8 +3441,10 @@ export class PlanningWorkers {
 				throw new Conflict("Exact published Start context changed or unavailable");
 			pin = this.startPin(op.targetId);
 			selection = { model: view.model!, thinking: view.thinking! };
+			route = view.route;
 			taskId = view.taskId!;
-			if (hash({ pin, selection }) !== op.bindingId) throw new Conflict("Start context changed");
+			if (hash({ pin, selection: startBinding(selection, route) }) !== op.bindingId)
+				throw new Conflict("Start context changed");
 		} catch (e) {
 			throw new OperationRejected(e instanceof Error ? e.message : "Invalid Start");
 		}
@@ -3484,6 +3514,7 @@ export class PlanningWorkers {
 		});
 		await store.durable();
 		await this.markRequestStarted(op.targetId, sessionId);
+		if (route) await sessions.recordModelRoute(result.sessionId, route).catch(() => undefined);
 		return result;
 	}
 	private async recoverStart(op: DurableOperation) {

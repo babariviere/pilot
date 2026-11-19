@@ -79,6 +79,25 @@ impl Intent {
                         .as_str()
                         .is_some_and(|s| !s.is_empty() && s.len() <= 256)
             }
+            "work-profiles" => {
+                // Same 12-profile limit as the daemon, with its six fields. The daemon checks the rest. The size
+                // limit holds the daemon's largest list: 12 profiles of two 8-entry lists, about 60 KB.
+                self.value.as_array().is_some_and(|a| {
+                    a.len() <= 12
+                        && a.iter().all(|p| {
+                            p.as_object().is_some_and(|o| {
+                                o.len() == 6
+                                    && ["id", "name", "covers"]
+                                        .iter()
+                                        .all(|k| o.get(*k).is_some_and(Value::is_string))
+                                    && o.get("optInOnly").is_some_and(Value::is_boolean)
+                                    && ["large", "small"]
+                                        .iter()
+                                        .all(|k| o.get(*k).is_some_and(Value::is_array))
+                            })
+                        })
+                }) && self.value.to_string().len() <= 65_536
+            }
             "failed-model" => {
                 self.value.as_object().is_some_and(|o| o.len() == 4)
                     && self.value["sessionId"]
@@ -205,6 +224,7 @@ pub(super) fn exact_result(op: &Value, receipt: &Value) -> Result<(), Error> {
         Some(
             "scope"
             | "defaults"
+            | "work-profiles"
             | "project-model"
             | "failed-model"
             | "logout"
@@ -411,6 +431,33 @@ pub(super) async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn work_profiles_send_the_whole_list_of_exact_profiles() {
+        let profile = json!({"id":"cyber","name":"Cyber","covers":"Security work.","optInOnly":true,
+            "large":[{"model":"anthropic/claude-opus-5","thinking":"high"}],"small":[]});
+        let intent = |value| Intent {
+            binding: "a".repeat(64),
+            action: "work-profiles".into(),
+            value,
+        };
+        assert_eq!(intent(json!([profile.clone()])).validate(), Ok(()));
+        assert_eq!(intent(json!([])).validate(), Ok(()));
+        let mut extra = profile.clone();
+        extra["projectId"] = json!("p");
+        assert_eq!(intent(json!([extra])).validate(), Err(Error::Invalid));
+        assert_eq!(
+            intent(json!(vec![profile.clone(); 13])).validate(),
+            Err(Error::Invalid)
+        );
+        let op = json!({"payload":serde_json::to_string(&intent(json!([profile]))).unwrap()});
+        assert_eq!(
+            exact_result(
+                &op,
+                &json!({"result":{"action":"work-profiles","saved":true}})
+            ),
+            Ok(())
+        );
+    }
     #[test]
     fn allowance_actions_require_integer_micros_and_exact_results() {
         for action in [

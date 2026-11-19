@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { DurableOperation } from "@pilot/protocol";
+import type { DurableOperation, WorkProfile } from "@pilot/protocol";
 import { GitHubImportService } from "./github-import.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
@@ -230,7 +230,17 @@ test("native link and unlink change one project's linked list and lookups never 
 	});
 	t.after(() => setup.close());
 	const journal = new OperationJournal(join(home, "operations"), host);
-	const service = new NativeProjects({ projects, setup, imports: new GitHubImportService(setup, projects), journal });
+	const profileList: WorkProfile[] = [
+		{ id: "backend", name: "Backend", covers: "Services.", optInOnly: false, large: [], small: [] },
+		{ id: "cyber", name: "Cyber", covers: "Security work.", optInOnly: true, large: [], small: [] },
+	];
+	const service = new NativeProjects({
+		projects,
+		setup,
+		imports: new GitHubImportService(setup, projects),
+		journal,
+		profiles: async () => profileList,
+	});
 	let sequence = 0;
 	const operation = (action: string, fields: Record<string, string>): DurableOperation => {
 		const payload = JSON.stringify({ purpose: PROJECT_ACTION, action, ...fields });
@@ -259,4 +269,52 @@ test("native link and unlink change one project's linked list and lookups never 
 	assert.equal((await journal.execute(unlink, (o, e) => service.admit(o, e.firstEntry))).state, "accepted");
 	assert.equal(projects.require(app.id).linkedProjects, undefined);
 	await assert.rejects(service.recover(link), /unknown/, "a lookup reports the current list, never relinks");
+	// Profiles allowed in a project: every profile but the opt-in-only ones, until the user ticks or unticks one.
+	const allowed = async () => (await service.read()).projects.find((p) => p.id === app.id)?.profiles;
+	assert.deepEqual(
+		(await service.read()).profiles?.map((p) => [p.id, p.optInOnly]),
+		[
+			["backend", false],
+			["cyber", true],
+		],
+	);
+	assert.deepEqual(await allowed(), ["backend"], "Cyber is off until the user allows it");
+	const before = projects.require(app.id).workflowGeneration;
+	const cyber = operation("allow-profile", { project: app.id, profile: "cyber" });
+	assert.equal((await journal.execute(cyber, (o, e) => service.admit(o, e.firstEntry))).state, "accepted");
+	assert.deepEqual(await allowed(), ["backend", "cyber"]);
+	assert.equal(projects.require(app.id).workflowGeneration, before, "a profile choice confirms no workflow again");
+	assert.equal(projects.require(app.id).profilesEdited, true, "the edit is saved, not inferred");
+	assert.deepEqual(await service.recover(cyber), { project: { id: app.id, allowedProfiles: ["backend", "cyber"] } });
+	const backend = operation("stop-profile", { project: app.id, profile: "backend" });
+	assert.equal((await journal.execute(backend, (o, e) => service.admit(o, e.firstEntry))).state, "accepted");
+	assert.deepEqual(await allowed(), ["cyber"]);
+	assert.deepEqual((await service.read()).projects.find((p) => p.id === lib.id)?.profiles, ["backend"]);
+	// A profile added later is off where the list was edited, and on where it never was (unless opt-in only).
+	profileList.push(
+		{ id: "data", name: "Data", covers: "Pipelines.", optInOnly: false, large: [], small: [] },
+		{ id: "red", name: "Red team", covers: "Attacks.", optInOnly: true, large: [], small: [] },
+	);
+	assert.deepEqual(await allowed(), ["cyber"]);
+	assert.deepEqual((await service.read()).projects.find((p) => p.id === lib.id)?.profiles, ["backend", "data"]);
+	const removed = operation("allow-profile", { project: app.id, profile: "gone" });
+	assert.equal((await journal.execute(removed, (o, e) => service.admit(o, e.firstEntry))).state, "rejected");
+	// Today asks once, after two cyber blocks in a project where Cyber is off and the user never chose.
+	const suggested = async () => (await service.read()).projects.find((p) => p.id === lib.id)?.suggestCyber;
+	await projects.recordCyberBlock(lib.id);
+	assert.equal(await suggested(), false);
+	await projects.recordCyberBlock(lib.id);
+	assert.equal(await suggested(), true);
+	assert.equal((await service.read()).projects.find((p) => p.id === app.id)?.suggestCyber, false);
+	const notNow = operation("cyber-not-now", { project: lib.id });
+	assert.equal((await journal.execute(notNow, (o, e) => service.admit(o, e.firstEntry))).state, "accepted");
+	assert.equal(await suggested(), false);
+	await projects.recordCyberBlock(lib.id);
+	assert.equal(await suggested(), false, "Not now is kept for the project");
+	assert.equal(projects.require(lib.id).cyberBlocks, 3);
+	// Any Cyber tick or untick answers the question too, so it never comes back after a later untick.
+	for (let i = 0; i < 2; i++) await projects.recordCyberBlock(app.id);
+	const off = operation("stop-profile", { project: app.id, profile: "cyber" });
+	assert.equal((await journal.execute(off, (o, e) => service.admit(o, e.firstEntry))).state, "accepted");
+	assert.equal((await service.read()).projects.find((p) => p.id === app.id)?.suggestCyber, false);
 });

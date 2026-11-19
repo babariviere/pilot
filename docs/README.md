@@ -13,6 +13,8 @@ requires an explicit project choice; saved choices stay with their drafts.
 In a profile-only window, New reads that project's configured model and trusted
 planning setup. Choosing starts nothing. Plan a mission starts planning only;
 building still needs the separate Start work confirmation.
+The planner gives each task a [work profile](connections.md#work-profiles) and a size. Pilot starts the
+least busy model for them, and sends a turn blocked as cyber work again in projects that allow Cyber.
 If a mission creation reply is lost, Check status reads that request's saved receipt.
 A similar goal offers Create another as a separate request, never a replay; the first stays checkable.
 Other goals and drafts remain available. Re-planning an old mission offers context to carry over
@@ -188,7 +190,7 @@ sent again. **Dismiss** takes a failed chat off Needs a look and sends nothing t
 | One-time and recurring messages                 | [Schedules](schedules.md)                     |
 | Setup commands, checks, and todo continuation   | [Project hooks](automations.md)               |
 | Generated visuals and attachments               | [Artifacts](artifacts.md)                     |
-| Connections, authentication, and models         | [Models and MCP](connections.md)              |
+| Connections, authentication, models, profiles   | [Models and MCP](connections.md)              |
 | Slack triage                                    | [Slack](slack.md)                             |
 | Linear tickets                                  | [Linear](linear.md)                           |
 | Subscription limits, token history, and context | [Usage](usage.md)                             |

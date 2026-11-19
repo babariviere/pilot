@@ -556,7 +556,13 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 	sessions.screenCall = (sessionId, operation, signal) => screen.call(sessionId, operation, signal);
 	const nativeProjects =
 		journal && githubSetup && githubImport
-			? new NativeProjects({ journal, projects, setup: githubSetup, imports: githubImport })
+			? new NativeProjects({
+					journal,
+					projects,
+					setup: githubSetup,
+					imports: githubImport,
+					profiles: () => models.workProfiles(),
+				})
 			: undefined;
 	const userVerifications =
 		journal && missions ? new UserVerifications({ journal, store: missions.store, projects, sessions }) : undefined;

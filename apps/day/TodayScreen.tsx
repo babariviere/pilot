@@ -5,6 +5,7 @@
 import { effect, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
 import type { Decision, MissionRow } from "pilot-day/native";
 import { ActionCard } from "./ActionCard";
+import { CyberSuggestions } from "./CyberSuggestions";
 import { commit, later, pickNth, toggleHelp, writeReply } from "./commands";
 import { DayLine } from "./DayLine";
 import { DecisionCard, decisionMark } from "./DecisionCard";
@@ -892,6 +893,10 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 									}
 									project={ctx.tagged() ? ctx.name : undefined}
 								/>
+								{/* Only a connected window can read project setup; mock worlds have no model controls. */}
+								<If when={props.day.models}>
+									<CyberSuggestions />
+								</If>
 								<NeedsYou day={props.day} ctx={ctx} interviews={interviews} />
 								<WorkingNow day={props.day} ctx={ctx} />
 								<If when={ctx.tagged()}>

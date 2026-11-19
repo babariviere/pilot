@@ -96,7 +96,8 @@ test("upstream content, required references and license stay byte-exact and attr
 	// A request in prose leaves planning stuck: the user sees no question to answer.
 	assert.match(PLANNING_SKILL_ADAPTATION, /Never end a turn by asking the user something in prose/);
 	for (const boundary of [
-		/each opus-ui slice that adds or changes a screen needs a ui prototype question the user settles/,
+		/each slice that adds or changes a screen needs a ui prototype question the user settles/,
+		/Give each slice one profile from read's profiles and a size: large for risky, cross-cutting or design-heavy work, small for contained work\. Split slices that mix profiles/,
 		/unmodified NSH TSX fixtures\/previews/,
 		/No real mutations, daemon credentials, privileged host access/,
 		/skip-tests advice never exempts integration\/safety tests/,

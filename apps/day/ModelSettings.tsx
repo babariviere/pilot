@@ -12,6 +12,7 @@ import {
 	modelReplacement as replacement,
 } from "./modelSettingsDraft";
 import { Action, Field, Panel, Picker, SectionTitle } from "./ui";
+import { WorkProfiles } from "./WorkProfiles";
 
 function effective(s: ModelSettings, task: boolean): string {
 	const list = task ? s.task : s.available;
@@ -185,6 +186,7 @@ export function ModelSettingsSection(props: { controls: ModelControls }) {
 			<If when={s()}>
 				{(read) => (
 					<View class="gap-4">
+						<WorkProfiles controls={c} settings={read()} />
 						<If
 							when={read().project}
 							else={

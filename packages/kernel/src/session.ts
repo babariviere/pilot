@@ -1277,6 +1277,8 @@ export class KernelSession {
 		model: string,
 		thinking?: string,
 		configuration?: { revalidate(): Promise<void> },
+		/** A work profile's model: any signed-in model, outside the chat model list. Pilot sets it, never the agent. */
+		signedIn = false,
 	): Promise<{ switched: true; attempts?: SessionAttempt[] } | undefined> {
 		if (this.#closing || this.#changingModel || this.#admissions || this.#clarifications || this.#moving)
 			throw new ConversationBusy(this.conversation.id);
@@ -1302,7 +1304,7 @@ export class KernelSession {
 			}, context);
 		try {
 			await configureIdle();
-			const choice = await this.adapter.resolveModel(model.trim());
+			const choice = await this.adapter.resolveModel(model.trim(), signedIn);
 			// Configuration-only admission cannot rebuild history, spend tokens or fork attempts.
 			// Refuse before selecting anything, even when raw replay might happen to fit today.
 			if (configuration && previous.provider !== choice.model.provider) {

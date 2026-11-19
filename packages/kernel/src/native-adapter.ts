@@ -860,13 +860,17 @@ export class NativeAdapter {
 		if (this.#onExtensionInput) this.#onExtensionInput(input);
 		else this.#extensionInputs.push(input);
 	}
-	/** Resolve only an exact, authenticated choice in this workspace's native model scope. */
-	async resolveModel(name: string) {
+	/**
+	 * Resolve only an exact, authenticated choice in this workspace's native model scope. `signedIn` drops the scope
+	 * for a work profile's model, which only has to be signed in.
+	 */
+	async resolveModel(name: string, signedIn = false) {
 		this.assertOpen();
 		const patterns = this.session.settingsManager.getEnabledModels();
-		const available = patterns?.length
-			? (await resolveModelScopeWithDiagnostics(patterns, this.session.modelRuntime)).scopedModels
-			: (await this.session.modelRuntime.getAvailable()).map((model) => ({ model, thinkingLevel: undefined }));
+		const available =
+			patterns?.length && !signedIn
+				? (await resolveModelScopeWithDiagnostics(patterns, this.session.modelRuntime)).scopedModels
+				: (await this.session.modelRuntime.getAvailable()).map((model) => ({ model, thinkingLevel: undefined }));
 		const choice = available.find(({ model }) => `${model.provider}/${model.id}` === name);
 		const resolved = resolveCliModel({ cliModel: name, modelRuntime: this.session.modelRuntime });
 		if (!choice || !resolved.model || resolved.error || `${resolved.model.provider}/${resolved.model.id}` !== name)

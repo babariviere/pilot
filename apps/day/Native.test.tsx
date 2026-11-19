@@ -4,6 +4,28 @@
 import { expect, open, test } from "nsh/test";
 
 const DECIDE = "id:decision >> role:button[Decide]";
+test("work profiles: settings, project checkboxes, the task line and Today's Cyber question, captured", async () => {
+	const settings = await open("./ModelSettingsFixture.tsx", { platform: "macos", width: 1000, height: 1800 });
+	await settings.waitFor("id:profile-backend");
+	await settings.press("id:profile-backend");
+	await settings.waitFor("First is preferred when both are equally busy.");
+	await settings.wait(400);
+	await settings.screenshot("output/work-profiles-settings.png");
+	const projects = await open("./ProjectsFixture.tsx", { platform: "macos", width: 1000, height: 1000 });
+	await projects.waitFor("id:project-profiles-one");
+	await projects.wait(400);
+	await projects.screenshot("output/work-profiles-projects.png");
+	const mission = await open("./MissionOverviewFixture.tsx", { platform: "macos", width: 1100, height: 1400 });
+	await mission.waitFor("id:next-model-search-4");
+	await mission.wait(400);
+	await mission.screenshot("output/work-profiles-task-line.png");
+	const today = await open("./CyberSuggestionsFixture.tsx", { platform: "macos", width: 900, height: 600 });
+	await today.waitFor("id:cyber-suggestion-phishing");
+	await today.wait(400);
+	await today.screenshot("output/work-profiles-today-question.png");
+	expect(today.shows("Phishing hit cyber blocks twice. Allow Cyber work in this project?")).toBe(true);
+});
+
 test("Linear publisher fixture preview and interrupted write, captured", async () => {
 	const app = await open("./LinearPublisherFixture.tsx", { platform: "macos", width: 1000, height: 1000 });
 	await app.press("id:linear-publisher-open");

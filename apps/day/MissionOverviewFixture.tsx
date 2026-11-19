@@ -62,6 +62,8 @@ function running(): TaskLine[] {
 			ownerTitle: "Build · Sonnet",
 			workReason: "Running the Linux test suite.",
 			body: "Run the integration suite on Ubuntu and Fedora with a large workspace.",
+			modelLine: "Backend · large · GPT-6.2 Sol · preferred",
+			modelProfile: "backend",
 		}),
 		moved
 			? task("search-4", 4, "Release pull request", "inProgress", "working", {
@@ -73,6 +75,8 @@ function running(): TaskLine[] {
 			: task("search-4", 4, "Release pull request", "todo", "queued", {
 					workReason: QUEUED,
 					body: "Open the release pull request with the benchmark chart.",
+					modelLine: "UI · large · GPT-6.2 Sol · Claude Opus 5.5 was busier",
+					modelProfile: "ui",
 				}),
 		task("search-5", 5, "Ranking tweaks", "todo", "dependencyBlocked", {
 			workReason: "Waiting for #4 Release pull request.",

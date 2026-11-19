@@ -612,8 +612,14 @@ pub struct Slice {
     pub stories: Vec<String>,
     /// Titles of the slices it needs first.
     pub after: Vec<String>,
-    /// Who builds it.
+    /// Who builds it, in older plans. Newer plans name a work profile instead.
     pub owners: Vec<SliceOwner>,
+    /// The work profile ID whose model starts its task. Empty in older plans.
+    #[prop(default)]
+    pub profile: String,
+    /// large or small. Empty in older plans, which count as large.
+    #[prop(default)]
+    pub size: String,
 }
 
 /// A proposed plan: spec, slices and what is still unknown.

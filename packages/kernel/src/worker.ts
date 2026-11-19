@@ -412,6 +412,7 @@ export function runKernelWorker(): void {
 									})),
 							}
 						: undefined,
+					command.type === "changeModel" && command.signedIn === true,
 				);
 				await send({
 					type: "modelChanged",

@@ -15,7 +15,13 @@ export type ProjectSetup = {
 		setup: { id: string; name: string; enabled: boolean }[];
 		/** IDs of other projects whose read-only main view this project's agents can read. */
 		linked?: string[];
+		/** IDs of the work profiles allowed in this project. */
+		profiles?: string[];
+		/** Today asks once whether to allow Cyber here, after two cyber blocks. */
+		suggestCyber?: boolean;
 	}[];
+	/** Work profiles a project may allow. Absent: the service offers no choice. */
+	profiles?: { id: string; name: string; optInOnly: boolean }[];
 	github: {
 		phase: string;
 		apiReady: boolean;

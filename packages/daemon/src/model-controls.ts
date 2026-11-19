@@ -1,9 +1,9 @@
 /** Native model settings reuse Pi's catalogue and the credential broker, never a chat. */
 import { createHash } from "node:crypto";
-import type { DurableOperation, SetupStartRequest } from "@pilot/protocol";
+import type { DurableOperation, SetupStartRequest, WorkProfile } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { FundingRefused } from "./funding-errors.ts";
-import { type ModelDefaults, ModelDefaultsRefused } from "./model-controls-store.ts";
+import { type ModelDefaults, ModelDefaultsRefused, workProfilesProblem } from "./model-controls-store.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
 import type { ModelCatalog } from "./models.ts";
 import { type OperationJournal, OperationRejected, sameHost } from "./operation-journal.ts";
@@ -227,6 +227,13 @@ export class ModelControls {
 				case "defaults":
 					await this.models.saveDefaults(read.defaultsHash, p.value as ModelDefaults);
 					break;
+				case "work-profiles": {
+					// A profile's model only needs a sign-in, so it is not checked against the chat model list.
+					const problem = workProfilesProblem(p.value);
+					if (problem) throw new OperationRejected(`${problem}. Nothing changed.`);
+					await this.models.saveWorkProfiles(read.defaultsHash, p.value as WorkProfile[]);
+					break;
+				}
 				case "project-model": {
 					if (!read.project || (p.value !== null && !read.task.models.some((m) => m.id === p.value)))
 						throw new OperationRejected("Choose an eligible project model. Nothing changed.");

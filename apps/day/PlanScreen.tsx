@@ -122,6 +122,12 @@ function owner(o: SliceOwner): string {
 	return o === "ui" ? "UI (Opus)" : "Backend (Sol)";
 }
 
+/** Who builds a slice: its work profile and size, or the owners of an older plan. */
+function builder(s: { owners: SliceOwner[]; profile?: string; size?: string }): string {
+	if (s.owners.length) return s.owners.map(owner).join(" · ");
+	return [s.profile, s.size || "large"].filter(Boolean).join(" · ");
+}
+
 /** A short list under a quiet label. */
 function Lines(props: { title: string; lines: string[]; testID?: string }) {
 	return (
@@ -163,7 +169,7 @@ function ProposalView(props: { proposal: Proposal }) {
 						<View testID={`slice-${s().id}`} class="gap-1.5 rounded-xl border border-border px-4 py-3">
 							<View class="flex-row flex-wrap items-baseline gap-2">
 								<Text class="flex-1 text-sm font-medium text-foreground">{s().title}</Text>
-								<Text class="text-xs text-faint">{s().owners.map(owner).join(" · ")}</Text>
+								<Text class="text-xs text-faint">{builder(s())}</Text>
 							</View>
 							<Text class="text-sm text-muted-foreground">{s().outcome}</Text>
 							<Text class="text-xs text-muted-foreground">

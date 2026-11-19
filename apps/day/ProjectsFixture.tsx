@@ -10,8 +10,27 @@ const writes = signal(0),
 const snapshot: ProjectSetup = {
 	version: 1,
 	projects: [
-		{ id: "one", name: "Harbour", path: "/Users/test/src/harbour", copy: "jj", setup: [], linked: [] },
-		{ id: "two", name: "Lighthouse", path: "/Users/test/src/lighthouse", copy: "jj", setup: [] },
+		{
+			id: "one",
+			name: "Harbour",
+			path: "/Users/test/src/harbour",
+			copy: "jj",
+			setup: [],
+			linked: [],
+			profiles: ["backend"],
+		},
+		{
+			id: "two",
+			name: "Lighthouse",
+			path: "/Users/test/src/lighthouse",
+			copy: "jj",
+			setup: [],
+			profiles: ["backend"],
+		},
+	],
+	profiles: [
+		{ id: "backend", name: "Backend", optInOnly: false },
+		{ id: "cyber", name: "Cyber", optInOnly: true },
 	],
 	github: { phase: "ready", apiReady: true, sshReady: true, account: "test", sshIdentity: "existing" },
 	imports: [
@@ -48,6 +67,18 @@ const source: ProjectsSource = {
 								args.action === "link"
 									? [...(p.linked ?? []), args.linked ?? ""]
 									: (p.linked ?? []).filter((id) => id !== args.linked),
+						},
+			);
+		if ((args.action === "allow-profile" || args.action === "stop-profile") && !pending)
+			snapshot.projects = snapshot.projects.map((p) =>
+				p.id !== args.project
+					? p
+					: {
+							...p,
+							profiles:
+								args.action === "allow-profile"
+									? [...(p.profiles ?? []), args.profile ?? ""]
+									: (p.profiles ?? []).filter((id) => id !== args.profile),
 						},
 			);
 		return {

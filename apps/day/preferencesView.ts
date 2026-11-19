@@ -3,7 +3,7 @@
 // the revision it started from, so it is never saved to another project or
 // over a newer list without the user choosing. Leaving the page, closing or
 // updating keeps it (windowState.ts); only Save sends it, once.
-import { signal } from "nsh";
+import { signal, type ViewRef } from "nsh";
 import type { ProjectPreference, ProjectPreferences } from "./preferencesFeed";
 import { glide } from "./ui";
 
@@ -22,10 +22,21 @@ export const preferencesDraft = signal<PreferencesDraft | null>(null);
 /** What the last Save or Check said, or "". */
 export const preferencesMessage = signal("");
 
-/** Opens Settings. Opening it only reads. */
-export function openSettings() {
+/** Where Settings opens: the Models section, at one work profile when named. */
+export type SettingsTarget = { section: "models"; profile?: string };
+
+/** Where the open Settings should go once, or null. Cleared once it scrolled there. */
+export const settingsTarget = signal<SettingsTarget | null>(null);
+
+/** The view Settings scrolls to and focuses for `settingsTarget`. The section that owns the target sets it. */
+export const settingsReveal = signal<ViewRef | null>(null);
+
+/** Opens Settings, at `target` when given. Opening it only reads. */
+export function openSettings(target?: SettingsTarget) {
 	glide();
 	preferencesMessage.set("");
+	settingsReveal.set(null);
+	settingsTarget.set(target ?? null);
 	settingsOpen.set(true);
 }
 
@@ -46,6 +57,8 @@ export function resetPreferencesView() {
 
 /** Back to Today. The draft stays. */
 export function closeSettings() {
+	settingsTarget.set(null);
+	settingsReveal.set(null);
 	settingsOpen.set(false);
 }
 

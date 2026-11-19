@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
+import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import {
 	CONFIG_DIR_NAME,
 	getAgentDir,
@@ -25,6 +25,7 @@ import type {
 	ModelScopeCandidate,
 	ModelScopePatternResolution,
 	ModelScopeUpdateResponse,
+	WorkProfile,
 } from "@pilot/protocol";
 import type { BackgroundAttribution, BackgroundCapture, CompletionRuntime } from "./background-usage.ts";
 import { TITLE_CONTEXT_LIMIT } from "./chat-title.ts";
@@ -35,7 +36,12 @@ import {
 	type ModelRecommendationTask,
 	recommendMissionModel,
 } from "./mission-model-recommendation.ts";
-import { type ModelDefaults, readModelDefaults, writeModelDefaults } from "./model-controls-store.ts";
+import {
+	type ModelDefaults,
+	readModelDefaults,
+	writeModelDefaults,
+	writeWorkProfiles,
+} from "./model-controls-store.ts";
 import { modelChangeThinking, newChatDefaults, taskDefaultThinking } from "./model-defaults.ts";
 import { modelScopeHash, modelScopeUpdate, readModelScopeValue, writeModelScope } from "./model-scope.ts";
 import { readModelSettings, settingsPath } from "./model-settings.ts";
@@ -288,6 +294,28 @@ export class ModelCatalog {
 	async saveDefaults(expectedHash: string, defaults: ModelDefaults) {
 		await writeModelDefaults(this.agentDir, expectedHash, defaults);
 		this.lists.clear();
+	}
+	saveWorkProfiles(expectedHash: string, profiles: WorkProfile[]) {
+		return writeWorkProfiles(this.agentDir, expectedHash, profiles);
+	}
+	async workProfiles(): Promise<WorkProfile[]> {
+		return (await readModelDefaults(this.agentDir)).profiles;
+	}
+
+	/**
+	 * Signed-in models by provider/modelId, with display names and the thinking level each supports. A work profile's
+	 * model only needs a sign-in, like the Slack classifier: enabledModels and the task price cap do not apply.
+	 */
+	async signedIn(): Promise<Map<string, { name: string; thinking(level: string): string }>> {
+		return new Map(
+			(await this.available()).map((m) => [
+				`${m.provider}/${m.id}`,
+				{
+					name: m.name || m.id,
+					thinking: (level: string) => clampThinkingLevel(m, level as Parameters<typeof clampThinkingLevel>[1]),
+				},
+			]),
+		);
 	}
 
 	/** Host-local settings only. Resolution returns identifiers/codes, never runtime models or auth errors. */

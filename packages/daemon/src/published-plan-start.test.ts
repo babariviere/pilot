@@ -7,8 +7,12 @@ import { canonicalJSON, OperationJournal, payloadHash } from "./operation-journa
 import { planningWorkerFixture } from "./planning-workers.fixture.ts";
 import { Worker } from "./sessions.ts";
 
-async function published(t: Parameters<typeof planningWorkerFixture>[0], journey = false) {
-	const f = await planningWorkerFixture(t, journey ? { journey: true } : { publishedPlan: true });
+async function published(
+	t: Parameters<typeof planningWorkerFixture>[0],
+	journey = false,
+	profiles?: NonNullable<Parameters<typeof planningWorkerFixture>[1]>["profiles"],
+) {
+	const f = await planningWorkerFixture(t, journey ? { journey: true, profiles } : { publishedPlan: true, profiles });
 	const enrollment = await f.post(f.enrollment);
 	assert.equal(enrollment.state, "accepted", JSON.stringify(enrollment));
 	const missionId = enrollment.result.missionId as string;
@@ -127,6 +131,41 @@ test("unavailable model authority leaves Start unavailable with no new worker", 
 	assert.equal((await f.read(f.missionId)).start.available, false);
 	assert.equal((await f.post(f.op)).state, "rejected");
 	assert.equal(f.specs.length, 1);
+});
+
+test("a planned task starts with its slice's profile model and records why, outside the task model policy", {
+	timeout: 60000,
+}, async (t) => {
+	const f = await published(t, false, [
+		{
+			id: "backend",
+			name: "Backend",
+			covers: "Services.",
+			optInOnly: false,
+			large: [{ model: "faux/faux-1", thinking: "high" }],
+			small: [],
+		},
+	]);
+	assert.equal(f.store.plans.get(f.missionId)!.slices[0]!.profile, "backend");
+	assert.match(f.store.tasks(f.missionId)[0]!.body ?? "", /\nProfile: backend · large\n/);
+	// The task model policy refuses everything: only the profile route can start this task.
+	t.mock.method(f.sessions, "selectTaskModel", async () => {
+		throw new Error("Model authority unavailable");
+	});
+	const task = f.store.tasks(f.missionId)[0]!;
+	const route = {
+		taskId: task.id,
+		model: "faux/faux-1",
+		modelName: (await f.sessions.modelState()).name("faux/faux-1"),
+		source: "profile",
+		profile: { id: "backend", name: "Backend" },
+		size: "large",
+	};
+	assert.deepEqual(await f.service.taskModelRoutes(f.missionId, [task]), [route]);
+	const receipt = await f.post(f.op);
+	assert.equal(receipt.state, "accepted", JSON.stringify(receipt) + f.logs());
+	assert.equal(f.specs.length, 2);
+	assert.deepEqual(await f.service.taskModelRoutes(f.missionId, f.store.tasks(f.missionId)), [route]);
 });
 
 test("a proven pre-effect refusal releases the user Start and never authorizes continuation", {

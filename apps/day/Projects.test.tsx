@@ -91,6 +91,21 @@ test("import previews its destination before any clone and keeps interrupted imp
 	expect(app.shows("SSH verified (existing).")).toBe(true);
 });
 
+test("each project has one checkbox per work profile; Cyber starts unchecked and a tick allows it there only", async () => {
+	const app = await open("./ProjectsFixture.tsx", desktop);
+	await app.waitFor("id:project-profiles-one");
+	expect(app.shows("Profiles allowed in this project. The planner picks from these for each task.")).toBe(true);
+	expect(app.shows("id:project-profile-tick-one-backend")).toBe(true);
+	expect(app.shows("id:project-profile-tick-one-cyber")).toBe(false);
+	await app.press("id:project-profile-one-cyber");
+	await app.waitFor("id:project-profile-tick-one-cyber");
+	expect(app.shows("Mock data. Actions: 1. Checks: 0.")).toBe(true);
+	expect(app.shows("id:project-profile-tick-two-cyber")).toBe(false);
+	await app.press("id:project-profile-one-backend");
+	await app.waitUntil(() => !app.shows("id:project-profile-tick-one-backend"));
+	expect(app.shows("Mock data. Actions: 2. Checks: 0.")).toBe(true);
+});
+
 test("linking another project is one explicit tick that the next read shows, and unticking unlinks", async () => {
 	const app = await open("./ProjectsFixture.tsx", desktop);
 	await app.waitFor("id:project-links-one");

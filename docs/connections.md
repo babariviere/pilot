@@ -24,6 +24,45 @@ chats, saved drafts and command receipts. Sign out removes the stored credential
 not environment variables or the provider's own authorization. An uncertain
 settings action stays Unknown. **Check receipt** reads its result without resending.
 
+## Work profiles
+
+A work profile names a kind of work and the models that do it. **Settings → AI → Work profiles** lists
+them, closed, with a summary such as "Large: Sol, Opus 5.5 · Small: Terra, Sonnet 5.5". Open one to
+change its two lists: **Large** for risky, cross-cutting or design-heavy work, **Small** for contained work.
+Each entry has a model, any signed-in model, and its own thinking level. Move entries up or down, remove
+them or add one. **Opt-in only** keeps a profile off in every project until you allow it there.
+**Add a profile** and **Remove profile** change the list. Each change saves the whole list once.
+Until you save your own list, Pilot uses Backend, UI and Cyber.
+
+A profile's models only need a signed-in provider. They do not have to be in the chosen model list, and the
+task price ceiling does not apply to them. Keep a model out of the chosen list to keep it out of the chat model
+pickers, and use it only through a profile.
+
+**Settings → Local projects** shows **Profiles allowed in this project**, one checkbox per profile. Until you
+change a project's boxes, it allows every profile except opt-in-only ones such as Cyber. Once you change them,
+the project keeps exactly your list: a profile you add later is off there until you check it.
+A project never puts one profile on all its chats.
+
+The planner gives each task one allowed profile and a size. When Pilot starts the task, it picks the model:
+
+1. A model set on the task, by you or the coordinator.
+2. The task's profile and size, if the project allows that profile. Pilot takes the entry with the fewest of
+   your chats working now. When two are equally busy, the first in the list wins. It skips a model that is
+   not signed in or is at its usage limit.
+3. Your default model. When every profile model was skipped, the task line says why.
+
+A mission's task rows say how the task got its model, such as "Backend · large · Sol · preferred",
+"UI · large · Sol · Opus 5.5 was busier" or "Sol · set by you". **Change** opens Settings at that task's
+work profile, open and focused.
+
+When a provider blocks a turn with "Cyber safeguards flagged this message" and the project allows Cyber,
+Pilot sends that turn again once with a Cyber model. The chat then stays on that model, and a note says
+"<model> blocked this turn as cyber work. Pilot sent it again with Cyber (<model>)." Its task line says
+"after a cyber block". When the project does not allow Cyber, the chat fails as before. After two blocks in
+such a project, Today asks once: "<Project> hit cyber blocks twice. Allow Cyber work in this project?"
+**Allow Cyber** checks Cyber for that project; **Not now** keeps it off. Either answer, or any Cyber box change
+in that project, ends the question there.
+
 ## Scoped models
 
 **Settings → Scoped models** edits pi's global model list on this Mac. Search,

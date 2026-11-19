@@ -455,6 +455,7 @@ fn detail(
         resources: Vec::new(),
         brief: None,
         decisions: Vec::new(),
+        task_models: Vec::new(),
     }
 }
 
@@ -553,6 +554,32 @@ fn native_detail() -> MissionDetail {
             task("native-6", 6, "Find in chat", TaskStatus::Todo, None),
         ],
     );
+    // Mock routes: one task's chat was sent again after a cyber block; the next start takes a less busy model.
+    detail.task_models = vec![
+        crate::contract::TaskModelRoute {
+            task_id: s("native-5"),
+            profile: Some(crate::contract::ProfileName {
+                id: s("cyber"),
+                name: s("Cyber"),
+            }),
+            size: s("large"),
+            model_name: s("Claude Opus 5"),
+            source: s("cyber"),
+            ..Default::default()
+        },
+        crate::contract::TaskModelRoute {
+            task_id: s("native-6"),
+            profile: Some(crate::contract::ProfileName {
+                id: s("ui"),
+                name: s("UI"),
+            }),
+            size: s("large"),
+            model_name: s("GPT-6.2 Sol"),
+            source: s("profile"),
+            busier_name: s("Claude Opus 5.5"),
+            ..Default::default()
+        },
+    ];
     // The chat view merged; the history slice's PR is open and it saved a
     // capture. Linked outputs, not the user's check.
     detail.resources = vec![

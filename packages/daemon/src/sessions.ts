@@ -55,8 +55,10 @@ import type {
 	DiagnosticTargetReference,
 	FailedModelSource,
 	MergePullRequestRequest,
+	ModelRoute,
 	NextAttemptModel,
 	OperationHost,
+	ProfileModel,
 	PullRequestBindingResult,
 	PullRequestMergePreview,
 	RewindAction,
@@ -79,6 +81,8 @@ import type {
 	SubscriptionPause,
 	ToolActivitySnapshot,
 	UpdatePreparation,
+	WorkProfile,
+	WorkSize,
 } from "@pilot/protocol";
 import { nodeTelemetry, type TraceCarrier } from "@pilot/telemetry";
 import release from "../../../package.json" with { type: "json" };
@@ -203,6 +207,7 @@ import { nextToolStallAt, ToolStallWatchdog, toolStallAttention } from "./tool-s
 import { hasUnpublishedWork } from "./unpublished-work.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { UsageHistoryStore } from "./usage-history.ts";
+import { allowedProfiles, isCyberBlock, type ModelState, pickProfileModel, profileHasModel } from "./work-profiles.ts";
 import { WorkerActivity } from "./worker-activity.ts";
 import { WorkerReviewDelivery } from "./worker-review-delivery.ts";
 import { WorkerStarts } from "./worker-starts.ts";
@@ -564,6 +569,10 @@ interface SessionMeta extends OutcomeMeta {
 	failedModelRevision?: string;
 	/** Activated only by a subsequent explicit user input/startup retry. */
 	recoveryModel?: NextAttemptModel;
+	/** Why the chat has its model: a work profile, a model set on its task, or a cyber retry. */
+	modelRoute?: ModelRoute;
+	/** The input entry whose cyber-blocked turn Pilot already sent again. Each turn is retried once. */
+	cyberRetried?: number;
 	/** Work closed by the system sleep policy, never a user Stop. */
 	sleepPaused?: boolean;
 	/** Durable desired input hold, including while its kernel is parked or sleeping. */
@@ -7737,6 +7746,127 @@ ${run.excerpt}`,
 		return this.modelCatalog.selectTaskModel(cwd, model, thinking);
 	}
 
+	workProfiles(): Promise<WorkProfile[]> {
+		return this.modelCatalog.workProfiles();
+	}
+
+	/**
+	 * Signed-in models, limits and working chats, from memory only. Limits come from the usage cache and the limits
+	 * chats recorded from provider refusals; nothing here calls a provider.
+	 */
+	async modelState(): Promise<ModelState & { thinking(entry: ProfileModel): string }> {
+		const signedIn = await this.modelCatalog.signedIn();
+		const limited = new Set(
+			refreshSubscriptionPolicy(undefined, this.subscriptionUsage).windows.map((w) => w.provider),
+		);
+		const working = new Map<string, number>();
+		for (const meta of this.metas.values()) {
+			const policy = meta.subscriptionPolicy;
+			for (const w of policy?.windows ?? [])
+				if (windowUnexpired(w) && !policy?.force?.includes(w.provider)) limited.add(w.provider);
+			if (meta.working && meta.archivedAt === undefined && meta.model)
+				working.set(meta.model, (working.get(meta.model) ?? 0) + 1);
+		}
+		return {
+			signedIn: (model) => signedIn.has(model),
+			limited: (model) => {
+				const provider = subscriptionProvider(modelProvider(model));
+				return !!provider && limited.has(provider);
+			},
+			working: (model) => working.get(model) ?? 0,
+			name: (model) => signedIn.get(model)?.name ?? model,
+			thinking: (entry) => signedIn.get(entry.model)?.thinking(entry.thinking) ?? entry.thinking,
+		};
+	}
+
+	/**
+	 * The model of a new chat in a project. A model set by the user or a coordinator wins, through the task model
+	 * policy. Then the slice's profile and size, when the project allows that profile: the entry with the fewest
+	 * working chats. Then `fallback` (the project model) or the default. Only a profile's model may be outside the
+	 * chat model list: it needs only a sign-in. `route` says why, for the chat and the mission page.
+	 */
+	async selectStartModel(
+		projectId: string,
+		choice: {
+			model?: string;
+			thinking?: string;
+			by?: "user" | "coordinator";
+			profile?: string;
+			size?: WorkSize;
+			fallback?: string;
+		} = {},
+	): Promise<{ model: string; thinking: string; route?: ModelRoute }> {
+		const project = this.projects.require(projectId);
+		if (choice.model !== undefined) {
+			const chosen = await this.selectTaskModel(project.path, choice.model, choice.thinking);
+			return choice.by ? { ...chosen, route: { source: choice.by } } : chosen;
+		}
+		const profile = choice.profile
+			? allowedProfiles(await this.workProfiles(), project).find((p) => p.id === choice.profile)
+			: undefined;
+		const fallback = () => this.selectTaskModel(project.path, choice.fallback, choice.thinking);
+		if (!profile) return fallback();
+		const state = await this.modelState();
+		const pick = pickProfileModel(profile, choice.size ?? "large", state);
+		if (pick.entry) return { model: pick.entry.model, thinking: state.thinking(pick.entry), route: pick.route };
+		return { ...(await fallback()), route: pick.route };
+	}
+
+	/** Saves why a chat started on its model, for the mission page. */
+	async recordModelRoute(id: string, route: ModelRoute): Promise<void> {
+		const meta = this.require(id);
+		meta.modelRoute = route;
+		await this.save(meta);
+	}
+
+	/**
+	 * A provider blocked a turn as cyber work. Pilot counts the block for the project. When the project allows the
+	 * Cyber profile and the chat is not on a Cyber model, Pilot sends that turn again once, with a Cyber model chosen
+	 * like a start (large). The chat stays on that model. Otherwise the chat stays failed.
+	 */
+	private async cyberBlocked(id: string, entry: unknown): Promise<void> {
+		const meta = this.require(id);
+		const project = meta.projectId ? this.projects.get(meta.projectId) : undefined;
+		if (!project) return;
+		await this.projects.recordCyberBlock(project.id);
+		if (typeof entry !== "number" || meta.cyberRetried === entry || meta.role || meta.insightsOwner) return;
+		const cyber = allowedProfiles(await this.workProfiles(), project).find((p) => p.id === "cyber");
+		if (!cyber || profileHasModel(cyber, meta.model)) return;
+		const state = await this.modelState();
+		const pick = pickProfileModel(cyber, "large", state, "cyber");
+		if (!pick.entry) {
+			console.warn(`pilotd: no cyber retry for ${id}: ${pick.route.reason}`);
+			return;
+		}
+		const blocked = meta.model ? state.name(meta.model) : "The model";
+		meta.cyberRetried = entry;
+		await this.save(meta);
+		await this.changeModel(id, pick.entry.model, this.modelCatalog, state.thinking(pick.entry), undefined, true);
+		meta.modelRoute = pick.route;
+		await this.save(meta);
+		await this.rewind(id, "retry", entry);
+		const text = `${blocked} blocked this turn as cyber work. Pilot sent it again with ${cyber.name} (${state.name(pick.entry.model)}).`;
+		await this.workers.get(id)?.request({
+			type: "activity",
+			requestId: `cyber-retry:${entry}`,
+			text,
+			event: { kind: "cyber_retry", text },
+		});
+	}
+
+	/** Each task's newest chat in a mission, with its model and why it has it. */
+	taskChats(missionId: string): Map<string, { model?: string; modelRoute?: ModelRoute }> {
+		const chats = new Map<string, { model?: string; modelRoute?: ModelRoute; createdAt: number }>();
+		for (const meta of this.metas.values()) {
+			if (meta.archivedAt !== undefined || !meta.taskIds?.length) continue;
+			if (this.missions?.membership(meta.id)?.missionId !== missionId) continue;
+			for (const taskId of meta.taskIds)
+				if ((chats.get(taskId)?.createdAt ?? -1) < meta.createdAt)
+					chats.set(taskId, { model: meta.model, modelRoute: meta.modelRoute, createdAt: meta.createdAt });
+		}
+		return chats;
+	}
+
 	/**
 	 * Member chats that were started for these mission tasks. A released task keeps its chat, so a
 	 * restarted task can continue there instead of opening a duplicate. A chat whose worker could not
@@ -8424,6 +8554,8 @@ ${run.excerpt}`,
 		catalog: Pick<ModelCatalog, "list"> = this.modelCatalog,
 		thinking?: string,
 		configuration?: { guard(generation: number): void; preserveThinking?: boolean },
+		/** A work profile's model: it needs only a sign-in, not the chat model list. Only Pilot's cyber retry sets it. */
+		profileModel = false,
 	): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		let locked = false;
@@ -8452,10 +8584,10 @@ ${run.excerpt}`,
 			this.changingModels.set(id, settled);
 			locked = true;
 			const name = model.trim();
-			const list = await catalog.list(meta.cwd);
-			const option = list.models.find((entry) => entry.id === name);
-			if (!option) throw new Error(`Model is not available in this session's scope: ${name}`);
-			if (thinking !== undefined && !option.thinkingLevels?.includes(thinking))
+			const option = profileModel ? undefined : (await catalog.list(meta.cwd)).models.find((m) => m.id === name);
+			if (profileModel ? !(await this.modelCatalog.signedIn()).has(name) : !option)
+				throw new Error(`Model is not available in this session's scope: ${name}`);
+			if (option && thinking !== undefined && !option.thinkingLevels?.includes(thinking))
 				throw new Error(`Thinking level is not supported by ${name}: ${thinking}`);
 			await this.unparked(id);
 			const reopening = !this.workers.has(id);
@@ -8467,7 +8599,7 @@ ${run.excerpt}`,
 				if (thinking === undefined) {
 					const execution = this.insightsOwnerStore!.current(meta.insightsOwner.authority)!;
 					thinking = execution.effectiveThinking ?? execution.thinking;
-					if (thinking === undefined || !option.thinkingLevels?.includes(thinking))
+					if (thinking === undefined || !option?.thinkingLevels?.includes(thinking))
 						throw new Conflict("owner_reported_thinking_unavailable_for_selected_model");
 				}
 			}
@@ -8494,6 +8626,7 @@ ${run.excerpt}`,
 					requestId,
 					model: name,
 					...(thinking !== undefined ? { thinking } : {}),
+					...(profileModel && !configuration ? { signedIn: true as const } : {}),
 				});
 			} catch (error) {
 				if (error instanceof CommandRejected && error.code === "busy") throw new Conflict(error.message);
@@ -15885,6 +16018,16 @@ ${run.excerpt}`,
 			)
 				worker.awaitingJobFollowUp = false;
 			const changed = applyActivity(meta, packet.working, packet.completion, this.backgroundWorking(meta, worker));
+			if (
+				changed &&
+				!packet.working &&
+				packet.completion?.outcome === "failed" &&
+				isCyberBlock(packet.completion.outcomeReason) &&
+				this.workers.get(meta.id) === worker
+			)
+				void this.cyberBlocked(meta.id, (packet.completion as { entry?: unknown }).entry).catch((error: unknown) =>
+					console.warn(`pilotd: cyber retry failed: ${error}`),
+				);
 			if (packet.type === "ready") {
 				if (this.workers.get(meta.id) === worker) worker.openTodoCount = packet.openTodoCount;
 				if (meta.continuationModel?.model === packet.model) delete meta.continuationModel;

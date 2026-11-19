@@ -1,6 +1,7 @@
 // Presentation mirror only. Rust chooses the host/project, journals effects and owns eligibility.
 import { signal } from "nsh";
 import type { FundingOwner, FundingView } from "../../packages/protocol/src/funding";
+import type { WorkProfile } from "../../packages/protocol/src/work-profiles";
 import { call } from "./bridge";
 
 export type ModelChoice = {
@@ -40,6 +41,8 @@ export type ModelSettings = {
 	version: number;
 	binding: string;
 	defaults: ModelDefaults;
+	/** Work profiles, with Pilot's starting set until the user saves a list. */
+	profiles: WorkProfile[];
 	project: { id: string; name: string; model: string | null } | null;
 	scope: {
 		enabledModels: string[] | null;
@@ -67,6 +70,7 @@ export type SignInView = {
 export type ModelAction =
 	| "scope"
 	| "defaults"
+	| "work-profiles"
 	| "project-model"
 	| "failed-model"
 	| "sign-in"

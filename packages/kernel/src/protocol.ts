@@ -258,7 +258,8 @@ export type KernelCommand =
 			mode?: DeliveryMode;
 			guardToken?: string;
 	  }
-	| { type: "changeModel"; requestId: string; model: string; thinking?: string }
+	/** signedIn: a work profile's model, which needs only a sign-in, not the chat model list. */
+	| { type: "changeModel"; requestId: string; model: string; thinking?: string; signedIn?: true }
 	/** Distinct command: older workers cannot silently ignore the configuration-only guard. */
 	| { type: "changeModelConfiguration"; requestId: string; model: string; thinking?: string }
 	| { type: "model.configuration.result"; callId: string; error?: string }

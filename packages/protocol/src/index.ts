@@ -300,7 +300,9 @@ export interface ChatEventSummary {
 		| "automation_finished"
 		| "automation_failed"
 		/** The user retried a run that failed in automatic handoff (POST /api/sessions/:id/retry-handoff). */
-		| "handoff_retry";
+		| "handoff_retry"
+		/** A provider blocked a turn as cyber work and Pilot sent it again with the Cyber profile. */
+		| "cyber_retry";
 	text: string;
 }
 export interface GitHubActionsUpdateEvent {
@@ -790,6 +792,18 @@ export interface Project {
 	path: string;
 	/** Default model for new sessions, "provider/modelId". */
 	model?: string;
+	/**
+	 * Set once the user ticks or unticks a work profile here. From then on `allowedProfiles` is exactly the allowed
+	 * list, so a profile added later is off. Until then every profile that is not opt-in only is allowed.
+	 * A project never forces one profile on its chats.
+	 */
+	profilesEdited?: true;
+	/** With `profilesEdited`: the IDs of the work profiles allowed in this project. */
+	allowedProfiles?: string[];
+	/** Host-owned: turns a provider blocked as cyber work in this project's chats. */
+	cyberBlocks?: number;
+	/** Host-owned: the user answered Not now to "Allow Cyber work in this project?". */
+	cyberSuggestionDismissed?: boolean;
 	/** "clone" (default): each session works in a private clone. "direct": in `path` itself. */
 	workspace?: WorkspaceMode;
 	/** Require branch/PR delivery. Defaults to true; false permits direct default-branch pushes. */
@@ -1458,6 +1472,8 @@ export interface MissionEvent {
 export interface MissionDetail {
 	/** Passive execution queue. Absent on older services, never start authority. */
 	execution?: MissionExecutionView;
+	/** GET /api/missions/:id only: how open tasks pick their start model. Tasks on the default model are absent. */
+	taskModels?: import("./work-profiles.ts").TaskModelRoute[];
 	mission: Mission;
 	brief?: MissionBrief;
 	decisions: MissionDecision[];
@@ -2284,6 +2300,7 @@ export type * from "./tracking.ts";
 export type * from "./transfers.ts";
 export type * from "./usage-history.ts";
 export type * from "./user-feedback.ts";
+export type * from "./work-profiles.ts";
 export type * from "./workflow-confirmations.ts";
 
 /** Explicit status-only lifecycle, distinct from legacy PATCH side effects. No replay key. */

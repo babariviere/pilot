@@ -705,6 +705,12 @@ pub struct TaskLine {
     /// Unfinished actual dependencies. Unknown/missing prerequisites stay visible.
     #[prop(default)]
     pub prerequisites: Vec<TaskPrerequisite>,
+    /// Its model and why: "UI · large · Sol · preferred". Empty: the default model, for no reason worth showing.
+    #[prop(default)]
+    pub model_line: String,
+    /// The work profile behind `model_line`, where its Change opens Settings. Empty without one.
+    #[prop(default)]
+    pub model_profile: String,
 }
 
 /// Work facts for the overview, not a scheduler or permission to start.

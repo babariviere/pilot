@@ -750,6 +750,36 @@ does not prove availability. User/task preferences never silently fall back or e
 Unknown effort alone does not raise scrutiny. Review/check gates never weaken for a weaker or unavailable
 model. This foundation does not write preferences, change chats, start workers or activate delivery.
 
+Work profiles (`pilotWorkProfiles` in Pi's agent `settings.json`, beside `defaultModel`) are
+`{ id, name, covers, optInOnly, large, small }`, at most 12, with at most 8 `{ model, thinking }` entries per size,
+each model once. They share the model defaults' settings lock and revision hash; the native `work-profiles`
+model-controls action replaces the whole list. Without a saved list Pilot uses Backend, UI and Cyber (opt-in only).
+A project never edited allows every profile that is not `optInOnly`. The native `allow-profile`/`stop-profile`
+project actions save `profilesEdited` and the exact `allowedProfiles` list, so a profile added later is off there.
+A project never forces a profile. A Cyber tick or untick also answers Today's Cyber question.
+`SessionManager.selectStartModel` picks a task chat's model: a model set by the user or a coordinator, through
+the task model policy; then the slice's profile and size, when allowed, as the entry with the fewest working
+chats (`meta.working`, in memory; ties go to list order), skipping models that are not signed in or whose
+provider has an unexpired limit window (usage cache or a recorded refusal); then the project model or default
+through the task model policy. Only the profile step skips `enabledModels` and the task price cap. The chat
+saves the reason as `modelRoute`. A confirmed plan Start binds a profile route's profile and size, not its model.
+
+Planner slices name one `profile` from the allowed profile IDs that the unpublished plan read lists (`profiles`)
+and a `size` (`large` or `small`). A proposal with `owners`, an unknown profile or no size is refused. Older
+plans keep `owners` and no size: they still load, validate and start as large with no profile, and their tasks keep
+the `Ownership:` body line that published starts compare. New tasks say `Profile: <id> · <size>`, or
+`Size: <size>` without a profile. `GET /api/missions/:id` adds `taskModels`: each open task's route (its chat's
+`modelRoute`, else a model set on the task, else the next start's pick), with model and display names. It is
+display only.
+
+A failed turn whose reason contains "Cyber safeguards flagged this message" counts in the project's host-owned
+`cyberBlocks`. When the project allows the `cyber` profile and the chat's model is not in it, Pilot picks a Cyber
+large entry by the same rule, changes the chat's model (the kernel's `changeModel` with `signedIn`, which drops
+the chat scope), rewinds with `retry` at the failed input entry and writes a `cyber_retry` activity note. The
+chat records `cyberRetried`, so each turn is sent again once. Native projects add `suggestCyber` after two blocks
+while Cyber is off and the user has not answered it (`cyber-not-now` or a Cyber choice). A task line's Change
+opens Settings at Models, scrolled to that task's profile with the keyboard focus on it; Day has no per-task model choice.
+
 Planning authorization uses the session identity bound by worker IPC, never an actor supplied in tool
 arguments. The loopback REST API remains the existing trusted user/daemon path, not an authenticated
 agent surface. This is not isolation against a full-access shell calling local REST or modifying local

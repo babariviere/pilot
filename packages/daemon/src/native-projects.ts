@@ -1,11 +1,12 @@
 /** Native-only local registration and explicit GitHub setup/import actions. */
-import type { DurableOperation, GitHubSetupAction, Project } from "@pilot/protocol";
+import type { DurableOperation, GitHubSetupAction, Project, WorkProfile } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { type GitHubImportService, importRepository } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
 import { type OperationJournal, OperationRejected, sameHost } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
 import { SetupError } from "./setup-error.ts";
+import { allowedProfiles } from "./work-profiles.ts";
 
 export const PROJECT_ACTION = "native-project-action";
 function registered(p: Project) {
@@ -16,7 +17,24 @@ type Dependencies = {
 	setup: GitHubSetupService;
 	imports: GitHubImportService;
 	journal: OperationJournal;
+	/** Work profiles a project may allow. Absent: projects show no profile choice. */
+	profiles?: () => Promise<WorkProfile[]>;
 };
+/** Cyber blocks in one project before Today asks to allow Cyber there: two, as the user asked. */
+const CYBER_SUGGESTION_BLOCKS = 2;
+/**
+ * Today asks once per project: after two cyber blocks, while Cyber is not allowed there. Not now, or any Cyber tick
+ * or untick in the project, answers it for good.
+ */
+export function suggestCyber(project: Project, profiles: readonly WorkProfile[] | undefined): boolean {
+	const cyber = profiles?.find((p) => p.id === "cyber");
+	return (
+		(project.cyberBlocks ?? 0) >= CYBER_SUGGESTION_BLOCKS &&
+		!project.cyberSuggestionDismissed &&
+		!!cyber &&
+		!allowedProfiles([cyber], project).length
+	);
+}
 export class NativeProjects {
 	private readonly deps: Dependencies;
 	constructor(deps: Dependencies) {
@@ -24,6 +42,8 @@ export class NativeProjects {
 	}
 	async read() {
 		const { projects, setup, imports } = this.deps;
+		// A broken settings file hides the choice; it does not hide the projects.
+		const profiles = await this.deps.profiles?.().catch(() => undefined);
 		return {
 			version: 1,
 			projects: projects.list().map((p) => ({
@@ -32,11 +52,15 @@ export class NativeProjects {
 				path: p.path,
 				copy: p.sourceCopy ?? "legacy",
 				linked: p.linkedProjects ?? [],
+				...(profiles
+					? { profiles: allowedProfiles(profiles, p).map((w) => w.id), suggestCyber: suggestCyber(p, profiles) }
+					: {}),
 				setup:
 					p.automations?.items
 						.filter((a) => a.on.includes("workspace.created") || a.on.includes("workspace.restored"))
 						.map(({ id, name, enabled }) => ({ id, name, enabled })) ?? [],
 			})),
+			...(profiles ? { profiles: profiles.map(({ id, name, optInOnly }) => ({ id, name, optInOnly })) } : {}),
 			github: await setup.status(),
 			imports: await imports.list(),
 		};
@@ -63,6 +87,16 @@ export class NativeProjects {
 			const project = this.deps.projects.get(p.project);
 			if (project && (project.linkedProjects ?? []).includes(p.linked) === (p.action === "link"))
 				return { project: { id: project.id, linked: project.linkedProjects ?? [] } };
+		}
+		if ((p.action === "allow-profile" || p.action === "stop-profile") && typeof p.project === "string") {
+			// Setting a choice: the current project shows whether it took effect. Nothing is replayed.
+			const project = this.deps.projects.get(p.project);
+			if (project?.profilesEdited && project.allowedProfiles?.includes(p.profile) === (p.action === "allow-profile"))
+				return { project: { id: project.id, allowedProfiles: project.allowedProfiles } };
+		}
+		if (p.action === "cyber-not-now" && typeof p.project === "string") {
+			const project = this.deps.projects.get(p.project);
+			if (project?.cyberSuggestionDismissed) return { project: { id: project.id, cyberSuggestionDismissed: true } };
 		}
 		if (p.action === "import") {
 			const saved = await this.deps.imports.acceptedStart(op.operationId);
@@ -110,6 +144,7 @@ export class NativeProjects {
 			"fingerprint",
 			"project",
 			"linked",
+			"profile",
 		];
 		if (
 			Object.keys(p).some((k) => !allowed.includes(k)) ||
@@ -142,6 +177,25 @@ export class NativeProjects {
 					: current.filter((id) => id !== p.linked);
 			const project = await projects.update(p.project, { linkedProjects: next });
 			return { project: { id: project.id, linked: project.linkedProjects ?? [] } };
+		}
+		if (p.action === "allow-profile" || p.action === "stop-profile") {
+			// The user's choice only: Pilot never allows or stops a profile in a project on its own.
+			if (typeof p.project !== "string" || typeof p.profile !== "string")
+				throw new OperationRejected("Choose a project and a work profile");
+			const project = projects.get(p.project);
+			if (!project) throw new OperationRejected("This project was removed. Read again.");
+			const profiles = (await this.deps.profiles?.()) ?? [];
+			if (!profiles.some((w) => w.id === p.profile))
+				throw new OperationRejected("This work profile was removed. Read again.");
+			const current = allowedProfiles(profiles, project).map((w) => w.id);
+			const next = await projects.setAllowedProfile(project.id, p.profile, p.action === "allow-profile", current);
+			return { project: { id: next.id, allowedProfiles: next.allowedProfiles } };
+		}
+		if (p.action === "cyber-not-now") {
+			if (typeof p.project !== "string" || !projects.get(p.project))
+				throw new OperationRejected("This project was removed. Read again.");
+			const project = await projects.dismissCyberSuggestion(p.project);
+			return { project: { id: project.id, cyberSuggestionDismissed: true } };
 		}
 		if (p.action === "import") {
 			if (typeof p.url !== "string" || typeof p.destination !== "string")

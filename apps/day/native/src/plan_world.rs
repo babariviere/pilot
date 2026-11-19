@@ -441,6 +441,8 @@ fn export_slices() -> Vec<Slice> {
             stories: strings(&["s1"]),
             after: Vec::new(),
             owners: vec![SliceOwner::Backend],
+            profile: String::new(),
+            size: String::new(),
         },
         Slice {
             files: Vec::new(),
@@ -454,6 +456,8 @@ fn export_slices() -> Vec<Slice> {
             stories: strings(&["s1", "s2"]),
             after: strings(&["Markdown writer"]),
             owners: vec![SliceOwner::Ui, SliceOwner::Backend],
+            profile: String::new(),
+            size: String::new(),
         },
         Slice {
             files: Vec::new(),
@@ -464,6 +468,8 @@ fn export_slices() -> Vec<Slice> {
             stories: strings(&["s2"]),
             after: strings(&["Markdown writer"]),
             owners: vec![SliceOwner::Backend],
+            profile: String::new(),
+            size: String::new(),
         },
     ]
 }
@@ -568,6 +574,8 @@ fn search_review() -> Plan {
             stories: strings(&["s1"]),
             after: Vec::new(),
             owners: vec![SliceOwner::Backend],
+            profile: String::new(),
+            size: String::new(),
         }],
         Vec::new(),
     );
@@ -598,6 +606,8 @@ pub(crate) fn amend_during_review(plan: &mut Plan) {
         stories: strings(&["s1"]),
         after: strings(&["Workspace index"]),
         owners: vec![SliceOwner::Backend],
+        profile: String::new(),
+        size: String::new(),
     });
     let proposal = self::proposal(proposal.spec, proposal.slices, proposal.open_fog);
     if let Some(old) = plan.round.take() {

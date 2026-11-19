@@ -7,7 +7,7 @@
 // silently replaces typed text, and a draft for another project is never
 // saved here. A Save whose answer was lost stays Unknown: Check only reads
 // its result. Leaving, closing or updating keeps the draft (windowState.ts).
-import { effect, keymap, Scroll, type ScrollRef, signal, Text, untracked, View } from "nsh";
+import { effect, keymap, Scroll, type ScrollRef, signal, Text, untracked, View, type ViewRef } from "nsh";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { DiagnosisSettings } from "./DiagnosisSettings";
 import type { Day } from "./day";
@@ -39,6 +39,8 @@ import {
 	quoteOf,
 	revisionLine,
 	revisionQuote,
+	settingsReveal,
+	settingsTarget,
 	sourceLine,
 } from "./preferencesView";
 import { SchedulesScreen } from "./SchedulesScreen";
@@ -536,8 +538,8 @@ export function SettingsScreen(props: { day: Day; onBackFromJump?: () => boolean
 		else if (!props.onBackFromJump?.()) closeSettings();
 	});
 	const scroll = keepScroll("settings");
-	// A restored offset waits for the rows it scrolled through.
-	let waiting = scroll.contentOffset.y > 0 ? scroll.contentOffset.y : null;
+	// A restored offset waits for the rows it scrolled through. A target (a task line's Change) wins over it.
+	let waiting = scroll.contentOffset.y > 0 && !untracked(settingsTarget) ? scroll.contentOffset.y : null;
 	const scroller = signal<ScrollRef | null>(null);
 	effect(() => {
 		const node = scroller();
@@ -545,6 +547,25 @@ export function SettingsScreen(props: { day: Day; onBackFromJump?: () => boolean
 		const y = waiting;
 		waiting = null;
 		node.scrollTo({ y, animated: false });
+	});
+	// Opened at a target: scroll its view to the top of the screen once, and give it the keyboard focus.
+	const root = signal<ViewRef | null>(null);
+	effect(() => {
+		const node = settingsReveal();
+		const s = scroller();
+		const r = root();
+		if (!node || !s || !r) return;
+		untracked(() => {
+			settingsReveal.set(null);
+			settingsTarget.set(null);
+			void Promise.all([node.measure(), r.measure()])
+				.then(([n, top]) => {
+					if (n && top)
+						s.scrollTo({ y: Math.max(0, n.pagePosition.y - top.pagePosition.y - 24), animated: false });
+					node.focus();
+				})
+				.catch(() => {});
+		});
 	});
 	return (
 		<If
@@ -559,30 +580,32 @@ export function SettingsScreen(props: { day: Day; onBackFromJump?: () => boolean
 						if (waiting === null) scroll.onScroll(e);
 					}}
 				>
-					<Page testID="settings" gap={10}>
-						<ScopedAnswerDrafts />
-						<PageTitle title="Settings" />
-						<If when={props.day.schedules}>
-							<View class="flex-row">
-								<Action
-									label="Schedules…"
-									testID="settings-schedules"
-									onPress={() => schedulesOpen.set(true)}
-								/>
-							</View>
-						</If>
-						<If when={props.day.models}>{(controls) => <ModelSettingsSection controls={controls()} />}</If>
-						<If when={props.day.connections}>{(controls) => <ConnectionSettings controls={controls()} />}</If>
-						<If when={props.day.slack}>{(controls) => <SlackSettings controls={controls()} />}</If>
-						<If when={props.day.diagnosis}>{(controls) => <DiagnosisSettings controls={controls()} />}</If>
-						<Preferences mirror={mirror} />
-						<KnowledgeSection projectId={mirror.view().projectId} />
-						<ProjectsSection />
-						<History mirror={mirror} />
-						<Text class="border-t border-border pt-5 text-xs text-faint">
-							Preferences are what you chose. Pilot's approvals, Stop and spending limits still apply.
-						</Text>
-					</Page>
+					<View ref={(node: ViewRef) => root.set(node)}>
+						<Page testID="settings" gap={10}>
+							<ScopedAnswerDrafts />
+							<PageTitle title="Settings" />
+							<If when={props.day.schedules}>
+								<View class="flex-row">
+									<Action
+										label="Schedules…"
+										testID="settings-schedules"
+										onPress={() => schedulesOpen.set(true)}
+									/>
+								</View>
+							</If>
+							<If when={props.day.models}>{(controls) => <ModelSettingsSection controls={controls()} />}</If>
+							<If when={props.day.connections}>{(controls) => <ConnectionSettings controls={controls()} />}</If>
+							<If when={props.day.slack}>{(controls) => <SlackSettings controls={controls()} />}</If>
+							<If when={props.day.diagnosis}>{(controls) => <DiagnosisSettings controls={controls()} />}</If>
+							<Preferences mirror={mirror} />
+							<KnowledgeSection projectId={mirror.view().projectId} />
+							<ProjectsSection />
+							<History mirror={mirror} />
+							<Text class="border-t border-border pt-5 text-xs text-faint">
+								Preferences are what you chose. Pilot's approvals, Stop and spending limits still apply.
+							</Text>
+						</Page>
+					</View>
 				</Scroll>
 			}
 		>
@@ -590,4 +613,5 @@ export function SettingsScreen(props: { day: Day; onBackFromJump?: () => boolean
 		</If>
 	);
 }
+
 import { ScopedAnswerDrafts } from "./ScopedQuestion";

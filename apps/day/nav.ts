@@ -373,10 +373,10 @@ export function goChanges() {
 	showChanges();
 }
 
-/** Opens Settings from wherever the user is. */
-export function goSettings() {
+/** Opens Settings from wherever the user is, at `target` when given. */
+export function goSettings(target?: import("./preferencesView").SettingsTarget) {
 	goHome();
-	openSettings();
+	openSettings(target);
 }
 
 /** Opens Feedback about Pilot in general from wherever the user is. Opening it sends nothing. */

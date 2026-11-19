@@ -106,6 +106,20 @@ test("opening a mission names the work now, its owner and what is next, without 
 	expect(app.shows("Results and evidence · 2")).toBe(true);
 });
 
+test("a task line names its profile, size, model and why; Change opens Settings", async () => {
+	const app = await opened();
+	expect(app.shows("id:now-model-search-3")).toBe(true);
+	expect(app.shows("Backend · large · GPT-6.2 Sol · preferred")).toBe(true);
+	expect(app.shows("id:now-model-change-search-3")).toBe(true);
+	expect(app.shows("id:next-model-search-4")).toBe(true);
+	expect(app.shows("UI · large · GPT-6.2 Sol · Claude Opus 5.5 was busier")).toBe(true);
+	// A task on the default model shows no line.
+	expect(app.shows("id:blocked-model-search-5")).toBe(false);
+	await app.press("id:next-model-change-search-4");
+	// This mock world has no Settings, so going there leaves the mission page.
+	await app.waitUntil(() => !app.shows("id:next-search-4"));
+});
+
 test("blockers tell a task dependency from a task marked blocked and an unavailable prerequisite", async () => {
 	const app = await opened();
 	expect(app.shows("id:blocked-search-5 >> text:Waits for earlier work")).toBe(true);

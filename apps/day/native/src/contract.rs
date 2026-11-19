@@ -551,6 +551,38 @@ pub struct MissionDetail {
     /// Every decision, replaced and withdrawn ones too.
     #[serde(default)]
     pub decisions: Vec<MissionDecision>,
+    /// How open tasks got, or pick, their start model. Tasks on the default model have none.
+    #[serde(default)]
+    pub task_models: Vec<TaskModelRoute>,
+}
+
+/// `TaskModelRoute`: a task's model and why. Display only, never start authority.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskModelRoute {
+    pub task_id: String,
+    #[serde(default)]
+    pub profile: Option<ProfileName>,
+    /// large or small, with a profile.
+    #[serde(default)]
+    pub size: String,
+    #[serde(default)]
+    pub model_name: String,
+    /// user, coordinator, profile, default or cyber.
+    #[serde(default)]
+    pub source: String,
+    /// The preferred model's name, when Pilot took a later one because it had fewer working chats.
+    #[serde(default)]
+    pub busier_name: String,
+    /// Why Pilot skipped the preferred model, or why the default model starts.
+    #[serde(default)]
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ProfileName {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -105,6 +105,37 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 								<Text class="text-xs text-faint">{`${s().enabled ? "Configured setup" : "Disabled setup"}: ${s().name}`}</Text>
 							)}
 						</Each>
+						<If when={snapshot()?.profiles}>
+							{(profiles) => (
+								<View testID={`project-profiles-${p().id}`} class="gap-1">
+									<Text class="text-xs text-muted-foreground">
+										Profiles allowed in this project. The planner picks from these for each task.
+									</Text>
+									<View class="flex-row flex-wrap gap-x-2">
+										<Each of={profiles()} key={(w) => w.id}>
+											{(w) => (
+												<CheckboxRow
+													testID={`project-profile-${p().id}-${w().id}`}
+													tickTestID={`project-profile-tick-${p().id}-${w().id}`}
+													label={w().name}
+													checked={(p().profiles ?? []).includes(w().id)}
+													disabled={disabled()}
+													onChange={() =>
+														void action({
+															action: (p().profiles ?? []).includes(w().id)
+																? "stop-profile"
+																: "allow-profile",
+															project: p().id,
+															profile: w().id,
+														})
+													}
+												/>
+											)}
+										</Each>
+									</View>
+								</View>
+							)}
+						</If>
 						<If when={(snapshot()?.projects.length ?? 0) > 1}>
 							<Disclosure
 								testID={`project-links-${p().id}`}

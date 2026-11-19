@@ -11,6 +11,7 @@ use crate::{
 /// Index once per mission read; large plans must not rescan every session per task.
 pub(crate) struct MissionWork<'a> {
     tasks: HashMap<&'a str, &'a c::Task>,
+    models: HashMap<&'a str, &'a c::TaskModelRoute>,
     owners: HashMap<&'a str, &'a c::MissionAgent>,
     working: HashMap<&'a str, &'a c::WorkingItem>,
     questions: HashMap<&'a str, &'a c::NeedsYouItem>,
@@ -49,6 +50,11 @@ impl<'a> MissionWork<'a> {
                 .into_iter()
                 .flat_map(|d| &d.tasks)
                 .map(|t| (t.id.as_str(), t))
+                .collect(),
+            models: detail
+                .into_iter()
+                .flat_map(|d| &d.task_models)
+                .map(|m| (m.task_id.as_str(), m))
                 .collect(),
             owners: inputs
                 .overview
@@ -242,7 +248,87 @@ impl<'a> MissionWork<'a> {
                 .unwrap_or_default(),
             body: task.body.clone(),
             prerequisites,
+            model_line: self
+                .models
+                .get(task.id.as_str())
+                .filter(|_| status != TaskStatus::Done)
+                .map(|m| model_line(m))
+                .unwrap_or_default(),
+            model_profile: self
+                .models
+                .get(task.id.as_str())
+                .and_then(|m| m.profile.as_ref())
+                .map(|p| p.id.clone())
+                .unwrap_or_default(),
             ..TaskLine::default()
         }
+    }
+}
+
+/// "Backend · large · Sol · preferred", "UI · large · Sol · Opus 5.5 was busier", "Sol · set by you" or
+/// "Cyber · large · Opus 5 · after a cyber block".
+pub(crate) fn model_line(route: &c::TaskModelRoute) -> String {
+    let profile = route
+        .profile
+        .as_ref()
+        .map(|p| format!("{} · {} · ", p.name, route.size))
+        .unwrap_or_default();
+    let model = &route.model_name;
+    match route.source.as_str() {
+        "user" => format!("{model} · set by you"),
+        "coordinator" => format!("{model} · set by the coordinator"),
+        "cyber" => format!("{profile}{model} · after a cyber block"),
+        "default" if !route.reason.is_empty() => {
+            format!("{profile}default {model} · {}", route.reason)
+        }
+        "profile" if !route.busier_name.is_empty() => {
+            format!("{profile}{model} · {} was busier", route.busier_name)
+        }
+        "profile" if !route.reason.is_empty() => format!("{profile}{model} · {}", route.reason),
+        "profile" => format!("{profile}{model} · preferred"),
+        _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn model_lines_name_the_profile_size_model_and_why() {
+        let route = |source: &str, busier: &str, reason: &str| c::TaskModelRoute {
+            task_id: "t".into(),
+            profile: Some(c::ProfileName {
+                id: "ui".into(),
+                name: "UI".into(),
+            }),
+            size: "large".into(),
+            model_name: "Sol".into(),
+            source: source.into(),
+            busier_name: busier.into(),
+            reason: reason.into(),
+        };
+        assert_eq!(model_line(&route("profile", "", "")), "UI · large · Sol · preferred");
+        assert_eq!(
+            model_line(&route("profile", "Opus 5.5", "")),
+            "UI · large · Sol · Opus 5.5 was busier"
+        );
+        assert_eq!(
+            model_line(&route("profile", "", "Opus 5.5 is at its limit")),
+            "UI · large · Sol · Opus 5.5 is at its limit"
+        );
+        assert_eq!(
+            model_line(&route("default", "", "no UI large model is signed in")),
+            "UI · large · default Sol · no UI large model is signed in"
+        );
+        assert_eq!(model_line(&route("default", "", "")), "");
+        assert_eq!(
+            model_line(&route("cyber", "", "")),
+            "UI · large · Sol · after a cyber block"
+        );
+        let set = c::TaskModelRoute {
+            profile: None,
+            ..route("user", "", "")
+        };
+        assert_eq!(model_line(&set), "Sol · set by you");
     }
 }

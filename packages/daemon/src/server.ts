@@ -4478,8 +4478,12 @@ async function missionRoute(
 	}
 	if (!id) return false;
 	if (parts.length === 3) {
-		if (method === "GET")
-			return (json(res, 200, { ...store.detail(id), execution: service.executionView?.(id) }), true);
+		if (method === "GET") {
+			const detail = store.detail(id);
+			// A broken settings file hides the model lines; it never fails the mission read.
+			const taskModels = await service.taskModelRoutes?.(id, detail.tasks).catch(() => undefined);
+			return (json(res, 200, { ...detail, execution: service.executionView?.(id), taskModels }), true);
+		}
 		if (method === "PATCH")
 			return (json(res, 200, store.update(id, await readJson<UpdateMissionRequest>(req))), true);
 		if (method === "DELETE") {

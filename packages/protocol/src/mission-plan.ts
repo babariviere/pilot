@@ -67,8 +67,12 @@ export interface PlanSlice {
 	acceptance: string[];
 	storyIds: string[];
 	dependsOn: string[];
-	/** Mixed slices keep substantive UI and backend ownership explicit. */
-	owners: ("opus-ui" | "sol-backend")[];
+	/** The work profile whose models start the slice's task. New slices name one; older plans have owners. */
+	profile?: string;
+	/** large: risky, cross-cutting or design-heavy. small: contained. Older plans have none and count as large. */
+	size?: import("./work-profiles.ts").WorkSize;
+	/** Older plans only: UI and backend ownership. Their published tasks keep the "Ownership:" line. */
+	owners?: ("opus-ui" | "sol-backend")[];
 	/** Exact repository-relative files or directory prefixes. Omitted scope takes the whole project's writer slot. */
 	files?: string[];
 	/**

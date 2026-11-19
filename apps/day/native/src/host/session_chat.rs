@@ -358,6 +358,14 @@ pub(crate) fn rows(entries: &[Value], cwd: &str, newest: bool) -> Vec<Value> {
             rows.push(json!({"key":id.to_string(),"entryId":id,"role":role,"text":text,"shortened":shortened}));
             continue;
         }
+        // Pilot's note after it sent a cyber-blocked turn again with the Cyber profile.
+        if entry["kind"] == "pilot.activity" && entry["data"]["event"]["kind"] == "cyber_retry" {
+            if let Some(text) = entry["data"]["event"]["text"].as_str() {
+                let (text, shortened) = limited(text.to_owned());
+                rows.push(json!({"key":id.to_string(),"entryId":id,"role":"request","text":text,"shortened":shortened}));
+            }
+            continue;
+        }
         let (role, from) = match entry["kind"].as_str() {
             Some("pi.user") => ("you", "user"),
             Some("pi.assistant") => ("pilot", "assistant"),
@@ -894,6 +902,17 @@ mod tests {
 
     #[test]
     fn entries_become_messages_and_compact_steps() {
+        let note = "Opus 5.5 blocked this turn as cyber work. Pilot sent it again with Cyber (Opus 5).";
+        let entries = vec![
+            json!({"id":5,"kind":"pilot.activity","model":[],
+                "data":{"text":note,"event":{"kind":"cyber_retry","text":note}}}),
+            json!({"id":6,"kind":"pilot.activity","model":[],
+                "data":{"text":"Checks passed","event":{"kind":"automation_finished","text":"Checks passed"}}}),
+        ];
+        let notes = rows(&entries, "/w", true);
+        assert_eq!(notes.len(), 1, "only the cyber retry note shows");
+        assert_eq!(notes[0]["role"], "request");
+        assert_eq!(notes[0]["text"], note);
         let entries = vec![
             result(4, "c1", true),
             assistant(

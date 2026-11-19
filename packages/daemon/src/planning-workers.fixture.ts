@@ -36,6 +36,8 @@ export async function planningWorkerFixture(
 		journey?: boolean;
 		/** A fake request source for the project, passed to the daemon as its tracking. */
 		tracking?: (projectId: string) => { tracking: unknown };
+		/** Saved work profiles. Default: none, so slices name no profile and starts use the default model. */
+		profiles?: import("@pilot/protocol").WorkProfile[];
 	} = {},
 ) {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "planning-worker-")));
@@ -94,7 +96,8 @@ return await tools.mission_plan({action:"questions",request:{purpose:"interview-
 				acceptance: ["Saved report"],
 				storyIds: ["one"],
 				dependsOn: [],
-				owners: ["sol-backend"],
+				...(options.profiles?.[0] ? { profile: options.profiles[0].id } : {}),
+				size: "large",
 			},
 		],
 	};
@@ -135,6 +138,7 @@ export default pi => {
 			defaultModel: "faux-1",
 			defaultTools: ["+codemode"],
 			codemode: { mode: "only" },
+			pilotWorkProfiles: options.profiles ?? [],
 		}),
 	);
 	// Register faux only in this process's real catalog. The forked kernel loads its normal extension.

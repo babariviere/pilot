@@ -18,6 +18,7 @@ import type {
 	SessionSummary,
 	StartMissionCoordinatorRequest,
 	StartMissionTaskRequest,
+	TaskModelRoute,
 } from "@pilot/protocol";
 import type { CriticalReviewVault } from "./critical-review-vault.ts";
 import { Conflict, NotFound } from "./errors.ts";
@@ -82,6 +83,7 @@ import { optionalReviewRequests } from "./review-request-access.ts";
 import type { ReviewSnapshotStore } from "./review-snapshots.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { SourceMcpClient } from "./source-mcp.ts";
+import { allowedProfiles, pickProfileModel, sliceRoute, taskModelRoute } from "./work-profiles.ts";
 import { validateBaseBranch } from "./workspaces.ts";
 
 /** Sent to a chat that just became a mission, so it drafts the shared state from its own conversation. */
@@ -672,6 +674,36 @@ export class MissionService {
 				if (chat) this.nudgeIfWaiting(chat);
 			}
 		}
+	}
+
+	/**
+	 * How each open task got its model, or how its next start would pick it, for the mission page: the same order
+	 * as the start. It reads memory only and starts nothing. Tasks on the default model, for no reason worth
+	 * showing, have no entry.
+	 */
+	async taskModelRoutes(missionId: string, tasks: readonly MissionTask[]): Promise<TaskModelRoute[]> {
+		const project = this.projects.require(this.store.require(missionId).projectId);
+		const open = tasks.filter((t) => t.status !== "done" && t.status !== "dropped");
+		if (!open.length) return [];
+		const [profiles, state] = await Promise.all([this.sessions.workProfiles(), this.sessions.modelState()]);
+		const allowed = allowedProfiles(profiles, project);
+		const chats = this.sessions.taskChats(missionId);
+		const plan = this.store.plans.get(missionId);
+		return open.flatMap(
+			(t) =>
+				taskModelRoute(
+					t,
+					chats.get(t.id),
+					() => {
+						const slice = sliceRoute(plan, t.id);
+						const profile = allowed.find((p) => p.id === slice?.profile);
+						if (!profile || !slice) return undefined;
+						const pick = pickProfileModel(profile, slice.size, state);
+						return { model: pick.entry?.model ?? project.model, route: pick.route };
+					},
+					state,
+				) ?? [],
+		);
 	}
 
 	executionView(missionId: string): import("@pilot/protocol").MissionExecutionView | undefined {
@@ -1921,8 +1953,14 @@ export class MissionService {
 			await validateBaseBranch(request.baseBranch, project.path);
 		}
 		const choice = taskModelChoice(tasks, request, by);
-		const selection = await this.sessions
-			.selectTaskModel(project.path, choice.model, choice.thinking)
+		const plan = this.store.plans.get(missionId);
+		const { route, ...selection } = await this.sessions
+			.selectStartModel(project.id, {
+				model: choice.model,
+				thinking: choice.thinking,
+				by: choice.preferredBy?.preferredModelSetBy === "user" ? "user" : choice.preferredBy ? "coordinator" : by,
+				...tasks.map((task) => sliceRoute(plan, task.id)).find((s) => s?.profile),
+			})
 			.catch((error: unknown) => {
 				if (!choice.preferredBy) throw error;
 				throw new Error(
@@ -2055,6 +2093,7 @@ export class MissionService {
 					tasks.map((task) => task.id),
 					{ role, ...(actorSessionId ? { actorSessionId } : {}) },
 				);
+		if (route) await this.sessions.recordModelRoute(session.id, route).catch(() => undefined);
 		for (const task of tasks) this.store.recordTaskStart(missionId, task.id, selection.model, selection.thinking);
 		return this.session(session.id);
 	}

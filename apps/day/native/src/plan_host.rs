@@ -560,6 +560,8 @@ fn proposal(plan: &Value) -> Option<Proposal> {
                         }
                     })
                     .collect(),
+                profile: s(&x["profile"]),
+                size: s(&x["size"]),
             })
             .collect(),
         open_fog: arr(&plan["fog"])

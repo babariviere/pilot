@@ -314,6 +314,47 @@ export class ProjectStore {
 		return next;
 	}
 
+	/**
+	 * The user allows or stops a work profile in this project. The first edit starts from `current`, the profiles
+	 * allowed now, and marks the list edited: it is then kept exactly. A Cyber choice also answers Today's Cyber
+	 * question. It changes no workflow confirmation: profiles are read again at each start. Whether the profile exists
+	 * is the caller's check.
+	 */
+	async setAllowedProfile(
+		id: string,
+		profile: string,
+		allowed: boolean,
+		current: readonly string[],
+	): Promise<Project> {
+		if (!/^[a-z][a-z0-9-]{0,31}$/.test(profile)) throw new Error("profile must be a work profile ID");
+		return this.patchHostFields(id, (p) => {
+			const kept = (p.profilesEdited ? (p.allowedProfiles ?? []) : current).filter((x) => x !== profile);
+			return {
+				...p,
+				profilesEdited: true,
+				allowedProfiles: allowed ? [...kept, profile] : kept,
+				...(profile === "cyber" ? { cyberSuggestionDismissed: true } : {}),
+			};
+		});
+	}
+
+	/** Counts one cyber block in this project's chats. Host-owned, so no workflow confirmation changes. */
+	recordCyberBlock(id: string): Promise<Project> {
+		return this.patchHostFields(id, (p) => ({ ...p, cyberBlocks: (p.cyberBlocks ?? 0) + 1 }));
+	}
+
+	/** The user answered Not now to the Cyber suggestion. Pilot does not ask again for this project. */
+	dismissCyberSuggestion(id: string): Promise<Project> {
+		return this.patchHostFields(id, (p) => ({ ...p, cyberSuggestionDismissed: true }));
+	}
+
+	private async patchHostFields(id: string, change: (project: Project) => Project): Promise<Project> {
+		const next = change(this.require(id));
+		this.projects = this.projects.map((existing) => (existing.id === id ? next : existing));
+		await this.persist();
+		return next;
+	}
+
 	/** Detached trigger-time snapshot. Invalid saved definitions are never executable. */
 	enabledAutomations(id: string, trigger: AutomationTrigger): { revision: number; items: Automation[] } {
 		const config = this.require(id).automations;

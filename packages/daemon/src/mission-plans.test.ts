@@ -17,6 +17,7 @@ import type {
 import { Conflict } from "./errors.ts";
 import { interviewDigest as digest } from "./mission-interview-contract.ts";
 import { MissionInterviews } from "./mission-interviews.ts";
+import { sliceTaskBody } from "./mission-plan-store.ts";
 import {
 	activeFog,
 	MissionPlans,
@@ -121,6 +122,43 @@ const slices = (): PlanSlice[] => [
 	},
 ];
 
+test("new slices name one allowed profile and a size; old plans with owners still load and keep their task body", async (t) => {
+	const f = await fixture(t);
+	await f.map([], []);
+	// An older plan: saved before profiles, with owners.
+	assert.equal((await f.write({ purpose: "plan-propose", spec: spec(), slices: slices() })).receipt.state, "accepted");
+	const old = f.plan;
+	assert.match(sliceTaskBody(old, old.slices[1]!, 1), /\nOwnership: sol-backend\n/);
+	f.profiles = ["backend", "ui"];
+	assert.equal(
+		(await f.write({ purpose: "plan-map", destination: "Same route", sources: [], questions: [], fog: [] })).receipt
+			.state,
+		"accepted",
+		"old slices still validate",
+	);
+	const owned = await f.write({ purpose: "plan-propose", spec: spec(), slices: slices() });
+	assert.equal(owned.receipt.state, "rejected", "new proposals name a profile, not owners");
+	const named = (profile: string, size?: string) =>
+		slices().map(({ owners: _owners, ...s }) => ({ ...s, profile, ...(size ? { size } : {}) }));
+	const unknown = await f.write({ purpose: "plan-propose", spec: spec(), slices: named("cyber", "large") });
+	assert.equal(unknown.receipt.state, "rejected");
+	assert.match(
+		String(unknown.receipt.reason),
+		/pick one profile from the profiles allowed in this project \(backend, ui\) and a size, large or small\. Split slices that mix profiles/,
+	);
+	const unsized = await f.write({ purpose: "plan-propose", spec: spec(), slices: named("ui") });
+	assert.equal(unsized.receipt.state, "rejected", "a new slice needs a size");
+	const odd = await f.write({ purpose: "plan-propose", spec: spec(), slices: named("ui", "huge") });
+	assert.equal(odd.receipt.state, "rejected");
+	assert.equal(
+		(await f.write({ purpose: "plan-propose", spec: spec(), slices: named("ui", "small") })).receipt.state,
+		"accepted",
+	);
+	assert.equal(f.plan.slices[0]!.profile, "ui");
+	assert.equal(f.plan.slices[0]!.size, "small");
+	assert.match(sliceTaskBody(f.plan, f.plan.slices[0]!, 1), /\nProfile: ui · small\n/);
+});
+
 test("owned write paths are exact declarations, never traversal or globs", async (t) => {
 	const f = await fixture(t);
 	await f.map([], []);
@@ -145,6 +183,7 @@ async function fixture(t: TestContext, disk = false) {
 		journal = new OperationJournal(join(home, "journal"), host),
 		allowed = true,
 		human = true;
+	let profiles: string[] | undefined;
 	const confirmations = () => new WorkflowConfirmations({ store, journal, authorize: () => "config-1" });
 	const interviews = () =>
 		new MissionInterviews({
@@ -164,6 +203,7 @@ async function fixture(t: TestContext, disk = false) {
 			authorize: () => {
 				if (!allowed) throw new Conflict("Permission denied");
 			},
+			...(profiles ? { profiles: async () => profiles! } : {}),
 		});
 	const create = operation(randomUUID(), {
 		purpose: "interview-create",
@@ -198,6 +238,9 @@ async function fixture(t: TestContext, disk = false) {
 		},
 		set human(v: boolean) {
 			human = v;
+		},
+		set profiles(v: string[] | undefined) {
+			profiles = v;
 		},
 		get plan() {
 			return store.plans.get(missionId)!;

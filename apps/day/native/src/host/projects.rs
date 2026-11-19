@@ -21,11 +21,17 @@ pub(crate) struct Intent {
     /// Link and unlink: the project whose agents read, and the project they read.
     project: Option<String>,
     linked: Option<String>,
+    /// Allow-profile and stop-profile: the work profile the user allows or stops in `project`.
+    profile: Option<String>,
 }
 impl Intent {
     pub(crate) fn validate(&self) -> Result<(), Error> {
-        if matches!(self.action.as_str(), "link" | "unlink")
-            && (self.project.is_none() || self.linked.is_none())
+        let choice = matches!(self.action.as_str(), "allow-profile" | "stop-profile");
+        if (matches!(self.action.as_str(), "link" | "unlink")
+            && (self.project.is_none() || self.linked.is_none()))
+            || (choice && (self.project.is_none() || self.profile.is_none()))
+            || (!choice && self.profile.is_some())
+            || (self.action == "cyber-not-now" && self.project.is_none())
         {
             return Err(Error::Invalid);
         }
@@ -44,6 +50,9 @@ impl Intent {
                 | "cancel"
                 | "link"
                 | "unlink"
+                | "allow-profile"
+                | "stop-profile"
+                | "cyber-not-now"
         ) || [
             &self.path,
             &self.digest,
@@ -54,6 +63,7 @@ impl Intent {
             &self.fingerprint,
             &self.project,
             &self.linked,
+            &self.profile,
         ]
         .iter()
         .any(|s| {
@@ -76,6 +86,7 @@ impl Intent {
             ("fingerprint", &self.fingerprint),
             ("project", &self.project),
             ("linked", &self.linked),
+            ("profile", &self.profile),
         ] {
             if let Some(value) = value {
                 p[name] = json!(value);
@@ -245,6 +256,23 @@ mod tests {
         let partial: Intent =
             serde_json::from_value(json!({"action":"unlink","project":"app"})).unwrap();
         assert_eq!(partial.validate(), Err(Error::Invalid));
+        let intent = |v: Value| serde_json::from_value::<Intent>(v).unwrap();
+        let allow = intent(json!({"action":"allow-profile","project":"app","profile":"cyber"}));
+        assert_eq!(allow.validate(), Ok(()));
+        assert_eq!(allow.payload()["profile"], "cyber");
+        let stop = intent(json!({"action":"stop-profile","project":"app","profile":"ui"}));
+        assert_eq!(stop.validate(), Ok(()));
+        let unnamed = intent(json!({"action":"allow-profile","project":"app"}));
+        assert_eq!(unnamed.validate(), Err(Error::Invalid));
+        let not_now = intent(json!({"action":"cyber-not-now","project":"app"}));
+        assert_eq!(not_now.validate(), Ok(()));
+        let nowhere = intent(json!({"action":"cyber-not-now"}));
+        assert_eq!(nowhere.validate(), Err(Error::Invalid));
+        let stray: Intent = serde_json::from_value(
+            json!({"action":"link","project":"app","linked":"lib","profile":"cyber"}),
+        )
+        .unwrap();
+        assert_eq!(stray.validate(), Err(Error::Invalid));
     }
 
     #[test]

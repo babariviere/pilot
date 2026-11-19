@@ -31,6 +31,8 @@ interface Dependencies {
 	validateRound?(questions: InterviewQuestion[]): void;
 	/** Checks a prototype's model and thinking level against the project's task models. Throws with the allowed ones. */
 	checkModel?(model: string, thinking?: string): Promise<void>;
+	/** IDs of the work profiles a new slice may name. */
+	profiles?(): Promise<string[]>;
 }
 const kinds = [
 	"plan-map",
@@ -364,11 +366,13 @@ export class MissionPlans extends MissionPlanReader {
 	private readonly journal: OperationJournal;
 	private readonly validateRound?: Dependencies["validateRound"];
 	private readonly checkModel?: Dependencies["checkModel"];
+	private readonly profiles?: Dependencies["profiles"];
 	constructor(deps: Dependencies) {
 		super(deps);
 		this.journal = deps.journal;
 		this.validateRound = deps.validateRound;
 		this.checkModel = deps.checkModel;
+		this.profiles = deps.profiles;
 	}
 	/**
 	 * `kept`: settled questions' sources already saved before this write (canonical JSON). They were checked
@@ -463,7 +467,10 @@ export class MissionPlans extends MissionPlanReader {
 					"acceptance",
 					"storyIds",
 					"dependsOn",
-					"owners",
+					// Older plans name owners; new slices name at most one profile and a size.
+					...(Object.hasOwn(slice, "owners") ? ["owners"] : []),
+					...(Object.hasOwn(slice, "profile") ? ["profile"] : []),
+					...(Object.hasOwn(slice, "size") ? ["size"] : []),
 					...(Object.hasOwn(slice, "files") ? ["files"] : []),
 					...(Object.hasOwn(slice, "prototypes") ? ["prototypes"] : []),
 				]);
@@ -501,11 +508,18 @@ export class MissionPlans extends MissionPlanReader {
 				if (
 					!slice.acceptance.length ||
 					!slice.storyIds.length ||
-					!slice.owners.length ||
-					list(slice.owners, 2).some((o) => !["opus-ui", "sol-backend"].includes(o)) ||
+					(slice.owners !== undefined &&
+						(slice.profile !== undefined ||
+							!slice.owners.length ||
+							list(slice.owners, 2).some((o) => !["opus-ui", "sol-backend"].includes(o)))) ||
+					(slice.profile !== undefined &&
+						(typeof slice.profile !== "string" || !/^[a-z][a-z0-9-]{0,31}$/.test(slice.profile))) ||
+					(slice.size !== undefined && slice.size !== "large" && slice.size !== "small") ||
 					slice.storyIds.some((key) => !s.stories.some((story) => story.id === key))
 				)
-					throw new Conflict("Verifiable slices need story traceability and explicit ownership");
+					throw new Conflict(
+						"Verifiable slices need story traceability, at most one work profile and a size of large or small",
+					);
 				if (slice.prototypes !== undefined) this.slicePrototypes(plan, slice);
 			}
 			if (!plan.slices.length) throw new Conflict("Vertical slices required");
@@ -558,6 +572,22 @@ export class MissionPlans extends MissionPlanReader {
 						},
 					);
 				}
+			if (this.profiles && request.purpose === "plan-propose") {
+				const known = await this.profiles();
+				for (const slice of Array.isArray(request.slices) ? (request.slices as PlanSlice[]) : []) {
+					const profile = (slice as { profile?: unknown })?.profile;
+					if (
+						Object.hasOwn(slice ?? {}, "owners") ||
+						(known.length ? !known.includes(profile as string) : profile !== undefined) ||
+						(slice as { size?: unknown })?.size === undefined
+					)
+						throw new Conflict(
+							known.length
+								? `Slice "${slice?.id}": pick one profile from the profiles allowed in this project (${known.join(", ")}) and a size, large or small. Split slices that mix profiles.`
+								: `Slice "${slice?.id}": this project allows no work profiles, so leave profile out and give a size, large or small.`,
+						);
+				}
+			}
 			const pin = this.context(op.targetId);
 			const check = () => {
 				this.deps.authorize(request.purpose, op.targetId, pin.owner);
