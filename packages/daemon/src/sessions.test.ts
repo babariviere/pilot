@@ -1684,7 +1684,20 @@ test("Insights review dispatch places one bounded input, persists a partial repo
 	assert.equal(f.reads(), 2);
 	f.worker.finish();
 	await assert.rejects(f.sessions["insightsHistory"](f.id, f.worker, { action: "chats" }), /bounded review_context/);
-	await f.sessions.send(f.id, "Automatic reminder", "followUp", `schedule:${randomUUID()}`);
+	// Scheduled inputs need the host schedule gate; without it they stay held.
+	f.sessions.setScheduleAdmission({
+		check: () => "ready",
+		denied: async () => {},
+		accepted: async () => {},
+		acceptedAt: () => undefined,
+		now: () => Date.now(),
+	});
+	const scheduled = `schedule:${randomUUID()}`;
+	await f.sessions.send(f.id, "Automatic reminder", "followUp", scheduled);
+	assert.ok(
+		f.worker.requests.some((c) => c.requestId === scheduled),
+		"the scheduled input reached the worker",
+	);
 	await assert.rejects(f.sessions["insightsHistory"](f.id, f.worker, { action: "chats" }), /bounded review_context/);
 	f.worker.finish();
 	await f.sessions.send(f.id, "Discuss the report");
@@ -7139,6 +7152,8 @@ test("request errors do not complete active work or prevent restart resumption",
 		};
 		try {
 			await reopened.load();
+			// load() starts resumption without awaiting it; scheduled-input checks add async steps first.
+			await until(() => resumed.length > 0);
 			assert.deepEqual(resumed, [meta.id]);
 			assert.equal(reopened.get(meta.id)?.outcome, undefined);
 		} finally {
