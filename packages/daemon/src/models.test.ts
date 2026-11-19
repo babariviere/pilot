@@ -72,7 +72,7 @@ test("generic triage completions use cheapest scoped model without thinking, too
 	);
 });
 
-test("Slack classification uses scoped Luna, strict JSON, no tools or thinking, with bounded input and no retry", async (t) => {
+test("Slack classification uses authenticated Luna, strict JSON, no tools or thinking, with bounded input and no retry", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "slack-model-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const luna = { ...cheap, id: "gpt-6-luna", provider: "openai-codex" };
@@ -88,14 +88,15 @@ test("Slack classification uses scoped Luna, strict JSON, no tools or thinking, 
 	};
 	let output = JSON.stringify(expected),
 		stop: "stop" | "error" = "stop",
-		calls = 0;
+		calls = 0,
+		available = [expensive, luna];
 	t.mock.method(
 		ModelRuntime,
 		"create",
 		async () =>
 			({
 				...requiredAuthRegistration,
-				getAvailable: async () => [expensive, luna],
+				getAvailable: async () => available,
 				completeSimple: async (
 					chosen: Model,
 					context: Parameters<ModelRuntime["completeSimple"]>[1],
@@ -110,7 +111,7 @@ test("Slack classification uses scoped Luna, strict JSON, no tools or thinking, 
 					assert.deepEqual(quoted.projectLabels, [{ name: "Client", description: "Questions about the app" }]);
 					assert.deepEqual(quoted.quotedCorrectionExamples, classifierContext.corrections.slice(0, 5));
 					assert.equal(options?.reasoning, undefined);
-					assert.equal(options?.maxTokens, 256);
+					assert.equal(options?.maxTokens, 1536);
 					assert.equal(options?.maxRetries, 0);
 					const payload = (await options?.onPayload?.({ model: luna.id, input: [] }, luna)) as {
 						text: { format: { strict: boolean; type: string } };
@@ -134,12 +135,18 @@ test("Slack classification uses scoped Luna, strict JSON, no tools or thinking, 
 	);
 	stop = "error";
 	await assert.rejects(catalog.classifySlack(root, content, signal, classifierContext), /Slack classification failed/);
+	// The chat model list (enabledModels) does not decide it: Luna left out of it still classifies.
+	stop = "stop";
+	output = JSON.stringify(expected);
 	await writeFile(join(root, "settings.json"), JSON.stringify({ enabledModels: ["test/large"] }));
+	assert.deepEqual(await catalog.classifySlack(root, content, signal, classifierContext), expected);
+	available = [expensive];
+	await writeFile(join(root, "auth.json"), "{}");
 	await assert.rejects(
 		catalog.classifySlack(root, content, signal, classifierContext),
-		/requires scoped, authenticated/,
+		/requires authenticated openai-codex\/gpt-6-luna/,
 	);
-	assert.equal(calls, 3);
+	assert.equal(calls, 4);
 });
 
 function submission(text: unknown, extra: Record<string, unknown> = {}) {

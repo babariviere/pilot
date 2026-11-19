@@ -1,4 +1,4 @@
-import type { SlackMessageType, SlackProjectLabel, SlackCorrection, SlackReportDetails } from "@pilot/protocol";
+import type { SlackCorrection, SlackMessageType, SlackProjectLabel, SlackReportDetails } from "@pilot/protocol";
 
 export interface SlackClassifierContext {
 	labels: SlackProjectLabel[];
@@ -17,9 +17,7 @@ export interface SlackClassification {
 }
 export class SlackModelUnavailable extends Error {
 	constructor() {
-		super(
-			"Slack classification requires scoped, authenticated openai-codex/gpt-6-luna. Check pi model settings and sign-in.",
-		);
+		super("Slack classification requires authenticated openai-codex/gpt-6-luna. Sign in to OpenAI Codex in pi.");
 	}
 }
 

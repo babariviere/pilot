@@ -13,7 +13,7 @@ fixtures. Searching only for titles or Slack would miss the isolated triage work
 | `models.ts` → `generateChatTitle` | `title` | Session/project UUIDs from SessionManager; canonical mission tuple only through the optional trusted membership bridge | Cheapest authenticated scoped title model, no thinking, 128 output tokens, no provider retries |
 | `models.ts` → `compactMemory` | `memory` | Project UUID supplied by ProjectMemoryService | Explicit authenticated Codex Luna, three validated submission attempts, no provider retries |
 | `models.ts` → `compactControlNode` | `compaction` | Host background only. A node/job or current Control chat does not prove which chat owns its source | Same-provider scoped cheapest model, up to six correction calls, existing two provider retries and deadline |
-| `models.ts` Slack classifier (poller and manual add) | `classification` | Project UUID from the source context | Scoped Codex Luna, no thinking/tools, 256 output tokens, no provider retries |
+| `models.ts` Slack classifier (poller and manual add) | `classification` | Project UUID from the source context | Signed-in Codex Luna, whatever the chat model list (enabledModels) holds; no thinking/tools, 1536 output tokens, no provider retries |
 | `triage-model-worker.ts` → `models.ts.completeTriage` | `triage` | Project UUID explicitly passed by grooming and Linear sizing callers | Cheapest authenticated scoped model, 8192 output tokens, no provider retries, existing worker/deadline/cancellation policy |
 
 The triage worker is shared by Slack/Linear correction grooming and Linear size classification. Neither a Slack

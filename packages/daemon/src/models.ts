@@ -125,7 +125,7 @@ export class ModelCatalog {
 		);
 	}
 
-	/** Scoped Luna classification reuses title-price selection, without thinking or tools. */
+	/** Luna classification, without thinking or tools. */
 	async classifySlack(
 		cwd: string,
 		text: string,
@@ -136,21 +136,18 @@ export class ModelCatalog {
 		return (await this.prepareSlackClassifier(cwd, signal, context, attribution))(text);
 	}
 
-	/** Resolve once per poll before reserving a thread, so missing auth/scope never poisons the cache. */
+	/** Resolve once per poll before reserving a thread, so missing auth never poisons the cache. */
 	async prepareSlackClassifier(
-		cwd: string,
+		_cwd: string,
 		signal: AbortSignal,
 		context: SlackClassifierContext = { labels: [], corrections: [] },
 		attribution?: BackgroundAttribution,
 	): Promise<(text: string) => Promise<SlackClassification>> {
 		const runtime = await this.getRuntime();
-		const { models } = await this.scoped(cwd, signal);
-		// Reuse title-price selection within the explicitly required classifier model's project scope.
-		// No fallback outside scope or to a working chat's expensive model.
-		const model = cheapestTitleModel(
-			models
-				.map(({ model }) => model)
-				.filter((model) => model.provider === "openai-codex" && model.id === "gpt-6-luna"),
+		// Like memory compaction: one fixed, signed-in model, whatever the chat model list (enabledModels)
+		// holds. Removing Luna from chats must not stop Slack. No fallback to a chat's expensive model.
+		const model = (await this.available(signal)).find(
+			(model) => model.provider === "openai-codex" && model.id === "gpt-6-luna",
 		);
 		signal.throwIfAborted();
 		if (!model) throw new SlackModelUnavailable();
