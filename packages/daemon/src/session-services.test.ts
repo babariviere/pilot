@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { KernelCommand } from "@pilot/kernel";
-import { DatabaseService } from "./databases.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
 import { SubscriptionUsageCache } from "./subscription-usage.ts";
@@ -23,8 +22,6 @@ for (const [offline, workerUsageHistory] of [
 		const projects = new ProjectStore(home);
 		await projects.load();
 		const subscription = t.mock.method(SubscriptionUsageCache.prototype, "start", async () => {});
-		const database = t.mock.method(DatabaseService.prototype, "refresh", async () => {});
-		t.mock.method(DatabaseService.prototype, "configured", () => true);
 		const usageHistory = new UsageHistoryStore(home);
 		const status = await usageHistory.status();
 		const history = t.mock.method(usageHistory, "status", async () => status);
@@ -68,8 +65,6 @@ for (const [offline, workerUsageHistory] of [
 			model: "fake/model",
 		});
 		const spec = await ready;
-		assert.equal(spec.databases, offline ? undefined : true);
-		assert.equal(database.mock.callCount(), offline ? 0 : 1);
 		assert.deepEqual(
 			spec.usageHistory,
 			workerUsageHistory

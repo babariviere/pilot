@@ -4,7 +4,6 @@ import type { SessionManagerOptions } from "../sessions.ts";
 export function offlineSessionOptions(options: SessionManagerOptions = {}): SessionManagerOptions {
 	return {
 		...options,
-		databases: options.databases ?? false,
 		subscriptionUsage: options.subscriptionUsage ?? false,
 		workerUsageHistory: options.workerUsageHistory ?? false,
 	};

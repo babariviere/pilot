@@ -291,7 +291,6 @@ export class NativeAttention {
 			typeof data.question !== "string" ||
 			!Array.isArray(data.options) ||
 			data.options.length > 9 ||
-			data.databaseAccess !== undefined ||
 			Buffer.byteLength(JSON.stringify(data)) > (data.interview ? 64 * 1024 : 32768)
 		)
 			return undefined;

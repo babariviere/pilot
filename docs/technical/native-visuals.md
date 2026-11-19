@@ -36,7 +36,7 @@ is a plain JavaScript function. The agent defines it in its script and passes it
 `String(visual)`, together with the data as a real object:
 
 ```js
-const rows = await tools.db({ query: "select region, p95, p99 from latency" });
+const rows = JSON.parse(await tools.read({ path: "latency.json" }));
 
 function visual({ ui, state, data }) {
   const s = state({ metric: "p95" });

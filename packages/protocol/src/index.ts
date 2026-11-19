@@ -21,7 +21,6 @@ export type {
 export type * from "./automations.ts";
 export type * from "./chat-settings.ts";
 export type * from "./critical-review.ts";
-export type * from "./databases.ts";
 export type * from "./decision-assistance.ts";
 export type * from "./diagnostic-context.ts";
 export type * from "./diagnostic-repair.ts";
@@ -1051,25 +1050,6 @@ export interface AgentQuestion {
 	multiSelect?: boolean;
 	/** IDs of artifacts the asking chat saved (such as an NSH mockup) that the user should see to answer. At most 3. */
 	artifacts?: string[];
-	/**
-	 * Set on the db tool's access requests. The app answers them with POST /api/sessions/:id/database-access, never
-	 * with a message: the first option allows, the second denies. A typed reply declines.
-	 */
-	databaseAccess?: DatabaseAccessRequest;
-}
-
-/** A type, not an interface, so questions stay assignable to JSON values. */
-export type DatabaseAccessRequest = {
-	/** Random per request. Only the matching pending request can be decided. */
-	id: string;
-	env: string;
-	mode: "read" | "write";
-};
-
-/** POST /api/sessions/:id/database-access */
-export interface DatabaseAccessDecision {
-	id: string;
-	allow: boolean;
 }
 
 /** POST /api/projects, PATCH /api/projects/:id (partial). An empty model clears it. */

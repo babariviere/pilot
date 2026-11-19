@@ -493,16 +493,6 @@ async fn run(
     }
     if matches!(
         call.command,
-        Command::DatabasesRead
-            | Command::DatabasesRefresh
-            | Command::DatabasesWrite(_)
-            | Command::DatabasesCheck(_)
-    ) {
-        return super::database_controls::handle(t, journal, shared, &call.command, &call.gate)
-            .await;
-    }
-    if matches!(
-        call.command,
         Command::ConnectionsRead
             | Command::ConnectionsWrite(_)
             | Command::ConnectionsCheck(_)
@@ -1077,10 +1067,6 @@ async fn run(
             value = json!({"generation":generation});
             None
         }
-        Command::DatabasesRead
-        | Command::DatabasesRefresh
-        | Command::DatabasesWrite(_)
-        | Command::DatabasesCheck(_) => unreachable!("handled database command"),
         Command::ConnectionsRead
         | Command::ConnectionsWrite(_)
         | Command::ConnectionsCheck(_)

@@ -149,10 +149,9 @@ the daemon report; check, sign-in and setup actions are not included. See the
   starts the next turn. A worker replacement keeps the saved question without replaying an interrupted script.
   Multi-question scope clarification uses the shared `interview` tool: a saved full round, native drafts,
   review and one complete Submit. Ordinary messages and coordinator answers cannot submit an interview.
-  Database-access approvals keep their separate turn-ending flow.
   Mission coordinators are notified of member questions and can answer ordinary questions within the approved
   mission scope. They read the exact pending question with `mission status` and reply with `mission answer`.
-  Replies are attributed to the coordinator, not you. Stale questions are rejected; database approvals remain yours.
+  Replies are attributed to the coordinator, not you. Stale questions are rejected.
 - **Explore before implementing.** Ask chats can read code and produce artifacts without repository write
   access. Move the discussion into a separate Build chat when you're ready to make changes.
 - **Review work in context.** Build chats include a diff inspector, a [libghostty](https://github.com/Lakr233/libghostty-spm)
@@ -198,8 +197,6 @@ the daemon report; check, sign-in and setup actions are not included. See the
   Pilot Next can preview supported inline images already stored in loaded Local conversations, with
   bounded decoding and explicit unsupported/over-limit states. This does not add attachment creation;
   see [stored conversation images](../../apps/desktop/docs/conversation-images.md).
-- **Query your databases.** Give a project's chats read-only or read-write Postgres access per environment,
-  granted up front or when you answer the agent's request. See [Databases](#databases).
 - **Bring work into Pilot.** Track Linear issues and Slack messages from configured sources, triage Slack
   messages by type, label and severity, see what waits on you across projects in one Inbox, then start a chat or
   mission from an item. A chat started from a Slack message shows that message's status in its toolbar (and ⌘K),
@@ -1120,93 +1117,9 @@ Slack messages and Linear issue or project links open in their desktop apps when
 browser fallback when the app is unavailable. Copied links remain web URLs.
 Slack links without a workspace ID use Slack's active workspace.
 
-### Databases
-
-For the current Day interface, see [Databases](../databases.md). Day uses explicit per-agent,
-environment, mode, destination and model-provider approvals. Saving never connects; separate connection tests
-authenticate without SQL. Verified TLS is the default. Insecure local/legacy transport needs a named
-`tlsException` (`plaintext` or `unverified`) with a persistent warning. Old unscoped grants and
-`access: "allow"` no longer authorize queries automatically. Grants end on revocation or archive;
-a changed destination/provider needs fresh approval. Each connection mode is approved separately.
-Failed or interrupted writes may have committed: investigate with approved reads and retry only with safe
-evidence and current authority. The following setup details describe the legacy editor and file format;
-the linked Day guide takes precedence for access and TLS policy.
-
-Build chats of a project can query Postgres databases you configure for that project. Chats of other projects,
-Ask chats and subagents do not get the tool. In **Project Settings → Databases**, add an environment and its
-read connection, write connection, or both. Enter the connection URL (including any password) in the secure field,
-then choose **Save Databases**. New connections default to **Ask each chat**; enabling writes or automatic access
-requires an explicit choice. Existing URLs and credential query parameters are never returned to the app. Leave
-the replacement URL empty to keep them. Existing environment names are fixed; remove and add to rename one.
-
-These settings belong to this Mac and are not replicated to other machines. Reload after a hand edit or a
-revision conflict. Invalid, unreadable, oversized,
-duplicate-project or insecure files disable editing instead of being replaced; Pilot does not repair permissions
-automatically. Saving preserves other projects and existing chat grants and does not connect to Postgres.
-
-You can also create or hand-edit `~/.config/pilot/database.json` (or
-`$XDG_CONFIG_HOME/pilot/database.json`), readable only by you (`chmod 600`; Pilot refuses a file others can read):
-
-```json
-{
-  "projects": {
-    "~/src/github.com/acme/app": {
-      "environments": {
-        "local": {
-          "read": { "url": "postgres://app_ro@localhost/app", "access": "allow" },
-          "write": { "url": "postgres://app@localhost/app", "access": "allow" }
-        },
-        "staging": {
-          "read": { "url": "postgres://app_ro:****@staging.example.com/app", "access": "allow" },
-          "write": { "url": "postgres://app:****@staging.example.com/app", "access": "ask" }
-        },
-        "prod": {
-          "read": { "url": "postgres://app_ro:****@prod.example.com/app", "access": "ask" }
-        }
-      }
-    }
-  }
-}
-```
-
-Projects are keyed by the folder you added to Pilot. Each environment has a read connection, a write
-connection, or both; leave one out to make that mode unavailable. `access` is `allow` (granted on first use)
-or `ask` (the default): the agent asks with a question naming the environment and mode, and its turn ends. Picking
-**Allow … access** in the app grants it; the app sends that decision to pilotd directly, and pilotd tells the agent.
-Messages never grant access, even ones with the same words: typing a reply instead declines. Grants last for the rest
-of the chat, and write access also covers reads. The file is read afresh for each call; new or removed projects apply
-to the next chat start.
-
-Access approval is permission, not a successful connectivity test. Configure TLS in each connection URL, for
-example `?sslmode=verify-full`. For a private CA or client certificate, hand-edit the connection's optional `ssl`
-field: `"ssl": { "ca": "<PEM contents>", "cert": "<PEM contents>", "key": "<PEM contents>" }`.
-Omit unused fields. `ssl: true` also enables verified TLS; `ssl: false` explicitly selects plaintext for endpoints
-that permit it. Without this field, URL and driver environment defaults apply. Object certificate options override
-URL certificate options while retaining other URL TLS settings, and explicit TLS always verifies the certificate
-and server name. Conflicting URL/object TLS enablement fails before connecting, with no plaintext fallback.
-The object does not accept `rejectUnauthorized: false`. Certificate contents stay on the daemon host and are
-preserved, but never returned, by the settings editor. A connection failure leaves access grants unchanged;
-check both TLS configuration and the server's authentication rules rather than weakening certificate validation.
-Connection errors retain SQLSTATE and distinguish certificate/negotiation failures, invalid passwords and explicit
-server authentication-rule rejection without exposing server details. An otherwise ambiguous `28000` rejection
-does not establish a TLS or credential fault; only an explicit server requirement is reported as requiring TLS.
-
-The agent calls `db({ action: "access" })` to list environments and request access, and
-`db({ action: "query", env, sql, params })` to run one statement. Read mode runs inside `BEGIN READ ONLY` with the
-extended protocol (one statement, no `COMMIT` escape) and is rolled back; in write mode, `statements` run in one
-transaction. Every call opens its own connection with a 30 s statement timeout, a 5 s lock timeout,
-`application_name=pilot-<chat id>`, and capped rows (100 by default, at most 1,000) and result size.
-Results are sent to the model provider, so only configure data you are comfortable sharing with it.
-
-Give read connections a role that can only read: `BEGIN READ ONLY` guards against mistakes, while the role is
-what Postgres enforces. Only pilotd reads this file and the agent sees environment names, not URLs or request ids.
-Agent shells still run as you and can reach pilotd's local API, so this is a guardrail for a cooperating agent, not
-a secret store or a hard boundary. With the bundled sandbox in
-`workspace-write` or `read-only` mode, add the file to `denyRead` in `~/.pi/agent/sandbox.json` to keep shells
-from reading it; with the sandbox off (the default), they can.
-
-On startup, Pilot moves the old `pilot-databases.json` and `pilot-tracking.json` from pi's agent directory
-(`PILOT_AGENT_DIR` when set) to these new locations, keeping their contents and permissions. Existing destination
-files are never replaced; if both locations contain a file, the new one wins and the old one stays untouched.
-These Pilot settings no longer follow `PILOT_AGENT_DIR` or `PILOT_HOME`. Update any sandbox `denyRead` entries
-that refer to the old paths.
+On startup, Pilot moves the old `pilot-tracking.json` from pi's agent directory (`PILOT_AGENT_DIR` when set)
+to `~/.config/pilot/tracking.json`, keeping its contents and permissions. An existing destination file is never
+replaced; if both locations contain a file, the new one wins and the old one stays untouched. This setting no
+longer follows `PILOT_AGENT_DIR` or `PILOT_HOME`. Update any sandbox `denyRead` entries that refer to the old path.
+Pilot no longer has database access. It does not read `database.json` or `pilot-databases.json` and leaves them
+where they are.

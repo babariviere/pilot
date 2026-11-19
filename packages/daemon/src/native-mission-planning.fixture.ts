@@ -6,7 +6,6 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DurableOperation, InterviewQuestion, SessionSummary } from "@pilot/protocol";
-import type { DatabaseService } from "./databases.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
 import type { McpStatusService } from "./mcp-status.ts";
@@ -27,13 +26,7 @@ import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemo
 import { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
 export async function nativePlanningFixture(
-	options: {
-		native?: boolean;
-		mcp?: McpStatusService;
-		connections?: boolean;
-		diagnostics?: boolean;
-		databases?: DatabaseService;
-	} = {},
+	options: { native?: boolean; mcp?: McpStatusService; connections?: boolean; diagnostics?: boolean } = {},
 ) {
 	const home = await mkdtemp(join(tmpdir(), "native-planning-"));
 	const projects = new ProjectStore(home);
@@ -100,14 +93,7 @@ export async function nativePlanningFixture(
 	} as { purpose: string });
 	await journal.execute(create, (op, entry) => interviews().admit(op, entry.firstEntry));
 	const missionId = store.interviews.lookup(create)!.fence.missionId;
-	const sessions = new SessionManager(
-		home,
-		projects,
-		undefined,
-		{},
-		{},
-		{ ...(options.databases ? { databases: options.databases } : {}) },
-	);
+	const sessions = new SessionManager(home, projects, undefined, {}, {}, {});
 	const extraOwners = new Map<string, SessionSummary>();
 	sessions.get = (id) => (id === owner ? coordinator : extraOwners.get(id));
 	sessions.spawn = async () => {

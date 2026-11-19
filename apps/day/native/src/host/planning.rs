@@ -88,6 +88,7 @@ impl PlanningRecord {
                         | "diagnostics-controls"
                         | "model-controls"
                         | "connection-controls"
+                        // The database feature is removed. Its old records still read.
                         | "database-controls"
                         | "slack-controls"
                         | "user-feedback"
@@ -147,9 +148,6 @@ impl PlanningRecord {
         }
         if o["kind"] == super::model_controls::KIND {
             super::model_controls::validate_record(&self.source, o)?;
-        }
-        if o["kind"] == super::database_controls::KIND {
-            super::database_controls::validate_record(&self.source, o)?;
         }
         if o["kind"] == super::connection_controls::KIND {
             super::connection_controls::validate_record(&self.source, o)?;
@@ -247,7 +245,6 @@ fn record_pinned(
                     | "diagnostics-controls"
                     | "model-controls"
                     | "connection-controls"
-                    | "database-controls"
                     | "slack-controls"
                     | "user-feedback"
                     | "feedback-work"
@@ -282,7 +279,6 @@ fn record_pinned(
                     | "diagnostics-controls"
                     | "model-controls"
                     | "connection-controls"
-                    | "database-controls"
                     | "slack-controls"
                     | "user-feedback"
                     | "feedback-work"
@@ -476,9 +472,6 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
     }
     if op["kind"] == super::model_controls::KIND && r["state"] == "accepted" {
         super::model_controls::exact_result(op, &r)?;
-    }
-    if op["kind"] == super::database_controls::KIND && r["state"] == "accepted" {
-        super::database_controls::exact_result(op, &r)?;
     }
     if op["kind"] == super::connection_controls::KIND && r["state"] == "accepted" {
         super::connection_controls::exact_result(op, &r)?;

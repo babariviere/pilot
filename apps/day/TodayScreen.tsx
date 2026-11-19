@@ -6,7 +6,6 @@ import { effect, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh"
 import type { Decision, MissionRow } from "pilot-day/native";
 import { ActionCard } from "./ActionCard";
 import { commit, later, pickNth, toggleHelp, writeReply } from "./commands";
-import { DatabaseApprovals } from "./DatabaseSettings";
 import { DayLine } from "./DayLine";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
@@ -73,7 +72,6 @@ function headline(day: Day): string {
 	const today = day.today();
 	if (today.problems.length > 0) return "Some work needs a look.";
 	if (!today.problemsKnown) return "Your last read.";
-	if (day.databases?.snapshot()?.agents.some((a) => !!a.request)) return "Database access needs your approval.";
 	// What needs the user was never read: an all-clear headline would be a guess.
 	if (!everRead(today.attention.state) && (today.headline.startsWith("Nothing needs you") || today.notes.length > 0)) {
 		return "Your last read.";
@@ -217,13 +215,7 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 		<View class="gap-4">
 			<SectionTitle
 				title="Needs you"
-				count={
-					items().length +
-					newFeedback(props.day).length +
-					checks() +
-					otherNeedsCount(props.ctx) +
-					(props.day.databases?.snapshot()?.agents.filter((a) => !!a.request).length ?? 0)
-				}
+				count={items().length + newFeedback(props.day).length + checks() + otherNeedsCount(props.ctx)}
 			/>
 			<If when={props.ctx.tagged()}>
 				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
@@ -247,12 +239,7 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 							</Text>
 						}
 					>
-						<If
-							when={
-								incomingFeedback(props.day).length === 0 &&
-								!props.day.databases?.snapshot()?.agents.some((a) => !!a.request)
-							}
-						>
+						<If when={incomingFeedback(props.day).length === 0}>
 							<Text class="text-base text-foreground">
 								{checks() > 0
 									? "Nothing else waits for you. Check the notes below."
@@ -324,7 +311,6 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 			</If>
 			<FeedbackIncoming day={props.day} active={!first()} />
 			<ToCheck day={props.day} nested queued />
-			<If when={props.day.databases}>{(c) => <DatabaseApprovals controls={c()} />}</If>
 			<OtherNeeds ctx={props.ctx} day={props.day} />
 			<OtherToCheck ctx={props.ctx} day={props.day} nested />
 		</View>

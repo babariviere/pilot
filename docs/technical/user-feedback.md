@@ -86,7 +86,7 @@ None follows from another by itself.
 
 A triage that calls `ask_user` reads as `question`, and its step carries the pending
 question exactly as the chat saved it: `{id, question, context?, options, multiSelect?}`,
-where `id` is the question's history entry. A database access request is not shown.
+where `id` is the question's history entry.
 
 - An `answer` payload is exactly `{questionId, message}` (at most 8,000 UTF-16 units).
   The daemon checks that the target is the item's latest triage, that it still waits on

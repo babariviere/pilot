@@ -56,10 +56,6 @@ pub const METHODS: &[&str] = &[
     "day.diagnosis.check",
     "day.models.read",
     "day.connections.read",
-    "day.databases.read",
-    "day.databases.refresh",
-    "day.databases.write",
-    "day.databases.check",
     "day.connections.write",
     "day.connections.check",
     "day.connections.probe",
@@ -351,10 +347,6 @@ pub(crate) enum Command {
     DiagnosisCheck(String),
     ModelsRead,
     ConnectionsRead,
-    DatabasesRead,
-    DatabasesRefresh,
-    DatabasesWrite(crate::host::database_controls::Intent),
-    DatabasesCheck(String),
     ConnectionsWrite(crate::host::connection_controls::Intent),
     ConnectionsCheck(String),
     ConnectionsProbe,
@@ -844,31 +836,6 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             } else {
                 C::SlackSetAside(r.operation_id)
             }
-        }
-        "day.databases.read" | "day.databases.refresh" => {
-            if args != json!({}) {
-                return Err(Error::Invalid);
-            }
-            if name == "day.databases.read" {
-                C::DatabasesRead
-            } else {
-                C::DatabasesRefresh
-            }
-        }
-        "day.databases.write" => {
-            let r: crate::host::database_controls::Intent = exact(args)?;
-            r.validate()?;
-            C::DatabasesWrite(r)
-        }
-        "day.databases.check" => {
-            #[derive(Deserialize)]
-            #[serde(deny_unknown_fields, rename_all = "camelCase")]
-            struct Lookup {
-                operation_id: String,
-            }
-            let r: Lookup = exact(args)?;
-            mission(&r.operation_id)?;
-            C::DatabasesCheck(r.operation_id)
         }
         "day.connections.read" | "day.connections.probe" => {
             if args != json!({}) {
@@ -1601,8 +1568,6 @@ impl Command {
                     | Self::DiagnosisRead
                     | Self::ModelsRead
                     | Self::ConnectionsRead
-                    | Self::DatabasesRead
-                    | Self::DatabasesRefresh
                     | Self::PowerRead
                     | Self::SlackRead(_)
                     | Self::ModelsRecovery(_)

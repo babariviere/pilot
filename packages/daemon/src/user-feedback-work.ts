@@ -428,7 +428,7 @@ export class UserFeedbackWorkService {
 		return result;
 	}
 
-	/** The question a feedback chat waits on now, as its chat saved it. Passive; a database request is not one. */
+	/** The question a feedback chat waits on now, as its chat saved it. Passive. */
 	private async question(sessionId: string): Promise<UserFeedbackQuestion | undefined> {
 		let entry: Awaited<ReturnType<SessionManager["pendingQuestion"]>>;
 		try {
@@ -443,7 +443,6 @@ export class UserFeedbackWorkService {
 			typeof data.question !== "string" ||
 			!Array.isArray(data.options) ||
 			data.options.length > 9 ||
-			data.databaseAccess !== undefined ||
 			Buffer.byteLength(JSON.stringify(data)) > 32768
 		)
 			return undefined;

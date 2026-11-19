@@ -95,6 +95,14 @@ fn slack_reports_keep_drafts_and_legacy_windows_default_to_none() {
 }
 
 #[test]
+fn windows_saved_with_the_removed_database_draft_still_read() {
+    let mut json = serde_json::to_value(view()).unwrap();
+    json["databaseSettings"] = serde_json::json!(r#"{"name":"prod","mode":"read"}"#);
+    let old: SavedView = nsh_core::element::from_json(&json).unwrap();
+    assert_eq!(old.today_project, "project");
+}
+
+#[test]
 fn deferred_feedback_round_trips_and_old_windows_default_to_none() {
     let mut original = view();
     original

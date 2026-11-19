@@ -83,7 +83,7 @@ The upcoming Day overview and separate Mission Pause/Resume controls are backend
 contracts only; the current desktop app has not gained those controls yet.
 
 Coordinators can answer ordinary member questions within the approved mission scope.
-Replies are attributed to the coordinator. Database-access approvals remain yours.
+Replies are attributed to the coordinator.
 
 When you authorize continued work, the coordinator can queue an exact next slice with
 `start` and a stable `operationId`. It waits durably for dependencies and a free worker

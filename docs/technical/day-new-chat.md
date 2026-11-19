@@ -37,7 +37,7 @@ profile mutation, provider request, source sync or authentication recovery.
 * `day.chat.select {projectId,contextDigest,mode}` re-reads that selection and
   returns `ChatChoice`, adding a native UUID `draftId`. Selection creates no
   session. Ask means read-only; Build uses the project's existing workspace and
-  permission defaults. This grants no extra database, host or integration access.
+  permission defaults. This grants no extra host or integration access.
 
 The native host keeps only the latest selected choice, and rejects an older
 choice even when that project's configuration is still valid. The screen must

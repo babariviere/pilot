@@ -92,7 +92,6 @@ import { chatTitleContext, TITLE_OPENING_LIMIT } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
-import { DatabaseService, type DatabaseState, decideDatabaseRequest, declineDatabaseRequest } from "./databases.ts";
 import {
 	awaitDiagnosticRead,
 	DiagnosticReadBroker,
@@ -423,8 +422,6 @@ export interface SessionManagerOptions {
 	usageHistory?: UsageHistoryStore;
 	/** Supply accounting generation/floors to workers. Does not change user capture consent. Defaults to true. */
 	workerUsageHistory?: boolean;
-	/** Agent database access. Defaults to the agent directory's config; false explicitly disables it. */
-	databases?: DatabaseService | false;
 	credentials?: CredentialBroker;
 	/** Delay after an automatic PR follow-up finishes. Defaults to five minutes. */
 	prFollowUpCooldownMs?: number;
@@ -652,8 +649,6 @@ interface SessionMeta extends OutcomeMeta {
 	unpublishedWork?: boolean;
 	model?: string;
 	thinking?: string;
-	/** Database grants for this chat, and a pending request awaiting the user's reply. */
-	databases?: DatabaseState;
 	/** Cleared after durable input admission, or explicit failed-state update recovery. */
 	initializing?: boolean;
 	/** Reopen even an idle parent after an update, so its pending child work recovers too. */
@@ -1985,7 +1980,6 @@ export class SessionManager {
 	/** Chats with a scheduled follow-up message. Set by setScheduledMessages. */
 	private scheduledMessages = new Set<string>();
 	private stopScheduledMessages?: () => void;
-	private readonly databases?: DatabaseService;
 	private readonly mainHeads = new Map<string, string>();
 	private readonly mainRepositories = new Map<string, string>();
 	private readonly mainListeners = new Set<(event: MainMoved) => unknown>();
@@ -2610,7 +2604,6 @@ export class SessionManager {
 		this.projects = projects;
 		this.agentDir = agentDir;
 		this.factories = factories;
-		this.databases = options.databases === false ? undefined : (options.databases ?? new DatabaseService());
 		this.modelCatalog = options.models ?? new ModelCatalog(agentDir);
 		this.runner = pullRequests.runner ?? run;
 		this.pullRequestMerger = new PullRequestMerger(this.runner);
@@ -11233,127 +11226,10 @@ ${run.excerpt}`,
 	): Promise<void> {
 		const end = this.updateGate.begin();
 		try {
-			// A message never grants database access (only decideDatabaseAccess does); it declines a pending request.
-			const meta = this.metas.get(id);
-			const databases = meta ? declineDatabaseRequest(meta.databases) : undefined;
-			if (meta && databases) meta.databases = databases;
 			await this.sendAdmitted(id, message, mode, requestId, false, false, trace, false, explicitModelRecovery);
 		} finally {
 			end();
 		}
-	}
-
-	/**
-	 * The app's answer to a db access question. Saves the decision, then tells the agent with a short message, which
-	 * starts its next turn. Only the pending request's id is accepted.
-	 */
-	async decideDatabaseAccess(id: string, requestId: string, allow: boolean): Promise<void> {
-		const meta = this.require(id);
-		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before answering");
-		const request = meta.databases?.request;
-		if (!request || request.id !== requestId) throw new Conflict("This database access request is no longer pending");
-		if (!this.databaseAuthority(meta).eligible || !this.databases)
-			throw new Conflict("Database access is unavailable");
-		await this.databases.validateRequest(
-			this.projectPath(meta)!,
-			request,
-			this.databaseAuthority(meta).provider,
-			meta.id,
-		);
-		if (
-			meta.databases?.request !== request ||
-			!this.databaseAuthority(meta).eligible ||
-			this.databaseAuthority(meta).provider !== request.provider
-		)
-			throw new Conflict("Database approval changed");
-		let databases: DatabaseState;
-		try {
-			databases = decideDatabaseRequest(meta.databases, requestId, allow);
-		} catch (error) {
-			throw new Conflict(error instanceof Error ? error.message : String(error));
-		}
-		meta.databases = databases;
-		try {
-			await this.save(meta, undefined, undefined, true);
-		} catch (error) {
-			meta.databases = {};
-			throw error;
-		}
-		const message = `${allow ? "Allowed" : "Denied"} ${request!.mode} access to the ${request!.env} database.`;
-		await this.send(id, message, "steer", `database-access:${requestId}`);
-	}
-
-	async projectDatabases(projectId: string) {
-		const project = this.projects.require(projectId);
-		if (!this.databases) throw new ServiceUnavailable("Database settings are unavailable");
-		return this.databases.settings(project.path);
-	}
-
-	private databaseAuthority(meta: SessionMeta) {
-		const membership = this.missions?.membership(meta.id);
-		const context = this.missions?.context(meta.id);
-		const provider = modelProvider(meta.model) ?? "";
-		const actual = this.workers.get(meta.id)?.usage?.provider;
-		return {
-			provider,
-			eligible:
-				!!provider &&
-				(!actual || actual === provider) &&
-				!meta.ask &&
-				meta.mode !== "ask" &&
-				!meta.role &&
-				!meta.planning &&
-				!meta.control &&
-				!meta.coordinatorView &&
-				!meta.delegationFenced &&
-				meta.archivedAt === undefined &&
-				!this.changingModels.has(meta.id) &&
-				!this.archiveTransitions.has(meta.id) &&
-				(!membership ||
-					(membership.active &&
-						membership.role === "builder" &&
-						!!context?.tasks.some((t) => t.status === "in_progress"))),
-		};
-	}
-
-	async databaseControls(projectId: string) {
-		const settings = await this.projectDatabases(projectId);
-		const agents = [...this.metas.values()]
-			.filter(
-				(m) =>
-					m.projectId === projectId &&
-					m.archivedAt === undefined &&
-					(!!m.databases?.grants?.length || !!m.databases?.request),
-			)
-			.map((m) => {
-				const authority = this.databaseAuthority(m);
-				return {
-					id: m.id,
-					title: m.title ?? m.id,
-					provider: authority.provider,
-					eligible: authority.eligible,
-					grants: m.databases?.grants ?? [],
-					request: m.databases?.request ?? null,
-				};
-			});
-		return { settings, agents };
-	}
-
-	async revokeDatabaseAccess(id: string, env: string, mode: string) {
-		const meta = this.require(id);
-		meta.databases = { grants: (meta.databases?.grants ?? []).filter((g) => g.env !== env || g.mode !== mode) };
-		await this.save(meta, undefined, undefined, true);
-	}
-
-	async testProjectDatabase(projectId: string, env: string, mode: "read" | "write", revision: string) {
-		if (!this.databases) throw new ServiceUnavailable("Database settings are unavailable");
-		return this.databases.testConnection(this.projects.require(projectId).path, env, mode, revision);
-	}
-
-	async updateProjectDatabases(projectId: string, input: unknown) {
-		const project = this.projects.require(projectId);
-		if (!this.databases) throw new ServiceUnavailable("Database settings are unavailable");
-		return this.databases.updateSettings(project.path, input);
 	}
 
 	/** A Slack reply can only reach the exact live worker that was eligible at admission. */
@@ -11398,7 +11274,6 @@ ${run.excerpt}`,
 				current.kernelRestartPending ||
 				current.failure ||
 				current.inputError ||
-				current.databases?.request ||
 				(current.slackReplyAdmission && current.slackReplyAdmission !== requestId) ||
 				current.working ||
 				current.preparing ||
@@ -14378,8 +14253,6 @@ ${run.excerpt}`,
 				await this.unparked(id);
 			}
 			await this.syncSubscriptionPolicy(this.require(id));
-			// Edits to the database config apply to the next kernel without restarting pilotd.
-			if (this.require(id).role !== "insights") await this.databases?.refresh();
 			return this.openWorker(id, configurationOnly);
 		});
 	}
@@ -14610,9 +14483,6 @@ ${run.excerpt}`,
 						...(meta.automation?.setup ? { workspaceSetup: { state: meta.automation.setup.state } } : {}),
 					},
 					...(mission ? { mission } : {}),
-					...(this.databaseAuthority(meta).eligible && this.databases?.configured(this.projectPath(meta))
-						? { databases: true }
-						: {}),
 				},
 				(packet) => {
 					if (published) this.onPacket(meta, published, packet);
@@ -14799,7 +14669,6 @@ ${run.excerpt}`,
 				"mission.call": "mission.result",
 				"memory.call": "memory.result",
 				"knowledge.call": "knowledge.result",
-				"database.call": "database.result",
 				"slack.call": "slack.result",
 				"liveUpdate.propose": "liveUpdate.result",
 				"insights.backlog.call": "insights.backlog.result",
@@ -14870,7 +14739,6 @@ ${run.excerpt}`,
 				"mission.call": "mission.result",
 				"memory.call": "memory.result",
 				"knowledge.call": "knowledge.result",
-				"database.call": "database.result",
 				"slack.call": "slack.result",
 				"liveUpdate.propose": "liveUpdate.result",
 				"diagnostics.call": "diagnostics.result",
@@ -15593,30 +15461,6 @@ ${run.excerpt}`,
 			);
 			return;
 		}
-		if (packet.type === "database.call") {
-			const reply = (result: { result?: unknown; error?: string }) => {
-				if (this.workers.get(meta.id) === worker)
-					worker.send({ type: "database.result", callId: packet.callId, ...(result as { result?: never }) });
-			};
-			const call = Promise.resolve().then(async () => {
-				if (!this.databases || !this.databaseAuthority(meta).eligible)
-					throw new Error("Database access is unavailable in this chat");
-				await this.saving.get(meta.id);
-				return this.databases.call(meta.id, this.projectPath(meta), packet.action, packet.args, {
-					authority: () => this.databaseAuthority(meta),
-					read: () => meta.databases,
-					write: async (state) => {
-						meta.databases = state;
-						await this.save(meta, undefined, undefined, true);
-					},
-				});
-			});
-			void call.then(
-				(result) => reply({ result }),
-				(error: unknown) => reply({ error: formatFailure(error, "Tool db") }),
-			);
-			return;
-		}
 		if (packet.type === "chatReport.call") {
 			const reply = (result: { result?: unknown; error?: string }) => {
 				if (this.workers.get(meta.id) === worker)
@@ -15861,7 +15705,6 @@ ${run.excerpt}`,
 		}
 		if (packet.type === "modelChanged") {
 			if (this.workers.get(meta.id) !== worker) return;
-			if (modelProvider(meta.model) !== modelProvider(packet.model)) meta.databases = {};
 			meta.model = packet.model;
 			meta.thinking = packet.thinking;
 			if (packet.switched) {
@@ -17413,7 +17256,7 @@ ${run.excerpt}`,
 		return join(this.sessionsDir, id);
 	}
 
-	/** The project's own folder, which keys per-project settings such as database access. */
+	/** The project's own folder. */
 	private projectPath(meta: SessionMeta): string | undefined {
 		return meta.projectId ? this.projects.get(meta.projectId)?.path : undefined;
 	}
@@ -17444,8 +17287,6 @@ ${run.excerpt}`,
 			if (meta.lifecycleCheckpoint) persisted.lifecycleCheckpoint = structuredClone(meta.lifecycleCheckpoint);
 			else delete persisted.lifecycleCheckpoint;
 			persisted.inputGeneration = meta.inputGeneration;
-			// Queued lifecycle snapshots cannot resurrect revoked database authority.
-			persisted.databases = archive?.timestamp !== undefined ? {} : structuredClone(meta.databases);
 			persisted.missionUserStopGeneration = meta.missionUserStopGeneration;
 			// Preserve the immutable execution ceiling across queued lifecycle snapshots.
 			persisted.executionPermission = meta.executionPermission;
@@ -17555,7 +17396,6 @@ ${run.excerpt}`,
 			}
 			// Commit in memory before the next queued save can read the metadata.
 			if (archive) {
-				if (archive.timestamp !== undefined) meta.databases = {};
 				if (archive.preserveWorkspace) meta.coordinatorArchivePreservesWorkspace = true;
 				if (archive.timestamp === undefined) delete meta.archivedAt;
 				else meta.archivedAt = archive.timestamp;

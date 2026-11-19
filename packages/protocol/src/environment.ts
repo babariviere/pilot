@@ -32,7 +32,6 @@ export interface EnvironmentTool {
 }
 
 export type EnvironmentExportValue = "url" | "socketUrl" | "host" | "port" | "database" | "user";
-export type EnvironmentDbAccess = "allow" | "ask";
 
 export interface EnvironmentService {
 	id: string;
@@ -45,8 +44,6 @@ export interface EnvironmentService {
 	/** Logical database name for provider "pilot", at most 32 characters. Defaults to the project name. Each chat
 	 * workspace gets its own physical database, <name>_<project prefix>_<workspace slug>; direct mode keeps one. */
 	database?: string;
-	/** Agent db tool access to the built-in database. false hides it. Defaults to allow/allow. */
-	dbTool?: { read: EnvironmentDbAccess; write: EnvironmentDbAccess } | false;
 	/** Variables exposed to steps, checks and agents, for example { DATABASE_URL: "url" }. */
 	exports: Record<string, EnvironmentExportValue>;
 	/** Provider "compose" only. Changing file or service clears the review. */

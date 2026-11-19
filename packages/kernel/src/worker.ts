@@ -6,7 +6,6 @@ import type { JsonValue } from "@earendil-works/chord/json";
 import { ConversationBusy } from "@earendil-works/pi-durable";
 import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
 import release from "../../../package.json" with { type: "json" };
-import type { DatabaseCall } from "./database-tool.ts";
 import type { DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
 import type { DiagnosticsCall } from "./diagnostics-tool.ts";
 import { formatFailure } from "./failure.ts";
@@ -244,8 +243,6 @@ export function runKernelWorker(): void {
 		callDaemon<JsonValue>((callId) => ({ type: "memory.call", callId, operationId, action, args }));
 	const callKnowledge: import("./knowledge-tools.ts").KnowledgeCall = (action, args, operationId) =>
 		callDaemon<JsonValue>((callId) => ({ type: "knowledge.call", callId, operationId, action, args }));
-	const callDatabase: DatabaseCall = (action, args) =>
-		callDaemon<JsonValue>((callId) => ({ type: "database.call", callId, action, args }));
 	const callLiveUpdateProposal: import("./live-update-tool.ts").LiveUpdateProposalCall = (args, operationId) =>
 		callDaemon<JsonValue>((callId) => ({ type: "liveUpdate.propose", callId, operationId, args }));
 	const callSlackStatus: SlackStatusCall = (args) =>
@@ -489,7 +486,6 @@ export function runKernelWorker(): void {
 			command.type === "knowledge.result" ||
 			command.type === "insights.backlog.result" ||
 			command.type === "liveUpdate.result" ||
-			command.type === "database.result" ||
 			command.type === "slack.result" ||
 			command.type === "chatReport.result" ||
 			command.type === "screen.result" ||
@@ -627,7 +623,6 @@ export function runKernelWorker(): void {
 					callKnowledge,
 					callInsightsBacklog,
 					callLiveUpdateProposal,
-					callDatabase,
 					callSlackStatus,
 					callChatReport,
 					callDiagnostics,

@@ -28,7 +28,7 @@ other stage runs on the host that runs the chats:
   the local files the user lists (such as `.env`) without reading, storing or syncing their contents.
 - Toolchains come from mise. Pilot keeps no table of known tools: tool IDs are mise registry names.
 - Each chat workspace gets its own built-in Postgres database on any host, for setup steps, checks and the agent's
-  `db` tool, so parallel chats never share migrations.
+  commands, so parallel chats never share migrations.
 - Not in scope: teardown or cleanup on archive, copying installs or plans between hosts, cloud
   environments, container images for whole workspaces, and services other than Postgres in the first version.
 
@@ -50,8 +50,6 @@ commands as context it never runs; both are later work (section 15).
 | `subprocesses` pool and `run` (`subprocess.ts`, `workspaces.ts`): off-thread, detached process groups, timeouts, output caps | Probes, installs and steps run through the planned bounded shell runner, built on this pool |
 | `runtimeEnvironment` (`packages/kernel/src/runtime-environment.ts`): sparse PATH, never sources login files | Probes use the same rule. Resolved tool directories are prepended to the agent's and checks' PATH instead of relying on shell activation |
 | Native host-action capability (`x-pilot-github-capability`, read over verified SSH or the local filesystem), used by model scope and GitHub setup | Required for saving approvals, confirming plans and approving scripts. Never exposed to agents |
-| Database grants: app decision → pilotd request ID, messages never grant | Same rule for install and script approvals |
-| `db` tool and `~/.config/pilot/database.json` (`databases.ts`): per-project environments, read and write connections, `allow` or `ask` | The chat's built-in database is added as an environment in memory; the user's file is never edited |
 | Scoped models sync (`docs/technical/devboxes.md`): saved intent on the Mac, per-host apply with hash checks, Synced, Pending and Conflict states | Same saved intent and per-host apply for the shared profile layer, without a Conflict state (section 2) |
 | mise registry and install records (`mise registry`, `<mise data>/installs/<tool>/<version>`) | Tool IDs and the app's tool picker come from the host's registry; presence is read from install records |
 | `RepositoryBindings` and **Set up on devbox**: explicit, host-qualified links between a project's placements | Defines which projects share a profile. Matching names or paths never link projects |
@@ -156,8 +154,6 @@ interface EnvironmentService {
 	version: string; // major the project declares, e.g. "16"; checked against the host's server (section 5)
 	provider: "pilot" | "compose"; // pilot: built-in database (section 5); compose: reviewed compose file
 	database?: string; // logical name for provider "pilot", at most 32 characters, defaults to the project name
-	/** Agent db tool access to the built-in database; false hides it from the tool. */
-	dbTool?: { read: "allow" | "ask"; write: "allow" | "ask" } | false; // default allow, allow
 	/** Variables exposed to steps, checks and agents, e.g. { DATABASE_URL: "url" }. */
 	exports: Record<string, "url" | "socketUrl" | "host" | "port" | "database" | "user">;
 	compose?: { file: string; service: string; review?: ReviewPin }; // provider "compose" only
@@ -403,7 +399,7 @@ created by **Apply** or **Run setup**.
 (a test database, a scratch database) with ordinary commands such as `createdb` or `CREATE DATABASE` through
 `DATABASE_URL`. There is no dedicated tool and no command filtering. Postgres only lets a role use a database it
 owns as a template, so `CREATEDB` does not expose other projects' data. Such databases follow Postgres defaults:
-the read-only role and the `db` tool's `pilot` environment do not cover them.
+the read-only role does not cover them.
 
 Pilot never drops databases (setup has no teardown), so archived and deleted chats leave theirs behind; agents can
 drop the ones their owner role owns. The Database section lists every database owned by the project's roles, with
@@ -433,14 +429,6 @@ the repository. Exports offer both forms:
 
 There are no Pilot-built or third-party portable binaries. Pilot never runs sudo.
 
-**Agent `db` tool.** pilotd adds an environment named `pilot` to the `db` tool configuration in memory, next
-to what `database.json` defines. It targets the calling chat's own database (the project database in
-direct mode); chats without their own workspace, such as Ask chats and coordinators, do not get it. Reads use the
-read-only role and writes the owner role, both `allow` by default and switchable to `ask` in the Environment
-section. The user file is never edited. If it already defines an environment named `pilot`, the file wins and
-the Environment section says so. Because the tool runs in each host's daemon, it works the same on Local and
-devboxes.
-
 **Never touched**: other clusters, Homebrew or systemd Postgres services, other Docker containers and volumes,
 existing databases and roles, `~/.pgpass`. If Pilot's data directory exists without Pilot's marker file, or a
 `pilot-postgres` container or `pilot-postgres-data-<major>` volume exists without Pilot's label, setup stops with
@@ -450,8 +438,8 @@ reusing or replacing it.
 **Compose provider.** Uses the project's reviewed compose file with a Pilot project name
 (`docker compose -p pilot-<projectId> up -d <service>`), so containers and volumes are namespaced. The compose
 file's own credentials stay in the file; Pilot does not copy them. Host ports come from the file, so a port
-conflict is reported, not resolved by stopping anything. Compose services are not added to the `db` tool.
-They stay per project: all of the project's workspaces share them. Per-workspace databases are a built-in
+conflict is reported, not resolved by stopping anything.
+Compose services stay per project: all of the project's workspaces share them. Per-workspace databases are a built-in
 database feature.
 
 Migrations and seed data are ordinary project steps; they target the workspace's database through the exported
@@ -688,7 +676,6 @@ README.md          "Requires Go 1.22+ and PostgreSQL 15 or later."
 			"version": "16",
 			"provider": "pilot",
 			"database": "orders",
-			"dbTool": { "read": "allow", "write": "allow" },
 			"exports": { "DATABASE_URL": "url" }
 		}
 	],
@@ -723,8 +710,8 @@ devbox-1 is smaller, so it adds an override layer there: `{ "revision": 1, "env"
 **Plan on Local (macOS arm64)**: Go 1.23.4 present via mise, no action. golangci-lint missing:
 `mise install golangci-lint@1.61.0`. Postgres 16 binaries present from Homebrew
 (`/opt/homebrew/opt/postgresql@16/bin`); action: create and start the built-in server for Postgres 16 and the
-project's roles. Step `make setup` reviewed. The user confirms once. Each chat's `db` tool then lists a `pilot`
-environment pointing at that chat's own database.
+project's roles. Step `make setup` reviewed. The user confirms once. Each chat's `DATABASE_URL` then points at
+that chat's own database.
 
 **Plan on devbox-1 (Linux x86-64, mise present, no Homebrew, apt)**: the synced profile arrives as **Synced**.
 Go and golangci-lint: install with mise. No Postgres binaries and no Homebrew, but Docker is present: the host has
@@ -785,8 +772,7 @@ lands.
 7. **Script review**: review view, hash pins, re-review on change, private script copies.
 8. **Built-in database**: one long-running native server or Docker container per host with its host version
    setting, project roles (owner with `CREATEDB`), the per-workspace database helper (one project database in
-   direct mode), socket (native) and TCP, restart on daemon start, readiness probes, `db` tool environment
-   targeting the chat's database, and the listing of every project-owned database. The compose provider follows
+   direct mode), socket (native) and TCP, restart on daemon start, readiness probes, and the listing of every project-owned database. The compose provider follows
    behind review.
 9. **Workspace setup**: on `workspace.created` and `workspace.restored`, copy local files, create the
    workspace's database, then run steps; first-turn hold, PATH and exports for agents, agent prompt line. Needs
@@ -829,7 +815,6 @@ Agent-led setup and project commands (section 15) are not scheduled.
 - The built-in database offers both a Unix socket and a loopback TCP port.
 - The built-in Postgres server is long-running. No teardown is designed.
 - Profiles sync across linked projects on all hosts; plans, installs and readiness stay per host.
-- The built-in database is offered to the agent's `db` tool.
 - Toolchains come from mise with no built-in tool table: tool IDs are mise registry names, the app adds tools
   from the host's mise registry, and detection reads mise's install records. Postgres keeps a dedicated
   Database section.
@@ -842,7 +827,7 @@ Agent-led setup and project commands (section 15) are not scheduled.
 - The project's owner role has `CREATEDB`, so agents create extra empty databases with ordinary commands, with no
   dedicated tool or command filtering. The Database section lists every database the project's roles own.
 - Each chat workspace gets its own database, created by workspace setup. Direct-mode projects keep one project
-  database. The `db` tool targets the chat's database.
+  database.
 - Workspace setup copies listed ignored local files from the main checkout into new and restored workspaces,
   before steps run. Pilot never stores or syncs their contents.
 - Sync is layered: a shared profile synced to every linked host, plus a per-host override layer that always wins

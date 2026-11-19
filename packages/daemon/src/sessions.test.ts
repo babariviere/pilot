@@ -3,14 +3,13 @@ import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter, once } from "node:events";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { JsonValue } from "@earendil-works/chord/json";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import type { KernelCommand, KernelPacket, KernelSubagent, KernelUsage } from "@pilot/kernel";
@@ -34,7 +33,6 @@ import { WebSocket } from "ws";
 import { createAskTools } from "../../kernel/src/ask-tools.ts";
 import { SourceReader } from "../../kernel/src/source-reader.ts";
 import { openSessionStorage } from "../../kernel/src/storage.ts";
-import { DATABASE_CONFIG_FILE, DatabaseService } from "./databases.ts";
 import { diagnosticContextResponse } from "./diagnostic-context.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { DaemonOperations, EventLoopWatchdog, operations } from "./event-loop-watchdog.ts";
@@ -2340,7 +2338,6 @@ test("Insights forged IPC cannot call broad capabilities or deliver stale eviden
 		"mission.call",
 		"memory.call",
 		"knowledge.call",
-		"database.call",
 		"slack.call",
 		"liveUpdate.propose",
 		"diagnostics.call",
@@ -2357,7 +2354,7 @@ test("Insights forged IPC cannot call broad capabilities or deliver stale eviden
 			callId: type,
 			request: { action: "spawn" },
 		} as unknown as KernelPacket);
-	assert.equal(worker.sent.filter((p) => "error" in p && p.error === "Insights denies this capability").length, 14);
+	assert.equal(worker.sent.filter((p) => "error" in p && p.error === "Insights denies this capability").length, 13);
 	assert.equal(f.broadCalls(), 0);
 	const count = f.workers.length;
 	for (const type of [
@@ -3089,6 +3086,25 @@ test("a chat left broken by a daemon that lost its credential broker recovers on
 	const recovered = restarted["metas"].get(created.id)!;
 	assert.equal(recovered.failure, undefined, "a chat must not stay broken because its broker was gone");
 	assert.equal(recovered.kernelRestartPending, true);
+});
+
+test("a saved chat with old database grants still loads and takes messages", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
+	await sessions["starting"].get(created.id);
+	await sessions.shutdown();
+	const persisted = { ...(await f.stored(created.id)) } as Record<string, unknown>;
+	persisted.databases = {
+		grants: [{ env: "prod", mode: "read", scope: "old" }],
+		request: { id: "old-request", env: "prod", mode: "write" },
+	};
+	await writeFile(join(f.home, "sessions", created.id, "meta.json"), JSON.stringify(persisted));
+	const restarted = await f.manager();
+	assert.ok(restarted.get(created.id));
+	await restarted.send(created.id, "Continue");
+	const worker = f.workers.at(-1)!;
+	assert.match(JSON.stringify([...worker.sent, ...worker.requests]), /Continue/);
 });
 
 test("todo count uses the live cache, ignores retired workers, and cold-reads without opening an agent", async (t) => {
@@ -7217,104 +7233,6 @@ test("queued metadata writes capture each transition instead of serializing live
 			await second;
 		}
 	});
-});
-
-test("database access: only configured projects get db, and only the app's decision grants an ask", async (t) => {
-	const f = await fixture(t);
-	const agentDir = join(f.root, "agent");
-	await mkdir(agentDir);
-	const config = join(agentDir, DATABASE_CONFIG_FILE);
-	await writeFile(
-		config,
-		JSON.stringify({
-			projects: { [f.project.path]: { environments: { prod: { read: { url: "postgres://ro@prod/app" } } } } },
-		}),
-	);
-	await chmod(config, 0o600);
-	const queries: string[] = [];
-	const databases = new DatabaseService(agentDir, async (target, statements) => {
-		queries.push(`${target.url} ${statements[0]?.sql}`);
-		return [{ columns: ["n"], rows: [{ n: 1 }], rowCount: 1, truncated: false }];
-	});
-	let sessions = await f.manager({}, { databases });
-	const settings = await sessions.projectDatabases(f.project.id);
-	assert.equal(JSON.stringify(settings).includes("postgres://"), false);
-	await sessions.updateProjectDatabases(f.project.id, {
-		revision: settings.revision,
-		environments: [
-			{ name: "prod", read: {} },
-			{ name: "local", read: { url: "postgres://ro@local/app" }, write: { url: "postgres://rw@local/app" } },
-		],
-	});
-	assert.equal((await sessions.projectDatabases(f.project.id)).environments[1]?.write?.access, "ask");
-	const created = await sessions.spawn({ projectId: f.project.id, workspace: "direct", message: "Start" });
-	await sessions["starting"].get(created.id);
-	let worker = f.workers.at(-1)!;
-	assert.equal(worker.spec.databases, true);
-	let meta = sessions["metas"].get(created.id)!;
-	const call = async (callId: string, action: "access" | "query", args: Record<string, JsonValue>) => {
-		sessions["onPacket"](meta, worker, { type: "database.call", callId, action, args });
-		await until(() => worker.sent.some((command) => command.type === "database.result" && command.callId === callId));
-		const reply = worker.sent.find((command) => command.type === "database.result" && command.callId === callId);
-		return reply as Extract<KernelCommand, { type: "database.result" }>;
-	};
-	const field = (value: JsonValue | undefined, key: string) =>
-		value && typeof value === "object" && !Array.isArray(value) ? value[key] : undefined;
-
-	assert.match((await call("q1", "query", { env: "prod", sql: "select 1" })).error ?? "", /No read access to prod/);
-	assert.equal(field((await call("a1", "access", { env: "prod" })).result, "status"), "pending");
-	// Typing the option's text is just a message: it declines instead of granting.
-	await sessions.send(created.id, "Allow read access to prod");
-	assert.deepEqual(sessions["metas"].get(created.id)?.databases, {});
-
-	const asked = (await call("a2", "access", { env: "prod" })).result;
-	const requestId = field(field(field(asked, "question"), "databaseAccess"), "id");
-	assert.equal(typeof requestId, "string");
-	await assert.rejects(sessions.decideDatabaseAccess(created.id, "forged", true), /no longer pending/);
-	await sessions.decideDatabaseAccess(created.id, requestId as string, true);
-	assert.equal(sessions["metas"].get(created.id)?.databases?.grants?.[0]?.env, "prod");
-	assert.ok(sessions["metas"].get(created.id)?.databases?.grants?.[0]?.scope);
-	await until(() =>
-		worker.requests.some(
-			(command) => command.type === "input" && command.content === "Allowed read access to the prod database.",
-		),
-	);
-	// The decision is used up: a repeated click changes nothing.
-	await assert.rejects(sessions.decideDatabaseAccess(created.id, requestId as string, false), /no longer pending/);
-	assert.deepEqual(field((await call("q2", "query", { env: "prod", sql: "select 1" })).result, "rows"), [{ n: 1 }]);
-	assert.deepEqual(queries, ["postgres://ro@prod/app select 1"]);
-	await sessions.shutdown();
-	sessions = await f.manager({}, { databases });
-	assert.ok(
-		(await sessions.databaseControls(f.project.id)).agents.find((a) => a.id === created.id)?.grants[0]?.scope,
-		"approval survives daemon reopen",
-	);
-	await sessions.send(created.id, "Check configured access after reopen");
-	await sessions["starting"].get(created.id);
-	worker = f.workers.at(-1)!;
-	meta = sessions["metas"].get(created.id)!;
-	const originalModel = meta.model;
-	meta.model = "other/model";
-	assert.match((await call("provider-change", "query", { env: "prod", sql: "select 1" })).error ?? "", /access/);
-	meta.model = originalModel;
-	meta.control = true;
-	assert.match((await call("helper", "query", { env: "prod", sql: "select 1" })).error ?? "", /unavailable/);
-	assert.ok(
-		(await sessions.databaseControls(f.project.id)).agents.find((a) => a.id === created.id)?.grants.length,
-		"temporarily ineligible agents keep visible approvals",
-	);
-	await sessions.revokeDatabaseAccess(created.id, "prod", "read");
-	delete meta.control;
-	assert.match((await call("revoked", "query", { env: "prod", sql: "select 1" })).error ?? "", /No read access/);
-	assert.equal(queries.length, 1);
-
-	// Another project has no databases: its chats never get the tool.
-	const other = join(f.root, "other");
-	await mkdir(other);
-	const project = await f.projects.create({ path: other, model: "test/preferred" });
-	const unrelated = await sessions.spawn({ projectId: project.id, workspace: "direct", message: "Start" });
-	await sessions["starting"].get(unrelated.id);
-	assert.equal(f.workers.at(-1)!.spec.databases, undefined);
 });
 
 test("chat summaries carry their triage source and follow link changes", async (t) => {

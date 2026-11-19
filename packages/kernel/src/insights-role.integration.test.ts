@@ -208,7 +208,6 @@ test("Insights rejects malformed start envelopes before opening storage", async 
 		{ role: undefined },
 		{ diagnosticHistoryAccess: true },
 		{ liveUpdateProposals: true },
-		{ databases: true },
 	]) {
 		await assert.rejects(KernelSession.open({ ...spec, ...patch }, { onWorking: () => {} }), /Insights/);
 	}

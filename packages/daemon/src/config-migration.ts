@@ -6,10 +6,7 @@ import { getPilotConfigDir } from "./config.ts";
 
 /** Run before config readers start. Publish exclusively, preserve bytes/modes, and never overwrite settings. */
 export async function migratePilotConfig(agentDir: string, configDir = getPilotConfigDir()): Promise<void> {
-	for (const [oldName, name] of [
-		["pilot-databases.json", "database.json"],
-		["pilot-tracking.json", "tracking.json"],
-	]) {
+	for (const [oldName, name] of [["pilot-tracking.json", "tracking.json"]]) {
 		const source = join(agentDir, oldName);
 		const destination = join(configDir, name);
 		try {

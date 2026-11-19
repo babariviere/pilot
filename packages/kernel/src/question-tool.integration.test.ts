@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { JsonValue } from "@earendil-works/chord/json";
 import {
 	fauxAssistantMessage,
 	fauxProvider,
@@ -15,18 +14,12 @@ import {
 import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
 import { Type } from "typebox";
-import type { DatabaseCall } from "./database-tool.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { QUESTION_ENTRY } from "./question-tool.ts";
 import { KernelSession } from "./session.ts";
-import { TOOL_ACTIVITY_FILE, type ToolActivityRecord } from "./tool-activity.ts";
 
-async function open(
-	t: TestContext,
-	name: string,
-	databases: { databases?: boolean; callDatabase?: DatabaseCall; root?: string } = {},
-) {
-	const root = databases.root ?? (await mkdtemp(join(tmpdir(), "pilot-question-")));
+async function open(t: TestContext, name: string) {
+	const root = await mkdtemp(join(tmpdir(), "pilot-question-"));
 	const cleanup: Array<() => Promise<void>> = [];
 	t.after(async () => {
 		try {
@@ -129,10 +122,8 @@ async function open(
 				sessionId: name,
 				cwd: root,
 				storageDir: join(root, "storage"),
-				...(databases.databases ? { databases: true } : {}),
 			},
 			{
-				...(databases.callDatabase ? { callDatabase: databases.callDatabase } : {}),
 				onQuestionAwaited: (question) => awaited.push(question),
 				onWorking: (working, completion) => {
 					if (!working && completion && completion.outcomeAt !== completions.at(-1)?.outcomeAt)
@@ -427,131 +418,4 @@ test("safe tool drain completes without a reply and preserves the saved question
 	await f.session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 	assert.deepEqual(f.effects, []);
 	assert.equal(f.faux.state.callCount, 2);
-});
-
-test("db through codemode queries pilotd, and a pending grant asks the user", { timeout: 20_000 }, async (t) => {
-	const calls: Array<[string, unknown]> = [];
-	const { session, faux, completions } = await open(t, "database-question", {
-		databases: true,
-		callDatabase: async (action, args): Promise<JsonValue> => {
-			calls.push([action, args]);
-			if (action === "query")
-				return { env: "local", mode: "read", columns: ["n"], rows: [{ n: 1 }], rowCount: 1, truncated: false };
-			return {
-				status: "pending",
-				env: "prod",
-				mode: "read",
-				question: {
-					question: "Allow read access to the prod database?",
-					options: [{ label: "Allow read access to prod" }, { label: "Deny" }],
-					databaseAccess: { id: "request-1", env: "prod", mode: "read" },
-				},
-			};
-		},
-	});
-	faux.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall("codemode", {
-				code: 'const r = await tools.db({action:"query",env:"local",sql:"select 1 as n"}); text(JSON.stringify(r.rows)); await tools.db({action:"access",env:"prod"});',
-			}),
-			{ stopReason: "toolUse" },
-		),
-	]);
-	await session.submit("ask", "Count users", "followUp");
-	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-	assert.deepEqual(calls, [
-		["query", { env: "local", sql: "select 1 as n" }],
-		["access", { env: "prod" }],
-	]);
-	const messages = (await session.conversation.context(BACKGROUND_CONTEXT)).messages;
-	const result = messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
-	assert.match(JSON.stringify(result), /n\\":1/);
-	assert.equal(faux.state.callCount, 1, "saving the access question ends the turn");
-	assert.deepEqual(await questions(session), [
-		{
-			question: "Allow read access to the prod database?",
-			options: [{ label: "Allow read access to prod" }, { label: "Deny" }],
-			databaseAccess: { id: "request-1", env: "prod", mode: "read" },
-		},
-	]);
-	assert.equal((await settled(completions, 1))?.outcome, "question");
-});
-
-test("a caught nested DB rejection remains a failed call even when discovery, approval and the script succeed", {
-	timeout: 20_000,
-}, async (t) => {
-	const calls: string[] = [];
-	const failure =
-		"Database connection failed (SQLSTATE 28000). PostgreSQL server authentication rules rejected the connection. The server reported an unencrypted connection; this alone does not establish a TLS requirement. Pilot access approval does not verify connectivity.";
-	const { session, faux, completions, storageDir } = await open(t, "database-caught-failure", {
-		databases: true,
-		callDatabase: async (action, args): Promise<JsonValue> => {
-			calls.push(action);
-			if (action === "access") {
-				assert.ok(!calls.includes("query"), "listing and approval happen before any connection attempt");
-				return args.env
-					? { status: "granted", env: "prod", mode: "read" }
-					: { environments: [{ name: "prod", modes: { read: "allow" }, granted: [] }] };
-			}
-			throw Object.assign(new Error(failure), { code: "28000" });
-		},
-	});
-	faux.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall("codemode", {
-				code: `text(typeof tools.db);
-text(await tools.db({action: "access"}));
-text(await tools.db({action: "access", env: "prod"}));
-try { await tools.db({action: "query", env: "prod", sql: "select 'private-query-marker'"}); }
-catch (error) { text(String(error)); }
-text("script finished, not connectivity success");`,
-			}),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The script finished, but the database query failed. No SQL results were returned."),
-	]);
-	await session.submit("query", "Run the offline DB failure fixture", "followUp");
-	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-	const messages = (await session.conversation.context(BACKGROUND_CONTEXT)).messages;
-	const outer = messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
-	assert.ok(outer?.role === "toolResult");
-	assert.equal(outer.isError, false);
-	assert.match(JSON.stringify(outer.content), /SQLSTATE 28000.*does not establish a TLS requirement/);
-	assert.match(JSON.stringify(outer.content), /script finished, not connectivity success/);
-	assert.doesNotMatch(JSON.stringify(outer.content), /rowCount|columns/);
-	assert.deepEqual(calls, ["access", "access", "query"], "no automatic retry after the caught rejection");
-	assert.equal((await settled(completions, 1))?.outcome, "done", "run completion is separate from query outcome");
-	await session.close();
-	const activity = await readFile(join(storageDir, TOOL_ACTIVITY_FILE), "utf8");
-	const finished = activity
-		.trim()
-		.split("\n")
-		.map((line) => JSON.parse(line) as ToolActivityRecord)
-		.filter((record) => record.kind === "finished");
-	assert.deepEqual(
-		finished.map(({ category, nested, outcome }) => ({ category, nested, outcome })),
-		[
-			{ category: "orchestration", nested: true, outcome: "success" },
-			{ category: "orchestration", nested: true, outcome: "success" },
-			{ category: "orchestration", nested: true, outcome: "failure" },
-			{ category: "codemode", nested: false, outcome: "success" },
-		],
-	);
-	assert.equal(new Set(finished.map(({ ref }) => ref)).size, 4, "independently attributable calls");
-	assert.doesNotMatch(activity, /private-query-marker|SQLSTATE|prod|authentication|postgres:\/\//);
-});
-
-test("without a database config, chats have no db tool", { timeout: 20_000 }, async (t) => {
-	const { session, faux } = await open(t, "database-absent", { callDatabase: async () => assert.fail("no call") });
-	let seen = "";
-	faux.setResponses([
-		fauxAssistantMessage(fauxToolCall("codemode", { code: "text(typeof tools.db);" }), { stopReason: "toolUse" }),
-		(context) => {
-			seen = JSON.stringify(context.messages.at(-1));
-			return fauxAssistantMessage("Done.");
-		},
-	]);
-	await session.submit("ask", "Hi", "followUp");
-	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-	assert.match(seen, /tools\.db does not exist/);
 });

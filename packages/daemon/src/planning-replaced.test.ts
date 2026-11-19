@@ -32,7 +32,7 @@ test("planners may use project Knowledge, but no other host call or documentatio
 	for (const action of ["list", "get", "create", "append", "link", "context", "preferences.get"])
 		assert.equal(planningHostCallAllowed("knowledge.call", action), true, action);
 	assert.equal(planningHostCallAllowed("knowledge.call", "batch"), false);
-	for (const type of ["mission.call", "memory.call", "database.call", "slack.call"])
+	for (const type of ["mission.call", "memory.call", "slack.call"])
 		assert.equal(planningHostCallAllowed(type, "get"), false, type);
 	assert.equal(planningHostCallAllowed("mission.call", "ticket"), true);
 	for (const action of ["comment", "updateLink", "split", undefined])

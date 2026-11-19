@@ -19,8 +19,7 @@ Open **Queued** to inspect them; supported text messages can be edited or remove
 Image-bearing messages are kept intact rather than flattened into editable text.
 
 When an agent asks a question, choose a suggested answer or write your own.
-Automatic inputs wait while it is open. Database approvals require the explicit
-[approval control](databases.md), not a typed reply.
+Automatic inputs wait while it is open.
 
 **Stop** ends the current run, stops working subagents and holds automatic follow-ups. Background
 jobs keep running, but their results wait with the other held inputs, so the chat shows as stopped,

@@ -17,7 +17,7 @@ explicitly unavailable. The offline executor qualification below does not enable
   boundary, Stop and reply identity before admitting a native answer. Its transaction can resume
   a suspended run. Decision help must **not** use that reply admission path.
   `nativeQuestionAssistance` instead requires a trusted current-boundary reader. It rejects older
-  entries, answered/stopped questions and database-access prompts. Reading historical transcript
+  entries and answered/stopped questions. Reading historical transcript
   records alone does not satisfy this port.
 - `workflow-confirmations.ts` and `workflow-confirmation-store.ts` own workflow approval and
   reviewer consent. Help cannot write them, accept proposals, resolve questions or edit guidance.

@@ -144,6 +144,7 @@ function tool(value: unknown, index: number): EnvironmentTool {
 
 function service(value: unknown, index: number): EnvironmentService {
 	const name = `services[${index}]`;
+	// "dbTool" is a removed setting. Saved profiles may still have it, so it is accepted and dropped.
 	const entry = record(value, name, ["id", "kind", "version", "provider", "database", "dbTool", "exports", "compose"]);
 	if (entry.kind !== "postgres") fail(`${name} kind must be postgres`);
 	if (entry.provider !== "pilot" && entry.provider !== "compose") fail(`${name} provider must be pilot or compose`);
@@ -158,16 +159,6 @@ function service(value: unknown, index: number): EnvironmentService {
 		if (entry.provider !== "pilot") fail(`${name} database applies to the built-in database only`);
 		// <name>_<8>_<8> must stay under Postgres's 63-byte identifier limit.
 		result.database = text(entry.database, `${name} database`, 32, /^[a-z_][a-z0-9_]{0,31}$/);
-	}
-	if (entry.dbTool !== undefined) {
-		if (entry.provider !== "pilot") fail(`${name} dbTool applies to the built-in database only`);
-		if (entry.dbTool === false) result.dbTool = false;
-		else {
-			const access = record(entry.dbTool, `${name} dbTool`, ["read", "write"]);
-			const level = (value: unknown) =>
-				value === "allow" || value === "ask" ? value : fail(`${name} dbTool access must be allow or ask`);
-			result.dbTool = { read: level(access.read), write: level(access.write) };
-		}
 	}
 	const exports = record(entry.exports, `${name} exports`, Object.keys(entry.exports ?? {}));
 	if (Object.keys(exports).length > ENVIRONMENT_LIMITS.exports)

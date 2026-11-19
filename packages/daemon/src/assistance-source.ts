@@ -58,8 +58,7 @@ export function nativeQuestionAssistance(
 			current.sessionId !== subject.sessionId ||
 			current.entryId !== subject.entryId ||
 			!current.questionPending ||
-			current.stopped ||
-			current.question.databaseAccess !== undefined
+			current.stopped
 		)
 			throw new AttentionError("stale", "That ordinary question is no longer pending");
 		const source = JSON.stringify(current.question);

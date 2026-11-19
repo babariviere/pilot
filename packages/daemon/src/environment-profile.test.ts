@@ -34,7 +34,6 @@ export function goServiceProfile(): Omit<ProjectEnvironment, "revision"> {
 				version: "16",
 				provider: "pilot",
 				database: "orders",
-				dbTool: { read: "allow", write: "allow" },
 				exports: { DATABASE_URL: "url" },
 			},
 		],
@@ -65,6 +64,12 @@ test("the worked example validates unchanged", () => {
 	const profile = goServiceProfile();
 	assert.deepEqual(validateEnvironmentProfile(profile), profile);
 	assert.deepEqual(validateProjectEnvironment({ ...profile, revision: 3 }), { revision: 3, ...profile });
+});
+
+test("a saved service with the removed dbTool setting still loads, without it", () => {
+	const profile = goServiceProfile();
+	const saved = { ...profile, services: [{ ...profile.services[0]!, dbTool: { read: "allow", write: "ask" } }] };
+	assert.deepEqual(validateEnvironmentProfile(saved), profile);
 });
 
 test("versions are exact and normalized, never ranges, aliases or latest", () => {
@@ -102,7 +107,7 @@ test("profiles reject unknown fields, unsafe paths, shell strings and dangling r
 		],
 		[
 			"compose without file",
-			(p) => (p.services[0] = { ...p.services[0]!, provider: "compose", database: undefined, dbTool: undefined }),
+			(p) => (p.services[0] = { ...p.services[0]!, provider: "compose", database: undefined }),
 			/database applies|compose must be/,
 		],
 		["bad export", (p) => (p.services[0]!.exports = { DATABASE_URL: "password" as never }), /unknown value/],

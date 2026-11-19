@@ -393,8 +393,7 @@ export async function admitWithHeld(
 				typeof data !== "object" ||
 				data === null ||
 				Array.isArray(data) ||
-				typeof data.question !== "string" ||
-				data.databaseAccess !== undefined
+				typeof data.question !== "string"
 			)
 				throw refuse("That ordinary question is no longer pending");
 			// A previous question's entry must never answer a later question in the same chat.

@@ -128,8 +128,8 @@ test("coordinator answers require the current ordinary question and preserve que
 		await f.session.commit(async (tx) => {
 			(await tx.doc(InboxDoc, f.id)).items = [];
 		}, context);
-		const publish = async (requestId: string, data = { question: "Which?" } as Record<string, unknown>) => {
-			await publishQuestionWithHeld(f.session, f.id, f.read, requestId, data as never, context);
+		const publish = async (requestId: string) => {
+			await publishQuestionWithHeld(f.session, f.id, f.read, requestId, { question: "Which?" }, context);
 			return Number(
 				(await f.storage.scanEntries({ conversationId: f.id }, 100, undefined, context)).items.find(
 					(entry) => entry.kind === "pilot.question",
@@ -147,10 +147,9 @@ test("coordinator answers require the current ordinary question and preserve que
 		const second = await publish("question:second");
 		await assert.rejects(reply(first, "mission:send:from:lead:mission:stale"), /no longer pending/);
 		await reply(second, "mission:send:from:lead:mission:second");
-		const database = await publish("question:database", { question: "Allow?", databaseAccess: { id: "request" } });
-		await assert.rejects(reply(database, "mission:send:from:lead:mission:database"), /ordinary question/);
+		const third = await publish("question:third");
 		await holdOnStop(f.session, f.id, f.read, context);
-		await assert.rejects(reply(database, "mission:send:from:lead:mission:stopped"), /no longer pending/);
+		await assert.rejects(reply(third, "mission:send:from:lead:mission:stopped"), /no longer pending/);
 	} finally {
 		await f.session.close(context);
 	}

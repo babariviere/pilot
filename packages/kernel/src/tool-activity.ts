@@ -100,7 +100,6 @@ export function toolCategory(name: string): ToolDiagnosticCategory {
 			"knowledge",
 			"question",
 			"todo",
-			"db",
 			"slack_status",
 			"chat_report",
 		].includes(name)

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,9 +17,7 @@ import type {
 } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { RepositoryChanges } from "./changes.ts";
-import { DATABASE_CONFIG_FILE, DatabaseService } from "./databases.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
-import { GitHubSetupService } from "./github-setup.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
@@ -289,81 +287,6 @@ test("native local feature aggregate delivery and diagnostic reads work with exp
 	assert.deepEqual(sessions.appDiagnostics().featureUsage?.cells, []);
 	assert.equal(sessions.appDiagnostics().featureUsage?.reason, "no_producer");
 	assert.equal(sessions.list().length, 0);
-});
-
-test("project database settings require native authority and fence revisions without exposing URLs", async (t) => {
-	const home = mkdtempSync(join(tmpdir(), "pilot-database-api-"));
-	const projects = new ProjectStore(home);
-	t.mock.method(projects, "require", (id: string) => {
-		if (id !== "project") throw new NotFound("Unknown project");
-		return { id, name: "Project", path: "/work/project", createdAt: 1 };
-	});
-	const databases = new DatabaseService(home);
-	const sessions = new SessionManager(home, projects, home, {}, {}, { databases });
-	const terminals = new TerminalManager();
-	const native = new GitHubSetupService(
-		home,
-		{ hostId: "fixture", daemonId: "fixture", lineageId: "fixture" },
-		{ userHome: home, env: {} },
-	);
-	await assert.rejects(native.nativeAuthority.authenticate("")); // Await local capability creation, without running a host probe.
-	const capability = JSON.parse(readFileSync(join(home, "github-app-capability"), "utf8")).token;
-	const args: Parameters<typeof createDaemonServer>[0] = {
-		config: { home, host: "127.0.0.1", port: 0 },
-		sessions,
-		projects,
-		models: new ModelCatalog(home),
-		terminals,
-	};
-	args.githubSetup = native;
-	args.nativeAuthority = args.githubSetup?.nativeAuthority;
-	const server = createDaemonServer(args);
-	t.after(async () => {
-		await sessions.shutdown();
-		await terminals.shutdown();
-		await native.close();
-		await new Promise<void>((resolve) => server.close(() => resolve()));
-		rmSync(home, { recursive: true, force: true });
-	});
-	server.listen(0, "127.0.0.1");
-	await once(server, "listening");
-	const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-	const url = `${origin}/api/projects/project/databases`;
-	const headers = { "x-pilot-github-capability": capability, "content-type": "application/json" };
-	for (const method of ["GET", "PUT"]) {
-		const response = await fetch(url, { method });
-		assert.equal(response.status, 403);
-		await response.arrayBuffer();
-	}
-	const missing = await fetch(`${origin}/api/projects/other/databases`, { headers });
-	assert.equal(missing.status, 404);
-	await missing.arrayBuffer();
-	const initial = await fetch(url, { headers });
-	assert.equal(initial.status, 200);
-	assert.equal(initial.headers.get("cache-control"), "no-store");
-	assert.deepEqual(await initial.json(), { revision: "missing", environments: [] });
-	const update = {
-		revision: "missing",
-		environments: [{ name: "prod", read: { url: "postgres://ro:secret@db/app?sslpassword=query-secret" } }],
-	};
-	const saved = await fetch(url, { headers, method: "PUT", body: JSON.stringify(update) });
-	assert.equal(saved.status, 200);
-	assert.ok(!(await saved.text()).includes("secret"));
-	assert.equal(databases.configured("/work/project"), true);
-	const stale = await fetch(url, { headers, method: "PUT", body: JSON.stringify(update) });
-	assert.equal(stale.status, 409);
-	await stale.arrayBuffer();
-	writeFileSync(join(home, DATABASE_CONFIG_FILE), "{secret malformed");
-	for (const method of ["GET", "PUT"]) {
-		const invalid = await fetch(url, {
-			headers,
-			method,
-			...(method === "PUT" ? { body: JSON.stringify(update) } : {}),
-		});
-		assert.equal(invalid.status, 422);
-		assert.ok(!(await invalid.text()).includes("secret"));
-	}
-	assert.equal(readFileSync(join(home, DATABASE_CONFIG_FILE), "utf8"), "{secret malformed");
 });
 
 test("app-wide diagnostic native endpoints require protected capability and reject forged role selectors", async (t) => {

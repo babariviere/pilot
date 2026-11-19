@@ -108,9 +108,6 @@ test("native help uses only the exact current ordinary question boundary", () =>
 	current.questionPending = true;
 	current.stopped = true;
 	assert.throws(() => read(subject), AttentionError);
-	current.stopped = false;
-	Object.assign(current.question, { databaseAccess: { id: "db", env: "prod", mode: "write" } });
-	assert.throws(() => read(subject), AttentionError);
 });
 
 test("all help modes remain commentary; exact inline question and immutable visual", async (t) => {

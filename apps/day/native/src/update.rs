@@ -374,7 +374,8 @@ pub struct SavedView {
     /// Unsent Slack tracking and message-link draft. Restore never imports.
     #[prop(default)]
     pub slack_settings: String,
-    /// Unsent database connection fields. Restoring never connects or approves.
+    /// Removed database settings draft. Kept so views saved before the removal
+    /// still read; nothing writes or restores it.
     #[prop(default)]
     pub database_settings: String,
     /// Unsaved Knowledge edit and library location. Restore never submits it.

@@ -7,7 +7,6 @@ import { RepositoryChanges } from "./changes.ts";
 import type { ChatSettingsService } from "./chat-settings.ts";
 import type { DaemonConfig } from "./config.ts";
 import { CONNECTION_CONTROLS, ConnectionControls } from "./connection-controls.ts";
-import { DATABASE_CONTROLS, DatabaseControls } from "./database-controls.ts";
 import { DeliveredArtifacts } from "./delivered-artifact.ts";
 import { diagnosticContextResponse } from "./diagnostic-context.ts";
 import { DIAGNOSTICS_CONTROLS, DiagnosticsControls } from "./diagnostics-controls.ts";
@@ -692,7 +691,6 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		schedules && journal ? new ScheduleControls(schedules, sessions, projects, journal.destination) : undefined;
 	if (schedules) missions?.service.setSchedules?.(schedules);
 	const slackControls = tracking ? new SlackControls(projects, tracking) : undefined;
-	const databaseControls = new DatabaseControls(sessions);
 	const modelControls = new ModelControls(models, projects, setup, sessions, _config.modelScopeReadOnly);
 	const diagnosticsControls =
 		telemetry && journal
@@ -721,7 +719,8 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
 		if (op.kind === CONNECTION_CONTROLS) throw new Error("Connection outcome unknown; lookup only");
 		if (op.kind === SLACK_CONTROLS) throw new Error("Slack outcome unknown; lookup only");
-		if (op.kind === DATABASE_CONTROLS) throw new Error("Database outcome unknown; lookup only");
+		// The database feature is removed. Its saved operations stay lookup only.
+		if (op.kind === "database-controls") throw new Error("Database outcome unknown; lookup only");
 		if (op.kind === DIAGNOSTICS_CONTROLS) throw new Error("Diagnostics outcome unknown; lookup only");
 		if (op.kind === SCHEDULE_CONTROLS) throw new Error("Schedule outcome unknown; lookup only");
 		if (op.kind === MODEL_CONTROLS) throw new Error("Model settings outcome unknown; lookup only");
@@ -943,7 +942,6 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		insightsReplacement,
 		connectionControls,
 		slackControls,
-		databaseControls,
 		modelControls,
 		diagnosticsControls,
 		scheduleControls,

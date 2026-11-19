@@ -20,7 +20,7 @@ const AREAS = [
 	"Agent profiles, tools and context",
 	"Models, MCP and usage policy",
 	"Knowledge and preferences",
-	"Database access safeguards",
+	"Secrets and credential safeguards",
 	"Power, sleep and offline behavior",
 	"Diagnostics, logs and telemetry",
 	"Distribution, CLI and legacy boundaries",

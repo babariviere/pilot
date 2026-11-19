@@ -2,8 +2,6 @@
 
 Short guides for the desktop app. Start with [installation and setup](getting-started.md).
 
-[Databases](databases.md) covers scoped agent approvals, TLS and nonmutating connection tests in Day.
-
 The upcoming interface can be prepared locally as a [connected candidate](technical/day-connected-candidate.md).
 Connected Day keeps earlier reads marked as older while it refreshes. An
 unavailable attention read never means that nothing needs you. Read again only
@@ -174,7 +172,6 @@ sent again. **Dismiss** takes a failed chat off Needs a look and sends nothing t
 | Connections, authentication, and models         | [Models and MCP](connections.md)              |
 | Slack triage                                    | [Slack](slack.md)                             |
 | Linear tickets                                  | [Linear](linear.md)                           |
-| Postgres access and approvals                   | [Databases](databases.md)                     |
 | Subscription limits, token history, and context | [Usage](usage.md)                             |
 | Project notes and research                      | [Memory and knowledge](knowledge.md)          |
 | Sleep, offline work, and closed-lid mode        | [Energy and connectivity](energy.md)          |

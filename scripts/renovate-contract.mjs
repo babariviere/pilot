@@ -27,7 +27,7 @@ const config = JSON.parse(await readFile("/repo/renovate.json", "utf8"));
 // Exercise real rule matching and ordering. Broad groups must not absorb SDK,
 // digest or major updates, and grouping must not enable paused dependencies.
 const groupingCases = [
-	["npm", "pg", "minor", "npm-runtime"],
+	["npm", "proper-lockfile", "minor", "npm-runtime"],
 	["npm", "ws", "patch", "npm-runtime"],
 	["npm", "tsx", "minor", "js-tooling"],
 	["npm", "@types/node", "patch", "js-tooling"],
@@ -38,7 +38,7 @@ const groupingCases = [
 	["npm", "@earendil-works/pi-ai", "major", "pi-sdk"],
 	["cargo", "serde", "patch", "rust-dependencies"],
 	["cargo", "tokio", "minor", "rust-dependencies"],
-	["npm", "pg", "major", undefined],
+	["npm", "proper-lockfile", "major", undefined],
 	["npm", "tsx", "major", undefined],
 	["npm", "@opentelemetry/core", "major", undefined],
 	["cargo", "serde", "major", undefined],

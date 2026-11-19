@@ -316,31 +316,14 @@ test("Slack reply admission rechecks the item after persistence and before dispa
 	assert.equal(f.sessions["metas"].get(f.id)!.pending?.length ?? 0, 0);
 });
 
-test("Slack replies keep a pending database decision on hold", async (t) => {
-	const f = await fixture(t, { outcome: undefined, outcomeAt: undefined });
-	await f.sessions.send(f.id, "User approved work", "followUp", randomUUID());
-	const worker = f.workers[0]!;
-	const before = worker.commands.length;
-	const meta = f.sessions["metas"].get(f.id)!;
-	const request = { id: "database-question", env: "production", mode: "read" as const };
-	meta.databases = { request };
-	assert.equal(await f.sessions.resumeSlackReply(f.id, "Reply", "slack-reply:item:database", () => {}), false);
-	assert.equal(worker.commands.length, before);
-	assert.equal(meta.databases.request, request, "only the user's database decision answers this request");
-});
-
 test("Slack reply rejects a hold or worker replacement during run-boundary I/O", async (t) => {
-	for (const action of ["hold", "replace", "database"] as const) {
+	for (const action of ["hold", "replace"] as const) {
 		const f = await fixture(t, { outcome: undefined, outcomeAt: undefined });
 		await f.sessions.send(f.id, "User approved work", "followUp", randomUUID());
 		const worker = f.workers[0]!;
 		const baseline = worker.commands.length;
 		t.mock.method(f.sessions, "captureRunBoundary" as never, async () => {
 			if (action === "hold") f.sessions["metas"].get(f.id)!.inputsPaused = true;
-			else if (action === "database")
-				f.sessions["metas"].get(f.id)!.databases = {
-					request: { id: "database-question", env: "production", mode: "read" },
-				};
 			else f.sessions["workers"].delete(f.id);
 		});
 		assert.equal(await f.sessions.resumeSlackReply(f.id, "Reply", `slack-reply:item:${action}`, () => {}), false);

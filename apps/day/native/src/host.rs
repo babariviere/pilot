@@ -6,7 +6,6 @@ pub mod attention;
 mod bridge;
 mod changes;
 pub(crate) mod connection_controls;
-pub(crate) mod database_controls;
 pub(crate) mod delivery;
 pub(crate) mod delivery_artifact;
 pub(crate) mod delivery_work;
@@ -184,8 +183,6 @@ struct Shared {
     /// Set once a screen asks for attention. Later authoritative refreshes
     /// read it again; a WS frame never supplies its content.
     attention_wanted: AtomicBool,
-    database_cache: Mutex<Option<database_controls::Cache>>,
-    database_wanted: AtomicBool,
     /// Pilot's pause for sleep, from the service's latest power frame: `{paused, since}`.
     power: Mutex<serde_json::Value>,
     /// The screen agent's binding, waiting requests and pictures of this window.
@@ -529,8 +526,6 @@ impl NativeHost {
             attention_drafts: Mutex::new(std::collections::BTreeMap::new()),
             url_opener,
             attention_wanted: AtomicBool::new(false),
-            database_cache: Mutex::new(None),
-            database_wanted: AtomicBool::new(false),
             power: Mutex::new(power::view(&serde_json::Value::Null)),
             screen: Mutex::default(),
             shown_project: Mutex::new(
@@ -1259,10 +1254,6 @@ fn sync_focus(
         serde_json::json!({"project":want.as_ref().map(|project| &project.project_id)}),
     );
     let t = want.map(|project| root.focus(project));
-    *shared
-        .database_cache
-        .lock()
-        .expect("database cache poisoned") = None;
     shared.epoch.fetch_add(1, Ordering::SeqCst);
     *shared.attention.lock().expect("attention read poisoned") = None;
     shared
@@ -1707,9 +1698,6 @@ async fn refresh(
         // Same rule for attention: a failed read leaves the last one stale,
         // never a successful empty list.
         let _ = attention::read(t, shared, epoch).await;
-    }
-    if shared.database_wanted.load(Ordering::SeqCst) {
-        let _ = database_controls::refresh(t, shared, epoch).await;
     }
     Ok(())
 }

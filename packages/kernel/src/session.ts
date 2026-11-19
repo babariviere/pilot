@@ -57,7 +57,6 @@ import { autoCompactionThreshold, shouldAutoCompact } from "./auto-compaction.ts
 import { canonicalJSON } from "./canonical-json.ts";
 import { chatEvents, compactionEvents } from "./chat-events.ts";
 import { createChatReportTool } from "./chat-report-tool.ts";
-import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
 import { createDiagnosticContextTool, type DiagnosticContextCall } from "./diagnostic-context-tool.ts";
 import { createDiagnosticHistoryTool, type DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
 import { createDiagnosticLogTool, type DiagnosticLogCall } from "./diagnostic-log-tool.ts";
@@ -217,8 +216,6 @@ export interface KernelSessionHooks {
 	callInsightsBacklog?: InsightsBacklogCall;
 	/** Proposes a local release for native approval, never executes an update. */
 	callLiveUpdateProposal?: import("./live-update-tool.ts").LiveUpdateProposalCall;
-	/** Executes a `db` tool call in pilotd. Registered only when the spec reports a database config. */
-	callDatabase?: DatabaseCall;
 	/** Executes a `slack_status` tool call in pilotd. The tool is declared only while the chat has a Slack message. */
 	callSlackStatus?: SlackStatusCall;
 	/** Executes a `chat_report` tool call in pilotd. Declared only for job chats (`pilot.job`). */
@@ -373,8 +370,7 @@ export class KernelSession {
 					spec.diagnosticTarget ||
 					spec.diagnosticScope ||
 					spec.diagnosticHistoryAccess ||
-					spec.liveUpdateProposals ||
-					spec.databases
+					spec.liveUpdateProposals
 				)
 					throw new Error("Invalid owner Insights start envelope");
 			} else {
@@ -401,7 +397,6 @@ export class KernelSession {
 					spec.diagnosticScope ||
 					spec.diagnosticHistoryAccess ||
 					spec.liveUpdateProposals ||
-					spec.databases ||
 					Object.keys(b).sort().join(",") !==
 						"enabled,grantId,host,missionId,projectId,reportSessionId,revision,schemaVersion"
 				)
@@ -871,9 +866,6 @@ export class KernelSession {
 													createKnowledgeTool(hooks.callKnowledge),
 													createProjectPreferencesTool(hooks.callKnowledge),
 												]
-											: []),
-										...(spec.databases && hooks.callDatabase
-											? [createDatabaseTool(hooks.callDatabase, publishQuestion)]
 											: []),
 									],
 								},

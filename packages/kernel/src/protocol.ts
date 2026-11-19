@@ -17,7 +17,6 @@ import type {
 } from "@pilot/protocol";
 import type { TraceCarrier } from "@pilot/telemetry";
 import type { CredentialEndpoint } from "./credential-rpc.ts";
-import type { DatabaseAction } from "./database-tool.ts";
 import type { MissionAction } from "./mission-tools.ts";
 import type { MissionContext, PilotContext, WorkspaceContext } from "./policy.ts";
 import type { KernelUsage } from "./usage.ts";
@@ -193,8 +192,6 @@ export interface KernelSpec {
 	pilot?: PilotContext;
 	/** The mission this chat belongs to, when it starts. Later changes arrive as `mission.context`. */
 	mission?: MissionContext;
-	/** pilotd has a database config; register the `db` tool. Connection details stay in pilotd. */
-	databases?: boolean;
 	/** Supervised host admission for proposal-only updates in writable local Pilot project chats. */
 	liveUpdateProposals?: boolean;
 	/** Host-owned export consent. No credential, arbitrary header or analytics identity crosses IPC. */
@@ -319,7 +316,6 @@ export type KernelCommand =
 	| { type: "knowledge.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "insights.backlog.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "liveUpdate.result"; callId: string; result?: JsonValue; error?: string }
-	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "chatReport.result"; callId: string; result?: JsonValue; error?: string }
 	/** The bound Day window's answer to a screen.call. For a screenshot: ScreenPictureData. */
@@ -471,8 +467,6 @@ export type KernelPacket =
 			operationId: string;
 			args: import("@pilot/protocol").LiveUpdateProposalArgs;
 	  }
-	/** A `db` tool call, answered by `database.result`. Grants are checked in pilotd. */
-	| { type: "database.call"; callId: string; action: DatabaseAction; args: Record<string, JsonValue> }
 	/** A `slack_status` tool call, answered by `slack.result`. Applies only to Slack messages linked to this chat. */
 	| { type: "slack.call"; callId: string; args: Record<string, JsonValue> }
 	/** A `chat_report` tool call, answered by `chatReport.result`. Only job chats (`pilot.job`) declare the tool. */

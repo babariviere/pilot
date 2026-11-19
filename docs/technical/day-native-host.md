@@ -135,7 +135,7 @@ Rust-only `read_attention` calls authenticated `POST /api/native-attention` with
 local home and project. This POST is a passive read, not completion or admission. The daemon checks
 the current project, writable origin chat, membership, Stop generation, configuration and mission
 control fence. Ordinary questions come from the passive current kernel boundary, not a historical
-transcript search. Stopped, replaced, answered and database-access questions cannot become choices.
+transcript search. Stopped, replaced and answered questions cannot become choices.
 Question scope carries the backend's exact entry/event/content/authority identity.
 
 `send_attention` accepts only native action progress/defer/resume/completion, ordinary question
