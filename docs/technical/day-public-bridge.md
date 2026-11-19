@@ -138,8 +138,9 @@ intent types, not daemon request envelopes:
 | `day.plan.leave` | `{missionId,chatOnly}` | null; closes the chat, or stops reading the page on activity notices; local only |
 | `day.attention.read` | `{}` | `Today` |
 | `day.attention.reply` | `ReplyIntent` | `Today` |
+| `day.attention.ask` | `AskIntent` | `Today`; one tool-free clarification of the shown question; the question stays open |
 | `day.attention.action` | `{action:ActionRef,ask:ActionAsk,text}` | `Today` |
-| `day.attention.check` | `{id,action:boolean}` | `Today` |
+| `day.attention.check` | `{id,action:boolean}` | `Today`; `id` is a decision, an action, or a lost clarification's operation |
 | `day.attention.draft` | `DraftIntent` | `Today` |
 | `day.update.read` | `{}` | `ServiceView` |
 | `day.update.prepare` | `PrepareIntent` | `ServiceView`, including one opaque confirmation |

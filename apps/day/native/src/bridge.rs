@@ -156,6 +156,7 @@ pub const METHODS: &[&str] = &[
     "day.attention.read",
     "day.attention.scoped",
     "day.attention.reply",
+    "day.attention.ask",
     "day.attention.action",
     "day.attention.check",
     "day.attention.draft",
@@ -484,6 +485,8 @@ pub(crate) enum Command {
     DismissNew,
     Attention,
     Reply(crate::model::ReplyIntent),
+    /// A clarification question about one decision. The decision stays open.
+    Ask(crate::model::AskIntent),
     Action {
         action: crate::model::ActionRef,
         ask: crate::model::ActionAsk,
@@ -1525,6 +1528,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: crate::model::ReplyIntent = decode(&args)?;
             id(&r.decision_id)?;
             C::Reply(r)
+        }
+        "day.attention.ask" => {
+            let r: crate::model::AskIntent = decode(&args)?;
+            id(&r.decision_id)?;
+            C::Ask(r)
         }
         "day.attention.action" => {
             let r: Action = exact(args)?;

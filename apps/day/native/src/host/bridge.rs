@@ -975,6 +975,25 @@ async fn run(
                 .map_err(|_| Error::Invalid)?;
             Some(Work::AttentionSend(request))
         }
+        Command::Ask(r) => {
+            // A clarification names the question's exact content, as an answer does, so the read
+            // need not be the newest. It keeps the question open; only an answer closes it.
+            let read = answer_read(host)?;
+            let view = today(host);
+            let decision = view
+                .decisions
+                .iter()
+                .find(|d| d.id == r.decision_id && d.revision == r.revision)
+                .ok_or(Error::Stale)?;
+            if !decision.can_clarify {
+                return Err(Error::Unavailable);
+            }
+            if decision.answers.iter().any(|a| a.state == AnswerState::Unknown) {
+                return Err(Error::Unknown);
+            }
+            let request = ah::help_request(&read, &r.decision_id, &r.question).map_err(|_| Error::Invalid)?;
+            Some(Work::AttentionSend(request))
+        }
         Command::Action { action, ask, text } => {
             // As an answer: the request names the action's exact revision and digest, checked again
             // before it is sent, so the read need not be the newest.
@@ -992,7 +1011,11 @@ async fn run(
             let op = if *action {
                 ah::pending_action(&ops, id)
             } else {
-                ah::pending_answer(&ops, id)
+                // A decision's answer, else one of its clarifications named by its own operation.
+                ah::pending_answer(&ops, id).or_else(|| {
+                    ops.iter()
+                        .find(|op| op["id"] == *id && op["state"] == "unknown" && op["request"]["clarification"] == true)
+                })
             }
             .ok_or(Error::Unknown)?;
             Some(Work::AttentionCheck(
@@ -1099,6 +1122,7 @@ async fn run(
         | Command::Refresh
         | Command::Attention
         | Command::Reply(_)
+        | Command::Ask(_)
         | Command::Action { .. }
         | Command::AttentionCheck { .. }
         | Command::Draft(_) => value = encode(today(host))?,

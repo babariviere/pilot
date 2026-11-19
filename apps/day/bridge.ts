@@ -449,12 +449,15 @@ export class ConnectedToday implements DayFeed {
 		return this.#send(intent.decisionId, "day.attention.check", { id: intent.decisionId, action: false });
 	}
 
-	ask(_intent: AskIntent): Promise<IntentOutcome> {
-		return Promise.resolve(refusalOutcome("unavailable", this.#today.revision));
+	/** A clarification question: the agent answers it without tools, and the decision stays open. */
+	ask(intent: AskIntent): Promise<IntentOutcome> {
+		// Not the decision's own send: the card stays answerable while the question is asked.
+		return this.#send(`ask:${intent.decisionId}`, "day.attention.ask", intent);
 	}
 
-	checkAnswer(_intent: AnswerRef): Promise<IntentOutcome> {
-		return Promise.resolve(refusalOutcome("unavailable", this.#today.revision));
+	/** Reads whether a clarification whose answer was lost was saved. Never asks again. */
+	checkAnswer(intent: AnswerRef): Promise<IntentOutcome> {
+		return this.#send(`ask:${intent.decisionId}`, "day.attention.check", { id: intent.answerId, action: false });
 	}
 
 	saveProgress(intent: ProgressIntent): Promise<IntentOutcome> {
