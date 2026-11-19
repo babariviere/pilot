@@ -10,6 +10,8 @@ export interface PlanningInventoryItem {
 	round: InterviewFence;
 	interviewRevision: number;
 	planRevision: number | null;
+	/** Questions without a current saved answer. Zero still requires explicit submission. */
+	pendingQuestions?: number;
 	/** The old mission this one re-plans, when it was planned as a re-plan. */
 	replaces?: MissionSuccessorLink;
 	/**

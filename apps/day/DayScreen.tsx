@@ -11,16 +11,14 @@ import { ChangesScreen } from "./ChangesScreen";
 import { ChatScreen } from "./ChatScreen";
 import { AppHeader } from "./Chrome";
 import type { Changes } from "./changeFeed";
-import { chatRoute } from "./chatView";
+import { chatRoute, openChat } from "./chatView";
 import { DeliveryScreen } from "./DeliveryScreen";
 import type { Day } from "./day";
 import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
 import { FeedbackScreen } from "./FeedbackScreen";
 import { InsightsScreen } from "./InsightsScreen";
-import { openChat } from "./chatView";
 import { canDraftInsight, hasOtherDraft, openFindingDraft } from "./insightsWork";
 import { LinearScreen } from "./LinearScreen";
-import { SlackReportsScreen } from "./SlackReportsScreen";
 import { MissionScreen } from "./MissionScreen";
 import { NewScreen } from "./NewScreen";
 import {
@@ -28,23 +26,24 @@ import {
 	jumpBack,
 	navigationError,
 	navigationRestoring,
-	type Places as WindowPlaces,
 	type Shown,
 	shown,
+	type Places as WindowPlaces,
 } from "./nav";
 import { PlanScreen } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { planRoute } from "./planView";
 import { RitualScreen } from "./RitualScreen";
-import { SearchDetailScreen } from "./SearchDetailScreen";
-import { ScopedQuestion, scopedQuestion } from "./ScopedQuestion";
-import { todayProject } from "./todayScope";
 import type { Rituals } from "./ritualFeed";
 import { ritualEntry } from "./ritualView";
+import { ScopedQuestion, scopedQuestion } from "./ScopedQuestion";
+import { SearchDetailScreen } from "./SearchDetailScreen";
 import { SettingsScreen } from "./SettingsScreen";
+import { SlackReportsScreen } from "./SlackReportsScreen";
 import { ThreadScreen } from "./ThreadScreen";
 import { TodayScreen } from "./TodayScreen";
 import { threadRoute } from "./threadView";
+import { todayProject } from "./todayScope";
 import { bindRestore, UpdateScreen } from "./UpdateScreen";
 import { Arrive, Notice } from "./ui";
 import type { Update } from "./updateFeed";
@@ -64,6 +63,10 @@ function backFromJump(places: WindowPlaces) {
 /** The planning screen the user opened, if any. */
 function Planning(props: { day: Day; plans: Plans }) {
 	const at = () => planRoute();
+	const interviewProject = () => {
+		const route = at();
+		return route?.kind === "plan" ? route.fromInterviewProject : undefined;
+	};
 	return (
 		<If
 			when={at()?.kind === "new"}
@@ -75,6 +78,7 @@ function Planning(props: { day: Day; plans: Plans }) {
 								day={props.day}
 								plans={props.plans}
 								missionId={id()}
+								interviewProject={interviewProject()}
 								title={props.day.feed.mission(id())?.row.title ?? ""}
 								onBackFromJump={backFromJump(props)}
 							/>

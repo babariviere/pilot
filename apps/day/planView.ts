@@ -9,7 +9,7 @@ import { closeMission } from "./view";
 export { answerKey, atQuestion, focusAsk, focusField, put, seeAll, writing } from "./interviewView";
 
 /** New, or one mission's planning, or null for Today and missions. */
-export type PlanRoute = { kind: "new" } | { kind: "plan"; missionId: string } | null;
+export type PlanRoute = { kind: "new" } | { kind: "plan"; missionId: string; fromInterviewProject?: string } | null;
 
 /** Where the planning screens are. Null shows Today or a mission. */
 export const planRoute = signal<PlanRoute>(null);
@@ -255,6 +255,12 @@ export function openNew() {
 export function openPlan(missionId: string) {
 	closeMission();
 	planRoute.set({ kind: "plan", missionId });
+}
+
+/** Open the current interview by mission, not by a possibly replaced round ID. */
+export function openPlannerInterview(missionId: string, projectId: string) {
+	closeMission();
+	planRoute.set({ kind: "plan", missionId, fromInterviewProject: projectId });
 }
 
 /** Back to Today. Drafts stay. */

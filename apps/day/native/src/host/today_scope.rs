@@ -8,7 +8,7 @@ use crate::{
     contract::DayOverview,
     desk::Desk,
     model::{FreshnessState, Today},
-    plan::{PlanAvailability, Planning},
+    plan::{PlanAvailability, PlanStage, Planning},
     plan_host,
 };
 use futures_util::StreamExt;
@@ -367,7 +367,7 @@ async fn read_inner(
         let project = read["projects"]
             .as_array()
             .and_then(|rows| rows.iter().find(|p| p["projectId"] == request.scope))
-            .ok_or(Error::Stale)?;
+            .ok_or(Error::Identity)?;
         let path = project["projectPath"].as_str().ok_or(Error::Invalid)?;
         *shared.focus.lock().expect("native focus poisoned") = Some(super::Project {
             project_id: request.scope.clone(),
@@ -431,7 +431,7 @@ async fn read_projects_from(
     };
     let projects = catalog["projects"].as_array().ok_or(Error::Invalid)?;
     if request.scope != "all" && !projects.iter().any(|p| p["projectId"] == request.scope) {
-        return Err(Error::Invalid);
+        return Err(Error::Identity);
     }
     let first = request.selected_only && request.scope != "all";
     // The selected project first, then the others: its rows are the ones a
@@ -577,6 +577,13 @@ async fn project_row(
             ..Planning::default()
         })
     });
+    // Normal profile windows may open every accessible mission. A legacy
+    // launch pinned to a project cannot open or answer another project's plan.
+    let can_open_planning = t
+        .source
+        .project
+        .as_ref()
+        .is_none_or(|own| project["projectId"] == own.project_id);
     let n = count(
         overview.as_ref().ok(),
         attention.as_ref().ok(),
@@ -584,12 +591,18 @@ async fn project_row(
         live,
     )
     .zip(planning.as_ref().ok())
-    .map(|(n, p)| n + p.plans.iter().filter(|p| p.needs_you).count());
+    .map(|(n, p)| {
+        n + p
+            .plans
+            .iter()
+            .filter(|p| p.needs_you && (can_open_planning || p.stage != PlanStage::Questions))
+            .count()
+    });
     let mut row = json!({"id":project["projectId"],"name":project["name"],"selected":selected,
         "currentness":if n.is_some() {"live"} else if !live && overview.is_ok() {"stale"} else {"unavailable"},
         "observedAt":overview.as_ref().ok().map(|v| v.observed_at),"needsYou":needs(n),
         "today":null,"planning":null,"intake":null,"results":null,"working":null,
-        "canAct":false,"errors":{}});
+        "canAct":false,"canOpenPlanning":can_open_planning,"errors":{}});
     if let Err(error) = &overview {
         row["errors"]["today"] = json!(error.to_string());
     }
@@ -602,6 +615,15 @@ async fn project_row(
     let denied = matches!(overview, Err(Error::Identity))
         || matches!(attention, Err(Error::Identity))
         || matches!(planning, Err(Error::Identity));
+    // Even unselected projects are read for outside counts. A refusal there
+    // must revoke their previously cached inventory in All projects.
+    row["planningRead"] = json!(match &planning {
+        _ if denied => "refused",
+        Ok(_) => "read",
+        Err(Error::Offline) => "offline",
+        Err(Error::Stale) => "stale",
+        Err(_) => "refused",
+    });
     if selected && !denied {
         row["working"] = working(overview.as_ref().ok(), live);
         row["today"] = serde_json::to_value(today).map_err(|_| Error::Invalid)?;

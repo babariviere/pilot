@@ -59,6 +59,7 @@ const row: PlanRow = {
 	plannerSays: SAYS,
 	reply: true,
 	identity: null,
+	pendingQuestions: null,
 };
 // Today reads the list from its own unchanged feed, as the window does.
 const todayPlans = openPlanning("wayfinder");

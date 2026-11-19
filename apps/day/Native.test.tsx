@@ -545,3 +545,26 @@ test("needs you: results to check, captured", async () => {
 		}
 	}
 });
+
+test("planner interviews: Today cards, captured", async () => {
+	const app = await open("./PlannerInterviewsFixture.tsx", { platform: "macos", width: 1100, height: 1000 });
+	await app.waitFor("Needs you");
+	await app.wait(600);
+	await app.screenshot("output/planner-interviews-today.png");
+});
+
+test("planner interviews: native button label, Back focus, and live update", async () => {
+	const app = await open("./PlannerInterviewsFixture.tsx", { platform: "macos", width: 1100, height: 1000 });
+	const label = "label:Answer interview for Export a chat as Markdown in Pilot project";
+	await app.waitFor(label);
+	await app.press(label);
+	await app.waitFor("What should one export include?");
+	await app.keyboard.press("escape");
+	await app.waitFor(label);
+	// Same item with a new pending count; Return still goes to the restored button.
+	await app.keyboard.press("mod+shift+2");
+	await app.waitFor("text:/3 questions pending/");
+	await app.keyboard.press("return");
+	await app.waitFor("What should one export include?");
+	expect(app.shows("Pilot continues planning: Not yet")).toBe(true);
+});

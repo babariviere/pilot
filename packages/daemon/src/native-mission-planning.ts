@@ -63,6 +63,8 @@ export class PlanningInventoryCapacity extends ServiceUnavailable {
 		this.limit = limit;
 	}
 }
+/** A raced read with the same project and mission authority on both sides. */
+export class PlanningInventoryRace extends Conflict {}
 interface Dependencies {
 	store: MissionStore;
 	journal: OperationJournal;
@@ -194,6 +196,19 @@ export class NativeMissionPlanning {
 						round: interview.fence,
 						interviewRevision: interview.revision,
 						planRevision: plan?.revision ?? null,
+						...(stage === "questions"
+							? {
+									pendingQuestions: interview.questions.filter(
+										(q) =>
+											!interview.answers.some(
+												(a) =>
+													a.questionId === q.id &&
+													a.questionDigest === interviewDigest(q) &&
+													(a.selectedOption !== null || a.text.trim()),
+											),
+									).length,
+								}
+							: {}),
 						...(replaces ? { replaces } : {}),
 					};
 					return { item, ownerFence };
@@ -202,8 +217,19 @@ export class NativeMissionPlanning {
 		};
 		const pin = snapshot();
 		const identity = canonicalJSON(pin);
+		const authority = (read: typeof pin) =>
+			canonicalJSON({
+				project: read.project,
+				owners: Object.fromEntries(read.rows.map(({ item, ownerFence }) => [item.missionId, ownerFence])),
+			});
+		const recheck = () => {
+			const current = snapshot();
+			if (canonicalJSON(current) === identity) return;
+			if (authority(current) === authority(pin)) throw new PlanningInventoryRace("Planning inventory changed");
+			throw new Conflict("Planning inventory authority changed");
+		};
 		await store.durable();
-		if (canonicalJSON(snapshot()) !== identity) throw new Conflict("Planning inventory changed");
+		recheck();
 		const items = pin.rows.map(({ item }) => item);
 		// Stuck planning is advice, not part of the pinned identity: checked once, after the pin. Both the stuck read
 		// (stuckView) and the planner's last words (plannerSays) are kept until they change.
@@ -225,6 +251,8 @@ export class NativeMissionPlanning {
 			}
 		};
 		await Promise.all(Array.from({ length: Math.min(PLANNER_READS, replies.length) }, read));
+		// An async history read can outlive the owner's access or the current round.
+		if (replies.length) recheck();
 		return { version: 1, projectId, status: "available", limit, total: items.length, items };
 	}
 

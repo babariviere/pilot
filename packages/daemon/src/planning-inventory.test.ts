@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
+import { WebSocket } from "ws";
+import { interviewDigest } from "./mission-interview-contract.ts";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 
 test("passive inventory lists several saved rounds across restart without writes or continuation", async (t) => {
@@ -20,6 +23,7 @@ test("passive inventory lists several saved rounds across restart without writes
 	);
 	for (const item of before.items) {
 		assert.equal(item.stage, "questions");
+		assert.equal(item.pendingQuestions, 1);
 		assert.equal(item.needsYou, true);
 		assert.equal(item.round.missionId, item.missionId);
 		assert.equal(item.round.questionSetRevision, 1);
@@ -35,6 +39,70 @@ test("passive inventory lists several saved rounds across restart without writes
 		(await fetch(`${f.root}/api/projects/${f.project.id}/planning-inventory`, { method: "POST" })).status,
 		405,
 	);
+});
+
+test("inventory waits for a durable submission, then identifies the next interview", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	const replacement = { ...f.question, id: "alternate", prompt: "What else should change?" };
+	await f.questions([f.question, replacement]);
+	const item = async () => (await (await f.inventory()).json()).items[0];
+	assert.equal((await item()).pendingQuestions, 2);
+	const answer = (q: typeof f.question) => ({
+		questionId: q.id,
+		questionDigest: interviewDigest(q),
+		selectedOption: null,
+		text: "Keep the semantics",
+	});
+	const notices: string[] = [];
+	const stop = f.store.interviews.onChange((id) => notices.push(id));
+	t.after(stop);
+	const write = async (request: { purpose: string; answers?: ReturnType<typeof answer>[] }) => {
+		const read = await (await f.read()).json();
+		const { fence, revision } = read.view.interview;
+		const op = f.operation(f.missionId, { ...request, expected: { fence, revision } }, read.contextDigest);
+		const receipt = await (await f.post(op)).json();
+		assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+	};
+	await write({ purpose: "interview-save", answers: [answer(f.question)] });
+	assert.ok(notices.includes(f.missionId), "answer saves invalidate the passive inventory");
+	assert.equal((await item()).pendingQuestions, 1);
+	await write({ purpose: "interview-save", answers: [answer(f.question), answer(replacement)] });
+	const before = await item();
+	assert.equal(before.pendingQuestions, 0);
+	assert.equal(before.stage, "questions", "a complete draft is still not submitted");
+	await write({ purpose: "interview-submit" });
+	assert.equal((await item()).stage, "submitted");
+	assert.equal((await item()).pendingQuestions, undefined);
+	notices.length = 0;
+	await f.questions([{ ...f.question, id: "clarification", prompt: "What should the new round produce?" }], "revisit");
+	const next = await item();
+	assert.equal(next.stage, "questions");
+	assert.equal(next.pendingQuestions, 1, "saved answers from the earlier round do not answer the new question");
+	assert.ok(next.round.questionSetRevision > before.round.questionSetRevision);
+	assert.ok(notices.includes(f.missionId), "new rounds invalidate the passive inventory");
+});
+
+test("an interview save invalidates connected Today without putting answers on the wire", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	const socket = new WebSocket(`${f.root.replace("http:", "ws:")}/api/ws`);
+	try {
+		await once(socket, "open", { signal: AbortSignal.timeout(5000) });
+		const notice = new Promise<unknown>((resolve, reject) => {
+			const deadline = setTimeout(() => reject(new Error("No inventory invalidation")), 5000);
+			socket.on("message", (bytes) => {
+				const event = JSON.parse(String(bytes));
+				if (event.type !== "mission-catalog.changed") return;
+				clearTimeout(deadline);
+				resolve(event);
+			});
+		});
+		await f.questions([{ ...f.question, id: "new-question" }]);
+		assert.deepEqual(await notice, { type: "mission-catalog.changed" });
+	} finally {
+		socket.terminate();
+	}
 });
 
 test("review stage names the exact current saved round and proposal revision", async (t) => {
@@ -118,7 +186,9 @@ test("round changes and inventory additions across the durability barrier refuse
 			() => {},
 		);
 	};
-	assert.equal((await f.inventory()).status, 409, "never serves an old question/answer revision");
+	const raced = await f.inventory();
+	assert.equal(raced.status, 409, "never serves an old question/answer revision");
+	assert.equal((await raced.json()).code, "planning_inventory_race");
 	f.store.durable = durable;
 	assert.equal((await f.inventory()).status, 200);
 	// A mission created after the empty-list barrier must not disappear as successful emptiness.

@@ -48,6 +48,8 @@ export type PlanningFeed = Pick<
 	readInventory?: () => Promise<void>;
 	/** Reads the open planning page from its service now: the old-data warning's Try now. */
 	readNow?: () => Promise<void>;
+	/** Whether this mission has a current planning read, without the usual stale-display grace period. */
+	readConfirmed?: (missionId: string) => boolean;
 	/** The window came back: reads the open planning page, at most every 30 s. */
 	focusRead?: () => void;
 	/** Passive canonical source read. Missing support is unavailable, never an empty record. */

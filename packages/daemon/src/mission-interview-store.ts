@@ -53,8 +53,14 @@ interface Port {
 /** Append-only snapshots share missions.sqlite's transaction/replica. No wake or worker side effects. */
 export class MissionInterviewStore {
 	private readonly port: Port;
+	private readonly listeners = new Set<(missionId: string) => void>();
 	constructor(port: Port) {
 		this.port = port;
+	}
+	/** Invalidates passive reads only. Consumers must read the durable state again. */
+	onChange(notice: (missionId: string) => void): () => void {
+		this.listeners.add(notice);
+		return () => this.listeners.delete(notice);
 	}
 	create(
 		op: DurableOperation,
@@ -192,7 +198,8 @@ export class MissionInterviewStore {
 		);
 	}
 	write(op: DurableOperation, request: InterviewWrite, check: () => void): MissionInterview {
-		return this.port.transaction(() => {
+		let changed = false;
+		const written = this.port.transaction(() => {
 			const existing = this.lookup(op);
 			if (existing) return existing;
 			check();
@@ -243,8 +250,11 @@ export class MissionInterviewStore {
 			state.revision++;
 			this.insert(state, op);
 			if (request.purpose === "interview-submit") this.port.submitted?.(state, op);
+			changed = true;
 			return state;
 		});
+		if (changed) for (const notice of this.listeners) notice(op.targetId);
+		return written;
 	}
 	/** Approval must cover the current complete snapshot, never just a matching old brief. */
 	binding(missionId: string, brief: { revision: number; markdown: string }): InterviewAgreementBinding | undefined {

@@ -67,6 +67,10 @@ export type ScopeProject = {
 	needsYou: ScopeCount;
 	today: Today | null;
 	planning: Planning | null;
+	/** Also reported for projects read only for outside counts. */
+	planningRead?: "read" | "offline" | "stale" | "refused";
+	/** Legacy project-bound windows cannot open other projects' interviews. */
+	canOpenPlanning?: boolean;
 	results?: ScopeResults | null;
 	/** Why a section of this project could not be read, by section. */
 	errors: Record<string, string>;
@@ -203,6 +207,14 @@ export function scopeOf(x: unknown): ScopeSnapshot | null {
 			needsYou: needs,
 			today,
 			planning: raw.selected ? planningOf(raw.planning) : null,
+			planningRead:
+				raw.planningRead === "read" ||
+				raw.planningRead === "offline" ||
+				raw.planningRead === "stale" ||
+				raw.planningRead === "refused"
+					? raw.planningRead
+					: undefined,
+			canOpenPlanning: raw.canOpenPlanning !== false,
 			results: raw.selected ? resultsOf(raw.results, raw.id) : null,
 			working: raw.selected ? workingOf(raw.working) : null,
 			errors,
@@ -310,6 +322,8 @@ export type ScopeMirror = {
 	view: Signal<ScopeView>;
 	/** Activity never stays live across an invalidation or failed read. */
 	activity: Signal<"reading" | "live" | "stale" | "disconnected" | "failed">;
+	/** Last read failed or was invalidated. Ordinary passive re-reads do not change this. */
+	incomplete: Signal<boolean>;
 	/** A newer event ages entered reads; completed same-scope reads still advance as earlier. */
 	invalidate: () => void;
 	/** The projects the last complete project list named, kept across scope changes. */
@@ -331,6 +345,7 @@ const PASSING = new Set<Refusal>(["offline", "unknown", "stale", "busy", "lost"]
 export function mirrorScope(source: ScopeSource): ScopeMirror {
 	const view = signal<ScopeView>({ state: "reading", reason: "", snapshot: null });
 	const activity = signal<"reading" | "live" | "stale" | "disconnected" | "failed">("reading");
+	const incomplete = signal(true);
 	const catalog = signal<{ id: string; name: string }[]>([]);
 	let newest = 0;
 	let invalidated = 0;
@@ -372,6 +387,7 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 			// Another scope's rows never show while this one is read. Its own
 			// last good read, if any, shows meanwhile.
 			wanted = scope;
+			incomplete.set(true);
 			failures = 0;
 			const kept = goods.get(scope);
 			shown = kept ? kept.key : "";
@@ -388,6 +404,7 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 			.catch(() => ({ ok: false as const, refusal: "invalid" as Refusal }));
 		// A newer read was asked for: this answer means nothing now.
 		if (mine !== newest) return;
+		incomplete.set(!r.ok || epoch !== invalidated);
 		if (!r.ok && PASSING.has(r.refusal)) {
 			// A passing failure: the service is down, slow or busy. Pilot tries
 			// again with backoff. Rows of this scope stay without a note until
@@ -438,15 +455,50 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 		}
 		let snapshot = scopeOf(r.snapshot);
 		if (!snapshot || snapshot.scope !== scope || snapshot.generation !== mine) {
+			incomplete.set(true);
 			activity.set("failed");
+			goods.delete(scope);
+			shown = "";
 			view.set({ state: "unavailable", reason: scopeReason("invalid"), snapshot: null });
 			return;
+		}
+		const kept = goods.get(scope)?.snapshot;
+		// Never recover a removed project's cards from another scope's cache.
+		const present = new Set(snapshot.projects.map((p) => p.id));
+		const refused = new Set(snapshot.projects.filter((p) => p.planningRead === "refused").map((p) => p.id));
+		const freshPlanning = new Map(
+			snapshot.projects
+				.filter((p) => p.planning?.availability === "live")
+				.map((p) => [p.id, JSON.stringify(p.planning?.plans)]),
+		);
+		for (const [key, cached] of goods) {
+			if (
+				cached.snapshot.projects.some(
+					(p) =>
+						(snapshot?.catalogComplete && !present.has(p.id)) ||
+						(p.planning &&
+							(refused.has(p.id) ||
+								(freshPlanning.has(p.id) && freshPlanning.get(p.id) !== JSON.stringify(p.planning.plans)))),
+				)
+			)
+				goods.delete(key);
+		}
+		if (kept) {
+			snapshot = {
+				...snapshot,
+				projects: snapshot.projects.map((p) => {
+					const earlier =
+						p.selected &&
+						(p.planningRead === "offline" || p.planningRead === "stale") &&
+						kept.projects.find((k) => k.id === p.id)?.planning;
+					return earlier ? { ...p, planning: { ...earlier, availability: "stale" } } : p;
+				}),
+			};
 		}
 		if (snapshot.partial) {
 			// The other projects' rows of this scope's last good read stay until
 			// the complete read replaces them, so nothing flickers to "reading".
-			const kept = goods.get(scope)?.snapshot;
-			if (kept)
+			if (kept?.projects.every((p) => present.has(p.id)))
 				snapshot = {
 					...snapshot,
 					outsideNeedsYou: kept.outsideNeedsYou,
@@ -456,7 +508,11 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 				};
 		}
 		const key = JSON.stringify({ ...snapshot, generation: 0 });
-		failures = 0;
+		const retryPlanning = snapshot.projects.some(
+			(p) =>
+				p.selected && p.canOpenPlanning !== false && (p.planningRead === "offline" || p.planningRead === "stale"),
+		);
+		failures = retryPlanning ? failures + 1 : 0;
 		// Only a complete read is kept as this scope's last good read.
 		if (!snapshot.partial) remember(scope, { key, snapshot, at: Date.now() });
 		const v = view();
@@ -477,14 +533,21 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 		activity.set(epoch === invalidated ? "live" : "stale");
 		// The chosen project shows; now the complete read fills in the others.
 		if (snapshot.partial && mine === newest) void read(scope);
+		else if (retryPlanning)
+			retry = setTimeout(() => {
+				retry = null;
+				if (!closed && wanted === scope && mine === newest) void read(scope);
+			}, retryDelay(failures));
 	};
 	return {
 		view,
 		activity,
+		incomplete,
 		catalog,
 		read,
 		invalidate: () => {
 			invalidated++;
+			incomplete.set(true);
 			if (activity() === "live") activity.set("stale");
 		},
 		close: () => {

@@ -757,6 +757,7 @@ export class ConnectedPlans implements PlanningFeed {
 					this.#take(missionId, r.snapshot);
 					return this.#current(missionId, r.snapshot) ? "current" : "failed";
 				}
+				this.#forgetRefused(missionId, r.refusal);
 				return r.refusal === "stale" || r.refusal === "busy" || r.refusal === "closed" ? "raced" : "failed";
 			},
 			this.#pages.has(missionId) ? Date.now() : null,
@@ -930,6 +931,20 @@ export class ConnectedPlans implements PlanningFeed {
 		return { ...page, interview: { ...iv, questions, unconfirmed: iv.unconfirmed && !sending } };
 	}
 
+	readConfirmed(missionId: string): boolean {
+		const page = this.#pages.get(missionId);
+		return !!page && this.#current(missionId, page);
+	}
+
+	#forgetRefused(missionId: string, refusal: Refusal) {
+		if (refusal !== "identity" && refusal !== "denied" && refusal !== "invalid") return;
+		if (!this.#pages.delete(missionId)) return;
+		this.#pageAt.delete(missionId);
+		this.#older.add(missionId);
+		this.#followUnknown();
+		this.#publish();
+	}
+
 	/** Reads the setup for New again: passive, it creates nothing. */
 	async prepare(): Promise<void> {
 		await this.prepareNew();
@@ -1026,7 +1041,9 @@ export class ConnectedPlans implements PlanningFeed {
 		if (this.#selected !== id || version !== this.#refreshVersion) return;
 		if (r.ok) this.#take(id, r.snapshot);
 		else {
+			this.#forgetRefused(id, r.refusal);
 			this.#older.add(id);
+			if (!this.#pages.has(id)) this.#pageReads?.auto.behind();
 			this.#publish();
 		}
 		// The open chat, as the root last read it with this page.
@@ -1067,10 +1084,12 @@ export class ConnectedPlans implements PlanningFeed {
 		this.#publish();
 		const r = await call<PlanPage>(this.#window, "day.plan.read", { missionId });
 		if (!r.ok) {
+			this.#forgetRefused(missionId, r.refusal);
+			if (this.#pageReads?.missionId === missionId) this.#pageReads.auto.behind();
 			return {
 				status: "rejected",
 				revision: this.#revision,
-				message: "Pilot could not read this mission's planning. What was read before stays on screen.",
+				message: "Pilot could not read this mission's planning. Your drafts are kept.",
 				missionId,
 			};
 		}

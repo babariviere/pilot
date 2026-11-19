@@ -55,6 +55,9 @@ fn today(host: &NativeHost) -> Today {
 }
 fn planning(host: &NativeHost, mission: &str) -> Result<Value, Error> {
     let read = host.planning(mission).ok_or(Error::Stale)?;
+    if read.is_null() {
+        return Err(Error::Invalid);
+    }
     encode(plan_host::page(
         &read,
         &host.planning_operations(mission),

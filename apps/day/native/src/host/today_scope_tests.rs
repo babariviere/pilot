@@ -490,7 +490,7 @@ async fn scope_read_checks_configured_access_and_never_sends_work_or_changes_sou
             || Ok(())
         )
         .await,
-        Err(Error::Invalid)
+        Err(Error::Identity)
     );
     assert!(
         peer.calls.lock().unwrap()[before..]

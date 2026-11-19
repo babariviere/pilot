@@ -1252,6 +1252,10 @@ pub fn inventory_rows(read: &Value) -> Result<Vec<PlanRow>, crate::host::Error> 
                 needs_you: needs_you || stuck,
                 planner_says: s(&item["stuck"]["plannerSays"]),
                 reply: item["stuck"]["reply"] == true,
+                pending_questions: item["pendingQuestions"]
+                    .as_u64()
+                    .filter(|n| *n <= 40 && stage == PlanStage::Questions)
+                    .map(|n| n as u32),
                 identity: Some(PlanIdentity {
                     interview_id: format!(
                         "{}-{}",
@@ -1297,6 +1301,7 @@ pub fn row(page: &PlanPage, title: &str) -> PlanRow {
         planner_says: String::new(),
         reply: false,
         identity: None,
+        pending_questions: None,
     }
 }
 

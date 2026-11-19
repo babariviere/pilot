@@ -97,7 +97,11 @@ import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } fr
 import { CHAT_CONTINUE, CHAT_DISMISS, CHAT_HANDOFF, CHAT_RECOVER, CHAT_REPLY } from "./native-chat.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
 import { isIntakeOperation } from "./native-intake.ts";
-import { isNativePlanningOperation, PlanningInventoryCapacity } from "./native-mission-planning.ts";
+import {
+	isNativePlanningOperation,
+	PlanningInventoryCapacity,
+	PlanningInventoryRace,
+} from "./native-mission-planning.ts";
 import { PROJECT_ACTION } from "./native-projects.ts";
 import { canonicalJSON, OperationRejected } from "./operation-journal.ts";
 import { isAllowedOrigin } from "./origin.ts";
@@ -2168,6 +2172,13 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			try {
 				return json(res, 200, await nativePlanning.inventory(parts[2]!));
 			} catch (error) {
+				if (error instanceof PlanningInventoryRace)
+					return json(res, 409, {
+						version: 1,
+						code: "planning_inventory_race",
+						projectId: parts[2]!,
+						error: error.message,
+					});
 				if (!(error instanceof PlanningInventoryCapacity)) throw error;
 				return json(res, 503, {
 					version: 1,
@@ -3995,7 +4006,9 @@ export function createDaemonServer(services: DaemonServices): Server & {
 	});
 	// Small coalesced invalidation only. Never put action text/files or a receipt in WS frames.
 	const stopAttentionWatch = missions?.store.attention.onChange(invalidateMissionCatalog);
+	const stopInterviewWatch = missions?.store.interviews.onChange(invalidateMissionCatalog);
 	onClose(() => {
+		stopInterviewWatch?.();
 		stopAttentionWatch?.();
 		stopDiagnosticReads?.();
 		stopNextControl?.();

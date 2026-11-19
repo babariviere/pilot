@@ -1117,6 +1117,7 @@ fn plan_row(id: &str, title: &str, stage: PlanStage, identity: PlanIdentity) -> 
         planner_says: String::new(),
         reply: false,
         identity: Some(identity),
+        pending_questions: None,
     }
 }
 

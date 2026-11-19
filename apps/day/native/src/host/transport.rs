@@ -351,12 +351,24 @@ impl Transport {
         if hello["capabilities"]["nativePlanning"] != 1 {
             return Err(Error::Unavailable);
         }
-        let v = self
-            .get(&format!(
+        let header = self.local()?;
+        let response = self
+            .client
+            .get(self.url(&format!(
                 "/api/projects/{}/missions/{id}/planning",
                 self.source.project()?.project_id
-            ))
-            .await?;
+            )))
+            .header("x-pilot-github-capability", header)
+            .send()
+            .await
+            .map_err(|_| Error::Offline)?;
+        // Missing missions and conflicts may mean revoked planning authority,
+        // not an unreachable service. Never leave an earlier page actionable.
+        if matches!(response.status().as_u16(), 404 | 409) {
+            return Err(Error::Invalid);
+        }
+        let v = body(response).await?;
+        self.local()?;
         if v["version"] == 1
             && v["projectId"] == self.source.project()?.project_id
             && v["missionId"] == id
@@ -713,10 +725,20 @@ pub(super) async fn body(r: reqwest::Response) -> Result<Value, Error> {
 }
 
 async fn inventory_body(r: reqwest::Response, project_id: &str) -> Result<Value, Error> {
-    // Conflict can mean a revoked owner/membership fence. It is not a
-    // transport outage and must discard the prior inventory, not retain it.
+    // Only a versioned, project-bound race proved the same authority on both
+    // sides. An ordinary conflict may be a revoked owner/membership fence.
     if r.status().as_u16() == 409 {
-        return Err(Error::Invalid);
+        let value = json_body(r).await?;
+        return Err(if value["version"] == 1
+            && value["code"] == "planning_inventory_race"
+            && value["projectId"] == project_id
+            && value.get("items").is_none()
+            && value.get("total").is_none()
+        {
+            Error::Stale
+        } else {
+            Error::Invalid
+        });
     }
     if r.status().as_u16() != 503 {
         return body(r).await;

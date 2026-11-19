@@ -24,13 +24,13 @@ import {
 import { closeFeedback, feedbackOpen, openFeedback } from "./feedbackView";
 import { closeInsights, insightsOpen } from "./insightsView";
 import { closeLinear, linearOpen, openLinear } from "./linearView";
-import { closeSlack, openSlack, slackOpen } from "./slackView";
 import { type Plans, planningListShape } from "./planning";
 import { closePlanning, openNew, openPlan, planRoute } from "./planView";
 import { closeSettings, openSettings, settingsOpen } from "./preferencesView";
 import { backFromStandup, closeRitual, ritualRoute } from "./ritualView";
-import { schedulesOpen } from "./scheduleDraft";
 import { scopedQuestion } from "./ScopedQuestion";
+import { schedulesOpen } from "./scheduleDraft";
+import { closeSlack, openSlack, slackOpen } from "./slackView";
 import { closeThread, threadRoute } from "./threadView";
 import { glide } from "./ui";
 import { closeUpdate, updateEntry, updateOpen } from "./updateView";
@@ -58,6 +58,9 @@ export function onToday(day: Day | undefined, id: string): boolean {
  * when Today's read has the mission, else Today.
  */
 export function planBack(day: Day | undefined, missionId: string): Back {
+	const route = planRoute();
+	if (route?.kind === "plan" && route.missionId === missionId && route.fromInterviewProject)
+		return to("Today", closePlanning);
 	if (!onToday(day, missionId)) return to("Today", closePlanning);
 	return to("Mission overview", () => {
 		closePlanning();

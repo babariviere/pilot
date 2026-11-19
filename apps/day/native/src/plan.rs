@@ -156,6 +156,8 @@ pub struct PlanRow {
     pub reply: bool,
     /// Current passive row identity; absent on mock and legacy single-page projections.
     pub identity: Option<PlanIdentity>,
+    /// How many current interview questions still need a saved answer, when known.
+    pub pending_questions: Option<u32>,
 }
 
 /// One chat started directly from New, without a mission.

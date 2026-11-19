@@ -761,6 +761,9 @@ impl NativeHost {
             .get(mission)
             .map(|(epoch, v)| {
                 let mut v = v.clone();
+                if v.is_null() {
+                    return v;
+                }
                 v["fresh"] = serde_json::Value::Bool(
                     !self.0.shared.closed.load(Ordering::SeqCst)
                         && *epoch == self.0.shared.epoch.load(Ordering::SeqCst),
@@ -1021,11 +1024,27 @@ async fn read_planning_fenced(
         .planning_mission
         .lock()
         .expect("native planning selection poisoned") = Some(mission.into());
-    let selected = t.mission_planning_transport(mission).await?;
-    let t = selected.as_ref().unwrap_or(t);
-    t.gate(false).await?;
-    let view = t.planning(mission).await?;
-    t.gate(false).await?;
+    let result = async {
+        let selected = t.mission_planning_transport(mission).await?;
+        let t = selected.as_ref().unwrap_or(t);
+        t.gate(false).await?;
+        let view = t.planning(mission).await?;
+        t.gate(false).await?;
+        Ok(view)
+    }
+    .await;
+    if matches!(result, Err(Error::Identity | Error::Invalid)) {
+        // A refusal replaces the cached page for this ID. The snapshot
+        // reports the refusal instead of republishing the previous answers.
+        let mut reads = shared.planning.lock().expect("native planning poisoned");
+        if !reads.get(mission).is_some_and(|(_, view)| view.is_null()) {
+            reads.clear();
+            reads.insert(mission.to_owned(), (0, serde_json::Value::Null));
+            drop(reads);
+            shared.change(|_| ());
+        }
+    }
+    let view = result?;
     let epoch = match epoch {
         Some(epoch) => {
             shared.current(epoch)?;

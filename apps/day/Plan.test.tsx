@@ -469,6 +469,7 @@ test("a planning page is older only when a later list names a newer interview", 
 		plannerSays: "",
 		reply: false,
 		identity: { interviewId, interviewRevision, planRevision: null },
+		pendingQuestions: null,
 	});
 	// The same interview: only a newer revision ages the page; one that lags does not.
 	expect(olderThanList(page, row("enrollment-2", 4))).toBe(false);

@@ -14,6 +14,7 @@ import { everRead, todayWarning } from "./freshness";
 import { LinearRow, RequestNotes, requestChecks, todayRequests } from "./Incoming";
 import { todayScrollTo } from "./kept";
 import { goSchedules } from "./nav";
+import { PlannerInterviewCards, type PlannerInterviews, plannerInterviews } from "./PlannerInterviews";
 import { stageMark, stageWord } from "./PlanScreen";
 import { Problems } from "./Problems";
 import type { Plans } from "./planning";
@@ -80,7 +81,7 @@ function waiting(day: Day): { results: number; requests: number } {
 }
 
 /** The headline: the coordinators' summary, until the user starts answering. */
-function headline(day: Day): string {
+function headline(day: Day, additional: number, interviewsKnown: boolean): string {
 	const today = day.today();
 	if (today.problems.length > 0) return "Some work needs a look.";
 	if (!today.problemsKnown) return "Your last read.";
@@ -90,7 +91,8 @@ function headline(day: Day): string {
 	}
 	const left = today.decisions.length + today.actions.length;
 	const w = waiting(day);
-	const extra = w.results + w.requests;
+	const extra = w.results + w.requests + additional;
+	if (left + extra + newFeedback(day).length === 0 && !interviewsKnown) return "What needs you is not fully known.";
 	if (newFeedback(day).length > 0 && left + extra === 0) return "Feedback needs a look.";
 	if (today.notes.length === 0) {
 		if (extra === 0) return today.headline;
@@ -105,7 +107,7 @@ function headline(day: Day): string {
 }
 
 /** The coordinators' summary, then the results and Slack requests it does not count. */
-function summary(day: Day): string {
+function summary(day: Day, interviews: number): string {
 	const today = day.today();
 	const w = waiting(day);
 	const some = (n: number, one: string, many: string) =>
@@ -113,11 +115,12 @@ function summary(day: Day): string {
 	const parts = [
 		some(w.results, "result to check", "results to check"),
 		some(w.requests, "Slack request", "Slack requests"),
+		some(interviews, "planner interview", "planner interviews"),
 	].filter(Boolean);
 	if (parts.length === 0) return today.summary;
 	const words = parts.join(" and ");
 	const also = today.decisions.length + today.actions.length > 0 ? "also " : "";
-	const line = `${words[0].toUpperCase()}${words.slice(1)} ${also}${w.results + w.requests === 1 ? "waits" : "wait"} for you.`;
+	const line = `${words[0].toUpperCase()}${words.slice(1)} ${also}${w.results + w.requests + interviews === 1 ? "waits" : "wait"} for you.`;
 	return today.summary ? `${today.summary} ${line}` : line;
 }
 
@@ -282,7 +285,7 @@ function QueueCard(props: { day: Day; item: Item; index: number; count: number; 
 }
 
 /** What waits for the user: one card in front, the rest as "Up next". */
-function NeedsYou(props: { day: Day; ctx: TodayScope }) {
+function NeedsYou(props: { day: Day; ctx: TodayScope; interviews: PlannerInterviews }) {
 	// Results to check queue behind the questions and actions, as cards of their own.
 	const results = () => todayResults(props.day);
 	// New Slack requests queue last: decisions, actions and results to check come first.
@@ -307,7 +310,13 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 		<View class="gap-4">
 			<SectionTitle
 				title="Needs you"
-				count={items().length + newFeedback(props.day).length + checks() + otherNeedsCount(props.ctx)}
+				count={
+					items().length +
+					newFeedback(props.day).length +
+					checks() +
+					otherNeedsCount(props.ctx) +
+					props.interviews.rows().length
+				}
 			/>
 			<If when={props.ctx.tagged()}>
 				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
@@ -331,7 +340,14 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 							</Text>
 						}
 					>
-						<If when={incomingFeedback(props.day).length === 0}>
+						<If
+							when={
+								incomingFeedback(props.day).length === 0 &&
+								props.interviews.rows().length === 0 &&
+								props.interviews.known() &&
+								otherNeedsCount(props.ctx) === 0
+							}
+						>
 							<Text class="text-base text-foreground">
 								{checks() > 0
 									? "Nothing else waits for you. Check the notes below."
@@ -378,6 +394,10 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 						)}
 					</Each>
 				</View>
+			</If>
+			<PlannerInterviewCards interviews={props.interviews} />
+			<If when={items().length + otherNeedsCount(props.ctx) + newFeedback(props.day).length === 0}>
+				<InterviewReadNote interviews={props.interviews} />
 			</If>
 			<FeedbackIncoming day={props.day} active={!first()} />
 			<ToCheck day={props.day} nested queued />
@@ -738,7 +758,17 @@ function unreadProblems(ctx: TodayScope) {
 }
 
 /** Today while it shows only another project. */
-function OtherProject(props: { day: Day; ctx: TodayScope }) {
+function InterviewReadNote(props: { interviews: PlannerInterviews }) {
+	return (
+		<If when={!props.interviews.known() && props.interviews.rows().length === 0}>
+			<Text testID="planner-interviews-unconfirmed" class="text-sm text-muted-foreground">
+				Pilot has not confirmed which planner interviews need answers.
+			</Text>
+		</If>
+	);
+}
+
+function OtherProject(props: { day: Day; ctx: TodayScope; interviews: PlannerInterviews }) {
 	return (
 		<If when={props.ctx.others().length > 0} else={<WorkingNow day={props.day} ctx={props.ctx} />}>
 			<View class="gap-12">
@@ -749,7 +779,11 @@ function OtherProject(props: { day: Day; ctx: TodayScope }) {
 						unreadProjects={unreadProblems(props.ctx)}
 						project={props.ctx.name}
 					/>
-					<SectionTitle title="Needs you" count={otherNeedsCount(props.ctx)} />
+					<SectionTitle title="Needs you" count={otherNeedsCount(props.ctx) + props.interviews.rows().length} />
+					<PlannerInterviewCards interviews={props.interviews} />
+					<If when={otherNeedsCount(props.ctx) === 0}>
+						<InterviewReadNote interviews={props.interviews} />
+					</If>
 					<OtherNeeds ctx={props.ctx} day={props.day} />
 					<OtherToCheck ctx={props.ctx} day={props.day} nested />
 				</View>
@@ -782,6 +816,15 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 	const plans = props.plans;
 	// The window's project scope: All projects unless the user chose one. Reading only.
 	const ctx = todayScope(props.day, plans);
+	const interviews = plannerInterviews(props.day);
+	const title = () => {
+		if (ctx.showsOwn())
+			return headline(props.day, interviews.rows().length + otherNeedsCount(ctx), interviews.known());
+		const scoped = scopedHeadline(ctx);
+		return !interviews.known() && scoped.startsWith("Nothing needs you")
+			? "What needs you is not fully known."
+			: scoped;
+	};
 	bindScopeReads(props.day, ctx);
 	bindTriage(
 		props.day,
@@ -820,9 +863,11 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 								</View>
 								<ScopeControl ctx={ctx} />
 							</View>
-							<PageTitle title={ctx.showsOwn() ? headline(props.day) : scopedHeadline(ctx)} />
+							<PageTitle title={title()} />
 							<If when={ctx.showsOwn()}>
-								<Text class="text-base leading-relaxed text-muted-foreground">{summary(props.day)}</Text>
+								<Text class="text-base leading-relaxed text-muted-foreground">
+									{summary(props.day, interviews.rows().length)}
+								</Text>
 								<If when={today().leftOff && today().decisions.length === 0}>
 									<Text class="text-xs text-primary">{today().leftOff ?? ""}</Text>
 								</If>
@@ -833,7 +878,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 							</If>
 						</View>
 
-						<If when={ctx.showsOwn()} else={<OtherProject day={props.day} ctx={ctx} />}>
+						<If when={ctx.showsOwn()} else={<OtherProject day={props.day} ctx={ctx} interviews={interviews} />}>
 							<View class="gap-12">
 								<Problems
 									rows={[...today().problems, ...ctx.others().flatMap((p) => p.today?.problems ?? [])]}
@@ -847,7 +892,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 									}
 									project={ctx.tagged() ? ctx.name : undefined}
 								/>
-								<NeedsYou day={props.day} ctx={ctx} />
+								<NeedsYou day={props.day} ctx={ctx} interviews={interviews} />
 								<WorkingNow day={props.day} ctx={ctx} />
 								<If when={ctx.tagged()}>
 									<OtherNotShown ctx={ctx} />
@@ -861,7 +906,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 								<ComingUp day={props.day} ctx={ctx} />
 
 								<Text class="border-t border-border pt-5 text-xs text-faint">
-									{!everRead(today().attention.state) || !today().problemsKnown
+									{!everRead(today().attention.state) || !today().problemsKnown || !interviews.known()
 										? "Pilot could not read everything that needs you yet. It keeps trying."
 										: today().problems.length > 0
 											? "Unresolved work is shown above. Pilot retries nothing on its own."

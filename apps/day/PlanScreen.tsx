@@ -735,14 +735,31 @@ export function PlanScreen(props: {
 	day?: Day;
 	plans: Plans;
 	missionId: string;
+	interviewProject?: string;
 	title?: string;
 	onBackFromJump?: () => boolean;
 }) {
 	// Leaving stops reading this page as its agent works, and closes its chat.
 	cleanup(() => props.plans.feed.leave?.(props.missionId));
+	const reading = signal<"reading" | "read" | "failed">("reading");
+	const readOnce = signal(false);
+	effect(() => {
+		if (!props.interviewProject || readOnce()) return;
+		props.plans.planning();
+		if (reading() === "read" || props.plans.feed.readConfirmed?.(props.missionId)) readOnce.set(true);
+	});
+	// An interview opened from Today must pass a new scoped read before
+	// showing anything from the planning page's cache.
+	const canShow = () => {
+		if (!props.interviewProject) return true;
+		const project = props.day?.scope
+			?.view()
+			.snapshot?.projects.find((p) => p.selected && p.id === props.interviewProject);
+		return readOnce() && project?.planning?.plans.some((p) => p.missionId === props.missionId) === true;
+	};
 	const page = computed(() => {
 		props.plans.planning();
-		return props.plans.feed.page(props.missionId) ?? null;
+		return canShow() ? (props.plans.feed.page(props.missionId) ?? null) : null;
 	});
 	// One level up: the mission's overview, once Today's read has the
 	// mission (its agents' reports, Pause and the chats working now), else
@@ -750,7 +767,6 @@ export function PlanScreen(props: {
 	const back = () => planBack(props.day, props.missionId);
 	const inToday = () => back().label === "Mission overview";
 	const toOverview = () => back().go();
-	const reading = signal<"reading" | "read" | "failed">("reading");
 	const message = signal("");
 	const id = props.missionId;
 	async function read() {
@@ -816,7 +832,7 @@ export function PlanScreen(props: {
 				onScroll={scroll.onScroll}
 			>
 				<Page gap={8}>
-					<If when={message() && page()}>
+					<If when={message() && page() && !(props.interviewProject && props.plans.feed.readConfirmed?.(id))}>
 						<Text role="alert" class="text-sm text-needs-ink">
 							{message()}
 						</Text>
@@ -828,7 +844,10 @@ export function PlanScreen(props: {
 								<Text class="flex-1 text-base text-muted-foreground">
 									{reading() === "reading"
 										? "Reading this mission's planning…"
-										: message() || "This mission is not in planning any more."}
+										: message() ||
+											(props.interviewProject && !canShow()
+												? "Pilot cannot show this interview here. Your drafts are kept."
+												: "This mission is not in planning any more.")}
 								</Text>
 								{readAgain()}
 							</View>

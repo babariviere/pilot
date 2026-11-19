@@ -466,6 +466,7 @@ impl Plan {
             planner_says: String::new(),
             reply: false,
             identity: None,
+            pending_questions: None,
         }
     }
 

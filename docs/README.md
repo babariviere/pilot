@@ -19,6 +19,9 @@ Other goals and drafts remain available. Re-planning an old mission offers conte
 and asks before replacing New's existing words and project choice.
 While Pilot plans, the planning page shows the agent's current step and time, and
 Show planning chat opens its conversation, read only.
+When a planner needs interview answers, Today shows a card in Needs you.
+**Answer interview** opens that mission's current questions without submitting or starting work.
+Back returns to the same Today scope. Saved drafts stay in the interview until you submit.
 Choose Search or press Command+K to find missions, chats, results, saved outputs,
 Knowledge and app destinations. Work is labeled by project. The search filter does not
 change Today's filter. Open an item in the same window, then use Back to return to your
