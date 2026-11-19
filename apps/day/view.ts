@@ -5,6 +5,7 @@
 // restart the screen starts from those drafts.
 import { effect, type Signal, signal, type ViewRef } from "nsh";
 import type { Decision, HumanAction, Today } from "pilot-day/native";
+import type { DeliveryEntry } from "./deliveryFeed";
 import { closeThread } from "./threadView";
 import { glide } from "./ui";
 
@@ -239,15 +240,41 @@ export function toggle(decision: Decision, option: string) {
 }
 
 /** One thing in Today's queue: a decision or an action. */
-export type Item =
+/** A question or action from Rust's read. */
+export type Work =
 	| { kind: "decision"; id: string; decision: Decision }
 	| { kind: "action"; id: string; action: HumanAction };
 
-/** Everything that waits for the user, decisions first, each in Rust's order. */
-export function queue(today: Today): Item[] {
+/** One card of Needs you: a question, an action or a result to check. */
+export type Item = Work | { kind: "result"; id: string; entry: DeliveryEntry };
+
+/** Results the user put off in this window, oldest first. Local only: nothing is sent or saved. */
+export const laterResults = signal<string[]>([]);
+
+/** Puts result `key` after the other results waiting, in this window only. */
+export function laterResult(key: string) {
+	laterResults.set([...laterResults().filter((k) => k !== key), key]);
+	releaseFront();
+	focusFront.set(true);
+}
+
+/**
+ * Everything that waits for the user: decisions, then actions, each in Rust's order, then the results to
+ * check, those put off in this window last.
+ */
+export function queue(today: Today): Work[];
+export function queue(today: Today, results: DeliveryEntry[]): Item[];
+export function queue(today: Today, results: DeliveryEntry[] = []): Item[] {
+	const later = laterResults();
+	const place = (e: DeliveryEntry) => {
+		const n = later.indexOf(e.key);
+		return n < 0 ? -1 : n;
+	};
+	const ordered = [...results].sort((a, b) => place(a) - place(b));
 	return [
 		...today.decisions.map((decision): Item => ({ kind: "decision", id: decision.id, decision })),
 		...today.actions.map((action): Item => ({ kind: "action", id: action.id, action })),
+		...ordered.map((entry): Item => ({ kind: "result", id: `result:${entry.key}`, entry })),
 	];
 }
 
@@ -259,8 +286,8 @@ export function queue(today: Today): Item[] {
 const engaged = signal<string | null>(null);
 
 /** The item in front: the one the user brought forward, else the one the user is answering, else the first. */
-export function front(today: Today): Item | undefined {
-	const all = queue(today);
+export function front(today: Today, results: DeliveryEntry[] = []): Item | undefined {
+	const all = queue(today, results);
 	return all.find((item) => item.id === focused()) ?? all.find((item) => item.id === engaged()) ?? all[0];
 }
 
@@ -276,9 +303,9 @@ export function releaseFront() {
 }
 
 /** Brings the item `step` places from the front forward, around the ends, and gives it the keyboard focus. */
-export function move(today: Today, step: number) {
-	const all = queue(today);
-	const now = front(today);
+export function move(today: Today, step: number, results: DeliveryEntry[] = []) {
+	const all = queue(today, results);
+	const now = front(today, results);
 	if (!now || all.length < 2) return;
 	const at = all.findIndex((item) => item.id === now.id);
 	const next = all[(at + step + all.length) % all.length];
@@ -342,6 +369,7 @@ export function resetTodayView() {
 	messages.set({});
 	asking.set({});
 	controlMessages.set({});
+	laterResults.set([]);
 	releaseFront();
 	route.set(null);
 	confirming.set(null);

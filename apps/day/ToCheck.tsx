@@ -46,7 +46,46 @@ export function toCheckCount(day: Day): number {
 	return v ? checkRows(v).length + v.unsettled.length : 0;
 }
 
-function LiveToCheck(props: { day: Day; mirror: DeliveryMirror; missionId?: string; nested?: boolean }) {
+/** Today's results that wait for the user's check, in the read's order. Needs you queues them as cards. */
+export function todayResults(day: Day): DeliveryEntry[] {
+	const v = day.delivery?.view();
+	return v ? checkRows(v) : [];
+}
+
+/** Checks whose answer Pilot could not confirm. Needs you counts them beside the results. */
+export function unsettledCount(day: Day): number {
+	return day.delivery?.view().unsettled.length ?? 0;
+}
+
+/** A result's name: its task's title, else where it came from. */
+export function resultTitle(day: Day, entry: DeliveryEntry): string {
+	const subject = entry.subject;
+	return (
+		entry.title ??
+		entry.snapshot?.title ??
+		titleOf(
+			entry.key,
+			subject,
+			subject.kind === "task" ? missions(day).find((m) => m.id === subject.missionId)?.title : undefined,
+		)
+	);
+}
+
+/** Where a result came from: its mission's title, or a standalone chat. */
+export function resultOrigin(day: Day, entry: DeliveryEntry): string {
+	const subject = entry.subject;
+	return subject.kind === "task"
+		? (missions(day).find((m) => m.id === subject.missionId)?.title ?? "A mission")
+		: "Standalone chat";
+}
+
+function LiveToCheck(props: {
+	day: Day;
+	mirror: DeliveryMirror;
+	missionId?: string;
+	nested?: boolean;
+	queued?: boolean;
+}) {
 	const v = () => props.mirror.view();
 	// Each time Today shows, look again. Passive: it reads saved commands and results only.
 	void props.mirror.source.readSaved();
@@ -55,7 +94,8 @@ function LiveToCheck(props: { day: Day; mirror: DeliveryMirror; missionId?: stri
 		v().entries[op.key]?.title ??
 		v().entries[op.key]?.snapshot?.title ??
 		titleOf(op.key, op.subject, op.subject.kind === "task" ? missionTitle(op.subject.missionId) : undefined);
-	const rows = (): DeliveryEntry[] => checkRows(v(), props.missionId);
+	// Queued, the results are Needs you's cards: only notes, unconfirmed checks and paging show here.
+	const rows = (): DeliveryEntry[] => (props.queued ? [] : checkRows(v(), props.missionId));
 	const unsettled = () => v().unsettled.filter((o) => inMission(o.subject, props.missionId));
 	// Discovery pages through all of Today's results; a mission page shows what was found.
 	const discovery = () => (props.missionId ? undefined : v().discovery);
@@ -87,11 +127,13 @@ function LiveToCheck(props: { day: Day; mirror: DeliveryMirror; missionId?: stri
 		<If when={visible()}>
 			<View testID="to-check" class="gap-1">
 				<If
-					when={props.nested}
+					when={props.nested && !props.queued}
 					else={
-						<View class="pb-1">
-							<SectionTitle title="To check" count={rows().length} />
-						</View>
+						<If when={!props.queued}>
+							<View class="pb-1">
+								<SectionTitle title="To check" count={rows().length} />
+							</View>
+						</If>
 					}
 				>
 					<Text role="header" class="pb-0.5 text-xs font-medium text-muted-foreground">
@@ -194,10 +236,11 @@ function LiveToCheck(props: { day: Day; mirror: DeliveryMirror; missionId?: stri
 
 /**
  * Delivered results waiting for the user's check: all of Today's, or one
- * mission's. Nested, it is part of Needs you and shows a small heading.
+ * mission's. Nested, it is part of Needs you and shows a small heading. Queued, Needs you shows the
+ * results themselves as cards, and this keeps only notes, unconfirmed checks and paging.
  * Hidden when nothing waits; the mock window has no results and shows none.
  */
-export function ToCheck(props: { day: Day; missionId?: string; nested?: boolean }) {
+export function ToCheck(props: { day: Day; missionId?: string; nested?: boolean; queued?: boolean }) {
 	const mirror = props.day.delivery;
 	return (
 		<If when={mirror}>
@@ -206,6 +249,7 @@ export function ToCheck(props: { day: Day; missionId?: string; nested?: boolean 
 				mirror={mirror as DeliveryMirror}
 				missionId={props.missionId}
 				nested={props.nested}
+				queued={props.queued}
 			/>
 		</If>
 	);

@@ -28,7 +28,7 @@ import type { Rituals } from "./ritualFeed";
 import { backFromStandup, closeRitual, openStandup, ritualRoute, START_STEPS, startStep } from "./ritualView";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
 import { Action, Mark, type MarkKind, MarkLine, Notice, Page, SectionTitle } from "./ui";
-import { focusFront, type Item, queue, releaseFront } from "./view";
+import { focusFront, queue, releaseFront, type Work } from "./view";
 import { provenance } from "./words";
 
 const STEPS = ["Since you looked", "Needs you", "Coming up today"].slice(0, START_STEPS);
@@ -113,7 +113,7 @@ function LeftOff(props: { day: Day }) {
 }
 
 /** What waits for the user, in Today's order. */
-function Waiting(props: { items: Item[] }) {
+function Waiting(props: { items: Work[] }) {
 	return (
 		<View class="gap-0.5">
 			<Each of={props.items} key={(item) => item.id}>
@@ -122,7 +122,7 @@ function Waiting(props: { items: Item[] }) {
 						<Mark
 							kind={
 								item().kind === "decision"
-									? decisionMark((item() as Extract<Item, { kind: "decision" }>).decision)
+									? decisionMark((item() as Extract<Work, { kind: "decision" }>).decision)
 									: "needs"
 							}
 						/>

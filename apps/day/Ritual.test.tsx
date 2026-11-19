@@ -75,7 +75,7 @@ test("a skipped start of day leaves every decision waiting and is not offered ag
 	}
 	await app.press("role:button[Skip for today]");
 	await app.waitFor("Three short things need you.");
-	expect(app.shows("1 of 3")).toBe(true);
+	expect(app.shows("text:/^1 of \\d+$/")).toBe(true);
 	expect(app.shows("has your answer")).toBe(false);
 	expect(app.shows("id:start-day")).toBe(false);
 	expect(app.shows("id:standup")).toBe(true);
@@ -92,7 +92,7 @@ test("Escape leaves a ritual unmarked, and Decide now only brings the first deci
 	await app.keyboard.press("mod+enter");
 	await app.waitFor("Three things need you.");
 	await app.press("role:button[Decide now]");
-	await app.waitFor("1 of 3");
+	await app.waitFor("text:/^1 of \\d+$/");
 	expect(app.shows("id:decision")).toBe(true);
 	expect(app.shows("Sending your answer…")).toBe(false);
 	expect(app.shows("has your answer")).toBe(false);

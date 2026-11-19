@@ -129,14 +129,14 @@ test("an unavailable work search is not an empty search", async () => {
 
 test("the screen's commit key does nothing while the palette covers it, and works again after", async () => {
 	const app = await open("./MockApp.tsx", desktop);
-	await app.waitFor("1 of 3");
+	await app.waitFor("text:/^1 of \\d+$/");
 	await app.keyboard.press("3");
 	await openPalette(app);
 	await app.keyboard.press("mod+enter");
 	await app.keyboard.press("escape");
 	expect(app.shows(SEARCH)).toBe(false);
 	expect(says(app, "has your answer")).toBe(false);
-	expect(app.shows("1 of 3")).toBe(true);
+	expect(app.shows("text:/^1 of \\d+$/")).toBe(true);
 	// With the palette closed, the keyboard is Today's again: the same key commits.
 	await app.keyboard.press("mod+enter");
 	await app.waitUntil(() => says(app, "has your answer"));
@@ -144,12 +144,12 @@ test("the screen's commit key does nothing while the palette covers it, and work
 
 test("Command+K again closes the palette, and Today's keys work after it", async () => {
 	const app = await open("./MockApp.tsx", desktop);
-	await app.waitFor("1 of 3");
+	await app.waitFor("text:/^1 of \\d+$/");
 	await openPalette(app);
 	await app.keyboard.press("mod+k");
 	expect(app.shows(SEARCH)).toBe(false);
 	await app.keyboard.press("j");
-	await app.waitFor("2 of 3");
+	await app.waitFor("text:/^2 of \\d+$/");
 });
 
 test("a shortcut that opens another place puts the palette away", async () => {

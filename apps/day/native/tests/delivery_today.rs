@@ -205,11 +205,11 @@ fn delivered_task_checked_from_its_mission_sent_back_once_and_a_lost_answer_stay
     let mut app = open(&entry, &bridge);
     wait(&mut app, "id:send-back-note");
     assert_eq!(app.screen().input_text("id:send-back-note"), Ok(Some(NOTE)));
-    // Explicitly return to Today to find the reopened result in To check.
+    // Explicitly return to Today to find the reopened result as a card in Needs you.
     app.press("id:back").unwrap();
     task_row(&mut app, &task_id);
     app.press("id:back").unwrap();
-    wait(&mut app, "id:to-check");
+    wait(&mut app, "id:result");
     wait(&mut app, &row);
     app.press(&row).unwrap();
     wait(&mut app, "id:your-check");

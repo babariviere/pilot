@@ -5,7 +5,7 @@
 // the agents' own next steps, and a read that is not live says so.
 import type { DoneBasis, DoneEntry, MissionRow, Today } from "pilot-day/native";
 import type { Recap } from "./ritualFeed";
-import { type Item, queue } from "./view";
+import { queue, type Work } from "./view";
 import { provenance, rowLine, stateWord } from "./words";
 
 const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
@@ -71,12 +71,12 @@ export function waitingLine(today: Today): string {
 }
 
 /** The title of an item that waits, as a list shows it. */
-export function itemTitle(item: Item): string {
+export function itemTitle(item: Work): string {
 	return item.kind === "decision" ? item.decision.title : `Action for you: ${item.action.title}`;
 }
 
 /** How long an item takes, as its agent wrote it. */
-export function itemEffort(item: Item): string {
+export function itemEffort(item: Work): string {
 	return item.kind === "decision" ? item.decision.effort : item.action.effort;
 }
 

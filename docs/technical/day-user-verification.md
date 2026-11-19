@@ -308,6 +308,10 @@ and standalone chats from accepted intake Starts (`sessionId` in the intake
 summaries), at most 20 saved subjects plus a page of 20 discoveries, each read passively. It reads again when Today shows
 or the window becomes active, not on every change notice. Its rows are results
 with a canonical delivery that is not currently Done or Sent back.
+On Today, Needs you queues these rows as cards (`ResultCard.tsx`) after the decisions and actions
+(`view.ts` `queue`). J, K, ⌘↩ (open the result) and L work on them as on the other cards. L is local to the
+window (`laterResults`): it sends nothing and saves nothing. `ToCheck` with `queued` then keeps only
+unconfirmed checks, settled notes and paging.
 
 Next results/First results page only the automatic list, never the durable cutoff
 or saved Unknown checks. Later pages state that earlier results are still pending.

@@ -164,9 +164,9 @@ test("Today in dark appearance", async () => {
 
 test("keyboard triage on a real platform: focus, picks, help and a question draft", async () => {
 	const app = await open("./MockApp.tsx", { platform: "macos", width: 1100, height: 900 });
-	await app.waitFor("1 of 3");
+	await app.waitFor("text:/^1 of \\d+$/");
 	await app.keyboard.press("j");
-	await app.waitFor("2 of 3");
+	await app.waitFor("text:/^2 of \\d+$/");
 	await app.keyboard.press("down");
 	await app.screenshot("output/today-keys-focus-1100.png");
 	await app.keyboard.press("k");
@@ -177,7 +177,7 @@ test("keyboard triage on a real platform: focus, picks, help and a question draf
 	expect(app.value("id:question")).toBe("j");
 	await app.keyboard.press("escape");
 	await app.keyboard.press("j");
-	await app.waitFor("2 of 3");
+	await app.waitFor("text:/^2 of \\d+$/");
 	await app.keyboard.press("k");
 	expect(app.value("id:question")).toBe("j");
 	await app.screenshot("output/today-keys-help-1100.png");
@@ -484,4 +484,32 @@ test("Point previews the control under the mouse and attaches the one clicked", 
 	expect(app.texts().filter((t) => t === "Save").length).toBe(3);
 	expect(app.shows("label:Stop pointing at it")).toBe(true);
 	await app.screenshot("output/screen-agent-pointed.png");
+});
+
+test("screen agent: a long conversation stays inside the bar, captured", async () => {
+	const app = await open("./ScreenAgentBarFixture.tsx", { platform: "macos", width: 1000, height: 800 });
+	await app.keyboard.press("mod+j");
+	for (let n = 1; n <= 8; n++) {
+		await app.type("id:screen-agent-words", `Question ${n}: why does this count look wrong after a refresh?`);
+		await app.submit("id:screen-agent-words");
+		await app.waitFor(`text:heard ${n}`);
+	}
+	await app.press("id:screen-agent-conversation");
+	await app.waitFor("id:screen-agent-rows");
+	await app.wait(400);
+	await app.screenshot("output/screen-agent-long-conversation.png");
+});
+
+test("needs you: results to check, captured", async () => {
+	for (const [entry, name] of [
+		["./NeedsYouResults.tsx", "only"],
+		["./NeedsYouResultsBehind.tsx", "behind"],
+	] as const) {
+		for (const colorScheme of ["light", "dark"] as const) {
+			const app = await open(entry, { platform: "macos", width: 1100, height: 1000, colorScheme });
+			await app.waitFor("Needs you");
+			await app.wait(600);
+			await app.screenshot(`output/needs-you-results-${name}-${colorScheme}.png`);
+		}
+	}
 });

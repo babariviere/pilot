@@ -154,7 +154,7 @@ test("a stale confirmation updates nothing, and a lost answer stays unconfirmed 
 
 test("the restored window shows the standup notes and open help again, and sends nothing", async () => {
 	const app = await open("./Update.tsx", desktop);
-	await app.waitFor("1 of 3");
+	await app.waitFor("text:/^1 of \\d+$/");
 	await app.press("Say it simpler");
 	await app.waitFor("Pilot sends too many notifications. Choose when it should tell you about finished work.");
 	await app.press("Ask a question");
@@ -178,7 +178,7 @@ test("the restored window shows the standup notes and open help again, and sends
 	expect(app.shows("id:question")).toBe(true);
 	expect(app.shows("Asking…")).toBe(false);
 	expect(app.shows("has your answer")).toBe(false);
-	expect(app.shows("1 of 3")).toBe(true);
+	expect(app.shows("text:/^1 of \\d+$/")).toBe(true);
 });
 
 test("a failed save and an unproven job exit stop the update before anything is replaced", async () => {

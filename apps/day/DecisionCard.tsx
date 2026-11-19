@@ -28,6 +28,7 @@ import type { Day } from "./day";
 import { InterviewCard } from "./InterviewCard";
 import { keepField } from "./kept";
 import { QuestionArtifacts } from "./QuestionArtifacts";
+import { todayResults } from "./ToCheck";
 import {
 	Action,
 	Bars,
@@ -591,7 +592,11 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 		<Each of={[props.decision]} key={(d) => `${d.id}:${d.interviewRoundId ?? "ordinary"}`}>
 			{(d) => (
 				<If when={d().interviewRoundId} else={<OrdinaryDecisionCard {...props} decision={d()} />}>
-					<InterviewCard {...props} decision={d()} keyboardActive={front(props.day.today())?.id === d().id} />
+					<InterviewCard
+						{...props}
+						decision={d()}
+						keyboardActive={front(props.day.today(), todayResults(props.day))?.id === d().id}
+					/>
 				</If>
 			)}
 		</Each>

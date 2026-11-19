@@ -23,7 +23,7 @@ test("Today shows decisions first, then moving and waiting missions", async () =
 	await app.waitFor("Three short things need you.");
 	for (const text of [
 		"How should finished work reach you?",
-		"1 of 3",
+		"text:/^1 of \\d+$/",
 		"Up next: Open a test copy of Pilot on your Mac?",
 		"Moving  1",
 		"Not moving  2",
@@ -78,14 +78,14 @@ test("help: simpler words, more context, and a question answered in the card", a
 
 test("keys bring the next item forward and the focus lands on its choice", async () => {
 	const app = await open("./MockApp.tsx", desktop);
-	await app.waitFor("1 of 3");
+	await app.waitFor("text:/^1 of \\d+$/");
 	await app.keyboard.press("j");
-	await app.waitFor("2 of 3");
+	await app.waitFor("text:/^2 of \\d+$/");
 	expect(app.shows("Up next: How should finished work reach you?")).toBe(true);
 	await app.keyboard.press("k");
-	await app.waitFor("1 of 3");
+	await app.waitFor("text:/^1 of \\d+$/");
 	await app.keyboard.press("j");
-	await app.waitFor("2 of 3");
+	await app.waitFor("text:/^2 of \\d+$/");
 	// The keyboard focus is on the chosen option, so Down picks the next one.
 	await app.keyboard.press("down");
 	await app.keyboard.press("mod+enter");
@@ -95,7 +95,7 @@ test("keys bring the next item forward and the focus lands on its choice", async
 
 test("keys pick an option and open help, and help sends nothing", async () => {
 	const app = await open("./MockApp.tsx", desktop);
-	await app.waitFor("1 of 3");
+	await app.waitFor("text:/^1 of \\d+$/");
 	await app.keyboard.press("3");
 	await app.keyboard.press("s");
 	await app.waitFor("Pilot sends too many notifications. Choose when it should tell you about finished work.");
@@ -107,12 +107,16 @@ test("keys pick an option and open help, and help sends nothing", async () => {
 	expect(app.shows("Finished work")).toBe(true);
 	expect(app.shows("Sending your answer…")).toBe(false);
 	expect(app.shows("has your answer")).toBe(false);
-	expect(app.shows("1 of 3")).toBe(true);
+	expect(app.shows("text:/^1 of \\d+$/")).toBe(true);
 	await app.keyboard.press("l");
 	await app.waitFor("Up next: How should finished work reach you?");
 	expect(app.shows("has your answer")).toBe(false);
-	await app.keyboard.press("k");
-	await app.waitFor("3 of 3");
+	// Later put it after the other questions and actions, before the results to check.
+	for (let n = 0; n < 3 && !app.shows("id:decision >> How should finished work reach you?"); n++) {
+		await app.keyboard.press("j");
+		await app.wait(100);
+	}
+	await app.waitFor("id:decision >> How should finished work reach you?");
 	// The pick survives Later; Command-Return sends exactly that.
 	await app.keyboard.press("mod+enter");
 	await app.waitFor("Quieter notifications has your answer: Only failures and questions.");
@@ -120,20 +124,20 @@ test("keys pick an option and open help, and help sends nothing", async () => {
 
 test("letters type into a question, Escape leaves it and its draft stays", async () => {
 	const app = await open("./MockApp.tsx", desktop);
-	await app.waitFor("1 of 3");
+	await app.waitFor("text:/^1 of \\d+$/");
 	await app.keyboard.press("q");
 	await app.keyboard.press("j");
 	await app.keyboard.press("k");
 	expect(app.value("id:question")).toBe("jk");
-	expect(app.shows("1 of 3")).toBe(true);
+	expect(app.shows("text:/^1 of \\d+$/")).toBe(true);
 	// Command-Return in the question does not decide.
 	await app.keyboard.press("mod+enter");
 	expect(app.shows("Sending your answer…")).toBe(false);
 	await app.keyboard.press("escape");
 	await app.keyboard.press("j");
-	await app.waitFor("2 of 3");
+	await app.waitFor("text:/^2 of \\d+$/");
 	await app.keyboard.press("k");
-	await app.waitFor("1 of 3");
+	await app.waitFor("text:/^1 of \\d+$/");
 	expect(app.value("id:question")).toBe("jk");
 	expect(app.shows("has your answer")).toBe(false);
 });
@@ -721,7 +725,7 @@ test("a request opens in place, says where it came from and sends nothing", asyn
 	expect(app.shows("id:request-detail-sl-stripe")).toBe(false);
 	// Opening a request answered, started and recorded nothing.
 	expect(app.shows("Three short things need you.")).toBe(true);
-	expect(app.shows("1 of 3")).toBe(true);
+	expect(app.shows("text:/^1 of \\d+$/")).toBe(true);
 	expect(app.shows("Northwind can't export invoices to CSV")).toBe(true);
 });
 
