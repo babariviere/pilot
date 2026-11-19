@@ -153,3 +153,19 @@ test("identity loss cannot resurrect revoked activity on invalidation or a delay
 	await app.press("label:Projects Today shows");
 	expect(app.shows("text:website")).toBe(true);
 });
+
+test("a read crossed by a notification is still a complete list, not an unread one", async () => {
+	const app = await ready();
+	for (const [action, words] of [
+		["Change task", "pilot · Daily work · Updated task"],
+		["None working", "No chat is working now."],
+	]) {
+		await app.press("Hold reads");
+		await app.press(action);
+		await app.press("Invalidate");
+		await app.press("Release newer");
+		await app.waitFor(words);
+		expect(app.shows("Some working chats could not be read. This list may be incomplete.")).toBe(false);
+		await app.press("Release older");
+	}
+});

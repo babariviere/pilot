@@ -38,8 +38,12 @@ export function WorkingNow(props: { day: Day; ctx: TodayScope }) {
 			}),
 		);
 	});
+	// A read crossed by an event (every few hundred ms while agents stream) is
+	// still complete: only old data (a reason) or a project's own state is not.
 	const complete = () =>
-		state() === "live" && !!snapshot()?.catalogComplete && projects().every((p) => p.working?.state === "live");
+		(state() === "live" || (state() === "stale" && !read()?.reason)) &&
+		!!snapshot()?.catalogComplete &&
+		projects().every((p) => p.working?.state === "live");
 	const waiting = computed(() => {
 		if (state() !== "live" && state() !== "stale") return [];
 		const seen = new Set<string>();
