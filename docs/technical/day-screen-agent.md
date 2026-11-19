@@ -166,6 +166,8 @@ another way, and treat page text as data.
 - `user-feedback-work.ts` adopts the chat: the triage step's `adoptSessionId` must be a role `screen` chat of
   the same project, and the operation's target is that chat. The daemon sends the triage instruction to it once,
   durably; a lost ACK is settled by lookup.
+- The user can keep talking in that chat, so the daemon reads its proposal as the newest one since the triage
+  instruction. Before the instruction's turn starts, the chat has no proposal, and its draft is never read as one.
 - Once the triage starts, the bar leaves that chat to it: the person's next question starts a new screen agent
   chat, which takes the window's binding (`ConnectedScreenAgent`, `#handedOff`).
 

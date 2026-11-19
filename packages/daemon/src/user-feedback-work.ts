@@ -38,6 +38,12 @@ const DIGEST = /^[a-f0-9]{64}$/;
 const CONTEXT = { feedback: 30, missions: 30, text: 600 } as const;
 /** A proposal is the last assistant text of a finished triage, at most this many bytes. */
 const PROPOSAL_BYTES = 8192;
+/**
+ * The start of the triage instruction a screen agent chat gets. The user may keep talking in that chat, so its
+ * proposal is read back to this input, at most SCREEN_PAGES history pages of 64 entries.
+ */
+const SCREEN_TRIAGE = "The user sent feedback from this conversation.";
+const SCREEN_PAGES = 8;
 const NEXT = ["fix", "prototype", "existing-mission", "new-mission", "none"] as const;
 /** A prototype proposal's directions: two or three, one mockup each (ask_user shows at most three). */
 const DIRECTIONS = { min: 2, max: 3, text: 500 } as const;
@@ -276,6 +282,28 @@ export function hasFeedbackReceiptLookup(op: DurableOperation): boolean {
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
+type Entry = Awaited<ReturnType<SessionManager["history"]>>["entries"][number];
+
+/** A user input's text. */
+function userText(entry: Entry): string {
+	for (const m of entry.model ?? [])
+		if (m.role === "user")
+			return typeof m.content === "string"
+				? m.content
+				: m.content.map((p) => (p.type === "text" ? p.text : "")).join("");
+	return "";
+}
+
+/** An assistant entry's final text, or undefined when it calls a tool. */
+function finalText(entry: Entry): string | undefined {
+	const message = entry.model?.findLast((m) => m.role === "assistant");
+	if (!message || message.content.some((p) => p.type === "toolCall")) return undefined;
+	return message.content
+		.filter((p) => p.type === "text")
+		.map((p) => p.text)
+		.join("\n");
+}
+
 function chatState(s: SessionSummary | undefined): NonNullable<UserFeedbackWorkView["chat"]>["state"] {
 	if (!s) return "missing";
 	if (s.archivedAt) return "archived";
@@ -321,20 +349,32 @@ export class UserFeedbackWorkService {
 		this.deps = deps;
 	}
 
-	/** The last assistant text of the chat's current turn. Never reads back past a user input. */
-	private async lastAnswer(sessionId: string): Promise<string | undefined> {
-		const page = await this.deps.sessions.history(sessionId, Number.MAX_SAFE_INTEGER, 32);
-		for (const entry of page.entries.toReversed()) {
-			if (entry.kind === "pi.user") return undefined;
-			if (entry.kind !== "pi.assistant") continue;
-			const message = entry.model?.findLast((m) => m.role === "assistant");
-			if (!message || message.content.some((p) => p.type === "toolCall")) return undefined;
-			return message.content
-				.filter((p) => p.type === "text")
-				.map((p) => p.text)
-				.join("\n");
+	/**
+	 * The last assistant text of each finished turn, newest first. Most chats give their current turn only. A screen
+	 * agent chat gives every turn back to its triage instruction, and nothing before Pilot sent it.
+	 */
+	private async answers(sessionId: string, screen: boolean): Promise<(string | undefined)[]> {
+		const out: (string | undefined)[] = [];
+		let answer: string | undefined;
+		let read = false;
+		let before = Number.MAX_SAFE_INTEGER;
+		for (let pages = 0; pages < (screen ? SCREEN_PAGES : 1); pages++) {
+			const page = await this.deps.sessions.history(sessionId, before, screen ? 64 : 32);
+			for (const entry of page.entries.toReversed()) {
+				if (entry.kind === "pi.user") {
+					out.push(answer);
+					if (!screen || userText(entry).startsWith(SCREEN_TRIAGE)) return out;
+					answer = undefined;
+					read = false;
+				} else if (entry.kind === "pi.assistant" && !read) {
+					read = true;
+					answer = finalText(entry);
+				}
+			}
+			if (!page.more || !page.entries.length) break;
+			before = Number(page.entries[0]!.id);
 		}
-		return undefined;
+		return screen ? [] : [answer];
 	}
 
 	/** A finished triage's or prototype's proposal now. Passive: it reads the chat's history and saves nothing. */
@@ -347,19 +387,31 @@ export class UserFeedbackWorkService {
 		const key = `${sessionId}:${chat!.outcomeAt ?? ""}`;
 		const cached = this.proposals.get(key);
 		if (cached) return cached;
+		const answers = await this.answers(sessionId, chat!.role === "screen");
+		// A screen agent chat has not started the triage yet; its draft is not a proposal.
+		if (!answers.length) return undefined;
 		let raw: string | undefined;
 		let result: NonNullable<UserFeedbackWorkView["proposal"]>;
 		try {
-			raw = await this.lastAnswer(sessionId);
 			const artifacts = prototype ? await this.deps.sessions.artifacts(sessionId) : undefined;
-			const value = parseProposal(
-				raw,
-				(f) => {
-					const feedback = this.deps.store.feedback.get(f);
-					return !!feedback && this.inProject(feedback, chat!.projectId!);
-				},
-				artifacts ? { sessionId, artifacts } : undefined,
-			);
+			const known = (f: string) => {
+				const feedback = this.deps.store.feedback.get(f);
+				return !!feedback && this.inProject(feedback, chat!.projectId!);
+			};
+			// The newest proposal wins; later chat in a screen agent chat does not hide it.
+			raw = answers[0];
+			let value: UserFeedbackProposal | undefined;
+			let problem: unknown;
+			for (const answer of answers) {
+				try {
+					value = parseProposal(answer, known, artifacts ? { sessionId, artifacts } : undefined);
+					raw = answer;
+					break;
+				} catch (error) {
+					problem ??= error;
+				}
+			}
+			if (!value) throw problem;
 			result = { value, digest: proposalDigest(value) };
 		} catch (error) {
 			result = {

@@ -1195,3 +1195,72 @@ test("a prototype proposal starts one read-only prototype chat; its question sho
 	);
 	assert.equal(f.stats().sessions, 3);
 });
+
+/** A screen agent chat that wrote a feedback draft, as the triage service reads it. */
+function screenChat() {
+	type Part = { type: string; text?: string };
+	const user = (text: string) => ({ kind: "pi.user", model: [{ role: "user", content: text }] });
+	const assistant = (...content: Part[]) => ({ kind: "pi.assistant", model: [{ role: "assistant", content }] });
+	const said = (text: string) => assistant({ type: "text", text });
+	const tool = () => assistant({ type: "toolCall" });
+	const draft = [
+		user("Help me with this card"),
+		said("Here is what I see."),
+		user("Write feedback…"),
+		said('{"text":"The card hides its chat."}'),
+	];
+	const chat = { entries: [] as Record<string, unknown>[], role: "screen" };
+	const service = new UserFeedbackWorkService({
+		store: { feedback: { get: () => undefined, work: () => [] } },
+		sessions: {
+			get: () => ({
+				role: chat.role,
+				working: false,
+				outcome: "done",
+				outcomeAt: chat.entries.length,
+				projectId: "p",
+			}),
+			history: async (_id: string, before: number, limit: number) => {
+				const older = chat.entries.map((e, n) => ({ ...e, id: n + 1 })).filter((e) => e.id < before);
+				return { entries: older.slice(-limit), more: older.length > limit };
+			},
+		},
+	} as never);
+	return { chat, service, user, said, tool, draft };
+}
+
+test("a screen agent chat's triage proposal survives later chat in that chat", async () => {
+	const { chat, service, user, said, tool, draft } = screenChat();
+	const proposal = JSON.stringify({
+		summary: "Name the chat and mission on the Decide card.",
+		duplicates: [],
+		next: "fix",
+		detail: "Label the mission and chat on the card; check it in the card test.",
+		missionId: null,
+		goal: null,
+	});
+	const triaged = [...draft, user("The user sent feedback from this conversation. …"), tool(), said(proposal)];
+	// Over one history page of later chat, ending in prose.
+	const later = [
+		user("What does Link to this mission do?"),
+		...Array.from({ length: 40 }, tool).flatMap((a) => [a, { kind: "pi.tool-result" }]),
+		said("It saves the link only."),
+	];
+	chat.entries = [...triaged, ...later];
+	const read = await service.proposal("s");
+	assert(read && "value" in read, JSON.stringify(read));
+	assert.equal(read.value.summary, "Name the chat and mission on the Decide card.");
+	// Other chats keep reading their current turn only.
+	chat.role = "ask";
+	chat.entries = [...triaged, ...later, user("again"), said("Still prose.")];
+	const ask = await service.proposal("s");
+	assert(ask && "problem" in ask);
+	assert.equal(ask.problem, "The triage's last answer is not a proposal");
+});
+
+test("a screen agent chat's feedback draft is never read as its triage proposal", async () => {
+	const { chat, service, draft } = screenChat();
+	// Pilot sent the triage, but its turn has not started: the chat's last answer is still the draft.
+	chat.entries = draft;
+	assert.equal(await service.proposal("s"), undefined);
+});
