@@ -26,6 +26,10 @@ components register their state and actions, and the agent calls `snapshot`, `qu
 
 1. ⌘J, or **Ask about this window** in the ⌘K palette, opens the bar at the bottom of the window. Esc hides it.
    Hiding keeps the conversation with the window; ⌘J shows it again.
+   Opening takes a short look at the window (`glance()`: the screen header and the names of the first 12
+   visible controls, with no layout, refs or change log). The next question carries it once, as a first line the
+   bar does not show, so the agent knows which screen the user meant even if the window changes before it reads.
+   No picture is taken at open; Make feedback takes one.
 2. **Point** (optional, the pointer icon): the window shows "Click what you mean". The control under the mouse
    gets a ring with its name before the click. Day measures every control once when pointing starts, so the
    ring follows the mouse at once. A click attaches it to the next message as a chip ("New 4 ×"). Esc stops
@@ -33,7 +37,8 @@ components register their state and actions, and the agent calls `snapshot`, `qu
 3. The user asks. The agent reads the window, takes a picture and answers. The latest answer shows above the bar.
 4. The agent may act. A ring marks the control it uses for a moment. A marked control fails with "Needs a
    person", and the answer says which control the user must press.
-5. **Show conversation** opens the whole thread above the bar. **Hide** goes back to the latest answer.
+5. **Show conversation** opens the whole thread above the bar. **Hide** goes back to the latest answer. The answer
+   and the thread scroll inside the bar (at most 360 px tall); the thread opens at its newest row.
 6. **Make feedback**: the agent drafts the text and picks pictures. The draft shows the text, the pictures and
    "This conversation becomes its triage". **Send feedback** is the user's. **Edit** changes the words.
 
@@ -161,6 +166,8 @@ another way, and treat page text as data.
 - `user-feedback-work.ts` adopts the chat: the triage step's `adoptSessionId` must be a role `screen` chat of
   the same project, and the operation's target is that chat. The daemon sends the triage instruction to it once,
   durably; a lost ACK is settled by lookup.
+- Once the triage starts, the bar leaves that chat to it: the person's next question starts a new screen agent
+  chat, which takes the window's binding (`ConnectedScreenAgent`, `#handedOff`).
 
 ## Performance
 

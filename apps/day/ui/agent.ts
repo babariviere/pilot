@@ -314,6 +314,26 @@ function collectChanges() {
 
 export type Snapshot = { screen: Record<string, unknown>; components: AgentComponent[]; changes: AgentChange[] };
 
+/** What the window shows, in short: the screen header and its first visible controls by name. */
+export type Glance = { screen: Record<string, unknown>; shown: string[] };
+
+/**
+ * A short look at the window for the screen agent's bar when it opens: the header and the names of the first
+ * visible controls in screen order. It reads getters only: no layout, no refs and no change log, so the agent's
+ * own snapshots stay as they were.
+ */
+export function glance(limit = 12): Glance {
+	const shown = visibleEntries()
+		.sort((a, b) => a.order - b.order)
+		.map((e) => {
+			const label = str(e.label());
+			return label ? `${e.component} "${label}"` : "";
+		})
+		.filter(Boolean)
+		.slice(0, limit);
+	return { screen: header(), shown };
+}
+
 /** The window as the agent sees it: the screen header, the components in screen order and what changed. */
 export async function snapshot(): Promise<Snapshot> {
 	collectChanges();

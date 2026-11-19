@@ -68,7 +68,10 @@ class ScriptedScreenAgent implements ScreenAgentSource {
 	}
 	async sendFeedback(text: string) {
 		feedbackSent.set(text);
-		return { ok: true, message: "Feedback saved. This conversation is its triage now." };
+		return {
+			ok: true,
+			message: "Feedback saved. This conversation is its triage now. Your next question starts a new conversation.",
+		};
 	}
 	dispose() {}
 }
@@ -80,6 +83,7 @@ mount(() => (
 	<View class="flex-1 gap-2 bg-background p-4">
 		<Action label="Save" onPress={() => {}} />
 		<Text testID="heard">{`heard ${heard().length}`}</Text>
+		<Text testID="last-heard">{heard().at(-1) ?? ""}</Text>
 		<Notice text="New 4" />
 		<ScreenAgentBar source={source} />
 	</View>

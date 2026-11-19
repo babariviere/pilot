@@ -11,7 +11,7 @@ import { feedbackProject } from "./feedbackView";
 import type { ScreenAnswer, ScreenPicture, ScreenRequest } from "./screenAgentContract";
 import { ConnectedSessionChat, type SessionChat } from "./sessionChat";
 import { todayProject } from "./todayScope";
-import { act, onActed, query, setScreenHeader, snapshot } from "./ui";
+import { act, type Glance, onActed, query, setScreenHeader, snapshot } from "./ui";
 import { dataSource } from "./view";
 import { shownKey } from "./windowState";
 
@@ -93,6 +93,24 @@ export function pointedMessage(pointed: Pointed | null, words: string): string {
 	return `[The person points at ${pointed.ref}${name} (${pointed.component}).]\n${words}`;
 }
 
+/**
+ * The first message after the bar opens, with what the window showed at that moment: the screen the person
+ * means, even if it changed before the agent reads it.
+ */
+export function openedMessage(at: Glance | null, message: string): string {
+	if (!at) return message;
+	const place = typeof at.screen.place === "string" && at.screen.place ? at.screen.place : "unknown";
+	const shown = at.shown.length ? ` It showed: ${at.shown.join("; ")}.` : "";
+	return `[When the person opened this bar, the window was on ${place}.${shown} Read the window again before acting: it may have changed.]\n${message}`;
+}
+
+const OPENED_LINE = /^\[When the person opened this bar, [^\n]*\]\n/u;
+
+/** The person's own words of a message the bar sent, without the window note it added. */
+export function spokenWords(text: string): string {
+	return text.replace(OPENED_LINE, "");
+}
+
 /** What the agent is asked when the person presses Make feedback. */
 export const FEEDBACK_REQUEST =
 	'Write feedback for Pilot\'s developers about what we found: what is wrong, where, and what would be better. Reply with only one JSON object: {"text": "..."}, under 1000 characters.';
@@ -114,6 +132,8 @@ export function feedbackDraft(chat: SessionChat | null): string | null {
 }
 
 const START_FAILED = "Pilot could not start the screen agent. Nothing was sent.";
+/** Said once the chat became a feedback's triage. */
+export const NEXT_STARTS_NEW = "Your next question starts a new conversation.";
 
 /** The connected window's screen agent: Day's existing chat, feedback and picture calls. */
 export class ConnectedScreenAgent implements ScreenAgentSource {
@@ -123,6 +143,8 @@ export class ConnectedScreenAgent implements ScreenAgentSource {
 	#feedback: ConnectedFeedback;
 	#choice: ChatChoice | null = null;
 	#sessionId: string | null = null;
+	/** Set once the chat became a feedback's triage: the next question starts a new chat. */
+	#handedOff = false;
 	#stops: (() => void)[] = [];
 
 	constructor(window: string) {
@@ -147,7 +169,7 @@ export class ConnectedScreenAgent implements ScreenAgentSource {
 	}
 
 	async ask(message: string): Promise<string> {
-		if (this.#sessionId) {
+		if (this.#sessionId && !this.#handedOff) {
 			const r = await this.#session.replyChat(this.#sessionId, message);
 			return r.status === "accepted" ? "" : r.message || "Pilot did not send it.";
 		}
@@ -181,6 +203,7 @@ export class ConnectedScreenAgent implements ScreenAgentSource {
 		if (!sessionId) return "Pilot started the screen agent but did not say which chat it is. Try again in a moment.";
 		this.#choice = picked.choice;
 		this.#sessionId = sessionId;
+		this.#handedOff = false;
 		const bound = await call(this.#window, "day.screen.bind", { sessionId });
 		await this.#session.open(sessionId);
 		return bound.ok ? "" : "The screen agent started, but this window could not show itself to it.";
@@ -227,7 +250,9 @@ export class ConnectedScreenAgent implements ScreenAgentSource {
 				ok: true,
 				message: `Feedback saved. Its triage did not start: ${step.message || "start it on the Feedback page."}`,
 			};
-		return { ok: true, message: "Feedback saved. This conversation is its triage now." };
+		// The triage owns this chat now; what the person asks next is a new conversation.
+		this.#handedOff = true;
+		return { ok: true, message: `Feedback saved. This conversation is its triage now. ${NEXT_STARTS_NEW}` };
 	}
 
 	dispose() {

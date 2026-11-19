@@ -10,6 +10,8 @@ import {
 	type MouseEvent,
 	Overlay,
 	type PressEvent,
+	Scroll,
+	type ScrollRef,
 	signal,
 	Text,
 	View,
@@ -19,9 +21,11 @@ import {
 	acted,
 	FEEDBACK_REQUEST,
 	feedbackDraft,
+	openedMessage,
 	type Pointed,
 	pointedMessage,
 	type ScreenAgentSource,
+	spokenWords,
 } from "./screenAgent";
 import type { ScreenPicture } from "./screenAgentContract";
 import { screenAgentOpen } from "./screenAgentOpen";
@@ -34,6 +38,8 @@ import {
 	controlAt,
 	controlFrames,
 	frameOf,
+	type Glance,
+	glance,
 	KeyCap,
 	Mark,
 	MarkLine,
@@ -77,7 +83,7 @@ function Line(props: { row: SessionChat["rows"][number] }) {
 		<View>
 			<If when={props.row.role === "you"}>
 				<View class="self-end rounded-xl bg-muted px-3 py-2">
-					<Text class="text-sm leading-relaxed text-foreground">{props.row.text}</Text>
+					<Text class="text-sm leading-relaxed text-foreground">{spokenWords(props.row.text)}</Text>
 				</View>
 			</If>
 			<If when={props.row.role === "pilot"}>
@@ -131,6 +137,11 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 	const actedRing = signal<Ring | null>(null);
 
 	keymap.bind("mod+j", () => screenAgentOpen.set(!screenAgentOpen()), { when: "always" });
+	// What the window showed when the bar opened; the next question carries it once.
+	let atOpen: Glance | null = null;
+	effect(() => {
+		atOpen = screenAgentOpen() ? glance() : null;
+	});
 	effect(() => {
 		hovered.set(null);
 		frames.set(null);
@@ -173,8 +184,10 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 	};
 	const ask = async () => {
 		const p = pointed();
-		const ok = await send(pointedMessage(p ? { ref: p.ref, component: p.component, label: p.label } : null, words()));
+		const said = pointedMessage(p ? { ref: p.ref, component: p.component, label: p.label } : null, words());
+		const ok = await send(openedMessage(atOpen, said));
 		if (ok) {
+			atOpen = null;
 			words.set("");
 			pointed.set(null);
 		}
@@ -211,6 +224,14 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 		pointed.set(hit ? { ref: hit.ref, component: hit.component, label: hit.label, frame: hit.frame } : null);
 	};
 	const left = () => Math.max(16, (windowSize().width - BAR_WIDTH) / 2);
+	// The conversation opens at its newest row and follows new rows.
+	let rowsScroll: ScrollRef | undefined;
+	effect(() => {
+		const rows = chat()?.rows.length ?? 0;
+		// After layout, so the end includes the new rows.
+		if (view() === "conversation" && rows > 0)
+			requestAnimationFrame(() => rowsScroll?.scrollToEnd({ animated: false }));
+	});
 
 	return (
 		<AgentScope.Provider value={{ hidden: true }}>
@@ -260,10 +281,13 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 					onCancel={() => screenAgentOpen.set(false)}
 				>
 					<If when={view() === "answer" && (latest(chat()).length > 0 || problem())}>
-						<Panel tone="card" size="lg" class="gap-3 shadow-lg">
-							<Each of={latest(chat())} key={(r) => r.key}>
-								{(r) => <Line row={r()} />}
-							</Each>
+						<Panel tone="card" size="lg" class="max-h-[360px] gap-3 shadow-lg">
+							{/* A long answer scrolls inside the bar instead of running past it. */}
+							<Scroll testID="screen-agent-answer" class="min-h-0 shrink" contentClass="gap-3">
+								<Each of={latest(chat())} key={(r) => r.key}>
+									{(r) => <Line row={r()} />}
+								</Each>
+							</Scroll>
 							<If when={problem()}>
 								<MarkLine kind="unknown">
 									<Text class="text-sm text-foreground">{problem()}</Text>
@@ -294,11 +318,16 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 								<Action label="Make feedback" variant="outline" onPress={() => void makeFeedback()} />
 								<Action label="Hide" testID="screen-agent-hide" onPress={() => view.set("answer")} />
 							</View>
-							<View class="min-h-0 shrink">
+							<Scroll
+								testID="screen-agent-rows"
+								ref={(node: ScrollRef) => (rowsScroll = node)}
+								class="min-h-0 shrink"
+								contentClass="gap-3"
+							>
 								<Each of={chat()?.rows ?? []} key={(r) => r.key}>
 									{(r) => <Line row={r()} />}
 								</Each>
-							</View>
+							</Scroll>
 						</Panel>
 					</If>
 					<If when={view() === "feedback"}>
