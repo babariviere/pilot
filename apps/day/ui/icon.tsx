@@ -14,6 +14,7 @@ import notes from "../icons/notes.svg";
 import pause from "../icons/pause.svg";
 import play from "../icons/play.svg";
 import plus from "../icons/plus.svg";
+import pointer from "../icons/pointer.svg";
 import refresh from "../icons/refresh.svg";
 import rename from "../icons/rename.svg";
 import settings from "../icons/settings.svg";
@@ -34,6 +35,7 @@ const ICONS = {
 	pause,
 	play,
 	plus,
+	pointer,
 	refresh,
 	rename,
 	settings,

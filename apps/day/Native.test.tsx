@@ -427,3 +427,22 @@ test("capture Linear linked work", async () => {
 	await app.waitFor("id:linear-detail-ln-231");
 	await app.screenshot("output/linear-linked-work.png");
 });
+
+// Headless runs do not hit-test overlays: pointing needs the real host.
+test("Point previews the control under the mouse and attaches the one clicked", async () => {
+	const app = await open("./ScreenAgentBarFixture.tsx", { platform: "macos", width: 1000, height: 800 });
+	await app.keyboard.press("mod+j");
+	await app.press("label:Point at something in this window");
+	await app.waitFor("Click what you mean");
+	await app.wait(100);
+	await app.hover("Save");
+	// The ring names the control before the person clicks it.
+	await app.waitUntil(() => app.texts().filter((t) => t === "Save").length === 2);
+	await app.screenshot("output/screen-agent-pointing.png");
+	await app.press("Save");
+	await app.waitUntil(() => !app.shows("Click what you mean"));
+	// The pointed control shows its ring and its chip in the bar.
+	expect(app.texts().filter((t) => t === "Save").length).toBe(3);
+	expect(app.shows("label:Stop pointing at it")).toBe(true);
+	await app.screenshot("output/screen-agent-pointed.png");
+});

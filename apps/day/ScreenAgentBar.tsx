@@ -2,8 +2,19 @@
 // "Ask about this window", a field at the bottom of the window, the agent's latest answer above it, and the
 // whole conversation or a feedback draft on request. Point attaches one control to the next question. The
 // bar itself is hidden from the agent. Esc hides it; the conversation stays with the window.
-import { cleanup, computed, effect, keymap, Overlay, type PressEvent, signal, Text, View, windowSize } from "nsh";
-import type { ScreenPicture } from "./screenAgentContract";
+import {
+	cleanup,
+	computed,
+	effect,
+	keymap,
+	type MouseEvent,
+	Overlay,
+	type PressEvent,
+	signal,
+	Text,
+	View,
+	windowSize,
+} from "nsh";
 import {
 	acted,
 	FEEDBACK_REQUEST,
@@ -12,18 +23,22 @@ import {
 	pointedMessage,
 	type ScreenAgentSource,
 } from "./screenAgent";
+import type { ScreenPicture } from "./screenAgentContract";
 import { screenAgentOpen } from "./screenAgentOpen";
 import type { SessionChat } from "./sessionChat";
 import {
 	Action,
 	type AgentFrame,
 	AgentScope,
+	type ControlFrame,
 	controlAt,
+	controlFrames,
 	frameOf,
 	KeyCap,
 	Mark,
 	MarkLine,
 	Panel,
+	smallestAt,
 	TextField,
 } from "./ui";
 
@@ -46,7 +61,10 @@ function RingMark(props: { ring: Ring }) {
 			}}
 		>
 			<View class="absolute inset-0 rounded-lg border-2 border-ring bg-primary/10" />
-			<View class="absolute -top-6 left-0 w-max rounded-md bg-primary px-1.5 py-0.5">
+			{/* The name goes below a control at the top of the window, where above would be cut off. */}
+			<View
+				class={`absolute left-0 w-max rounded-md bg-primary px-1.5 py-0.5 ${props.ring.frame.y < 28 ? "-bottom-6" : "-top-6"}`}
+			>
 				<Text class="text-xs text-primary-foreground">{props.ring.label}</Text>
 			</View>
 		</View>
@@ -101,6 +119,9 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 	const problem = signal("");
 	const sending = signal(false);
 	const pointing = signal(false);
+	// While pointing: every control's frame, measured once when pointing starts, and the one under the mouse.
+	const frames = signal<ControlFrame[] | null>(null);
+	const hovered = signal<ControlFrame | null>(null);
 	const pointed = signal<(Pointed & { frame: AgentFrame }) | null>(null);
 	const view = signal<"answer" | "conversation" | "feedback">("answer");
 	const draft = signal<string | null>(null);
@@ -110,6 +131,14 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 	const actedRing = signal<Ring | null>(null);
 
 	keymap.bind("mod+j", () => screenAgentOpen.set(!screenAgentOpen()), { when: "always" });
+	effect(() => {
+		hovered.set(null);
+		frames.set(null);
+		if (!pointing()) return;
+		void controlFrames().then((list) => {
+			if (pointing()) frames.set(list);
+		});
+	});
 	effect(() => {
 		const ref = acted();
 		if (!ref) {
@@ -169,9 +198,16 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 			sending.set(false);
 		}
 	};
+	const hover = (e: MouseEvent) => {
+		const list = frames();
+		if (list) hovered.set(smallestAt(list, e.pagePosition.x, e.pagePosition.y));
+	};
 	const point = async (e: PressEvent) => {
+		const list = frames();
 		pointing.set(false);
-		const hit = await controlAt(e.pagePosition.x, e.pagePosition.y);
+		const hit = list
+			? smallestAt(list, e.pagePosition.x, e.pagePosition.y)
+			: await controlAt(e.pagePosition.x, e.pagePosition.y);
 		pointed.set(hit ? { ref: hit.ref, component: hit.component, label: hit.label, frame: hit.frame } : null);
 	};
 	const left = () => Math.max(16, (windowSize().width - BAR_WIDTH) / 2);
@@ -191,10 +227,24 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 					<If when={actedRing()}>
 						<RingMark ring={actedRing() as Ring} />
 					</If>
+					<If when={pointing() && hovered()}>
+						<RingMark
+							ring={{
+								frame: (hovered() as ControlFrame).frame,
+								label: hovered()?.label ?? hovered()?.component ?? "",
+							}}
+						/>
+					</If>
 				</View>
 				<If when={pointing()}>
 					<Overlay testID="screen-agent-pointing" class="inset-0" onCancel={() => pointing.set(false)}>
-						<View class="absolute inset-0" onPress={(e: PressEvent) => void point(e)} />
+						<View
+							class="absolute inset-0"
+							style={{ cursor: "crosshair" }}
+							onMouseMove={hover}
+							onMouseLeave={() => hovered.set(null)}
+							onPress={(e: PressEvent) => void point(e)}
+						/>
 						<View class="absolute left-0 right-0 top-14 items-center" style={{ pointerEvents: "none" }}>
 							<View class="flex-row items-center gap-2 rounded-full bg-foreground px-3 py-1.5">
 								<Text class="text-xs text-background">Click what you mean</Text>
@@ -296,7 +346,10 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 					<View class="flex-row items-center gap-2 rounded-2xl border border-border-strong bg-background px-2 py-2 shadow-lg">
 						<Mark kind={working() ? "moving" : "still"} />
 						<Action
-							label={pointing() ? "Pointing…" : "Point"}
+							label={pointing() ? "Stop pointing" : "Point at something in this window"}
+							icon="pointer"
+							iconOnly
+							variant={pointing() ? "outline" : "plain"}
 							testID="screen-agent-point"
 							onPress={() => pointing.set(!pointing())}
 						/>

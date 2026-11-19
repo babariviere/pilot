@@ -645,18 +645,33 @@ export async function frameOf(ref: string): Promise<AgentFrame | null> {
 	return e && !marks(e).hidden ? frame(e) : null;
 }
 
-/** The smallest visible control under a point, for pointing at what the person means. */
-export async function controlAt(
-	x: number,
-	y: number,
-): Promise<{ ref: string; component: string; label?: string; frame: AgentFrame } | null> {
-	let best: { e: Entry; f: AgentFrame } | null = null;
-	for (const e of visibleEntries()) {
-		const f = await frame(e);
-		if (!f || x < f.x || y < f.y || x > f.x + f.width || y > f.y + f.height) continue;
-		if (!best || f.width * f.height < best.f.width * best.f.height) best = { e, f };
+/** A visible control and where it is, for pointing at what the person means. */
+export type ControlFrame = { ref: string; component: string; label?: string; frame: AgentFrame };
+
+/** Every visible control and its frame now. All are measured at once, not one after another. */
+export async function controlFrames(): Promise<ControlFrame[]> {
+	const list = visibleEntries();
+	const frames = await Promise.all(list.map((e) => frame(e)));
+	return list.flatMap((e, i) => {
+		const f = frames[i];
+		return f ? [{ ref: e.ref, component: e.component, label: str(e.label()), frame: f }] : [];
+	});
+}
+
+/** The smallest of `frames` under a point, or null. */
+export function smallestAt(frames: ControlFrame[], x: number, y: number): ControlFrame | null {
+	let best: ControlFrame | null = null;
+	for (const c of frames) {
+		const f = c.frame;
+		if (x < f.x || y < f.y || x > f.x + f.width || y > f.y + f.height) continue;
+		if (!best || f.width * f.height < best.frame.width * best.frame.height) best = c;
 	}
-	return best ? { ref: best.e.ref, component: best.e.component, label: str(best.e.label()), frame: best.f } : null;
+	return best;
+}
+
+/** The smallest visible control under a point, for pointing at what the person means. */
+export async function controlAt(x: number, y: number): Promise<ControlFrame | null> {
+	return smallestAt(await controlFrames(), x, y);
 }
 
 const actedListeners = new Set<(ref: string) => void>();

@@ -26,8 +26,10 @@ components register their state and actions, and the agent calls `snapshot`, `qu
 
 1. ⌘J, or **Ask about this window** in the ⌘K palette, opens the bar at the bottom of the window. Esc hides it.
    Hiding keeps the conversation with the window; ⌘J shows it again.
-2. **Point** (optional): the window shows "Click what you mean". The control under the pointer gets a ring.
-   A click attaches it to the next message as a chip ("New 4 ×"). Esc stops pointing.
+2. **Point** (optional, the pointer icon): the window shows "Click what you mean". The control under the mouse
+   gets a ring with its name before the click. Day measures every control once when pointing starts, so the
+   ring follows the mouse at once. A click attaches it to the next message as a chip ("New 4 ×"). Esc stops
+   pointing.
 3. The user asks. The agent reads the window, takes a picture and answers. The latest answer shows above the bar.
 4. The agent may act. A ring marks the control it uses for a moment. A marked control fails with "Needs a
    person", and the answer says which control the user must press.
