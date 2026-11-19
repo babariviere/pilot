@@ -16,6 +16,7 @@ import {
 	goHome,
 	goLinear,
 	goMission,
+	goInsights,
 	goNew,
 	goPlan,
 	goSchedules,
@@ -126,6 +127,10 @@ function entries(places: Places): Entry[] {
 	place("artifacts", "Artifacts", !!day.artifacts, goArtifacts, { here: at === "artifacts" });
 	place("feedback", "Feedback", !!day.feedback, goFeedback, { keywords: ["bug", "idea"], here: at === "feedback" });
 	place("schedules", "Schedules", !!day.schedules, goSchedules, { keywords: ["automation", "check-ins", "repair"] });
+	place("insights", "Insights", !!day.insights, goInsights, {
+		keywords: ["reports", "findings"],
+		here: at === "insights",
+	});
 	// Opens the screen agent's bar over this screen. It sends nothing until the person asks.
 	if (screenAgentAvailable()) {
 		list.push({

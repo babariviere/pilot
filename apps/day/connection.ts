@@ -17,6 +17,7 @@ import { deliveryTitles } from "./deliveryView";
 import { connectedDiagnosisControls } from "./diagnosisControls";
 import { ConnectedFeedback, mirrorFeedback } from "./feedbackFeed";
 import { autoRead, FAILED_TRIES, retryDelay } from "./freshness";
+import { connectInsights } from "./insightsControls";
 import { ConnectedIntake, type IntakeMirror, mirrorIntake } from "./intakeFeed";
 import { ConnectedLinear, mirrorLinear } from "./linearFeed";
 import { connectedModelControls } from "./modelControls";
@@ -135,7 +136,8 @@ class OpeningFeeds {
 		if (this.closed) return;
 		this.closed = true;
 		if (this.day) this.day.close();
-		else {
+		this.day?.insights?.dispose();
+		if (!this.day) {
 			this.today.dispose();
 			this.intake?.close();
 		}
@@ -195,6 +197,7 @@ function refreshSoon() {
 function refresh() {
 	if (connection().state !== "open" || !current()) return;
 	const open = connection();
+	if (open.state === "open") open.day.insights?.invalidate();
 	// These are cached native projections, not service/provider startup.
 	void Promise.all([
 		todayFeed?.refresh(),
@@ -394,6 +397,7 @@ async function connect() {
 		day.models = connectedModelControls(window);
 		day.diagnosis = connectedDiagnosisControls(window);
 		day.schedules = connectedScheduleControls(window);
+		day.insights = connectInsights(window);
 		day.connections = connectedConnectionControls(window);
 		day.power = connectedPower(window);
 		void day.power.read();

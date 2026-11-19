@@ -174,7 +174,10 @@ backgroundUsage.funding = fundingBackground(
 );
 const sessionFunding = fundingRequests(funding, credentials.catalog, (id) => sessions.fundingRequestOwner(id));
 credentials.fundingRequest = async (binding, request) => {
-	if (typeof binding === "string") return sessionFunding(binding, request);
+	if (typeof binding === "string")
+		return sessions.dayInsights?.owns(binding)
+			? sessions.dayInsights.fundingRequest(binding, request, credentials.catalog)
+			: sessionFunding(binding, request);
 	const p = request.value as { provider?: string } | undefined;
 	if (request.op === "funding-reserve" && p?.provider) await backgroundSubscription.assert(p.provider);
 	const value = await fundingRequests(funding, credentials.catalog, () => binding, "triage")("background", request);

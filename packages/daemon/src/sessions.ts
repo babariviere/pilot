@@ -2036,6 +2036,67 @@ export class SessionManager {
 	setInsightsOwnerStore(store: import("./insights-owner-store.ts").InsightsOwnerStore): void {
 		this.insightsOwnerStore = store;
 	}
+	dayInsights?: import("./day-insights.ts").DayInsights;
+	dayInsightsScheduleReady(id: string, revision: number): boolean {
+		if (!this.isDayInsightsReport(id)) return true;
+		return this.dayInsights?.scheduleReady(id, revision) ?? false;
+	}
+	dayInsightsSource(id: string) {
+		const meta = this.metas.get(id);
+		return meta ? { id: meta.id, projectId: meta.projectId, archivedAt: meta.archivedAt, role: meta.role } : null;
+	}
+	async bindFreshDayRun(id: string, run: string, guard: () => void) {
+		guard();
+		const meta = this.require(id);
+		if (this.workers.has(id) || !this.isDayInsightsReport(id)) throw new Conflict("day_insights_executor_not_closed");
+		meta.insightsReviewRun = run;
+		await this.save(meta, undefined, undefined, true);
+		guard();
+	}
+	async configureFreshDayReport(id: string, model: string, thinking: string | undefined, guard: () => void) {
+		guard();
+		const meta = this.require(id);
+		this.insightsOwnerApplySnapshot(id);
+		if (this.workers.has(id) || !this.isDayInsightsReport(id)) throw new Conflict("day_insights_executor_not_closed");
+		meta.model = model;
+		meta.thinking = thinking;
+		await this.save(meta, undefined, undefined, true);
+		guard();
+	}
+	isDayInsightsReport(id: string): boolean {
+		const binding = this.metas.get(id)?.insightsOwner?.binding;
+		return !!binding && !!this.insightsOwnerStore?.isDayExecution(binding);
+	}
+	async denyUnsupportedDayInsights(id: string) {
+		const saved = this.require(id).insightsOwner;
+		if (!saved || !this.isDayInsightsReport(id)) throw new Conflict("day_insights_identity_unavailable");
+		const lease = this.insightsOwnerLease(saved.authority);
+		try {
+			if (this.insightsOwnerStore!.current(saved.authority)?.state !== "paused")
+				await this.insightsOwnerStore!.fence(lease, "paused");
+		} finally {
+			await this.stop(id);
+			await this.drainInsightsOwner(id);
+		}
+	}
+	async syncDayInsightsOwner(id: string, guard: () => void) {
+		guard();
+		const meta = this.require(id);
+		this.insightsOwnerApplySnapshot(id);
+		if (this.workers.has(id) || !meta.insightsOwner) throw new Conflict("day_insights_executor_not_closed");
+		const current = this.insightsOwnerStore!.current(meta.insightsOwner.authority);
+		if (!current) throw new Conflict("day_insights_owner_missing");
+		meta.insightsOwner = { authority: current.authority, binding: structuredClone(current.binding) };
+		await this.save(meta, undefined, undefined, true);
+		guard();
+	}
+	dayInsightsRunId(id: string): string {
+		this.insightsOwnerAdmission(id).revalidate();
+		const run = this.require(id).insightsReviewRun;
+		if (!run) throw new Conflict("day_insights_run_missing");
+		this.dayInsights?.assertRunId(id, run);
+		return run;
+	}
 	setInsightsTransitionStore(store: import("./insights-transition-store.ts").InsightsTransitionStore): void {
 		this.insightsTransitionStore = store;
 	}
@@ -2074,6 +2135,10 @@ export class SessionManager {
 			throw new Conflict("owner_profile_unavailable");
 		this.insightsOwnerLease(saved.authority).revalidate();
 		const current = this.insightsOwnerStore?.current(saved.authority);
+		if (current && this.insightsOwnerStore!.isDayExecution(current.binding) && !this.dayInsights?.executionAvailable)
+			throw new Conflict("day_insights_execution_adapter_unavailable");
+		if (current && this.insightsOwnerStore!.isDayExecution(current.binding))
+			this.dayInsights!.assertAdmission(current, configurationOnly);
 		if (
 			!(current?.state === "active" || (configurationOnly && current?.state === "configuring")) ||
 			!current.binding.enabled ||
@@ -2257,6 +2322,22 @@ export class SessionManager {
 		};
 	}
 	/** Native legacy projection only. Disabled/archived profiles remain readable, never executable. */
+	insightsLegacyDiscovery(after: string | null) {
+		if (!this.sessionInventoryQualified || this.closing) throw new Conflict("session_inventory_unavailable");
+		let selected: { reportSessionId: string; projectId: string; missionId: string } | null = null;
+		let scanned = 0;
+		for (const meta of this.metas.values()) {
+			if (++scanned > 4096) throw new Conflict("legacy_discovery_capacity");
+			if (meta.insightsOwner || (meta.role !== "insights" && !meta.insightsGrant)) continue;
+			const grant = meta.insightsGrant;
+			if (!grant) throw new Conflict("legacy_discovery_identity_unavailable");
+			if (after !== null && meta.id <= after) continue;
+			if (!selected || meta.id < selected.reportSessionId)
+				selected = { reportSessionId: meta.id, projectId: grant.projectId, missionId: grant.missionId };
+		}
+		return selected;
+	}
+	/** Native legacy projection only. Disabled/archived profiles remain readable, never executable. */
 	insightsLegacyIdentity(id: string, projectId: string, missionId: string) {
 		const meta = this.require(id);
 		this.validateMode(meta);
@@ -2388,6 +2469,7 @@ export class SessionManager {
 		id: string,
 		request: import("@pilot/protocol").InsightsReviewDispatch,
 	) {
+		if (this.isDayInsightsReport(id)) await this.dayInsights!.prepareRun(id, request);
 		const admission = this.insightsOwnerAdmission(id);
 		const reviews = this.insightsOwnerStore!.reviews;
 		const execution = this.insightsOwnerStore!.current(this.require(id).insightsOwner!.authority)!;
@@ -2397,7 +2479,9 @@ export class SessionManager {
 			if (sourceId === retiredReport) return false;
 			const source = this.metas.get(sourceId);
 			if (!source || sourceId === id) return false;
+			if (this.isDayInsightsReport(id) && source.role === "insights") return false;
 			if (source.projectId && !this.projects.get(source.projectId)) return false;
+			if (this.dayInsights?.owns(id) && !this.dayInsights.sourceAllowed(source, Date.now())) return false;
 			return insightsSourceAllowed(execution.settings.settings, source);
 		};
 		if (!(await reviews.reserve(admission, request))) return (await reviews.status(admission, request.runId))!;
@@ -2431,7 +2515,7 @@ export class SessionManager {
 					requestId,
 					mode: "followUp",
 					onlyIfIdle: true,
-					content: `Review the bounded host-prepared evidence for ${request.windowStart} through ${request.windowEnd}. Run/report key: ${request.runId}. Read every insights_backlog review_context page. Revisit prior findings with list/get. Save one partial report with this exact run key and expectedRevision=0. Dates are context, not certified coverage. Findings grant no implementation authority.`,
+					content: `Review the bounded host-prepared evidence for ${request.windowStart} through ${request.windowEnd}. Run/report key: ${request.runId}. Read every insights_backlog review_context page. ${this.isDayInsightsReport(id) ? "This is a fresh report context. Prior tracking contents are intentionally withheld; native history remains readable." : "Revisit prior findings with list/get."} Save one partial report with this exact run key and expectedRevision=0. Dates are context, not certified coverage. Findings grant no implementation authority.`,
 				});
 				attempted = true;
 				await this.save(meta, undefined, undefined, true);
@@ -2444,12 +2528,21 @@ export class SessionManager {
 				this.sending.delete(id);
 			}
 		} catch {
-			await reviews.interrupt(
-				id,
-				attempted ? "unknown" : "interrupted",
-				"Owner review interrupted; never replay",
-				request.runId,
-			);
+			if (this.isDayInsightsReport(id))
+				await this.dayInsights!.finishRun(
+					request.runId,
+					attempted ? "unknown" : "held",
+					attempted
+						? "Input placement uncertain; native Pause required; never replay"
+						: "Report preparation failed before input placement; distinct run required",
+				);
+			else
+				await reviews.interrupt(
+					id,
+					attempted ? "unknown" : "interrupted",
+					"Owner review interrupted; never replay",
+					request.runId,
+				);
 		}
 		return (await reviews.status(admission, request.runId))!;
 	}
@@ -2457,6 +2550,7 @@ export class SessionManager {
 		return this.insightsOwnerStore!.reviews.status(this.insightsOwnerAdmission(id), runId);
 	}
 	async insightsOwnerBacklog(id: string, input: unknown, worker?: SessionWorker) {
+		if (this.isDayInsightsReport(id)) return this.dayInsights!.backlog(id, input, worker);
 		const admission = this.insightsOwnerAdmission(id, worker);
 		const lease = this.insightsOwnerLease(this.require(id).insightsOwner!.authority);
 		return this.insightsOwnerStore!.backlog(this.insightsWorkspaceStore!, lease, admission, input);
@@ -5594,6 +5688,7 @@ ${run.excerpt}`,
 
 	/** Authorization comes only from supervised worker identity, never request fields. */
 	private scopedMetrics(callerId: string, input: unknown, signal?: AbortSignal): DiagnosticContextResponse {
+		if (this.isDayInsightsReport(callerId)) throw new Conflict("Day report metrics are not admitted");
 		const request = parseDiagnosticContext(input);
 		if (request.action !== "scoped_metrics") throw new Conflict("Invalid metrics selector");
 		const caller = this.require(callerId);
@@ -11995,6 +12090,8 @@ ${run.excerpt}`,
 		const reviewRun = command.requestId.startsWith("insights-review:")
 			? command.requestId.slice("insights-review:".length)
 			: undefined;
+		if (this.isDayInsightsReport(id) && reviewRun !== this.dayInsightsRunId(id))
+			throw new CommandRejected("Day report accepts only its exact fresh run input", "stopped");
 		const assertReview = () => {
 			if (!reviewRun) return;
 			try {
@@ -14301,10 +14398,12 @@ ${run.excerpt}`,
 					false,
 					undefined,
 					// Limits off: the worker starts unmetered, so no request waits on a reservation.
-					this.fundingRequired(spec.sessionId) && (await this.funding?.enabled()) !== false
+					this.dayInsights?.owns(spec.sessionId) ||
+						(this.fundingRequired(spec.sessionId) && (await this.funding?.enabled()) !== false)
 						? spec.sessionId
 						: undefined,
 				);
+				if (spec.credentials && this.dayInsights?.owns(spec.sessionId)) spec.credentials.insightsMetered = true;
 				const view = spec.pilot?.coordinatorView;
 				try {
 					if (view && process.platform === "linux")
@@ -14400,6 +14499,7 @@ ${run.excerpt}`,
 					...(configurationOnly ? { configurationOnly: true as const, stopOnOpen: true } : {}),
 					...(insightsBinding ? { insightsBinding } : {}),
 					...(ownerBinding ? { insightsOwnerBinding: structuredClone(ownerBinding) } : {}),
+					...(this.isDayInsightsReport(id) ? { dayInsightsRunId: this.dayInsightsRunId(id) } : {}),
 					...(liveUpdateProposals && meta.projectId === liveUpdateProjectId && this.canProposeLiveUpdate(meta)
 						? { liveUpdateProposals: true }
 						: {}),
@@ -14412,9 +14512,10 @@ ${run.excerpt}`,
 						: {}),
 					...(usageHistory ? { usageHistory } : {}),
 					...(usageMission ? { usageMission } : {}),
-					...(meta.role ||
-					mission ||
-					(meta.createOperationId && this.feedbackMetricsScope?.(meta.createOperationId, id))
+					...(!this.isDayInsightsReport(id) &&
+					(meta.role ||
+						mission ||
+						(meta.createOperationId && this.feedbackMetricsScope?.(meta.createOperationId, id)))
 						? { scopedMetrics: true }
 						: {}),
 					...(meta.role ? { role: meta.role } : {}),
@@ -14422,7 +14523,9 @@ ${run.excerpt}`,
 					...(diagnosticScope ? { diagnosticScope } : {}),
 					...(meta.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true } : {}),
 					...(meta.projectId ? { projectId: meta.projectId } : {}),
-					storageDir: join(this.dir(id), "durable"),
+					storageDir: this.isDayInsightsReport(id)
+						? join(this.dir(id), "day-runs", this.dayInsightsRunId(id), "durable")
+						: join(this.dir(id), "durable"),
 					subscriptionPolicy: join(this.dir(id), "subscription-policy.json"),
 					...(this.internetOnline !== undefined
 						? { connectivityPolicy: join(this.home, "connectivity.json") }
@@ -14545,6 +14648,15 @@ ${run.excerpt}`,
 		// A late exit from a replaced worker cannot fail or resume its successor.
 		if (current && current !== exited) return;
 		const owned = current === exited || this.retiring.has(exited);
+		if (owned && this.isDayInsightsReport(meta.id) && meta.insightsReviewRun) {
+			void this.dayInsights
+				?.finishRun(
+					meta.insightsReviewRun,
+					meta.pending?.length || this.delivering.has(meta.id) ? "unknown" : "held",
+					"Report worker exited without a saved report; distinct run required",
+				)
+				.catch(() => console.warn("pilotd: Day run settlement unavailable"));
+		}
 		if (current === exited) {
 			this.workers.delete(meta.id);
 			this.toolStallWatchdog.remove(meta.id);
@@ -14581,7 +14693,7 @@ ${run.excerpt}`,
 		}
 		// Never publish the exited worker's stale lifecycle state or usage.
 		this.emit(meta);
-		if (owned && !this.parked.has(exited)) this.scheduleKernelRestart(meta);
+		if (owned && !this.parked.has(exited) && !this.isDayInsightsReport(meta.id)) this.scheduleKernelRestart(meta);
 	}
 
 	private fail(meta: SessionMeta, reason: string): void {
@@ -15164,6 +15276,8 @@ ${run.excerpt}`,
 			void Promise.resolve()
 				.then(() => {
 					if (this.workers.get(meta.id) !== worker) throw new Conflict("Worker changed");
+					if (this.isDayInsightsReport(meta.id))
+						throw new Conflict("Day report diagnostic/metrics reads are not admitted");
 					// Synchronous snapshots are admitted in the delivery turn below.
 					if (packet.request.action === "scoped_metrics") return;
 					if (meta.role === "insights") insights = this.executionAdmission(meta.id, worker);
@@ -15737,6 +15851,20 @@ ${run.excerpt}`,
 				this.generateTitle(meta);
 			}
 			const wasWorking = Boolean(meta.working);
+			if (
+				packet.type === "working" &&
+				wasWorking &&
+				!packet.working &&
+				this.isDayInsightsReport(meta.id) &&
+				meta.insightsReviewRun
+			)
+				void this.dayInsights
+					?.finishRun(
+						meta.insightsReviewRun,
+						"held",
+						"Report finished without a saved report; distinct run required",
+					)
+					.catch(() => console.warn("pilotd: Day run settlement unavailable"));
 			// A new run means the user wrote again, which releases what Stop held.
 			if (packet.working) worker.followUpsHeld = false;
 			if (

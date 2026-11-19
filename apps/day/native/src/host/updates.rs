@@ -441,6 +441,8 @@ impl Record {
 pub(crate) fn validate_view(view: &SavedView) -> Result<(), Error> {
     if !view.offsets_valid()
         || !view.linear_valid()
+        || !view.insights_draft_valid()
+        || !view.insights_work_valid()
         || !view.preferences_valid()
         || !view.threads_valid()
         || !view.question_help_valid()

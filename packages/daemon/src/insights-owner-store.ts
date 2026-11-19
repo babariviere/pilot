@@ -134,6 +134,14 @@ export class InsightsOwnerStore {
 			...(row.effective_thinking == null ? {} : { effectiveThinking: String(row.effective_thinking) }),
 		};
 	}
+	/** Persisted grant provenance, independent of whether the Day service/adapter is installed. */
+	isDayExecution(binding: InsightsOwnerBinding): boolean {
+		return !!this.db.one(
+			"SELECT 1 FROM insights_owner_grants g JOIN day_insights_operations d ON d.operation_id=g.operation_id WHERE g.grant_id=? AND g.workspace_id=?",
+			binding.grantId,
+			binding.owner.workspaceId,
+		);
+	}
 	async read(lease: InsightsWorkspaceAdmission): Promise<InsightsOwnerExecution | null> {
 		lease.revalidate();
 		const current = this.current(lease.authority);
@@ -286,6 +294,111 @@ export class InsightsOwnerStore {
 		return result;
 	}
 	/** The marker is durable BEFORE an external call. A retained entered marker is lookup-only. */
+	async prepareDay(
+		lease: InsightsWorkspaceAdmission,
+		op: DurableOperation,
+		settings: InsightsSettingsRecord,
+		thinking?: string,
+		guard: () => void = () => lease.revalidate(),
+	) {
+		this.db.transaction(() => {
+			guard();
+			lease.revalidate();
+			const marker = this.db.one(
+				"SELECT * FROM day_insights_operations WHERE operation_id=? AND state='entered'",
+				op.operationId,
+			);
+			if (op.kind !== "day-insights" || marker?.envelope !== JSON.stringify(op))
+				throw new Conflict("day_insights_entry_required");
+			const current = this.current(lease.authority);
+			if (current && !["active", "paused"].includes(current.state))
+				throw new Conflict("day_insights_owner_unsettled");
+			this.assertApplyIdle(lease.authority);
+			const binding: InsightsOwnerBinding = {
+				schemaVersion: 2,
+				owner: lease.authority.owner,
+				grantId: crypto.randomUUID(),
+				revision: (current?.binding.revision ?? 0) + 1,
+				enabled: true,
+				reportSessionId: lease.authority.owner.reportSessionId,
+				projectId: lease.authority.owner.projectId,
+				host: lease.authority.owner.expectedHome,
+			};
+			this.db.run(
+				"INSERT INTO insights_owner_grants VALUES (?,?,?,?)",
+				binding.owner.workspaceId,
+				binding.grantId,
+				JSON.stringify(binding),
+				op.operationId,
+			);
+			if (!current)
+				this.db.run(
+					"INSERT INTO insights_owner_execution(workspace_id,authority,binding,state,settings_revision,settings,model,thinking) VALUES (?,?,?,'provisioning',?,?,?,?)",
+					binding.owner.workspaceId,
+					JSON.stringify(lease.authority),
+					JSON.stringify(binding),
+					settings.revision,
+					JSON.stringify(validateInsightsSettings(settings.settings)),
+					settings.model,
+					thinking ?? null,
+				);
+			else
+				this.db.run(
+					"UPDATE insights_owner_execution SET state='configuring',binding=? WHERE workspace_id=?",
+					JSON.stringify(binding),
+					binding.owner.workspaceId,
+				);
+		});
+		await this.db.durable();
+		guard();
+	}
+	assertLegacyDayRunsQuiescent(): void {
+		if (
+			this.db.one(
+				"SELECT 1 FROM insights_runs WHERE state IN ('preparing','ready','sent','unknown','interrupted') LIMIT 1",
+			) ||
+			this.db.one("SELECT 1 FROM insights_replacements WHERE result IS NULL LIMIT 1") ||
+			this.db.one("SELECT 1 FROM insights_transfers WHERE state='entered' LIMIT 1")
+		)
+			throw new Conflict("legacy_execution_or_transfer_uncertain");
+	}
+	async finishDay(
+		lease: InsightsWorkspaceAdmission,
+		op: DurableOperation,
+		settings: InsightsSettingsRecord,
+		paused: boolean,
+		thinking?: string,
+		guard: () => void = () => lease.revalidate(),
+	) {
+		this.db.transaction(() => {
+			guard();
+			lease.revalidate();
+			const marker = this.db.one(
+				"SELECT envelope FROM day_insights_operations WHERE operation_id=? AND state='entered'",
+				op.operationId,
+			);
+			const current = this.current(lease.authority);
+			if (
+				!current ||
+				!["configuring", "provisioning"].includes(current.state) ||
+				marker?.envelope !== JSON.stringify(op)
+			)
+				throw new Conflict("day_insights_entry_changed");
+			this.db.run(
+				"UPDATE insights_owner_execution SET state=?,binding=?,settings_revision=?,settings=?,model=?,thinking=?,effective_thinking=? WHERE workspace_id=?",
+				"provisioning",
+				JSON.stringify({ ...current.binding, enabled: !paused }),
+				settings.revision,
+				JSON.stringify(validateInsightsSettings(settings.settings)),
+				settings.model,
+				thinking ?? null,
+				null,
+				lease.authority.owner.workspaceId,
+			);
+		});
+		await this.db.durable();
+		guard();
+	}
 	async lookup(
 		lease: InsightsWorkspaceAdmission,
 		op: DurableOperation,

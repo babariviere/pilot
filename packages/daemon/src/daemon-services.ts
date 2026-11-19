@@ -7,6 +7,8 @@ import { RepositoryChanges } from "./changes.ts";
 import type { ChatSettingsService } from "./chat-settings.ts";
 import type { DaemonConfig } from "./config.ts";
 import { CONNECTION_CONTROLS, ConnectionControls } from "./connection-controls.ts";
+import { DayInsights } from "./day-insights.ts";
+import { DayInsightsExecution } from "./day-insights-execution.ts";
 import { DeliveredArtifacts } from "./delivered-artifact.ts";
 import { diagnosticContextResponse } from "./diagnostic-context.ts";
 import { DIAGNOSTICS_CONTROLS, DiagnosticsControls } from "./diagnostics-controls.ts";
@@ -463,7 +465,8 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 	sessions.feedbackMetricsScope = (operationId, sessionId) =>
 		missions?.store.feedback.metricsScope(operationId, sessionId);
 	sessions.feedbackFixAdmission = (sessionId, projectId) =>
-		!!missions?.store.feedback.resultPage({ kind: "fix", id: sessionId, projectId }, Number.MAX_SAFE_INTEGER, 1).items.length;
+		!!missions?.store.feedback.resultPage({ kind: "fix", id: sessionId, projectId }, Number.MAX_SAFE_INTEGER, 1).items
+			.length;
 	const reviewRequests = missions ? optionalReviewRequests(missions.store, sessions, projects) : undefined;
 	const humanReviews = missions
 		? new HumanReviews({
@@ -580,6 +583,32 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 					// Startup supplies no executor. Dependent-work consumers remain separate adapters.
 				})
 			: undefined;
+	const dayInsights =
+		journal && missions?.store.dayInsights && sessions.insightsAdmissionEpoch
+			? new DayInsights({
+					home: _config.home,
+					host: journal.destination,
+					projects,
+					models,
+					store: missions.store.dayInsights,
+					owners: missions.store.insightsOwner,
+					workspace: missions.store.insightsWorkspace,
+					admissionEpoch: sessions.insightsAdmissionEpoch,
+					allowance: missions.store.dayInsightsAllowance,
+					sessions,
+					runtime: schedules
+						? new DayInsightsExecution({
+								sessions,
+								owners: missions.store.insightsOwner,
+								store: missions.store.dayInsights,
+								schedules,
+								journal,
+								models,
+							})
+						: undefined,
+				})
+			: undefined;
+	sessions.dayInsights = dayInsights;
 	const insightsWorkspace =
 		journal && missions && schedules
 			? new InsightsWorkspace({
@@ -776,6 +805,10 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 			if (!insightsOwner) throw new OperationRejected("Owner Insights execution unavailable");
 			return insightsOwner.admit(op);
 		}
+		if (op.kind === "day-insights") {
+			if (!dayInsights) throw new OperationRejected("Day Insights unavailable");
+			return dayInsights.admit(op, false);
+		}
 		if (isInsightsWorkspaceOperation(op.kind)) {
 			if (!insightsWorkspace) throw new OperationRejected("App-owned Insights workspace unavailable");
 			return insightsWorkspace.admit(op);
@@ -934,6 +967,7 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		deliveredArtifacts,
 		nativeAttention,
 		insightsWorkspace,
+		dayInsights,
 		insightsTransition,
 		insightsOwner,
 		insightsLegacy,

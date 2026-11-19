@@ -309,6 +309,38 @@ export class InsightsReviews<A extends InsightsReviewAdmission = InsightsAdmissi
 		if (!row || row.binding !== scope || !active(String(row.state)))
 			throw new Conflict("Review is terminal or unavailable; never replay");
 	}
+	/** Provider refusal is terminal. It never releases unclear monetary reservations. */
+	async hold(sessionId: string, runId: string, detail: string) {
+		this.db.run(
+			`UPDATE ${this.tables.runs} SET state='held',detail=? WHERE session_id=? AND run_id=? AND state IN ('preparing','ready','sent')`,
+			detail.slice(0, 300),
+			sessionId,
+			runId,
+		);
+		await this.db.durable();
+		this.changed();
+	}
+	/** Before each disclosure and final provider payload, recheck every prepared source. */
+	assertDelivery(admission: A, runId: string, allowed: (id: string) => boolean) {
+		this.scope(admission);
+		const row = this.row(admission.binding.reportSessionId, runId);
+		if (!row?.packet || !["ready", "sent", "partial"].includes(String(row.state)))
+			throw new Conflict("day_insights_evidence_not_ready");
+		const packet = JSON.parse(String(row.packet)) as Packet;
+		if (packet.pages.some((p) => !allowed(p.sessionId))) {
+			packet.gaps = [
+				...packet.gaps,
+				"Source eligibility changed after preparation; withheld before delivery. Start a distinct report.",
+			];
+			this.db.run(
+				`UPDATE ${this.tables.runs} SET packet=? WHERE session_id=? AND run_id=?`,
+				JSON.stringify(packet),
+				admission.binding.reportSessionId,
+				runId,
+			);
+			throw new Conflict("day_insights_evidence_eligibility_changed");
+		}
+	}
 	hasActive(admission: A): boolean {
 		this.scope(admission);
 		return !!this.db.one(

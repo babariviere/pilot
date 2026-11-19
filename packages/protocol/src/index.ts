@@ -21,6 +21,7 @@ export type {
 export type * from "./automations.ts";
 export type * from "./chat-settings.ts";
 export type * from "./critical-review.ts";
+export type * from "./day-insights.ts";
 export type * from "./decision-assistance.ts";
 export type * from "./diagnostic-context.ts";
 export type * from "./diagnostic-repair.ts";

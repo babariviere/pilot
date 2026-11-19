@@ -12,6 +12,7 @@ pub(crate) mod delivery_work;
 pub(crate) mod diagnosis;
 mod enrollment;
 pub(crate) mod feedback;
+pub(crate) mod insights;
 pub(crate) mod intake;
 mod inventory;
 mod journal;
@@ -151,6 +152,7 @@ struct Shared {
     notices: Mutex<Vec<std::sync::Weak<dyn Fn() + Send + Sync>>>,
     ritual: Mutex<ritual::State>,
     changes: Mutex<changes::State>,
+    insights: Mutex<insights::Shown>,
     desk: Mutex<Desk>,
     epoch: AtomicU64,
     closed: Arc<AtomicBool>,
@@ -504,6 +506,7 @@ impl NativeHost {
             notices: Mutex::default(),
             ritual: Mutex::new(ritual::State::default()),
             changes: Mutex::new(changes::State::default()),
+            insights: Mutex::default(),
             desk: Mutex::new(Desk::native()),
             epoch: AtomicU64::new(0),
             closed: Arc::new(AtomicBool::new(false)),

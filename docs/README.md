@@ -177,7 +177,7 @@ sent again. **Dismiss** takes a failed chat off Needs a look and sends nothing t
 | Sleep, offline work, and closed-lid mode        | [Energy and connectivity](energy.md)          |
 | Failures, diagnostics, and updates              | [Troubleshooting](troubleshooting.md)         |
 
-[Insights](insights.md) covers one-confirmation weekly enable from Automations, review settings with Save and Apply, Tasks-tab decisions and access settings.
+[Insights](insights.md) covers chosen-source reports and findings in Day, and the separate legacy weekly setup.
 
 Pilot runs work locally. Remote devbox execution is retired; saved history and
 drafts are not migrated or submitted elsewhere.

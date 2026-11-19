@@ -28,6 +28,7 @@ import { Problems } from "./Problems";
 import { askRevisit } from "./planCommands";
 import type { Plans } from "./planning";
 import { goalDraft, linkedMission, openNew, openPlan, replacesDraft, requestDraft } from "./planView";
+import { findingWork } from "./insightsWork";
 import { MissionThreadsSection } from "./ThreadScreen";
 import { ToCheck } from "./ToCheck";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
@@ -632,6 +633,10 @@ function Replan(props: { day: Day; page: MissionPage }) {
 		// A linked draft from Feedback keeps New, and the other draft it holds aside: nothing replaces either.
 		if (linkedMission()) {
 			note.set("New has a linked mission draft from Feedback. Plan or discard it there first. Nothing changed.");
+			return;
+		}
+		if (findingWork()) {
+			note.set("New has a draft from Insights. Finish or discard it there first. Nothing changed.");
 			return;
 		}
 		glide();

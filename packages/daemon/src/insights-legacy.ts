@@ -1,6 +1,6 @@
 /** Native-only compatibility reads. These do not transfer ownership or create authority. */
 import { resolve } from "node:path";
-import type { InsightsLegacySelector, OperationHost } from "@pilot/protocol";
+import type { DayInsightsLegacyPage, InsightsLegacySelector, OperationHost } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { InsightsJournal } from "./insights-journal.ts";
 import type { InsightsWorkspaceDb } from "./insights-workspace-store.ts";
@@ -17,6 +17,11 @@ export class InsightsLegacyRecords {
 	private readonly db: Pick<InsightsWorkspaceDb, "one" | "all" | "durable">;
 	constructor(db: Pick<InsightsWorkspaceDb, "one" | "all" | "durable">) {
 		this.db = db;
+	}
+	hasRecords(): boolean {
+		return !!this.db.one(
+			"SELECT 1 FROM (SELECT 1 FROM insights_items UNION ALL SELECT 1 FROM insights_settings UNION ALL SELECT 1 FROM insights_runs) LIMIT 1",
+		);
 	}
 	pin(selector: InsightsLegacySelector, kind: "finding" | "report" | "checkpoint" | "settings", cursor = 0) {
 		if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Conflict("Invalid legacy cursor");
@@ -67,6 +72,90 @@ export class InsightsLegacy {
 	};
 	constructor(deps: InsightsLegacy["deps"]) {
 		this.deps = deps;
+	}
+	/** Host constructs selectors. This discovery does not grant, transfer or read source messages. */
+	async discover(raw?: string): Promise<DayInsightsLegacyPage> {
+		let after: string | null = null,
+			report: string | null = null,
+			kind: "report" | "finding" = "report",
+			row = 0;
+		if (raw !== undefined) {
+			if (raw.length > 512 || !/^[A-Za-z0-9_-]+$/u.test(raw)) throw new Conflict("Invalid legacy discovery cursor");
+			let c: Record<string, unknown>;
+			try {
+				c = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+			} catch {
+				throw new Conflict("Invalid legacy discovery cursor");
+			}
+			if (
+				!c ||
+				Object.keys(c).sort().join(",") !== "after,kind,report,row" ||
+				![c.after, c.report].every((v) => v === null || (typeof v === "string" && /^[0-9a-f-]{36}$/u.test(v))) ||
+				!["report", "finding"].includes(String(c.kind)) ||
+				!Number.isSafeInteger(c.row) ||
+				Number(c.row) < 0
+			)
+				throw new Conflict("Invalid legacy discovery cursor");
+			after = c.after as string | null;
+			report = c.report as string | null;
+			kind = c.kind as "report" | "finding";
+			row = Number(c.row);
+		}
+		try {
+			const selected = this.deps.sessions.insightsLegacyDiscovery(after);
+			if (!selected) {
+				if (after === null && this.deps.records.hasRecords())
+					throw new Conflict("legacy_discovery_identity_unavailable");
+				if (report !== null) throw new Conflict("legacy_discovery_identity_changed");
+				return { schemaVersion: 1, state: "available", reason: null, items: [], nextCursor: null };
+			}
+			if (report !== null && selected.reportSessionId !== report)
+				throw new Conflict("legacy_discovery_identity_changed");
+			const project = this.deps.projects.require(selected.projectId);
+			const selector: InsightsLegacySelector = {
+				schemaVersion: 2,
+				...selected,
+				expectedHome: this.deps.host,
+				context: payloadHash(
+					canonicalJSON([
+						resolve(this.deps.home),
+						this.deps.host,
+						selected.projectId,
+						project.path,
+						selected.missionId,
+					]),
+				),
+			};
+			const projection = await this.page(selector, kind, row);
+			if (!same(selected, this.deps.sessions.insightsLegacyDiscovery(after)))
+				throw new Conflict("legacy_discovery_changed_during_read");
+			let next: { after: string | null; report: string | null; kind: "report" | "finding"; row: number } | null;
+			if (projection.nextCursor !== null)
+				next = { after, report: selected.reportSessionId, kind, row: projection.nextCursor };
+			else if (kind === "report") next = { after, report: selected.reportSessionId, kind: "finding", row: 0 };
+			else
+				next = this.deps.sessions.insightsLegacyDiscovery(selected.reportSessionId)
+					? { after: selected.reportSessionId, report: null, kind: "report", row: 0 }
+					: null;
+			const result: DayInsightsLegacyPage = {
+				schemaVersion: 1,
+				state: "available",
+				reason: null,
+				items: [{ kind, projection }],
+				nextCursor: next ? Buffer.from(JSON.stringify(next)).toString("base64url") : null,
+			};
+			if (Buffer.byteLength(JSON.stringify(result)) > 65536)
+				throw new Conflict("legacy_discovery_response_capacity");
+			return result;
+		} catch (error) {
+			return {
+				schemaVersion: 1,
+				state: "unavailable",
+				reason: error instanceof Conflict ? error.message : "legacy_discovery_unavailable",
+				items: [],
+				nextCursor: null,
+			};
+		}
 	}
 	async page(s: InsightsLegacySelector, kind: "finding" | "report" | "checkpoint" | "settings", cursor = 0) {
 		if (

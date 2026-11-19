@@ -114,6 +114,17 @@ export class InsightsJournal {
 		});
 	}
 	/** Retained intent is a refusal fence, not proof a resource still exists or a grant remains valid. */
+	async freshDayExecutionGuard(knownReports: string[]) {
+		return this.journal.openReader(({ records, failed, pendingKinds }) => {
+			if (failed || [...pendingKinds].some(isLegacyOperation))
+				throw new OperationConflict("legacy_journal_busy_or_unavailable");
+			for (const { operation: op, receipt } of records) {
+				if (!isLegacyOperation(op.kind) || receipt.state === "rejected") continue;
+				if (receipt.state === "pending" || !knownReports.includes(op.targetId))
+					throw new OperationConflict("legacy_execution_not_proven_quiescent");
+			}
+		});
+	}
 	async legacyInsightsGuard(): Promise<() => void> {
 		// Check live reservations synchronously again at the owner transaction boundary.
 		// A prior absent observation is never authority to ignore a later v1 reservation.

@@ -47,6 +47,8 @@ pub(super) struct Journal {
     // Private review traffic has its own fsynced ledger and quota, never the planning/acceptance budget.
     review_file: Option<Box<Journal>>,
     pub result_reviews: BTreeMap<String, super::result_review::Record>,
+    pub insights: BTreeMap<String, super::insights::Record>,
+    insights_reserved: u64,
     pub knowledge: BTreeMap<String, super::knowledge::Record>,
     pub losses: BTreeMap<String, super::update_loss::Record>,
     pub windows: BTreeMap<String, super::window::SavedWindow>,
@@ -68,6 +70,7 @@ pub(super) struct Journal {
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum Entry {
+    Insights(Box<super::insights::Record>),
     ResultReview(Box<super::result_review::Record>),
     Knowledge(Box<super::knowledge::Record>),
     Loss(Box<super::update_loss::Record>),
@@ -95,6 +98,17 @@ fn private(file: &File) -> Result<(), Error> {
 }
 
 impl Journal {
+    #[cfg(test)]
+    pub(super) fn test_fill(&mut self, remaining: u64) {
+        self.bytes = MAX_LEDGER - remaining;
+        self.file.set_len(self.bytes).unwrap();
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_append(&mut self, record: &impl Serialize) -> Result<(), Error> {
+        self.append(record)
+    }
+
     pub(super) fn path(&self) -> &Path {
         &self.path
     }
@@ -173,6 +187,7 @@ impl Journal {
         }
         let mut records: BTreeMap<String, Record> = BTreeMap::new();
         let mut result_reviews: BTreeMap<String, super::result_review::Record> = BTreeMap::new();
+        let mut insights: BTreeMap<String, super::insights::Record> = BTreeMap::new();
         let mut knowledge: BTreeMap<String, super::knowledge::Record> = BTreeMap::new();
         let mut planning: BTreeMap<String, PlanningRecord> = BTreeMap::new();
         let mut attention: BTreeMap<String, AttentionRecord> = BTreeMap::new();
@@ -199,6 +214,20 @@ impl Journal {
                     }
                     continue;
                 }
+                Entry::Insights(record) => {
+                    record.validate().map_err(|_| Error::Storage)?;
+                    if insights
+                        .get(record.id())
+                        .map_or(record.settled(), |old| !record.follows(old))
+                    {
+                        return Err(Error::Storage);
+                    }
+                    insights.insert(record.id().to_owned(), *record);
+                    if insights.len() > MAX_OPERATIONS {
+                        return Err(Error::Storage);
+                    }
+                    continue;
+                }
                 Entry::Knowledge(record) => {
                     record.validate()?;
                     if knowledge
@@ -210,7 +239,7 @@ impl Journal {
                         return Err(Error::Storage);
                     }
                     knowledge.insert(record.knowledge_operation.clone(), *record);
-                    if knowledge.len() > MAX_OPERATIONS {
+                    if insights.len() + knowledge.len() > MAX_OPERATIONS {
                         return Err(Error::Storage);
                     }
                     continue;
@@ -477,9 +506,18 @@ impl Journal {
                 result_reviews.insert(id.clone(), record.clone());
             }
         }
+        let insights_reserved = insights
+            .values()
+            .filter(|r| !r.settled())
+            .try_fold(0, |total, r| Ok(total + r.terminal_reservation()?))?;
+        if bytes + insights_reserved > MAX_LEDGER {
+            return Err(Error::Storage);
+        }
         Ok(Self {
             review_file,
             result_reviews,
+            insights,
+            insights_reserved,
             knowledge,
             losses,
             windows,
@@ -509,6 +547,34 @@ impl Journal {
         self.append(&record)?;
         self.records
             .insert(record.command.operation_id.clone(), record);
+        Ok(())
+    }
+
+    pub fn save_insights(&mut self, record: super::insights::Record) -> Result<(), Error> {
+        record.validate()?;
+        if self
+            .insights
+            .get(record.id())
+            .map_or(record.settled(), |old| !record.follows(old))
+        {
+            return Err(Error::Stale);
+        }
+        if !self.insights.contains_key(record.id()) && self.count() >= MAX_OPERATIONS {
+            return Err(Error::Capacity);
+        }
+        let released = self
+            .insights
+            .get(record.id())
+            .map(|r| r.terminal_reservation())
+            .transpose()?
+            .unwrap_or(0);
+        let reserve = if record.settled() {
+            0
+        } else {
+            record.terminal_reservation()?
+        };
+        self.append_with_insights_reserve(&record, reserve, released)?;
+        self.insights.insert(record.id().to_owned(), record);
         Ok(())
     }
 
@@ -605,6 +671,15 @@ impl Journal {
     }
 
     fn append(&mut self, record: &impl Serialize) -> Result<(), Error> {
+        self.append_with_insights_reserve(record, 0, 0)
+    }
+
+    fn append_with_insights_reserve(
+        &mut self,
+        record: &impl Serialize,
+        added: u64,
+        released: u64,
+    ) -> Result<(), Error> {
         if self.failed {
             return Err(Error::Storage);
         }
@@ -620,6 +695,12 @@ impl Journal {
         if self.bytes + bytes.len() as u64 > MAX_LEDGER {
             return Err(Error::Storage);
         }
+        let reserved = (self.insights_reserved + added)
+            .checked_sub(released)
+            .ok_or(Error::Storage)?;
+        if self.bytes + bytes.len() as u64 + reserved > MAX_LEDGER {
+            return Err(Error::Capacity);
+        }
         // Poison this writer on partial write/fsync failure. Never send after it.
         self.failed = true;
         self.file
@@ -631,6 +712,7 @@ impl Journal {
             return Err(Error::Storage);
         }
         self.bytes += bytes.len() as u64;
+        self.insights_reserved = reserved;
         self.failed = false;
         Ok(())
     }
@@ -673,10 +755,12 @@ impl Journal {
             + self.planning.values().filter(|r| !r.not_sent).count()
             + self.attention.values().filter(|r| !r.not_sent).count()
             + self.knowledge.len()
+            + self.insights.len()
     }
 
     fn count(&self) -> usize {
-        self.knowledge.len()
+        self.insights.len()
+            + self.knowledge.len()
             + self.losses.len()
             + self.windows.len()
             + self.updates.len()

@@ -125,6 +125,8 @@ export function captureView(today?: Today): SavedView {
 		scheduleSettings: savedSchedules(),
 		connectionSettings: savedConnectionDraft(),
 		slackSettings: savedSlackDraft(),
+		insightsDraft: savedInsightsDraft(),
+		insightsWork: savedFindingWork(),
 		knowledge: savedKnowledge(),
 		...thread,
 		...feedback,
@@ -162,6 +164,8 @@ export async function saveForms(day: Day, plans?: Plans): Promise<FormSave> {
 
 /** A fresh window clears only the same view-local state as before. */
 export function startFresh() {
+	restoreInsightsDraft();
+	restoreFindingWork();
 	restoreScopedDrafts();
 	restoreRecoveryNotes([]);
 	resetTodayView();
@@ -193,6 +197,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	restorePlanningPlace(view);
 	restoreChangesView(view, changes);
 	restorePlanningDraft(view);
+	restoreFindingWork(view.insightsWork);
 	restoreTodayView(view);
 	restoreInterviewView(view);
 	restoreRitualView(view, today);
@@ -207,6 +212,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	restoreSchedules(view.scheduleSettings ?? "");
 	restoreConnectionDraft(view.connectionSettings ?? "");
 	restoreSlackDraft(view.slackSettings ?? "");
+	restoreInsightsDraft(view.insightsDraft);
 	restoreKnowledge(view.knowledge ?? "");
 	restoreSettingsPlace(view.settings, settings);
 	restoreFeedbackView(view);
@@ -218,3 +224,5 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	restoreUpdateView(view.update);
 }
 import { captureScopedDrafts, restoreScopedDrafts } from "./ScopedQuestion";
+import { restoreInsightsDraft, savedInsightsDraft } from "./insightsView";
+import { restoreFindingWork, savedFindingWork } from "./insightsWork";

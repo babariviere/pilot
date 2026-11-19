@@ -33,6 +33,7 @@ import {
 } from "./linkedMission";
 import { jumpBack } from "./nav";
 import { newFundingDraft } from "./modelSettingsDraft";
+import { findingGoal, findingWork, restoreOtherDraft } from "./insightsWork";
 import { OpenChatAction } from "./OpenChatAction";
 import { stageMark, stageWord } from "./PlanScreen";
 import { checkCreation, planMission } from "./planCommands";
@@ -292,7 +293,7 @@ function ConfirmStart(props: { plans: Plans }) {
 		<View testID="confirm-start" class="gap-3 rounded-2xl border border-border-strong bg-card px-5 py-4">
 			<Text class="text-sm font-medium text-card-foreground">Start one chat with exactly these words?</Text>
 			<Panel size="sm" selectable>
-				<Text class="text-sm text-foreground">{goalDraft()}</Text>
+				<Text class="text-sm text-foreground">{findingGoal(goalDraft(), "fix")}</Text>
 			</Panel>
 			<View class="gap-1">
 				<Text class="text-xs text-faint">What it may do</Text>
@@ -482,14 +483,24 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 		>
 			<Page gap={8}>
 				<View class="gap-3">
-					<PageTitle title={linked() ? "Plan a linked mission" : "What do you want done?"} />
+					<PageTitle
+						title={
+							linked() || findingWork()?.kind === "plan"
+								? "Plan a linked mission"
+								: findingWork()
+									? "Start a fix"
+									: "What do you want done?"
+						}
+					/>
 					<Text
 						testID={linked() ? "linked-from" : undefined}
 						class="text-sm leading-relaxed text-muted-foreground"
 					>
 						{linked()
 							? `From Feedback: “${linked()?.title ?? ""}”. Plan links the feedback to the mission. Edit the goal first.`
-							: "Say it in your own words. A mission starts with questions to clarify what you want."}
+							: findingWork()
+								? `From Insights: “${findingWork()?.title}”. The finding and its source references stay linked when you edit the goal.`
+								: "Say it in your own words. A mission starts with questions to clarify what you want."}
 					</Text>
 					<TextField
 						testID="goal"
@@ -513,7 +524,26 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 						variant="composer"
 						large
 					/>
-					<If when={linked()} else={<ProjectRow plans={props.plans} />}>
+					<If
+						when={linked()}
+						else={
+							<If when={findingWork()} else={<ProjectRow plans={props.plans} />}>
+								<View class="gap-1">
+									<Text class="text-sm text-muted-foreground">{`Project: ${projectName(chatView(), findingWork()?.projectId ?? "")}`}</Text>
+									<View class="self-start">
+										<Action
+											label="Discard finding draft"
+											disabled={newBusy()}
+											onPress={() => {
+												restoreOtherDraft();
+												void prepareChat(chats);
+											}}
+										/>
+									</View>
+								</View>
+							</If>
+						}
+					>
 						<LinkedScope plans={props.plans} canPlan={canPlan()} />
 					</If>
 					<If when={requestDraft()}>
@@ -567,22 +597,24 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 				<If when={!confirmingStart()}>
 					<View class="gap-3">
 						<View class="flex-row flex-wrap items-center gap-2">
-							<Action
-								variant="primary"
-								label={
-									newBusy()
-										? "Writing questions…"
-										: similar()
-											? "Create another"
-											: linked()
-												? "Plan mission"
-												: "Plan a mission"
-								}
-								disabled={off() || empty() || newBusy() || !canPlan()}
-								onPress={() => {
-									if (canPlan()) void planMission(props.plans, similar());
-								}}
-							/>
+							<If when={findingWork()?.kind !== "fix"}>
+								<Action
+									variant="primary"
+									label={
+										newBusy()
+											? "Writing questions…"
+											: similar()
+												? "Create another"
+												: linked()
+													? "Plan mission"
+													: "Plan a mission"
+									}
+									disabled={off() || empty() || newBusy() || !canPlan()}
+									onPress={() => {
+										if (canPlan()) void planMission(props.plans, similar());
+									}}
+								/>
+							</If>
 							<If
 								when={!linked()}
 								else={
@@ -597,18 +629,20 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 									</View>
 								}
 							>
-								<Action
-									label="Start as one chat"
-									disabled={!canStartChat() || empty() || newBusy()}
-									onPress={() => {
-										newMessage.set("");
-										// A choice whose setup could not be read is read again: passive.
-										const pick = chatPick();
-										if (pick && !chatChoice() && !chatSelecting()) void chooseChat(chats, pick);
-										glide();
-										confirmingStart.set(true);
-									}}
-								/>
+								<If when={findingWork()?.kind !== "plan"}>
+									<Action
+										label={findingWork() ? "Review fix…" : "Start as one chat"}
+										disabled={!canStartChat() || empty() || newBusy()}
+										onPress={() => {
+											newMessage.set("");
+											// A choice whose setup could not be read is read again: passive.
+											const pick = chatPick();
+											if (pick && !chatChoice() && !chatSelecting()) void chooseChat(chats, pick);
+											glide();
+											confirmingStart.set(true);
+										}}
+									/>
+								</If>
 							</If>
 						</View>
 						<If when={similar()}>

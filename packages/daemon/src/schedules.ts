@@ -117,6 +117,7 @@ export interface ScheduleDispatch {
 		revision: number,
 		recurrence?: ScheduleRecurrence,
 	): InsightsReviewDispatch["bounds"];
+	dayInsightsScheduleReady?(id: string, revision: number): boolean;
 	dispatchInsightsOwnerReview?(id: string, request: InsightsReviewDispatch): Promise<InsightsReviewRun>;
 	insightsOwnerReviewStatus?(id: string, runId: string): Promise<InsightsReviewRun | null>;
 	insightsReplacementTarget?(id: string): void;
@@ -602,12 +603,22 @@ export class ScheduleService {
 			}
 		});
 	}
+	ownerSettingsCommitted(): void {
+		this.requestSweep();
+	}
 	private activeItems() {
-		return this.store
-			.pendingItems()
-			.filter(
-				(item) => (this.deps.automationsEnabled?.() ?? true) && !this.missionHeld(this.store.require(item.id)),
+		if (this.deps.automationsEnabled?.() === false) return [];
+		return this.store.pendingItems().filter(({ id }) => {
+			const item = this.store.require(id);
+			return (
+				!this.missionHeld(item) &&
+				(!item.insightsOwnerDestination ||
+					this.deps.sessions.dayInsightsScheduleReady?.(
+						item.insightsOwnerDestination.reportSessionId,
+						item.insightsSettingsRevision ?? 0,
+					) !== false)
 			);
+		});
 	}
 	private missionId(item: ScheduledItem): string | undefined {
 		return item.target.kind === "chat"
@@ -822,6 +833,14 @@ export class ScheduleService {
 		const insights =
 			item.target.kind === "message" ? this.deps.sessions.insightsStatus?.(item.target.sessionId) : undefined;
 		const ownerDestination = item.insightsOwnerDestination;
+		if (
+			ownerDestination &&
+			this.deps.sessions.dayInsightsScheduleReady?.(
+				ownerDestination.reportSessionId,
+				item.insightsSettingsRevision ?? 0,
+			) === false
+		)
+			return;
 		const destination =
 			item.insightsDestination ??
 			(insights
@@ -1614,6 +1633,19 @@ export class ScheduleService {
 		this.store.assertSettled();
 		if (!this.inventoryLoaded) throw new Conflict("schedule_inventory_unavailable");
 		if (this.store.hasLegacyInsightsIntent()) throw new Conflict("legacy_transition_required");
+	}
+	assertLegacyDayQuiescent(expectedHome: ScheduleHome): void {
+		this.assertOpen();
+		this.checkHome(expectedHome, false);
+		this.store.assertSettled();
+		if (!this.inventoryLoaded) throw new Conflict("schedule_inventory_unavailable");
+		for (const rule of this.store.list())
+			if (
+				!rule.insightsOwnerDestination &&
+				(rule.insightsDestination || rule.insightsEnableOperationId || rule.insightsReview) &&
+				!["cancelled", "completed"].includes(rule.state)
+			)
+				throw new Conflict("legacy_schedule_not_quiescent");
 	}
 	assertTransferredLegacy(expectedHome: ScheduleHome, acknowledged: ScheduledItem[], oldId: string): void {
 		this.assertOpen();

@@ -16,6 +16,9 @@ import { DeliveryScreen } from "./DeliveryScreen";
 import type { Day } from "./day";
 import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
 import { FeedbackScreen } from "./FeedbackScreen";
+import { InsightsScreen } from "./InsightsScreen";
+import { openChat } from "./chatView";
+import { canDraftInsight, hasOtherDraft, openFindingDraft } from "./insightsWork";
 import { LinearScreen } from "./LinearScreen";
 import { SlackReportsScreen } from "./SlackReportsScreen";
 import { MissionScreen } from "./MissionScreen";
@@ -111,6 +114,7 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 			untracked(() => {
 				// Today's service read too, at most every 30 s (freshness.ts).
 				props.day.freshness?.focus();
+				props.day.insights?.focus();
 				void rituals.refresh();
 				// Results waiting for a check, looked at again. Passive.
 				void props.day.delivery?.source.readSaved();
@@ -232,9 +236,31 @@ function MainScreens(props: { at: Shown; day: Day; rituals: Rituals; plans?: Pla
 
 function Results(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
 	return (
-		<If when={props.at === "slack"} else={<OtherResults {...props} />}>
+		<If
+			when={props.at === "insights"}
+			else={
+				<If when={props.at === "slack"} else={<OtherResults {...props} />}>
+					<Arrive class="flex-1">
+						<SlackReportsScreen day={props.day} />
+					</Arrive>
+				</If>
+			}
+		>
 			<Arrive class="flex-1">
-				<SlackReportsScreen day={props.day} />
+				<InsightsScreen
+					controls={props.day.insights!}
+					onBack={backFromJump(props)}
+					openChat={props.day.chat ? (id) => openChat(id, "Insights") : undefined}
+					openWork={
+						props.plans
+							? {
+									available: canDraftInsight,
+									wouldReplace: hasOtherDraft,
+									draft: openFindingDraft,
+								}
+							: undefined
+					}
+				/>
 			</Arrive>
 		</If>
 	);

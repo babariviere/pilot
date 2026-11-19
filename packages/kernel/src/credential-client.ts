@@ -172,6 +172,7 @@ export function credentialClient(): CredentialClient | undefined {
 				socket,
 				token,
 				...(process.env.PILOT_FUNDING_REQUIRED === "1" ? { metered: true as const } : {}),
+				...(process.env.PILOT_INSIGHTS_FUNDING_REQUIRED === "1" ? { insightsMetered: true as const } : {}),
 			}),
 		);
 	return clients.get(token)!;
@@ -183,5 +184,6 @@ export function credentialEnvironment(endpoint?: CredentialEndpoint): NodeJS.Pro
 		PILOT_REQUIRE_CREDENTIAL_BROKER: endpoint ? "1" : undefined,
 		PILOT_SHARED_CATALOG_DIR: endpoint?.catalogAgentDir,
 		PILOT_FUNDING_REQUIRED: endpoint?.metered ? "1" : undefined,
+		PILOT_INSIGHTS_FUNDING_REQUIRED: endpoint?.insightsMetered ? "1" : undefined,
 	};
 }

@@ -7,6 +7,7 @@
 // Today's, not the last one used. A started chat uses its choice up.
 import type { ChatMirror, ChatMode, ChatView } from "./chatFeed";
 import { fundingAmount } from "./FundingSettings";
+import { findingGoal, findingWork, restoreOtherDraft } from "./insightsWork";
 import { newFundingDraft } from "./modelSettingsDraft";
 import {
 	chatChoice,
@@ -26,7 +27,7 @@ import { glide } from "./ui";
 /** The newest choice. An answer to an older one is dropped. */
 let selection = 0;
 /** The words each creation of this window sent, by operation: Check clears them from New only if unchanged. */
-const sentWords = new Map<string, string>();
+const sentWords = new Map<string, { goal: string; finding: ReturnType<typeof findingWork> }>();
 
 /** A project's name, or "a project" when Pilot no longer lists it. */
 export function projectName(view: ChatView, projectId: string): string {
@@ -115,11 +116,12 @@ export async function startNewChat(chats: ChatMirror) {
 	newBusy.set(true);
 	newMessage.set("");
 	const goal = goalDraft();
+	const finding = findingWork();
 	const view = chats.view();
 	const where = projectName(view, choice.projectId);
 	try {
-		const r = await chats.source.create(choice, goal);
-		if (r.operationId) sentWords.set(r.operationId, goal);
+		const r = await chats.source.create(choice, findingGoal(goal, "fix"));
+		if (r.operationId) sentWords.set(r.operationId, { goal, finding });
 		if (r.status === "accepted") {
 			glide();
 			confirmingStart.set(false);
@@ -128,6 +130,7 @@ export async function startNewChat(chats: ChatMirror) {
 			// their own. Words changed meanwhile keep the user's choice, with a
 			// new selection.
 			if (goalDraft() === goal) {
+				if (finding?.kind === "fix" && restoreOtherDraft(finding)) return;
 				goalDraft.set("");
 				replacesDraft.set(null);
 				requestDraft.set(null);
@@ -158,12 +161,13 @@ export async function checkNewChat(chats: ChatMirror, operationId: string) {
 	const view = chats.view();
 	const op = view.settled.find((o) => o.operationId === operationId);
 	if (r.status === "accepted") {
-		const words = sentWords.get(operationId);
+		const sent = sentWords.get(operationId);
 		newMessage.set(
 			`The chat in ${projectName(view, op?.projectId ?? "")} started. It works on its own; that is not progress or a result yet.`,
 		);
 		// Its words started: new words need a project of their own.
-		if (words !== undefined && goalDraft() === words) {
+		if (sent && goalDraft() === sent.goal && findingWork() === sent.finding) {
+			if (sent.finding?.kind === "fix" && restoreOtherDraft(sent.finding)) return;
 			goalDraft.set("");
 			replacesDraft.set(null);
 			requestDraft.set(null);

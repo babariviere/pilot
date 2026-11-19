@@ -22,6 +22,8 @@ fn view() -> SavedView {
         chat: None,
         chat_chosen: false,
         linked_mission: String::new(),
+        insights_draft: String::new(),
+        insights_work: String::new(),
         focused: "d-1".into(),
         questions: vec!["export-1/what".into()],
         ritual: "standup/start".into(),
@@ -76,7 +78,9 @@ fn view() -> SavedView {
             "ask\ni1/q1\n\n0\nWhat is NSH?".into(),
         ],
         recovery_notes: vec!["chat-1\n  Corrected scope 日本語\nKeep the copy. ".into()],
-        scoped_drafts: vec![r#"{"target":{"pin":"exact"},"answer":{"text":"日本語","picks":[]}}"#.into()],
+        scoped_drafts: vec![
+            r#"{"target":{"pin":"exact"},"answer":{"text":"日本語","picks":[]}}"#.into(),
+        ],
         feedback_answers: vec!["triage-1/42\n1,2\n  Exact answer 👩🏽‍💻\nsecond line ".into()],
     }
 }

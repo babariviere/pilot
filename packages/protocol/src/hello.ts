@@ -30,6 +30,8 @@ export interface DaemonCapabilities {
 	insightsReplacement?: 1;
 	/** App-owned passive projections and native reservation only, not activation. */
 	insightsWorkspace?: 2;
+	/** Day configuration and passive legacy discovery. Query status for execution support. */
+	dayInsights?: 1;
 	/** Native-confirmed owner execution. Support is neither consent nor Enabled. */
 	insightsWorkspaceExecution?: 2;
 	/** Bounded native-confirmed tracking transfer, with separate fresh execution consent. */

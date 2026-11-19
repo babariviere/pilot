@@ -272,6 +272,14 @@ pub struct SavedView {
     /// and never erases the other draft.
     #[prop(default)]
     pub linked_mission: String,
+    /// Unsent Insights text. Restoring never recreates a review or an operation.
+    #[prop(default)]
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub insights_draft: String,
+    /// Finding references and the previous New draft, with no operation authority.
+    #[prop(default)]
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub insights_work: String,
     /// The Today item the user brought to the front, or empty.
     pub focused: String,
     /// The planning question the user was on in each interview, as "interview/question".
@@ -461,6 +469,8 @@ impl SavedView {
                 .map_or(0, |m| m.mission_id.len() + m.title.len())
             + self.chat.as_ref().map_or(0, |c| c.text_bytes())
             + self.linked_mission.len()
+            + self.insights_draft.len()
+            + self.insights_work.len()
             + self.id.len()
             + self.focused.len()
             + self.ritual.len()
@@ -511,6 +521,14 @@ impl SavedView {
             .iter()
             .all(|y| y.is_finite() && *y >= 0.0 && *y <= 10_000_000.0)
             && self.start <= self.end
+    }
+
+    pub fn insights_draft_valid(&self) -> bool {
+        crate::host::insights::valid_draft(&self.insights_draft)
+    }
+
+    pub fn insights_work_valid(&self) -> bool {
+        crate::host::insights::valid_work_draft(&self.insights_work)
     }
 
     pub fn recovery_notes_valid(&self) -> bool {
@@ -1128,6 +1146,8 @@ impl UpdateDesk {
                 || view.entries() > VIEW_ENTRIES
                 || !view.offsets_valid()
                 || !view.linear_valid()
+                || !view.insights_draft_valid()
+                || !view.insights_work_valid()
                 || !view.preferences_valid()
                 || !view.threads_valid()
                 || !view.question_help_valid()

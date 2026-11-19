@@ -314,6 +314,9 @@ async fn run(
     call.command
         .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
     shared.open()?;
+    if let Command::Insights(request) = &call.command {
+        return super::insights::handle(root, journal, shared, call, request).await;
+    }
     if let Command::ScopedAttention(request) = &call.command {
         let snapshot = super::attention::scoped_attention::handle(
             root,
@@ -719,6 +722,7 @@ async fn run(
     let mut value = Value::Null;
     let mut enrollment = None;
     let work = match &call.command {
+        Command::Insights(_) => unreachable!("Insights uses the profile route"),
         Command::KnowledgeRead(_) | Command::KnowledgeSave(_) | Command::KnowledgeCheck(_) => {
             unreachable!("handled library command")
         }
@@ -978,10 +982,15 @@ async fn run(
             if !decision.can_clarify {
                 return Err(Error::Unavailable);
             }
-            if decision.answers.iter().any(|a| a.state == AnswerState::Unknown) {
+            if decision
+                .answers
+                .iter()
+                .any(|a| a.state == AnswerState::Unknown)
+            {
                 return Err(Error::Unknown);
             }
-            let request = ah::help_request(&read, &r.decision_id, &r.question).map_err(|_| Error::Invalid)?;
+            let request =
+                ah::help_request(&read, &r.decision_id, &r.question).map_err(|_| Error::Invalid)?;
             Some(Work::AttentionSend(request))
         }
         Command::Action { action, ask, text } => {
@@ -1003,8 +1012,11 @@ async fn run(
             } else {
                 // A decision's answer, else one of its clarifications named by its own operation.
                 ah::pending_answer(&ops, id).or_else(|| {
-                    ops.iter()
-                        .find(|op| op["id"] == *id && op["state"] == "unknown" && op["request"]["clarification"] == true)
+                    ops.iter().find(|op| {
+                        op["id"] == *id
+                            && op["state"] == "unknown"
+                            && op["request"]["clarification"] == true
+                    })
                 })
             }
             .ok_or(Error::Unknown)?;

@@ -149,6 +149,8 @@ export interface KernelSpec {
 	role?: import("@pilot/protocol").SessionRole;
 	insightsBinding?: import("@pilot/protocol").InsightsBinding;
 	insightsOwnerBinding?: import("@pilot/protocol").InsightsOwnerBinding;
+	/** One non-reopenable, empty durable context for this host-admitted Day report run. */
+	dayInsightsRunId?: string;
 	/** Host-admitted chat that a diagnostics specialist may inspect. */
 	diagnosticTarget?: DiagnosticTargetReference;
 	/** Host-admitted app scope when no chat is attached. */

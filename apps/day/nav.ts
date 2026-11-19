@@ -14,6 +14,7 @@ import { chatRoute, closeChat } from "./chatView";
 import type { Day } from "./day";
 import { closeDelivery, deliveryRoute, hideInspection } from "./deliveryView";
 import { closeFeedback, feedbackOpen, openFeedback } from "./feedbackView";
+import { closeInsights, insightsOpen } from "./insightsView";
 import { closeLinear, linearOpen, openLinear } from "./linearView";
 import { closeSlack, slackOpen } from "./slackView";
 import { type Plans, planningListShape } from "./planning";
@@ -68,6 +69,7 @@ export type Shown =
 	| "delivery"
 	| "linear"
 	| "slack"
+	| "insights"
 	| "artifacts"
 	| "change"
 	| "changes"
@@ -104,6 +106,7 @@ export function shown(places: Places): Shown {
 	if (change) return change.kind === "change" ? "change" : "changes";
 	const plan = places.plans ? planRoute() : null;
 	if (plan) return plan.kind;
+	if (places.day.insights && insightsOpen()) return "insights";
 	const mission = route();
 	if (mission && places.day.threads && threadRoute()?.missionId === mission) return "thread";
 	if (mission) return "mission";
@@ -151,6 +154,8 @@ export function backTarget(places: Places): Back | null {
 			return to("Today", closeLinear);
 		case "slack":
 			return to("Today", closeSlack);
+		case "insights":
+			return to("Today", closeInsights);
 		case "artifacts":
 			return to("Today", closeArtifacts);
 		case "change":
@@ -158,7 +163,7 @@ export function backTarget(places: Places): Back | null {
 		case "changes":
 			return to("Today", () => changesRoute.set(null));
 		case "new":
-			return to("Today", closePlanning);
+			return to(insightsOpen() ? "Insights" : "Today", closePlanning);
 		case "plan": {
 			const plan = planRoute();
 			return plan?.kind === "plan" ? planBack(places.day, plan.missionId) : to("Today", closePlanning);
@@ -183,6 +188,7 @@ function closePlaces() {
 	scopedQuestion.set(null);
 	destinationProject.set("");
 	closeSlack();
+	closeInsights();
 	schedulesOpen.set(false);
 	closeUpdate();
 	closeRitual();
@@ -251,6 +257,7 @@ export function jump(places: Places, open: () => void) {
 	const feedback = feedbackOpen();
 	const linear = linearOpen();
 	const slack = slackOpen();
+	const insights = insightsOpen();
 	const artifacts = artifactsOpen();
 	const update = updateOpen();
 	const detail = searchDetail();
@@ -274,6 +281,7 @@ export function jump(places: Places, open: () => void) {
 		feedback: "Feedback",
 		linear: "Linear issues",
 		slack: "Slack reports",
+		insights: "Insights",
 		artifacts: "Artifacts",
 		update: "Update",
 		changes: "Changes",
@@ -313,6 +321,7 @@ export function jump(places: Places, open: () => void) {
 				feedbackOpen.set(feedback);
 				linearOpen.set(linear);
 				slackOpen.set(slack);
+				insightsOpen.set(insights);
 				artifactsOpen.set(artifacts);
 				updateOpen.set(update);
 				searchDetail.set(detail);
@@ -380,4 +389,10 @@ export function goSchedules() {
 	goHome();
 	openSettings();
 	schedulesOpen.set(true);
+}
+
+/** Opens Insights without reading source chats or starting a report. */
+export function goInsights() {
+	goHome();
+	insightsOpen.set(true);
 }

@@ -1,5 +1,29 @@
 # Insights
 
+## Pilot Day
+
+Open **Insights** from the command palette. In **Settings**, choose the report
+project and model, the source projects, and both spending limits. Review the
+settings before applying them. Setup enables manual reports without starting
+one. After setup, you can choose a weekly day, time and time zone. Applying
+settings while paused does not resume reports.
+
+**Reports** shows samples, gaps and evidence links. All active chats in the
+chosen projects are eligible unless excluded. Archived chats qualify for 24
+hours after archive; earlier messages in an eligible chat may still be read.
+The selected model provider processes sanitized excerpts, which can still
+contain private project text. The two limits use catalog estimates, not bills:
+each request must fit both the report budget and the shared UTC calendar-month
+budget. Insights does not use the small background-work allowance.
+
+**Findings** opens the usual fix or mission draft, with source references.
+Only an explicit Start or Plan begins that work. Shipping is not benefit
+verification; mark the benefit verified only after checking it yourself.
+Earlier history is read-only and does not transfer source access or schedules.
+See the [Day service contract](technical/day-insights-wire.md).
+
+## Legacy desktop
+
 **Status: weekly Insights can be enabled from Automations. Review settings are editable; Apply uses them.**
 
 The app-owned workspace backend is a separate foundation. It does not yet replace these

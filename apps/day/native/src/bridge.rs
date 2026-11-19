@@ -18,6 +18,14 @@ pub const MAX_REQUEST: usize = 65_536;
 pub const MAX_RESPONSE: usize = 16 * 1024 * 1024;
 /// The complete native method allowlist. No prefix or generic request method.
 pub const METHODS: &[&str] = &[
+    "day.insights.read",
+    "day.insights.list",
+    "day.insights.item",
+    "day.insights.models",
+    "day.insights.history",
+    "day.insights.prepare",
+    "day.insights.confirm",
+    "day.insights.check",
     "day.projects.read",
     "day.projects.setup",
     "day.projects.preview",
@@ -282,6 +290,7 @@ struct Envelope {
 }
 
 pub(crate) enum Command {
+    Insights(crate::host::insights::Request),
     TodayScope(crate::host::today_scope::Request),
     Search(crate::host::search::Request),
     NavigationProject,
@@ -575,6 +584,15 @@ fn exact<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Error> {
 fn command(name: &str, args: Value) -> Result<Command, Error> {
     use Command as C;
     Ok(match name {
+        "day.insights.read"
+        | "day.insights.list"
+        | "day.insights.item"
+        | "day.insights.models"
+        | "day.insights.history"
+        | "day.insights.prepare"
+        | "day.insights.confirm"
+        | "day.insights.check" => C::Insights(crate::host::insights::Request::parse(name, args)?),
+
         "day.projects.read" => {
             if args != json!({}) {
                 return Err(Error::Invalid);
@@ -634,7 +652,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             if r.message.len() > crate::host::new_chat::RECOVERY_INPUT_BYTES {
                 return Err(Error::Invalid);
             }
-            if name == "day.chat.handoff" { C::ChatHandoff(r) } else { C::ChatRecover(r) }
+            if name == "day.chat.handoff" {
+                C::ChatHandoff(r)
+            } else {
+                C::ChatRecover(r)
+            }
         }
         "day.chat.continue" | "day.chat.dismiss" => {
             #[derive(Deserialize)]

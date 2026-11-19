@@ -98,7 +98,7 @@ export function artifactPreviewsAvailable(): boolean {
  * call may write to Pilot, so a screen agent's step never sends one (docs/technical/day-screen-agent.md).
  */
 const PASSIVE =
-	/\.(read|snapshot|check|checkNew|checkWork|checkRevision|inventory|inventorySnapshot|prepare|select|chat|chatSnapshot|history|source|list|scope|refresh|leave|close|preview|artifact|saved|results)$/;
+	/\.(read|snapshot|check|checkNew|checkWork|checkRevision|inventory|inventorySnapshot|prepare|select|chat|chatSnapshot|history|source|list|scope|refresh|leave|close|preview|artifact|saved|results|models)$/;
 
 /** Whether call `name` only reads. */
 export function passiveCall(name: string): boolean {

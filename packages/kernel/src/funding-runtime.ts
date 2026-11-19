@@ -13,6 +13,8 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { FundingTokens } from "@pilot/protocol";
 
 export interface FundingAdmission {
+	/** Day evidence/authority must be rechecked after any subscription wait, immediately before dispatch. */
+	waitBeforeReserve?: true;
 	reserve(id: string, model: Model<Api>, bound: FundingBound): Promise<void>;
 	settle(id: string, usage: FundingTokens): Promise<void>;
 }
@@ -135,8 +137,10 @@ export function installFundingRuntime(runtime: ModelRuntime, admission: FundingA
 								bound = {
 									hold: `Allowance hold: output limit is ${limit} tokens; got ${bound.outputTokens}. Choose a model that supports this bound.`,
 								};
+							if (admission.waitBeforeReserve) await subscription.wait(physical.provider, options?.signal);
+							options?.signal?.throwIfAborted();
 							await admission.reserve(id, physical, bound);
-							await subscription.wait(physical.provider, options?.signal);
+							if (!admission.waitBeforeReserve) await subscription.wait(physical.provider, options?.signal);
 							options?.signal?.throwIfAborted();
 							reserved = { id, provider: physical.provider, model: physical.id };
 							return final;

@@ -50,6 +50,8 @@ import type {
 import type { MissionRevisionDelta, MissionRevisionProposal } from "../../protocol/src/mission-revision.ts";
 import { ATTENTION_SCHEMA, AttentionStore } from "./attention-store.ts";
 import { CHANGE_LANDING_SCHEMA, ChangeLandingStore } from "./change-landing-store.ts";
+import { DAY_INSIGHTS_ALLOWANCE_SCHEMA, DayInsightsAllowance } from "./day-insights-allowance.ts";
+import { DAY_INSIGHTS_SCHEMA, DayInsightsStore } from "./day-insights-store.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { HUMAN_REVIEW_SCHEMA, HumanReviewStore } from "./human-review-store.ts";
@@ -743,6 +745,20 @@ export class MissionStore {
 	});
 
 	/** App-owned Insights records never project to ordinary missions or tasks. */
+	readonly dayInsights = new DayInsightsStore({
+		all: (sql, ...params) => this.all(sql, ...params),
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		durable: () => this.durable(),
+	});
+	readonly dayInsightsAllowance = new DayInsightsAllowance({
+		all: (sql, ...params) => this.all(sql, ...params),
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		durable: () => this.durable(),
+	});
 	readonly insightsWorkspace = new InsightsWorkspaceStore({
 		all: (sql, ...params) => this.all(sql, ...params),
 		one: (sql, ...params) => this.one(sql, ...params),
@@ -1020,6 +1036,8 @@ export class MissionStore {
 		this.db.exec(INSIGHTS_SCHEMA);
 		this.db.exec(INSIGHTS_WORKSPACE_SCHEMA);
 		this.db.exec(INSIGHTS_OWNER_SCHEMA);
+		this.db.exec(DAY_INSIGHTS_SCHEMA);
+		this.db.exec(DAY_INSIGHTS_ALLOWANCE_SCHEMA);
 		this.db.exec(INSIGHTS_TRANSITION_SCHEMA);
 		this.db.exec(WORKFLOW_CONFIRMATION_SCHEMA);
 		this.db.exec(MISSION_INTERVIEW_SCHEMA);

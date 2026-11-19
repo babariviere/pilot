@@ -28,12 +28,16 @@ impl Fixture {
         Self::with_daemon("day-intake.ts")
     }
     fn with_daemon(fixture: &str) -> Self {
-        let mut child = Command::new("node")
-            .arg(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../../packages/daemon/src/fixtures")
-                    .join(fixture),
-            )
+        let mut command = Command::new("node");
+        command.arg(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../packages/daemon/src/fixtures")
+                .join(fixture),
+        );
+        Self::with_command(command)
+    }
+    fn with_command(mut command: Command) -> Self {
+        let mut child = command
             .env_remove("NODE_TEST_CONTEXT")
             .env_remove("PILOT_HOME")
             .env_remove("PILOT_PORT")

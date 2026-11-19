@@ -380,6 +380,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		deliveredArtifacts,
 		nativeAttention,
 		insightsWorkspace,
+		dayInsights,
 		insightsTransition,
 		insightsOwner,
 		insightsLegacy,
@@ -802,6 +803,29 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				throw new HttpError(400, "Invalid legacy selector");
 			}
 			return json(res, 200, await insightsTransition.preview(selector));
+		}
+		if (parts[1] === "insights" && parts[2] === "day") {
+			res.setHeader("cache-control", "no-store");
+			if (!dayInsights || !nativeAuthority) throw new ServiceUnavailable("Day Insights unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			const legacy = parts.length === 4 && parts[3] === "legacy";
+			for (const key of url.searchParams.keys())
+				if (!legacy || key !== "cursor" || url.searchParams.getAll(key).length !== 1)
+					throw new HttpError(400, "Invalid Day Insights query");
+			if (parts.length === 3) {
+				if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+				return json(res, 200, await dayInsights.status());
+			}
+			if (parts.length === 4 && parts[3] === "preflight") {
+				if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
+				return json(res, 200, await dayInsights.preflight(await readJson(req)));
+			}
+			if (legacy) {
+				if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+				if (!insightsLegacy) throw new ServiceUnavailable("Legacy Insights unavailable");
+				return json(res, 200, await insightsLegacy.discover(url.searchParams.get("cursor") ?? undefined));
+			}
+			throw new HttpError(404, "Not found");
 		}
 		if (parts[1] === "insights" && parts[2] === "workspace" && parts[3] === "execution") {
 			res.setHeader("cache-control", "no-store");
@@ -1277,7 +1301,12 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					end();
 				}
 			}
-			if (operation?.kind === CHAT_CONTINUE || operation?.kind === CHAT_RECOVER || operation?.kind === CHAT_REPLY || operation?.kind === CHAT_HANDOFF) {
+			if (
+				operation?.kind === CHAT_CONTINUE ||
+				operation?.kind === CHAT_RECOVER ||
+				operation?.kind === CHAT_REPLY ||
+				operation?.kind === CHAT_HANDOFF
+			) {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native chat continue unavailable");
 				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
@@ -1375,7 +1404,10 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					end();
 				}
 			}
-			if (operation?.kind === "insights-workspace-transfer" && parts[2] === "receipt") {
+			if (
+				(operation?.kind === "insights-workspace-transfer" || operation?.kind === "day-insights") &&
+				parts[2] === "receipt"
+			) {
 				if (!nativeAuthority) throw new ServiceUnavailable("Native transfer lookup unavailable");
 				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			}
@@ -1390,6 +1422,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				throw new HttpError(410, "Remote devbox operations are retired; stored receipts are retained");
 			if (
 				(operation?.kind === "repair-create" ||
+					operation?.kind === "day-insights" ||
 					isInsightsOperation(operation?.kind) ||
 					isInsightsWorkspaceOperation(operation?.kind) ||
 					isInsightsOwnerOperation(operation?.kind) ||
@@ -1406,6 +1439,15 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				parts[2] === "receipt"
 					? await journal.lookup(operation)
 					: await journal.execute(operation, async (op, entry) => {
+							if (op.kind === "day-insights") {
+								if (!dayInsights) throw new OperationRejected("Day Insights unavailable");
+								const end = mutations.begin({ kind: "operation", id: op.operationId });
+								try {
+									return await dayInsights.admit(op, entry.firstEntry);
+								} finally {
+									end();
+								}
+							}
 							if (isInsightsOwnerOperation(op.kind)) {
 								if (!insightsOwner) throw new OperationRejected("Owner Insights execution unavailable");
 								const end = mutations.begin({ kind: "operation", id: op.operationId });
@@ -1442,6 +1484,10 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					return json(res, 200, { state: "unknown" });
 			}
 			res.setHeader("cache-control", "no-store");
+			if (operation.kind === "day-insights" && parts[2] === "receipt" && dayInsights) {
+				const superseded = await dayInsights.supersededReceipt(operation);
+				if (superseded) return json(res, 200, superseded);
+			}
 			return json(res, 200, receipt ?? { state: "unknown" });
 		}
 		if (parts[1] === "review" && parts[2] === "requests") {
@@ -1542,6 +1588,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					insightsApply: insightsApply && nativeAuthority ? 1 : undefined,
 					insightsReplacement: insightsReplacement && nativeAuthority ? 1 : undefined,
 					insightsWorkspace: insightsWorkspace && nativeAuthority ? 2 : undefined,
+					dayInsights: dayInsights && nativeAuthority ? 1 : undefined,
 					insightsWorkspaceExecution: insightsOwner && nativeAuthority ? 2 : undefined,
 					insightsWorkspaceTransition: insightsTransition && nativeAuthority ? 2 : undefined,
 					automations: chatSettings?.automationsEnabled() ? 1 : undefined,
@@ -2572,11 +2619,13 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				await userFeedback.page(
 					url.searchParams.get("before") ?? undefined,
 					url.searchParams.get("limit") ?? undefined,
-					resultKind === null ? undefined : {
-						kind: resultKind,
-						id: url.searchParams.get("resultId") ?? "",
-						projectId: url.searchParams.get("projectId") ?? "",
-					},
+					resultKind === null
+						? undefined
+						: {
+								kind: resultKind,
+								id: url.searchParams.get("resultId") ?? "",
+								projectId: url.searchParams.get("projectId") ?? "",
+							},
 				),
 			);
 		}

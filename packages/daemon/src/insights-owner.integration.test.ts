@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
+	createAssistantMessageEventStream,
 	fauxAssistantMessage,
 	fauxProvider,
 	fauxToolCall,
@@ -18,9 +19,14 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import type { DurableOperation, ModelOption } from "@pilot/protocol";
+import { CredentialClient } from "../../kernel/src/credential-client.ts";
+import { type DayInsightsReservation, installDayInsightsRuntime } from "../../kernel/src/day-insights-runtime.ts";
 import { NativeAdapter } from "../../kernel/src/native-adapter.ts";
 import { KernelSession } from "../../kernel/src/session.ts";
 import { openSessionStorage } from "../../kernel/src/storage.ts";
+import { CredentialBroker } from "./credential-broker.ts";
+import { DayInsights } from "./day-insights.ts";
+import { DayInsightsExecution } from "./day-insights-execution.ts";
 import { Conflict } from "./errors.ts";
 import { InsightsOwner, isInsightsOwnerOperation } from "./insights-owner.ts";
 import { InsightsWorkspace } from "./insights-workspace.ts";
@@ -164,7 +170,7 @@ async function fixture(
 	};
 }
 
-async function seedSource(f: Awaited<ReturnType<typeof fixture>>) {
+async function seedSource(f: Awaited<ReturnType<typeof fixture>>, archivedAt?: string, marker = "", role?: "insights") {
 	const sourceId = randomUUID(),
 		dir = join(f.home, "sessions", sourceId);
 	await mkdir(dir, { recursive: true });
@@ -176,6 +182,8 @@ async function seedSource(f: Awaited<ReturnType<typeof fixture>>) {
 		cwd: f.project.path,
 		createdAt: 1,
 		updatedAt: 1,
+		...(archivedAt === undefined ? {} : { archivedAt }),
+		...(role === undefined ? {} : { role }),
 	};
 	// Load an actual metadata file through a fresh manager rather than fabricating ready metadata.
 	const { writeFile } = await import("node:fs/promises");
@@ -188,7 +196,7 @@ async function seedSource(f: Awaited<ReturnType<typeof fixture>>) {
 			for (let n = 0; n < 10; n++)
 				await tx.appendEntry(root.id, {
 					kind: "pi.user",
-					model: [{ role: "user", content: `Synthetic correction ${n}`, timestamp: 1 }],
+					model: [{ role: "user", content: `Synthetic correction ${n} ${marker}`, timestamp: 1 }],
 				});
 		}, context);
 	} finally {
@@ -200,6 +208,429 @@ async function seedSource(f: Awaited<ReturnType<typeof fixture>>) {
 	const sourceBytes = await readFile(join(dir, "meta.json"));
 	return { sourceId, dir, sourceBytes };
 }
+
+async function dayRuntimeFixture(t: TestContext) {
+	const f = await fixture(t);
+	const settings: import("@pilot/protocol").DayInsightsSettings = {
+		model: model.id,
+		thinking: "high",
+		source: { projects: [f.project.id], excludeProjects: [], excludeSessions: [] },
+		weekly: null,
+		allowance: { perReportMicros: 1000000, monthlyMicros: 10000000, basis: "catalog_estimate" },
+	};
+	const day = new DayInsights({
+		home: f.home,
+		host,
+		projects: f.projects,
+		models: f.models,
+		store: f.missions.dayInsights,
+		owners: f.missions.insightsOwner,
+		workspace: f.missions.insightsWorkspace,
+		sessions: f.sessions,
+		allowance: f.missions.dayInsightsAllowance,
+		admissionEpoch: f.sessions.insightsAdmissionEpoch,
+		runtime: new DayInsightsExecution({
+			sessions: f.sessions,
+			owners: f.missions.insightsOwner,
+			store: f.missions.dayInsights,
+			schedules: f.schedules,
+			journal: f.journal,
+			models: f.models,
+		}),
+	});
+	f.sessions.dayInsights = day;
+	const intent = async (
+		action: import("@pilot/protocol").DayInsightsAction,
+		config: typeof settings | null = null,
+	) => {
+		const review = await day.preflight({
+			action,
+			expectedRevision: (await day.status()).revision,
+			projectId: f.project.id,
+			settings: config,
+		});
+		assert.ok(review.payload, JSON.stringify(review));
+		return f.operation("day-insights", review.payload, f.owner.workspaceId);
+	};
+	const run = (op: DurableOperation) => f.journal.execute(op, (op, entry) => day.admit(op, entry.firstEntry));
+	assert.equal((await run(await intent("apply", settings))).state, "accepted");
+	return { ...f, day, settings, intent, runDay: run };
+}
+
+test("Day Pause fences an older Apply across awaits and its generation cannot reactivate", async (t) => {
+	const f = await dayRuntimeFixture(t);
+	let arrived!: () => void, release!: () => void;
+	const entered = new Promise<void>((r) => {
+			arrived = r;
+		}),
+		hold = new Promise<void>((r) => {
+			release = r;
+		});
+	t.after(release);
+	const original = f.missions.insightsOwner.prepareDay;
+	const fault = t.mock.method(f.missions.insightsOwner, "prepareDay", async (...args: Parameters<typeof original>) => {
+		await original.apply(f.missions.insightsOwner, args);
+		arrived();
+		await hold;
+	});
+	const apply = await f.intent("apply", {
+		...f.settings,
+		allowance: { ...f.settings.allowance, perReportMicros: 2000000 },
+	});
+	const pending = f.runDay(apply);
+	await entered;
+	const pause = await f.intent("pause");
+	assert.equal((await f.runDay(pause)).state, "accepted");
+	assert.equal(f.missions.dayInsights.control(f.owner.workspaceId)?.enabled, 0);
+	release();
+	assert.equal((await pending).state, "pending");
+	fault.mock.restore();
+	assert.equal(f.missions.insightsOwner.current(f.authority)?.state, "paused");
+	const superseded = await f.day.supersededReceipt(apply);
+	assert.equal(superseded?.state, "rejected");
+	assert.equal(superseded?.reason, "day_insights_superseded_by_pause");
+	assert.deepEqual(superseded?.result, {
+		state: "superseded",
+		pauseOperationId: pause.operationId,
+		execution: "not_inferred",
+	});
+	assert.equal((await f.runDay(apply)).state, "rejected", "Superseded effects never execute again");
+	assert.equal((await f.day.status()).paused, true);
+	assert.equal((await f.runDay(await f.intent("resume"))).state, "accepted");
+});
+
+test("Day schedule cannot claim an occurrence before exact Apply commit", async (t) => {
+	const f = await dayRuntimeFixture(t);
+	let arrived!: () => void, release!: () => void;
+	const entered = new Promise<void>((r) => {
+			arrived = r;
+		}),
+		hold = new Promise<void>((r) => {
+			release = r;
+		});
+	t.after(release);
+	const configure = f.missions.dayInsights.configure;
+	const fault = t.mock.method(f.missions.dayInsights, "configure", async (...args: Parameters<typeof configure>) => {
+		arrived();
+		await hold;
+		return configure.apply(f.missions.dayInsights, args);
+	});
+	const apply = await f.intent("apply", { ...f.settings, weekly: { day: 3, time: "12:00", timezone: "UTC" } });
+	const pending = f.runDay(apply);
+	await entered;
+	f.schedules.start();
+	await f.due();
+	assert.equal(f.workers.length, 0);
+	assert.equal(f.schedules.store.require(f.owner.scheduleId).runs?.length, 0);
+	assert.equal(f.sessions.dayInsightsScheduleReady(f.owner.reportSessionId, 2), false);
+	release();
+	assert.equal((await pending).state, "accepted");
+	fault.mock.restore();
+	await f.schedules.signal({ type: "online", online: true });
+	assert.equal(f.workers.length, 1);
+	assert.equal(f.schedules.store.require(f.owner.scheduleId).runs?.length, 1);
+	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
+});
+
+test("Day prepared excerpts expire before model-facing disclosure and final payload reservation", async (t) => {
+	const f = await dayRuntimeFixture(t);
+	const clock = Date.now();
+	await seedSource(f, new Date(clock - 23 * 3600000).toISOString(), "AGE_LIMIT_MARKER");
+	const run = await f.intent("run");
+	assert.equal((await f.runDay(run)).state, "accepted");
+	assert.equal((await f.day.status()).running, true);
+	const before = Number(f.missions["one"]("SELECT COUNT(*) n FROM day_insights_allowance")!.n);
+	const time = t.mock.method(Date, "now", () => clock + 2 * 3600000);
+	const physical = {
+		id: "terra",
+		provider: "synthetic",
+		api: "anthropic-messages",
+		contextWindow: 100,
+		maxTokens: 20,
+		cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 1 },
+	};
+	await assert.rejects(
+		f.day.fundingRequest(
+			f.owner.reportSessionId,
+			{
+				op: "funding-reserve",
+				namespace: "pi",
+				key: "expired-before-payload",
+				value: { provider: physical.provider, model: physical.id, api: physical.api, outputTokens: 20 },
+			},
+			{ fundingModel: async () => physical } as unknown as Pick<
+				import("./shared-model-catalog.ts").SharedCatalogService,
+				"fundingModel"
+			>,
+		),
+		/eligibility_changed/,
+	);
+	assert.equal(Number(f.missions["one"]("SELECT COUNT(*) n FROM day_insights_allowance")!.n), before);
+	assert.equal((await f.day.status()).running, false);
+	assert.match((await f.day.status()).holdReason!, /eligibility_changed/);
+	await assert.rejects(
+		f.sessions.insightsOwnerBacklog(f.owner.reportSessionId, { action: "review_context", cursor: 0 }),
+		/run_not_active/,
+	);
+	const packet = JSON.parse(
+		String(f.missions["one"]("SELECT packet FROM insights_owner_runs WHERE run_id=?", run.operationId)!.packet),
+	);
+	assert.ok(packet.gaps.some((g: string) => g.includes("withheld before delivery")));
+	time.mock.restore();
+	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
+});
+
+test("Day denies metrics and other report engines while preserving passive history", async (t) => {
+	const f = await dayRuntimeFixture(t);
+	const engine = await seedSource(f, undefined, "OTHER_INSIGHTS_ENGINE_MARKER", "insights");
+	const source = await seedSource(f);
+	assert.equal(
+		f.day.sourceAllowed({ id: engine.sourceId, projectId: f.project.id, role: "insights" }, Date.now()),
+		false,
+	);
+	const run = await f.intent("run");
+	assert.equal((await f.runDay(run)).state, "accepted");
+	assert.equal(f.specs.at(-1)?.scopedMetrics, undefined);
+	assert.throws(
+		() =>
+			f.sessions["scopedMetrics"](f.owner.reportSessionId, { action: "scoped_metrics", sessionId: source.sourceId }),
+		/not admitted/,
+	);
+	const packet = String(
+		f.missions["one"]("SELECT packet FROM insights_owner_runs WHERE run_id=?", run.operationId)!.packet,
+	);
+	assert.ok(!packet.includes("OTHER_INSIGHTS_ENGINE_MARKER"));
+	assert.ok((await f.stored(engine.sourceId)).role === "insights", "Passive old metadata is kept");
+	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
+	assert.equal(await f.day.supersededReceipt(run), null, "Committed Run reservation receipts are never superseded");
+});
+
+test("Day idle without report settles both stores and permits only a distinct run", async (t) => {
+	const f = await dayRuntimeFixture(t);
+	const op = await f.intent("run");
+	assert.equal((await f.runDay(op)).state, "accepted");
+	const worker = f.workers.at(-1)!;
+	worker.state = "idle";
+	worker.busy = false;
+	worker["onPacket"]({ type: "working", working: false });
+	await f.missions.durable();
+	assert.equal(f.missions.dayInsights.run(op.operationId)?.state, "held");
+	assert.equal(
+		f.missions["one"]("SELECT state FROM insights_owner_runs WHERE run_id=?", op.operationId)?.state,
+		"held",
+	);
+	assert.equal((await f.day.status()).uncertainOperationId, null);
+	const next = await f.intent("run");
+	assert.notEqual(next.operationId, op.operationId);
+	assert.equal((await f.runDay(next)).state, "accepted");
+	assert.equal(f.workers.length, 2);
+	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
+});
+
+test("Day unavailable input placement stays uncertain until native Pause", async (t) => {
+	const f = await dayRuntimeFixture(t);
+	const fault = t.mock.method(f.sessions, "dispatchInsightsOwnerReview", async () => {
+		throw new Error("Synthetic lost placement ACK");
+	});
+	const op = await f.intent("run");
+	assert.equal((await f.runDay(op)).state, "accepted");
+	fault.mock.restore();
+	assert.equal(f.missions.dayInsights.run(op.operationId)?.state, "unknown");
+	assert.equal((await f.day.status()).uncertainOperationId, op.operationId);
+	assert.equal(
+		(
+			await f.day.preflight({
+				action: "run",
+				expectedRevision: (await f.day.status()).revision,
+				projectId: f.project.id,
+				settings: null,
+			})
+		).state,
+		"blocked",
+	);
+	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
+});
+
+test("Day manual Apply starts no worker; explicit Run uses closed reader, allowances, Pause and distinct Resume", async (t) => {
+	const f = await fixture(t);
+	const runtime = new DayInsightsExecution({
+		sessions: f.sessions,
+		owners: f.missions.insightsOwner,
+		store: f.missions.dayInsights,
+		schedules: f.schedules,
+		journal: f.journal,
+		models: f.models,
+	});
+	const day = new DayInsights({
+		home: f.home,
+		host,
+		projects: f.projects,
+		models: f.models,
+		store: f.missions.dayInsights,
+		owners: f.missions.insightsOwner,
+		workspace: f.missions.insightsWorkspace,
+		runtime,
+		sessions: f.sessions,
+		allowance: f.missions.dayInsightsAllowance,
+		admissionEpoch: f.sessions.insightsAdmissionEpoch,
+	});
+	f.sessions.dayInsights = day;
+	const settings: import("@pilot/protocol").DayInsightsSettings = {
+		model: model.id,
+		thinking: "high",
+		source: { projects: [f.project.id], excludeProjects: [], excludeSessions: [] },
+		weekly: null,
+		allowance: { perReportMicros: 1000000, monthlyMicros: 10000000, basis: "catalog_estimate" },
+	};
+	const submit = async (
+		action: import("@pilot/protocol").DayInsightsAction,
+		config: typeof settings | null = null,
+	) => {
+		const review = await day.preflight({
+			action,
+			expectedRevision: (await day.status()).revision,
+			projectId: f.project.id,
+			settings: config,
+		});
+		assert.ok(review.payload, JSON.stringify(review));
+		const op = f.operation("day-insights", review.payload, f.owner.workspaceId);
+		const receipt = await f.journal.execute(op, (op, entry) => day.admit(op, entry.firstEntry));
+		assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+		return op;
+	};
+	await submit("apply", settings);
+	assert.equal(f.workers.length, 0);
+	assert.equal(f.schedules.store.list().length, 0);
+	const { sourceBytes, dir } = await seedSource(f);
+	const recent = await seedSource(f, new Date(Date.now() - 3600000).toISOString());
+	const expired = await seedSource(f, new Date(Date.now() - 90000000).toISOString());
+	const excluded = await seedSource(f);
+	settings.source.excludeSessions = [excluded.sourceId];
+	await submit("apply", settings);
+	const op = await submit("run");
+	assert.equal(f.workers.length, 1);
+	assert.equal((await day.status()).running, true);
+	let cursor: number | null = 0,
+		evidence = 0;
+	const seen = new Set<string>();
+	do {
+		const page = (await f.sessions.insightsOwnerBacklog(f.owner.reportSessionId, {
+			action: "review_context",
+			cursor,
+		})) as { nextCursor: number | null; evidence: unknown; gaps: string[] };
+		assert.ok(page.gaps.length);
+		if (page.evidence) {
+			evidence++;
+			seen.add((page.evidence as { sessionId: string }).sessionId);
+		}
+		cursor = page.nextCursor;
+	} while (cursor !== null);
+	assert.ok(evidence > 0);
+	assert.ok(seen.has(recent.sourceId), "Recently archived chat includes its old messages");
+	assert.ok(!seen.has(expired.sourceId));
+	assert.ok(!seen.has(excluded.sourceId));
+	assert.deepEqual(await readFile(join(dir, "meta.json")), sourceBytes);
+	const physical = {
+		id: "terra",
+		provider: "synthetic",
+		api: "anthropic-messages",
+		contextWindow: 100,
+		maxTokens: 20,
+		cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 1 },
+	};
+	const catalog = { fundingModel: async () => physical } as unknown as Pick<
+		import("./shared-model-catalog.ts").SharedCatalogService,
+		"fundingModel"
+	>;
+	const broker = new CredentialBroker(join(f.home, "synthetic-credentials"));
+	await broker.start();
+	broker.fundingRequest = async (binding, request) => {
+		assert.equal(binding, f.owner.reportSessionId);
+		return day.fundingRequest(f.owner.reportSessionId, request, catalog);
+	};
+	const client = new CredentialClient(broker.grant(false, undefined, f.owner.reportSessionId));
+	t.after(async () => {
+		client.close();
+		await broker.close();
+	});
+	const funded = await client.request({
+		op: "funding-reserve",
+		namespace: "pi",
+		key: "request-one",
+		value: { provider: physical.provider, model: physical.id, api: physical.api, outputTokens: 20 },
+	});
+	assert.deepEqual(funded, { requestId: "request-one", perReportReserved: true, monthlyReserved: true });
+	assert.ok((await day.status()).remaining.uncertainMicros! > 0);
+	await client.request({
+		op: "funding-settle",
+		namespace: "pi",
+		key: "request-one",
+		value: { input: 5, output: 2, cacheRead: 0, cacheWrite: 5, cacheWrite1h: 5 },
+	});
+	assert.equal((await day.status()).remaining.uncertainMicros, 0);
+	await submit("pause");
+	assert.equal((await day.status()).paused, true);
+	assert.equal((await day.status()).running, false);
+	const weekly = { ...settings, weekly: { day: 2, time: "10:30", timezone: "Europe/Paris" } };
+	await submit("apply", weekly);
+	assert.equal((await day.status()).paused, true);
+	assert.equal((await day.status()).nextAt, null);
+	await submit("resume");
+	assert.equal((await day.status()).paused, false);
+	assert.ok((await day.status()).nextAt);
+	f.schedules.start();
+	await f.due();
+	assert.equal((await day.status()).running, true);
+	assert.equal(f.schedules.store.require(f.owner.scheduleId).runs?.length, 1);
+	await submit("pause");
+	assert.equal(f.schedules.store.require(f.owner.scheduleId).state, "cancelled");
+	assert.equal((await day.status()).nextAt, null);
+	await submit("resume");
+	assert.equal(f.schedules.store.require(f.owner.scheduleId).state, "pending");
+	assert.equal(f.schedules.store.require(f.owner.scheduleId).runs?.length, 1);
+	assert.equal(
+		(await f.sessions.insightsOwnerReviewStatus(f.owner.reportSessionId, op.operationId))?.state,
+		"cancelled",
+	);
+	const disabled = new DayInsights({
+		home: f.home,
+		host,
+		projects: f.projects,
+		models: f.models,
+		store: f.missions.dayInsights,
+		workspace: f.missions.insightsWorkspace,
+		sessions: f.sessions,
+		allowance: f.missions.dayInsightsAllowance,
+		admissionEpoch: f.sessions.insightsAdmissionEpoch,
+	});
+	f.sessions.dayInsights = disabled;
+	assert.equal((await disabled.status()).executionSupported, false);
+	assert.throws(() => f.sessions.insightsOwnerAdmission(f.owner.reportSessionId), /adapter_unavailable/);
+	const launches = f.workers.length;
+	await f.due();
+	assert.equal(f.workers.length, launches);
+	await assert.rejects(
+		disabled.fundingRequest(
+			f.owner.reportSessionId,
+			{ op: "funding-reserve", namespace: "pi", key: "disabled", value: {} },
+			catalog,
+		),
+		/funding_unavailable/,
+	);
+	const denial = await disabled.preflight({
+		action: "pause",
+		expectedRevision: (await disabled.status()).revision,
+		projectId: f.project.id,
+		settings: null,
+	});
+	assert.ok(denial.payload);
+	const denyOp = f.operation("day-insights", denial.payload, f.owner.workspaceId);
+	assert.equal(
+		(await f.journal.execute(denyOp, (op, entry) => disabled.admit(op, entry.firstEntry))).state,
+		"accepted",
+	);
+	assert.equal(f.missions.insightsOwner.current(f.authority)?.state, "paused");
+});
 
 test("fresh confirmed owner creates one inert report/rule, scheduler uses closed reader for two partial reports", async (t) => {
 	const f = await fixture(t);
@@ -688,6 +1119,81 @@ test("cold recovery keeps owner receipts, grants and entered Apply effects witho
 	assert.equal(sessions.insightsOwnerStatus(f.owner.reportSessionId)?.available, false);
 });
 
+test("Day production HTTP installs the qualified adapter and admits inert Apply then explicit Run/Pause", async (t) => {
+	const f = await fixture(t);
+	f.automations(false);
+	const args: Parameters<typeof createDaemonServer>[0] = {
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: f.models as ModelCatalog,
+		terminals: new TerminalManager(),
+		missions: { store: f.missions, service: f.missionService },
+		schedules: f.schedules,
+		hello: {
+			...host,
+			daemonVersion: "synthetic",
+			protocolVersion: 1,
+			minimumClientProtocolVersion: 1,
+			platform: "darwin",
+			arch: "arm64",
+			capabilities: {
+				powerManagement: false,
+				systemSleepEvents: false,
+				swiftUIArtifacts: false,
+				coordinatorIsolation: true,
+				independentExecution: true,
+			},
+		},
+		nativeAuthority: {
+			authenticate: async (token: unknown) => {
+				if (token !== "native") throw new Conflict("Native confirmation required");
+			},
+		},
+	};
+	const server = createDaemonServer(args);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	t.after(async () => {
+		server.closeAllConnections();
+		await new Promise<void>((r) => server.close(() => r()));
+	});
+	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+	const headers = { "content-type": "application/json", "x-pilot-github-capability": "native" };
+	const get = async () => await (await fetch(`${root}/insights/day`, { headers })).json();
+	const post = async (path: string, value: unknown) =>
+		await (await fetch(`${root}/${path}`, { method: "POST", headers, body: JSON.stringify(value) })).json();
+	assert.equal((await get()).executionSupported, true);
+	const settings: import("@pilot/protocol").DayInsightsSettings = {
+		model: model.id,
+		thinking: "high",
+		source: { projects: [f.project.id], excludeProjects: [], excludeSessions: [] },
+		weekly: null,
+		allowance: { perReportMicros: 1000000, monthlyMicros: 10000000, basis: "catalog_estimate" },
+	};
+	const submit = async (action: string, config: typeof settings | null) => {
+		const preview = await post("insights/day/preflight", {
+			action,
+			expectedRevision: (await get()).revision,
+			projectId: f.project.id,
+			settings: config,
+		});
+		assert.equal(preview.state, "ready", JSON.stringify(preview));
+		const op = f.operation("day-insights", preview.payload, f.owner.workspaceId);
+		assert.equal((await post("operations", op)).state, "accepted");
+		return op;
+	};
+	await submit("apply", settings);
+	assert.equal(f.workers.length, 0);
+	assert.equal(f.schedules.store.list().length, 0);
+	const run = await submit("run", null);
+	assert.equal(f.workers.length, 1);
+	await submit("pause", null);
+	assert.equal((await get()).paused, true);
+	assert.equal((await post("operations/receipt", run)).state, "accepted");
+	assert.equal((await get()).running, false);
+});
+
 test("native owner HTTP admits Enable Save Apply Pause Revoke and passive Check without report startup", async (t) => {
 	const f = await fixture(t);
 	const args: Parameters<typeof createDaemonServer>[0] = {
@@ -944,277 +1450,461 @@ test("Revoke after Pause uses the prior transaction ACK, not a matching cancelle
 	assert.equal(f.schedules.store.require(f.owner.scheduleId).revision, 2);
 });
 
-test("owner scheduler and closed tools complete two cycles through a real Harness with a faux provider", async (t) => {
-	const runtime = await ModelRuntime.create({
-		credentials: new InMemoryCredentialStore(),
-		modelsPath: null,
-		modelsStore: new InMemoryModelsStore(),
-		allowModelNetwork: false,
-		refreshOnCreate: false,
-	});
-	const faux = fauxProvider({
-		provider: "synthetic",
-		models: [
-			{ id: "terra", reasoning: true, contextWindow: 64000 },
-			{ id: "terra-two", reasoning: true, contextWindow: 64000 },
-		],
-	});
-	runtime.registerNativeProvider(faux.provider);
-	const openAdapter = NativeAdapter.open;
-	t.mock.method(globalThis, "fetch", () => assert.fail("No live provider or catalog access"));
-	t.mock.method(NativeAdapter, "open", (options: Parameters<typeof NativeAdapter.open>[0]) => {
-		assert.ok(
-			!options.hostTools?.some((tool) => tool.name === "insights_history"),
-			"Owner cannot list the legacy direct-history tool",
-		);
-		return openAdapter.call(NativeAdapter, {
-			...options,
-			agentDir: join(options.cwd, "..", "synthetic-agent"),
-			projectTrusted: false,
-			bundledExtensions: false,
-			settingsManager: SettingsManager.inMemory({ defaultTools: [] }),
-			sessionOptions: { modelRuntime: runtime, model: faux.getModel() },
-			loaderOptions: {
-				cwd: options.cwd,
-				agentDir: join(options.cwd, "..", "synthetic-agent"),
-				noExtensions: true,
-				noSkills: true,
-				noPromptTemplates: true,
-				noThemes: true,
-				noContextFiles: true,
-			},
-		});
-	});
-	let f!: Awaited<ReturnType<typeof fixture>>;
-	let nextCursor: number | null = 0,
-		activeRun = "",
-		phase = "context",
-		toolCalls = 0,
-		launches = 0;
-	const findingKey = randomUUID();
-	const workers: SessionWorker[] = [];
-	const factory: SessionFactories["worker"] = (spec, onPacket, onExit) => {
-		launches++;
-		let kernel!: KernelSession;
-		const guards = new Map<string, { resolve(): void; reject(error: Error): void }>();
-		const accounting = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
-		const worker: SessionWorker = {
-			state: "idle",
-			busy: false,
-			modelConfiguration: 1,
-			ready: Promise.resolve(),
-			send: (command) => {
-				if (command.type === "usage-history.epoch.result" || command.type === "usage-history.result") {
-					const pending = accounting.get(command.callId);
-					accounting.delete(command.callId);
-					if (command.error) pending?.reject(new Error(command.error));
-					else pending?.resolve(command.result);
-					return;
-				}
-				if (command.type !== "model.configuration.result") return;
-				const pending = guards.get(command.callId);
-				guards.delete(command.callId);
-				if (command.error) pending?.reject(new Error(command.error));
-				else pending?.resolve();
-			},
-			request: async (command) => {
-				await worker.ready;
-				if (command.type === "input") {
-					activeRun = command.requestId.slice("insights-review:".length);
-					await kernel.submit(command.requestId, command.content, command.mode, command.onlyIfIdle);
-				} else if (command.type === "changeModelConfiguration") {
-					const result = await kernel.changeModel(command.model, command.thinking, {
-						revalidate: () =>
-							new Promise<void>((resolve, reject) => {
-								const callId = randomUUID();
-								guards.set(callId, { resolve, reject });
-								onPacket({ type: "model.configuration.guard", callId, requestId: command.requestId });
-							}),
-					});
+for (const freshDay of [false, true])
+	test(
+		freshDay
+			? "Day fresh contexts exclude prior transcript and tracking after scope narrows"
+			: "owner scheduler and closed tools complete two cycles through a real Harness with a faux provider",
+		async (t) => {
+			const runtime = await ModelRuntime.create({
+				credentials: new InMemoryCredentialStore(),
+				modelsPath: null,
+				modelsStore: new InMemoryModelsStore(),
+				allowModelNetwork: false,
+				refreshOnCreate: false,
+			});
+			const faux = fauxProvider({
+				provider: "synthetic",
+				...(freshDay ? { api: "anthropic-messages" } : {}),
+				models: [
+					{
+						id: "terra",
+						reasoning: true,
+						contextWindow: 64000,
+						maxTokens: 1024,
+						cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 1 },
+					},
+					{ id: "terra-two", reasoning: true, contextWindow: 64000 },
+				],
+			});
+			if (freshDay) {
+				const original = faux.provider.streamSimple.bind(faux.provider);
+				const physical: typeof original = (chosen, payload, options) => {
+					const out = createAssistantMessageEventStream();
+					void (async () => {
+						try {
+							await options?.onPayload?.({ model: chosen.id, max_tokens: chosen.maxTokens }, chosen);
+							const source = original(chosen, payload, options);
+							for await (const event of source) out.push(event);
+							out.end(await source.result());
+						} catch (error) {
+							const message = {
+								...fauxAssistantMessage("", { stopReason: "error", errorMessage: String(error) }),
+								api: chosen.api,
+								provider: chosen.provider,
+								model: chosen.id,
+							};
+							out.push({ type: "error", reason: "error", error: message });
+							out.end(message);
+						}
+					})();
+					return out;
+				};
+				runtime.registerNativeProvider({
+					...faux.provider,
+					stream: (chosen, payload, options) =>
+						physical(chosen, payload, { onPayload: options?.onPayload, signal: options?.signal }),
+					streamSimple: physical,
+				});
+			} else runtime.registerNativeProvider(faux.provider);
+			const openAdapter = NativeAdapter.open;
+			t.mock.method(globalThis, "fetch", () => assert.fail("No live provider or catalog access"));
+			t.mock.method(NativeAdapter, "open", (options: Parameters<typeof NativeAdapter.open>[0]) => {
+				assert.ok(
+					!options.hostTools?.some((tool) => tool.name === "insights_history"),
+					"Owner cannot list the legacy direct-history tool",
+				);
+				if (freshDay)
+					assert.ok(
+						!options.hostTools?.some((tool) => tool.name === "scoped_metrics"),
+						"Fresh Day cannot expose metrics",
+					);
+				return openAdapter.call(NativeAdapter, {
+					...options,
+					agentDir: join(options.cwd, "..", "synthetic-agent"),
+					projectTrusted: false,
+					bundledExtensions: false,
+					settingsManager: SettingsManager.inMemory({ defaultTools: [] }),
+					sessionOptions: { modelRuntime: runtime, model: faux.getModel() },
+					loaderOptions: {
+						cwd: options.cwd,
+						agentDir: join(options.cwd, "..", "synthetic-agent"),
+						noExtensions: true,
+						noSkills: true,
+						noPromptTemplates: true,
+						noThemes: true,
+						noContextFiles: true,
+					},
+				});
+			});
+			let f!: Awaited<ReturnType<typeof fixture>>;
+			let nextCursor: number | null = 0,
+				activeRun = "",
+				phase = "context",
+				toolCalls = 0,
+				launches = 0;
+			const findingKey = randomUUID();
+			let day: DayInsights | undefined;
+			const marker = "FIRST_TRANSCRIPT_PRIVATE_MARKER_27";
+			let firstSawMarker = false;
+			const storagePaths: string[] = [];
+			const workers: SessionWorker[] = [];
+			const factory: SessionFactories["worker"] = (spec, onPacket, onExit) => {
+				launches++;
+				storagePaths.push(spec.storageDir);
+				let kernel!: KernelSession;
+				const guards = new Map<string, { resolve(): void; reject(error: Error): void }>();
+				const accounting = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
+				const worker: SessionWorker = {
+					state: "idle",
+					busy: false,
+					modelConfiguration: 1,
+					ready: Promise.resolve(),
+					send: (command) => {
+						if (command.type === "usage-history.epoch.result" || command.type === "usage-history.result") {
+							const pending = accounting.get(command.callId);
+							accounting.delete(command.callId);
+							if (command.error) pending?.reject(new Error(command.error));
+							else pending?.resolve(command.result);
+							return;
+						}
+						if (command.type !== "model.configuration.result") return;
+						const pending = guards.get(command.callId);
+						guards.delete(command.callId);
+						if (command.error) pending?.reject(new Error(command.error));
+						else pending?.resolve();
+					},
+					request: async (command) => {
+						await worker.ready;
+						if (command.type === "input") {
+							activeRun = command.requestId.slice("insights-review:".length);
+							await kernel.submit(command.requestId, command.content, command.mode, command.onlyIfIdle);
+						} else if (command.type === "changeModelConfiguration") {
+							const result = await kernel.changeModel(command.model, command.thinking, {
+								revalidate: () =>
+									new Promise<void>((resolve, reject) => {
+										const callId = randomUUID();
+										guards.set(callId, { resolve, reject });
+										onPacket({ type: "model.configuration.guard", callId, requestId: command.requestId });
+									}),
+							});
+							onPacket({
+								type: "modelChanged",
+								requestId: command.requestId,
+								model: kernel.model,
+								thinking: kernel.thinkingLevel,
+								usage: kernel.usage,
+								...result,
+							});
+						} else if (command.type === "abort") {
+							await kernel.abort();
+						} else throw new Error(`Unexpected synthetic kernel command ${command.type}`);
+					},
+					close: async () => {
+						await worker.ready;
+						await kernel.close();
+						onExit(worker, 0);
+					},
+					hasChildren: async () => {
+						await worker.ready;
+						return kernel.hasChildren();
+					},
+				};
+				const ready = KernelSession.open(spec, {
+					acquireUsageEpoch: () =>
+						new Promise<import("../../kernel/src/usage-capture.ts").UsageCaptureEpoch>((resolve, reject) => {
+							const callId = randomUUID();
+							accounting.set(callId, {
+								resolve: (v) => resolve(v as import("../../kernel/src/usage-capture.ts").UsageCaptureEpoch),
+								reject,
+							});
+							onPacket({ type: "usage-history.epoch", callId });
+						}),
+					reportUsageHistory: (row) =>
+						new Promise<import("@pilot/protocol").UsageHistoryWriteResult>((resolve, reject) => {
+							const callId = randomUUID();
+							accounting.set(callId, {
+								resolve: (v) => resolve(v as import("@pilot/protocol").UsageHistoryWriteResult),
+								reject,
+							});
+							onPacket({ type: "usage-history", callId, row });
+						}),
+					onWorking: (working) => {
+						worker.state = working ? "working" : "idle";
+						Object.assign(worker, { busy: working });
+						onPacket({ type: "working", working });
+					},
+					callInsightsBacklog: async (request) => {
+						toolCalls++;
+						const result = await f.sessions.insightsOwnerBacklog(spec.sessionId, request, worker);
+						if ((request as { action?: string }).action === "review_context")
+							nextCursor = (result as { nextCursor: number | null }).nextCursor;
+						return result;
+					},
+					callDiagnosticContext: async () => {
+						throw new Error("Dispatched owner cannot request direct source history");
+					},
+				}).then((value) => {
+					kernel = value;
 					onPacket({
-						type: "modelChanged",
-						requestId: command.requestId,
+						type: "ready",
 						model: kernel.model,
 						thinking: kernel.thinkingLevel,
-						usage: kernel.usage,
-						...result,
+						working: false,
+						usage: {},
 					});
-				} else if (command.type === "abort") {
-					await kernel.abort();
-				} else throw new Error(`Unexpected synthetic kernel command ${command.type}`);
-			},
-			close: async () => {
-				await worker.ready;
-				await kernel.close();
-				onExit(worker, 0);
-			},
-			hasChildren: async () => {
-				await worker.ready;
-				return kernel.hasChildren();
-			},
-		};
-		const ready = KernelSession.open(spec, {
-			acquireUsageEpoch: () =>
-				new Promise<import("../../kernel/src/usage-capture.ts").UsageCaptureEpoch>((resolve, reject) => {
-					const callId = randomUUID();
-					accounting.set(callId, {
-						resolve: (v) => resolve(v as import("../../kernel/src/usage-capture.ts").UsageCaptureEpoch),
-						reject,
-					});
-					onPacket({ type: "usage-history.epoch", callId });
-				}),
-			reportUsageHistory: (row) =>
-				new Promise<import("@pilot/protocol").UsageHistoryWriteResult>((resolve, reject) => {
-					const callId = randomUUID();
-					accounting.set(callId, {
-						resolve: (v) => resolve(v as import("@pilot/protocol").UsageHistoryWriteResult),
-						reject,
-					});
-					onPacket({ type: "usage-history", callId, row });
-				}),
-			onWorking: (working) => {
-				worker.state = working ? "working" : "idle";
-				Object.assign(worker, { busy: working });
-				onPacket({ type: "working", working });
-			},
-			callInsightsBacklog: async (request) => {
-				toolCalls++;
-				const result = await f.sessions.insightsOwnerBacklog(spec.sessionId, request, worker);
-				if ((request as { action?: string }).action === "review_context")
-					nextCursor = (result as { nextCursor: number | null }).nextCursor;
-				return result;
-			},
-			callDiagnosticContext: async () => {
-				throw new Error("Dispatched owner cannot request direct source history");
-			},
-		}).then((value) => {
-			kernel = value;
-			onPacket({ type: "ready", model: kernel.model, thinking: kernel.thinkingLevel, working: false, usage: {} });
-		});
-		Object.assign(worker, { ready });
-		workers.push(worker);
-		return worker;
-	};
-	f = await fixture(t, { worker: factory }, {});
-	assert.equal((await f.run(f.enable)).state, "accepted");
-	assert.equal(launches, 0);
-	await seedSource(f);
-	f.schedules.start();
-	for (let cycle = 0; cycle < 2; cycle++) {
-		nextCursor = 0;
-		phase = "context";
-		const respond = () => {
-			if (phase === "context") {
-				if (nextCursor !== null)
-					return fauxAssistantMessage(
-						fauxToolCall("insights_backlog", { action: "review_context", cursor: nextCursor }),
-						{ stopReason: "toolUse" },
-					);
-				phase = "finding";
-				return fauxAssistantMessage(fauxToolCall("insights_backlog", { action: "list", kind: "finding" }), {
-					stopReason: "toolUse",
 				});
-			}
-			if (phase === "finding") {
-				phase = "report";
-				return fauxAssistantMessage(
-					fauxToolCall("insights_backlog", {
-						action: cycle === 0 ? "propose" : "amend",
-						operationId: randomUUID(),
-						key: findingKey,
-						expectedRevision: cycle,
-						patternKey: "synthetic workflow repeated reads",
-						draft: {
-							title: "Repeated synthetic correction",
-							priority: "medium",
-							observation: "Synthetic fixture repeated a correction",
-							uncertainty: "No real workflow or cost baseline",
-							proposedChange: "Investigate only after separate approval",
-							expectedBenefit: "Unknown",
-							targets: [],
-							implementationLinks: [],
-						},
-						evidence: [],
+				Object.assign(worker, { ready });
+				workers.push(worker);
+				return worker;
+			};
+			f = await fixture(t, { worker: factory }, {});
+			let settings: import("@pilot/protocol").DayInsightsSettings = {
+				model: model.id,
+				source: { projects: [f.project.id], excludeProjects: [], excludeSessions: [] },
+				weekly: null,
+				allowance: { perReportMicros: 10000000, monthlyMicros: 100000000, basis: "catalog_estimate" },
+			};
+			const submit = async (
+				action: import("@pilot/protocol").DayInsightsAction,
+				config: typeof settings | null = null,
+			) => {
+				const review = await day!.preflight({
+					action,
+					expectedRevision: (await day!.status()).revision,
+					projectId: f.project.id,
+					settings: config,
+				});
+				assert.ok(review.payload, JSON.stringify(review));
+				const op = f.operation("day-insights", review.payload, f.owner.workspaceId);
+				const receipt = await f.journal.execute(op, (op, entry) => day!.admit(op, entry.firstEntry));
+				assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+			};
+			if (freshDay) {
+				day = new DayInsights({
+					home: f.home,
+					host,
+					projects: f.projects,
+					models: f.models,
+					store: f.missions.dayInsights,
+					workspace: f.missions.insightsWorkspace,
+					owners: f.missions.insightsOwner,
+					sessions: f.sessions,
+					allowance: f.missions.dayInsightsAllowance,
+					admissionEpoch: f.sessions.insightsAdmissionEpoch,
+					runtime: new DayInsightsExecution({
+						sessions: f.sessions,
+						owners: f.missions.insightsOwner,
+						store: f.missions.dayInsights,
+						schedules: f.schedules,
+						journal: f.journal,
+						models: f.models,
 					}),
-					{ stopReason: "toolUse" },
+				});
+				f.sessions.dayInsights = day;
+				const broker = new CredentialBroker(join(f.home, "fresh-day-credentials"));
+				await broker.start();
+				broker.fundingRequest = async (_binding, request) =>
+					day!.fundingRequest(f.owner.reportSessionId, request, {
+						fundingModel: async (provider, id) => (provider === "synthetic" ? faux.getModel(id) : undefined),
+					});
+				const client = new CredentialClient(broker.grant(false, undefined, f.owner.reportSessionId));
+				t.after(async () => {
+					await client.close();
+					await broker.close();
+				});
+				installDayInsightsRuntime(runtime, {
+					reserve: async (id, chosen, bound) =>
+						(await client.request({
+							op: "funding-reserve",
+							namespace: "pi",
+							key: id,
+							value: { provider: chosen.provider, model: chosen.id, api: chosen.api, ...bound },
+						})) as DayInsightsReservation,
+					settle: async (id, usage) => {
+						await client.request({ op: "funding-settle", namespace: "pi", key: id, value: usage });
+					},
+				});
+				await submit("apply", settings);
+				assert.equal(f.schedules.store.list().length, 0);
+				settings = { ...settings, weekly: { day: 5, time: "18:00", timezone: "Europe/Paris" } };
+				await submit("apply", settings);
+			} else assert.equal((await f.run(f.enable)).state, "accepted");
+			assert.equal(launches, 0);
+			const source = await seedSource(f, undefined, freshDay ? marker : "");
+			if (freshDay) await seedSource(f);
+			f.schedules.start();
+			for (let cycle = 0; cycle < 2; cycle++) {
+				nextCursor = 0;
+				phase = "context";
+				const respond = (payload: import("@earendil-works/pi-ai").TranscriptContext) => {
+					if (freshDay) {
+						const serialized = JSON.stringify(payload);
+						if (cycle === 0 && serialized.includes(marker)) firstSawMarker = true;
+						if (cycle === 1)
+							assert.ok(
+								!serialized.includes(marker),
+								"Excluded first transcript/tracking leaked into the second provider context",
+							);
+					}
+					if (phase === "context") {
+						if (nextCursor !== null)
+							return fauxAssistantMessage(
+								fauxToolCall("insights_backlog", { action: "review_context", cursor: nextCursor }),
+								{ stopReason: "toolUse" },
+							);
+						phase = "finding";
+						return fauxAssistantMessage(fauxToolCall("insights_backlog", { action: "list", kind: "finding" }), {
+							stopReason: "toolUse",
+						});
+					}
+					if (phase === "finding") {
+						phase = "report";
+						return fauxAssistantMessage(
+							fauxToolCall("insights_backlog", {
+								action: cycle === 0 ? "propose" : "amend",
+								operationId: randomUUID(),
+								key: findingKey,
+								expectedRevision: cycle,
+								patternKey: "synthetic workflow repeated reads",
+								draft: {
+									title: "Repeated synthetic correction",
+									priority: "medium",
+									observation: freshDay && cycle === 0 ? marker : "Synthetic fixture repeated a correction",
+									uncertainty: "No real workflow or cost baseline",
+									proposedChange: "Investigate only after separate approval",
+									expectedBenefit: "Unknown",
+									targets: [],
+									implementationLinks: [],
+								},
+								evidence: [],
+							}),
+							{ stopReason: "toolUse" },
+						);
+					}
+					if (phase === "report") {
+						phase = "finish";
+						const request = JSON.parse(
+							String(
+								f.missions["one"]("SELECT request FROM insights_owner_runs WHERE run_id=?", activeRun)!.request,
+							),
+						);
+						return fauxAssistantMessage(
+							fauxToolCall("insights_backlog", {
+								action: "save_report",
+								operationId: randomUUID(),
+								key: activeRun,
+								expectedRevision: 0,
+								record: {
+									status: "partial",
+									windowStart: request.windowStart,
+									windowEnd: request.windowEnd,
+									markdown:
+										freshDay && cycle === 0
+											? marker
+											: "Synthetic report. No comprehensive coverage or implementation approval.",
+									checkpoints: [],
+									findingKeys: [findingKey],
+									gaps: ["Synthetic bounded sources only."],
+								},
+							}),
+							{ stopReason: "toolUse" },
+						);
+					}
+					return fauxAssistantMessage(freshDay && cycle === 0 ? marker : "Saved a partial synthetic report.");
+				};
+				faux.setResponses(Array.from({ length: 20 }, () => respond));
+				if (freshDay && cycle === 1) {
+					settings = { ...settings, source: { ...settings.source, excludeSessions: [source.sourceId] } };
+					await submit("apply", settings);
+				}
+				if (freshDay && cycle === 0) await submit("run");
+				else await f.due();
+				await until(
+					() =>
+						f.missions["one"]("SELECT state FROM insights_owner_runs WHERE run_id=?", activeRun)?.state ===
+							"partial" && workers.at(-1)?.state === "idle",
 				);
 			}
-			if (phase === "report") {
-				phase = "finish";
-				const request = JSON.parse(
-					String(f.missions["one"]("SELECT request FROM insights_owner_runs WHERE run_id=?", activeRun)!.request),
+			assert.equal(launches, freshDay ? 2 : 1);
+			if (freshDay) {
+				assert.equal(new Set(storagePaths).size, 2);
+				assert.ok(firstSawMarker);
+				assert.equal(
+					Number(f.missions["one"]("SELECT COUNT(*) n FROM day_insights_allowance")!.n),
+					faux.state.callCount,
 				);
-				return fauxAssistantMessage(
-					fauxToolCall("insights_backlog", {
-						action: "save_report",
-						operationId: randomUUID(),
-						key: activeRun,
-						expectedRevision: 0,
-						record: {
-							status: "partial",
-							windowStart: request.windowStart,
-							windowEnd: request.windowEnd,
-							markdown: "Synthetic report. No comprehensive coverage or implementation approval.",
-							checkpoints: [],
-							findingKeys: [findingKey],
-							gaps: ["Synthetic bounded sources only."],
-						},
-					}),
-					{ stopReason: "toolUse" },
+				assert.equal(
+					Number(f.missions["one"]("SELECT COUNT(*) n FROM day_insights_allowance WHERE usage IS NULL")!.n),
+					0,
 				);
+				assert.ok(storagePaths.every((path) => path.includes("/day-runs/")));
+				const calls = faux.state.callCount;
+				settings = { ...settings, allowance: { ...settings.allowance, perReportMicros: 1 } };
+				await submit("apply", settings);
+				for (let attempt = 0; attempt < 2; attempt++) {
+					await submit("run");
+					await until(
+						() =>
+							f.missions["one"]("SELECT state FROM insights_owner_runs WHERE run_id=?", activeRun)?.state ===
+								"held" && workers.at(-1)?.state === "idle",
+					);
+					const status = await day!.status();
+					assert.equal(status.running, false);
+					assert.match(status.holdReason!, /report_allowance_hold/);
+					assert.equal(status.uncertainOperationId, null);
+				}
+				assert.equal(faux.state.callCount, calls, "Allowance hold must precede physical provider dispatch");
+				assert.equal(
+					Number(f.missions["one"]("SELECT COUNT(*) n FROM day_insights_runs WHERE state='held'")!.n),
+					2,
+				);
+				return;
 			}
-			return fauxAssistantMessage("Saved a partial synthetic report.");
-		};
-		faux.setResponses(Array.from({ length: 20 }, () => respond));
-		await f.due();
-		await until(
-			() =>
-				f.missions["one"]("SELECT state FROM insights_owner_runs WHERE run_id=?", activeRun)?.state === "partial" &&
-				workers[0]?.state === "idle",
-		);
-	}
-	assert.equal(launches, 1);
-	assert.ok(toolCalls >= 4);
-	assert.equal(Number(f.missions["one"]("SELECT COUNT(*) n FROM insights_owner_reports")!.n), 2);
-	assert.equal(
-		Number(
-			f.missions["one"]("SELECT revision FROM insights_workspace_items WHERE kind='finding' AND key=?", findingKey)!
-				.revision,
-		),
-		2,
-	);
-	assert.ok(Number(f.missions["one"]("SELECT COUNT(*) n FROM insights_owner_sources")!.n) > 0);
-	assert.equal(f.missions.list().length, 0);
-	const oldAdmission = f.sessions.insightsOwnerAdmission(f.owner.reportSessionId);
-	const oldSources = f.missions["all"]("SELECT * FROM insights_owner_sources");
-	f.setCatalog([model, { ...model, id: "synthetic/terra-two", name: "Terra Two" }]);
-	const desired = (await f.workspace.settings()).record!;
-	const save = f.operation(
-		"insights-workspace-settings",
-		{
-			schemaVersion: 2,
-			owner: f.owner,
-			expectedRevision: desired.revision,
-			settings: { ...desired.settings, requestedModel: { kind: "id", value: "synthetic/terra-two" } },
+			assert.ok(toolCalls >= 4);
+			assert.equal(Number(f.missions["one"]("SELECT COUNT(*) n FROM insights_owner_reports")!.n), 2);
+			assert.equal(
+				Number(
+					f.missions["one"](
+						"SELECT revision FROM insights_workspace_items WHERE kind='finding' AND key=?",
+						findingKey,
+					)!.revision,
+				),
+				2,
+			);
+			assert.ok(Number(f.missions["one"]("SELECT COUNT(*) n FROM insights_owner_sources")!.n) > 0);
+			assert.equal(f.missions.list().length, 0);
+			const oldAdmission = f.sessions.insightsOwnerAdmission(f.owner.reportSessionId);
+			const oldSources = f.missions["all"]("SELECT * FROM insights_owner_sources");
+			f.setCatalog([model, { ...model, id: "synthetic/terra-two", name: "Terra Two" }]);
+			const desired = (await f.workspace.settings()).record!;
+			const save = f.operation(
+				"insights-workspace-settings",
+				{
+					schemaVersion: 2,
+					owner: f.owner,
+					expectedRevision: desired.revision,
+					settings: { ...desired.settings, requestedModel: { kind: "id", value: "synthetic/terra-two" } },
+				},
+				f.owner.workspaceId,
+			);
+			assert.equal((await f.journal.execute(save, (op) => f.workspace.admit(op))).state, "accepted");
+			const callsBeforeApply = faux.state.callCount;
+			const apply = f.operation(
+				"insights-workspace-apply",
+				await f.ownerService.previewApply(f.owner),
+				f.owner.workspaceId,
+			);
+			const applied = await f.run(apply);
+			assert.equal(applied.state, "accepted", JSON.stringify(applied));
+			assert.equal(faux.state.callCount, callsBeforeApply, "Configuration does not run the provider");
+			assert.equal(f.sessions.get(f.owner.reportSessionId)?.model, "synthetic/terra-two");
+			assert.equal(f.missions.insightsOwner.current(f.authority)!.settings.model, "synthetic/terra-two");
+			assert.throws(() => oldAdmission.revalidate(), /changed/);
+			assert.deepEqual(
+				f.missions["all"]("SELECT * FROM insights_owner_sources"),
+				oldSources,
+				"Apply does not reset unfinished source positions",
+			);
 		},
-		f.owner.workspaceId,
 	);
-	assert.equal((await f.journal.execute(save, (op) => f.workspace.admit(op))).state, "accepted");
-	const callsBeforeApply = faux.state.callCount;
-	const apply = f.operation(
-		"insights-workspace-apply",
-		await f.ownerService.previewApply(f.owner),
-		f.owner.workspaceId,
-	);
-	const applied = await f.run(apply);
-	assert.equal(applied.state, "accepted", JSON.stringify(applied));
-	assert.equal(faux.state.callCount, callsBeforeApply, "Configuration does not run the provider");
-	assert.equal(f.sessions.get(f.owner.reportSessionId)?.model, "synthetic/terra-two");
-	assert.equal(f.missions.insightsOwner.current(f.authority)!.settings.model, "synthetic/terra-two");
-	assert.throws(() => oldAdmission.revalidate(), /changed/);
-	assert.deepEqual(
-		f.missions["all"]("SELECT * FROM insights_owner_sources"),
-		oldSources,
-		"Apply does not reset unfinished source positions",
-	);
-});

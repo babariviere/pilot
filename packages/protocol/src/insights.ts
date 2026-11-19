@@ -408,7 +408,7 @@ export interface InsightsReviewDispatch {
 
 export interface InsightsReviewRun {
 	runId: string;
-	state: "preparing" | "ready" | "sent" | "partial" | "cancelled" | "interrupted" | "unknown";
+	state: "preparing" | "ready" | "sent" | "partial" | "cancelled" | "interrupted" | "unknown" | "held";
 	windowStart: string;
 	windowEnd: string;
 	reportKey: string | null;

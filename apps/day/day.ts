@@ -9,6 +9,7 @@ import type { DiagnosisControls } from "./diagnosisControls";
 import type { FeedbackMirror } from "./feedbackFeed";
 import type { DayFeed } from "./feeds";
 import type { AutoRead } from "./freshness";
+import type { ConnectedInsights } from "./insightsControls";
 import type { IntakeMirror } from "./intakeFeed";
 import type { LinearMirror } from "./linearFeed";
 import type { ModelControls } from "./modelControls";
@@ -28,6 +29,7 @@ export type Day = {
 	models?: ModelControls;
 	diagnosis?: DiagnosisControls;
 	schedules?: ScheduleControls;
+	insights?: ConnectedInsights;
 	connections?: ConnectionControls;
 	slack?: SlackControls;
 	/** Sends intents. Never written to from TSX state. */

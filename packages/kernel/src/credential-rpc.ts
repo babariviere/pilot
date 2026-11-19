@@ -9,6 +9,8 @@ export interface CredentialEndpoint {
 	catalogAgentDir?: string;
 	/** Requests from this capability must reserve against their host-owned funding scope. */
 	metered?: true;
+	/** Dedicated Insights AND allowances. No background/global-off bypass. */
+	insightsMetered?: true;
 }
 export type CredentialNamespace = "pi" | "mcp";
 export type CredentialOperation =

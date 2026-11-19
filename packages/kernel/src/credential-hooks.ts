@@ -8,6 +8,7 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { credentialClient } from "./credential-client.ts";
+import { type DayInsightsReservation, installDayInsightsRuntime } from "./day-insights-runtime.ts";
 import { installFundingRuntime } from "./funding-runtime.ts";
 import { ownModelCatalog } from "./model-catalog-owner.ts";
 import { readonlyModelsStore } from "./readonly-models-store.ts";
@@ -63,20 +64,34 @@ export function installCredentialBrokerHooks(options: { descendants?: boolean } 
 			});
 			if (shared) useSharedModelCatalog(runtime, client);
 			ownModelCatalog(runtime);
-			if (client?.endpoint.metered)
-				installFundingRuntime(runtime, {
-					reserve: async (id, model, bound) => {
-						await client.request({
-							op: "funding-reserve",
-							namespace: "pi",
-							key: id,
-							value: { provider: model.provider, model: model.id, api: model.api, ...bound },
-						});
-					},
-					settle: async (id, usage) => {
-						await client.request({ op: "funding-settle", namespace: "pi", key: id, value: usage });
-					},
-				});
+			if (client?.endpoint.metered) {
+				const reserve = async (
+					id: string,
+					model: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>,
+					bound: import("./funding-runtime.ts").FundingBound,
+				) =>
+					await client.request({
+						op: "funding-reserve",
+						namespace: "pi",
+						key: id,
+						value: { provider: model.provider, model: model.id, api: model.api, ...bound },
+					});
+				const settle = async (id: string, usage: import("@pilot/protocol").FundingTokens) => {
+					await client.request({ op: "funding-settle", namespace: "pi", key: id, value: usage });
+				};
+				if (client.endpoint.insightsMetered)
+					installDayInsightsRuntime(runtime, {
+						reserve: async (id, model, bound) => (await reserve(id, model, bound)) as DayInsightsReservation,
+						settle,
+					});
+				else
+					installFundingRuntime(runtime, {
+						reserve: async (id, model, bound) => {
+							await reserve(id, model, bound);
+						},
+						settle,
+					});
+			}
 			if (shared && options.refreshOnCreate !== false) {
 				const timed =
 					options.allowModelNetwork === true && options.modelRefreshTimeoutMs !== undefined

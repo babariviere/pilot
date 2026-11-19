@@ -9,6 +9,7 @@
 import { signal } from "nsh";
 import { dropChoice } from "./chatCommands";
 import type { FeedbackItem, UserFeedbackProposal } from "./feedbackFeed";
+import { findingWork } from "./insightsWork";
 import { type ChatStep, clip, missionDraft } from "./feedbackSteps";
 import { closeFeedback, feedbackDraft, openFeedback } from "./feedbackView";
 import { newFundingDraft } from "./modelSettingsDraft";
@@ -82,7 +83,7 @@ export function draftLinkedMission(
 	from: ChatStep,
 	proposal: { value: UserFeedbackProposal; digest: string },
 ): boolean {
-	if (newBusy()) return false;
+	if (newBusy() || findingWork()) return false;
 	const now = linkedMission();
 	const same =
 		now?.feedbackId === item.id && now.triageSessionId === from.sessionId && now.proposalDigest === proposal.digest;

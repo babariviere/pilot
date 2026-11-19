@@ -328,6 +328,14 @@ export class KernelSession {
 	}
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
+		if (
+			spec.dayInsightsRunId !== undefined &&
+			(!spec.insightsOwnerBinding ||
+				spec.role !== "insights" ||
+				!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(spec.dayInsightsRunId) ||
+				spec.configurationOnly)
+		)
+			throw new Error("Invalid fresh Day report envelope");
 		if (spec.planning) {
 			assertPlanningBinding(spec.planning);
 			if (
@@ -659,6 +667,8 @@ export class KernelSession {
 					}, hooks.publicationSource)
 				: undefined;
 			const active = await activeConversation(owned.storage, context);
+			if (spec.dayInsightsRunId && (await owned.storage.scanConversations({}, 1, undefined, context)).items.length)
+				throw new Error("Day report context already exists; never reopen or replay");
 			const [pinned, ghStack] = await Promise.all([
 				pinnedAgent(owned.storage, active),
 				spec.role ? Promise.resolve(false) : detectGhStack(spec.cwd),
@@ -801,7 +811,7 @@ export class KernelSession {
 					...(spec.feedbackLogs && hooks.callDiagnosticLogs
 						? [createDiagnosticLogTool(hooks.callDiagnosticLogs, { kind: "feedback" })]
 						: []),
-					...(spec.scopedMetrics && hooks.callDiagnosticContext
+					...(!spec.dayInsightsRunId && spec.scopedMetrics && hooks.callDiagnosticContext
 						? [createScopedMetricsTool(hooks.callDiagnosticContext)]
 						: []),
 					...(spec.role === "insights" && hooks.callInsightsBacklog

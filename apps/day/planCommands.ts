@@ -6,6 +6,7 @@
 import type { Interview, PlanPage, Question } from "pilot-day/native";
 import { dropChoice } from "./chatCommands";
 import { fundingAmount } from "./FundingSettings";
+import { findingGoal, findingWork, restoreOtherDraft } from "./insightsWork";
 import { deferred, returnToQuestion } from "./interviewView";
 import { linkedPlanned } from "./linkedMission";
 import { newFundingDraft } from "./modelSettingsDraft";
@@ -422,6 +423,7 @@ export async function planMission(plans: Plans, createAnother = false) {
 	newBusy.set(true);
 	newMessage.set("");
 	const goal = goalDraft();
+	const finding = findingWork();
 	// A linked draft names only its feedback and proposal: never a request or a re-plan.
 	const linked = linkedMission();
 	const feedback = linked
@@ -447,7 +449,7 @@ export async function planMission(plans: Plans, createAnother = false) {
 		}
 		const outcome = await plans.feed.plan({
 			createAnother,
-			goal,
+			goal: findingGoal(goal, "plan"),
 			setup: setup.digest,
 			replaces,
 			request,
@@ -457,10 +459,12 @@ export async function planMission(plans: Plans, createAnother = false) {
 		if (outcome.status === "accepted" && outcome.missionId) {
 			if (linked) linkedPlanned(linked);
 			else if (goalDraft() === goal) {
-				goalDraft.set("");
-				replacesDraft.set(null);
-				requestDraft.set(null);
-				dropChoice();
+				if (finding?.kind !== "plan" || !restoreOtherDraft(finding)) {
+					goalDraft.set("");
+					replacesDraft.set(null);
+					requestDraft.set(null);
+					dropChoice();
+				}
 			}
 			openPlan(outcome.missionId);
 		} else {
@@ -494,6 +498,8 @@ export async function checkCreation(plans: Plans, operationId?: string) {
 				from.proposalDigest === linked.proposalDigest
 			)
 				linkedPlanned(linked);
+			else if (findingWork()?.kind === "plan" && creation?.goal === findingGoal(goalDraft(), "plan"))
+				restoreOtherDraft();
 			openPlan(outcome.missionId);
 		}
 	} catch {

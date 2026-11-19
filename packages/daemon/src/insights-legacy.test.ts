@@ -138,6 +138,25 @@ test("exact legacy projection preserves mission ownership, original payload stri
 	assert.equal(f.store.require(f.selector.missionId).title, "User-owned legacy backlog");
 });
 
+test("Day discovery derives selectors and pages preserved reports/findings without activation", async (t) => {
+	const f = await fixture(t);
+	const rows = f.store["all"]("SELECT * FROM insights_items"),
+		metadata = await f.stored(f.report);
+	const reports = await f.service.discover();
+	assert.equal(reports.state, "available");
+	assert.equal(reports.items[0]?.kind, "report");
+	assert.ok(reports.nextCursor);
+	const findings = await f.service.discover(reports.nextCursor);
+	assert.equal(findings.state, "available");
+	assert.equal(findings.items[0]?.kind, "finding");
+	assert.equal(findings.nextCursor, null);
+	assert.deepEqual(findings.items[0]?.projection, await f.service.page(f.selector, "finding"));
+	assert.deepEqual(f.store["all"]("SELECT * FROM insights_items"), rows);
+	assert.deepEqual(await f.stored(f.report), metadata);
+	assert.equal(f.workers.length, 0);
+	await assert.rejects(f.service.discover("bad!"), /cursor/);
+});
+
 test("foreign lineage/context and unknown mission remain unavailable, never an empty successful setup", async (t) => {
 	const f = await fixture(t);
 	await assert.rejects(

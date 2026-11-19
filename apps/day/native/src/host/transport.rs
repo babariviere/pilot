@@ -403,7 +403,9 @@ impl Transport {
     pub(super) async fn project_preview(&self, path: &str, value: Value) -> Result<Value, Error> {
         if !matches!(
             path,
-            "/api/native-projects/preview" | "/api/github-import/preview"
+            "/api/native-projects/preview"
+                | "/api/github-import/preview"
+                | "/api/insights/day/preflight"
         ) {
             return Err(Error::Invalid);
         }
