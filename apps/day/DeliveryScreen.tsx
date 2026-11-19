@@ -19,6 +19,7 @@ import { artifactPreviewsAvailable } from "./bridge";
 import { ContinueRow } from "./ChatScreen";
 import { ChatWaits } from "./ChatWaits";
 import { openChat } from "./chatView";
+import { CodeChanges, CodeReviewScreen, ReviewStatus } from "./CodeReviewScreen";
 import type { Day } from "./day";
 import { artifactSelection } from "./deliveryArtifact";
 import type { AgentWork, OwnedChange } from "./deliveryBridge";
@@ -46,6 +47,8 @@ import {
 	chatNow,
 	checkLine,
 	closeDelivery,
+	codeReviewed,
+	codeReviewRoute,
 	type DeliveryPlace,
 	deliveryMessages,
 	doneAsk,
@@ -57,6 +60,8 @@ import {
 	inspectionCurrent,
 	inspectionOf,
 	lastInspection,
+	NOTE_LIMIT,
+	openCodeReview,
 	outputMessages,
 	ownPullRequests,
 	prName,
@@ -74,6 +79,7 @@ import {
 	showWork,
 	titleOf,
 	unsettledLine,
+	utf8,
 	whenOf,
 	workOnOpen,
 } from "./deliveryView";
@@ -82,8 +88,14 @@ import { LinkedFeedback } from "./LinkedFeedback";
 import { goHome } from "./nav";
 import { OutputComparison } from "./OutputComparison";
 import { pageScroll, scrolled } from "./onScreen";
-import { ResultReviewPanel } from "./ResultReviewPanel";
-import type { ResultReviewSource } from "./resultReview";
+import {
+	connectedResultReview,
+	forgetReviewDraft,
+	keepReviewDraft,
+	type ResultReviewSource,
+	reviewKey,
+} from "./resultReview";
+import { type ReviewSession, reviewSession } from "./reviewSession";
 import type { SessionChatMirror } from "./sessionChat";
 import {
 	Action,
@@ -101,19 +113,6 @@ import {
 	TextField,
 } from "./ui";
 import { setFor } from "./view";
-
-/** The most UTF-8 bytes a Send back note holds. */
-const NOTE_LIMIT = 8000;
-
-/** UTF-8 bytes of `text`, without an encoder. */
-function utf8(text: string): number {
-	let n = 0;
-	for (const ch of text) {
-		const c = ch.codePointAt(0) ?? 0;
-		n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
-	}
-	return n;
-}
 
 /** One line of "Where this stands": what, then its state. */
 function Stand(props: { label: string; value: string; testID: string; tone?: "needs" }) {
@@ -884,8 +883,85 @@ function Reminders(props: { place: DeliveryPlace; work: DeliveredWork }) {
 	);
 }
 
-/** The user's own check: reminders, Mark done and Send back, or how the last check ended. */
-function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: DeliveredWork; title: string }) {
+/**
+ * A note on the whole result: a general comment, which Send back includes, or the private My notes, which it never
+ * does. Both use the review's existing save paths and never go to GitHub.
+ */
+function NoteEditor(props: { review: ReviewSession; placeKey: string }) {
+	const r = props.review;
+	const mine = () => r.draft().kind === "note";
+	const body = () => (r.draft().anchor.kind === "general" ? r.draft().body : "");
+	const field = keepField(`review:${r.key}`, () => `delivery/${props.placeKey}`, body);
+	return (
+		<View class="gap-1.5">
+			<TextField
+				variant="composer"
+				testID="review-body"
+				ref={field.ref}
+				onFocus={field.focus}
+				onSelectionChange={field.select}
+				accessibilityLabel={
+					mine() ? "My notes. Only for you; Send back never includes them." : "Your note on this result."
+				}
+				placeholder={mine() ? "Notes only for you" : "A note on this result. Send back includes it."}
+				multiline
+				autoFocus
+				value={body()}
+				disabled={r.busy() || r.pending().length > 0}
+				onChange={({ value }) =>
+					keepReviewDraft(r.key, { kind: r.draft().kind, anchor: { kind: "general" }, body: value })
+				}
+			/>
+			<If when={utf8(body()) > NOTE_LIMIT}>
+				<Text class="text-xs text-needs-ink">This note is too long to save. Shorten it first.</Text>
+			</If>
+			<Text class="text-xs text-faint">
+				{mine()
+					? "Only for you. Send back never includes them, and nothing goes to GitHub."
+					: "Kept with this result and counted with your comments. Send back includes it; nothing goes to GitHub."}
+			</Text>
+			<View class="flex-row gap-2">
+				<Action
+					variant="primary"
+					label={r.busy() ? "Saving…" : mine() ? "Save my notes" : "Save note"}
+					testID="note-save"
+					disabled={r.disabled() || utf8(body()) > NOTE_LIMIT || (!mine() && !body().trim())}
+					onPress={() => void r.save()}
+				/>
+				<Action
+					label="Cancel"
+					testID="note-cancel"
+					disabled={r.busy()}
+					onPress={() => {
+						glide();
+						r.editorOpen.set(false);
+					}}
+				/>
+				<Action
+					label="Discard"
+					testID="note-discard"
+					disabled={r.busy() || r.pending().length > 0}
+					onPress={() => {
+						glide();
+						forgetReviewDraft(r.key);
+						r.editorOpen.set(false);
+					}}
+				/>
+			</View>
+		</View>
+	);
+}
+
+/** The user's own check: reminders, Mark done, Send back and a note, or how the last check ended. */
+function YourCheck(props: {
+	mirror: DeliveryMirror;
+	place: DeliveryPlace;
+	work: DeliveredWork;
+	title: string;
+	review?: ReviewSession;
+	/** Review code is the page's primary command until the user opens it. */
+	reviewFirst: boolean;
+}) {
 	const key = () => props.place.key;
 	const w = () => props.work;
 	const v = () => props.mirror.view();
@@ -906,6 +982,7 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
 	};
 	const tooLong = () => utf8(note()) > NOTE_LIMIT;
 	const field = keepField(`note:${key()}`, () => `delivery/${key()}`, note);
+	const noting = () => props.review?.editorOpen() === true;
 
 	const send = async (action: Assessment) => {
 		const shown = w();
@@ -1100,10 +1177,13 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
 							</View>
 						</Panel>
 					</If>
-					<If when={!open() && !asked()}>
+					<If when={noting() && !open() && !asked()}>
+						<NoteEditor review={props.review as ReviewSession} placeKey={key()} />
+					</If>
+					<If when={!open() && !asked() && !noting()}>
 						<View class="flex-row flex-wrap gap-2">
 							<Action
-								variant="primary"
+								variant={props.reviewFirst ? "outline" : "primary"}
 								label={sending() ? "Sending…" : "Mark done"}
 								testID="mark-done"
 								disabled={sending()}
@@ -1118,12 +1198,49 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
 									setFor(backOpen, key(), true);
 								}}
 							/>
+							<If when={props.review}>
+								<Action
+									label="Add a note"
+									testID="add-note"
+									disabled={props.review?.disabled() ?? true}
+									onPress={() => {
+										glide();
+										props.review?.startEditor("comment");
+									}}
+								/>
+								<Action
+									label="My notes…"
+									testID="my-notes"
+									disabled={props.review?.disabled() ?? true}
+									onPress={() => {
+										glide();
+										props.review?.startEditor("note");
+									}}
+								/>
+							</If>
 						</View>
 					</If>
 					<If when={!open() && note()}>
 						<Text class="text-xs text-faint">Your unsent note is kept. Send back… shows it again.</Text>
 					</If>
+					<Each of={props.review?.general() ?? []} key={(e) => e.operationId}>
+						{(e) => (
+							<Panel testID="saved-general" size="sm" selectable class="gap-1">
+								<Text class="text-xs text-muted-foreground">Your note · goes with Send back</Text>
+								<Text class="text-sm text-foreground">{e().body}</Text>
+							</Panel>
+						)}
+					</Each>
+					<If when={props.review?.note() && !noting()}>
+						<Panel testID="saved-note" size="sm" selectable class="gap-1">
+							<Text class="text-xs text-muted-foreground">My notes · only for you</Text>
+							<Text class="text-sm text-foreground">{props.review?.note() ?? ""}</Text>
+						</Panel>
+					</If>
 				</View>
+			</If>
+			<If when={props.review}>
+				<ReviewStatus review={props.review as ReviewSession} />
 			</If>
 			<If when={deliveryMessages()[key()]}>
 				<Text role="alert" testID="delivery-message" class="text-sm text-needs-ink">
@@ -1210,6 +1327,7 @@ export function DeliveryScreen(props: {
 		"escape",
 		() => {
 			const last = lastInspection(key);
+			if (codeReviewRoute() === key) return;
 			if (doneAsk()?.key === key) doneAsk.set(null);
 			else if (backOpen()[key]) {
 				glide();
@@ -1222,86 +1340,137 @@ export function DeliveryScreen(props: {
 		},
 		{ when: "always" },
 	);
-	const scroll = keepScroll(`delivery/${key}`);
 	const unsettled = () => mirror.view().unsettled.find((o) => o.key === key);
+	const reviewSource = props.reviewSource ?? connectedResultReview();
+	const onLater = () => {
+		void mirror.source.readSaved();
+		closeDelivery();
+	};
 	return (
-		<Scroll
-			class="flex-1 bg-background"
-			contentOffset={scroll.contentOffset}
-			scrollEventThrottle={100}
-			ref={pageScroll}
-			onScroll={(e) => {
-				scroll.onScroll(e);
-				scrolled();
-			}}
-		>
-			<Page testID="delivery" gap={8}>
-				<View class="gap-2">
-					<PageTitle title={title()} />
-					<Text class="text-sm text-muted-foreground">{origin()}</Text>
-					<If when={props.day.search && fresh() && work()?.deliveryId}>
-						<InspectInWindow
-							title={title()}
-							context={destinationProject() || origin()}
-							text={[
-								work()?.scope,
-								agentLine(work()!),
-								work()?.workerDelivery?.summary,
-								work()?.completion?.checks ?? work()?.workerDelivery?.checks,
-								work()?.completion?.issues ?? work()?.workerDelivery?.issues,
-							]
-								.filter(Boolean)
-								.join("\n\n")}
-						/>
-					</If>
-				</View>
-				<If when={entry()?.reason}>
-					<Notice testID="delivery-off" text={entry()?.reason ?? ""} />
-				</If>
-				<If
-					when={work()}
-					else={
-						<Text class="text-base text-muted-foreground">
-							{reading() && !entry()?.reason ? "Reading this result…" : "Pilot cannot show this result now."}
-						</Text>
-					}
-				>
-					<Each of={work() ? [work() as DeliveredWork] : []} key={(w) => w.deliveryId ?? "none"}>
-						{(w) => (
-							<View class="gap-10">
-								<ChatNow
-									day={props.day}
-									work={w()}
-									placeKey={props.place.key}
-									reread={() => void mirror.source.read(props.place.subject)}
-								/>
-								<Report work={w()} />
-								<Screens mirror={mirror} work={w()} fresh={fresh()} resultKey={props.place.key} />
-								<ResultReviewPanel
-									source={props.reviewSource}
-									work={w()}
-									fresh={fresh()}
-									onLater={() => {
-										void mirror.source.readSaved();
-										closeDelivery();
-									}}
-								/>
-								<Outputs mirror={mirror} place={props.place} work={w()} fresh={fresh()} anchors={anchors} />
-								<If when={w().deliveryId}>
-									<AgentWorkPanel mirror={mirror} place={props.place} work={w()} fresh={fresh()} />
-								</If>
-								<Stands work={w()} unsettled={unsettled()} />
-								<YourCheck mirror={mirror} place={props.place} work={w()} title={title()} />
-								<If when={props.day.feedback && w().deliveryId}>
-									<LinkedFeedback mirror={props.day.feedback!} scope={feedbackScope} disabled={!fresh()} />
-								</If>
-							</View>
-						)}
-					</Each>
-				</If>
-			</Page>
-		</Scroll>
+		<If when={codeReviewRoute() === key} else={<ResultPage />}>
+			<Each of={work() ? [work() as DeliveredWork] : []} key={(w) => w.deliveryId ?? "none"}>
+				{(w) => (
+					<CodeReviewScreen
+						mirror={mirror}
+						place={props.place}
+						work={w()}
+						fresh={fresh()}
+						title={title()}
+						source={reviewSource}
+					/>
+				)}
+			</Each>
+		</If>
 	);
+
+	function ResultPage() {
+		const scroll = keepScroll(`delivery/${key}`);
+		return (
+			<Scroll
+				class="flex-1 bg-background"
+				contentOffset={scroll.contentOffset}
+				scrollEventThrottle={100}
+				ref={pageScroll}
+				onScroll={(e) => {
+					scroll.onScroll(e);
+					scrolled();
+				}}
+			>
+				<Page testID="delivery" gap={8}>
+					<View class="gap-2">
+						<PageTitle title={title()} />
+						<Text class="text-sm text-muted-foreground">{origin()}</Text>
+						<If when={props.day.search && fresh() && work()?.deliveryId}>
+							<InspectInWindow
+								title={title()}
+								context={destinationProject() || origin()}
+								text={[
+									work()?.scope,
+									agentLine(work()!),
+									work()?.workerDelivery?.summary,
+									work()?.completion?.checks ?? work()?.workerDelivery?.checks,
+									work()?.completion?.issues ?? work()?.workerDelivery?.issues,
+								]
+									.filter(Boolean)
+									.join("\n\n")}
+							/>
+						</If>
+					</View>
+					<If when={entry()?.reason}>
+						<Notice testID="delivery-off" text={entry()?.reason ?? ""} />
+					</If>
+					<If
+						when={work()}
+						else={
+							<Text class="text-base text-muted-foreground">
+								{reading() && !entry()?.reason ? "Reading this result…" : "Pilot cannot show this result now."}
+							</Text>
+						}
+					>
+						<Each of={work() ? [work() as DeliveredWork] : []} key={(w) => w.deliveryId ?? "none"}>
+							{(w) => {
+								const review =
+									reviewSource && w().deliveryId ? reviewSession(w, fresh, reviewSource, onLater) : undefined;
+								const reviewFirst = () => !!review && review.hasCode() && !codeReviewed()[reviewKey(w())];
+								return (
+									<View class="gap-10">
+										<ChatNow
+											day={props.day}
+											work={w()}
+											placeKey={props.place.key}
+											reread={() => void mirror.source.read(props.place.subject)}
+										/>
+										<Report work={w()} />
+										<Screens mirror={mirror} work={w()} fresh={fresh()} resultKey={props.place.key} />
+										<If when={review}>
+											<CodeChanges
+												review={review as ReviewSession}
+												work={w()}
+												placeKey={key}
+												primary={
+													reviewFirst() &&
+													!backOpen()[key] &&
+													doneAsk()?.key !== key &&
+													!review?.editorOpen()
+												}
+												onOpen={() => openCodeReview(key)}
+											/>
+										</If>
+										<Outputs
+											mirror={mirror}
+											place={props.place}
+											work={w()}
+											fresh={fresh()}
+											anchors={anchors}
+										/>
+										<If when={w().deliveryId}>
+											<AgentWorkPanel mirror={mirror} place={props.place} work={w()} fresh={fresh()} />
+										</If>
+										<Stands work={w()} unsettled={unsettled()} />
+										<YourCheck
+											mirror={mirror}
+											place={props.place}
+											work={w()}
+											title={title()}
+											review={review}
+											reviewFirst={reviewFirst()}
+										/>
+										<If when={props.day.feedback && w().deliveryId}>
+											<LinkedFeedback
+												mirror={props.day.feedback!}
+												scope={feedbackScope}
+												disabled={!fresh()}
+											/>
+										</If>
+									</View>
+								);
+							}}
+						</Each>
+					</If>
+				</Page>
+			</Scroll>
+		);
+	}
 }
 
 import { InspectInWindow } from "./InspectionWindow";

@@ -305,6 +305,10 @@ Mark done (confirmed first while a pull request is not merged), Send back and
 Reopen send exactly the displayed `DeliveredWork` pins. A confirmation pinned
 to an older delivery or revision cannot be sent. A lost or uncertain answer is
 Unknown and Check-only; a GET that already reports Done does not settle it.
+When the result has saved code, a Code changes row opens Review code (`CodeReviewScreen.tsx`),
+a page over the result that Back returns from. Its Send back with comments is the same
+`send_back` assessment, with the saved comments as the note (docs/technical/day-result-comments.md).
+Opening it only reads, and is window-local: it makes Mark done the primary command.
 
 `ToCheck.tsx` builds Today's To check from discovery plus saved records: subjects named
 by `day.delivery.saved` (Unknown first, then sent back or reopened, then Done)

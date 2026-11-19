@@ -18,6 +18,7 @@ import type {
 	VerificationSubject,
 } from "./deliveryFeed";
 import { deliveryKey, subjectOf, workOf } from "./deliveryFeed";
+import { restoreScroll, scrollOf } from "./kept";
 import { captureReviewDrafts, restoreReviewDrafts } from "./resultReview";
 import { glide } from "./ui";
 
@@ -26,6 +27,29 @@ export type DeliveryPlace = { key: string; subject: VerificationSubject; title: 
 
 /** The delivered result whose page is open, over Today or a mission. */
 export const deliveryRoute = signal<DeliveryPlace | null>(null);
+/** The result, by key, whose Review code page lies over its result page. */
+export const codeReviewRoute = signal<string | null>(null);
+/**
+ * Result versions whose Review code page the user opened in this window, by `reviewKey`. Until then Review code
+ * is the result page's primary command; after it, Mark done is. Window-local: it sends and saves nothing.
+ */
+export const codeReviewed = signal<Record<string, true>>({});
+/** The result whose Code changes row shows now, so Command+K can offer Review code. */
+export const reviewableCode = signal<string | null>(null);
+/** Set as Review code closes: the result page gives Review code the keyboard focus once. */
+export const focusReviewCode = signal<string | null>(null);
+/** The most UTF-8 bytes a Send back note holds. */
+export const NOTE_LIMIT = 8000;
+
+/** UTF-8 bytes of `text`, without an encoder. */
+export function utf8(text: string): number {
+	let n = 0;
+	for (const ch of text) {
+		const c = ch.codePointAt(0) ?? 0;
+		n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+	}
+	return n;
+}
 /** Titles Pilot knows for results, by key, from the pages that named them. */
 export const deliveryTitles = signal<Record<string, string>>({});
 /** Unsent Send back notes, exactly as typed, by result. */
@@ -136,6 +160,9 @@ export function restoreDeliveryView(view: SavedDeliveryView) {
 export function resetDeliveryView() {
 	restoreReviewDrafts([]);
 	deliveryRoute.set(null);
+	codeReviewRoute.set(null);
+	codeReviewed.set({});
+	focusReviewCode.set(null);
 	deliveryTitles.set({});
 	backNotes.set({});
 	backOpen.set({});
@@ -492,7 +519,27 @@ export function closeDelivery() {
 	hideInspection();
 	agentWork.set({});
 	workOnOpen.set(null);
+	codeReviewRoute.set(null);
 	deliveryRoute.set(null);
+}
+
+/** Opens Review code over result `key`'s page. The result page keeps its scroll for the way back. */
+export function openCodeReview(key: string) {
+	if (deliveryRoute()?.key !== key) return;
+	const page = `delivery/${key}`;
+	restoreScroll(page, scrollOf(page));
+	doneAsk.set(null);
+	glide();
+	codeReviewRoute.set(key);
+}
+
+/** Back from Review code to its result page, which gives Review code the keyboard focus. */
+export function closeCodeReview() {
+	const key = codeReviewRoute();
+	if (!key) return;
+	focusReviewCode.set(key);
+	glide();
+	codeReviewRoute.set(null);
 }
 
 /** The words Pilot uses for a result it has no title for. */

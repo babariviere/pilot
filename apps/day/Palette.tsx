@@ -8,7 +8,7 @@
 import { cleanup, computed, effect, Keyboard, keymap, signal, Text, untracked, View } from "nsh";
 import { Command, type CommandItem, type CommandRef, Dialog } from "nsh/base";
 import { openChat } from "./chatView";
-import { openDelivery } from "./deliveryView";
+import { deliveryRoute, openCodeReview, openDelivery, reviewableCode } from "./deliveryView";
 import {
 	goArtifacts,
 	goChanges,
@@ -103,6 +103,15 @@ function entries(places: Places): Entry[] {
 		});
 	};
 	place("today", "Today", true, goHome, { keywords: ["home"], here: at === "today" });
+	// The open result's Review code, while its page shows a Code changes row.
+	const result = deliveryRoute()?.key;
+	if (result && (at === "code-review" || (at === "delivery" && reviewableCode() === result))) {
+		place("review-code", "Review code", true, () => openCodeReview(result), {
+			keywords: ["diff", "comments", "changes"],
+			shortcut: "mod+r",
+			here: at === "code-review",
+		});
+	}
 	// The service, only when it needs the user, as the header offers it.
 	const update = updateEntry();
 	const word = update && !updateOpen() ? updateLabel(update.service()) : "";

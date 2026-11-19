@@ -10,6 +10,7 @@ import document from "../icons/document.svg";
 import fullscreen from "../icons/fullscreen.svg";
 import fullscreenExit from "../icons/fullscreen-exit.svg";
 import moon from "../icons/moon.svg";
+import more from "../icons/more.svg";
 import notes from "../icons/notes.svg";
 import pause from "../icons/pause.svg";
 import play from "../icons/play.svg";
@@ -32,6 +33,7 @@ const ICONS = {
 	fullscreen,
 	fullscreenExit,
 	moon,
+	more,
 	notes,
 	pause,
 	play,

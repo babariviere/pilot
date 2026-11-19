@@ -1,8 +1,11 @@
-// Invented service data only. Exercises the production review panel, not a second screen.
-import { mount, Scroll, signal, Text, View } from "nsh";
-import type { DeliveredWork } from "./deliveryContract";
-import { backNotes } from "./deliveryView";
-import { ResultReviewPanel } from "./ResultReviewPanel";
+// Invented service data only. Exercises the production result page and its Review code page over a scripted
+// result (deliveryDemo.ts) and a scripted private review, not a second screen.
+import { keymap, mount, signal, Text, View } from "nsh";
+import { DeliveryScreen } from "./DeliveryScreen";
+import { ScriptedDelivery } from "./deliveryDemo";
+import { mirrorDelivery } from "./deliveryFeed";
+import { backNotes, type DeliveryPlace, deliveryRoute, openDelivery } from "./deliveryView";
+import { openDay } from "./mockFeeds";
 import {
 	captureReviewDrafts,
 	type ResultReviewEntry,
@@ -10,32 +13,29 @@ import {
 	restoreReviewDrafts,
 	reviewDrafts,
 } from "./resultReview";
-import { Action, Page } from "./ui";
+import { Action } from "./ui";
 
-const work = signal<DeliveredWork>({
-	version: 1,
-	subject: { kind: "task", projectId: "project", missionId: "mission", taskId: "task" },
-	deliveryId: "a".repeat(64),
-	targetId: "target",
-	ownerSessionId: "worker",
-	pullRequests: [],
-	artifacts: [],
-	production: "not_tracked",
-	verification: null,
-	verificationCurrent: false,
-	verificationReceiptState: "unknown",
-	verificationRevision: 0,
-	pendingOperationId: null,
-});
+const KEY = "task/mock-project/native/native-4";
+const delivery = new ScriptedDelivery();
+const day = { ...openDay(), delivery: mirrorDelivery(delivery) };
+void delivery.readSaved();
+openDelivery({ kind: "task", projectId: "mock-project", missionId: "native", taskId: "native-4" }, "#4 History slice");
+
 const entries: ResultReviewEntry[] = [];
 const revision = signal(0);
-const sends = signal(0);
-const laterReturns = signal(0);
+const saves = signal(0);
 let lose = false;
 let refuse = false,
 	hold = false,
 	release: (() => void) | undefined;
 let pending: string[] = [];
+const file = (path: string, before: string, after: string, n: number) => ({
+	path,
+	status: "modified",
+	reason: "",
+	before: { path, sha256: String(n).repeat(64), text: before },
+	after: { path, sha256: String(n + 1).repeat(64), text: after },
+});
 const source: ResultReviewSource = {
 	async read(shown) {
 		return {
@@ -52,31 +52,34 @@ const source: ResultReviewSource = {
 	async diff() {
 		return {
 			snapshotId: "snapshot",
-			base: "8ac2d10",
-			head: "c94fa21",
+			base: "8ac2d10e",
+			head: "c94fa21b",
 			status: "complete",
 			omissions: [],
 			files: [
-				{
-					path: "src/export.ts",
-					status: "modified",
-					reason: "",
-					before: {
-						path: "src/export.ts",
-						sha256: "b".repeat(64),
-						text: "async function exportReport() {\n  const path = await chooseSavePath();\n  clearDraft();\n  await writeReport(path);\n}\n",
-					},
-					after: {
-						path: "src/export.ts",
-						sha256: "c".repeat(64),
-						text: "async function exportReport() {\n  const path = await chooseSavePath();\n  if (!path) return;\n  await writeReport(path);\n  clearDraft();\n}\n",
-					},
-				},
+				file(
+					"src/export.ts",
+					"async function exportReport() {\n  const path = await chooseSavePath();\n  clearDraft();\n  await writeReport(path);\n}\n",
+					"async function exportReport() {\n  const path = await chooseSavePath();\n  if (!path) return;\n  await writeReport(path);\n  clearDraft();\n}\n",
+					1,
+				),
+				file(
+					"src/history/loader.ts",
+					"export function load(page: number) {\n  return fetchPage(page);\n}\n",
+					"export function load(page: number, before?: string) {\n  return fetchPage(page, before);\n}\n",
+					3,
+				),
+				file(
+					"src/history/loader.test.ts",
+					"test('loads', () => load(1));\n",
+					"test('loads', () => load(1));\ntest('loads older', () => load(2, 'm1'));\n",
+					5,
+				),
 			],
 		};
 	},
 	async save(shown, edit) {
-		sends.set(sends() + 1);
+		saves.set(saves() + 1);
 		if (refuse) {
 			refuse = false;
 			const receipt = {
@@ -116,67 +119,73 @@ const source: ResultReviewSource = {
 		return { state: receipt ? "saved" : "unknown", operationId: id, receipt };
 	},
 };
-mount(() => (
-	<View class="flex-1 bg-background">
-		<Scroll testID="review-scroll" class="flex-1 min-h-0">
-			<Page gap={8}>
-				<Text class="text-xs text-muted-foreground">Mock data · Result review fixture</Text>
-				<Text class="text-2xl font-semibold text-foreground">Keep the export draft after cancel</Text>
-				<Text class="text-sm text-muted-foreground">
-					Checks: cancel and exact-byte export passed. Risks: Linux dialog unverified.
-				</Text>
-				<Each of={[`${work().deliveryId}:${revision()}`]} key={(id) => id}>
-					{() => (
-						<ResultReviewPanel
-							source={source}
-							work={work()}
-							fresh={true}
-							onLater={() => laterReturns.set(laterReturns() + 1)}
-						/>
-					)}
+mount(() => {
+	// A background read of the same result, as a fresh copy, from a key so the focus stays where it is.
+	keymap.bind(
+		"mod+shift+u",
+		() => {
+			const shown = delivery.works.get(KEY);
+			if (shown) delivery.works.set(KEY, { ...shown });
+			delivery.publish();
+		},
+		{ when: "always" },
+	);
+	return (
+		<View class="flex-1 bg-background">
+			<View class="min-h-0 flex-1">
+				<Each
+					of={deliveryRoute() ? [{ place: deliveryRoute() as DeliveryPlace, at: revision() }] : []}
+					key={(p) => `${p.place.key}:${p.at}`}
+				>
+					{(p) => <DeliveryScreen day={day} place={p().place} reviewSource={source} />}
 				</Each>
-				<Text testID="revision-request">{backNotes()["task/project/mission/task"] ?? "No revision request"}</Text>
-			</Page>
-		</Scroll>
-		<View class="flex-row flex-wrap gap-2 p-3 border-t border-border">
-			<Text>{`Saves: ${sends()}`}</Text>
-			<Text>{`Later returns: ${laterReturns()}`}</Text>
-			<Action
-				label="Refuse next save"
-				onPress={() => {
-					refuse = true;
-				}}
-			/>
-			<Action
-				label="Delay next save reply"
-				onPress={() => {
-					hold = true;
-				}}
-			/>
-			<Action
-				label="Release saved reply"
-				onPress={() => {
-					release?.();
-					release = undefined;
-				}}
-			/>
-			<Action
-				label="Lose next save reply"
-				onPress={() => {
-					lose = true;
-				}}
-			/>
-			<Action label="Reopen review" onPress={() => revision.set(revision() + 1)} />
-			<Action label="New result version" onPress={() => work.set({ ...work(), deliveryId: "d".repeat(64) })} />
-			<Action
-				label="Save and restore drafts"
-				onPress={() => {
-					const saved = captureReviewDrafts();
-					reviewDrafts.set({});
-					restoreReviewDrafts(saved);
-					revision.set(revision() + 1);
-				}}
-			/>
+				<If when={!deliveryRoute()}>
+					<Text class="p-6 text-sm text-muted-foreground">Result closed</Text>
+				</If>
+			</View>
+			<View class="flex-row flex-wrap gap-2 border-t border-border p-3">
+				<Text class="text-xs text-muted-foreground">Mock data · Result review fixture</Text>
+				<Text>{`Saves: ${saves()}`}</Text>
+				<Text>{`Sends: ${delivery.counts().sends}`}</Text>
+				<Text testID="sent-note">{`Note sent: [${delivery.counts().note}]`}</Text>
+				<Text testID="revision-request">{backNotes()[KEY] ?? "No unsent Send back note"}</Text>
+				<Action
+					label="Refuse next save"
+					onPress={() => {
+						refuse = true;
+					}}
+				/>
+				<Action
+					label="Delay next save reply"
+					onPress={() => {
+						hold = true;
+					}}
+				/>
+				<Action
+					label="Release saved reply"
+					onPress={() => {
+						release?.();
+						release = undefined;
+					}}
+				/>
+				<Action
+					label="Lose next save reply"
+					onPress={() => {
+						lose = true;
+					}}
+				/>
+				<Action label="Reopen review" onPress={() => revision.set(revision() + 1)} />
+				<Action label="New result version" onPress={() => delivery.deliverAgain(KEY, "d")} />
+				<Action
+					label="Save and restore drafts"
+					onPress={() => {
+						const saved = captureReviewDrafts();
+						reviewDrafts.set({});
+						restoreReviewDrafts(saved);
+						revision.set(revision() + 1);
+					}}
+				/>
+			</View>
 		</View>
-	</View>
-));
+	);
+});

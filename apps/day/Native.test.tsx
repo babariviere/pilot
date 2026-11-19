@@ -26,7 +26,7 @@ test("Linear publisher fixture preview and interrupted write, captured", async (
 	await app.screenshot("output/linear-publisher-interrupted.png");
 });
 
-test("result review: outcome and visible code comments captured", async () => {
+test("result review: the Code changes row and the Review code page, captured", async () => {
 	const app = await open("./DeliveryFixture.tsx", { platform: "macos", width: 1100, height: 1400 });
 	await app.waitFor("id:to-check");
 	if (app.shows("Show private review fixture")) await app.press("Show private review fixture");
@@ -34,11 +34,25 @@ test("result review: outcome and visible code comments captured", async () => {
 	await app.screenshot("output/result-review-queue-light.png");
 	await app.press("id:check-task.mock-project.native.native-4");
 	await app.waitFor("id:delivery-report");
+	await app.scroll("id:delivery", 380);
 	await app.wait(400);
 	await app.screenshot("output/result-review-outcome-light.png");
-	await app.scroll("id:delivery", 550);
+	// Before Review code, the diff and comments sat further down the result page (before-after.sh runs this there).
+	if (!app.shows("id:review-code")) {
+		await app.scroll("id:delivery", 550);
+		await app.wait(400);
+		await app.screenshot("output/result-review-code-light.png");
+		return;
+	}
+	await app.press("id:review-code");
+	await app.waitFor("Your comment · line 3");
 	await app.wait(400);
 	await app.screenshot("output/result-review-code-light.png");
+	await app.press("id:review-diff >> text:5 >> nth=0");
+	await app.waitFor("id:review-body");
+	await app.type("id:review-body", "Clear the draft only after the write succeeds.");
+	await app.wait(400);
+	await app.screenshot("output/result-review-comment-light.png");
 });
 
 test("question help: background, an answered question and waiting notes, captured", async () => {

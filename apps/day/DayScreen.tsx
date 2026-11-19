@@ -269,7 +269,7 @@ function Results(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; 
 function OtherResults(props: { at: Shown; day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
 	return (
 		<If
-			when={props.at === "delivery"}
+			when={props.at === "delivery" || props.at === "code-review"}
 			else={
 				<If
 					when={props.at === "linear"}

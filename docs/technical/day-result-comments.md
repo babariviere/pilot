@@ -1,6 +1,9 @@
 # Private result review
 
-`ResultReviewPanel.tsx` extends the existing result page. The service stores comments,
+The result page (`DeliveryScreen.tsx`) shows one Code changes row and the note under Your check.
+`CodeReviewScreen.tsx` is the Review code page over it (`codeReviewRoute` in `deliveryView.ts`):
+files, the selected file's diff with comments under their lines, Keep for later and Send back.
+Both read and write through `reviewSession.ts` and `resultReview.ts`. The service stores comments,
 personal-note revisions and queue selections in `missions.sqlite`, separately from user
 verification and task completion. Only the native capability routes can access these rows.
 No review save calls a provider, sends to an agent or publishes to GitHub.
@@ -18,14 +21,18 @@ line range. The service supplies the excerpt from retained UTF-8 bytes. It never
 client excerpt text. Comparisons come from explicit delivery evidence or an exact match
 between the owner's reported commit and a retained committed comparison. Inventory reads
 inspect up to five metadata pages, not live repositories; a missing match stays unavailable.
-An old comment can reopen its original comparison through current retained-source access
-checks. There is no fuzzy reanchoring. Each file uses its own upstream NSH DiffView, keeping
+An old comment shows under its lines only where its exact snapshot, path and blob show, through
+current retained-source access checks. There is no fuzzy reanchoring. Each file uses its own upstream NSH DiffView, keeping
 line selection independent of other files. Binary/unkept sources explain why no text shows.
+File counts come from a line diff in `reviewSession.ts` (`lineCounts`), limited to 100,000 line
+comparisons per file (about 20 ms in QuickJS) so the page's thread stays free; past it, moved lines
+are not counted.
 
 The report, task state, publication observations and human acceptance remain separate.
-Existing Send back owns revision-message admission and receipt recovery. Preparing it
-copies selected comments, saved IDs and original excerpts, excludes personal notes, and
-preserves existing unsent words. It neither sends nor starts another agent.
+Existing Send back owns revision-message admission and receipt recovery. Send back with
+comments puts every saved comment of the shown version, with saved IDs and original excerpts,
+after any unsent Send back words, excludes personal notes, and sends it once through the same
+assessment as Send back. Over the 8,000-byte note limit it refuses and sends nothing.
 An existing active same-mission coordinator receives the request when available; otherwise
 the owner receives it. The Send back intent pins that route, and the native receipt pin keeps
 the exact recipient across restart. A route change invalidates that send envelope without
@@ -37,7 +44,8 @@ results are a separate bounded list. Later sorts after pending results, below ot
 questions/actions. Accepted or sent-back results are hidden only by the existing acknowledged
 verification rules. Personal notes never affect queue state or delivery identity.
 
-Reopening My notes keeps unsent edits ahead of the saved note. When a result changes,
+Add a note saves a general comment (`anchor.kind = "general"`); per-section comments are no longer
+offered. Reopening My notes keeps unsent edits ahead of the saved note. When a result changes,
 earlier unsent drafts stay readable in their original-version disclosure (20 per page).
 They are not moved into the current editor or sent automatically.
 
@@ -57,5 +65,5 @@ requests cannot consume it. Reaching this review-only limit refuses a new save w
 evidence or blocking ordinary result acceptance. Profile receipt compaction is not implemented.
 
 Tests use isolated service stores, the released JSON/native bridge and the production TSX
-panel with fixture sources. Those checks do not establish physical Linux or packaged-app
+pages with fixture sources. Those checks do not establish physical Linux or packaged-app
 qualification, Apple signing, user acceptance, or live cutover.

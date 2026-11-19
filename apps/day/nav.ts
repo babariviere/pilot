@@ -12,7 +12,15 @@ import type { Changes } from "./changeFeed";
 import { changesRoute, showChanges } from "./changesView";
 import { chatRoute, closeChat } from "./chatView";
 import type { Day } from "./day";
-import { closeDelivery, deliveryRoute, hideInspection } from "./deliveryView";
+import {
+	closeCodeReview,
+	closeDelivery,
+	codeReviewRoute,
+	deliveryRoute,
+	deliveryTitles,
+	focusReviewCode,
+	hideInspection,
+} from "./deliveryView";
 import { closeFeedback, feedbackOpen, openFeedback } from "./feedbackView";
 import { closeInsights, insightsOpen } from "./insightsView";
 import { closeLinear, linearOpen, openLinear } from "./linearView";
@@ -66,6 +74,7 @@ export type Shown =
 	| "chat"
 	| "settings"
 	| "feedback"
+	| "code-review"
 	| "delivery"
 	| "linear"
 	| "slack"
@@ -98,7 +107,8 @@ export function shown(places: Places): Shown {
 	if (places.day.chat && chatRoute()) return "chat";
 	if (places.day.preferences && settingsOpen()) return "settings";
 	if (places.day.feedback && feedbackOpen()) return "feedback";
-	if (places.day.delivery && deliveryRoute()) return "delivery";
+	const delivery = places.day.delivery ? deliveryRoute() : null;
+	if (delivery) return codeReviewRoute() === delivery.key ? "code-review" : "delivery";
 	if (places.day.linear && linearOpen()) return "linear";
 	if (places.day.slack && slackOpen()) return "slack";
 	if (places.day.artifacts && artifactsOpen()) return "artifacts";
@@ -144,6 +154,11 @@ export function backTarget(places: Places): Back | null {
 			return id
 				? to(places.day.feed.mission(id)?.row.title || "Mission overview", closeFeedback)
 				: to("Today", closeFeedback);
+		}
+		case "code-review": {
+			// Review code lies over its result's page.
+			const place = deliveryRoute();
+			return to(place?.title || (place ? deliveryTitles()[place.key] : "") || "Result", closeCodeReview);
 		}
 		case "delivery": {
 			const id = route();
@@ -222,6 +237,7 @@ function location(places: Places): string {
 		planRoute(),
 		chatRoute()?.sessionId,
 		deliveryRoute()?.key,
+		codeReviewRoute(),
 		threadRoute()?.topicId,
 		changesRoute(),
 		ritualRoute(),
@@ -249,6 +265,7 @@ export function jump(places: Places, open: () => void) {
 	const plan = planRoute();
 	const chat = chatRoute();
 	const delivery = deliveryRoute();
+	const codeReview = codeReviewRoute();
 	const thread = threadRoute();
 	const change = changesRoute();
 	const ritual = ritualRoute();
@@ -276,6 +293,7 @@ export function jump(places: Places, open: () => void) {
 		plan: "Plan",
 		chat: "Chat",
 		delivery: "Result",
+		"code-review": "Review code",
 		thread: "Discussion",
 		settings: "Settings",
 		feedback: "Feedback",
@@ -308,11 +326,15 @@ export function jump(places: Places, open: () => void) {
 					}
 				}
 				navigationError.set("");
+				// Leaving Review code for its own result page gives Review code the focus, as Back does.
+				const leaving = codeReviewRoute();
 				closePlaces();
 				route.set(mission);
 				planRoute.set(plan);
 				chatRoute.set(chat);
 				deliveryRoute.set(delivery);
+				codeReviewRoute.set(codeReview);
+				if (leaving && leaving === delivery?.key && codeReview !== leaving) focusReviewCode.set(leaving);
 				threadRoute.set(thread);
 				changesRoute.set(change);
 				ritualRoute.set(ritual);

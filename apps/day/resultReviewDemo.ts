@@ -61,6 +61,36 @@ export function resultReviewDemo(): ResultReviewSource {
 							text: "async function exportReport() {\n  const path = await chooseSavePath();\n  if (!path) return;\n  await writeReport(path);\n  clearDraft();\n}\n",
 						},
 					},
+					{
+						path: "src/history/loader.ts",
+						status: "modified",
+						reason: "",
+						before: {
+							path: "src/history/loader.ts",
+							sha256: "d".repeat(64),
+							text: "export async function loadHistory(chat: string) {\n  const page = await fetchPage(chat, 0);\n  return page.messages;\n}\n",
+						},
+						after: {
+							path: "src/history/loader.ts",
+							sha256: "e".repeat(64),
+							text: "const PAGE = 50;\n\n/** Older messages, 50 at a time, while a reply streams. */\nexport async function loadHistory(chat: string, before?: string) {\n  const page = await fetchPage(chat, { before, limit: PAGE });\n  keepScrollAnchor(page.first);\n  return page.messages;\n}\n",
+						},
+					},
+					{
+						path: "src/history/loader.test.ts",
+						status: "modified",
+						reason: "",
+						before: {
+							path: "src/history/loader.test.ts",
+							sha256: "f".repeat(64),
+							text: "test('loads history', async () => {\n  expect(await loadHistory('c1')).toHaveLength(20);\n});\n",
+						},
+						after: {
+							path: "src/history/loader.test.ts",
+							sha256: "0".repeat(64),
+							text: "test('loads history', async () => {\n  expect(await loadHistory('c1')).toHaveLength(50);\n});\n\ntest('loads older messages while a reply streams', async () => {\n  stream('c1');\n  expect(await loadHistory('c1', 'm50')).toHaveLength(50);\n});\n",
+						},
+					},
 				],
 			};
 		},

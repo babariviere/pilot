@@ -41,16 +41,22 @@ Standalone questions show only Chat. Back returns to the pending question and ke
 Opening either link sends no answer and starts no work.
 Older work stays in missions, without being accepted or deleted. Your saved
 checks stay available. Open a result directly from any project you can access.
-Result pages keep private general, section and code-line comments. Code changes shows
-saved old/new sources with line numbers, never a live working copy. A comparison must
-be linked evidence or match the owner's explicitly reported committed revision; otherwise
-the page says no matching comparison is available. Old comments keep their original
-excerpt and code context, with uncertain locations labeled after a new result.
-My notes stay personal. Prepare revision request copies saved comments and their context
-into Send back for you to review and send; it excludes personal notes and posts nothing
-to GitHub. Saving a comment or reading evidence never accepts a result.
-Later keeps a result behind other pending results. Add to review queue explicitly selects
-older work without accepting it or importing the rest of its history. Independent work continues.
+When a result has code, its page shows one **Code changes** row: files, lines added and
+removed, your comments, the pull request and the saved commits. **Review code** (⌘R, also in
+Command+K) opens the code on its own page; Back, ⌘[ or Escape returns to the result. Until you
+open it, Review code is the page's main button, then Mark done is. The page lists the files on
+the left (J and K go to the next and previous file) and shows the selected file's saved diff,
+never your working copy. Select lines to write a comment under them. Comments stay with the
+result and are never posted to GitHub. **Send back with N comments** sends every saved comment
+of this result, with its code, to the agent once, after any unsent Send back words.
+**Keep for later** keeps the result behind other pending results. The ⋯ menu has Add to review
+queue, which explicitly selects older work without accepting it, and Refresh private review.
+A comparison must be linked evidence or match the owner's explicitly reported committed revision;
+otherwise the page says no matching comparison is available. After a new result, old comments
+show as an earlier version where their exact code still shows.
+**Add a note** under Your check saves a general comment on the result. It counts with your
+comments and goes with Send back. **My notes…** keeps notes only for you; Send back never includes them.
+Saving a comment or a note, or reading code, never accepts a result. Independent work continues.
 Unconfirmed private saves offer Check saved comment, which reads only the original receipt.
 A result's Agent work section (folded until Show, or opened from a task linked in a thread) lists
 the changes its agent owns, the chat's saved pushes and pull requests, and what Pilot saw on GitHub.

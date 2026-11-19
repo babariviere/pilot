@@ -1,23 +1,36 @@
 // A read-only diff of one exact patch.
-import { type JSX, Text } from "nsh";
+import { type JSX, signal, Text, View } from "nsh";
 import type { DiffAnnotation, DiffLineRange } from "nsh/base";
 import { Button, type DiffFile, DiffView, type DiffViewClasses, type DiffViewRef } from "nsh/base";
-import { Action, FOCUS_RING } from "./button";
+import { FOCUS_RING } from "./button";
+import { Icon } from "./icon";
 
 export type { DiffAnnotation, DiffLineRange } from "nsh/base";
 
-/** Saved two-text comparison with private annotations. Callers own selections and comment bodies. */
+/**
+ * Saved two-text comparison with private annotations. Callers own selections and comment bodies. The Comment
+ * control shows only on the selected lines' last row, as a small + in the change-mark column, so it never covers
+ * line numbers or code. NSH places it in the gutter, so a wider label would cover the numbers.
+ */
 export function ReviewDiff(props: {
 	before: string;
 	after: string;
 	language: string;
 	annotations: DiffAnnotation[];
+	/** Hears the view, to clear its line selection. */
+	ref?: (diff: DiffViewRef) => void;
 	onSelection: (range: DiffLineRange | null) => void;
 	onComment: (range: DiffLineRange) => void;
 	renderAnnotation: (annotation: DiffAnnotation) => JSX.Element;
 }) {
+	const selected = signal<DiffLineRange | null>(null);
+	const isSelected = (range: DiffLineRange) => {
+		const s = selected();
+		return !!s && s.side === range.side && s.start === range.start && s.end === range.end;
+	};
 	return (
 		<DiffView
+			ref={(diff) => props.ref?.(diff)}
 			testID="review-diff"
 			oldValue={props.before}
 			newValue={props.after}
@@ -28,14 +41,24 @@ export function ReviewDiff(props: {
 			softWrap
 			classes={DIFF_CLASSES}
 			class="flex-1 min-h-0"
-			onLineSelectionChange={({ range }) => props.onSelection(range)}
+			onLineSelectionChange={({ range }) => {
+				selected.set(range);
+				props.onSelection(range);
+			}}
 			annotations={props.annotations}
 			renderAddAnnotation={(range) => (
-				<Action
-					label="Comment"
-					accessibilityLabel="Comment on these code lines"
-					onPress={() => props.onComment(range)}
-				/>
+				<If when={isSelected(range)}>
+					<View class="absolute inset-y-0 right-0 justify-center pr-0.5">
+						<Button
+							accessibilityLabel="Comment on these code lines"
+							tooltip="Comment on these lines"
+							onPress={() => props.onComment(range)}
+							class={`size-4 items-center justify-center rounded bg-primary ${FOCUS_RING}`}
+						>
+							<Icon name="plus" tint="tint-primary-foreground" />
+						</Button>
+					</View>
+				</If>
 			)}
 			renderAnnotation={(annotation) => props.renderAnnotation(annotation)}
 		/>
