@@ -6,19 +6,9 @@ import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import type { LoadedMcpConfig, McpServerEntry, McpTransportFactory } from "@earendil-works/pi-coding-agent";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
-import { getPilotConfigDir } from "./config.ts";
-import { slackReactionUser } from "./slack-reaction-owner.ts";
-import {
-	loadSlackRemovalRoute,
-	slackRemovalCall,
-	slackRouteCall,
-	TRACKING_CONFIG_FILE,
-} from "./slack-removal-route.ts";
 import {
 	decodeMcpResult,
 	dedicatedSourceTool,
-	SlackRemovalError,
-	type SlackRemovalFailure,
 	SourceRateLimited,
 	SourceToolError,
 	slackAlreadyReacted,
@@ -90,35 +80,17 @@ let reply: {
 	toolError?: boolean;
 	failureCategory?: ReturnType<typeof sourceToolFailure>;
 	configuration?: boolean;
-	removalFailure?: SlackRemovalFailure;
 	notDispatched?: true;
 };
 try {
 	const { kind, tool: logicalTool, args } = workerData;
 	if (!validSourceArguments(logicalTool, args)) throw new SetupError("Invalid Linear or Slack start update");
-	const removal = kind === "slack" && logicalTool === "removeSlackEyes";
 	const agentDir = workerData.agentDir ?? paths.getAgentDir();
-	const configDir = workerData.configDir ?? getPilotConfigDir();
-	const removalConfig = removal
-		? await loadSlackRemovalRoute(configDir).catch(() => {
-				throw new SetupError("Slack eyes removal route is unconfigured or invalid");
-			})
-		: undefined;
-	if (removalConfig?.enabled === false) throw new SetupError("Slack eyes removal is disabled");
-	const route = removalConfig ? slackRemovalCall(removalConfig, args.channel_id, args.message_ts) : undefined;
-	const name = route?.tool ?? dedicatedSourceTool(kind, logicalTool);
+	const name = dedicatedSourceTool(kind, logicalTool);
 	if (!name) throw new SetupError("Unknown dedicated MCP source tool");
-	// Local user config only. A repository cannot supply an executable removal route.
-	// Removal is entirely daemon-owned: do not load mcp.json or register its tools with agents.
-	const entry: McpServerEntry | undefined = route
-		? {
-				name: "pilot-slack-removal",
-				source: join(configDir, TRACKING_CONFIG_FILE),
-				config: { type: "http", ...route.server },
-			}
-		: config
-				.loadMcpConfig({ agentDir, cwd: agentDir, projectTrusted: false })
-				.servers.find((entry) => entry.name === kind);
+	const entry: McpServerEntry | undefined = config
+		.loadMcpConfig({ agentDir, cwd: agentDir, projectTrusted: false })
+		.servers.find((entry) => entry.name === kind);
 	if (!entry) throw new SetupError("Dedicated MCP server is not configured in pi");
 	if (entry.config.enabled === false) throw new SetupError("MCP server is disabled or hidden");
 	if (config.getMcpToolExposure(entry.config, name) === "hidden") throw new SetupError("MCP tool is hidden");
@@ -159,13 +131,10 @@ try {
 		entry,
 		cwd: agentDir,
 		createTransport: runtime.createDefaultTransport,
-		// Explicit Bearer configuration needs no OAuth store and must never fall back to one.
-		credentials: removal
-			? undefined
-			: new runtime.McpOAuthCredentialStore(
-					new auth.FileAuthStorageBackend(join(agentDir, "mcp-auth.json")),
-					agentDir,
-				),
+		credentials: new runtime.McpOAuthCredentialStore(
+			new auth.FileAuthStorageBackend(join(agentDir, "mcp-auth.json")),
+			agentDir,
+		),
 		onTools: () => {},
 	});
 	if (controller.signal.aborted) throw controller.signal.reason;
@@ -173,71 +142,28 @@ try {
 	const tool = connection.tools.find((tool) => tool.name === name);
 	if (
 		!tool ||
-		(!removal &&
-			logicalTool !== "startIssue" &&
+		(logicalTool !== "startIssue" &&
 			logicalTool !== "publishIssueWrite" &&
 			logicalTool !== "startSlack" &&
-			logicalTool !== "doneSlack" &&
 			(tool.annotations?.readOnlyHint === false || tool.annotations?.destructiveHint === true))
 	)
 		throw new SetupError("Tracking tool is missing or advertises writes");
 	const options = { signal: controller.signal, timeoutMs: 30_000 };
-	if (removalConfig) {
-		if (!removalConfig.identityTool) throw new SlackRemovalError("identity_unverified");
-		const identity = slackRouteCall(removalConfig, removalConfig.identityTool, {});
-		if (!connection.tools.some((tool) => tool.name === identity.tool))
-			throw new SlackRemovalError("identity_unverified");
-		const user = slackReactionUser(decodeMcpResult(await connection.callTool(identity.tool, identity.args, options)));
-		if (!user) throw new SlackRemovalError("identity_unverified");
-		if (user !== args.user_id) throw new SlackRemovalError("identity_mismatch");
-	}
-	let userId: string | undefined;
-	if (kind === "slack" && logicalTool === "startSlack") {
-		// Same credential/connection as the write. Identity failure must not prevent starting work.
-		const profile = connection.tools.find((tool) => tool.name === "slack_read_user_profile");
-		if (
-			profile &&
-			config.getMcpToolExposure(entry.config, profile.name) !== "hidden" &&
-			profile.annotations?.readOnlyHint !== false &&
-			profile.annotations?.destructiveHint !== true
-		) {
-			try {
-				userId = slackReactionUser(
-					decodeMcpResult(await connection.callTool(profile.name, { response_format: "detailed" }, options)),
-				);
-			} catch {
-				/* Done will truthfully report ownership as unverified. */
-			}
-		}
-	}
 	controller.signal.throwIfAborted();
 	let value: ReturnType<typeof decodeMcpResult>;
 	try {
-		value = decodeMcpResult(await connection.callTool(name, route?.args ?? args, options), logicalTool);
+		value = decodeMcpResult(await connection.callTool(name, args, options), logicalTool);
 	} catch (error) {
-		if (kind !== "slack" || !["startSlack", "doneSlack"].includes(logicalTool) || !slackAlreadyReacted(error))
-			throw error;
+		if (kind !== "slack" || logicalTool !== "startSlack" || !slackAlreadyReacted(error)) throw error;
 		value = { ok: true };
 	}
-	reply = { value: userId ? { ok: true, userId } : value };
+	reply = { value };
 } catch (error) {
 	const limited = error instanceof SourceRateLimited ? error : sourceRateLimit(error);
 	const category = error instanceof SourceToolError ? error.category : sourceToolFailure(error);
 	// Never forward external tool text, config values, or transport errors that can contain secrets.
 	reply = {
 		...(workerData.tool === "publishIssueWrite" && !publishSent ? { notDispatched: true as const } : {}),
-		...(workerData.tool === "removeSlackEyes"
-			? {
-					removalFailure:
-						error instanceof SlackRemovalError
-							? error.reason
-							: error instanceof SetupError
-								? ("configuration" as const)
-								: category === "access_denied" || connection?.state === "needs-auth"
-									? ("access_denied" as const)
-									: ("error" as const),
-				}
-			: {}),
 		error:
 			connection?.state === "needs-auth"
 				? "Sign in required"

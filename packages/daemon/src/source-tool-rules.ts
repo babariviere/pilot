@@ -1,7 +1,7 @@
 import type { TrackedKind, TrackingJson } from "@pilot/protocol";
-import { isSlackChannelId, isSlackTimestamp, isSlackUserId } from "./slack-reaction-owner.ts";
+import { isSlackChannelId, isSlackTimestamp } from "./slack-ids.ts";
 
-/** Fixed dedicated tools. Linear start/synchronization writes change state only; Slack writes are reactions. */
+/** Fixed dedicated tools. Linear start/synchronization writes change state only; the Slack write is the start reaction. */
 export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | undefined {
 	if (kind === "linear" && tool === "issues") return "list_issues";
 	if (kind === "linear" && tool === "cycles") return "list_cycles";
@@ -18,7 +18,6 @@ export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | u
 	if (kind === "slack" && tool === "mentionsPrivate") return "slack_search_public_and_private";
 	if (kind === "slack" && tool === "thread") return "slack_read_thread";
 	if (kind === "slack" && tool === "startSlack") return "slack_add_reaction";
-	if (kind === "slack" && tool === "doneSlack") return "slack_add_reaction";
 	if (kind === "slack" && tool === "reactions") return "slack_get_reactions";
 	if (kind === "slack" && tool === "searchChannels") return "slack_search_channels";
 	if (kind === "slack" && tool === "myChannels") return "slack_list_user_channels";
@@ -64,11 +63,10 @@ export function validSourceArguments(tool: string, args: Record<string, unknown>
 			/^in:(?:<#[CG][A-Z0-9]{1,199}>|[a-z0-9_-]{1,200})(?: with:<@[UW][A-Z0-9]{1,39}>)?$/i.test(args.filters) &&
 			args.channel_types === "public_channel,private_channel"
 		);
-	if (tool === "startSlack" || tool === "doneSlack" || tool === "removeSlackEyes" || tool === "reactions")
+	if (tool === "startSlack" || tool === "reactions")
 		return (
-			Object.keys(args).length === (tool === "reactions" ? 2 : tool === "removeSlackEyes" ? 4 : 3) &&
-			(tool !== "removeSlackEyes" || isSlackUserId(args.user_id)) &&
-			(tool === "reactions" || args.emoji === (tool === "doneSlack" ? "white_check_mark" : "eyes")) &&
+			Object.keys(args).length === (tool === "reactions" ? 2 : 3) &&
+			(tool === "reactions" || args.emoji === "eyes") &&
 			isSlackChannelId(args.channel_id) &&
 			isSlackTimestamp(args.message_ts)
 		);
@@ -84,19 +82,6 @@ export function validSourceArguments(tool: string, args: Record<string, unknown>
 	);
 }
 
-export type SlackRemovalFailure =
-	| "identity_unverified"
-	| "identity_mismatch"
-	| "access_denied"
-	| "configuration"
-	| "error";
-export class SlackRemovalError extends Error {
-	readonly reason: SlackRemovalFailure;
-	constructor(reason: SlackRemovalFailure) {
-		super("Couldn't remove Slack eyes reaction");
-		this.reason = reason;
-	}
-}
 export class SourceSignInRequired extends Error {}
 export class SourceConfigurationError extends Error {}
 /** The caller or connector proved tools/call did not leave this process. */
@@ -196,23 +181,8 @@ export function decodeMcpResult(
 	},
 	tool?: string,
 ): TrackingJson {
-	if (tool === "startSlack" || tool === "doneSlack") return decodeSlackReaction(result);
+	if (tool === "startSlack") return decodeSlackReaction(result);
 	if (tool === "reactions") return decodeSlackReactionRead(result);
-	if (tool === "removeSlackEyes") {
-		// Only the exact structured Slack code is idempotent. Prose is not evidence of absence.
-		let value: { ok?: unknown; error?: unknown } | null = null;
-		try {
-			value = decodeMcpResult({ ...result, isError: false }) as { ok?: unknown; error?: unknown } | null;
-		} catch {}
-		if (value?.ok === false && value.error === "no_reaction") return { ok: true, absent: true };
-		if (!result.isError && value?.ok === true && !value.error) return { ok: true };
-		const denied =
-			sourceToolFailure(result) === "access_denied" ||
-			["missing_scope", "not_allowed_token_type", "not_authed", "invalid_auth", "token_revoked"].includes(
-				String(value?.error),
-			);
-		throw new SlackRemovalError(denied ? "access_denied" : "error");
-	}
 	if (result.isError)
 		throw sourceRateLimit(result) ?? new SourceToolError("MCP tool returned an error", sourceToolFailure(result));
 	const value =

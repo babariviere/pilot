@@ -32,7 +32,7 @@ const jobStages = [
 	"reserve",
 	"classification",
 	"commit",
-	"remove_eyes",
+	"remove_eyes", // Legacy stage, accepted so saved evidence stays readable.
 	"eligibility",
 ];
 const outcomes = ["success", "partial", "failure", "budget_limited", "cancelled"];
@@ -136,7 +136,7 @@ export function validRefreshValue(type: "source" | "job", value: unknown): value
 		!choice(value.job, [
 			"linked_linear_sync",
 			"manual_lookup",
-			"slack_done_write",
+			"slack_done_write", // Legacy job, accepted so saved evidence stays readable.
 			"triage_rebuild",
 			"linear_parent_header",
 		]) ||

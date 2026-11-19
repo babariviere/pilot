@@ -1003,7 +1003,7 @@ If a target is missing, ambiguous or no longer a started state, Pilot leaves the
 a quiet error. Starting work still proceeds. Saved choices are rechecked against the issue's actual team.
 Confirming Start chat or Start mission moves an eligible Linear ticket to that state, or adds an `eyes`
 reaction to a Slack thread's parent message as you. The Slack reaction is attempted once per item,
-counts an existing reaction as success, and can be removed on Done through the opt-in route below. Failures never
+counts an existing reaction as success, and stays in place after Done. Failures never
 block the work and appear quietly on the item. Managed ticket status synchronization is described above.
 Tracking never sends Slack messages or replies.
 Linear size classification suggests Quick fix, Needs planning or Unknown from a bounded title and description.
@@ -1063,63 +1063,13 @@ replies, including ones an agent posts as you, never end a wait. The same tool m
 the request is resolved, with a short outcome shown as “Done · answered in thread”. It only changes a chat's own
 messages while they are In progress or Waiting: Open, Done and Dismissed stay yours, so only you reopen a message.
 During normal Slack refreshes, up to eight Open, In progress or Waiting parents are checked for a ✅ reaction, each
-at most once an hour. These checks have no additional local hourly operation cap.
-A ✅ from anyone marks the item Done with “Done · ✅ in Slack”. Reopening keeps it open while
-that reaction remains present, even if its count changes. Removing it and adding it again is a new reaction.
-When an item with a successful eyes reaction becomes Done (manually, from a merge, or from Slack), Pilot adds ✅
-once. Already reacted counts as success; failures show a quiet row error without changing Done. Reopening never
-writes reactions. Adding ✅ always uses the dedicated Slack server. That server has no remove-reaction tool.
-To opt in to removing only the eyes reaction Pilot successfully added, create a local
-`~/.config/pilot/tracking.json` (or `$XDG_CONFIG_HOME/pilot/tracking.json`) with an explicit MCP route:
-
-```json
-{
-  "slackEyesRemoval": {
-    "server": {
-      "url": "https://mcp.example.com/mcp",
-      "headers": { "Authorization": "Bearer ${SLACK_REACTION_API_KEY}" }
-    },
-    "tool": "remove_reaction",
-    "identityTool": "auth_test",
-    "dispatcher": { "tool": "dispatch", "nameKey": "name", "argumentsKey": "arguments" }
-  }
-}
-```
-
-Names and URL above are placeholders. Use the exact tool names from your server; omit `dispatcher` for a direct
-tool. The daemon owns this MCP-over-HTTP connection entirely from `tracking.json`: it never reads or
-registers a removal server in pi's `mcp.json`, and the tools do not appear in agent tool listings. Your existing
-general-purpose MCP connections and their permissions are unchanged.
-Use an API key scoped only to the removal tool and its authenticated identity read. HTTPS is required,
-except for loopback development servers.
-Supply the variable to the daemon process, or use a header beginning with `!command` to read the complete
-`Bearer <key>` value from a local secret store (using pi's existing header expansion). Never put keys in project
-settings, committed files or chat messages. Only an explicit Authorization header is accepted; no OAuth store
-is used. A revoked or rejected key fails without opening a browser or falling back to OAuth or another server.
-Tool-scoped keys enforce access on the server, rather than just hiding tools from a model.
-Set `slackEyesRemoval.enabled` to `false` to leave a prepared route inactive until its key is available.
-The inner tool must accept `{channel, ts, name}` (`name` is always `eyes`, without colons) and return JSON
-`{ok: true}` on success, via MCP structured content or one JSON text block. The configured server must use the
-same Slack user as the dedicated server: Slack only lets users remove their own reactions. `identityTool`
-(namespaced or dispatched like `tool`) must accept `{}` and return `{ok: true, user_id: "U…"}` for the
-credential making the removal. Pilot records the authenticated user and original parent when adding eyes,
-then verifies that user on the removal connection before writing. It never supplies a user selector to the
-removal tool, so other users' eyes stay untouched. Unknown legacy ownership or a different identity fails
-closed, without attempting removal. A missing `identityTool` also fails closed.
-This local file is read afresh for each new Done attempt, never from a repository or replicated project settings.
-An exact structured Slack `no_reaction` response is an idempotent success (eyes already absent).
-Missing/invalid config, disabled routes, unreachable/missing tools, authorization and identity failures do not
-affect ✅ or local Done. Completion-add and eyes-removal outcomes are saved independently; cleanup failures
-show a quiet row error with permission/identity guidance, even when ✅ succeeded. There is no automatic retry or
-fallback to another server. Each item is attempted once, including across restarts; configuring a route does not
-replay old Done items. No Slack messages or replies are sent.
+at most once an hour. Pilot only records that it saw the reaction: a ✅ never marks an item Done. Only you do.
+Pilot never adds ✅ to a Slack message, including when its item becomes Done, and never removes its eyes
+reaction. Older done-reaction records stay readable. Pilot no longer reads `~/.config/pilot/tracking.json` or
+moves pi's old `pilot-tracking.json`; it leaves both files where they are.
 Slack messages and Linear issue or project links open in their desktop apps when installed, with a
 browser fallback when the app is unavailable. Copied links remain web URLs.
 Slack links without a workspace ID use Slack's active workspace.
 
-On startup, Pilot moves the old `pilot-tracking.json` from pi's agent directory (`PILOT_AGENT_DIR` when set)
-to `~/.config/pilot/tracking.json`, keeping its contents and permissions. An existing destination file is never
-replaced; if both locations contain a file, the new one wins and the old one stays untouched. This setting no
-longer follows `PILOT_AGENT_DIR` or `PILOT_HOME`. Update any sandbox `denyRead` entries that refer to the old path.
 Pilot no longer has database access. It does not read `database.json` or `pilot-databases.json` and leaves them
 where they are.

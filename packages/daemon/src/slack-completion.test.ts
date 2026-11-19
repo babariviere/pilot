@@ -246,8 +246,8 @@ test("legacy completion and label closure evidence remains readable without migr
 		assert.equal(saved.slack?.status, "done");
 		assert.equal(saved.slack?.doneReason, completion.reason);
 		assert.deepEqual(saved.metadata.slackDone, done);
+		assert.equal(saved.metadata.slackEyesRemoval, undefined, "old eyes removal records load but are ignored");
 		assert.deepEqual(saved.metadata.mergeDone, completion.mergeDone);
-		assert.equal(await store.reserveSlackDone("p"), undefined);
 		const labelSaved = await store.require(labelId);
 		assert.equal(labelSaved.slack?.closedByLabel, "Product");
 		await store.slackLabelEffects([{ projectId: "p", close: ["Product"] }]);

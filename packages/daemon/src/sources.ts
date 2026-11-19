@@ -36,7 +36,6 @@ import { RuntimeBackground } from "./runtime-background.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
 import { parseSlackMessageLink, SlackFormatChanged } from "./slack-format.ts";
 import { SLACK_BUDGET_WINDOW_MS, SLACK_HOURLY_BUDGET, SLACK_REACTION_RECHECK_MS } from "./slack-poll-policy.ts";
-import type { SlackReactionOwner } from "./slack-reaction-owner.ts";
 import { refreshSlackReactions } from "./slack-reactions.ts";
 import { type SlackAdder, slackChannelProgress, slackExcerpt, slackThread } from "./slack-source.ts";
 import { slackStart, slackStartAllowed } from "./slack-start.ts";
@@ -63,7 +62,7 @@ export interface SourcePollContext {
 	config: ProjectTrackingConfig;
 	cursor?: TrackingJson;
 	signal: AbortSignal;
-	/** Logical capability: dedicated source tools, except the local opt-in eyes removal route. No model here. */
+	/** Logical capability: dedicated source tools only. No model here. */
 	call(tool: string, args: Record<string, unknown>): Promise<TrackingJson>;
 }
 export interface SourcePollResult {
@@ -1284,7 +1283,6 @@ export class SourceRegistry {
 			// Read the durable parent identity, not a stale caller snapshot.
 			const current = await this.items.require(item.id);
 			let outcome: "reacted" | "skipped" | "error" = "error";
-			let owner: SlackReactionOwner | undefined;
 			try {
 				controller.signal.throwIfAborted();
 				if (!key || (current.metadata.manual !== true && this.items.checkpoint(sourceId)?.configKey !== key))
@@ -1293,7 +1291,7 @@ export class SourceRegistry {
 				if (health && health.status !== "ok" && health.nextPollAt > Date.now())
 					throw new Conflict("Source is backing off");
 				const project = structuredClone(this.projects.require(item.projectId));
-				const result = await abortable(
+				outcome = await abortable(
 					slackStart(
 						{
 							project,
@@ -1309,12 +1307,10 @@ export class SourceRegistry {
 					),
 					controller.signal,
 				);
-				outcome = result.outcome;
-				owner = result.owner;
 			} catch {
 				/* The chat is already linked. Never expose provider errors or retry this write. */
 			}
-			await this.items.slackStartResult(item.id, outcome, owner);
+			await this.items.slackStartResult(item.id, outcome);
 		});
 		const promise = work.finally(() => {
 			clearTimeout(timer);
@@ -1337,8 +1333,7 @@ export class SourceRegistry {
 		args: Record<string, unknown>,
 		signal: AbortSignal,
 	): Promise<TrackingJson> {
-		if (tool === "startIssue" || tool === "startSlack" || tool === "doneSlack" || tool === "removeSlackEyes")
-			return Promise.reject(new Error("Source reads cannot write"));
+		if (tool === "startIssue" || tool === "startSlack") return Promise.reject(new Error("Source reads cannot write"));
 		return this.mcp.call(kind, tool, args, signal);
 	}
 

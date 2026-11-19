@@ -132,7 +132,8 @@ test("Slack reaction confirmations accept result wrappers but preserve failures 
 		{ structuredContent: { result } },
 		{ content: [{ type: "text", text: JSON.stringify({ result }) }] },
 	];
-	for (const tool of ["startSlack", "doneSlack"]) {
+	{
+		const tool = "startSlack";
 		for (const confirmation of [
 			"Reaction :eyes: added to message (private detail).",
 			"Added :white_check_mark: reaction to message (private detail).",
@@ -165,18 +166,11 @@ test("Slack reaction confirmations accept result wrappers but preserve failures 
 	}
 });
 
-test("check reads expose only reaction metadata and Done writes are fixed to white_check_mark", () => {
+test("check reads expose only reaction metadata and no done reaction write exists", () => {
 	assert.equal(dedicatedSourceTool("slack", "reactions"), "slack_get_reactions");
-	assert.equal(dedicatedSourceTool("slack", "doneSlack"), "slack_add_reaction");
-	assert.equal(dedicatedSourceTool("linear", "doneSlack"), undefined);
+	assert.equal(dedicatedSourceTool("slack", "doneSlack"), undefined);
 	const args = { channel_id: "CEXAMPLE", message_ts: "1780000000.123456", emoji: "white_check_mark" };
-	assert.equal(validSourceArguments("doneSlack", args), true);
-	for (const invalid of [
-		{ ...args, emoji: "eyes" },
-		{ ...args, name: "white_check_mark" },
-		{ ...args, emoji: ":white_check_mark:" },
-	])
-		assert.equal(validSourceArguments("doneSlack", invalid), false);
+	assert.equal(validSourceArguments("startSlack", args), false);
 	const { emoji: _, ...readArgs } = args;
 	assert.equal(validSourceArguments("reactions", readArgs), true);
 	assert.equal(validSourceArguments("reactions", args), false);
@@ -228,9 +222,6 @@ test("check reads expose only reaction metadata and Done writes are fixed to whi
 		{ structuredContent: { ok: false, error: "private" } },
 	])
 		assert.throws(() => decodeMcpResult(response, "reactions"), /Slack reactions response|read Slack reactions/);
-	assert.deepEqual(decodeMcpResult({ isError: true, structuredContent: { error: "already_reacted" } }, "doneSlack"), {
-		ok: true,
-	});
 });
 
 test("in-flight stdio cancellation waits for process-group shutdown before returning", async () => {
@@ -319,7 +310,6 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 	let reactionResponse: Parameters<typeof decodeMcpResult>[0] | undefined;
 	let linearResponse: Parameters<typeof decodeMcpResult>[0] | undefined;
 	let reactionThrows = false;
-	let profileResponse: Parameters<typeof decodeMcpResult>[0] | undefined;
 	let called!: () => void;
 	const server = createServer(async (req, res) => {
 		if (needsAuth) {
@@ -387,18 +377,16 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 		}
 		if (message.method === "tools/call")
 			result =
-				message.params.name === "slack_read_user_profile" && profileResponse
-					? profileResponse
-					: message.params.name === "get_issue" && linearResponse
-						? linearResponse
-						: message.params.name === "slack_add_reaction" && reactionResponse
-							? reactionResponse
-							: limited
-								? {
-										isError: true,
-										content: [{ type: "text", text: "Rate limit exceeded; retry-after: 120; secret" }],
-									}
-								: { content: [{ type: "text", text: '{"issues":[]}' }] };
+				message.params.name === "get_issue" && linearResponse
+					? linearResponse
+					: message.params.name === "slack_add_reaction" && reactionResponse
+						? reactionResponse
+						: limited
+							? {
+									isError: true,
+									content: [{ type: "text", text: "Rate limit exceeded; retry-after: 120; secret" }],
+								}
+							: { content: [{ type: "text", text: '{"issues":[]}' }] };
 		res.writeHead(200, { "content-type": "application/json" });
 		res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
 	});
@@ -536,32 +524,25 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 				arguments: reactionArgs,
 			});
 		}
+		const beforeDone = seen.length;
 		const doneArgs = { ...reactionArgs, emoji: "white_check_mark" };
-		assert.deepEqual(await client.call("slack", "doneSlack", doneArgs, signal), { ok: true });
-		assert.deepEqual(seen.filter((request) => request.method === "tools/call").at(-1)?.params, {
-			name: "slack_add_reaction",
-			arguments: doneArgs,
-		});
-		// Earlier assertions deliberately marked every read tool writable. Restore the profile read contract.
+		await assert.rejects(client.call("slack", "doneSlack", doneArgs, signal), /Unknown dedicated MCP/);
+		assert.equal(seen.length, beforeDone, "no done reaction write connects");
+		// Earlier assertions deliberately marked every read tool writable. Start still reads nothing first.
 		writes = false;
-		profileResponse = {
-			structuredContent: { result: "User ID: UPILOT\nUsername: fixture\nEmail: private@example.test\n" },
-		};
 		reactionResponse = { structuredContent: { ok: true } };
-		assert.deepEqual(await client.call("slack", "startSlack", reactionArgs, signal), { ok: true, userId: "UPILOT" });
+		const beforeStart = seen.filter((request) => request.method === "tools/call").length;
+		assert.deepEqual(await client.call("slack", "startSlack", reactionArgs, signal), { ok: true });
 		assert.deepEqual(
 			seen
 				.filter((request) => request.method === "tools/call")
-				.slice(-2)
+				.slice(beforeStart)
 				.map((request) => request.params),
-			[
-				{ name: "slack_read_user_profile", arguments: { response_format: "detailed" } },
-				{ name: "slack_add_reaction", arguments: reactionArgs },
-			],
+			[{ name: "slack_add_reaction", arguments: reactionArgs }],
 		);
 		reactionResponse = { isError: true, content: [{ type: "text", text: "missing_scope: private detail" }] };
 		reactionThrows = true;
-		assert.deepEqual(await client.call("slack", "startSlack", reactionArgs, signal), { ok: true, userId: "UPILOT" });
+		assert.deepEqual(await client.call("slack", "startSlack", reactionArgs, signal), { ok: true });
 		reactionThrows = false;
 		await assert.rejects(
 			client.call("slack", "startSlack", reactionArgs, signal),

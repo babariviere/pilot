@@ -1,12 +1,9 @@
 import { Worker } from "node:worker_threads";
 import type { TrackedKind, TrackingJson } from "@pilot/protocol";
-import { getPilotConfigDir } from "./config.ts";
 import { RuntimeBackground } from "./runtime-background.ts";
 import { SourceSignInCancelled, SourceSignInFailed } from "./source-sign-in.ts";
 import {
 	dedicatedSourceTool,
-	SlackRemovalError,
-	type SlackRemovalFailure,
 	SourceConfigurationError,
 	SourceNotDispatched,
 	SourceRateLimited,
@@ -58,11 +55,9 @@ export class PiSourceMcpClient implements SourceMcpClient {
 	private readonly signInWorkers = new Set<Worker>();
 	private stopped = false;
 	private readonly agentDir?: string;
-	private readonly configDir: string;
 	private readonly openUrl: OpenUrl;
-	constructor(agentDir?: string, options: { openUrl?: OpenUrl; configDir?: string } = {}) {
+	constructor(agentDir?: string, options: { openUrl?: OpenUrl } = {}) {
 		this.agentDir = agentDir;
-		this.configDir = options.configDir ?? getPilotConfigDir();
 		this.openUrl = options.openUrl ?? openBrowser;
 	}
 	signIn(kind: TrackedKind, options: { again: boolean; signal: AbortSignal }): Promise<void> {
@@ -140,11 +135,9 @@ export class PiSourceMcpClient implements SourceMcpClient {
 			return Promise.reject(new Error("MCP arguments exceed 256 KiB"));
 		if (this.callWorkers.size >= 2) return Promise.reject(new Error("MCP client busy, retry shortly"));
 		if (!validSourceArguments(tool, args)) return Promise.reject(new Error("Invalid Linear or Slack start update"));
-		if (!dedicatedSourceTool(kind, tool) && !(kind === "slack" && tool === "removeSlackEyes"))
-			return Promise.reject(new Error("Unknown dedicated MCP source tool"));
+		if (!dedicatedSourceTool(kind, tool)) return Promise.reject(new Error("Unknown dedicated MCP source tool"));
 		const worker = this.startWorker("./source-mcp-worker.ts", {
 			agentDir: this.agentDir,
-			configDir: this.configDir,
 			kind,
 			tool,
 			args,
@@ -166,7 +159,6 @@ export class PiSourceMcpClient implements SourceMcpClient {
 					toolError?: boolean;
 					failureCategory?: SourceToolFailure;
 					configuration?: boolean;
-					removalFailure?: SlackRemovalFailure;
 					publishReady?: true;
 					notDispatched?: true;
 				}) => {
@@ -191,17 +183,15 @@ export class PiSourceMcpClient implements SourceMcpClient {
 					else if (signal.aborted) reject(signal.reason);
 					else if (reply.error)
 						reject(
-							reply.removalFailure
-								? new SlackRemovalError(reply.removalFailure)
-								: reply.signIn
-									? new SourceSignInRequired(reply.error)
-									: reply.retryAfterMs
-										? new SourceRateLimited(reply.retryAfterMs)
-										: reply.toolError
-											? new SourceToolError(reply.error, reply.failureCategory)
-											: reply.configuration
-												? new SourceConfigurationError(reply.error)
-												: new Error(reply.error),
+							reply.signIn
+								? new SourceSignInRequired(reply.error)
+								: reply.retryAfterMs
+									? new SourceRateLimited(reply.retryAfterMs)
+									: reply.toolError
+										? new SourceToolError(reply.error, reply.failureCategory)
+										: reply.configuration
+											? new SourceConfigurationError(reply.error)
+											: new Error(reply.error),
 						);
 					else resolve(reply.value!);
 				},

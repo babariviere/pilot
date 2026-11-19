@@ -1,23 +1,16 @@
 import type { TrackedItem } from "@pilot/protocol";
-import { isSlackUserId, type SlackReactionOwner } from "./slack-reaction-owner.ts";
 import { validSourceArguments } from "./source-tool-rules.ts";
 import type { SourcePollContext } from "./sources.ts";
 
 /** Start write: eyes on the stored parent, never the reply that surfaced the thread. */
-export async function slackStart(
-	context: SourcePollContext,
-	item: TrackedItem,
-): Promise<{ outcome: "reacted" | "skipped"; owner?: SlackReactionOwner }> {
+export async function slackStart(context: SourcePollContext, item: TrackedItem): Promise<"reacted" | "skipped"> {
 	const { channel, thread_ts: ts } = item.metadata;
 	const args = { channel_id: channel, message_ts: ts, emoji: "eyes" };
 	if (!validSourceArguments("startSlack", args)) throw new Error("Invalid Slack thread");
-	if (!slackStartAllowed(context.config.slackChannels, item)) return { outcome: "skipped" };
+	if (!slackStartAllowed(context.config.slackChannels, item)) return "skipped";
 	context.signal.throwIfAborted();
-	const result = (await context.call("startSlack", args)) as { userId?: string };
-	const owner = isSlackUserId(result?.userId)
-		? { userId: result.userId, channel: channel as string, messageTs: ts as string }
-		: undefined;
-	return { outcome: "reacted", ...(owner ? { owner } : {}) };
+	await context.call("startSlack", args);
+	return "reacted";
 }
 
 export function slackStartAllowed(channels: string[], item: TrackedItem): boolean {

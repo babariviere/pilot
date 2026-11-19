@@ -43,41 +43,20 @@ async function fixture(t: TestContext, adapter: SourcePoller = async () => ({ it
 	await items.load([project.id]);
 	await items.commit(project.id, "slack", [input]);
 	const item = (await items.list({ projectId: project.id })).items[0]!;
-	let read: Response = { structuredContent: { reactions: [] } },
-		write: Response = { structuredContent: { ok: true } };
-	let removal: Response | Error = { structuredContent: { ok: true } };
-	let beforeRead = async (_signal: AbortSignal) => {},
-		beforeWrite = async (_signal: AbortSignal) => {},
-		beforeRemoval = async (_signal: AbortSignal) => {};
+	let read: Response = { structuredContent: { reactions: [] } };
+	let beforeRead = async (_signal: AbortSignal) => {};
 	const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
 	const registry = new SourceRegistry(projects, items, {
 		async call(kind, tool, args, signal) {
 			assert.equal(kind, "slack");
 			assert.ok(validSourceArguments(tool, args));
-			if (tool === "removeSlackEyes") {
-				calls.push({ tool, args });
-				assert.deepEqual(args, { channel_id: "CEXAMPLE", message_ts: parent, emoji: "eyes", user_id: "UPILOT" });
-				await beforeRemoval(signal);
-				signal.throwIfAborted();
-				if (removal instanceof Error) throw removal;
-				return decodeMcpResult(removal, tool);
-			}
-			assert.equal(
-				dedicatedSourceTool(kind, tool),
-				tool === "reactions" ? "slack_get_reactions" : "slack_add_reaction",
-			);
+			assert.equal(tool, "reactions", "Slack reaction checks only read");
+			assert.equal(dedicatedSourceTool(kind, tool), "slack_get_reactions");
 			calls.push({ tool, args });
-			if (tool === "reactions") {
-				assert.deepEqual(args, { channel_id: "CEXAMPLE", message_ts: parent });
-				await beforeRead(signal);
-				signal.throwIfAborted();
-				return decodeMcpResult(read, tool);
-			}
-			assert.equal(tool, "doneSlack");
-			assert.deepEqual(args, { channel_id: "CEXAMPLE", message_ts: parent, emoji: "white_check_mark" });
-			await beforeWrite(signal);
+			assert.deepEqual(args, { channel_id: "CEXAMPLE", message_ts: parent });
+			await beforeRead(signal);
 			signal.throwIfAborted();
-			return decodeMcpResult(write, tool);
+			return decodeMcpResult(read, tool);
 		},
 	});
 	registry.register("slack", adapter);
@@ -102,28 +81,12 @@ async function fixture(t: TestContext, adapter: SourcePoller = async () => ({ it
 		read: (value: Response) => {
 			read = value;
 		},
-		write: (value: Response) => {
-			write = value;
-		},
-		removal: (value: Response | Error) => {
-			removal = value;
-		},
-		beforeRemoval: (value: typeof beforeRemoval) => {
-			beforeRemoval = value;
-		},
 		beforeRead: (value: typeof beforeRead) => {
 			beforeRead = value;
 		},
-		beforeWrite: (value: typeof beforeWrite) => {
-			beforeWrite = value;
-		},
-		eyes: async (recordOwner = true) => {
+		eyes: async () => {
 			assert.equal(await items.reserveSlackStart(item.id), true);
-			await items.slackStartResult(
-				item.id,
-				"reacted",
-				recordOwner ? { userId: "UPILOT", channel: "CEXAMPLE", messageTs: parent } : undefined,
-			);
+			await items.slackStartResult(item.id, "reacted");
 		},
 		drain: async () => {
 			await delay(10);
@@ -141,7 +104,6 @@ test("only Start writes a reaction; tackling and completion evidence never write
 	await assert.rejects(f.items.agentSlackStatus("chat", "done"), /Only the user/);
 	await f.items.patch(f.item.id, { slack: { status: "done" } });
 	await f.drain();
-	assert.equal(await f.items.reserveSlackDone(f.project.id), undefined);
 	assert.equal((await f.items.require(f.item.id)).slack?.status, "done");
 	assert.equal(outcome(await f.items.require(f.item.id)), undefined);
 	assert.deepEqual(f.calls, []);
@@ -161,18 +123,6 @@ test("emoji changes never complete open or in-progress reports", async (t) => {
 		assert.equal((await f.items.require(f.item.id)).slack?.status, status);
 	}
 	assert.equal(f.calls.filter((call) => call.tool !== "reactions").length, 0);
-});
-
-test("normal source reads cannot invoke the configured removal write", async (t) => {
-	const f = await fixture(t, async (context) => {
-		await assert.rejects(
-			context.call("removeSlackEyes", { channel_id: "CEXAMPLE", message_ts: parent, emoji: "eyes" }),
-			/cannot write/,
-		);
-		return { items: [] };
-	});
-	await f.poll();
-	assert.equal(f.calls.filter((call) => call.tool === "removeSlackEyes").length, 0);
 });
 
 test("a user reopen fences an in-flight check and later seeing the same reaction does not close it", async (t) => {

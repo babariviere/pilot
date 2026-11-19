@@ -42,7 +42,7 @@ async function fixture(t: TestContext) {
 			calls.push({ tool, args });
 			await beforeWrite(signal);
 			signal.throwIfAborted();
-			return { ...(decodeMcpResult(response, tool) as Record<string, TrackingJson>), userId: "UPILOT" };
+			return decodeMcpResult(response, tool);
 		},
 	});
 	tracking.register("slack", async () => ({ items: [structuredClone(input)] }));
@@ -102,7 +102,7 @@ test("confirmed chat and mission starts react on the parent without awaiting Sla
 		assert.equal(outcome(saved)?.outcome, "reacted");
 		assert.equal(typeof outcome(saved)?.attemptedAt, "number");
 		assert.equal(outcome(saved)?.error, undefined);
-		assert.deepEqual(outcome(saved)?.owner, { userId: "UPILOT", channel: "CEXAMPLE", messageTs: parentTs });
+		assert.equal(outcome(saved)?.owner, undefined, "no reaction owner is read or saved");
 		assert.equal(saved.updatedAt, f.item.updatedAt, "source timestamp stays source-owned");
 		await f.tracking.patch(linked.id, { ...link, start: true });
 		await f.tracking.patch(linked.id, { sessionId: "another-chat", start: true });
@@ -205,8 +205,7 @@ test("ordinary/replayed links, Linear starts, invalid confirmation and polling n
 		assert.throws(() => validatePatch(patch));
 	await f.tracking.startSlack({ ...f.item, kind: "linear" });
 	f.tracking.register("linear", async (context) => {
-		for (const tool of ["startSlack", "startIssue", "doneSlack"])
-			await assert.rejects(context.call(tool, {}), /cannot write/);
+		for (const tool of ["startSlack", "startIssue"]) await assert.rejects(context.call(tool, {}), /cannot write/);
 		return { items: [] };
 	});
 	await f.projects.update(f.project.id, { tracking: { linearTeam: "example", slackChannels: ["CEXAMPLE"] } });

@@ -4,12 +4,7 @@ import { createHash } from "node:crypto";
 import type { MissionLinearSync, RefreshReason, TrackedKind } from "@pilot/protocol";
 import { SourceRateLimited, SourceSignInRequired } from "./source-tool-rules.ts";
 
-export type BackgroundJob =
-	| "linked_linear_sync"
-	| "manual_lookup"
-	| "slack_done_write"
-	| "triage_rebuild"
-	| "linear_parent_header";
+export type BackgroundJob = "linked_linear_sync" | "manual_lookup" | "triage_rebuild" | "linear_parent_header";
 export type JobOutcome = "success" | "no_work" | "skipped" | "partial" | "failure" | "cancelled" | "backoff";
 export type JobStage =
 	| NonNullable<MissionLinearSync["failure"]>["stage"]
@@ -17,7 +12,6 @@ export type JobStage =
 	| "reserve"
 	| "classification"
 	| "commit"
-	| "remove_eyes"
 	| "eligibility";
 export type JobReason =
 	| RefreshReason
@@ -233,15 +227,11 @@ export class BackgroundJobDiagnostics {
 					? "managed_linked_missions_only_not_source_poll_eligibility"
 					: job === "triage_rebuild"
 						? "corrections_or_cases_when_eligible"
-						: job === "slack_done_write"
-							? "durably_reserved_done_items_only"
-							: "explicit_lookup_only",
+						: "explicit_lookup_only",
 			quota:
-				job === "slack_done_write"
-					? "provider_limits_and_shared_slots_not_local_source_read_budget"
-					: job === "triage_rebuild"
-						? "grooming_cooldown_not_source_classification_quota"
-						: "provider_limits_not_source_poll_quota",
+				job === "triage_rebuild"
+					? "grooming_cooldown_not_source_classification_quota"
+					: "provider_limits_not_source_poll_quota",
 			liveness: "Only observed events establish progress. Idle/event-driven work is not a failed scheduler.",
 		};
 	}

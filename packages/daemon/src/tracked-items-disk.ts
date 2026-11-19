@@ -26,8 +26,6 @@ import {
 	SLACK_WAITING_BATCH,
 	SLACK_WAITING_INTERVAL_MS,
 } from "./slack-poll-policy.ts";
-import { type SlackReactionOwner, validSlackReactionOwner } from "./slack-reaction-owner.ts";
-import type { SlackRemovalFailure } from "./source-tool-rules.ts";
 import { validatePatch } from "./tracked-item-patch.ts";
 import { TriageGuideDisk } from "./triage-guide-disk.ts";
 
@@ -282,33 +280,18 @@ export class TrackedItemDisk {
 		// While a Slack message waits: { since, reason?, afterTs?, checkedAt? }. Stale once the status changes.
 		if (!columns.some((column) => column.name === "slack_waiting"))
 			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_waiting TEXT");
-		this.db
-			.prepare(`UPDATE tracked_items SET slack_done=json_set(slack_done, '$.outcome', 'error', '$.error', ?)
-			WHERE slack_done IS NOT NULL AND json_extract(slack_done, '$.outcome') IS NULL`)
-			.run("Couldn't add done reaction in Slack.");
-		// An interrupted cleanup is unknown, not synchronized, and never automatically replayed.
-		this.db
-			.prepare(`UPDATE tracked_items SET slack_done=json_set(slack_done,
-            '$.eyesRemoval.outcome', 'error', '$.eyesRemoval.reason', 'error', '$.eyesRemoval.error', ?)
-            WHERE json_type(slack_done, '$.eyesRemoval')='object'
-            AND json_extract(slack_done, '$.eyesRemoval.outcome') IS NULL`)
-			.run("Couldn't remove eyes reaction in Slack.");
 		// Waiting messages joined the reaction reads; the older index no longer covers their query.
+		// Pilot no longer adds a done reaction, so its pending index is dropped. Old slack_done values stay readable.
 		this.db.exec(`DROP INDEX IF EXISTS slack_reaction_reads;
+			DROP INDEX IF EXISTS slack_done_pending;
 			CREATE INDEX IF NOT EXISTS slack_reaction_reads_unfinished ON tracked_items(project_id, slack_reaction_checked, id)
 			WHERE kind='slack' AND active=1 AND dismissed=0 AND slack_status IN ('open','in_progress','waiting');
 			CREATE INDEX IF NOT EXISTS slack_waiting_reads ON tracked_items(project_id, id)
-			WHERE kind='slack' AND active=1 AND slack_status='waiting';
-			CREATE INDEX IF NOT EXISTS slack_done_pending ON tracked_items(project_id, id)
-			WHERE kind='slack' AND active=1 AND slack_status='done' AND slack_done IS NULL
-			AND json_extract(slack_start, '$.outcome')='reacted';`);
+			WHERE kind='slack' AND active=1 AND slack_status='waiting';`);
 		this.db.exec(`
 			CREATE TABLE IF NOT EXISTS slack_pr_observations (
 			 session_id TEXT NOT NULL, url TEXT NOT NULL, state TEXT NOT NULL, checked_at INTEGER NOT NULL,
 			 merge_seen INTEGER NOT NULL, PRIMARY KEY(session_id, url)
-			);
-			CREATE TABLE IF NOT EXISTS slack_done_events (
-			 item_id TEXT NOT NULL, event TEXT NOT NULL, PRIMARY KEY(item_id, event)
 			);
 		`);
 		if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='tracked_item_links'").get()) {
@@ -802,7 +785,7 @@ export class TrackedItemDisk {
 		if (changed) this.emit(item.projectId);
 		return !!changed;
 	}
-	slackStartResult(id: string, outcome: "reacted" | "skipped" | "error", owner?: SlackReactionOwner): void {
+	slackStartResult(id: string, outcome: "reacted" | "skipped" | "error"): void {
 		if (!["reacted", "skipped", "error"].includes(outcome)) throw new Error("Invalid Slack start outcome");
 		const item = this.require(id);
 		const row = this.db.prepare("SELECT slack_start FROM tracked_items WHERE id=?").get(id) as Pick<
@@ -815,7 +798,6 @@ export class TrackedItemDisk {
 		const result = {
 			outcome,
 			attemptedAt: prior.attemptedAt,
-			...(outcome === "reacted" && validSlackReactionOwner(owner) ? { owner } : {}),
 			...(outcome === "error" ? { error: "Couldn't add eyes reaction in Slack." } : {}),
 		};
 		this.db.prepare("UPDATE tracked_items SET slack_start=? WHERE id=?").run(JSON.stringify(result), id);
@@ -1039,58 +1021,6 @@ export class TrackedItemDisk {
 				.run(JSON.stringify({ ...waiting, afterTs: result.afterTs } satisfies SlackWaiting), id);
 		if (result.status) this.emit(row.project_id);
 		return true;
-	}
-
-	/** Durable once-per-item admission. Reopen never schedules a reaction or clears the outcome. */
-	reserveSlackDone(_projectId: string): TrackedItem | undefined {
-		// Completion is local user intent, never a Slack write. Do not mutate legacy outcomes.
-		return undefined;
-	}
-	slackDoneResult(id: string, outcome: "reacted" | "skipped" | "error"): void {
-		if (!["reacted", "skipped", "error"].includes(outcome)) throw new Error("Invalid Slack done outcome");
-		const row = this.db.prepare("SELECT * FROM tracked_items WHERE id=?").get(id) as Row | undefined;
-		if (row?.kind !== "slack" || !row.slack_done) return;
-		const prior = JSON.parse(row.slack_done);
-		if (prior.outcome) return;
-		this.db
-			.prepare(
-				"UPDATE tracked_items SET slack_done=?, slack_reaction_seen=CASE WHEN ?='reacted' THEN 1 ELSE slack_reaction_seen END WHERE id=?",
-			)
-			.run(
-				JSON.stringify({
-					...prior,
-					outcome,
-					...(outcome === "error" ? { error: "Couldn't add done reaction in Slack." } : {}),
-				}),
-				outcome,
-				id,
-			);
-		this.emit(row.project_id);
-	}
-
-	slackEyesRemovalResult(
-		id: string,
-		outcome: "removed" | "absent" | "skipped" | "error",
-		reason?: SlackRemovalFailure,
-	): void {
-		if (!["removed", "absent", "skipped", "error"].includes(outcome))
-			throw new Error("Invalid Slack removal outcome");
-		const row = this.db.prepare("SELECT * FROM tracked_items WHERE id=?").get(id) as Row | undefined;
-		if (row?.kind !== "slack" || !row.slack_done) return;
-		const prior = JSON.parse(row.slack_done);
-		if (!prior.eyesRemoval || prior.eyesRemoval.outcome) return;
-		const safeReason = ["identity_unverified", "identity_mismatch", "access_denied", "configuration"].includes(
-			reason ?? "",
-		)
-			? reason
-			: "error";
-		prior.eyesRemoval = {
-			...prior.eyesRemoval,
-			outcome,
-			...(outcome === "error" ? { reason: safeReason, error: "Couldn't remove eyes reaction in Slack." } : {}),
-		};
-		this.db.prepare("UPDATE tracked_items SET slack_done=? WHERE id=?").run(JSON.stringify(prior), id);
-		this.emit(row.project_id);
 	}
 
 	/** Keep PR observations as evidence without changing report status. */
@@ -1372,7 +1302,6 @@ function decode(row: Row): TrackedItem {
 					severity: slack.severity,
 					...(slackStart?.outcome ? { slackStart } : {}),
 					...(slackDone?.outcome ? { slackDone } : {}),
-					...(slackDone?.eyesRemoval?.outcome ? { slackEyesRemoval: slackDone.eyesRemoval } : {}),
 				}
 			: { ...metadata, ...(row.linear_start ? { linearStart: JSON.parse(row.linear_start) } : {}) },
 		...(slack ? { slack } : {}),

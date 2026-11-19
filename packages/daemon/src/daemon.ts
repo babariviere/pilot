@@ -12,7 +12,6 @@ import { BackgroundSubscription } from "./background-subscription.ts";
 import { BackgroundUsage } from "./background-usage.ts";
 import { ChatSettingsService } from "./chat-settings.ts";
 import { loadConfig } from "./config.ts";
-import { migratePilotConfig } from "./config-migration.ts";
 import { ConnectivityService } from "./connectivity.ts";
 import { CredentialBroker } from "./credential-broker.ts";
 import { createDaemonServices } from "./daemon-services.ts";
@@ -68,7 +67,6 @@ import { untrackedStats } from "./untracked-stats.ts";
 import { UsageHistoryStore } from "./usage-history.ts";
 
 const config = loadConfig();
-await migratePilotConfig(config.agentDir ?? getAgentDir());
 await mkdir(config.agentDir ?? getAgentDir(), { recursive: true, mode: 0o700 });
 const credentials = new CredentialBroker(await realpath(config.agentDir ?? getAgentDir()));
 await credentials.start();

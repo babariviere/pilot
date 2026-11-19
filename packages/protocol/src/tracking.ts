@@ -196,9 +196,8 @@ export interface TrackedItem {
 	status: string;
 	/** Local start results, preserved by sync:
 	 * linearStart { outcome: moved|skipped|error, attemptedAt, error? };
-	 * slackStart { outcome: reacted|skipped|error, attemptedAt, error?, owner?: { userId, channel, messageTs } }, once per item.
-	 * slackDone { outcome: reacted|skipped|error, attemptedAt, error? } records only completion-add;
-	 * slackEyesRemoval { outcome: removed|absent|skipped|error, attemptedAt, reason?, error? } records cleanup separately.
+	 * slackStart { outcome: reacted|skipped|error, attemptedAt, error? }, once per item (older records may carry owner);
+	 * slackDone { outcome, attemptedAt, error? } is a legacy done-reaction record, kept readable but never written.
 	 * Linear sub-issues also carry parentId, the parent issue's ID (matches the parent's externalId when tracked). */
 	metadata: Record<string, TrackingJson>;
 	/** Linear sub-issues: the parent's minimal header, whether or not the parent is itself a tracked item.

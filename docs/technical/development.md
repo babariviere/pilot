@@ -135,7 +135,6 @@ Mission notices and ordinary chat PR tracking continue independently.
 | `PILOT_HOME` | `~/.local/share/pilot` (or `$XDG_DATA_HOME/pilot`) | Local session data and managed repositories |
 | `PILOT_PORT` | `4319` | Daemon port |
 | `PILOT_AGENT_DIR` | pi's agent directory | Pi settings, packages and authentication |
-| `XDG_CONFIG_HOME` | `~/.config` | Pilot settings in `pilot/tracking.json` |
 | `PILOT_WORKSPACE_RETENTION_DAYS` | unset (immediate) | Private workspace discard delay; explicit positive days delay deletion, explicit `0` disables automatic cleanup |
 | `PILOT_PERF_TIMINGS` | enabled | Set to `0` to disable local, content-free request timing logs for new workers |
 
