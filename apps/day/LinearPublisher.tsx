@@ -1,6 +1,6 @@
 import { cleanup, signal, Text, View } from "nsh";
 import { call, windowId } from "./bridge";
-import { Action, CheckboxRow, Notice, SectionTitle } from "./ui";
+import { Action, CheckboxRow, MarkdownPreview, Notice, SectionTitle } from "./ui";
 
 type IssueText = { title: string; description: string };
 type Issue = { identifier: string; url: string };
@@ -61,6 +61,19 @@ function Copy(props: { text: string; label?: string }) {
 	);
 }
 
+function IssueDescription(props: { markdown: string; label?: string }) {
+	return (
+		<View class="gap-1">
+			<If when={props.label}>
+				<Text class="text-xs font-semibold text-muted-foreground">{props.label ?? ""}</Text>
+			</If>
+			<If when={props.markdown} else={<Text class="text-sm text-muted-foreground">No description.</Text>}>
+				<MarkdownPreview markdown={props.markdown} />
+			</If>
+		</View>
+	);
+}
+
 function IssueDraft(props: { row: Draft }) {
 	const opened = signal(false);
 	return (
@@ -93,11 +106,11 @@ function IssueDraft(props: { row: Draft }) {
 						<Copy label="New title" text={props.row.after.title} />
 					</If>
 					<If when={props.row.before && props.row.before.description !== props.row.after.description}>
-						<Copy label="Previous description" text={props.row.before?.description ?? ""} />
+						<IssueDescription label="Previous description" markdown={props.row.before?.description ?? ""} />
 					</If>
-					<Copy
+					<IssueDescription
 						label={props.row.change === "update" ? "Description after this update" : "Description"}
-						text={props.row.after.description}
+						markdown={props.row.after.description}
 					/>
 				</View>
 			</If>
@@ -366,12 +379,11 @@ export function LinearPublisher(props: { missionId: string; request?: Request })
 												<View class="gap-2 border-t border-border py-2">
 													<Copy
 														label={`${e().issue.identifier} · Last sent by Pilot`}
-														text={`${e().sent.title}\n\n${e().sent.description}`}
+														text={e().sent.title}
 													/>
-													<Copy
-														label="Current in Linear"
-														text={`${e().current.title}\n\n${e().current.description}`}
-													/>
+													<IssueDescription markdown={e().sent.description} />
+													<Copy label="Current in Linear" text={e().current.title} />
+													<IssueDescription markdown={e().current.description} />
 												</View>
 											)}
 										</Each>

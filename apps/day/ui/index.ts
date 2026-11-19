@@ -26,6 +26,7 @@ export * from "./disclosure";
 export * from "./field";
 export * from "./icon";
 export * from "./layout";
+export * from "./markdown";
 export * from "./motion";
 export * from "./picker";
 export * from "./status";

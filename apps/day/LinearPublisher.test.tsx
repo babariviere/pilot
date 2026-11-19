@@ -16,7 +16,10 @@ test("Linear preview shows exact scope, then one publish and a read-only status 
 	await app.waitFor("Billing Portal · Publishing on");
 	await app.press("id:linear-publish-preview");
 	await app.press("id:linear-publish-draft-declines");
-	await app.waitUntil(() => app.texts().some((text) => text.includes("Simulate a card decline")));
+	await app.waitFor("Outcome");
+	await app.waitFor("Acceptance criteria");
+	await app.waitFor("Simulate a card decline.");
+	expect(app.texts().some((text) => text.includes("## Outcome"))).toBe(false);
 	await app.press("id:linear-publish-confirm");
 	await app.waitFor("read → preview → setting → preview → publish → check");
 	await app.press("id:linear-publish-check");

@@ -56,8 +56,9 @@ dropped or transferred automatically.
 ## Publish approved tasks
 
 On a mission, open **Publish tasks to Linear**. Choose a linked top-level
-issue and select approved tasks. Preview the exact issue text and blocking
-links. Enable **Allow publishing in this project** to make the final
+issue and select approved tasks. Preview the Markdown descriptions and exact
+blocking links. The preview does not load remote images or open links.
+Enable **Allow publishing in this project** to make the final
 **Publish to Linear** action available. This uses the official Linear MCP
 connection and does not turn on status management.
 
