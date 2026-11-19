@@ -25,6 +25,13 @@ newer cached projection.
 
 - Keep native generation checks. A notice race says that the read changed,
   not that transport failed. Actual failures still say unavailable/offline.
+- Only structural notices (the project list, a lost connection, a failed read)
+  raise the generation that fences writes. Mission notices (`mission-catalog.changed`,
+  `missions`, `mission`) arrive a few times a second while agents work, for any
+  project. They start a read but do not fence: each write names its exact target
+  (question scope, action revision and digest, plan context digest), and Day and
+  the daemon refuse it only when that target changed. Fencing on them refused most
+  writes while agents worked.
 - Keep complete planning rows as explicitly stale display data during refresh
   or temporary failure. Invalid data, overflow, denied access and source changes
   discard them. A stale list is never submission or Start authority.

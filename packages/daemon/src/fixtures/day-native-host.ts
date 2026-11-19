@@ -143,6 +143,10 @@ const upstreamSockets = new Set<WebSocket>();
 const invalidate = () => {
 	for (const ws of wss.clients) ws.send(JSON.stringify({ type: "mission-catalog.changed" }));
 };
+// A structural change (the project list): unlike mission notices, it fences reads and writes in flight.
+const fence = () => {
+	for (const ws of wss.clients) ws.send(JSON.stringify({ type: "projects" }));
+};
 const proxy = createServer(async (req, res) => {
 	try {
 		const path = req.url!;
@@ -208,14 +212,14 @@ const proxy = createServer(async (req, res) => {
 			dayReads++;
 			if (dayRace) {
 				dayRace = false;
-				invalidate();
+				fence();
 				await new Promise((resolve) => setTimeout(resolve, 40));
 			}
 		}
 		if (path === `/api/missions/${mission.id}`) {
 			if (detailRace !== 0) {
 				if (detailRace > 0) detailRace--;
-				invalidate();
+				fence();
 				await new Promise((resolve) => setTimeout(resolve, 40));
 			}
 			if (changeCoordinator) body.mission.coordinatorSessionId = randomUUID();

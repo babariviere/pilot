@@ -2386,8 +2386,17 @@ async fn watch_once(
                     diagnosis::log_controls_at(source, &settings, false, token).await;
                 }
                 // Structural changes fence actions bound to the shown read.
-                Some("mission-catalog.changed" | "missions" | "mission" | "projects") => {
+                Some("projects") => {
                     shared.epoch.fetch_add(1, Ordering::SeqCst);
+                    shared.full_refresh.store(true, Ordering::SeqCst);
+                    let _ = invalidated.try_send(());
+                }
+                // Any mission in any project changed, a few times a second while agents work.
+                // Read again, but do not fence writes: each write names its exact target
+                // (question scope, action revision and digest, plan context digest), and Day
+                // and the daemon refuse it only when that target changed. Fencing every write on
+                // these notices refused most of them while agents worked.
+                Some("mission-catalog.changed" | "missions" | "mission") => {
                     shared.full_refresh.store(true, Ordering::SeqCst);
                     let _ = invalidated.try_send(());
                 }

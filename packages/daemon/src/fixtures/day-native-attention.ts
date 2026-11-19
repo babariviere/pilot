@@ -23,8 +23,9 @@ let hold = false,
 // Reads left that see the mission moved on: the chat's authority changes, its question does not.
 let churn = 0,
 	delivered = 0;
-// Every attention read races a mission notice: the window hears it before the read's reply.
-let notice = false;
+// Every attention read races a notice the window hears before the read's reply: "fence" a structural
+// one (the project list), "catalog" a mission notice, which never fences.
+let notice: "fence" | "catalog" | null = null;
 const sockets = new Set<WebSocket>();
 const wss = new WebSocketServer({ noServer: true });
 const proxy = createServer(async (req, res) => {
@@ -41,7 +42,8 @@ const proxy = createServer(async (req, res) => {
 			f.session = { ...f.session, outcomeAt: (f.session.outcomeAt ?? 0) + 1 };
 		}
 		if (intent?.kind === "read" && notice) {
-			for (const ws of wss.clients) ws.send(JSON.stringify({ type: "mission" }));
+			const type = notice === "fence" ? "projects" : "mission-catalog.changed";
+			for (const ws of wss.clients) ws.send(JSON.stringify({ type }));
 			await new Promise((r) => setTimeout(r, 100));
 		}
 		if (lookup) lookups++;
@@ -127,7 +129,8 @@ for await (const line of createInterface({ input: process.stdin })) {
 	// true: the next two reads see the mission move; false: every read does.
 	if (cmd.action === "churn") churn = cmd.value ? 2 : 1_000_000;
 	if (cmd.action === "calm") churn = 0;
-	if (cmd.action === "notice") notice = cmd.value;
+	if (cmd.action === "notice") notice = cmd.value ? "fence" : null;
+	if (cmd.action === "catalog") notice = cmd.value ? "catalog" : null;
 	// Answers reach the chat: the input executor takes them.
 	if (cmd.action === "deliver")
 		f.sessions.sendDurable = async () => {

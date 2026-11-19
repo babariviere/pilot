@@ -235,8 +235,8 @@ fn an_answer_whose_retry_read_races_a_notice_uses_that_try_and_goes_on() {
     f.cmd("deliver", true);
     let host = f.open();
     let view = read(&host);
-    // A mission notice arrives during every read, the retry reads too. Each one uses a try;
-    // none ends the send with a bare refusal.
+    // A structural notice (the project list) arrives during every read, the retry reads too.
+    // Each one uses a try; none ends the send with a bare refusal.
     f.cmd("notice", true);
     stale(
         reply(host.send_attention(answer(&view))),
@@ -253,6 +253,32 @@ fn an_answer_whose_retry_read_races_a_notice_uses_that_try_and_goes_on() {
     let counts = f.cmd("stats", false);
     assert_eq!(counts["posts"], 1);
     assert_eq!(counts["delivered"], 1);
+    close(&host);
+}
+
+#[test]
+fn mission_notices_during_every_read_do_not_refuse_or_retry_an_answer() {
+    let mut f = Fixture::new();
+    f.cmd("deliver", true);
+    let host = f.open();
+    let view = read(&host);
+    // Agents at work: a mission notice arrives during every read. It names no target, so the
+    // answer goes on the first try.
+    f.cmd("catalog", true);
+    let started = std::time::Instant::now();
+    status(
+        reply(host.send_attention(answer(&view))),
+        OutcomeStatus::Accepted,
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "no retry waits: {:?}",
+        started.elapsed()
+    );
+    let counts = f.cmd("stats", false);
+    assert_eq!(counts["posts"], 1);
+    assert_eq!(counts["delivered"], 1);
+    f.cmd("catalog", false);
     close(&host);
 }
 
