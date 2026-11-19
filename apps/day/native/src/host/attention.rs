@@ -393,6 +393,19 @@ async fn read_current(t: &Transport, shared: &Shared, epoch: u64) -> Result<Valu
     Ok(value)
 }
 
+/// The questions and actions as they are now, for a write. Unlike `read`, a notice during the read
+/// does not refuse it: a write checks only its own question or action, never the rest of the mission.
+async fn latest(t: &Transport, shared: &Shared) -> Result<Value, Error> {
+    let mut value = snapshot(t).await?;
+    shared.open()?;
+    // It is the newest read now; a notice during it starts another read as usual.
+    value["canOpenUrl"] = json!(shared.url_opener.is_some());
+    value["epoch"] = json!(shared.epoch.load(std::sync::atomic::Ordering::SeqCst));
+    *shared.attention.lock().expect("attention read poisoned") = Some(value.clone());
+    shared.change(|_| ());
+    Ok(value)
+}
+
 /// Passive canonical read, without selecting a page or changing the root's cache.
 pub(super) async fn snapshot(t: &Transport) -> Result<Value, Error> {
     t.gate(false).await?;
@@ -600,9 +613,9 @@ async fn send(
         };
         tokio::time::sleep(wait).await;
         attempt += 1;
-        // The newest read under the current fence; the target is checked again against it.
+        // The newest read; the target is checked again against it.
         epoch = shared.epoch.load(std::sync::atomic::Ordering::SeqCst);
-        result = match read(t, shared, epoch).await {
+        result = match latest(t, shared).await {
             Ok(current) => match rebind(&request, &current) {
                 Ok(next) => {
                     request = next;
@@ -612,8 +625,6 @@ async fn send(
                     return (Ok(shared.outcome(OutcomeStatus::Stale, changed)), attempt);
                 }
             },
-            // Another notice came during this read: nothing was sent, so this try is used.
-            Err(Error::Stale) => Err(Error::Stale),
             Err(error) => return (Err(error), attempt),
         };
     }
@@ -726,15 +737,15 @@ async fn send_once(
                 not_sent: false,
             };
             record.validate()?;
-            let fresh = read(t, shared, epoch).await?;
+            let fresh = latest(t, shared).await?;
             qualifies(&record.request, &fresh)?;
             journal.save_attention(record.clone())?;
             publish(shared, &record);
-            // Re-read after fsync; a queued event or permission change must stop a first send.
-            let check = read(t, shared, epoch)
+            // Re-read after fsync: a question or action that changed meanwhile, or a permission change
+            // (in its authority digest), stops a first send. Other mission changes do not.
+            let check = latest(t, shared)
                 .await
-                .and_then(|r| qualifies(&record.request, &r))
-                .and_then(|()| shared.current(epoch));
+                .and_then(|r| qualifies(&record.request, &r));
             if let Err(e) = check {
                 record.not_sent = true;
                 journal.save_attention(record.clone())?;

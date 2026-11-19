@@ -230,22 +230,14 @@ fn an_answer_stops_after_three_tries_and_when_its_question_changed() {
 }
 
 #[test]
-fn an_answer_whose_retry_read_races_a_notice_uses_that_try_and_goes_on() {
+fn an_answer_is_sent_while_notices_keep_the_read_behind() {
     let mut f = Fixture::new();
     f.cmd("deliver", true);
     let host = f.open();
     let view = read(&host);
-    // A structural notice (the project list) arrives during every read, the retry reads too.
-    // Each one uses a try; none ends the send with a bare refusal.
+    // A structural notice (the project list) arrives during every read, so no read is ever the
+    // newest. Only the question must be up to date: the answer goes on the first try.
     f.cmd("notice", true);
-    stale(
-        reply(host.send_attention(answer(&view))),
-        "Pilot tried 3 times",
-    );
-    assert_eq!(f.cmd("stats", false)["posts"], 0);
-    // Once the mission is quiet, the same unchanged question takes the answer.
-    f.cmd("notice", false);
-    let view = read(&host);
     status(
         reply(host.send_attention(answer(&view))),
         OutcomeStatus::Accepted,
@@ -253,6 +245,7 @@ fn an_answer_whose_retry_read_races_a_notice_uses_that_try_and_goes_on() {
     let counts = f.cmd("stats", false);
     assert_eq!(counts["posts"], 1);
     assert_eq!(counts["delivered"], 1);
+    f.cmd("notice", false);
     close(&host);
 }
 

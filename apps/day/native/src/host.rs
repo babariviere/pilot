@@ -989,6 +989,17 @@ async fn read_planning(
     epoch: u64,
     mission: &str,
 ) -> Result<serde_json::Value, Error> {
+    read_planning_fenced(t, shared, Some(epoch), mission).await
+}
+
+/// Reads `mission`'s planning. With `epoch`, a notice during the read refuses it (Stale); without,
+/// as for a write's own checks, the read is kept: the write compares only its own digest.
+async fn read_planning_fenced(
+    t: &Transport,
+    shared: &Shared,
+    epoch: Option<u64>,
+    mission: &str,
+) -> Result<serde_json::Value, Error> {
     if !valid_id(mission) {
         return Err(Error::Invalid);
     }
@@ -1001,7 +1012,16 @@ async fn read_planning(
     t.gate(false).await?;
     let view = t.planning(mission).await?;
     t.gate(false).await?;
-    shared.current(epoch)?;
+    let epoch = match epoch {
+        Some(epoch) => {
+            shared.current(epoch)?;
+            epoch
+        }
+        None => {
+            shared.open()?;
+            shared.epoch.load(Ordering::SeqCst)
+        }
+    };
     {
         let mut reads = shared.planning.lock().expect("native planning poisoned");
         // The daemon owns saved drafts. Keep just the selected complete read in native memory.
@@ -1017,7 +1037,6 @@ async fn write_interview(
     t: &Transport,
     journal: &mut Journal,
     shared: &Shared,
-    epoch: u64,
     mission: &str,
     digest: &str,
     request: &serde_json::Value,
@@ -1035,13 +1054,12 @@ async fn write_interview(
         digest.to_owned(),
         request.clone(),
     )?;
-    qualify_planning(t, shared, epoch, &mission, &digest, &request).await?;
+    qualify_planning(t, shared, &mission, &digest, &request).await?;
     journal.save_planning(record.clone())?;
     publish_planning(shared, &record);
-    // A fence that moved after the re-read also marks the record as not sent, never pending.
-    let qualified = qualify_planning(t, shared, epoch, &mission, &digest, &request)
-        .await
-        .and_then(|()| shared.current(epoch));
+    // A changed digest on the re-read marks the record as not sent, never pending. Other mission
+    // changes do not: the write names its own context digest.
+    let qualified = qualify_planning(t, shared, &mission, &digest, &request).await;
     if let Err(e) = qualified {
         record.not_sent = true;
         journal.save_planning(record.clone())?;
@@ -1100,12 +1118,11 @@ async fn write_interview(
 async fn qualify_planning(
     t: &Transport,
     shared: &Shared,
-    epoch: u64,
     mission: &str,
     digest: &str,
     request: &serde_json::Value,
 ) -> Result<(), Error> {
-    let read = read_planning(t, shared, epoch, mission).await?;
+    let read = read_planning_fenced(t, shared, None, mission).await?;
     if request["purpose"] == "plan-question-ask" {
         let question = request["questionId"].as_str().unwrap_or_default();
         if read["questionDigests"][question] != digest {
@@ -1751,11 +1768,10 @@ async fn handle(
                 .expect("native planning poisoned")
                 .get(&mission)
                 .map(|(_, read)| read.clone());
-            let (mut epoch, mut digest, mut request) = (epoch, digest, request);
+            let (mut digest, mut request) = (digest, request);
             let mut attempt = 1;
             loop {
-                match write_interview(t, journal, shared, epoch, &mission, &digest, &request).await
-                {
+                match write_interview(t, journal, shared, &mission, &digest, &request).await {
                     Err(Error::Stale) => {}
                     other => return other,
                 }
@@ -1767,17 +1783,11 @@ async fn handle(
                 }
                 tokio::time::sleep(Duration::from_millis(250 * attempt)).await;
                 attempt += 1;
-                let moved = shared.epoch.load(Ordering::SeqCst) != epoch;
-                epoch = shared.epoch.load(Ordering::SeqCst);
-                let fresh = match read_planning(t, shared, epoch, &mission).await {
-                    Ok(fresh) => fresh,
-                    Err(Error::Stale) => continue,
-                    Err(e) => return Err(e),
-                };
+                // The newest read; only this write's own context is compared with it.
+                let fresh = read_planning_fenced(t, shared, None, &mission).await?;
                 match crate::plan_host::rebind(&request, shown.as_ref(), &fresh) {
-                    // Nothing around it moved: the target itself changed.
-                    crate::plan_host::Rebind::Same if !moved => return Err(Error::Stale),
-                    crate::plan_host::Rebind::Same => {}
+                    // Nothing to bind it to again: its own target changed.
+                    crate::plan_host::Rebind::Same => return Err(Error::Stale),
                     crate::plan_host::Rebind::To(next_digest, next) => {
                         digest = next_digest;
                         request = next;

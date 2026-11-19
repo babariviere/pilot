@@ -85,17 +85,9 @@ fn planning_request(
         request,
     })
 }
-fn attention_read(host: &NativeHost) -> Result<Value, Error> {
-    let read = host.attention_snapshot().ok_or(Error::Stale)?;
-    if read["current"] != true {
-        return Err(Error::Stale);
-    }
-    Ok(read)
-}
-/// The read an answer is built from. An answer names its question's exact scope (event, content and
-/// authority digests) and the service refuses it when that changed, so an older read still qualifies.
-/// While agents work, mission events change the read faster than a slow read finishes; requiring a
-/// current read there refused every answer.
+/// The read an answer, an action or a draft is built from. Each names its exact question or action
+/// (event, content and authority digests, or revision and digest), checked again before it is sent,
+/// so an older read still qualifies. Only the question or action must be up to date, not the mission.
 fn answer_read(host: &NativeHost) -> Result<Value, Error> {
     host.attention_snapshot().ok_or(Error::Stale)
 }
@@ -981,7 +973,9 @@ async fn run(
             Some(Work::AttentionSend(request))
         }
         Command::Action { action, ask, text } => {
-            let read = attention_read(host)?;
+            // As an answer: the request names the action's exact revision and digest, checked again
+            // before it is sent, so the read need not be the newest.
+            let read = answer_read(host)?;
             let ops = host.attention_operations();
             if ah::pending_action(&ops, &action.action_id).is_some() {
                 return Err(Error::Unknown);
