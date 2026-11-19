@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pilot component system · mockup</title>
+<!--
+PROTOTYPE. Throw away. Not Pilot app code; the app stays native (NSH).
+
+Question: what should Pilot Day's component system be, so every screen is built from the same few parts?
+
+Three directions on one page, switched with ?variant=A|B|C, the bottom bar or the arrow keys:
+  A  Lines    one reading column; type and hairlines give structure
+  B  Panes    sidebar, list, detail; position gives structure
+  C  Blocks   sections are blocks on a tinted canvas; surfaces give structure
+Four views each (?view=system|today|mission|settings) and two appearances (?theme=light|dark).
+
+Colours come from apps/day/theme.json. Every record is invented. No network, nothing is saved.
+-->
+<style>
+:root{
+	--bg:#ffffff;--fg:#1f2633;--surface:#ffffff;--muted:#f1f4f8;--mfg:#5f6b7d;--faint:#8b95a4;
+	--border:#e3e8ef;--border2:#d3dae4;--primary:#2f6fc6;--onprimary:#ffffff;--hover:#f3f4f6;--sel:#eceef2;--track:#e9ebee;
+	--needs:#c98a00;--needs-ink:#8a5a00;--needs-soft:#fbf3e0;--ok:#2f8f5b;--ok-ink:#22744a;--ok-soft:#eaf4ef;
+	--failed:#c93c37;--failed-ink:#a8302b;--failed-soft:#fbeceb;--progress:#5b6ad0;
+	--canvas:#f2f4f7;--side:#f6f7f9;--shadow:0 1px 2px rgba(20,30,50,.06);
+	--soft:color-mix(in srgb,var(--fg) 7%,transparent);--soft2:color-mix(in srgb,var(--fg) 11%,transparent);
+	--sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif;
+	--serif:ui-serif,"New York","Iowan Old Style",Charter,Georgia,serif;
+	--mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+html[data-theme=dark]{
+	color-scheme:dark;
+	--bg:#23262c;--fg:#d6dbe3;--surface:#2b2f36;--muted:#343943;--mfg:#a3acba;--faint:#7f8998;
+	--border:#353a43;--border2:#434955;--primary:#7db9e8;--onprimary:#13202f;--hover:#2c3037;--sel:#373c45;--track:#33363c;
+	--needs:#e6b450;--needs-ink:#f0c56d;--needs-soft:#3a3324;--ok:#6cc58f;--ok-ink:#84d3a3;--ok-soft:#2c3938;
+	--failed:#f07a72;--failed-ink:#f59a93;--failed-soft:#3f2a2b;--progress:#8f9bf0;
+	--canvas:#1b1e23;--side:#1e2126;--shadow:0 1px 2px rgba(0,0,0,.3);
+}
+
+/* What each direction sets. Everything below reads these. */
+.vA{--display-font:var(--serif);--fs-display:34px;--lh-display:1.18;--fw-display:400;--ls-display:-.015em;
+	--fs-title:20px;--fw-title:600;--fs-heading:15px;--heading-color:var(--fg);--fs-body:15px;--lh-body:22px;--fs-caption:13px;--fs-ctl:14px;
+	--ctl-h:32px;--ctl-px:12px;--ctl-r:8px;--field-r:8px;--card-r:12px;--card-p:24px;--row-py:12px;--row-px:0px;--fw-row:500;--opt-r:8px;
+	--btn2-bg:var(--bg);--btn2-border:var(--border2);--btn2-shadow:none;--btn2-hover:var(--hover)}
+.vB{--display-font:var(--sans);--fs-display:20px;--lh-display:1.25;--fw-display:700;--ls-display:-.015em;
+	--fs-title:15px;--fw-title:600;--fs-heading:11.5px;--heading-color:var(--faint);--fs-body:13px;--lh-body:18px;--fs-caption:11.5px;--fs-ctl:13px;
+	--ctl-h:26px;--ctl-px:10px;--ctl-r:6px;--field-r:6px;--card-r:10px;--card-p:16px;--row-py:5px;--row-px:10px;--fw-row:400;--opt-r:6px;
+	--btn2-bg:var(--surface);--btn2-border:var(--border2);--btn2-shadow:0 .5px 1.5px rgba(0,0,0,.08);--btn2-hover:var(--hover)}
+.vC{--display-font:var(--sans);--fs-display:28px;--lh-display:1.2;--fw-display:700;--ls-display:-.022em;
+	--fs-title:18px;--fw-title:650;--fs-heading:15px;--heading-color:var(--fg);--fs-body:14px;--lh-body:20px;--fs-caption:12.5px;--fs-ctl:13.5px;
+	--ctl-h:32px;--ctl-px:14px;--ctl-r:999px;--field-r:10px;--card-r:16px;--card-p:20px;--row-py:11px;--row-px:16px;--fw-row:500;--opt-r:12px;
+	--btn2-bg:var(--soft);--btn2-border:transparent;--btn2-shadow:none;--btn2-hover:var(--soft2);--page-bg:var(--canvas)}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--page-bg,var(--bg));color:var(--fg);font-family:var(--sans);font-size:var(--fs-body);line-height:var(--lh-body);-webkit-font-smoothing:antialiased}
+h1,h2,h3,p{margin:0;font-weight:inherit;font-size:inherit}
+button{font:inherit;color:inherit;cursor:default}
+svg{display:block}
+code{font-family:var(--mono);font-size:.9em;background:var(--muted);padding:1px 5px;border-radius:5px}
+:focus-visible{outline:2px solid color-mix(in srgb,var(--primary) 55%,transparent);outline-offset:2px}
+.sp{flex:1}
+.measure{max-width:64ch}
+.num{font-variant-numeric:tabular-nums}
+.line{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+
+/* Text: five roles */
+.t-display{font-family:var(--display-font);font-size:var(--fs-display);line-height:var(--lh-display);font-weight:var(--fw-display);letter-spacing:var(--ls-display);text-wrap:balance}
+.t-title{font-size:var(--fs-title);line-height:1.3;font-weight:var(--fw-title);letter-spacing:-.01em}
+.t-heading{font-size:var(--fs-heading);line-height:1.4;font-weight:600;color:var(--heading-color)}
+.t-caption{font-size:var(--fs-caption);line-height:1.45;color:var(--mfg)}
+.muted{color:var(--mfg)}
+.faint{color:var(--faint)}
+.tone-needs{color:var(--needs-ink)}
+.tone-failed{color:var(--failed-ink)}
+.tone-ok{color:var(--ok-ink)}
+.tone-quiet{color:var(--mfg)}
+
+/* Mark: one per state */
+.mark{display:inline-flex;width:14px;height:14px;flex:none}
+.mark svg{width:14px;height:14px}
+.mark-needs{color:var(--needs)}
+.mark-failed{color:var(--failed)}
+.mark-ready{color:var(--ok)}
+.mark-working,.mark-paused{color:var(--mfg)}
+.mark-fresh,.mark-done{color:var(--faint)}
+.state{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-caption);line-height:1.45;white-space:nowrap}
+.vC .state{padding:2px 9px 2px 7px;border-radius:999px;background:var(--muted)}
+.vC .state.tone-needs{background:var(--needs-soft)}
+.vC .state.tone-failed{background:var(--failed-soft)}
+.vC .state.tone-ok{background:var(--ok-soft)}
+
+/* Button and link */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:var(--ctl-h);padding:0 var(--ctl-px);border-radius:var(--ctl-r);border:1px solid transparent;background:transparent;font-size:var(--fs-ctl);font-weight:500;line-height:1;white-space:nowrap;flex:none;transition:background .12s,border-color .12s}
+.btn svg{width:15px;height:15px;flex:none}
+.btn-primary{background:var(--primary);color:var(--onprimary)}
+.btn-primary:hover{filter:brightness(1.07)}
+.btn-secondary{background:var(--btn2-bg);border-color:var(--btn2-border);box-shadow:var(--btn2-shadow);color:var(--fg)}
+.btn-secondary:hover{background:var(--btn2-hover)}
+.btn-quiet{color:var(--mfg)}
+.btn-quiet:hover{background:var(--hover);color:var(--fg)}
+.btn-danger{color:var(--failed-ink);border-color:color-mix(in srgb,var(--failed) 45%,transparent)}
+.btn-danger:hover{background:var(--failed-soft)}
+.btn-icon{width:var(--ctl-h);padding:0}
+.btn-sm{height:calc(var(--ctl-h) - 6px);padding:0 calc(var(--ctl-px) - 2px)}
+.btn[disabled]{opacity:.45}
+.badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--muted);color:var(--fg);font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}
+.badge-needs{background:var(--needs-soft);color:var(--needs-ink)}
+.link{display:inline-flex;align-items:center;gap:5px;padding:0;border:0;background:none;color:var(--primary);font-size:inherit;font-weight:500;border-radius:4px;cursor:pointer}
+.link:hover{text-decoration:underline}
+.link svg{width:14px;height:14px}
+.kbd{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 4px;border-radius:5px;background:var(--muted);color:var(--mfg);font-size:11px;font-weight:600}
+.hints{display:inline-flex;align-items:center;gap:5px;font-size:var(--fs-caption);color:var(--faint)}
+.hints .kbd+span{margin-right:6px}
+.chip{height:26px;padding:0 11px;border-radius:999px;border:1px solid var(--border2);background:transparent;font-size:var(--fs-caption);color:var(--mfg)}
+.chip:hover{background:var(--hover)}
+.chip[aria-pressed=true]{background:var(--sel);border-color:transparent;color:var(--fg)}
+.vB .chip{height:22px;border-radius:6px;padding:0 8px}
+.vC .chip{border-color:transparent;background:var(--soft)}
+.vC .chip[aria-pressed=true]{background:var(--fg);color:var(--bg)}
+
+/* Field */
+.field{display:flex;flex-direction:column;gap:5px;min-width:0}
+.field-label{font-size:var(--fs-ctl);font-weight:500}
+.field-help{font-size:var(--fs-caption);color:var(--mfg)}
+.field-help.is-error{color:var(--failed-ink)}
+.input,.select{height:var(--ctl-h);border:1px solid var(--border2);border-radius:var(--field-r);background:var(--surface);padding:0 10px;font:inherit;font-size:var(--fs-ctl);color:var(--fg);min-width:0}
+.input::placeholder{color:var(--faint)}
+.input.is-error{border-color:var(--failed)}
+.select{display:inline-flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap}
+.select svg{width:14px;height:14px;color:var(--faint)}
+.vC .input,.vC .select{background:var(--soft);border-color:transparent}
+.vC .input.is-error{border-color:var(--failed)}
+.switch{position:relative;width:34px;height:20px;flex:none;padding:0;border:0;border-radius:10px;background:var(--border2);transition:background .15s}
+.switch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}
+.switch[aria-checked=true]{background:var(--primary)}
+.switch[aria-checked=true]::after{transform:translateX(14px)}
+.vB .switch{width:28px;height:16px}
+.vB .switch::after{width:12px;height:12px}
+.vB .switch[aria-checked=true]::after{transform:translateX(12px)}
+.checkline{display:inline-flex;align-items:center;gap:8px;font-size:var(--fs-ctl)}
+.check{display:inline-grid;place-items:center;width:16px;height:16px;flex:none;border-radius:4px;border:1.5px solid var(--border2);color:transparent}
+.check svg{width:12px;height:12px;stroke-width:2.2}
+.checkline[aria-checked=true] .check{background:var(--primary);border-color:var(--primary);color:var(--onprimary)}
+.opts{display:flex;flex-direction:column;gap:2px}
+.opt{display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border-radius:var(--opt-r)}
+.opt:hover{background:var(--hover)}
+.opt[aria-checked=true]{background:var(--sel)}
+.radio{display:grid;place-items:center;width:16px;height:16px;flex:none;margin-top:calc((var(--lh-body) - 16px) / 2);border-radius:50%;border:1.5px solid var(--border2)}
+.opt[aria-checked=true] .radio{border-color:var(--primary)}
+.opt[aria-checked=true] .radio::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--primary)}
+.opt-title{font-weight:500}
+.opt-hint{font-size:var(--fs-caption);color:var(--mfg);line-height:1.45}
+.tag{margin-left:8px;padding:1px 6px;border-radius:5px;background:var(--muted);color:var(--mfg);font-size:11px;font-weight:500}
+.opt[aria-checked=true] .tag{background:var(--surface)}
+.tabs{display:flex;gap:20px;border-bottom:1px solid var(--border)}
+.tabs button{height:34px;margin-bottom:-1px;padding:0;border:0;border-bottom:2px solid transparent;background:none;color:var(--mfg);font-size:var(--fs-ctl)}
+.tabs button[aria-selected=true]{color:var(--fg);border-color:var(--fg);font-weight:500}
+.vB .tabs,.vC .tabs{display:inline-flex;gap:2px;padding:2px;border:0;border-radius:calc(var(--field-r) + 2px);background:var(--soft)}
+.vB .tabs button,.vC .tabs button{height:calc(var(--ctl-h) - 4px);margin:0;padding:0 12px;border:0;border-radius:var(--field-r);font-weight:500}
+.vB .tabs button[aria-selected=true],.vC .tabs button[aria-selected=true]{background:var(--surface);box-shadow:var(--shadow)}
+.vC .tabs{border-radius:999px;padding:3px}
+.vC .tabs button{border-radius:999px;padding:0 14px}
+
+/* Row: mark, title, meta, state, trailing */
+.row{position:relative;display:flex;align-items:flex-start;gap:10px;min-width:0;padding:var(--row-py) var(--row-px)}
+.row-mark{display:flex;align-items:center;flex:none;width:14px;height:var(--lh-body)}
+.row-main{flex:1;min-width:0}
+.row-title{font-weight:var(--fw-row);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row-meta{margin-top:1px;font-size:var(--fs-caption);line-height:1.45;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row-state{flex:none;align-self:center;font-size:var(--fs-caption);line-height:var(--lh-body);white-space:nowrap}
+.row-trail{display:flex;align-items:center;gap:8px;flex:none;align-self:center;min-height:var(--lh-body);font-size:var(--fs-caption);color:var(--faint);white-space:nowrap}
+.rows>.row+.row{border-top:1px solid var(--border)}
+.vA .row-mark{margin-left:-24px}
+.vA .row-press:hover .row-title{text-decoration:underline}
+.vB .row{align-items:center;gap:8px;border-radius:6px}
+.vB .rows>.row+.row{border-top:0}
+.vB .rows{margin:0 -10px}
+.vB .row:hover{background:var(--hover)}
+.vB .row.is-selected{background:var(--sel)}
+.vB .row-main{display:flex;align-items:baseline;gap:8px}
+.vB .row-title{flex:0 1 auto;min-width:0}
+.vB .row-meta{flex:1 1 0;min-width:0;margin:0}
+.vC .rows>.row+.row{border-top:0}
+.vC .rows>.row+.row::before{content:"";position:absolute;top:0;left:var(--row-px);right:0;height:1px;background:var(--border)}
+.vC .row-press:hover{background:var(--hover)}
+.vC .row-state{padding:0 9px;border-radius:999px;line-height:22px;background:var(--muted);align-self:center}
+.vC .row-state.tone-needs{background:var(--needs-soft)}
+.vC .row-state.tone-failed{background:var(--failed-soft)}
+.vC .row-state.tone-ok{background:var(--ok-soft)}
+
+/* Section: heading, count, one action, rows, foot */
+.sec{min-width:0}
+.sec-head{display:flex;align-items:baseline;gap:10px}
+.sec-head .count{margin-left:6px;color:var(--faint);font-weight:400;font-variant-numeric:tabular-nums}
+.sec-note{font-size:var(--fs-caption);color:var(--faint)}
+.sec-acts{display:flex;gap:14px;font-size:var(--fs-caption)}
+.sec-foot{font-size:var(--fs-caption);color:var(--faint)}
+.pad{padding:var(--pad,0)}
+.stack{display:flex;flex-direction:column;gap:10px}
+.vA .sec-head{padding-bottom:8px;border-bottom:1px solid var(--border)}
+.vA .sec-foot{padding-top:10px;border-top:1px solid var(--border)}
+.vA{--pad:14px 0 0}
+.vB .sec-head{padding:0 0 4px}
+.vB .sec-foot{padding:4px 0 0}
+.vB{--pad:2px 0 0}
+.vC .sec{border:1px solid var(--border);border-radius:var(--card-r);background:var(--surface);overflow:hidden}
+.vC .sec-head{padding:14px 16px 4px}
+.vC .sec-foot{padding:6px 16px 14px}
+.vC .sec-body{padding-bottom:4px}
+.vC{--pad:6px 16px 14px}
+
+/* Notice: one problem, one way out */
+.notice{display:flex;align-items:flex-start;gap:10px}
+.notice-body{flex:1;min-width:0}
+.notice-detail{font-size:var(--fs-caption);line-height:1.45;color:var(--mfg)}
+.notice .btn,.notice .link{align-self:center;font-size:var(--fs-caption)}
+.vA .notice{padding:12px 0;border-bottom:1px solid var(--border)}
+.vA .a-page>.notice{border-top:1px solid var(--border)}
+.vB .notice{align-items:center;padding:6px 10px;border-radius:6px;background:var(--needs-soft)}
+.vB .notice-failed{background:var(--failed-soft)}
+.vB .notice .row-mark{height:14px}
+.vB .sec-body>.notice{margin:2px 0 4px}
+.vC .notice{padding:11px 14px;border-radius:12px;background:var(--needs-soft)}
+.vC .notice-failed{background:var(--failed-soft)}
+.vC .sec-body>.notice{margin:6px 12px 6px}
+
+/* Card: the one thing that waits for an answer */
+.card{border:1px solid var(--border2);border-radius:var(--card-r);background:var(--surface);padding:var(--card-p);box-shadow:var(--shadow)}
+.vA .sec-body>.card{margin:16px 0 4px}
+.decision{display:flex;flex-direction:column;gap:14px}
+.decision-head{display:flex;align-items:baseline;gap:12px}
+.decision-head h3{flex:1}
+.decision-meta{display:flex;align-items:center;gap:6px;margin-top:-8px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.decision-foot{display:flex;align-items:center;gap:8px;padding-top:2px}
+.vA .decision .opts,.vC .decision .opts{margin:0 -12px}
+
+/* Chat */
+.chat{display:flex;flex-direction:column;gap:12px}
+.bubble{align-self:flex-end;max-width:80%;padding:7px 12px;border-radius:14px;background:var(--muted)}
+.vB .bubble{border-radius:10px}
+.fold{display:flex;align-items:center;gap:4px;font-size:var(--fs-caption);color:var(--mfg)}
+.fold svg{width:13px;height:13px}
+.event{font-size:var(--fs-caption);color:var(--faint)}
+.working{display:flex;align-items:center;gap:8px;font-size:var(--fs-caption);color:var(--mfg)}
+.dots{display:inline-flex;gap:3px}
+.dots i{width:4px;height:4px;border-radius:50%;background:var(--faint)}
+.dots i:nth-child(2){background:var(--progress);transform:translateY(-2px)}
+.composer{display:flex;flex-direction:column;gap:8px;padding:10px 10px 10px 14px;border:1px solid var(--border2);border-radius:var(--card-r);background:var(--surface)}
+.composer-text{min-height:40px;color:var(--faint)}
+.composer-bar{display:flex;align-items:center;gap:8px}
+.vC .composer{border-color:transparent;background:var(--soft)}
+
+/* Small parts */
+.bar{display:inline-flex;width:var(--bar-w,160px);height:6px;flex:none;border-radius:3px;overflow:hidden;background:var(--track)}
+.bar i{display:block;height:100%}
+.p-done{background:var(--ok)}
+.p-review{background:var(--needs)}
+.p-active{background:var(--progress)}
+.p-blocked{background:var(--failed)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:var(--fs-caption);color:var(--mfg)}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:7px;height:7px;border-radius:50%}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 16px;font-size:var(--fs-caption)}
+.kv dt{color:var(--faint)}
+.kv dd{margin:0}
+dl{margin:0}
+.empty{position:relative;height:150px;padding:18px 20px;border-radius:var(--card-r);overflow:hidden;background:var(--muted)}
+.dither{position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated;color:var(--progress);opacity:.5}
+.empty-text{position:relative}
+
+/* Chrome shared by the directions */
+.brand{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 8px;border:0;border-radius:8px;background:none;font-size:14px;font-weight:600}
+.brand:hover{background:var(--hover)}
+.logo{width:16px;height:16px;flex:none;border-radius:5px;background:var(--primary)}
+.bar-sep{width:1px;height:16px;margin:0 4px;background:var(--border)}
+.stateline{display:flex;align-items:center;gap:6px}
+.danger{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+
+/* A · Lines */
+.a-bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:4px;height:48px;padding:0 12px;background:var(--bg);border-bottom:1px solid var(--border)}
+.a-page{display:flex;flex-direction:column;gap:44px;max-width:776px;margin:0 auto;padding:56px 48px 170px}
+.a-head{display:flex;flex-direction:column;gap:12px}
+.a-dateline{display:flex;align-items:center;gap:18px;font-size:var(--fs-caption)}
+.a-titleline{display:flex;align-items:flex-start;gap:6px}
+
+/* B · Panes */
+.b-win{display:flex;height:100vh;overflow:hidden}
+.b-side{display:flex;flex-direction:column;gap:1px;width:224px;flex:none;padding:8px 8px 76px;overflow:auto;background:var(--side);border-right:1px solid var(--border)}
+.b-side-top{display:flex;align-items:center;gap:8px;height:34px;margin-bottom:6px;padding:0 2px 0 8px;font-weight:600}
+.side-item{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border:0;border-radius:6px;background:none;text-align:left;font-size:13px;width:100%}
+.side-item:hover{background:var(--soft)}
+.side-item.is-current{background:var(--soft2)}
+.side-item>svg{width:15px;height:15px;flex:none;color:var(--mfg)}
+.side-item>span:not(.badge):not(.mark){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.side-head{padding:16px 8px 4px;font-size:11.5px;font-weight:600;color:var(--faint)}
+.b-main{display:flex;flex-direction:column;flex:1;min-width:0;background:var(--bg)}
+.b-tool{display:flex;align-items:center;gap:6px;height:48px;flex:none;padding:0 12px 0 20px;border-bottom:1px solid var(--border)}
+.b-tool .t-caption{margin-left:6px}
+.b-split{display:flex;flex:1;min-height:0}
+.b-list{display:flex;flex-direction:column;gap:14px;width:400px;flex:none;padding:8px 8px 90px;overflow:auto;border-right:1px solid var(--border)}
+.b-list .rows{margin:0}
+.b-list .sec-head{padding:0 10px 4px}
+.b-list .sec-foot{padding:4px 10px 0}
+.b-sum{display:flex;flex-direction:column;gap:4px;padding:10px 10px 0}
+.b-sum-h{font-size:15px;line-height:1.3;font-weight:600;letter-spacing:-.01em}
+.b-detail{flex:1;min-width:0;padding:28px 36px 100px;overflow:auto}
+.b-detail-in{display:flex;flex-direction:column;gap:24px;max-width:680px}
+.b-insp{display:flex;flex-direction:column;gap:22px;width:300px;flex:none;padding:18px 20px 90px;overflow:auto;border-left:1px solid var(--border)}
+.b-subnav{display:flex;flex-direction:column;gap:1px;width:200px;flex:none;padding:8px;border-right:1px solid var(--border)}
+.b-rule{height:1px;background:var(--border)}
+
+/* C · Blocks */
+.c-bar{position:sticky;top:0;z-index:5;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;height:56px;padding:0 16px;background:var(--canvas)}
+.c-bar .brand{justify-self:start}
+.c-bar-right{display:flex;justify-content:flex-end;align-items:center;gap:6px}
+.c-page{display:flex;flex-direction:column;gap:16px;max-width:1120px;margin:0 auto;padding:12px 24px 170px}
+.c-page.is-narrow{max-width:760px}
+.c-hero{display:flex;flex-direction:column;gap:10px;max-width:780px;padding:20px 4px 12px}
+.c-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:16px;align-items:start}
+.c-col{display:flex;flex-direction:column;gap:16px;min-width:0}
+@media (max-width:880px){.c-grid{grid-template-columns:minmax(0,1fr)}}
+
+/* System view: the catalogue's own chrome stays the same in every direction */
+.cat{max-width:1080px;margin:0 auto;padding:48px 48px 180px}
+.cat-h1{font:600 22px/1.25 var(--sans);letter-spacing:-.015em}
+.cat-lead{max-width:70ch;margin-top:8px;font:14px/1.55 var(--sans);color:var(--mfg)}
+.thumbs{display:flex;flex-wrap:wrap;gap:12px;margin:22px 0 40px}
+.thumb{display:flex;flex-direction:column;gap:8px;width:210px;padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--surface);text-align:left}
+.thumb:hover{border-color:var(--border2)}
+.thumb.is-on{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary)}
+.thumb b{font:600 13px/1.2 var(--sans)}
+.thumb span{font:12px/1.35 var(--sans);color:var(--mfg)}
+.th{display:flex;height:78px;border-radius:6px;overflow:hidden;background:var(--muted)}
+.th-a{flex-direction:column;align-items:center;gap:7px;padding-top:12px;background:var(--bg);border:1px solid var(--border)}
+.th-a i{width:46%;height:2px;background:var(--border2)}
+.th-a i:first-child{height:5px;width:46%;background:var(--mfg);border-radius:1px}
+.th-b{background:var(--bg);border:1px solid var(--border)}
+.th-b i:nth-child(1){width:22%;background:var(--side);border-right:1px solid var(--border)}
+.th-b i:nth-child(2){width:32%;border-right:1px solid var(--border);background:linear-gradient(var(--sel),var(--sel)) 4px 10px/calc(100% - 8px) 9px no-repeat}
+.th-b i:nth-child(3){flex:1;background:linear-gradient(var(--mfg),var(--mfg)) 10px 12px/40% 4px no-repeat,linear-gradient(var(--border2),var(--border2)) 10px 24px/70% 2px no-repeat,linear-gradient(var(--border2),var(--border2)) 10px 32px/60% 2px no-repeat}
+.th-c{display:grid;grid-template-columns:1.5fr 1fr;grid-template-rows:1fr 1fr;gap:5px;padding:8px;background:var(--canvas)}
+.th-c i{border-radius:5px;background:var(--surface);border:1px solid var(--border)}
+.th-c i:first-child{grid-row:span 2}
+.cat-dir{display:flex;flex-direction:column;gap:10px;padding-bottom:36px}
+.cat-rules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:28px;margin-top:12px}
+.cat-rules b{display:block;font:600 14px/1.3 var(--sans);margin-bottom:4px}
+.cat-rules p{font:13px/1.5 var(--sans);color:var(--mfg)}
+.layers{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;margin-bottom:8px;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--border)}
+.layers div{padding:14px 16px;background:var(--surface)}
+.layers b{display:block;font:600 13px/1.3 var(--sans)}
+.layers span{display:block;margin-top:4px;font:12.5px/1.5 var(--sans);color:var(--mfg)}
+.spec{display:grid;grid-template-columns:230px minmax(0,1fr);gap:40px;padding:32px 0;border-top:1px solid var(--border)}
+.vC .spec{margin-top:16px;padding:24px;border:1px solid var(--border);border-radius:16px;background:var(--surface)}
+.spec-name{font:600 15px/1.3 var(--sans);color:var(--fg)}
+.spec-rule{margin-top:6px;font:13px/1.5 var(--sans);color:var(--mfg)}
+.spec-body{display:flex;flex-direction:column;gap:22px;min-width:0}
+.cap{font:12px/1.4 var(--sans);color:var(--faint)}
+.cap b{color:var(--mfg);font-weight:600}
+.swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}
+.sw{display:flex;align-items:center;gap:10px;font:12.5px/1.3 var(--sans)}
+.sw i{width:28px;height:28px;flex:none;border-radius:8px;border:1px solid var(--border)}
+.sw b{display:block;font-weight:600}
+.sw span{color:var(--faint)}
+.ty{display:grid;grid-template-columns:minmax(0,1fr) 220px;align-items:baseline;gap:20px;padding:10px 0;border-top:1px solid var(--border)}
+.ty:first-child{border-top:0;padding-top:0}
+.scale{display:flex;align-items:flex-end;gap:14px}
+.scale div{display:flex;flex-direction:column;align-items:center;gap:6px;font:11.5px/1 var(--sans);color:var(--faint)}
+.scale i{display:block;background:color-mix(in srgb,var(--primary) 30%,transparent);border-radius:2px}
+.radii{display:flex;gap:18px;align-items:center}
+.radii i{display:block;width:64px;height:40px;border:1.5px solid var(--border2);background:var(--muted)}
+.marks{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px 24px}
+.markdef{display:flex;gap:10px;align-items:flex-start}
+.markdef .mark{margin-top:3px}
+.markdef b{display:block;font:600 13.5px/1.4 var(--sans)}
+.markdef div span{font:12.5px/1.4 var(--sans);color:var(--mfg)}
+.anat .row-mark,.anat .row-title,.anat .row-meta,.anat .row-state,.anat .row-trail{outline:1px dashed color-mix(in srgb,var(--primary) 70%,transparent);outline-offset:2px}
+.slots{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:8px}
+.tbl{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);font:13px/1.5 var(--sans)}
+.tbl>*{padding:9px 16px 9px 0;border-top:1px solid var(--border)}
+.tbl>.th-h{border-top:0;padding-top:0;font-weight:600}
+.tbl>:nth-child(odd){color:var(--mfg)}
+.box{max-width:520px}
+
+/* The switcher. Not part of any design. */
+.proto{position:fixed;left:50%;bottom:16px;z-index:100;display:flex;align-items:center;gap:2px;padding:5px;transform:translateX(-50%);border-radius:14px;background:#14171c;color:#eef1f6;font:500 13px/1 var(--sans);white-space:nowrap;box-shadow:0 0 0 1px rgba(255,255,255,.14),0 10px 30px rgba(0,0,0,.35)}
+.proto button{height:30px;padding:0 10px;border:0;border-radius:9px;background:none;color:#aeb6c4}
+.proto button:hover{background:rgba(255,255,255,.1);color:#fff}
+.proto button.is-on{background:rgba(255,255,255,.17);color:#fff}
+.proto-label{min-width:96px;padding:0 4px;text-align:center}
+.proto-label span{margin-left:6px;color:#aeb6c4;font-weight:400}
+.proto-sep{width:1px;height:18px;margin:0 6px;background:rgba(255,255,255,.16)}
+.proto-note{padding:0 10px 0 4px;color:#8a93a3;font-size:12px;font-weight:400}
+.b-tool .state{margin-left:8px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="proto" class="proto"></div>
+<style>
+.legend .p-todo{background:var(--track);box-shadow:inset 0 0 0 1px var(--border2)}
+.vC .pad+.rows{border-top:1px solid var(--border)}
+.report{display:flex;flex-direction:column;gap:10px}
+.a-titleline .t-display,.c-hero .t-display{min-width:0}
+</style>
+<script>
+// ---------- where we are ----------
+const VARIANTS=['A','B','C'];
+const VIEWS=[['system','System'],['today','Today'],['mission','Mission'],['settings','Settings']];
+const DIR={
+	A:{name:'Lines',line:'One reading column. Type and hairlines give structure.',
+		thesis:'Pilot reads like a short daily note. Nothing sits in a box unless it waits for your answer.',
+		rules:[['One column','Every page sits in the same 680 px column. State marks hang in the margin, so titles line up down the page.'],
+			['One frame','Only the decision that needs you gets a border. Everything else is a row or a sentence.'],
+			['Button or link','A command is a framed button or a blue link. Plain grey text is never pressable.']]},
+	B:{name:'Panes',line:'Sidebar, list, detail. Position gives structure.',
+		thesis:'Pilot works like a Mac workbench. You pick on the left and act on the right, without leaving the screen.',
+		rules:[['Sidebar','Today, Changes and every mission stay one click away, each with its state mark.'],
+			['Select, then act','A list row selects, and its detail shows beside it. Back buttons go away.'],
+			['Dense','13 px text, 26 px controls, one-line rows. More on screen, less scrolling.']]},
+	C:{name:'Blocks',line:'Sections are blocks on a tinted canvas. Surfaces give structure.',
+		thesis:'Pilot looks like a calm board. Each block holds one kind of thing, and a wide window shows two columns.',
+		rules:[['Blocks','Every section is a block with its heading inside. The page has no loose rows.'],
+			['State chips','A state is a tinted chip, so a row says its state without a legend.'],
+			['Two columns','What needs you sits left. What is in progress sits right.']]},
+};
+const q=new URLSearchParams(location.search);
+const state={
+	variant:VARIANTS.includes(q.get('variant'))?q.get('variant'):'A',
+	view:VIEWS.some(v=>v[0]===q.get('view'))?q.get('view'):'system',
+	theme:['light','dark'].includes(q.get('theme'))?q.get('theme'):(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'),
+};
+function go(patch){
+	const moved=(patch.view&&patch.view!==state.view)||(patch.variant&&patch.variant!==state.variant&&state.view!=='system');
+	Object.assign(state,patch);
+	history.replaceState(null,'','?'+new URLSearchParams(state));
+	render();
+	if(moved)window.scrollTo(0,0);
+}
+function cycle(by){go({variant:VARIANTS[(VARIANTS.indexOf(state.variant)+by+VARIANTS.length)%VARIANTS.length]});}
+
+// ---------- parts ----------
+const ICONS={
+	plus:'<path d="M8 3.5v9M3.5 8h9"/>',
+	search:'<circle cx="7" cy="7" r="4"/><path d="m10 10 3 3"/>',
+	settings:'<path d="M2.5 5h5M11.5 5h2M2.5 11h2M8.5 11h5"/><circle cx="9.5" cy="5" r="1.7"/><circle cx="6.5" cy="11" r="1.7"/>',
+	back:'<path d="M9.5 3.5 5 8l4.5 4.5"/>',
+	right:'<path d="m6 4 4 4-4 4"/>',
+	chevron:'<path d="m4.5 6.5 3.5 3.5 3.5-3.5"/>',
+	changes:'<path d="M4.5 2.5v5M2 5h5M9 11.5h5"/>',
+	doc:'<path d="M4 2.5h5L12 5.5v8H4z"/><path d="M6.2 8.5h3.6M6.2 11h3.6"/>',
+	moon:'<path d="M12.8 9.6A5.2 5.2 0 0 1 6.4 3.2a5.2 5.2 0 1 0 6.4 6.4z"/>',
+	notes:'<rect x="3" y="2.5" width="10" height="11" rx="2"/><path d="M5.6 6h4.8M5.6 8.5h4.8M5.6 11h2.6"/>',
+	pencil:'<path d="m3 13 .7-2.9 6.9-6.9 2.2 2.2-6.9 6.9z"/>',
+	archive:'<rect x="2.5" y="3" width="11" height="3" rx="1"/><path d="M3.5 6v6.5h9V6M6.5 9h3"/>',
+	today:'<circle cx="8" cy="8" r="2.6"/><path d="M8 1.8v1.4M8 12.8v1.4M1.8 8h1.4M12.8 8h1.4M3.6 3.6l1 1M11.4 11.4l1 1M3.6 12.4l1-1M11.4 4.6l1-1"/>',
+	check:'<path d="m3.5 8.5 3 3 6-7"/>',
+};
+const MARKS={
+	needs:{word:'Needs you',tone:'needs',what:'A question, an unreviewed result, a sign-in.',svg:'<circle cx="7" cy="7" r="4.2" fill="currentColor"/>'},
+	failed:{word:'Failed',tone:'failed',what:'Work stopped on an error.',svg:'<path d="M7 2.6 12 11.4H2Z" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>'},
+	ready:{word:'Ready to merge',tone:'ok',what:'An open pull request that nothing blocks.',svg:'<circle cx="7" cy="7" r="5.6" fill="currentColor"/><path d="m4.4 7.2 1.9 1.9 3.4-4" fill="none" stroke="var(--surface)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'},
+	working:{word:'Working',tone:'quiet',what:'An agent, or its background jobs, runs.',svg:'<circle cx="7" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/>'},
+	paused:{word:'Paused',tone:'quiet',what:'Held by you or by a usage limit.',svg:'<path d="M5 3.6v6.8M9 3.6v6.8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>'},
+	fresh:{word:'New',tone:'quiet',what:'It came in and nobody started it.',svg:'<circle cx="7" cy="7" r="2.6" fill="currentColor"/>'},
+	done:{word:'Done',tone:'quiet',what:'Finished and reviewed.',svg:'<path d="m3.2 7.4 2.6 2.6 5-5.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'},
+};
+const icon=n=>`<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
+const Mark=k=>`<span class="mark mark-${k}" role="img" aria-label="${MARKS[k].word}"><svg viewBox="0 0 14 14" aria-hidden="true">${MARKS[k].svg}</svg></span>`;
+const State=(k,word)=>`<span class="state tone-${MARKS[k].tone}">${Mark(k)}${word||MARKS[k].word}</span>`;
+const Btn=(label,o={})=>`<button class="btn btn-${o.kind||'secondary'}${o.iconOnly?' btn-icon':''}${o.sm?' btn-sm':''}"${o.disabled?' disabled':''}${o.iconOnly?` aria-label="${label}" title="${label}"`:''} ${o.attrs||''}>${o.icon?icon(o.icon):''}${o.iconOnly?'':`<span>${label}</span>`}${o.badge?`<span class="badge">${o.badge}</span>`:''}</button>`;
+const Link=(label,o={})=>`<button class="link" ${o.attrs||''}>${o.icon?icon(o.icon):''}${label}</button>`;
+const Kbd=k=>`<span class="kbd">${k}</span>`;
+const Chip=(label,on)=>`<button class="chip" aria-pressed="${on?'true':'false'}">${label}</button>`;
+const Select=label=>`<button class="select"><span>${label}</span>${icon('chevron')}</button>`;
+const Switch=(on,label)=>`<button class="switch" role="switch" aria-checked="${on?'true':'false'}" aria-label="${label||'Switch'}"></button>`;
+const Check=(label,on)=>`<span class="checkline" role="checkbox" tabindex="0" aria-checked="${on?'true':'false'}"><span class="check">${icon('check')}</span>${label}</span>`;
+const Opt=(title,hint,on,tag)=>`<div class="opt" role="radio" tabindex="0" aria-checked="${on?'true':'false'}"><span class="radio"></span><div><div class="opt-title">${title}${tag?`<span class="tag">${tag}</span>`:''}</div>${hint?`<div class="opt-hint">${hint}</div>`:''}</div></div>`;
+const Tabs=(items,cur=0)=>`<div class="tabs" role="tablist">${items.map((it,i)=>{const [l,a]=[].concat(it);return `<button role="tab" aria-selected="${i===cur}" ${a||''}>${l}</button>`;}).join('')}</div>`;
+
+const PARTS=[['done','done'],['review','to check'],['active','in progress'],['blocked','stopped'],['todo','to do']];
+const total=p=>PARTS.reduce((n,[k])=>n+(p[k]||0),0);
+const Bar=(p,w)=>`<span class="bar"${w?` style="--bar-w:${w}px"`:''} role="img" aria-label="${p.done||0} of ${total(p)} done">${PARTS.map(([k])=>p[k]?`<i class="p-${k}" style="flex:${p[k]}"></i>`:'').join('')}</span>`;
+const Legend=p=>`<div class="legend">${PARTS.map(([k,w])=>p[k]?`<span><i class="p-${k}"></i>${p[k]} ${w}</span>`:'').join('')}</div>`;
+
+const Row=r=>`<div class="row${r.selected?' is-selected':''}${r.press?' row-press':''}" ${r.attrs||''}>${r.mark?`<span class="row-mark">${Mark(r.mark)}</span>`:''}<div class="row-main"><div class="row-title">${r.title}</div>${r.meta?`<div class="row-meta">${r.meta}</div>`:''}</div>${r.state?`<span class="row-state tone-${r.tone||'quiet'}">${r.state}</span>`:''}${r.trail?`<span class="row-trail">${r.trail}</span>`:''}</div>`;
+const Rows=list=>`<div class="rows">${list.map(Row).join('')}</div>`;
+const Section=s=>`<section class="sec"><header class="sec-head"><h2 class="t-heading">${s.title}${s.count!=null?`<span class="count">${s.count}</span>`:''}</h2>${s.note?`<span class="sec-note">${s.note}</span>`:''}<span class="sp"></span>${s.action?`<span class="sec-acts">${s.action}</span>`:''}</header><div class="sec-body">${s.body}</div>${s.foot?`<footer class="sec-foot">${s.foot}</footer>`:''}</section>`;
+const Notice=n=>`<div class="notice notice-${n.kind||'needs'}" role="status"><span class="row-mark">${Mark(n.kind==='failed'?'failed':'needs')}</span><div class="notice-body"><div>${n.text}</div>${n.detail?`<div class="notice-detail">${n.detail}</div>`:''}</div>${n.action||''}</div>`;
+
+const Decision=(o={})=>`<article class="decision">
+	<header class="decision-head"><h3 class="${o.titleClass||'t-title'}">2 integration tests fail on Linux</h3><span class="t-caption faint num">1 of 2</span></header>
+	<div class="decision-meta t-caption">${Mark('failed')}<span class="tone-failed">Failed: Linux checks</span><span class="faint">· Faster search · About 2 min</span></div>
+	<p class="measure">The search index tests pass on macOS and fail on Linux CI. The coordinator stopped before merging and asks what to do.</p>
+	<div class="chips">${Chip('Say it simpler')}${Chip('More context')}${Chip('Show me')}</div>
+	<div class="opts" role="radiogroup" aria-label="Your answer">
+		${Opt('Fix the tests first','Keeps the pull request open. About 20 min of agent work.',true,'Recommended')}
+		${Opt('Skip Linux for this release','Ships today. Linux search stays on the old index.')}
+		${Opt('Stop the mission','Nothing merges. The work so far is kept.')}
+	</div>
+	<footer class="decision-foot">${Btn('Decide',{kind:'primary'})}${Btn('Later')}<span class="sp"></span><span class="hints">${Kbd('⌘↩')}<span>Decide</span>${Kbd('J')}${Kbd('K')}<span>Next</span></span></footer>
+</article>`;
+const Composer=()=>`<div class="composer"><div class="composer-text">Message the coordinator</div><div class="composer-bar">${Btn('Claude Opus',{kind:'quiet',sm:1})}<span class="sp"></span><span class="hints">${Kbd('⌘↩')}</span>${Btn('Send',{sm:1,disabled:1})}</div></div>`;
+const Chat=()=>`<div class="chat">
+	<div class="event">Coordinator paused #4 History slice · 24 min ago</div>
+	<p class="measure">I pushed <code>e93b1a0</code> for Image zoom, but its chat did not confirm the checkpoint. I am waiting before I go on with Find.</p>
+	<div class="fold">${icon('right')}Worked for 3 min · read 3 files, edited 1, ran 2 commands</div>
+	<div class="bubble">Also keep the CSV header row.</div>
+	<div class="working"><span class="dots"><i></i><i></i><i></i></span>Waiting on 1 job…</div>
+	${Composer()}
+</div>`;
+const Empty=()=>`<div class="empty"><canvas class="dither" aria-hidden="true"></canvas><div class="empty-text"><div class="t-title">Nothing needs you.</div><div class="t-caption">3 missions are working. Pilot tells you when one asks.</div></div></div>`;
+
+// ---------- the same invented day, in every direction ----------
+const num=n=>`<span class="faint num">#${n}</span> `;
+const P={search:{done:4,blocked:1,todo:2},native:{done:2,review:1,active:2,todo:1},quiet:{done:1,todo:3},invoice:{done:5}};
+const prog=(p,bars)=>(bars?Bar(p,64):'')+`<span class="num">${p.done} of ${total(p)}</span>`;
+const D={
+	date:'Monday 9 November, 16:48',
+	headline:'One check failed. One push is unconfirmed.',
+	summary:'Faster search stopped on 2 Linux test failures and needs a choice. The native app is waiting to confirm a push. You paused Quieter notifications.',
+	slack:{text:'Slack needs you to sign in again.',detail:'These are the requests Pilot read before.',action:Link('Sign in')},
+	upnext:[{mark:'needs',title:'Did the push for Native desktop app land?',meta:'Native desktop app · Asks: confirm e93b1a0',trail:'Under a minute',press:1}],
+	fresh:[
+		{mark:'fresh',title:'Northwind can’t export invoices to CSV',meta:'Slack · #client-northwind',trail:'20 min ago',press:1},
+		{mark:'fresh',title:'Update the Stripe SDK to v15',meta:'Slack · #eng-billing',trail:'47 min ago',press:1},
+		{mark:'fresh',title:'Staging database restarts at 14:00',meta:'Slack · #eng',trail:'1 h ago',press:1},
+		{mark:'fresh',title:'CSV export times out for large accounts',meta:'Linear · BIL-231',trail:'3 h ago',press:1},
+	],
+	working:[
+		{mark:'working',title:'#5 Image zoom',meta:'Native desktop app · editing ImageView.tsx',trail:'12 min',press:1},
+		{mark:'working',title:'Plan for Import bank statements',meta:'Import bank statements · reading docs/missions.md',trail:'2 min',press:1},
+	],
+	tasks:[
+		{mark:'done',title:num(1)+'Shell and window',state:'Done'},
+		{mark:'needs',title:num(2)+'Chat view',meta:'PR merged · release not tracked',state:'To check',tone:'needs',trail:Btn('Review',{sm:1})},
+		{mark:'done',title:num(3)+'Composer and drafts',state:'Done'},
+		{mark:'paused',title:num(4)+'History slice',meta:'Held at its checkpoint',state:'Paused'},
+		{mark:'needs',title:num(5)+'Image zoom',meta:'Its chat did not confirm the checkpoint',state:'Did not confirm',tone:'needs'},
+		{mark:'fresh',title:num(6)+'Open a real Today',state:'To do'},
+	],
+	goal:'Replace the desktop app with a native one that keeps every chat and draft.',
+	pausing:{text:'Pausing did not finish everywhere.',detail:'#5 Image zoom did not confirm its checkpoint. Check it before anything else is sent.'},
+};
+const missions=bars=>[
+	{mark:'failed',title:'Faster search',meta:'Stopped on 2 Linux test failures',state:'Failed',tone:'failed',trail:prog(P.search,bars),press:1},
+	{mark:'needs',title:'Native desktop app',meta:'Pausing · waits to confirm a push',state:'Needs you',tone:'needs',trail:prog(P.native,bars),press:1,attrs:'data-view="mission"'},
+	{mark:'ready',title:'Invoice PDF export',meta:'PR #441 · checks passed',state:'Ready to merge',tone:'ok',trail:prog(P.invoice,bars),press:1},
+	{mark:'working',title:'Import bank statements',meta:'Pilot is planning',state:'Working',press:1},
+	{mark:'paused',title:'Quieter notifications',meta:'You paused it yesterday',state:'Paused',trail:prog(P.quiet,bars),press:1},
+];
+const Report=()=>`<div class="report"><p>Waiting to confirm a push before continuing.</p><p class="muted">Next: check that <code>e93b1a0</code> landed, then go on with Find.</p></div>`;
+const Progress=w=>`<div class="report"><div class="line">${Bar(P.native,w)}<span class="t-caption num">2 of 6 tasks done</span></div>${Legend(P.native)}</div>`;
+const settingsSections=()=>[
+	Section({title:'AI',body:Rows([
+		{title:'Model',meta:'Used for new chats and missions',trail:Select('Claude Opus 4.5')},
+		{title:'Thinking',meta:'More thinking is slower and uses more of your allowance',trail:Select('High')},
+		{title:'Retry failed work once',meta:'A failed task restarts once before it asks you',trail:Switch(true,'Retry failed work once')},
+	])}),
+	Section({title:'Local projects',action:Link('Add project'),body:Rows([
+		{title:'Harbour',meta:'/Users/test/src/harbour · private jj copies',trail:Select('Also reads Lighthouse')},
+		{title:'Lighthouse',meta:'/Users/test/src/lighthouse · private jj copies',trail:Select('Reads no other project')},
+	])}),
+	Section({title:'Tool connections',body:Rows([
+		{mark:'needs',title:'Slack',meta:'Signed out 2 days ago. New requests are not read.',state:'Needs sign-in',tone:'needs',trail:Btn('Sign in',{sm:1})},
+		{mark:'done',title:'Linear',meta:'Billing and Platform teams',state:'Connected'},
+		{mark:'done',title:'GitHub',meta:'test/harbour and test/lighthouse',state:'Connected'},
+	])}),
+	Section({title:'Diagnostics & privacy',body:Rows([
+		{title:'Count usage on this Mac',meta:'Counts stay on this Mac',trail:Switch(true,'Count usage on this Mac')},
+		{title:'Send problem reports',meta:'Reports hold logs, never chat text',trail:Switch(false,'Send problem reports')},
+	])}),
+].join('');
+const Danger=()=>`<div class="danger">${Btn('Remove Harbour…',{kind:'danger'})}<span class="t-caption">Its chats and drafts stay on this Mac.</span></div>`;
+
+// ---------- A · Lines ----------
+const A={
+	bar:back=>`<header class="a-bar"><button class="brand" data-view="today"><span class="logo"></span>Pilot</button>${back?`<span class="bar-sep"></span>${Btn(back,{kind:'quiet',icon:'back',attrs:'data-view="today"'})}`:''}<span class="sp"></span>${Btn('Changes',{kind:'quiet',icon:'changes',badge:'2'})}${Btn('Search',{kind:'quiet',icon:'search',iconOnly:1})}${Btn('Settings',{kind:'quiet',icon:'settings',iconOnly:1,attrs:'data-view="settings"'})}${Btn('New',{icon:'plus'})}</header>`,
+	today:()=>A.bar()+`<main class="a-page">
+		<header class="a-head">
+			<div class="a-dateline"><span class="muted">${D.date}</span><span class="sp"></span>${Link('End the day',{icon:'moon'})}${Link('Standup notes',{icon:'notes'})}</div>
+			<h1 class="t-display">${D.headline}</h1>
+			<p class="muted measure">${D.summary}</p>
+		</header>
+		${Section({title:'Needs you',count:2,body:`<div class="card">${Decision()}</div>`+Rows(D.upnext)})}
+		${Section({title:'New',count:4,note:'From Slack and Linear',body:Notice(D.slack)+Rows(D.fresh),foot:Link('Show all 5')})}
+		${Section({title:'Working now',count:2,body:Rows(D.working)})}
+		${Section({title:'Missions',count:5,body:Rows(missions(true))})}
+	</main>`,
+	mission:()=>A.bar('Today')+`<main class="a-page">
+		<header class="a-head">
+			<div class="a-titleline"><h1 class="t-display" style="flex:1">Native desktop app</h1>${Btn('Rename',{kind:'quiet',icon:'pencil',iconOnly:1})}${Btn('Archive',{kind:'quiet',icon:'archive',iconOnly:1})}</div>
+			<div class="stateline t-caption">${State('paused','Pausing')}<span class="faint">· Harbour · started 3 days ago</span></div>
+			<p class="muted measure">${D.goal}</p>
+		</header>
+		${Notice({...D.pausing,action:Btn('Check it on Today',{kind:'primary',attrs:'data-view="today"'})})}
+		${Section({title:'Latest report',note:'Coordinator · 21 min ago',body:`<div class="pad stack">${Report()}${Progress(220)}</div>`})}
+		${Section({title:'Tasks',count:6,body:Rows(D.tasks)})}
+		${Section({title:'Coordinator',action:Link('Open the full chat'),body:`<div class="pad">${Chat()}</div>`})}
+	</main>`,
+	settings:()=>A.bar('Today')+`<main class="a-page"><header class="a-head"><h1 class="t-display">Settings</h1></header>${settingsSections()}${Danger()}</main>`,
+};
+
+// ---------- B · Panes ----------
+const Side=(label,o={})=>`<button class="side-item${o.current?' is-current':''}" ${o.attrs||''}>${o.mark?Mark(o.mark):o.icon?icon(o.icon):''}<span>${label}</span>${o.badge?`<span class="badge${o.needs?' badge-needs':''}">${o.badge}</span>`:''}</button>`;
+const B={
+	shell:(cur,tool,body)=>`<div class="b-win"><aside class="b-side">
+		<div class="b-side-top"><span class="logo"></span>Pilot<span class="sp"></span>${Btn('New',{kind:'quiet',icon:'plus',iconOnly:1})}</div>
+		${Side('Today',{icon:'today',current:cur==='today',badge:'2',needs:1,attrs:'data-view="today"'})}
+		${Side('Changes',{icon:'changes',badge:'2'})}
+		${Side('Artifacts',{icon:'doc'})}
+		<div class="side-head">Missions</div>
+		${missions(false).map(m=>Side(m.title,{mark:m.mark,current:cur==='mission'&&m.title==='Native desktop app',attrs:'data-view="mission"'})).join('')}
+		<span class="sp"></span>
+		${Side('Settings',{icon:'settings',current:cur==='settings',attrs:'data-view="settings"'})}
+	</aside><main class="b-main"><header class="b-tool">${tool}</header>${body}</main></div>`,
+	today:()=>B.shell('today',
+		`<h1 class="t-title">Today</h1><span class="t-caption">${D.date}</span><span class="sp"></span>${Btn('End the day',{kind:'quiet',icon:'moon'})}${Btn('Standup notes',{kind:'quiet',icon:'notes'})}${Btn('Search',{kind:'quiet',icon:'search',iconOnly:1})}`,
+		`<div class="b-split"><div class="b-list">
+			<div class="b-sum"><p class="b-sum-h">${D.headline}</p><p class="t-caption">${D.summary}</p></div>
+			${Section({title:'Needs you',count:2,body:Rows([
+				{mark:'failed',title:'2 integration tests fail on Linux',meta:'Faster search',trail:'2 min',selected:1},
+				{mark:'needs',title:'Did the push land?',meta:'Native desktop app',trail:'1 min'}])})}
+			${Section({title:'New',count:4,note:'From Slack and Linear',body:Notice(D.slack)+Rows(D.fresh),foot:Link('Show all 5')})}
+			${Section({title:'Working now',count:2,body:Rows(D.working)})}
+		</div><div class="b-detail"><div class="b-detail-in">
+			${Decision({titleClass:'t-display'})}
+			<div class="b-rule"></div>
+			${Section({title:'From the coordinator',note:'Faster search · 14 min ago',body:`<div class="pad chat"><p class="measure">Two tests in <code>search_index_test.rs</code> rely on a file order that differs on Linux. The fix is small, but it is outside the plan you approved, so I stopped.</p><div class="fold">${icon('right')}Worked for 6 min · read 9 files, ran 4 commands</div></div>`})}
+		</div></div></div>`),
+	mission:()=>B.shell('mission',
+		`<h1 class="t-title">Native desktop app</h1>${State('paused','Pausing')}<span class="sp"></span>${Btn('Resume')}${Btn('Rename',{kind:'quiet',icon:'pencil',iconOnly:1})}${Btn('Archive',{kind:'quiet',icon:'archive',iconOnly:1})}`,
+		`<div class="b-split"><div class="b-detail"><div class="b-detail-in">
+			<p class="muted measure">${D.goal}</p>
+			${Notice({...D.pausing,action:Btn('Check it on Today',{kind:'primary',sm:1,attrs:'data-view="today"'})})}
+			${Section({title:'Tasks',count:6,body:Rows(D.tasks)})}
+			${Section({title:'Coordinator',action:Link('Open the full chat'),body:`<div class="pad">${Chat()}</div>`})}
+		</div></div><aside class="b-insp">
+			${Section({title:'Latest report',note:'21 min ago',body:`<div class="pad">${Report()}</div>`})}
+			${Section({title:'Progress',body:`<div class="pad">${Progress(260)}</div>`})}
+			${Section({title:'Details',body:`<dl class="kv pad"><dt>Project</dt><dd>Harbour</dd><dt>Started</dt><dd>3 days ago</dd><dt>Branch</dt><dd>native/desktop</dd><dt>Model</dt><dd>Claude Opus 4.5</dd></dl>`})}
+		</aside></div>`),
+	settings:()=>B.shell('settings',`<h1 class="t-title">Settings</h1>`,
+		`<div class="b-split"><nav class="b-subnav">${['AI','Local projects','Tool connections','Allowances','Diagnostics & privacy'].map((l,i)=>Side(l,{current:i===0})).join('')}</nav><div class="b-detail"><div class="b-detail-in">${settingsSections()}${Danger()}</div></div></div>`),
+};
+
+// ---------- C · Blocks ----------
+const C={
+	bar:cur=>`<header class="c-bar"><button class="brand" data-view="today"><span class="logo"></span>Pilot</button>${Tabs([['Today','data-view="today"'],['Missions','data-view="mission"'],['Changes'],['Settings','data-view="settings"']],['today','mission','changes','settings'].indexOf(cur))}<div class="c-bar-right">${Btn('Search',{kind:'quiet',icon:'search',iconOnly:1})}${Btn('New',{icon:'plus'})}</div></header>`,
+	today:()=>C.bar('today')+`<main class="c-page">
+		<header class="c-hero"><span class="t-caption">${D.date}</span><h1 class="t-display">${D.headline}</h1><p class="muted measure">${D.summary}</p><div class="line" style="margin-top:4px">${Btn('End the day',{icon:'moon'})}${Btn('Standup notes',{icon:'notes'})}</div></header>
+		<div class="c-grid"><div class="c-col">
+			${Section({title:'Needs you',count:2,body:`<div class="pad">${Decision()}</div>`+Rows(D.upnext)})}
+			${Section({title:'New',count:4,note:'From Slack and Linear',body:Notice(D.slack)+Rows(D.fresh),foot:Link('Show all 5')})}
+		</div><div class="c-col">
+			${Section({title:'Working now',count:2,body:Rows(D.working)})}
+			${Section({title:'Missions',count:5,body:Rows(missions(false))})}
+		</div></div>
+	</main>`,
+	mission:()=>C.bar('mission')+`<main class="c-page">
+		<header class="c-hero"><div class="line"><h1 class="t-display">Native desktop app</h1>${State('paused','Pausing')}</div><p class="muted measure">${D.goal}</p><div class="line" style="margin-top:4px">${Btn('Resume')}${Btn('Rename',{icon:'pencil'})}${Btn('Archive',{icon:'archive'})}</div></header>
+		<div class="c-grid"><div class="c-col">
+			${Notice({...D.pausing,action:Btn('Check it on Today',{kind:'primary',attrs:'data-view="today"'})})}
+			${Section({title:'Tasks',count:6,body:Rows(D.tasks)})}
+			${Section({title:'Coordinator',action:Link('Open the full chat'),body:`<div class="pad">${Chat()}</div>`})}
+		</div><div class="c-col">
+			${Section({title:'Latest report',note:'21 min ago',body:`<div class="pad">${Report()}</div>`})}
+			${Section({title:'Progress',body:`<div class="pad">${Progress(240)}</div>`})}
+		</div></div>
+	</main>`,
+	settings:()=>C.bar('settings')+`<main class="c-page is-narrow"><header class="c-hero"><h1 class="t-display">Settings</h1></header>${settingsSections()}${Danger()}</main>`,
+};
+
+// ---------- System: the parts, drawn in the chosen direction ----------
+const Spec=(name,rule,body)=>`<section class="spec"><div><h2 class="spec-name">${name}</h2><p class="spec-rule">${rule}</p></div><div class="spec-body">${body}</div></section>`;
+const TOKENS=[['--bg','Page','Behind everything'],['--surface','Surface','Cards and fields'],['--muted','Muted','Bubbles, tags, tracks'],['--fg','Text','Titles and body'],['--mfg','Muted text','Meta and captions'],['--faint','Faint text','Times and counts'],['--border','Line','Hairlines'],['--primary','Accent','The one commit, links'],['--needs','Needs you','Amber'],['--ok','Ready','Green'],['--failed','Failed','Red'],['--progress','Progress','Bars and live dots']];
+const TYPE=[['t-display','Display','the page’s one headline','Three short things need you.'],['t-title','Title','a card or pane','2 integration tests fail on Linux'],['t-heading','Heading','a section','Needs you'],['','Body','rows and sentences','Faster search stopped on 2 Linux test failures.'],['t-caption','Caption','meta, help and times','Slack · #client-northwind · 20 min ago']];
+const CARD_RULE={
+	A:'The only bordered surface. It holds one thing that waits for your answer.',
+	B:'One thing that waits for your answer. In Panes it fills the detail pane, so it has no border there.',
+	C:'One thing that waits for your answer. In Blocks it is a block like any other, placed first.',
+};
+function System(){
+	const d=DIR[state.variant];
+	return `<div class="cat">
+	<h1 class="cat-h1">Pilot component system: three directions</h1>
+	<p class="cat-lead">The parts, the content and the state words are the same in each. What changes is how the app gets its structure. Pick a direction here, then look at Today, Mission and Settings in the bar below. Arrow keys switch direction, 1 to 4 switch view, D switches appearance.</p>
+	<div class="thumbs">${VARIANTS.map(v=>`<button class="thumb${v===state.variant?' is-on':''}" data-variant="${v}"><span class="th th-${v.toLowerCase()}">${v==='A'?'<i></i><i></i><i></i><i></i><i></i>':'<i></i><i></i><i></i>'}</span><b>${v} · ${DIR[v].name}</b><span>${DIR[v].line}</span></button>`).join('')}</div>
+	<div class="cat-dir"><h2 class="t-display">${d.name}</h2><p class="muted measure">${d.thesis}</p><div class="cat-rules">${d.rules.map(([b,p])=>`<div><b>${b}</b><p>${p}</p></div>`).join('')}</div></div>
+	<div class="layers">
+		<div><b>1 · Tokens</b><span>12 colour roles, 5 text roles, one spacing scale, 2 radii.</span></div>
+		<div><b>2 · Parts</b><span>Text, Mark, Button, Link, Field, Key hint, Progress.</span></div>
+		<div><b>3 · Patterns</b><span>Row, Section, Notice, Card, Chat, Empty state.</span></div>
+		<div><b>4 · Screens</b><span>Compose patterns only. A screen sets no size, colour or spacing.</span></div>
+	</div>
+	${Spec('Colour','Colour is a signal. Amber, green and red only mean a state. Blue is the one accent. The palette is today’s theme.json, unchanged.',
+		`<div class="swatches">${TOKENS.map(([v,n,u])=>`<div class="sw"><i style="background:var(${v})"></i><div><b>${n}</b><span>${u}</span></div></div>`).join('')}</div>`)}
+	${Spec('Text','Five roles. A screen picks a role and never sets a size or a weight.',
+		`<div>${TYPE.map(([c,n,u,s])=>`<div class="ty"><span class="${c}" data-ty>${s}</span><span class="cap"><b>${n}</b> · ${u}<br><span data-tyspec></span></span></div>`).join('')}</div>`)}
+	${Spec('Space and shape','One spacing scale and two radii: one for controls, one for surfaces.',
+		`<div class="scale">${[4,8,12,16,24,32,48].map(n=>`<div><i style="width:${n}px;height:${n}px"></i>${n}</div>`).join('')}</div>
+		<div class="radii"><i style="border-radius:min(var(--ctl-r),20px)"></i><span class="cap"><b>Control</b> · buttons, fields, chips</span><i style="border-radius:var(--card-r)"></i><span class="cap"><b>Surface</b> · cards, blocks, composer</span></div>`)}
+	${Spec('State','One mark and one word per state, the same on every screen. The shape differs as well as the colour, and the word always shows.',
+		`<div class="marks">${Object.entries(MARKS).map(([k,m])=>`<div class="markdef">${Mark(k)}<div><b>${m.word}</b><span>${m.what}</span></div></div>`).join('')}</div><div class="line">${State('needs')}${State('failed')}${State('ready')}${State('working')}${State('paused')}</div>`)}
+	${Spec('Button and link','Primary is the screen’s one commit. Secondary is every other command. Quiet lives only in bars and rows. A link is a command inside text. Destructive comes last on the page.',
+		`<div class="line">${Btn('Decide',{kind:'primary'})}${Btn('Later')}${Btn('New',{icon:'plus'})}${Btn('Changes',{kind:'quiet',icon:'changes',badge:'2'})}${Btn('Rename',{kind:'quiet',icon:'pencil',iconOnly:1})}${Btn('Remove Harbour…',{kind:'danger'})}</div>
+		<div class="line">${Btn('Decide',{kind:'primary',disabled:1})}${Btn('Later',{disabled:1})}${Btn('Review',{sm:1})}${Link('Show all 5')}${Link('End the day',{icon:'moon'})}<span class="hints">${Kbd('⌘↩')}<span>Decide</span>${Kbd('J')}${Kbd('K')}<span>Next</span></span></div>
+		<div class="cap">Top: Primary, Secondary, Secondary with icon, Quiet with count, Quiet icon, Destructive. Below: disabled, small, links, key hints.</div>`)}
+	${Spec('Field','The label sits above, or leads a row. Help sits below. An error takes the help line’s place.',
+		`<div class="line" style="align-items:flex-start;gap:24px"><label class="field" style="width:260px"><span class="field-label">Channel</span><input class="input" value="#client-northwind"><span class="field-help">Pilot reads new messages here.</span></label><label class="field" style="width:260px"><span class="field-label">Repository</span><input class="input is-error" value="github.com/test"><span class="field-help is-error">Add the repository name after the owner.</span></label></div>
+		<div class="line" style="gap:18px">${Select('Claude Opus 4.5')}${Switch(true,'Example on')}${Switch(false,'Example off')}${Check('Lighthouse',true)}${Check('Harbour',false)}${Chip('More context',true)}${Chip('Show me')}</div>
+		<div class="opts box" role="radiogroup">${Opt('One summary at 18:00','Fewer interruptions. Failures still reach you right away.',true,'Recommended')}${Opt('Each finished task','Same as today.')}</div>
+		<div>${Tabs(['Overview','Tasks','Changes'],0)}</div>`)}
+	${Spec('Row','One row for every list: mark, title, meta, state, trailing. A slot is filled or empty, and a screen never restyles it. The state word shows only where rows of different states mix.',
+		`<div><div class="anat">${Row({mark:'needs',title:'Chat view',meta:'PR merged · release not tracked',state:'To check',tone:'needs',trail:'21 min ago'})}</div><div class="slots cap"><span><b>Mark</b> the state’s shape</span><span><b>Title</b> one line</span><span><b>Meta</b> where and what</span><span><b>State</b> its word</span><span><b>Trailing</b> a time, a count or one control</span></div></div>
+		${Rows([D.fresh[0],missions(true)[0],{title:'Retry failed work once',meta:'A failed task restarts once before it asks you',trail:Switch(true,'Retry failed work once')},{mark:'needs',title:'Slack',meta:'Signed out 2 days ago',state:'Needs sign-in',tone:'needs',trail:Btn('Sign in',{sm:1})}])}`)}
+	${Spec('Section','A heading, an optional count and at most one action. Five rows at most, then Show all.',
+		Section({title:'New',count:4,note:'From Slack and Linear',action:Link('Open Linear'),body:Rows(D.fresh.slice(0,2)),foot:Link('Show all 5')}))}
+	${Spec('Notice','Says one problem beside the thing it affects, with one way out. Amber when you can act, red when something failed.',
+		`<div class="stack">${Notice(D.slack)}${Notice({kind:'failed',text:'Pilot could not read this mission.',detail:'The last read is 12 min old and still shows.',action:Link('Read again')})}</div>`)}
+	${Spec('Card',CARD_RULE[state.variant],`<div class="card" style="max-width:640px">${Decision()}</div>`)}
+	${Spec('Chat','A conversation, not a log. A turn folds to one line, automatic items are one-line events, and live work sits above the composer.',`<div style="max-width:640px">${Chat()}</div>`)}
+	${Spec('Small parts','Progress is one plain bar with a legend of counts. An empty place is one quiet line, with Pilot’s dither as atmosphere.',
+		`${Progress(220)}<div style="max-width:440px">${Empty()}</div>`)}
+	${Spec('What it replaces','Counted in apps/day today, without tests and fixtures.',
+		`<div class="tbl"><div class="th-h">Today</div><div class="th-h">With the system</div>
+		<div>492 <code>Action</code> buttons. About 290 use the default look: grey text with no frame.</div><div>Button in three looks, and Link for a command inside text.</div>
+		<div>2,406 class strings in 74 screen files, 442 of them different.</div><div>Screens compose Row, Section, Notice and Card, and write no classes.</div>
+		<div>Rows built by hand on each screen, each with its own spacing and marks.</div><div>One Row with five slots.</div>
+		<div>11 kinds of <code>Mark</code>. Some rows say a state twice, as a dot and as a word.</div><div>7 states, one mark and one word each.</div>
+		<div><code>Panel</code> in two tones and three sizes, <code>Notice</code>, bordered cards, panels inside cards.</div><div>Notice says a problem. Card asks for a decision. Nothing nests.</div>
+		<div>Section titles in muted grey, quieter than the rows under them.</div><div>Heading is a text role that outranks its rows.</div>
+		<div>“Mission read is up to date.” on every page.</div><div>Freshness shows only when a read is old or failed, as a Notice.</div>
+		</div>`)}
+	</div>`;
+}
+
+// ---------- render ----------
+const BAYER=[0,32,8,40,2,34,10,42,48,16,56,24,50,18,58,26,12,44,4,36,14,46,6,38,60,28,52,20,62,30,54,22,3,35,11,43,1,33,9,41,51,19,59,27,49,17,57,25,15,47,7,39,13,45,5,37,63,31,55,23,61,29,53,21];
+function drawDither(){
+	document.querySelectorAll('canvas.dither').forEach(c=>{
+		const cell=3,w=Math.ceil(c.clientWidth/cell),h=Math.ceil(c.clientHeight/cell);
+		if(!w||!h)return;
+		c.width=w;c.height=h;
+		const x=c.getContext('2d');
+		x.fillStyle=getComputedStyle(c).color;
+		for(let j=0;j<h;j++)for(let i=0;i<w;i++){
+			const u=i/w,v=j/h,hz=.52+.1*Math.sin(u*5.2+.6)+.05*Math.sin(u*13+2);
+			const sky=Math.max(0,(u-.6)/.4);
+			const t=v<hz?.3*sky*sky*(1-v/hz):.2+.55*((v-hz)/(1-hz));
+			if(t>(BAYER[(j&7)*8+(i&7)]+.5)/64)x.fillRect(i,j,1,1);
+		}
+	});
+}
+function fillType(){
+	document.querySelectorAll('[data-ty]').forEach(el=>{
+		const s=getComputedStyle(el);
+		el.parentElement.querySelector('[data-tyspec]').textContent=`${parseFloat(s.fontSize)}/${Math.round(parseFloat(s.lineHeight))} · weight ${s.fontWeight} · ${s.fontFamily.startsWith('ui-serif')?'serif':'system sans'}`;
+	});
+}
+function render(){
+	document.documentElement.dataset.theme=state.theme;
+	document.body.className='v'+state.variant;
+	const dir={A,B,C}[state.variant];
+	document.getElementById('app').innerHTML=state.view==='system'?System():dir[state.view]();
+	document.getElementById('proto').innerHTML=`<button data-cycle="-1" aria-label="Previous direction">‹</button><span class="proto-label"><b>${state.variant}</b><span>${DIR[state.variant].name}</span></span><button data-cycle="1" aria-label="Next direction">›</button><span class="proto-sep"></span>${VIEWS.map(([k,l])=>`<button data-view="${k}" class="${k===state.view?'is-on':''}">${l}</button>`).join('')}<span class="proto-sep"></span><button data-theme-toggle>${state.theme==='dark'?'Light':'Dark'}</button><span class="proto-note">Mockup · invented data</span>`;
+	document.title=`${state.variant} ${DIR[state.variant].name} · Pilot component system mockup`;
+	fillType();
+	drawDither();
+}
+document.addEventListener('click',e=>{
+	const t=e.target.closest('[data-variant],[data-view],[data-cycle],[data-theme-toggle],.opt,.switch,.checkline,.chip,[role=tab]');
+	if(!t)return;
+	if(t.dataset.variant)return go({variant:t.dataset.variant});
+	if(t.dataset.view)return go({view:t.dataset.view});
+	if(t.dataset.cycle)return cycle(+t.dataset.cycle);
+	if('themeToggle' in t.dataset)return go({theme:state.theme==='dark'?'light':'dark'});
+	if(t.matches('.opt'))return t.parentElement.querySelectorAll('.opt').forEach(o=>o.setAttribute('aria-checked',o===t));
+	if(t.matches('.switch,.checkline'))return t.setAttribute('aria-checked',t.getAttribute('aria-checked')!=='true');
+	if(t.matches('.chip'))return t.setAttribute('aria-pressed',t.getAttribute('aria-pressed')!=='true');
+	t.parentElement.querySelectorAll('[role=tab]').forEach(o=>o.setAttribute('aria-selected',o===t));
+});
+document.addEventListener('keydown',e=>{
+	if(e.metaKey||e.ctrlKey||e.altKey||e.target.matches('input,textarea,[contenteditable]'))return;
+	if(e.key==='ArrowRight')cycle(1);
+	else if(e.key==='ArrowLeft')cycle(-1);
+	else if(e.key>='1'&&e.key<='4')go({view:VIEWS[+e.key-1][0]});
+	else if(e.key==='d'||e.key==='D')go({theme:state.theme==='dark'?'light':'dark'});
+});
+addEventListener('resize',drawDither);
+render();
+</script>
+</body>
+</html>
