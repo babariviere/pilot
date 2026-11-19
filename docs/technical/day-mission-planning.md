@@ -23,7 +23,13 @@ When no research chat of the mission still runs, or 3 findings wait, the idle pl
 saving failed). The planner cites them on the map and resolves the questions, so it never retypes findings;
 research chats never resolve questions or create tasks. If the planner
 unclaims a question because its findings were not enough, one more research chat starts for it, never a
-third. A question too broad for one chat is split on the map into narrower research questions instead.
+third. A question the planner changes (for example after new source access) gets a chat again, once per change.
+A chat that ends by asking the user counts as ended: the planner gets its question (at most 500 characters),
+marked as a question to the user, not findings, and may change the map question.
+When a newer chat takes over a question, or the question is resolved or the plan published, Pilot withdraws
+an earlier chat's unanswered question with a note ("Pilot started a newer research chat for this question.")
+and archives that chat once it is idle. It never archives a working chat. Its history stays readable.
+A question too broad for one chat is split on the map into narrower research questions instead.
 Each chat's final answer is limited to 48,000 characters. Research chats read the old mission a re-plan
 replaces with `mission` action `replaced`.
 A failed start waits a minute before the next try. Code: `PlanningWorkers.startResearch`.

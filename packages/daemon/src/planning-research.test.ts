@@ -125,6 +125,115 @@ test("ready research starts limited read-only chats and reports all findings tog
 	assert.equal(f.store.tasks(f.missionId).length, 0, "research never creates build tasks");
 });
 
+test("a research chat that asks the user closes when a newer chat or the plan settles its question", async (t) => {
+	const f = await fixture(t, { published: false });
+	const revision = () => f.store.plans.get(f.missionId)!.revision;
+	// The planner unclaims "a" and rewrites it, as it does after new source access.
+	const map = async (aQuestion: string, unclaim = true) => {
+		if (unclaim)
+			await f.plan({ purpose: "plan-claim", expectedRevision: revision(), questionId: "a", claimedBy: null } as {
+				purpose: string;
+			});
+		await f.plan({
+			purpose: "plan-map",
+			expectedRevision: revision(),
+			destination: "Importer",
+			sources: [],
+			questions: [{ ...research("a"), question: aQuestion }, research("b")],
+			fog: [],
+		} as { purpose: string });
+	};
+	await map("What is true about a?", false);
+	const chats = new Map<string, Partial<SessionSummary>>();
+	let spawned = 0;
+	t.mock.method(f.sessions, "spawn", async () => {
+		const id = `research-${++spawned}`;
+		f.store.join(id, f.missionId, { sessionId: f.owner }, "explorer");
+		chats.set(id, { id, state: "working", working: true });
+		return { id } as SessionSummary;
+	});
+	const get = f.sessions.get.bind(f.sessions);
+	t.mock.method(f.sessions, "get", (id: string) =>
+		chats.has(id) ? ({ ...chats.get(id) } as SessionSummary) : get(id),
+	);
+	t.mock.method(f.sessions, "lastAssistantReply", async () => "Findings");
+	const withdrawn: [string, string][] = [];
+	t.mock.method(f.sessions, "withdrawQuestion", async (id: string, note: string) => {
+		withdrawn.push([id, note]);
+		chats.set(id, { ...chats.get(id), outcome: "stopped", outcomeReason: note });
+		return true;
+	});
+	const archived: string[] = [];
+	t.mock.method(f.sessions, "archive", async (id: string) => {
+		archived.push(id);
+		chats.set(id, { ...chats.get(id), archivedAt: 1 });
+		return chats.get(id) as SessionSummary;
+	});
+	const settle = async () => {
+		f.workers.scheduleResearch(f.missionId);
+		await f.workers.settleResearch();
+	};
+	const ask = (id: string) =>
+		chats.set(id, {
+			id,
+			state: "idle",
+			working: false,
+			outcome: "question",
+			outcomeReason: "Can you restore access?",
+		});
+	f.workers.startResearch();
+	await f.workers.settleResearch();
+	assert.equal(spawned, 2);
+
+	// research-1 asks the user. Its question goes to the planner, which rewrites the map question after new access.
+	ask("research-1");
+	chats.set("research-2", { id: "research-2", state: "idle", working: false, outcome: "done" });
+	await settle();
+	assert.equal(f.inputs.length, 1);
+	assert.match(
+		f.inputs[0]!.content,
+		/The research chat ended with a question to the user, not findings: "Can you restore access\?"/,
+	);
+	assert.deepEqual(withdrawn, [], "a chat that asks stays open until a newer chat replaces it");
+	await map("What is true about a, now that its source is readable?");
+	await settle();
+	assert.equal(spawned, 3, "the changed question gets a newer research chat");
+	assert.deepEqual(withdrawn, [["research-1", "Pilot started a newer research chat for this question."]]);
+	assert.deepEqual(archived, ["research-1"]);
+	await settle();
+	assert.equal(withdrawn.length, 1, "a closed chat is closed once");
+
+	// A replaced chat that works again (the user replied) is never archived while it works.
+	chats.set("research-3", { id: "research-3", state: "idle", working: false, outcome: "done" });
+	await settle();
+	await map("What is true about a, from the linked source?");
+	await settle();
+	assert.equal(spawned, 4);
+	assert.deepEqual(f.store.planningWorkers.get(f.missionId)!.research!.a!.earlierSessionIds, [
+		"research-1",
+		"research-3",
+	]);
+	assert.deepEqual(archived, ["research-1"], "a finished chat that asks nothing stays as it is");
+	chats.set("research-3", { id: "research-3", state: "working", working: true });
+	await settle();
+	assert.deepEqual(archived, ["research-1"], "a working chat is never archived");
+
+	// The current chat asks the user, and the plan settles its question: it no longer waits on the user either.
+	ask("research-4");
+	await settle();
+	const plans = f.store.plans;
+	const plan = plans.get(f.missionId)!;
+	t.mock.method(plans, "get", () => ({
+		...plan,
+		questions: plan.questions.map((q) =>
+			q.id === "a" ? { ...q, resolution: { kind: "knowledge", id: "k", digest: "d" } } : q,
+		),
+	}));
+	await settle();
+	assert.deepEqual(withdrawn.at(-1), ["research-4", "The plan settled this question."]);
+	assert.deepEqual(archived, ["research-1", "research-4"]);
+});
+
 test("many split research questions reach the planner in limited batches, not all at the end", async (t) => {
 	const f = await fixture(t, { published: false });
 	const ids = ["a", "b", "c", "d", "e", "g"];

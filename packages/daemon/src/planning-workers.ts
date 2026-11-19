@@ -180,6 +180,11 @@ const RESEARCH_ATTEMPTS = 2;
 const RESEARCH_BATCH = 3;
 /** Final answer characters sent to the planner per research chat. Broad research should be split instead. */
 const RESEARCH_REPORT_LIMIT = 48_000;
+/**
+ * Characters of a research chat's question to the user sent to the planner. It protects planner tokens. The user chose
+ * 500; the kernel already cuts a question reason at 300, so this holds only if that changes.
+ */
+const RESEARCH_QUESTION_CHARS = 500;
 /** Prototype chats a mission runs at once: the user reviews one prototype at a time. The worker cap also applies.
  * Attempts per question are RESEARCH_ATTEMPTS. Pilot does not stop a prototype chat on time. */
 const PROTOTYPE_CHATS = 1;
@@ -690,6 +695,45 @@ export class PlanningWorkers {
 				console.log(`pilotd: planning ${missionId} closed thread chat ${chat.id} (${topic.disposition})`);
 			} catch (error) {
 				console.warn(`pilotd: thread chat ${chat.id} not archived: ${error}`);
+			}
+		}
+	}
+	/**
+	 * Closes research and prototype chats whose map question no longer needs them while they still ask the user: an
+	 * earlier chat a newer one replaced, or any chat once the question is resolved or the plan published. Pilot
+	 * withdraws the question with a note and archives the chat once it is idle. Their history stays readable.
+	 */
+	private async closeSettledExplorers(missionId: string): Promise<void> {
+		const plan = this.deps.store.plans.get(missionId);
+		for (const [questionId, entry] of Object.entries(
+			this.deps.store.planningWorkers.get(missionId)?.research ?? {},
+		)) {
+			// A running chat's outcome goes to the planner first.
+			const settled =
+				entry.state !== "starting" &&
+				entry.state !== "running" &&
+				(!!plan?.publication || !!plan?.questions.find((q) => q.id === questionId)?.resolution);
+			const kind = entry.kind === "prototype" ? "prototype" : "research";
+			const closing = [
+				...(entry.earlierSessionIds ?? []).map((id) => ({
+					id,
+					note: `Pilot started a newer ${kind} chat for this question.`,
+				})),
+				...(settled && entry.sessionId ? [{ id: entry.sessionId, note: "The plan settled this question." }] : []),
+			];
+			for (const { id, note } of closing) {
+				const chat = this.deps.sessions.get(id);
+				if (!chat || chat.archivedAt !== undefined || chat.working) continue;
+				if (chat.state !== "idle" && chat.state !== "parked") continue;
+				// The note also marks a chat whose archive failed after Pilot withdrew its question: it is tried again.
+				if (chat.outcome !== "question" && !(chat.outcome === "stopped" && chat.outcomeReason === note)) continue;
+				try {
+					await this.deps.sessions.withdrawQuestion(id, note);
+					await this.deps.sessions.archive(id);
+					console.log(`pilotd: planning ${missionId} closed ${kind} chat ${id} for ${questionId}: ${note}`);
+				} catch (error) {
+					console.warn(`pilotd: ${kind} chat ${id} not closed: ${error}`);
+				}
 			}
 		}
 	}
@@ -2030,6 +2074,7 @@ export class PlanningWorkers {
 		await this.reconcileRepair(missionId);
 		this.queueHandoffs(missionId);
 		await this.closeThreadChats(missionId);
+		await this.closeSettledExplorers(missionId);
 		await this.deliverMessages(missionId);
 		await this.linkRequest(missionId);
 		await this.reconcileTaskPrototypes(missionId);
@@ -2078,9 +2123,14 @@ export class PlanningWorkers {
 						return undefined;
 					})
 				: undefined;
+			const asked = chat.outcome === "question" ? chat.outcomeReason?.trim().slice(0, RESEARCH_QUESTION_CHARS) : "";
 			state = this.changeResearch(this.deps.store.planningWorkers.get(missionId)!, questionId, {
 				state: "reporting",
-				report: found || `The research chat ended (${chat.outcome}) without findings.`,
+				report:
+					found ||
+					(asked
+						? `The research chat ended with a question to the user, not findings: ${JSON.stringify(asked)}`
+						: `The research chat ended (${chat.outcome}) without findings.`),
 				...(knowledge ? { knowledge } : {}),
 			});
 			await this.deps.store.durable();

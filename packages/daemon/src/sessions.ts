@@ -13712,6 +13712,18 @@ ${run.excerpt}`,
 		return true;
 	}
 
+	/**
+	 * Pilot withdraws the idle chat's unanswered question, for example because a newer research chat took over its map
+	 * question. The chat shows Stopped with `reason` as its note. Sends nothing to the chat. False when it asks nothing.
+	 */
+	async withdrawQuestion(id: string, reason: string): Promise<boolean> {
+		const meta = this.require(id);
+		if (this.summary(meta).working || !applyQuestionStopped(meta, Date.now(), reason)) return false;
+		await this.save(meta, undefined, undefined, true);
+		this.emit(meta);
+		return true;
+	}
+
 	/** Passive current question read; never subscribes or starts a worker. */
 	async pendingQuestion(id: string) {
 		const view = await this.recentColdSnapshot(this.require(id));

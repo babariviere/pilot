@@ -79,16 +79,17 @@ export function applyFailure(meta: OutcomeMeta, reason: string, now: number): bo
 }
 
 /**
- * Stop withdrew the chat's unanswered question, so it no longer waits on the user. A newer version than the
- * question's, so the kernel's saved question completion cannot return.
+ * Stop (or Pilot, with `reason`) withdrew the chat's unanswered question, so it no longer waits on the user. A newer
+ * version than the question's, so the kernel's saved question completion cannot return.
  */
-export function applyQuestionStopped(meta: OutcomeMeta, now: number): boolean {
+export function applyQuestionStopped(meta: OutcomeMeta, now: number, reason?: string): boolean {
 	if (meta.outcome !== "question" || meta.working) return false;
 	meta.lastCompletionAt ??= meta.outcomeAt ?? -1;
 	meta.outcome = "stopped";
 	meta.outcomeAt = Math.max(now, Math.max(meta.lastOutcomeAt ?? -1, meta.outcomeAt ?? -1) + 1);
 	meta.lastOutcomeAt = meta.outcomeAt;
-	delete meta.outcomeReason;
+	if (reason) meta.outcomeReason = reason;
+	else delete meta.outcomeReason;
 	return true;
 }
 

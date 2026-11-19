@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SessionCompletion, SessionOutcome } from "@pilot/protocol";
 import { formatFailure } from "@pilot/kernel";
-import { applyActivity, applyFailure, normalizeLegacyOutcome, type OutcomeMeta } from "./session-outcomes.ts";
+import {
+	applyActivity,
+	applyFailure,
+	applyQuestionStopped,
+	normalizeLegacyOutcome,
+	type OutcomeMeta,
+} from "./session-outcomes.ts";
 
 test("diagnostic completions persist redacted causes, survive JSON reload and clear on new work", () => {
 	const reason = formatFailure(
@@ -116,6 +122,19 @@ test("a question waits on the user while background work continues", () => {
 	applyActivity(meta, true);
 	assert.equal(meta.outcome, undefined);
 	assert.equal(meta.lastCompletionAt, 42);
+});
+
+test("Pilot withdraws a question with a note, and the saved question cannot return", () => {
+	const meta: OutcomeMeta = {};
+	const completion: SessionCompletion = { outcome: "question", outcomeAt: 42, outcomeReason: "Restore access?" };
+	applyActivity(meta, false, completion);
+	const note = "Pilot started a newer research chat for this question.";
+	assert.equal(applyQuestionStopped(meta, 10, note), true);
+	assert.equal(meta.outcome, "stopped");
+	assert.equal(meta.outcomeReason, note);
+	assert.ok(meta.outcomeAt! > 42);
+	assert.equal(applyActivity(meta, false, completion), false, "the kernel's saved question stays withdrawn");
+	assert.equal(applyQuestionStopped(meta, 11, note), false, "only a question is withdrawn");
 });
 
 test("settled packets persist each explicit outcome and replace obsolete reasons", () => {
