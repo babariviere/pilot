@@ -288,6 +288,22 @@ pub fn event(event: &str, fields: Value) {
         line(event, fields),
     ));
 }
+
+/// Which form a close could not save, from the window's message (connection.ts, windowState.ts),
+/// as a fixed word: the message itself may name a draft.
+pub fn unsaved_cause(message: &str) -> &'static str {
+    if message.starts_with("Today's drafts could not be saved") {
+        "today_drafts"
+    } else if message.starts_with("Pilot could not save your draft on") {
+        "today_form"
+    } else if message.contains("interview answer") {
+        "interview"
+    } else if message.contains("feedback image") {
+        "feedback_image"
+    } else {
+        "error"
+    }
+}
 fn directory() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("PILOT_DAY_LOG_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(dir));
@@ -328,10 +344,18 @@ fn line(event: &str, fields: Value) -> Vec<u8> {
             line.insert(key.into(), v.clone());
         }
     }
-    if let Some(cause) = fields["cause"]
-        .as_str()
-        .filter(|c| matches!(*c, "catalog_changed" | "project_gone"))
-    {
+    if let Some(cause) = fields["cause"].as_str().filter(|c| {
+        matches!(
+            *c,
+            "catalog_changed"
+                | "project_gone"
+                | "today_drafts"
+                | "today_form"
+                | "interview"
+                | "feedback_image"
+                | "error"
+        )
+    }) {
         line.insert("cause".into(), cause.into());
     }
     // A method or read name only, such as "day.delivery.read": letters and dots, never content.
@@ -682,6 +706,33 @@ mod tests {
             assert_eq!(meta.mode() & 0o777, 0o600, "{name}");
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unsaved_forms_keep_only_a_fixed_cause_never_the_message() {
+        let causes = [
+            ("Today's drafts could not be saved.", "today_drafts"),
+            (
+                "Pilot could not save your draft on “Ship it?”. Its text stays on Today.",
+                "today_form",
+            ),
+            ("2 interview answers could not be saved.", "interview"),
+            (
+                "Finish attaching your feedback image, or remove it before closing.",
+                "feedback_image",
+            ),
+            ("TypeError: boom", "error"),
+        ];
+        for (message, cause) in causes {
+            let record = line(
+                "forms.unsaved",
+                serde_json::json!({"message": message, "cause": unsaved_cause(message)}),
+            );
+            let value: Value = serde_json::from_slice(&record).unwrap();
+            assert_eq!(value["cause"], cause, "{message}");
+            assert!(value.get("message").is_none());
+            assert!(!String::from_utf8(record).unwrap().contains("Ship it"));
+        }
     }
 
     #[test]

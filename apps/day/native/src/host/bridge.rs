@@ -150,8 +150,12 @@ pub(super) fn cached(
                 Value::Null
             }
             Command::Log { event, message } => {
-                // Local only: one line in Day's log, from the window's code.
-                crate::day_log::event(event, json!({"message": message}));
+                // Local only: one line in Day's log, from the window's code. The message itself may
+                // name a draft, so only a fixed cause for unsaved forms is kept.
+                crate::day_log::event(
+                    event,
+                    json!({"message": message, "cause": crate::day_log::unsaved_cause(message)}),
+                );
                 Value::Null
             }
             // Local only: closes the chat, or stops reading the page on notices.
@@ -999,7 +1003,10 @@ async fn run(
             ))
         }
         Command::Draft(r) => {
-            let read = attention_read(host)?;
+            // A draft is saved on this Mac only, under its question's exact content digest or its
+            // action's revision and digest, so an older read still names the right place. Requiring
+            // a current read refused drafts while agents worked, and a close then could not save them.
+            let read = answer_read(host)?;
             let key = ah::draft_key(&read, &r.item_id, r.revision).map_err(|_| Error::Stale)?;
             // A question keeps a Later saved before; only a sent answer clears it.
             let before = host.attention_draft(&key);
