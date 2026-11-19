@@ -539,7 +539,6 @@ pub fn project(
         {
             options[n].recommended = true;
         }
-        let chat = s(&q["session"]["title"]);
         let sent = match local.sending.get(&id) {
             Some(Sending::Answer(picks)) => options
                 .iter()
@@ -560,18 +559,17 @@ pub fn project(
             Delivery::Idle
         };
         decisions.push(Decision {
-			request_session_id: s(&q["session"]["id"]),
+            request_session_id: s(&q["session"]["id"]),
+            request_session_title: s(&q["session"]["title"]),
             can_clarify: read["capabilities"]["clarification"] == 1 && data["interview"].is_null(),
             revision: 1,
             kind: DecisionKind::Choice,
             title: s(&data["question"]),
             reason: "Asks for your answer".into(),
             mission_id: s(&q["session"]["missionId"]),
-            mission_title: title(&q["session"]["missionId"]).unwrap_or_else(|| chat.clone()),
+            mission_title: title(&q["session"]["missionId"]).unwrap_or_default(),
             context: s(&data["context"]),
-            boundary: format!(
-                "Only you can answer. Pilot sends your answer to “{chat}” once, exactly as you write it."
-            ),
+            boundary: "Only you can answer. Pilot sends your answer once, exactly as you write it.".into(),
             interview_round_id: data["interview"]["roundId"].as_str().map(str::to_owned),
             interview_questions: pending.filter(|op| op["request"]["interview"].is_object())
                 .map(|op| crate::attention_interview::sent(&op["request"]))
@@ -1105,7 +1103,10 @@ mod tests {
         assert_eq!(view.attention.state, FreshnessState::Live);
         let d = &view.decisions[0];
         assert_eq!(d.id, "question-s1-12");
+        assert_eq!(d.mission_id, "m1");
         assert_eq!(d.mission_title, "Release");
+        assert_eq!(d.request_session_id, "s1");
+        assert_eq!(d.request_session_title, "Release chat");
         assert!(d.reply);
         assert_eq!(d.help_unavailable.as_deref(), Some(NO_HELP));
         assert!(d.options[0].recommended && !d.options[1].recommended);
@@ -1116,6 +1117,18 @@ mod tests {
         assert_eq!(a.files[0].name, "reviewed.zip");
         assert_eq!(a.origin.chat_title, "Release chat");
         assert!(!a.can_open);
+    }
+
+    #[test]
+    fn a_standalone_question_names_only_the_chat() {
+        let mut r = read();
+        r["questions"][0]["session"]["missionId"] = Value::Null;
+        let view = project(Some(&r), &[], &[], &missions(), &Local::default());
+        let d = &view.decisions[0];
+        assert!(d.mission_id.is_empty());
+        assert!(d.mission_title.is_empty());
+        assert_eq!(d.request_session_id, "s1");
+        assert_eq!(d.request_session_title, "Release chat");
     }
 
     #[test]

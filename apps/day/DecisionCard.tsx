@@ -10,6 +10,7 @@
 import { cleanup, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
 import type { Answer, Decision, DecisionOption } from "pilot-day/native";
 import type { ArtifactSource } from "./artifactReads";
+import { openChat } from "./chatView";
 import {
 	ask,
 	canSend,
@@ -27,14 +28,13 @@ import type { Day } from "./day";
 import { InterviewCard } from "./InterviewCard";
 import { keepField } from "./kept";
 import { QuestionArtifacts } from "./QuestionArtifacts";
-import { QuestionDiscussion } from "./QuestionDiscussion";
-import type { SessionChatMirror } from "./sessionChat";
 import {
 	Action,
 	Bars,
 	CheckboxRow,
 	EvidenceChip,
 	InlineAction,
+	LinkAction,
 	Mark,
 	type MarkKind,
 	Panel,
@@ -54,8 +54,10 @@ import {
 	helpOpen,
 	holdFront,
 	messages,
+	openMission,
 	pickChanged,
 	picked,
+	placeRow,
 	questionText,
 	replies,
 	replyTarget,
@@ -152,7 +154,20 @@ function pickedLine(decision: Decision): string {
 function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: number; count: number; later: boolean }) {
 	const d = () => props.decision;
 	const id = props.decision.id;
-	const discussion = signal(false);
+	const hasSource = () => d().reply && !!d().requestSessionId;
+	const missionLink = `decision-mission-${id}`;
+	const chatLink = `decision-chat-${id}`;
+	const mission = placeRow(missionLink, () => {
+		holdFront(id);
+		openMission(d().missionId);
+	});
+	const chat = placeRow(chatLink, () => {
+		const sessionId = d().requestSessionId;
+		if (!sessionId) return;
+		holdFront(id);
+		openChat(sessionId, "Today");
+	});
+	const chatLabel = () => `Chat: ${d().requestSessionTitle || "Title unavailable"}`;
 	const idle = () => d().delivery === "idle";
 	const radios = new Map<string, ViewRef>();
 	let firstChip: ViewRef | undefined;
@@ -227,7 +242,7 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 		props.day.feed.flushDrafts();
 	};
 	const meta = () =>
-		[d().missionTitle, d().effort]
+		[hasSource() ? "" : d().missionTitle, d().effort]
 			.filter(Boolean)
 			.map((part) => `· ${part}`)
 			.join(" ");
@@ -249,6 +264,22 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 				<Text role="header" class="text-xl font-semibold leading-snug text-card-foreground">
 					{d().title}
 				</Text>
+				<If when={hasSource()}>
+					<View testID="decision-source" class="flex-row flex-wrap items-center gap-x-1.5 gap-y-1">
+						<If when={d().missionId}>
+							<LinkAction
+								label={`Mission: ${d().missionTitle || "Title unavailable"}`}
+								testID={missionLink}
+								anchor={mission.anchor}
+								onPress={mission.press}
+							/>
+							<Text class="text-xs text-muted-foreground">·</Text>
+						</If>
+						<If when={props.day.chat} else={<Text class="text-xs text-muted-foreground">{chatLabel()}</Text>}>
+							<LinkAction label={chatLabel()} testID={chatLink} anchor={chat.anchor} onPress={chat.press} />
+						</If>
+					</View>
+				</If>
 				<View class="flex-row flex-wrap items-center gap-1.5">
 					<Mark kind={decisionMark(d())} />
 					<Text
@@ -458,23 +489,6 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 			</If>
 
 			<If when={d().reply}>
-				<If when={props.day.chat && d().requestSessionId}>
-					<View class="flex-row">
-						<Action
-							label={discussion() ? "Hide discussion" : "Open discussion"}
-							testID="question-open-discussion"
-							onPress={() => {
-								discussion.set(!discussion());
-							}}
-						/>
-					</View>
-					<If when={discussion()}>
-						<QuestionDiscussion
-							mirror={props.day.chat as SessionChatMirror}
-							sessionId={d().requestSessionId ?? ""}
-						/>
-					</If>
-				</If>
 				<TextField
 					testID="reply"
 					ref={replyField.ref}

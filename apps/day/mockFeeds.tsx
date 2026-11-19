@@ -51,6 +51,7 @@ class MockChat implements SessionChatSource {
 	}
 	async open(sessionId: string) {
 		const coordinator = sessionId.startsWith("c-");
+		const titles: Record<string, string> = { "w-upload": "Check the upload", "w-native": "Release chat" };
 		const row = (key: string, role: ChatRow["role"], text: string): ChatRow => ({
 			key,
 			role,
@@ -61,7 +62,7 @@ class MockChat implements SessionChatSource {
 		});
 		this.#set({
 			sessionId,
-			title: coordinator ? "Mission coordinator" : "Mission chat",
+			title: coordinator ? "Mission coordinator" : (titles[sessionId] ?? "Mission chat"),
 			state: coordinator ? "working" : "done",
 			stateReason: "",
 			rows: [

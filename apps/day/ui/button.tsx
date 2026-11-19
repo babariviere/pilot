@@ -198,6 +198,7 @@ export function LinkAction(props: {
 	label: string;
 	testID?: string;
 	accessibilityLabel?: string;
+	anchor?: (node: ViewRef) => void;
 	/** Set to make it a toggle that shows when it is on. */
 	pressed?: boolean;
 	/** The look of the words (default `primary`): `faint` for a quiet disclosure. */
@@ -214,12 +215,16 @@ export function LinkAction(props: {
 		mark: () => props.agent,
 		actions: { press: () => props.onPress() },
 	});
+	const anchor = (node: ViewRef) => {
+		agent.anchor(node);
+		props.anchor?.(node);
+	};
 	return (
 		<If
 			when={props.pressed !== undefined}
 			else={
 				<Button
-					ref={agent.anchor}
+					ref={anchor}
 					testID={props.testID}
 					accessibilityLabel={props.accessibilityLabel ?? null}
 					onPress={props.onPress}
@@ -230,7 +235,7 @@ export function LinkAction(props: {
 			}
 		>
 			<Toggle
-				ref={agent.anchor}
+				ref={anchor}
 				testID={props.testID}
 				accessibilityLabel={props.accessibilityLabel ?? null}
 				pressed={props.pressed === true}

@@ -198,9 +198,11 @@ test("Mission overview in light, dark and a narrow window", async () => {
 	}
 });
 
-test("execution controls: clarification and original request capture", async () => {
+test("decide sources and clarification, captured", async () => {
 	const app = await open("./Asks.tsx", { platform: "macos", width: 1100, height: 1200 });
 	await app.waitFor("Which package should go to the store?");
+	await app.wait(400);
+	await app.screenshot("output/decide-mission.png");
 	if (app.shows("Ask a question")) {
 		await app.press("Ask a question");
 		await app.type("id:question", "Why not rebuild?");
@@ -209,6 +211,10 @@ test("execution controls: clarification and original request capture", async () 
 	}
 	await app.wait(400);
 	await app.screenshot("output/execution-clarification.png");
+	await app.press("Later");
+	await app.waitFor("Pick any that apply.");
+	await app.wait(400);
+	await app.screenshot("output/decide-standalone.png");
 });
 
 test("execution controls: standalone queue capture", async () => {

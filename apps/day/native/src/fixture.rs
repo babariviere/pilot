@@ -1041,12 +1041,13 @@ fn asks() -> World {
     world.today.headline = s("Two questions need you.");
     let first = Decision {
         request_session_id: s("w-native"),
+        request_session_title: s("Release chat"),
         can_clarify: true,
         title: s("Which package should go to the store?"),
         reason: s("Asks for your answer"),
         context: s("The reviewed zip is ready. A rebuild would change its bytes."),
         boundary: s(
-            "Only you can answer. Pilot sends your answer to “Release chat” once, exactly as you write it.",
+            "Only you can answer. Pilot sends your answer once, exactly as you write it.",
         ),
         options: vec![
             opt("option-1", "Reviewed package", "", true),
@@ -1057,6 +1058,8 @@ fn asks() -> World {
         ..decision("ask1", DecisionKind::Choice, "native", "Native desktop app")
     };
     let second = Decision {
+        request_session_id: s("w-upload"),
+        request_session_title: s("Check the upload"),
         title: s("Which checks should run before the upload?"),
         reason: first.reason.clone(),
         context: s("Pick any that apply. Pilot runs only the checks you pick."),
@@ -1069,7 +1072,7 @@ fn asks() -> World {
         multiple: true,
         reply: true,
         help_unavailable: first.help_unavailable.clone(),
-        ..decision("ask2", DecisionKind::Choice, "native", "Native desktop app")
+        ..decision("ask2", DecisionKind::Choice, "", "")
     };
     world.today.decisions = vec![first, second];
     world

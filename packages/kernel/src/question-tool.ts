@@ -23,7 +23,11 @@ export function createQuestionTool(publish: PublishQuestion): ToolDefinition {
 		parameters: Type.Object({
 			question: Type.String({ minLength: 1, maxLength: 300, description: "One short question." }),
 			context: Type.Optional(
-				Type.String({ maxLength: 600, description: "One or two sentences the user needs to answer." }),
+				Type.String({
+					maxLength: 600,
+					description:
+						"Give one or two plain-language sentences: what you are trying to do, what is blocked, and what the choice changes. Make it clear without opening the chat.",
+				}),
 			),
 			options: Type.Optional(
 				Type.Array(

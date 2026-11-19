@@ -42,18 +42,43 @@ test("clarification keeps one request and the explicit reply draft", async () =>
 	).toBe(true);
 });
 
-test("a focused discussion reads the same asking agent and keeps one request and draft", async () => {
+test("mission and chat sources return to the same pending decision and draft", async () => {
 	const app = await open("./Asks.tsx", desktop);
+	await app.waitFor("Mission: Native desktop app");
+	expect(app.shows("Chat: Release chat")).toBe(true);
+	expect(app.shows("Open discussion")).toBe(false);
 	await app.type("id:reply", "Why not rebuild?");
-	await app.press("id:question-open-discussion");
-	await app.waitFor("id:question-discussion");
-	await app.waitFor("The task is done.");
+	await app.press("id:decision-mission-ask1");
+	await app.waitFor("id:mission-page");
+	await app.press("role:button[Back to Today]");
+	await app.waitFor("id:decision-mission-ask1");
 	expect(app.value("id:reply")).toBe("Why not rebuild?");
+	await app.press("id:decision-chat-ask1");
+	await app.waitFor("id:chat");
+	await app.waitFor("Release chat");
+	await app.waitFor("The task is done.");
+	await app.press("role:button[Back to Today]");
+	await app.waitFor("id:decision-chat-ask1");
 	expect(app.shows("Which package should go to the store?")).toBe(true);
 	expect(app.shows("has your answer")).toBe(false);
-	await app.press("id:question-open-discussion");
-	expect(app.shows("id:question-discussion")).toBe(false);
 	expect(app.value("id:reply")).toBe("Why not rebuild?");
+});
+
+test("a standalone decision shows only the chat source and Back keeps its draft", async () => {
+	const app = await open("./Asks.tsx", desktop);
+	await app.waitFor("Which package should go to the store?");
+	await app.press("Later");
+	await app.waitFor("Chat: Check the upload");
+	expect(app.shows("id:decision-mission-ask2")).toBe(false);
+	await app.type("id:reply", "Run the upload checks.");
+	await app.press("id:decision-chat-ask2");
+	await app.waitFor("id:chat");
+	await app.waitFor("Check the upload");
+	await app.press("role:button[Back to Today]");
+	await app.waitFor("id:decision-chat-ask2");
+	expect(app.shows("Which checks should run before the upload?")).toBe(true);
+	expect(app.shows("has your answer")).toBe(false);
+	expect(app.value("id:reply")).toBe("Run the upload checks.");
 });
 
 test("a suggestion is not an answer until picked, and 0 opens the user's own words", async () => {

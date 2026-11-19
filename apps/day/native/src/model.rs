@@ -410,9 +410,12 @@ pub struct AttentionInterviewQuestion {
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Decision {
-    /// Exact original agent for this request. Opening its discussion only reads.
+    /// Exact original chat for this request. Opening it only reads.
     #[prop(default)]
     pub request_session_id: String,
+    /// Title of the original chat, separate from the mission's title.
+    #[prop(default)]
+    pub request_session_title: String,
     /// A tool-free clarification keeps the original question pending.
     #[prop(default)]
     pub can_clarify: bool,

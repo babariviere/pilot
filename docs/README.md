@@ -30,6 +30,9 @@ revision without editing it there. Open an agent's chat to inspect its current
 private working copy. The live comparison is separate from saved evidence.
 Today To check discovers new mission deliveries from a saved first-use cutoff.
 To check is part of Needs you on Today, and a mission's overview lists its own results to check.
+On a Decide card, the Mission and Chat links below the question open its source.
+Standalone questions show only Chat. Back returns to the pending question and keeps your draft.
+Opening either link sends no answer and starts no work.
 Older work stays in missions, without being accepted or deleted. Your saved
 checks stay available. Open a result directly from any project you can access.
 Result pages keep private general, section and code-line comments. Code changes shows
