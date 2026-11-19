@@ -4,6 +4,7 @@
 import type { Answer, Decision, HumanAction, IntentOutcome } from "pilot-day/native";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
+import { openMissions, startRequest, triageCard } from "./Incoming";
 import { resultTitle } from "./ToCheck";
 import {
 	asking,
@@ -284,12 +285,17 @@ export async function checkAction(day: Day, action: HumanAction) {
 	if (outcome.status === "accepted") focusFront.set(true);
 }
 
-/** The front item's one next action: check, decide, or report done. */
+/** The front item's one next action: check, decide, report done, open a result or start a request. */
 export function commit(day: Day, item: Item | undefined) {
 	if (!item) return;
 	if (item.kind === "result") {
 		// Opening the result only reads it; its page holds Mark done and Send back.
 		openDelivery(item.entry.subject, resultTitle(day, item.entry));
+		return;
+	}
+	if (item.kind === "request") {
+		// The first press asks to start; the press after it sends the Start the card shows.
+		if (day.intake) startRequest(day.intake, item.row, openMissions(day.today()));
 		return;
 	}
 	if (item.kind === "decision") {
@@ -301,11 +307,13 @@ export function commit(day: Day, item: Item | undefined) {
 	else if (item.action.delivery === "idle") void complete(day, item.action);
 }
 
-/** Puts the front item off. */
+/** Puts the front item off. A request's Later is its saved triage, not just this window's order. */
 export function later(day: Day, item: Item | undefined) {
 	if (!item) return;
 	if (item.kind === "result") laterResult(item.entry.key);
-	else if (item.kind === "decision") laterDecision(day, item.decision);
+	else if (item.kind === "request") {
+		if (day.intake) void triageCard(day.intake, item.row, "later");
+	} else if (item.kind === "decision") laterDecision(day, item.decision);
 	else if (item.action.delivery === "idle") void laterAction(day, item.action);
 }
 

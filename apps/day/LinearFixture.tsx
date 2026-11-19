@@ -15,7 +15,20 @@ import { captureView, restoreView, startFresh } from "./windowState";
 const linear = new ScriptedLinear();
 
 function request(id: string, key: string, title: string): Request {
-	return { id, source: "linear", sourceLabel: "Linear", title, place: key, kind: "", age: "", link: "" };
+	return {
+		id,
+		source: "linear",
+		sourceLabel: "Linear",
+		title,
+		place: key,
+		kind: "",
+		age: "",
+		link: "",
+		who: "",
+		quote: "",
+		client: "",
+		reporter: "",
+	};
 }
 
 /** New on Today: the Linear requests nobody started. Writes are refused; this fixture tests reading. */
@@ -36,6 +49,7 @@ const intakeView: IntakeView = {
 	settled: [],
 	started: [],
 	sending: [],
+	canOpen: false,
 };
 const refuse = async () => ({ status: "rejected" as const, message: "Not in this fixture.", operationId: null });
 const intake: IntakeSource = {
@@ -45,6 +59,7 @@ const intake: IntakeSource = {
 	triage: refuse,
 	start: refuse,
 	check: refuse,
+	open: refuse,
 	dispose: () => {},
 };
 
@@ -70,6 +85,7 @@ mount(() => (
 			<Text testID="reads">{`Reads: ${linear.reads()}`}</Text>
 			{/* A read as Pilot starts one on its own (a change, the window coming back). */}
 			<Action label="Fixture read" onPress={() => void day.linear.source.read()} />
+			<Action label="Forget reads" onPress={() => linear.forget()} />
 			<Each of={MODES} key={(m) => m[0]}>
 				{(m) => <Action label={`Mode ${m()[0]}`} onPress={() => linear.mode.set(m()[1])} />}
 			</Each>

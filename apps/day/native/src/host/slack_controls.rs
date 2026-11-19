@@ -68,6 +68,20 @@ fn channel(s: &str) -> bool {
         && s.bytes()
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
 }
+/// The saved Slack message link Pilot may hand to the opener, as saved. Its
+/// workspace-less `slack.com` form is checked as a workspace link.
+pub(super) fn message_link(url: &str) -> Result<String, Error> {
+    let mut checked = reqwest::Url::parse(url).map_err(|_| Error::Invalid)?;
+    if checked.host_str() == Some("slack.com") {
+        checked
+            .set_host(Some("source.slack.com"))
+            .map_err(|_| Error::Invalid)?;
+    }
+    if !safe_link(checked.as_str()) {
+        return Err(Error::Invalid);
+    }
+    Ok(url.to_owned())
+}
 impl Intent {
     pub(crate) fn validate(&self) -> Result<(), Error> {
         let valid = match self.action.as_str() {
@@ -236,16 +250,7 @@ pub(super) async fn handle(
                         .find(|r| r["id"] == i.value["itemId"])
                         .ok_or(Error::Stale)?;
                     let url = item["url"].as_str().ok_or(Error::Invalid)?;
-                    let mut checked = reqwest::Url::parse(url).map_err(|_| Error::Invalid)?;
-                    if checked.host_str() == Some("slack.com") {
-                        checked
-                            .set_host(Some("source.slack.com"))
-                            .map_err(|_| Error::Invalid)?;
-                    }
-                    if !safe_link(checked.as_str()) {
-                        return Err(Error::Invalid);
-                    }
-                    Ok(url.to_owned())
+                    message_link(url)
                 };
                 let url = qualify(&read_page(t, offset).await?)?;
                 if qualify(&read_page(t, offset).await?)? != url {

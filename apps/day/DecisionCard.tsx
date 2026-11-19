@@ -25,6 +25,7 @@ import {
 	toggleHelp,
 } from "./commands";
 import type { Day } from "./day";
+import { todayRequests } from "./Incoming";
 import { InterviewCard } from "./InterviewCard";
 import { keepField } from "./kept";
 import { QuestionArtifacts } from "./QuestionArtifacts";
@@ -595,7 +596,9 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 					<InterviewCard
 						{...props}
 						decision={d()}
-						keyboardActive={front(props.day.today(), todayResults(props.day))?.id === d().id}
+						keyboardActive={
+							front(props.day.today(), todayResults(props.day), todayRequests(props.day))?.id === d().id
+						}
 					/>
 				</If>
 			)}

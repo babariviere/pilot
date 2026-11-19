@@ -103,6 +103,18 @@ fn request(kind: RequestSource, source: &TrackedSource, item: &TrackedItem, now:
         RequestSource::Linear => item.text("identifier").unwrap_or_default().to_owned(),
         RequestSource::Other => String::new(),
     };
+    // Slack's report details: each a value with its evidence, quoted from the message.
+    let detail = |name: &str, part: &str| -> String {
+        item.metadata
+            .get("details")
+            .and_then(|d| d.get(name))
+            .and_then(|d| d.get(part))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let slack = kind == RequestSource::Slack;
     let what = match kind {
         RequestSource::Slack => slack_kind(item),
         _ => item
@@ -126,6 +138,26 @@ fn request(kind: RequestSource, source: &TrackedSource, item: &TrackedItem, now:
             .filter(|u| u.starts_with("https://"))
             .unwrap_or_default()
             .to_owned(),
+        who: if slack {
+            item.text("author").unwrap_or_default().trim().to_owned()
+        } else {
+            String::new()
+        },
+        quote: if slack {
+            detail("issue", "evidence")
+        } else {
+            String::new()
+        },
+        client: if slack {
+            detail("client", "value")
+        } else {
+            String::new()
+        },
+        reporter: if slack {
+            detail("reporter", "value")
+        } else {
+            String::new()
+        },
     }
 }
 
@@ -269,8 +301,30 @@ mod tests {
         assert_eq!(first.kind, "Bug, high");
         assert_eq!(first.age, "4 min ago");
         assert!(first.link.starts_with("https://"));
+        assert_eq!(first.who, "");
+        assert_eq!(first.quote, "");
         assert!(intake.trouble.is_empty());
         assert_eq!(intake.more, "");
+    }
+
+    #[test]
+    fn a_slack_request_carries_its_author_and_evidenced_details() {
+        let mut item = slack_item("s1", "open", 3);
+        item.metadata.insert("author".into(), "Jane Doe".into());
+        item.metadata.insert(
+            "details".into(),
+            serde_json::json!({
+                "client": { "value": "Northwind", "evidence": "For Northwind" },
+                "issue": { "value": "export spins", "evidence": "the Export button spins forever" },
+                "reporter": null,
+            }),
+        );
+        let intake = intake(&[slack(vec![item], 1)], NOW);
+        let r = &intake.requests[0];
+        assert_eq!(r.who, "Jane Doe");
+        assert_eq!(r.quote, "the Export button spins forever");
+        assert_eq!(r.client, "Northwind");
+        assert_eq!(r.reporter, "");
     }
 
     #[test]

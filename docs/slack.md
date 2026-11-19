@@ -27,7 +27,8 @@ It does not cancel or retry the action, which may already have saved a message.
 
 ## Reports in Day
 
-Open **Today → New → Slack reports** for the window's project. Each report has
+Open **Slack reports** for the window's project from Command+K. A Slack request's card on
+Today offers **Open in Slack**, which shows that message in your browser. Each report has
 separate client organization, Slack author, original reporter and issue fields.
 Missing information says **Not identified**. Evidence appears below each extracted
 field; **Source message** opens the exact saved Slack link. **Correct details…**

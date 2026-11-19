@@ -2,8 +2,10 @@
 
 Today intake uses canonical tracked items, not the dashboard's five-row preview.
 No source sync, sign-in, model call or external write runs during a read or Check.
-The connected window's New section consumes these methods (apps/day/README.md).
-The mock window keeps Today's read-only example rows.
+The connected window's Today consumes these methods: each new Slack request is a
+card in Needs you after the results to check (`RequestCard.tsx`), and the writes
+live in `Incoming.tsx`. Linear requests are counted on Today's one Linear row and
+start from the Linear page. Mock windows have no request source and show no cards.
 
 ## Read
 
@@ -170,9 +172,10 @@ prove access to live Linear/Slack. No alternate routes or stores are needed.
 ### The Linear page
 
 Day's connected window shows this saved read on the Linear page, opened from
-"Your Linear issues" in New on Today when Linear is one of the project's sources.
-`linearFeed.ts` reads only when the page opens, on Read again and when Today's
-requests change while it is open; the window's startup does not call it.
+Today's Linear row (after Missions) when Linear is set up or one of the project's
+request sources. `linearFeed.ts` reads once when that row first shows, to count
+the user's open issues (only from a complete read of the current settings), when
+the page opens, on Read again and when Today's requests change while it is open.
 
 - Title and scope: "Your issues in cycle N" (or "Your open Linear issues" for
   `no_active_cycle`), and always "Not your team's other issues or other cycles".
@@ -182,9 +185,10 @@ requests change while it is open; the window's startup does not call it.
   this is not the same as having none. A failed first read shows nothing guessed;
   a failed later read keeps the last one and says so.
 - Rows group by Linear state type. A row's place comes from `missionId`/`sessionId`
-  and `triageState` only, plus whether New on Today lists its exact ID. Earlier
-  links are counted from `missionIds`/`sessionIds`. Eligible issues share New's
-  explicit start and prefill controls. Triage stays in New.
+  and `triageState` only, plus whether the intake read lists its exact ID as new
+  ("Not started"). Earlier links are counted from `missionIds`/`sessionIds`.
+  Eligible issues offer the shared explicit start and prefill controls. Later and
+  Discard stay with the request cards; earlier triage shows under Needs you.
 - `more > 0` always shows how many saved rows are not shown; there is no paging.
 - A close or update saves the page in the window's `SavedView.linear`, as
   `<project>` or `<project>/<tracked item>` with the issue open in place, plus
@@ -218,7 +222,13 @@ revision and project configuration decides.
 day.intake.triage {itemId, revision, contextDigest, state}
 day.intake.start  {itemId, revision, contextDigest, missionId?}
 day.intake.check  {operationId}
+day.intake.open   {itemId, revision}
 ```
+
+`day.intake.open` reads the intake twice and opens only the exact Slack row's saved
+message link, at the revision shown, through the root's URL opener. It saves,
+sends and retries nothing. The read's `snapshot.canOpenUrl` says whether the
+window has an opener; without one, or without a link, the card offers no action.
 
 Later sets `later`; Bring back sets `new`. Discard sets `discarded`; Undo sets
 `new`. Source sync keeps this state. Every tracked-item update invalidates the
@@ -274,11 +284,13 @@ change without its outer receipt stays Unknown, never auto-replayed.
   durable session metadata, with fake sources/model selection and no workers.
 - `native/tests/intake.rs`: released NSH host channel, native ledger-before-send,
   real isolated daemon, all four triage actions, lost Start reply and cold Check.
-- `native/tests/intake_today.rs`: `Connected.tsx` headless on the same daemon:
-  Later, Bring back, Discard and Undo each send once, a lost Start stays
+- `native/tests/intake_today.rs`: `Connected.tsx` headless on the same daemon
+  with synthetic Slack requests: Linear requests stay on the Linear row, Later,
+  Bring back, Discard and Undo each send once from the card, a lost Start stays
   not confirmed across a native reopen and Check reads it once.
-- `apps/day/Intake.test.tsx`: the New section's controls on a scripted source:
-  stale writes, changed requests and projects, rapid presses and focus.
+- `apps/day/Intake.test.tsx`: the request cards on a scripted source: stale
+  writes, changed requests and projects, rapid presses, keys and focus.
+  `NeedsYouResults.test.tsx` checks that the cards wait behind results to check.
 
 After a reopen, a Start whose request is already linked to its chat shows as "a
 request": the read no longer holds the item, and the saved operation has no title.

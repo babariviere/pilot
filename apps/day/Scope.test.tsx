@@ -115,12 +115,13 @@ test("pressing another project's mission opens it, and sends nothing", async () 
 
 test("pressing another project's request switches Today to that project, and sends nothing", async () => {
 	const app = await ready();
-	await app.waitFor("id:scope-new-demo-website");
+	// Another project's Slack request waits among its Needs you rows.
+	await app.waitFor("id:scope-needs-demo-website >> Slack request · #client-northwind · 20 min ago");
 	await app.press(
 		"label:Northwind can't export invoices to CSV in website. Open it to start work, put it off or discard it.",
 	);
 	// Today now shows website only. In the connected window the root then makes
-	// website the window's own project, so its requests can be acted on in New.
+	// website the window's own project, so its request comes forward as a card in Needs you.
 	await app.waitFor("Showing website.");
 	expect(app.shows("Northwind can't export invoices to CSV")).toBe(true);
 	expect(sent(app)).toContain("Sent: 0");

@@ -169,6 +169,15 @@ export class ScriptedLinear implements LinearSource {
 		for (const l of this.#listeners) l(v);
 	}
 
+	/** Drops the saved read, as a window that never read one. Today's Linear row reads once when it shows. */
+	forget(): void {
+		this.#last = null;
+		this.#refused = false;
+		this.reads.set(0);
+		const v = this.view();
+		for (const l of this.#listeners) l(v);
+	}
+
 	dispose(): void {
 		this.#listeners.clear();
 	}

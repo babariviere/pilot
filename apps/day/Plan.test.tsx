@@ -31,7 +31,7 @@ test("Today shows New and a mission whose questions wait", async () => {
 	for (const text of ["Export a chat as Markdown", "Questions for you", "3 of 7 answered", "role:button[New]"]) {
 		expect(app.shows(text)).toBe(true);
 	}
-	expect(app.shows("Three short things need you.")).toBe(true);
+	expect(app.shows("Eight things need you.")).toBe(true);
 });
 
 test("one question at a time, starting at the first without an answer; a recommendation is not an answer", async () => {

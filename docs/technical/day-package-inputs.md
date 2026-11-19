@@ -307,10 +307,10 @@ reservation, exact-owner exit and new-boot handoff. See
 [Daemon upgrades](../../apps/desktop/docs/daemon-upgrades.md). A pause ACK is
 not a drain proof, and an uncertain handoff cannot be retried.
 
-The mock test fixtures' incoming rows are examples with no Start actions. The
-connected `Incoming.tsx` route uses `LiveIncoming` and `NewControls`: opening
-a new Slack or Linear request offers Start work, Later and Discard. Start
-then confirms one Build chat and its exact destination. Merely viewing those
+The mock test fixtures have no request source and show no request cards. In the
+connected window, a new Slack request is a card in Needs you (`RequestCard.tsx`)
+with Start work, Later and Discard; a Linear issue starts from the Linear page.
+Start then confirms one Build chat and its exact destination. Merely viewing those
 controls sends nothing; testing a real Start needs execution approval.
 
 ## Supported lanes and evidence limits

@@ -6,7 +6,7 @@ import { expect, open, test } from "nsh/test";
 
 const desktop = { platform: "macos", width: 1100, height: 1400 } as const;
 const narrow = { platform: "macos", width: 520, height: 1000 } as const;
-const TODAY = "Three short things need you.";
+const TODAY = "Eight things need you.";
 
 type App = Awaited<ReturnType<typeof open>>;
 

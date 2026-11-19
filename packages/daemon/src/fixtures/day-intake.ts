@@ -218,6 +218,36 @@ for await (const line of createInterface({ input: process.stdin })) {
 	const c = JSON.parse(line);
 	if (c.action === "quit") break;
 	if (c.action === "lost") lost = true;
+	if (c.action === "slack-requests") {
+		// Two synthetic Slack requests in the selected project. No channel is set up, so a Start reacts in Slack never.
+		const slack = (ts: string, title: string, minutes: number) => ({
+			externalId: `C1/${ts}`,
+			title,
+			url: `https://slack.com/archives/C1/p${ts.replace(".", "")}`,
+			status: "open",
+			updatedAt: Date.now() - minutes * 60_000,
+			metadata: {
+				channel: "C1",
+				channelName: "client-one",
+				thread_ts: ts,
+				author: "Jane Doe",
+				type: "bug",
+				severity: "high",
+				confidence: 0.9,
+				summary: title,
+				label: null,
+				details: {
+					client: { value: "Northwind", evidence: "For Northwind" },
+					issue: { value: "export spins", evidence: "the Export button spins forever" },
+					reporter: null,
+				},
+			},
+		});
+		await f.items.commit(f.project.id, "slack", [
+			slack("1791892800.000100", "Slack one", 1),
+			slack("1791892700.000200", "Slack two", 5),
+		]);
+	}
 	if (c.action === "fail-chats") {
 		// Synthetic failed turns with no workers. Preserve identity, source and saved inputs.
 		// biome-ignore lint/complexity/useLiteralKeys: lifecycle fixture boundary

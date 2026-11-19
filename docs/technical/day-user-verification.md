@@ -316,6 +316,10 @@ On Today, Needs you queues these rows as cards (`ResultCard.tsx`) after the deci
 (`view.ts` `queue`). J, K, ⌘↩ (open the result) and L work on them as on the other cards. L is local to the
 window (`laterResults`): it sends nothing and saves nothing. `ToCheck` with `queued` then keeps only
 unconfirmed checks, settled notes and paging.
+New Slack requests queue after the results as `RequestCard.tsx` cards. Their L is the saved intake Later
+triage, and ⌘↩ asks to start, then sends the Start the card shows (`Incoming.tsx`).
+Today's headline and summary (`TodayScreen.tsx`) add these cards and the results to Rust's count of
+decisions and actions, so "Nothing needs you" never shows above a card.
 
 Next results/First results page only the automatic list, never the durable cutoff
 or saved Unknown checks. Later pages state that earlier results are still pending.

@@ -57,6 +57,8 @@ export type IntakeView = {
 	started: IntakeOp[];
 	/** Requests with a write on its way. */
 	sending: string[];
+	/** Whether this window can hand a request's saved link to the browser, as the native root last said. */
+	canOpen: boolean;
 };
 
 /** What a write or a Check did, for the user. */
@@ -74,6 +76,8 @@ export type StartIntent = {
 	missionId: string | null;
 	manageStatus?: boolean;
 };
+/** Opens one shown Slack request's saved message link. Nothing is saved or sent. */
+export type OpenIntent = { itemId: string; revision: number };
 
 /** The New section's source. The connected window has one; the mock window has none. */
 export interface IntakeSource {
@@ -85,6 +89,12 @@ export interface IntakeSource {
 	start(intent: StartIntent): Promise<IntakeResult>;
 	/** Reads one unsettled write's saved receipt. Never sends the write again. */
 	check(operationId: string): Promise<IntakeResult>;
+	/**
+	 * Shows the saved Slack message of exactly the request shown in the browser,
+	 * once, for one press. Native reads the request again first; a changed one
+	 * opens nothing. Nothing is saved, sent or retried.
+	 */
+	open(intent: OpenIntent): Promise<IntakeResult>;
 	dispose(): void;
 }
 
@@ -101,6 +111,7 @@ type Snapshot = {
 	later?: Intake;
 	discarded?: Intake;
 	claimed?: Intake;
+	canOpenUrl?: boolean;
 };
 type Summary = {
 	operationId: string;
@@ -160,6 +171,37 @@ export function intakeReason(refusal: Refusal): string {
 
 /** Unknown words for a lost answer: the same promise everywhere. */
 const UNKNOWN = "Pilot sent this but heard nothing back. It will not send it again; Check only reads.";
+
+/** What a refused open means. Only an open whose answer is lost may have shown the message. */
+function refusedOpen(refusal: Refusal): IntakeResult {
+	const r = (status: IntakeResult["status"], message: string): IntakeResult => ({
+		status,
+		message,
+		operationId: null,
+	});
+	switch (refusal) {
+		case "lost":
+		case "unknown":
+			return r(
+				"unknown",
+				"Pilot asked your browser to open it but did not hear back. It will not try again by itself.",
+			);
+		case "stale":
+			return r("stale", "This request changed since Pilot read it. Nothing opened. Look again first.");
+		case "busy":
+		case "closed":
+			return r("rejected", "Pilot is closing. Nothing opened.");
+		case "offline":
+			return r("rejected", "Pilot could not reach its service to check this link. Nothing opened.");
+		case "invalid":
+			return r("rejected", "Pilot only opens Slack message links. Nothing opened.");
+		case "denied":
+		case "unavailable":
+			return r("rejected", "Pilot cannot open links in this window. Nothing opened.");
+		default:
+			return r("rejected", "Pilot could not open this link. Nothing opened.");
+	}
+}
 
 /** What a refused write means, before anything was saved or sent. */
 function refused(refusal: Refusal): IntakeResult {
@@ -269,6 +311,7 @@ export class ConnectedIntake implements IntakeSource {
 				.filter((o) => o.kind === "intake-start" && o.state === "accepted" && !o.missionId && o.sessionId)
 				.map(op),
 			sending: [...this.#sending],
+			canOpen: s?.canOpenUrl === true,
 		};
 	}
 
@@ -415,6 +458,19 @@ export class ConnectedIntake implements IntakeSource {
 			message: "Pilot's service has no result for it yet. Nothing was sent again.",
 			operationId,
 		};
+	}
+
+	async open(intent: OpenIntent): Promise<IntakeResult> {
+		// One press, one call: an open is never queued, saved or tried again.
+		const r = await call<unknown>(this.#window, "day.intake.open", {
+			itemId: intent.itemId,
+			revision: intent.revision,
+		});
+		if (!r.ok) {
+			if (r.refusal === "stale") void this.read();
+			return refusedOpen(r.refusal);
+		}
+		return { status: "accepted", message: "", operationId: null };
 	}
 
 	dispose(): void {

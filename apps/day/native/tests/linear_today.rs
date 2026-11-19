@@ -4,7 +4,7 @@
 //! needs the repository's Node dependencies). Headless: no visible window,
 //! provider, live source poll or external write.
 //!
-//! The page opens from New on Today and shows only the saved own issues and
+//! The page opens from Today's Linear row and shows only the saved own issues and
 //! saved cycle: exact links, the count it does not show, source trouble with
 //! the earlier saved copy, a lost read, and a replaced checkpoint that hides
 //! every row. Reading never polls Linear and sends nothing.
@@ -100,7 +100,7 @@ fn linear_page_shows_saved_issues_with_exact_links_and_never_polls_or_sends() {
     let entry = entry();
     let bridge = f.bridge();
     let mut app = open(&entry, &bridge);
-    wait(&mut app, "id:incoming");
+    wait(&mut app, "id:linear-row");
     wait(&mut app, "id:linear-open");
     app.press("id:linear-open").unwrap();
     wait(&mut app, "id:linear");
@@ -129,7 +129,7 @@ fn linear_page_shows_saved_issues_with_exact_links_and_never_polls_or_sends() {
         &app,
         "Earlier it was also linked to 1 other mission and 1 other chat."
     ));
-    assert!(has(&app, "label:/^Same title, Todo\\. New on Today\\./"));
+    assert!(has(&app, "label:/^Same title, Todo\\. Not started\\./"));
     let stats = f.stats("stats");
     assert_eq!(
         stats["linearReads"], 1,
@@ -165,7 +165,7 @@ fn linear_page_shows_saved_issues_with_exact_links_and_never_polls_or_sends() {
     assert!(!has(&app, "id:linear-cycle"));
 
     app.press("role:button[Back to Today]").unwrap();
-    wait(&mut app, "id:incoming");
+    wait(&mut app, "id:linear-row");
     let stats = f.stats("stats");
     assert_eq!(
         stats["linearReads"], 2,

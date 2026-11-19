@@ -21,6 +21,7 @@ import {
 	goPlan,
 	goSchedules,
 	goSettings,
+	goSlack,
 	jump,
 	type Places,
 	shown,
@@ -124,6 +125,7 @@ function entries(places: Places): Entry[] {
 		here: at === "changes" || at === "change",
 	});
 	place("linear", "Linear issues", !!day.linear, goLinear, { keywords: ["tickets", "cycle"], here: at === "linear" });
+	place("slack", "Slack reports", !!day.slack, goSlack, { keywords: ["requests", "triage"], here: at === "slack" });
 	place("artifacts", "Artifacts", !!day.artifacts, goArtifacts, { here: at === "artifacts" });
 	place("feedback", "Feedback", !!day.feedback, goFeedback, { keywords: ["bug", "idea"], here: at === "feedback" });
 	place("schedules", "Schedules", !!day.schedules, goSchedules, { keywords: ["automation", "check-ins", "repair"] });

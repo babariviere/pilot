@@ -16,7 +16,7 @@ import { closeDelivery, deliveryRoute, hideInspection } from "./deliveryView";
 import { closeFeedback, feedbackOpen, openFeedback } from "./feedbackView";
 import { closeInsights, insightsOpen } from "./insightsView";
 import { closeLinear, linearOpen, openLinear } from "./linearView";
-import { closeSlack, slackOpen } from "./slackView";
+import { closeSlack, openSlack, slackOpen } from "./slackView";
 import { type Plans, planningListShape } from "./planning";
 import { closePlanning, openNew, openPlan, planRoute } from "./planView";
 import { closeSettings, openSettings, settingsOpen } from "./preferencesView";
@@ -370,6 +370,12 @@ export function goArtifacts() {
 export function goLinear() {
 	goHome();
 	openLinear();
+}
+
+/** Opens the Slack reports page from wherever the user is. Opening it only reads. */
+export function goSlack() {
+	goHome();
+	openSlack();
 }
 
 /** Opens mission `id`'s overview from wherever the user is. */

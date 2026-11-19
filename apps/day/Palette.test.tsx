@@ -6,7 +6,7 @@
 import { expect, open, test } from "nsh/test";
 
 const desktop = { platform: "macos", width: 1100, height: 1400 } as const;
-const TODAY = "Three short things need you.";
+const TODAY = "Eight things need you.";
 const SEARCH = "label:Search work and places";
 const OUTPUT = "role:option[Export comparison, Output in Harbor]";
 const CHAT = "role:option[Export checks, Chat in Atlas]";

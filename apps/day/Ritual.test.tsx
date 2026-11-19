@@ -74,7 +74,7 @@ test("a skipped start of day leaves every decision waiting and is not offered ag
 		expect(app.shows(text)).toBe(true);
 	}
 	await app.press("role:button[Skip for today]");
-	await app.waitFor("Three short things need you.");
+	await app.waitFor("Eight things need you.");
 	expect(app.shows("text:/^1 of \\d+$/")).toBe(true);
 	expect(app.shows("has your answer")).toBe(false);
 	expect(app.shows("id:start-day")).toBe(false);
@@ -86,7 +86,7 @@ test("Escape leaves a ritual unmarked, and Decide now only brings the first deci
 	await app.press("id:start-day");
 	await app.waitFor("Good morning.");
 	await app.keyboard.press("escape");
-	await app.waitFor("Three short things need you.");
+	await app.waitFor("Eight things need you.");
 	expect(app.shows("id:start-day")).toBe(true);
 	await app.press("id:start-day");
 	await app.keyboard.press("mod+enter");
@@ -181,7 +181,7 @@ test("standup notes say what is done, next and waiting, each with its source", a
 		expect(app.shows(text)).toBe(true);
 	}
 	await app.press("role:button[Back to Today]");
-	await app.waitFor("Three short things need you.");
+	await app.waitFor("Eight things need you.");
 });
 
 test("a first look has nothing done yet in the standup notes", async () => {

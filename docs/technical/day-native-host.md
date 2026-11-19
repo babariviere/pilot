@@ -91,7 +91,7 @@ added. The UI owns the saved per-window scope and rejects late replies too.
 On screen (`ScopeRows.tsx`, `todayScope.ts`), one control at the top of Today picks
 All projects (the default) or one project. `SavedView.todayProject` keeps it per
 window (empty for All projects); restoring it only reads. The window's own project
-keeps its actionable sections. Other projects' New requests, Needs you, Planning,
+keeps its actionable sections. Other projects' Needs you (with their Slack requests), Planning,
 Missions and Done rows show under their project's name, read only, with no links
 or actions. Results to check and Coming up from other projects are not shown, and
 Today says so. A single project shows `outsideNeedsYou` as a count, "nothing",

@@ -30,6 +30,12 @@ Today To check discovers new mission deliveries from a saved first-use cutoff.
 On Today, each result to check is a card in Needs you, after the questions and actions. **Check the result**
 (⌘↩) opens it; **Later** (L) puts it after the other results in this window only. A mission's overview lists
 its own results to check.
+New Slack requests wait in Needs you after the results, one card each: the message's words, its client and
+reporter when Pilot found them, and where work starts. **Start work** (⌘↩) asks once before it starts one Build
+chat; **Change** picks a mission instead or plans a new one. **Later** (L) and **Discard** set the request aside;
+the folded lists below Needs you bring it back. **Open in Slack** shows the message in your browser. Today's
+headline counts these cards and the results with the questions. Linear is one quiet row after Missions, with
+how many issues are yours and how many are new; **Open** shows the Linear page, where Linear issues start.
 On a Decide card, the Mission and Chat links below the question open its source.
 Standalone questions show only Chat. Back returns to the pending question and keeps your draft.
 Opening either link sends no answer and starts no work.
@@ -74,9 +80,10 @@ When a change you can see lands, its chat captures the real app before and after
 each screen under Screens, with Before and After tabs, or the chat's reason for having no captures.
 The Artifacts page and the mission overview show each such screen as one Before/After card.
 On a mission page, a done task folds its report until Show report, and each task links its own chat.
-A request in New (a Linear issue or a Slack message) can also become a mission: Plan a mission… opens New
-with its title and link. Your Plan takes it out of New and links it to the mission, without changing
-Linear or Slack. When the mission's first task starts, Pilot marks the request started there.
+A Slack request (Change, then Plan a mission…) or a Linear issue (Prefill mission draft on the Linear page)
+can also become a mission: it opens New with its title and link. Your Plan takes it off Today and links it to
+the mission, without changing Linear or Slack. When the mission's first task starts, Pilot marks the request
+started there.
 A chat started from Slack, Linear or a schedule saves a report for its result page: its answer, how
 it knows, its limits, your next step and links. A chat with no report shows its last message instead.
 For published native plans, Revisit mission requests planning only. Review new questions and

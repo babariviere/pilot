@@ -397,9 +397,10 @@ A revision cannot ask questions, so the planner adds no task whose only work is 
 a user choice. A new screen task carries the thread's chosen mockup (`newTasks[].prototype`), or its
 worker shows a mockup and asks before building.
 
-## Planning from a request in New
+## Planning from a Slack or Linear request
 
-New's Plan a mission… on a Linear or Slack request opens New with a goal that names the request and its
+Plan a mission… on a Slack request's card (under Change) or Prefill mission draft on a Linear issue opens New
+with a goal that names the request and its
 link, and keeps the request beside the words (`requestDraft`). Plan sends it in the enrollment as
 `request: { itemId, revision }` (`PlanRequest` in Day's `NewIntent`). Before the enrollment is entered,
 the daemon refuses a request that is in another project, changed since the user saw it, or was already

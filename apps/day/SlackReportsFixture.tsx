@@ -129,6 +129,10 @@ const intakeView: IntakeView = {
 			kind: "bug",
 			age: "",
 			link: i.url,
+			who: "",
+			quote: "",
+			client: "",
+			reporter: "",
 		},
 	})),
 	later: [],
@@ -137,6 +141,7 @@ const intakeView: IntakeView = {
 	settled: [],
 	started: [],
 	sending: [],
+	canOpen: false,
 };
 const source: IntakeSource = {
 	view: () => intakeView,
@@ -144,6 +149,7 @@ const source: IntakeSource = {
 	read: async () => {},
 	triage: async () => ({ status: "rejected", message: "Not used", operationId: null }),
 	check: async () => ({ status: "unknown", message: "Unknown", operationId: null }),
+	open: async () => ({ status: "rejected", message: "Not used", operationId: null }),
 	dispose: () => {},
 	start: async (intent) => {
 		starts.set(starts() + 1);

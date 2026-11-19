@@ -328,9 +328,19 @@ function needsOf(p: ScopeProject): Need[] {
 	];
 }
 
-/** How many things other projects in the scope need the user for, when read. */
+/** Another project's new Slack requests. Its Linear requests wait on its Linear page. */
+function requestsOf(p: ScopeProject) {
+	return (p.today?.intake.requests ?? []).filter((r) => r.source !== "linear");
+}
+
+/** Why another project's requests could not all be read, one line each. */
+function requestTrouble(p: ScopeProject): string[] {
+	return [p.errors.intake ?? "", ...(p.today?.intake.trouble ?? [])].filter(Boolean);
+}
+
+/** How many things other projects in the scope need the user for, when read: Slack requests count too. */
 export function otherNeedsCount(ctx: TodayScope): number {
-	return ctx.others().reduce((n, p) => n + needsOf(p).length, 0);
+	return ctx.others().reduce((n, p) => n + needsOf(p).length + requestsOf(p).length, 0);
 }
 
 /** Other projects' attention. Opening the exact item does not switch the Today filter. */
@@ -381,6 +391,35 @@ export function OtherNeeds(props: { ctx: TodayScope; day: Day }) {
 									/>
 								</If>
 								<Text class="text-xs text-muted-foreground">{n().effort}</Text>
+							</View>
+						)}
+					</Each>
+					<Each of={requestTrouble(p())} key={(t) => t}>
+						{(t) => (
+							<View class="flex-row items-center gap-2.5 py-1.5">
+								<Mark kind="unknown" />
+								<Text class="flex-1 text-sm text-muted-foreground">{`${p().name}: ${t()}`}</Text>
+							</View>
+						)}
+					</Each>
+					<Each of={requestsOf(p())} key={(r) => r.id}>
+						{(r) => (
+							<View testID={`scope-request-${r().id}`} class="flex-row items-center gap-2.5 py-1.5">
+								<Mark kind="new" />
+								<View class="min-w-0 flex-1 gap-0.5">
+									<Text class="text-sm text-foreground">{r().title}</Text>
+									<Text class="text-xs text-muted-foreground">
+										{[`${r().sourceLabel} request`, r().place, r().age].filter(Boolean).join(" · ")}
+									</Text>
+								</View>
+								<Action
+									label="Open"
+									accessibilityLabel={`${r().title} in ${p().name}. Open it to start work, put it off or discard it.`}
+									onPress={() => {
+										openRequestIn(p().id, r().id);
+										todayProject.set(p().id);
+									}}
+								/>
 							</View>
 						)}
 					</Each>
@@ -513,72 +552,6 @@ export function OtherDone(props: { ctx: TodayScope }) {
 							</View>
 						)}
 					</Each>
-				</View>
-			)}
-		</Each>
-	);
-}
-
-function requestsOf(p: ScopeProject) {
-	return p.today?.intake.requests ?? [];
-}
-
-/** Whether other projects in the scope have New requests to show, or say they could not be read. */
-export function otherNewShown(ctx: TodayScope): boolean {
-	return ctx
-		.others()
-		.some((p) => requestsOf(p).length > 0 || (p.today?.intake.trouble.length ?? 0) > 0 || !!p.errors.intake);
-}
-
-/**
- * Other projects' new requests. Pressing one switches Today to its project and
- * opens it in New, where it can be started, put off or discarded. Pressing
- * sends nothing.
- */
-export function OtherNew(props: { ctx: TodayScope }) {
-	const shown = () =>
-		props.ctx
-			.others()
-			.filter((p) => requestsOf(p).length > 0 || (p.today?.intake.trouble.length ?? 0) > 0 || p.errors.intake);
-	return (
-		<Each of={shown()} key={(p) => p.id}>
-			{(p) => (
-				<View testID={`scope-new-${p().id}`} class="gap-0.5">
-					<ProjectLabel name={p().name} stale={p().currentness === "stale"} />
-					<Each
-						of={[p().errors.intake ?? "", ...(p().today?.intake.trouble ?? [])].filter(Boolean)}
-						key={(t) => t}
-					>
-						{(t) => (
-							<View class="flex-row items-center gap-2.5 py-1.5">
-								<Mark kind="unknown" />
-								<Text class="flex-1 text-sm text-muted-foreground">{`${p().name}: ${t()}`}</Text>
-							</View>
-						)}
-					</Each>
-					<Each of={requestsOf(p())} key={(r) => r.id}>
-						{(r) => (
-							<View class="gap-0.5 py-1.5">
-								<RowLink
-									testID={`scope-request-${r().id}`}
-									title={r().title}
-									accessibilityLabel={`${r().title} in ${p().name}. Open it to start work, put it off or discard it.`}
-									onPress={() => {
-										openRequestIn(p().id, r().id);
-										todayProject.set(p().id);
-									}}
-								>
-									<Mark kind="new" />
-								</RowLink>
-								<Text class="pl-4 text-xs text-faint">
-									{[r().sourceLabel, r().place, r().age].filter(Boolean).join(" · ")}
-								</Text>
-							</View>
-						)}
-					</Each>
-					<If when={p().today?.intake.more}>
-						<Text class="text-xs text-faint">{p().today?.intake.more ?? ""}</Text>
-					</If>
 				</View>
 			)}
 		</Each>

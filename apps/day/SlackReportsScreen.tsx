@@ -374,10 +374,13 @@ function Report(props: { item: SlackReport; day: SlackDay; controls: SlackContro
 												age: "",
 												link: i().url,
 												kind: i().slack?.type ?? "",
+												who: "",
+												quote: "",
+												client: "",
+												reporter: "",
 											},
 										}}
 										missions={missions()}
-										workOnly
 										busy={
 											props.locked ||
 											mirror().view().sending.includes(i().id) ||

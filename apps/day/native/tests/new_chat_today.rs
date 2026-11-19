@@ -149,7 +149,7 @@ fn new_chat_starts_once_in_the_chosen_project_and_a_lost_answer_stays_check_only
     let stats = |f: &mut Fixture| f.stats("stats");
 
     let mut app = open(&entry, &bridge);
-    wait(&mut app, "id:incoming");
+    wait(&mut app, "id:linear-row");
     assert!(!has(&app, "Mock data"));
     app.press("role:button[New]").unwrap();
     wait(&mut app, "What do you want done?");
@@ -202,7 +202,7 @@ fn new_chat_starts_once_in_the_chosen_project_and_a_lost_answer_stays_check_only
     // A cold native reopen still shows it on New, and offers Check only.
     let bridge = f.bridge();
     let mut app = open(&entry, &bridge);
-    wait(&mut app, "id:incoming");
+    wait(&mut app, "id:linear-row");
     app.press("role:button[New]").unwrap();
     wait(
         &mut app,

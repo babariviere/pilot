@@ -67,6 +67,23 @@ impl Management {
         Ok(())
     }
 }
+
+/// Opens one new Slack request's saved message link, as shown. Nothing is saved or sent.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct Open {
+    item_id: String,
+    revision: u64,
+}
+
+impl Open {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
+        if !valid_id(&self.item_id) || self.revision == 0 || self.revision > 9_007_199_254_740_991 {
+            return Err(Error::Invalid);
+        }
+        Ok(())
+    }
+}
 fn is_intake(r: &planning::PlanningRecord) -> bool {
     matches!(
         r.operation["kind"].as_str(),
@@ -315,6 +332,34 @@ pub(super) async fn handle(
             return Ok(json!({"snapshot":null, "outcome":{"ok":true}}));
         }
         Command::IntakeRead => {}
+        Command::IntakeOpen(open) => {
+            let opener = shared.url_opener.as_ref().ok_or(Error::Unavailable)?;
+            // The exact Slack row shown, at its revision; only its saved message link opens.
+            let qualify = |snapshot: &Value| -> Result<String, Error> {
+                let item = snapshot["sources"]
+                    .as_array()
+                    .ok_or(Error::Invalid)?
+                    .iter()
+                    .flat_map(|s| s["items"].as_array().into_iter().flatten())
+                    .find(|i| i["id"] == open.item_id)
+                    .ok_or(Error::Stale)?;
+                if item["kind"] != "slack" || item["revision"] != open.revision {
+                    return Err(Error::Stale);
+                }
+                super::slack_controls::message_link(item["url"].as_str().ok_or(Error::Invalid)?)
+            };
+            let url = qualify(&read(t).await?)?;
+            // Read again after the first answer: a cached page never grants an open.
+            if qualify(&read(t).await?)? != url {
+                return Err(Error::Stale);
+            }
+            t.local()?;
+            let guard = gate.lock().expect("bridge gate poisoned");
+            shared.open()?;
+            command.admit(&guard)?;
+            opener(&url).map_err(|_| Error::Unknown)?;
+            return Ok(json!({"snapshot":null,"outcome":{"state":"opened"}}));
+        }
         Command::IntakeWrite(intent) => {
             if journal.planning.values().any(|r| {
                 r.source == t.source && is_intake(r) && r.mission() == intent.item_id && r.pending()
@@ -427,6 +472,11 @@ pub(super) async fn handle(
         _ => return Err(Error::Invalid),
     }
     let snapshot = read(t).await;
+    // Whether this window can hand a request's link to the browser.
+    let snapshot = snapshot.map(|mut s| {
+        s["canOpenUrl"] = json!(shared.url_opener.is_some());
+        s
+    });
     if matches!(command, Command::IntakeRead) {
         let snapshot = snapshot?;
         check()?;

@@ -468,6 +468,7 @@ async fn run(
             | Command::LinearManage(_)
             | Command::IntakeWrite(_)
             | Command::IntakeCheck(_)
+            | Command::IntakeOpen(_)
     ) {
         return super::intake::handle(t, journal, shared, epoch, &call.command, &call.gate).await;
     }
@@ -770,7 +771,8 @@ async fn run(
         | Command::LinearRead
         | Command::LinearManage(_)
         | Command::IntakeWrite(_)
-        | Command::IntakeCheck(_) => {
+        | Command::IntakeCheck(_)
+        | Command::IntakeOpen(_) => {
             unreachable!("handled intake command")
         }
         Command::PreferencesRead

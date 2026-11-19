@@ -6,6 +6,7 @@
 import { effect, type Signal, signal, type ViewRef } from "nsh";
 import type { Decision, HumanAction, Today } from "pilot-day/native";
 import type { DeliveryEntry } from "./deliveryFeed";
+import type { IntakeRow } from "./intakeFeed";
 import { closeThread } from "./threadView";
 import { glide } from "./ui";
 
@@ -245,8 +246,11 @@ export type Work =
 	| { kind: "decision"; id: string; decision: Decision }
 	| { kind: "action"; id: string; action: HumanAction };
 
-/** One card of Needs you: a question, an action or a result to check. */
-export type Item = Work | { kind: "result"; id: string; entry: DeliveryEntry };
+/** One card of Needs you: a question, an action, a result to check or a Slack request. */
+export type Item =
+	| Work
+	| { kind: "result"; id: string; entry: DeliveryEntry }
+	| { kind: "request"; id: string; row: IntakeRow };
 
 /** Results the user put off in this window, oldest first. Local only: nothing is sent or saved. */
 export const laterResults = signal<string[]>([]);
@@ -260,11 +264,11 @@ export function laterResult(key: string) {
 
 /**
  * Everything that waits for the user: decisions, then actions, each in Rust's order, then the results to
- * check, those put off in this window last.
+ * check, those put off in this window last, then new requests, newest first.
  */
 export function queue(today: Today): Work[];
-export function queue(today: Today, results: DeliveryEntry[]): Item[];
-export function queue(today: Today, results: DeliveryEntry[] = []): Item[] {
+export function queue(today: Today, results: DeliveryEntry[], requests?: IntakeRow[]): Item[];
+export function queue(today: Today, results: DeliveryEntry[] = [], requests: IntakeRow[] = []): Item[] {
 	const later = laterResults();
 	const place = (e: DeliveryEntry) => {
 		const n = later.indexOf(e.key);
@@ -275,6 +279,7 @@ export function queue(today: Today, results: DeliveryEntry[] = []): Item[] {
 		...today.decisions.map((decision): Item => ({ kind: "decision", id: decision.id, decision })),
 		...today.actions.map((action): Item => ({ kind: "action", id: action.id, action })),
 		...ordered.map((entry): Item => ({ kind: "result", id: `result:${entry.key}`, entry })),
+		...requests.map((row): Item => ({ kind: "request", id: `request:${row.request.id}`, row })),
 	];
 }
 
@@ -286,8 +291,8 @@ export function queue(today: Today, results: DeliveryEntry[] = []): Item[] {
 const engaged = signal<string | null>(null);
 
 /** The item in front: the one the user brought forward, else the one the user is answering, else the first. */
-export function front(today: Today, results: DeliveryEntry[] = []): Item | undefined {
-	const all = queue(today, results);
+export function front(today: Today, results: DeliveryEntry[] = [], requests: IntakeRow[] = []): Item | undefined {
+	const all = queue(today, results, requests);
 	return all.find((item) => item.id === focused()) ?? all.find((item) => item.id === engaged()) ?? all[0];
 }
 
@@ -303,9 +308,9 @@ export function releaseFront() {
 }
 
 /** Brings the item `step` places from the front forward, around the ends, and gives it the keyboard focus. */
-export function move(today: Today, step: number, results: DeliveryEntry[] = []) {
-	const all = queue(today, results);
-	const now = front(today, results);
+export function move(today: Today, step: number, results: DeliveryEntry[] = [], requests: IntakeRow[] = []) {
+	const all = queue(today, results, requests);
+	const now = front(today, results, requests);
 	if (!now || all.length < 2) return;
 	const at = all.findIndex((item) => item.id === now.id);
 	const next = all[(at + step + all.length) % all.length];

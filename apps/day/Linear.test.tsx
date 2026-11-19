@@ -1,13 +1,15 @@
-// The read-only Linear page as a user opens it from New on Today, on a
+// The read-only Linear page as a user opens it from Today's Linear row, on a
 // scripted saved read (LinearFixture.tsx). No daemon, provider or Linear.
 import { expect, open, test } from "nsh/test";
 
 const desktop = { platform: "macos", width: 1100, height: 1200 } as const;
 
-async function page(mode?: string) {
+async function page(mode?: string, fresh = false) {
 	const app = await open("./LinearFixture.tsx", desktop);
-	await app.waitFor("id:incoming");
+	await app.waitFor("id:linear-row");
 	if (mode) await app.press(`role:button[Mode ${mode}]`);
+	// Today's Linear row read once already; start the page as a window that never read.
+	if (fresh) await app.press("Forget reads");
 	await app.press("id:linear-open");
 	await app.waitFor("id:linear");
 	return app;
@@ -26,7 +28,8 @@ test("the page names its scope, the saved cycle and groups the user's issues by 
 	expect(app.shows("id:linear-group-other")).toBe(false);
 	expect(app.shows("All 7 saved issues are shown.")).toBe(true);
 	expect(app.shows("id:linear-more")).toBe(false);
-	expect(app.shows("Reads: 1")).toBe(true);
+	// Today's Linear row read once to count the issues; opening the page read again.
+	expect(app.shows("Reads: 2")).toBe(true);
 });
 
 test("links come only from saved IDs, never from a matching title", async () => {
@@ -34,11 +37,11 @@ test("links come only from saved IDs, never from a matching title", async () => 
 	await app.waitFor("id:linear-issue-ln-219");
 	expect(app.shows("BIL-219 · In Faster search")).toBe(true);
 	expect(app.shows("BIL-224 · In a chat")).toBe(true);
-	expect(app.shows("BIL-231 · New on Today")).toBe(true);
+	expect(app.shows("BIL-231 · Not started")).toBe(true);
 	expect(app.shows("BIL-226 · Later on Today")).toBe(true);
 	expect(app.shows("BIL-227 · In a mission")).toBe(true);
 	// Titled like the mission on Today, but nothing links it there.
-	expect(app.shows("BIL-240 · New on Today")).toBe(true);
+	expect(app.shows("BIL-240 · Not started")).toBe(true);
 	await app.press("id:linear-issue-ln-219");
 	await app.waitFor("id:linear-detail-ln-219");
 	expect(app.shows("Linked to the mission “Faster search”. A chat is linked to it too.")).toBe(true);
@@ -51,7 +54,7 @@ test("links come only from saved IDs, never from a matching title", async () => 
 	expect(app.shows("Not linked to a chat or mission in Pilot.")).toBe(true);
 });
 
-test("an issue opens its mission, or its request in New; Escape goes back to Today", async () => {
+test("an issue opens its mission; Escape goes back to Today", async () => {
 	const app = await page();
 	await app.press("id:linear-issue-ln-219");
 	await app.press("id:linear-mission-ln-219");
@@ -63,17 +66,12 @@ test("an issue opens its mission, or its request in New; Escape goes back to Tod
 	await app.keyboard.press("escape");
 	await app.press("id:linear-open");
 	await app.press("id:linear-issue-ln-231");
-	await app.press("id:linear-new-ln-231");
-	await app.waitFor("id:request-detail-ln-231");
-	expect(app.shows("id:linear")).toBe(false);
-	await app.press("id:linear-open");
-	await app.press("id:linear-issue-ln-231");
 	await app.waitFor("id:linear-detail-ln-231");
 	// Escape closes the open issue first, then the page.
 	await app.keyboard.press("escape");
 	expect(app.shows("id:linear-detail-ln-231")).toBe(false);
 	await app.keyboard.press("escape");
-	await app.waitFor("id:incoming");
+	await app.waitFor("id:linear-row");
 	expect(app.shows("id:linear")).toBe(false);
 });
 
@@ -91,7 +89,7 @@ test("source trouble keeps the saved issues and says so; a read only reads", asy
 	await app.waitFor("Linear needs you to sign in again. These are the issues it saved before.");
 	expect(app.shows("id:linear-issue-ln-219")).toBe(true);
 	await app.press("Fixture read");
-	await app.waitFor("Reads: 2");
+	await app.waitFor("Reads: 3");
 });
 
 test("a checkpoint for other settings, or no Linear, shows no rows and is not the same as none", async () => {
@@ -107,7 +105,7 @@ test("a checkpoint for other settings, or no Linear, shows no rows and is not th
 });
 
 test("an unreadable first read shows nothing guessed; a later read keeps the last one", async () => {
-	const app = await page("unreadable");
+	const app = await page("unreadable", true);
 	await app.waitFor("Pilot cannot show your Linear issues here. Pilot could not reach its service.");
 	expect(app.shows("This is not the same as having none.")).toBe(true);
 	expect(app.shows("id:linear-issue-ln-219")).toBe(false);
@@ -130,15 +128,13 @@ test("without an active cycle, the page says Pilot saved the open issues", async
 	expect(app.shows("All 3 saved issues are shown.")).toBe(true);
 });
 
-test("the mock window offers the page with demo issues and points back to its example request", async () => {
+test("the mock window offers the page with demo issues; a new request says nobody started it", async () => {
 	const app = await open("./MockApp.tsx", desktop);
-	await app.waitFor("id:incoming");
+	await app.waitFor("id:linear-row");
 	await app.press("id:linear-open");
 	await app.waitFor("Your issues in cycle 42");
 	await app.press("id:linear-issue-ln-231");
-	await app.press("id:linear-new-ln-231");
-	await app.waitFor("id:request-detail-ln-231");
-	expect(app.shows("id:linear")).toBe(false);
+	await app.waitFor("Nobody started it in Pilot yet.");
 });
 
 test("a close or an update keeps the page, its project and the open issue; showing it again only reads", async () => {
@@ -160,11 +156,11 @@ test("a close or an update keeps the page, its project and the open issue; showi
 	expect(app.shows("id:linear")).toBe(true);
 	// Back on Today, nothing is kept for the page.
 	await app.keyboard.press("escape");
-	await app.waitFor("id:incoming");
+	await app.waitFor("id:linear-row");
 	await app.press("Save and reopen");
 	await app.waitFor("Kept: []");
 	expect(app.shows("id:linear")).toBe(false);
-	expect(app.shows("id:incoming")).toBe(true);
+	expect(app.shows("id:linear-row")).toBe(true);
 });
 
 test("a restored page never shows another project's issues in its place", async () => {
@@ -184,7 +180,7 @@ test("a restored page never shows another project's issues in its place", async 
 	await app.waitFor("Kept: [mock-project/ln-219]");
 	// Opening the page again from Today shows the project Pilot reads now.
 	await app.press("role:button[Back to Today]");
-	await app.waitFor("id:incoming");
+	await app.waitFor("id:linear-row");
 	await app.press("id:linear-open");
 	await app.waitFor("id:linear-issue-ln-219");
 	expect(app.shows("id:linear-other-project")).toBe(false);

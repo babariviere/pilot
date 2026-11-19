@@ -54,3 +54,48 @@ test("questions come first; results wait behind them as Up next", async () => {
 	expect(app.shows(CARD)).toBe(false);
 	expect(app.shows("text:/^Up next, result to check: /")).toBe(true);
 });
+
+test("Slack requests wait behind the results; Start, Later and Discard work from their card", async () => {
+	const app = await open("./NeedsYouRequests.tsx", desktop);
+	await app.waitFor(CARD);
+	const request = "id:request";
+	const northwind = "Northwind can't export invoices to CSV";
+	const stripe = "Update the Stripe SDK to v15";
+	// A result is in front; the requests queue after every result.
+	expect(app.shows(request)).toBe(false);
+	// The headline counts every card Needs you holds: five results and two Slack requests.
+	expect(app.shows("Seven things need you.")).toBe(true);
+	expect(app.shows("text:/ Five results to check and two Slack requests wait for you\\.$/")).toBe(true);
+	expect(app.shows(`Up next, Slack request: ${northwind}`)).toBe(true);
+	const texts = app.texts();
+	const lastResult = Math.max(...texts.map((t, i) => (t.startsWith("Up next, result to check: ") ? i : -1)));
+	expect(lastResult).toBeGreaterThan(-1);
+	expect(texts.indexOf(`Up next, Slack request: ${northwind}`)).toBeGreaterThan(lastResult);
+	// K from the front goes around to the last card.
+	await app.keyboard.press("k");
+	await app.waitFor(`${request} >> ${stripe}`);
+	await app.keyboard.press("k");
+	await app.waitFor(`${request} >> ${northwind}`);
+	await app.press(`${request} >> role:button[Start work]`);
+	await app.waitFor(`Start one Build chat for “${northwind}” as standalone work?`);
+	await app.press("id:confirm-start-northwind");
+	await app.waitFor(
+		`Started “${northwind}” as standalone work: one Build chat was created. That is not progress or a result yet.`,
+	);
+	await app.waitFor(CARD);
+	expect(app.shows(`Up next, Slack request: ${northwind}`)).toBe(false);
+	await app.keyboard.press("k");
+	await app.waitFor(`${request} >> ${stripe}`);
+	await app.press(`${request} >> role:button[Later]`);
+	await app.waitFor("Requests for later  1");
+	await app.waitFor(CARD);
+	await app.press("role:button[Show later requests]");
+	await app.press("id:bring-back-stripe");
+	await app.waitFor(`Up next, Slack request: ${stripe}`);
+	await app.keyboard.press("k");
+	await app.waitFor(`${request} >> ${stripe}`);
+	await app.press(`${request} >> role:button[Discard]`);
+	await app.waitFor(`Discarded “${stripe}”.`);
+	expect(app.shows(request)).toBe(false);
+	expect(app.shows("text:/^Up next, Slack request: /")).toBe(false);
+});

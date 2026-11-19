@@ -20,7 +20,7 @@ test("the mission shows the service's execution wait without starting work", asy
 
 test("Today shows decisions first, then moving and waiting missions", async () => {
 	const app = await open("./MockApp.tsx", desktop);
-	await app.waitFor("Three short things need you.");
+	await app.waitFor("Eight things need you.");
 	for (const text of [
 		"How should finished work reach you?",
 		"text:/^1 of \\d+$/",
@@ -40,7 +40,7 @@ test("deciding sends the recommended option and moves the mission", async () => 
 	const app = await open("./MockApp.tsx", desktop);
 	await app.press(DECIDE);
 	await app.waitFor("Quieter notifications has your answer: One summary at 18:00.");
-	await app.waitFor("Two things left.");
+	await app.waitFor("Seven things left.");
 	expect(app.shows("Open a test copy of Pilot on your Mac?")).toBe(true);
 	expect(app.shows("Moving  2")).toBe(true);
 });
@@ -90,7 +90,7 @@ test("keys bring the next item forward and the focus lands on its choice", async
 	await app.keyboard.press("down");
 	await app.keyboard.press("mod+enter");
 	await app.waitFor("Native desktop app has your answer: Skip it.");
-	await app.waitFor("Two things left.");
+	await app.waitFor("Seven things left.");
 });
 
 test("keys pick an option and open help, and help sends nothing", async () => {
@@ -270,13 +270,13 @@ test("a mission opens with its report, tasks and working chats, and Escape goes 
 	]) {
 		expect(app.shows(text)).toBe(true);
 	}
-	expect(app.shows("Three short things need you.")).toBe(false);
+	expect(app.shows("Eight things need you.")).toBe(false);
 	await app.keyboard.press("escape");
-	await app.waitFor("Three short things need you.");
+	await app.waitFor("Eight things need you.");
 	await app.press("id:mission-notify");
 	await app.waitFor("The task list is not available here yet.");
 	await app.press("role:button[Back to Today]");
-	await app.waitFor("Three short things need you.");
+	await app.waitFor("Eight things need you.");
 });
 
 test("a mission's coordinator, task and working chats open read only, and Back returns to the mission", async () => {
@@ -365,7 +365,7 @@ test("an old mission being re-planned names the new mission, and Stop re-plannin
 	await app.waitFor("id:mission-replan-start");
 	expect(app.shows("Re-planning as “Faster search”")).toBe(false);
 	await app.keyboard.press("escape");
-	await app.waitFor("Three short things need you.");
+	await app.waitFor("Eight things need you.");
 	await app.press("id:mission-search");
 	await app.waitFor("id:mission-section-map");
 	expect(app.shows("Replaces “Docs refresh”")).toBe(false);
@@ -393,12 +393,12 @@ test("Archive asks first, then the page says Archived with Reopen and Today drop
 	// Only an active mission offers Archive.
 	expect(app.shows("id:mission-archive")).toBe(false);
 	await app.keyboard.press("escape");
-	await app.waitFor("Three short things need you.");
+	await app.waitFor("Eight things need you.");
 	expect(app.shows("id:mission-notify")).toBe(false);
 	await app.press("id:mission-search");
 	await app.waitFor("id:mission-archive");
 	await app.keyboard.press("escape");
-	await app.waitFor("Three short things need you.");
+	await app.waitFor("Eight things need you.");
 });
 
 test("Reopen brings an archived mission back to Today with its Archive button", async () => {
@@ -440,7 +440,7 @@ test("Rename turns the title into a field; Enter saves it and the page and Today
 	expect(app.shows("id:mission-rename-message")).toBe(false);
 	await app.waitFor("id:mission-rename");
 	await app.keyboard.press("escape");
-	await app.waitFor("Three short things need you.");
+	await app.waitFor("Eight things need you.");
 	expect(app.shows("Calmer notifications")).toBe(true);
 });
 
@@ -528,7 +528,7 @@ test("a mission's overview leads to its interview and plan, which says when ther
 	await app.press("role:button[Back to Mission overview]");
 	await app.waitFor("id:mission-plan");
 	await app.keyboard.press("escape");
-	await app.waitFor("Three short things need you.");
+	await app.waitFor("Eight things need you.");
 });
 
 test("the default and connected entries without a service say so and show no mock data", async () => {
@@ -538,7 +538,7 @@ test("the default and connected entries without a service say so and show no moc
 		expect(
 			app.shows("This window was not opened for a Pilot service, so it shows nothing rather than examples."),
 		).toBe(true);
-		for (const text of ["Mock data", "Needs you", "Three short things need you."]) {
+		for (const text of ["Mock data", "Needs you", "Eight things need you."]) {
 			expect(app.shows(text)).toBe(false);
 		}
 	}
@@ -689,57 +689,25 @@ test("the screen's sandbox refuses network, sockets, files and processes", async
 	}
 });
 
-test("New lists requests nobody started, newest first, and counts what it does not show", async () => {
+test("Linear is one quiet row after Missions; it counts new issues and opens the Linear page", async () => {
 	const app = await open("./MockApp.tsx", desktop);
-	await app.waitFor("id:incoming");
-	for (const text of [
-		"From Slack and Linear",
-		"Northwind can't export invoices to CSV",
-		"Slack · #client-northwind · 20 min ago",
-		"Update the Stripe SDK to v15",
-		"CSV export times out for large accounts",
-		"Linear · BIL-231 · 3 h ago",
-		"1 more Slack message is not shown here.",
-	]) {
-		expect(app.shows(text)).toBe(true);
-	}
-	// A request someone already started is not new.
-	expect(app.shows("Invoice PDF footer overlaps totals")).toBe(false);
+	await app.waitFor("id:linear-row");
+	// The demo saved 5 open issues of yours; one is a new request.
+	await app.waitFor("Linear · 5 assigned to you · 1 new");
+	// The Linear request is not a card, and the old New section is gone.
+	expect(app.shows("CSV export times out for large accounts")).toBe(false);
+	expect(app.shows("id:incoming")).toBe(false);
+	const texts = app.texts();
+	expect(texts.indexOf("Done since you looked")).toBeGreaterThan(texts.indexOf("Missions"));
+	await app.press("id:linear-open");
+	await app.waitFor("id:linear");
 });
 
-test("a request opens in place, says where it came from and sends nothing", async () => {
-	const app = await open("./MockApp.tsx", desktop);
-	await app.waitFor("id:incoming");
-	expect(app.shows("id:request-detail-sl-northwind")).toBe(false);
-	await app.press("id:request-sl-northwind");
-	await app.waitFor("id:request-detail-sl-northwind");
-	expect(app.shows("Bug, high")).toBe(true);
-	expect(app.shows("text:https://example.slack.com/archives/C0MOCK/psl-northwind")).toBe(true);
-	expect(app.shows("This window shows examples, so nothing here can start, put off or discard a request.")).toBe(true);
-	expect(app.shows("role:button[Start]")).toBe(false);
-	// One open at a time; the keyboard focus stays on the pressed row, so Space closes it.
-	await app.press("id:request-sl-stripe");
-	await app.waitFor("id:request-detail-sl-stripe");
-	expect(app.shows("id:request-detail-sl-northwind")).toBe(false);
-	await app.keyboard.press("space");
-	expect(app.shows("id:request-detail-sl-stripe")).toBe(false);
-	// Opening a request answered, started and recorded nothing.
-	expect(app.shows("Three short things need you.")).toBe(true);
-	expect(app.shows("text:/^1 of \\d+$/")).toBe(true);
-	expect(app.shows("Northwind can't export invoices to CSV")).toBe(true);
-});
-
-test("a request source that needs sign-in says so and keeps what Pilot read before", async () => {
-	const app = await open("./Trouble.tsx", desktop);
-	await app.waitFor("id:incoming");
-	expect(app.shows("Slack needs you to sign in again. These are the requests Pilot read before.")).toBe(true);
-	expect(app.shows("Northwind can't export invoices to CSV")).toBe(true);
-});
-
-test("without a request source Today shows no New section", async () => {
+test("without a request source Today shows no Linear row and no request notes", async () => {
 	const app = await open("./Quiet.tsx", desktop);
 	await app.waitFor("Coming up");
-	expect(app.shows("id:incoming")).toBe(false);
+	expect(app.shows("id:linear-row")).toBe(false);
+	expect(app.shows("id:requests")).toBe(false);
 });
 
 test("a mission's tasks show what their agents linked, and merged is not released", async () => {

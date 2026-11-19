@@ -190,7 +190,7 @@ export function countLine(read: SavedLinearRead): string {
 	return `${read.items.length} of ${read.total} saved issues are shown. ${read.more} more are not shown here: Pilot shows up to ${read.limit}.`;
 }
 
-/** Where an issue stands in Pilot: its exact link, or what the user did with it on Today. */
+/** Where an issue stands in Pilot: its exact link, or what the user did with it. */
 export type Place =
 	| { kind: "mission"; missionId: string; title: string | null; chat: boolean }
 	| { kind: "chat" }
@@ -199,7 +199,7 @@ export type Place =
 	| { kind: "discarded" }
 	| { kind: "none" };
 
-/** The issue's place, from its saved IDs only. `fresh` lists the requests in New on Today. */
+/** The issue's place, from its saved IDs only. `fresh` lists the new requests nobody started. */
 export function placeOf(item: TrackedItem, missions: MissionRow[], fresh: string[]): Place {
 	if (item.missionId) {
 		const title = missions.find((m) => m.id === item.missionId)?.title ?? null;
@@ -220,7 +220,7 @@ export function placeWord(place: Place): string {
 		case "chat":
 			return "In a chat";
 		case "new":
-			return "New on Today";
+			return "Not started";
 		case "later":
 			return "Later on Today";
 		case "discarded":
@@ -242,7 +242,7 @@ export function placeSentence(place: Place): string {
 		case "chat":
 			return "Linked to a chat.";
 		case "new":
-			return "Nobody started it in Pilot. It waits in New on Today.";
+			return "Nobody started it in Pilot yet.";
 		case "later":
 			return "You put it off with Later on Today.";
 		case "discarded":

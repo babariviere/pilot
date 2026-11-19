@@ -11,7 +11,7 @@ import { effect, keymap, Scroll, type ScrollRef, signal, Text, View, type ViewRe
 import type { MissionRow } from "pilot-day/native";
 import type { Day } from "./day";
 import { keepRead, staleLine } from "./freshness";
-import { IntakeWorkControls, openMissions, openRequest } from "./Incoming";
+import { IntakeWorkControls, openMissions } from "./Incoming";
 import { keepScroll } from "./kept";
 import type { LinearMirror, LinearView } from "./linearFeed";
 import type { LinearCycleSummary, SavedLinearRead, TrackedItem } from "./linearRead";
@@ -90,7 +90,7 @@ function Cycle(props: { read: SavedLinearRead }) {
 	);
 }
 
-/** What the user can do from an issue's place: go to its mission or to New. Both only move. */
+/** What the user can do from an issue's place: go to its mission. It only moves. */
 function PlaceAction(props: { place: Place; itemId: string }) {
 	const p = () => props.place;
 	return (
@@ -104,17 +104,6 @@ function PlaceAction(props: { place: Place; itemId: string }) {
 						const id = (p() as Extract<Place, { kind: "mission" }>).missionId;
 						closeLinear();
 						openMission(id);
-					}}
-				/>
-			</If>
-			<If when={p().kind === "new"}>
-				<InlineAction
-					label="Show it in New"
-					testID={`linear-new-${props.itemId}`}
-					onPress={() => {
-						closeLinear();
-						glide();
-						openRequest.set(props.itemId);
 					}}
 				/>
 			</If>
@@ -258,7 +247,6 @@ function Issue(props: { day: Day; item: TrackedItem; group: GroupKey; place: Pla
 										intake!.view().sending.includes(i().id) ||
 										intake!.view().unsettled.some((o) => o.itemId === i().id)
 									}
-									workOnly
 									fromLinearList
 									onStarted={closeLinear}
 								/>

@@ -1033,6 +1033,17 @@ pub struct Request {
     pub age: String,
     /// The source's own link, as text. Empty when there is none.
     pub link: String,
+    /// Who wrote it, such as a Slack author's display name. Empty when unknown.
+    pub who: String,
+    /// Words quoted from the message itself, never a summary. Empty when
+    /// Pilot holds none.
+    pub quote: String,
+    /// The client the message names, as Pilot's sorting read it with
+    /// evidence. Empty when unknown.
+    pub client: String,
+    /// Who reported the problem, as the message says. Not always its
+    /// author. Empty when unknown.
+    pub reporter: String,
 }
 
 /// New requests from the project's request sources (Slack, Linear) that

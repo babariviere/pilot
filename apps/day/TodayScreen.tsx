@@ -11,13 +11,14 @@ import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { FeedbackIncoming, feedbackFocus, incomingFeedback, newFeedback } from "./FeedbackIncoming";
 import { everRead, todayWarning } from "./freshness";
-import { Incoming } from "./Incoming";
+import { LinearRow, RequestNotes, requestChecks, todayRequests } from "./Incoming";
 import { todayScrollTo } from "./kept";
 import { goSchedules } from "./nav";
 import { stageMark, stageWord } from "./PlanScreen";
 import { Problems } from "./Problems";
 import type { Plans } from "./planning";
 import { openPlan } from "./planView";
+import { RequestCard } from "./RequestCard";
 import { ResultCard } from "./ResultCard";
 import type { Rituals } from "./ritualFeed";
 import {
@@ -25,13 +26,11 @@ import {
 	OtherDone,
 	OtherMissions,
 	OtherNeeds,
-	OtherNew,
 	OtherNotShown,
 	OtherPlanning,
 	OtherToCheck,
 	otherMissionsCount,
 	otherNeedsCount,
-	otherNewShown,
 	ProjectLabel,
 	ScopeControl,
 	ScopeNote,
@@ -67,6 +66,19 @@ function actionFor(decision: Decision | undefined): string {
 
 const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
 
+/** "Two", or "12" past nine. */
+function countWord(n: number): string {
+	return WORDS[n] ?? String(n);
+}
+
+/**
+ * The cards Needs you queues that Rust's headline and summary do not count:
+ * results to check and new Slack requests.
+ */
+function waiting(day: Day): { results: number; requests: number } {
+	return { results: todayResults(day).length, requests: todayRequests(day).length };
+}
+
 /** The headline: the coordinators' summary, until the user starts answering. */
 function headline(day: Day): string {
 	const today = day.today();
@@ -77,11 +89,36 @@ function headline(day: Day): string {
 		return "Your last read.";
 	}
 	const left = today.decisions.length + today.actions.length;
-	if (newFeedback(day).length > 0 && left === 0) return "Feedback needs a look.";
-	if (today.notes.length === 0) return today.headline;
-	if (left === 0) return "That was everything. Pilot is back on it.";
-	if (left === 1) return "One thing left.";
-	return `${WORDS[left] ?? String(left)} things left.`;
+	const w = waiting(day);
+	const extra = w.results + w.requests;
+	if (newFeedback(day).length > 0 && left + extra === 0) return "Feedback needs a look.";
+	if (today.notes.length === 0) {
+		if (extra === 0) return today.headline;
+		// Count every card Needs you holds, as its count does, not only the coordinators' questions.
+		const n = left + extra + newFeedback(day).length;
+		return n === 1 ? "One thing needs you." : `${countWord(n)} things need you.`;
+	}
+	const rest = left + extra;
+	if (rest === 0) return "That was everything. Pilot is back on it.";
+	if (rest === 1) return "One thing left.";
+	return `${countWord(rest)} things left.`;
+}
+
+/** The coordinators' summary, then the results and Slack requests it does not count. */
+function summary(day: Day): string {
+	const today = day.today();
+	const w = waiting(day);
+	const some = (n: number, one: string, many: string) =>
+		n > 0 ? `${countWord(n).toLowerCase()} ${n === 1 ? one : many}` : "";
+	const parts = [
+		some(w.results, "result to check", "results to check"),
+		some(w.requests, "Slack request", "Slack requests"),
+	].filter(Boolean);
+	if (parts.length === 0) return today.summary;
+	const words = parts.join(" and ");
+	const also = today.decisions.length + today.actions.length > 0 ? "also " : "";
+	const line = `${words[0].toUpperCase()}${words.slice(1)} ${also}${w.results + w.requests === 1 ? "waits" : "wait"} for you.`;
+	return today.summary ? `${today.summary} ${line}` : line;
 }
 
 function total(row: MissionRow): number {
@@ -167,12 +204,14 @@ function MissionGroup(props: { day: Day; label: string; rows: MissionRow[]; firs
 
 function itemTitle(day: Day, item: Item): string {
 	if (item.kind === "result") return resultTitle(day, item.entry);
+	if (item.kind === "request") return item.row.request.title;
 	return item.kind === "decision" ? item.decision.title : item.action.title;
 }
 
 /** The words before an Up next title. */
 function upNext(item: Item): string {
 	if (item.kind === "result") return "Up next, result to check: ";
+	if (item.kind === "request") return `Up next, ${item.row.request.sourceLabel} request: `;
 	return item.kind === "decision" ? "Up next: " : "Up next, action for you: ";
 }
 
@@ -191,12 +230,65 @@ function feedbackTurn(day: Day): boolean {
 	);
 }
 
+/** One card of Needs you, drawn for its kind. */
+function QueueCard(props: { day: Day; item: Item; index: number; count: number; later: boolean }) {
+	const item = () => props.item;
+	return (
+		<If
+			when={item().kind === "decision"}
+			else={
+				<If
+					when={item().kind === "result"}
+					else={
+						<If
+							when={item().kind === "request" && props.day.intake}
+							else={
+								<ActionCard
+									day={props.day}
+									action={(item() as Extract<Item, { kind: "action" }>).action}
+									index={props.index}
+									count={props.count}
+								/>
+							}
+						>
+							<RequestCard
+								day={props.day}
+								mirror={props.day.intake as NonNullable<Day["intake"]>}
+								row={(item() as Extract<Item, { kind: "request" }>).row}
+								index={props.index}
+								count={props.count}
+							/>
+						</If>
+					}
+				>
+					<ResultCard
+						day={props.day}
+						entry={(item() as Extract<Item, { kind: "result" }>).entry}
+						index={props.index}
+						count={props.count}
+					/>
+				</If>
+			}
+		>
+			<DecisionCard
+				day={props.day}
+				decision={(item() as Extract<Item, { kind: "decision" }>).decision}
+				index={props.index}
+				count={props.count}
+				later={props.later}
+			/>
+		</If>
+	);
+}
+
 /** What waits for the user: one card in front, the rest as "Up next". */
 function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 	// Results to check queue behind the questions and actions, as cards of their own.
 	const results = () => todayResults(props.day);
-	const items = () => queue(props.day.today(), results());
-	const first = () => (feedbackTurn(props.day) ? undefined : front(props.day.today(), results()));
+	// New Slack requests queue last: decisions, actions and results to check come first.
+	const requests = () => todayRequests(props.day);
+	const items = () => queue(props.day.today(), results(), requests());
+	const first = () => (feedbackTurn(props.day) ? undefined : front(props.day.today(), results(), requests()));
 	const rest = () => items().filter((item) => item.id !== first()?.id);
 	const decisions = () => props.day.today().decisions;
 	// What needs the user has its own read. While a refresh runs or after a
@@ -204,8 +296,8 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 	// checks each answer again before it sends. Only a read that never worked
 	// says so, so an unread list never looks empty.
 	const readable = () => everRead(props.day.today().attention.state);
-	// Checks whose answer Pilot could not confirm count here too; they show as notices below the cards.
-	const checks = () => unsettledCount(props.day);
+	// Checks and request writes whose answer Pilot could not confirm count here too; they show as notices below the cards.
+	const checks = () => unsettledCount(props.day) + requestChecks(props.day);
 	// A focus request with no card to take it lapses, so a later arrival
 	// never takes the focus on its own.
 	effect(() => {
@@ -252,37 +344,13 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 				<Each of={first() ? [first() as Item] : []} key={(item) => item.id}>
 					{(item) => (
 						<Arrive>
-							<If
-								when={item().kind === "decision"}
-								else={
-									<If
-										when={item().kind === "result"}
-										else={
-											<ActionCard
-												day={props.day}
-												action={(item() as Extract<Item, { kind: "action" }>).action}
-												index={items().findIndex((i) => i.id === item().id)}
-												count={items().length}
-											/>
-										}
-									>
-										<ResultCard
-											day={props.day}
-											entry={(item() as Extract<Item, { kind: "result" }>).entry}
-											index={items().findIndex((i) => i.id === item().id)}
-											count={items().length}
-										/>
-									</If>
-								}
-							>
-								<DecisionCard
-									day={props.day}
-									decision={(item() as Extract<Item, { kind: "decision" }>).decision}
-									index={items().findIndex((i) => i.id === item().id)}
-									count={items().length}
-									later={decisions().length > 1}
-								/>
-							</If>
+							<QueueCard
+								day={props.day}
+								item={item()}
+								index={items().findIndex((i) => i.id === item().id)}
+								count={items().length}
+								later={decisions().length > 1}
+							/>
 						</Arrive>
 					)}
 				</Each>
@@ -296,7 +364,9 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 									kind={
 										item().kind === "decision"
 											? decisionMark((item() as Extract<Item, { kind: "decision" }>).decision)
-											: "needs"
+											: item().kind === "request"
+												? "new"
+												: "needs"
 									}
 								/>
 								<Text class="flex-1 text-sm text-muted-foreground">
@@ -311,6 +381,7 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 			</If>
 			<FeedbackIncoming day={props.day} active={!first()} />
 			<ToCheck day={props.day} nested queued />
+			<RequestNotes day={props.day} />
 			<OtherNeeds ctx={props.ctx} day={props.day} />
 			<OtherToCheck ctx={props.ctx} day={props.day} nested />
 		</View>
@@ -328,15 +399,16 @@ function NeedsYou(props: { day: Day; ctx: TodayScope }) {
  */
 function bindTriage(day: Day, shown: () => boolean) {
 	const results = () => todayResults(day);
+	const requests = () => todayRequests(day);
 	const decision = (): Decision | undefined => {
-		const item = front(day.today(), results());
+		const item = front(day.today(), results(), requests());
 		return item?.kind === "decision" ? item.decision : undefined;
 	};
 	const keys: Record<string, () => void> = {
-		j: () => move(day.today(), 1, results()),
-		k: () => move(day.today(), -1, results()),
-		l: () => later(day, front(day.today(), results())),
-		"mod+enter": () => commit(day, front(day.today(), results())),
+		j: () => move(day.today(), 1, results(), requests()),
+		k: () => move(day.today(), -1, results(), requests()),
+		l: () => later(day, front(day.today(), results(), requests())),
+		"mod+enter": () => commit(day, front(day.today(), results(), requests())),
 		s: () => {
 			const d = decision();
 			if (d) toggleHelp(d, "simpler");
@@ -670,12 +742,6 @@ function OtherProject(props: { day: Day; ctx: TodayScope }) {
 	return (
 		<If when={props.ctx.others().length > 0} else={<WorkingNow day={props.day} ctx={props.ctx} />}>
 			<View class="gap-12">
-				<If when={otherNewShown(props.ctx)}>
-					<View class="gap-1">
-						<SectionTitle title="New" />
-						<OtherNew ctx={props.ctx} />
-					</View>
-				</If>
 				<View class="gap-4">
 					<Problems
 						rows={props.ctx.others().flatMap((p) => p.today?.problems ?? [])}
@@ -719,7 +785,10 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 	bindScopeReads(props.day, ctx);
 	bindTriage(
 		props.day,
-		() => ctx.showsOwn() && !feedbackTurn(props.day) && !!front(props.day.today(), todayResults(props.day)),
+		() =>
+			ctx.showsOwn() &&
+			!feedbackTurn(props.day) &&
+			!!front(props.day.today(), todayResults(props.day), todayRequests(props.day)),
 	);
 	// A restored offset for a Today already on screen: scrolled to once, without animation.
 	const scroller = signal<ScrollRef | null>(null);
@@ -753,7 +822,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 							</View>
 							<PageTitle title={ctx.showsOwn() ? headline(props.day) : scopedHeadline(ctx)} />
 							<If when={ctx.showsOwn()}>
-								<Text class="text-base leading-relaxed text-muted-foreground">{today().summary}</Text>
+								<Text class="text-base leading-relaxed text-muted-foreground">{summary(props.day)}</Text>
 								<If when={today().leftOff && today().decisions.length === 0}>
 									<Text class="text-xs text-primary">{today().leftOff ?? ""}</Text>
 								</If>
@@ -778,13 +847,6 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 									}
 									project={ctx.tagged() ? ctx.name : undefined}
 								/>
-								<Incoming day={props.day} />
-								<If when={otherNewShown(ctx)}>
-									<View testID="scope-new" class="gap-1">
-										<SectionTitle title="New in other projects" />
-										<OtherNew ctx={ctx} />
-									</View>
-								</If>
 								<NeedsYou day={props.day} ctx={ctx} />
 								<WorkingNow day={props.day} ctx={ctx} />
 								<If when={ctx.tagged()}>
@@ -794,6 +856,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 									<Planning plans={plans as Plans} ctx={ctx} />
 								</If>
 								<Missions day={props.day} ctx={ctx} plans={plans} />
+								<LinearRow day={props.day} />
 								<DoneSince day={props.day} ctx={ctx} />
 								<ComingUp day={props.day} ctx={ctx} />
 

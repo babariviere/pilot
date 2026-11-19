@@ -97,6 +97,7 @@ pub const METHODS: &[&str] = &[
     "day.intake.triage",
     "day.intake.start",
     "day.intake.check",
+    "day.intake.open",
     "day.delivery.read",
     "day.delivery.list",
     "day.delivery.artifact",
@@ -398,6 +399,7 @@ pub(crate) enum Command {
     ThreadsCheck(String),
     IntakeWrite(crate::host::intake::Intent),
     IntakeCheck(String),
+    IntakeOpen(crate::host::intake::Open),
     DeliveryRead(crate::host::delivery::Subject),
     DeliveryList(crate::host::delivery::List),
     DeliveryArtifact(crate::host::delivery_artifact::Request),
@@ -1137,6 +1139,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             let r: Lookup = exact(args)?;
             mission(&r.operation_id)?;
             C::IntakeCheck(r.operation_id)
+        }
+        "day.intake.open" => {
+            let r: crate::host::intake::Open = exact(args)?;
+            r.validate()?;
+            C::IntakeOpen(r)
         }
         "day.update.read" | "day.update.check" => {
             if args != json!({}) {
