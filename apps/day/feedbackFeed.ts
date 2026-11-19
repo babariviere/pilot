@@ -54,6 +54,7 @@ export type FeedbackStepOp = {
 
 /** A project agents can work in, as Pilot read it. The ID is the identity. */
 export type FeedbackProject = { projectId: string; name: string; contextDigest: string };
+export type FeedbackResultScope = { kind: "chat" | "mission"; id: string; projectId: string };
 
 /** One explicit step on one saved item. */
 export type StepIntent = { feedbackId: string } & (
@@ -71,6 +72,8 @@ export type StepIntent = { feedbackId: string } & (
 			/** The chat whose proposal it starts from: a triage, or for a fix also a prototype. */
 			triageSessionId: string;
 			proposalDigest: string;
+			fixSetupDigest?: string;
+			allowanceMicros?: number;
 	  }
 	| { action: "link"; missionId: string }
 	| { action: "resolve" | "reopen" | "remove" }
@@ -137,6 +140,8 @@ export interface FeedbackSource {
 	onChange(listener: (view: FeedbackView) => void): () => void;
 	/** Reads the newest page again. Passive: it sends and settles nothing. */
 	read(): Promise<void>;
+	/** Only feedback explicitly linked to this result, including items outside the newest page. */
+	readResult?(scope: FeedbackResultScope, before?: number): Promise<Page | null>;
 	/** Reads the next older page. Passive. */
 	more(): Promise<void>;
 	/** Sends one piece of feedback once. Never resent. */
@@ -316,8 +321,30 @@ function workOf(x: unknown): UserFeedbackWorkView | null {
 		const chat = w.chat as Record<string, unknown> | undefined;
 		if (!str(w.sessionId) || !str(w.projectId)) return null;
 		if (chat !== undefined && (!chat || !str(chat.title) || !STATES.includes(chat.state as string))) return null;
+		if (
+			chat?.currentSessionId !== undefined &&
+			(w.kind !== "fix" ||
+				typeof chat.currentSessionId !== "string" ||
+				!/^[A-Za-z0-9_-]{1,128}$/.test(chat.currentSessionId))
+		)
+			return null;
 		if (w.kind !== "triage" && (!str(w.triageSessionId) || !str(w.proposalDigest))) return null;
 		if (w.proposal !== undefined && !proposalOf(w.proposal)) return null;
+		if (w.fixSetup !== undefined) {
+			const s = w.fixSetup as Record<string, unknown> | null;
+			if (
+				!s ||
+				!str(s.model) ||
+				!str(s.thinking) ||
+				typeof s.digest !== "string" ||
+				!/^[a-f0-9]{64}$/.test(s.digest) ||
+				(s.allowanceMicros != null &&
+					(typeof s.allowanceMicros !== "number" ||
+						!Number.isSafeInteger(s.allowanceMicros) ||
+						s.allowanceMicros < 0))
+			)
+				return null;
+		}
 		if (w.question !== undefined && !questionOf(w.question)) return null;
 		// A queue view that does not read is left out; the step still shows.
 		if (chat?.queue !== undefined) {
@@ -669,6 +696,17 @@ export class ConnectedFeedback implements FeedbackSource {
 		const projects = r.ok ? projectsOf(r.snapshot) : null;
 		if (projects) this.#projects = projects;
 		this.#publish();
+	}
+
+	async readResult(result: FeedbackResultScope, before?: number): Promise<Page | null> {
+		const r = await call<unknown>(this.#window, "day.feedback.read", { result, before });
+		if (!r.ok || this.#closed) return null;
+		const ops = summariesOf(r.value.operations);
+		if (ops) {
+			this.#ops = ops;
+			this.#publish();
+		}
+		return pageOf(r.snapshot);
 	}
 
 	async step(intent: StepIntent): Promise<StepResult> {

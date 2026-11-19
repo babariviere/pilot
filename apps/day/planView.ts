@@ -25,13 +25,45 @@ export const replacesDraft = signal<{ missionId: string; title: string } | null>
  * The request in New (a Linear issue or Slack message) New's words plan, set by
  * its "Plan a mission". Only Plan sends it, and it goes when the words go.
  */
-export const requestDraft = signal<{
+export const requestDraft = signal<RequestDraft | null>(null);
+export type RequestDraft = {
 	itemId: string;
 	revision: number;
 	title: string;
 	source: string;
 	manageStatus?: boolean;
-} | null>(null);
+};
+
+/** New's other draft, kept exactly as it was while a linked mission draft is in New. */
+export type OtherNewDraft = {
+	goal: string;
+	pick: { projectId: string; mode: ChatMode } | null;
+	replaces: { missionId: string; title: string } | null;
+	request: RequestDraft | null;
+	funding: { project: string; quickFix: string; mission: string | null } | null;
+};
+
+/**
+ * A mission draft from Feedback, linked to one saved feedback and the exact
+ * proposal the user saw. New's words, project and allowance are its own while
+ * it is there; Plan sends the link with them, once. New's other draft is kept
+ * aside unchanged. Only an accepted Plan with `replace` chosen drops it.
+ */
+export type LinkedMissionDraft = {
+	feedbackId: string;
+	triageSessionId: string;
+	proposalDigest: string;
+	/** The feedback's words, shortened, as "From Feedback" shows them. */
+	title: string;
+	/** The project of the triage or prototype that proposed it. */
+	projectId: string;
+	/** Whether an accepted Plan replaces the other draft. Off until the user chooses it. */
+	replace: boolean;
+	/** The goal exactly as drafted from the proposal: words that differ are the user's edits. */
+	drafted: string;
+	other: OtherNewDraft | null;
+};
+export const linkedMission = signal<LinkedMissionDraft | null>(null);
 /** Whether New waits for the user to confirm a direct start. */
 export const confirmingStart = signal(false);
 /** The last message New's intents returned. */
@@ -102,16 +134,57 @@ export function drop<T>(store: Signal<Record<string, T>>, key: string) {
 	});
 }
 
-type SavedPlanningDraft = Pick<import("pilot-day/native").SavedView, "goal" | "chat" | "chatChosen" | "replanningFrom">;
+type SavedPlanningDraft = Pick<
+	import("pilot-day/native").SavedView,
+	"goal" | "chat" | "chatChosen" | "replanningFrom" | "linkedMission"
+>;
 
 /** Keeps New's exact words and the user's explicit project choice. */
 export function capturePlanningDraft(): SavedPlanningDraft {
+	const linked = linkedMission();
 	return {
 		goal: goalDraft(),
 		chat: chatChoice(),
 		chatChosen: chatChoice() !== null && chatPick() !== null,
 		replanningFrom: replacesDraft(),
+		linkedMission: linked ? JSON.stringify(linked) : "",
 	};
+}
+
+/** A saved linked mission draft, or null when it is missing or not one. */
+function savedLinked(text: string): LinkedMissionDraft | null {
+	if (!text) return null;
+	try {
+		const l = JSON.parse(text);
+		const str = (v: unknown) => typeof v === "string";
+		const o = l.other;
+		const other =
+			o &&
+			str(o.goal) &&
+			(o.pick === null || (str(o.pick?.projectId) && (o.pick.mode === "build" || o.pick.mode === "ask")))
+				? (o as OtherNewDraft)
+				: null;
+		if (![l.feedbackId, l.triageSessionId, l.proposalDigest, l.title, l.projectId].every(str)) return null;
+		return {
+			feedbackId: l.feedbackId,
+			triageSessionId: l.triageSessionId,
+			proposalDigest: l.proposalDigest,
+			title: l.title,
+			projectId: l.projectId,
+			replace: l.replace === true,
+			// Without it, every word counts as the user's edit, so nothing drops them unasked.
+			drafted: str(l.drafted) ? l.drafted : "",
+			other: other && {
+				goal: other.goal,
+				pick: other.pick ? { projectId: other.pick.projectId, mode: other.pick.mode } : null,
+				replaces: other.replaces ?? null,
+				request: other.request ?? null,
+				funding: other.funding ?? null,
+			},
+		};
+	} catch {
+		return null;
+	}
 }
 
 /** Restores a place without opening it or starting planning. */
@@ -127,10 +200,15 @@ export function restorePlanningDraft(view: SavedPlanningDraft) {
 	replacesDraft.set(view.goal.trim() ? (view.replanningFrom ?? null) : null);
 	requestDraft.set(null);
 	const chat = view.chat;
+	const linked = savedLinked(view.linkedMission ?? "");
+	linkedMission.set(linked);
+	// A linked draft's project is its proposal's: never another choice.
 	chatPick.set(
-		chat && view.chatChosen === true
-			? { projectId: chat.projectId, mode: chat.mode === "ask" ? "ask" : "build" }
-			: null,
+		linked
+			? { projectId: linked.projectId, mode: "build" }
+			: chat && view.chatChosen === true
+				? { projectId: chat.projectId, mode: chat.mode === "ask" ? "ask" : "build" }
+				: null,
 	);
 	chatChoice.set(null);
 	restoredDraft.set(chat?.draftId ?? null);
@@ -154,6 +232,7 @@ export function resetPlanningView() {
 	goalDraft.set("");
 	replacesDraft.set(null);
 	requestDraft.set(null);
+	linkedMission.set(null);
 	confirmingStart.set(false);
 	newMessage.set("");
 	newBusy.set(false);

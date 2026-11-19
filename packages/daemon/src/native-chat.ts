@@ -10,6 +10,7 @@ const digest = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{
 /** Native operation kind: one fixed follow-up to one stopped or failed chat, sent once. */
 export const CHAT_CONTINUE = "chat-continue";
 export const CHAT_RECOVER = "chat-recover";
+export const CHAT_HANDOFF = "chat-handoff";
 export const RETRY_TEXT =
 	"The user asked you to retry after this chat failed. Continue the original work within its existing scope, access and remaining allowance.";
 /** Native operation kind: take one chat's failed outcome out of Needs you. Sends nothing to the chat. */
@@ -52,6 +53,8 @@ interface Dependencies {
 		| "retryStartup"
 		| "startupRecoveryAdmitted"
 		| "dismissFailure"
+		| "handoffFix"
+		| "lookupFixHandoff"
 	>;
 }
 export class NativeChat {
@@ -191,14 +194,24 @@ export class NativeChat {
 		images?: string[],
 		background = false,
 		feedbackSources?: AskContext["feedbackSources"],
+		beforeEntry?: () => void,
+		onRollback?: () => void,
 	) {
-		const funding = await this.deps.sessions.activeFunding();
-		if (funding && !background) {
-			if (p.allowanceMicros == null) throw new OperationRejected("Choose an allowance before starting this work");
-			check();
-			await funding.open({ kind: "quick_fix", id: draftId, projectId: p.projectId }, p.allowanceMicros);
-			check();
+		let funding: Awaited<ReturnType<SessionManager["activeFunding"]>>;
+		try {
+			funding = await this.deps.sessions.activeFunding();
+			if (funding && !background) {
+				if (p.allowanceMicros == null) throw new OperationRejected("Choose an allowance before starting this work");
+				check();
+				await funding.open({ kind: "quick_fix", id: draftId, projectId: p.projectId }, p.allowanceMicros);
+				check();
+			}
+		} catch (error) {
+			if (!beforeEntry || error instanceof OperationRejected) throw error;
+			// This call has not entered chat creation. Funding alone cannot start a writer.
+			throw new OperationRejected("Pilot could not prepare funding for this fix; no chat started");
 		}
+		beforeEntry?.();
 		return this.deps.sessions.spawnDurable(
 			{
 				projectId: p.projectId,
@@ -224,6 +237,7 @@ export class NativeChat {
 			!!funding,
 			background,
 			feedbackSources,
+			onRollback,
 		);
 	}
 	async createPinned(p: Selection, draftId: string, operationId: string, message: string) {
@@ -263,7 +277,7 @@ export class NativeChat {
 				`Corrected follow-up is ${Buffer.byteLength(p.message)} bytes; limit is 12000. Shorten it before sending`,
 			);
 		const reply = op.kind === CHAT_REPLY;
-		const recover = op.kind === CHAT_RECOVER;
+		const recover = op.kind === CHAT_RECOVER || op.kind === CHAT_HANDOFF;
 		if (
 			(op.kind !== CHAT_CONTINUE && op.kind !== CHAT_DISMISS && !reply && !recover) ||
 			!p ||
@@ -293,7 +307,7 @@ export class NativeChat {
 				sessionId: p.sessionId,
 				updatedAt: p.updatedAt as number,
 				inputGeneration: p.inputGeneration as number,
-				message: (p.message as string).trim() ? (p.message as string) : RETRY_TEXT,
+				message: op.kind === CHAT_HANDOFF || (p.message as string).trim() ? (p.message as string) : RETRY_TEXT,
 			};
 		return { sessionId: p.sessionId, ...(reply ? { message: p.message as string } : {}) };
 	}
@@ -307,6 +321,22 @@ export class NativeChat {
 	 */
 	async continueChat(op: DurableOperation, firstEntry: boolean) {
 		const request = this.chatRequest(op);
+		if (op.kind === CHAT_HANDOFF) {
+			if (!firstEntry) {
+				const target = await this.deps.sessions.lookupFixHandoff(request.sessionId, op.operationId);
+				if (target)
+					return { sessionId: target.id, sourceSessionId: request.sessionId, operationId: op.operationId };
+				throw new Error("Handoff outcome is unknown; it is never started again");
+			}
+			const target = await this.deps.sessions.handoffFix(
+				request.sessionId,
+				op.operationId,
+				request.message ?? "",
+				request.updatedAt!,
+				request.inputGeneration!,
+			);
+			return { sessionId: target.id, sourceSessionId: request.sessionId, operationId: op.operationId };
+		}
 		if (op.kind !== CHAT_CONTINUE && op.kind !== CHAT_RECOVER) throw new OperationRejected("Invalid continue intent");
 		const { sessionId, updatedAt, inputGeneration } = request;
 		const message = op.kind === CHAT_RECOVER ? (request.message ?? RETRY_TEXT) : CONTINUE_TEXT;

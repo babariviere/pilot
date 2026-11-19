@@ -11,7 +11,7 @@ import type { MissionRow, Request, Today } from "pilot-day/native";
 import type { Day } from "./day";
 import type { IntakeMirror, IntakeOp, IntakeResult, IntakeRow, IntakeView, Triage } from "./intakeFeed";
 import { openLinear } from "./linearView";
-import { goalDraft, openNew, replacesDraft, requestDraft } from "./planView";
+import { goalDraft, linkedMission, openNew, replacesDraft, requestDraft } from "./planView";
 import { openSlack } from "./slackView";
 import {
 	Action,
@@ -236,6 +236,8 @@ function triage(mirror: IntakeMirror, row: IntakeRow, state: Triage, rows: Intak
  */
 function planFrom(row: IntakeRow, manageStatus = false) {
 	const r = row.request;
+	// A linked draft from Feedback keeps New, and the other draft it holds aside: nothing replaces either.
+	if (linkedMission()) return false;
 	if (r.source === "linear" && goalDraft().trim() && requestDraft()?.itemId !== r.id) return false;
 	const where = r.place ? ` (${r.place})` : "";
 	const link = r.link ? `\n${r.link}` : "";

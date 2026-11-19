@@ -548,6 +548,9 @@ interface SessionMeta extends OutcomeMeta {
 	/** Durable known limits and window-scoped user exemptions, shared with child admission gates. */
 	subscriptionPolicy?: SubscriptionPolicy;
 	continuationOf?: string;
+	/** Exact native standalone handoff receipt. Never inferred from a linked chat. */
+	fixHandoffOperationId?: string;
+	fixOriginalScope?: string;
 	/** The logical standalone allowance survives a transfer to another chat. */
 	fundingId?: string;
 	fundingMissionId?: string;
@@ -5035,6 +5038,8 @@ ${run.excerpt}`,
 		operationId: string,
 		sessionId: string,
 	) => { origin: import("@pilot/protocol").UserFeedback["origin"] } | undefined;
+	/** Indexed saved feedback-fix provenance, never inferred from ordinary Build mode. */
+	feedbackFixAdmission?: (sessionId: string, projectId: string) => boolean;
 	diagnosticDomainRead?: (request: DiagnosticContextRequest) => Promise<DiagnosticContextResponse>;
 	diagnosticFeatureUsage?: (host: OperationHost) => import("@pilot/protocol").FeatureUsageSnapshot;
 	private diagnosticContextReads = new Map<string, AbortController>();
@@ -7652,12 +7657,197 @@ ${run.excerpt}`,
 		return holders;
 	}
 
+	private originalFixScope(events: readonly AgentEvent[], pending: readonly PendingCommand[] = []): string {
+		for (const event of events) {
+			const entries =
+				event.type === "snapshot" || event.type === "snapshot_prefix"
+					? event.entries
+					: event.type === "entry_appended"
+						? [event.entry]
+						: [];
+			for (const entry of entries) {
+				if (entry.kind !== "pi.user") continue;
+				const message = entry.model?.find((message) => message.role === "user");
+				if (typeof message?.content === "string") return message.content;
+				if (Array.isArray(message?.content))
+					return message.content
+						.filter((part) => part.type === "text")
+						.map((part) => part.text)
+						.join("\n");
+			}
+		}
+		// Startup can fail before the first input enters history. Keep that saved scope losslessly too.
+		for (const command of pending)
+			if (command.type === "input" && typeof command.content === "string") return command.content;
+		throw new Conflict("Original fix scope is unavailable; keep this chat's history and retry later");
+	}
+
+	private assertStandaloneFixHandoff(meta: SessionMeta, ownConfigurationLock = false): void {
+		const state = this.summary(meta);
+		if (
+			this.closing ||
+			this.sleepPause ||
+			this.globalUpdatePreparing ||
+			meta.working ||
+			this.workers.get(meta.id)?.busy ||
+			meta.initializing ||
+			meta.kernelRestartPending ||
+			this.starting.has(meta.id) ||
+			state.sleepPaused ||
+			state.offlinePaused ||
+			state.subscriptionPause ||
+			state.recoveryBlockedReason ||
+			meta.preparing ||
+			meta.workspaceRecovery ||
+			(!ownConfigurationLock && this.changingModels.has(meta.id)) ||
+			this.archiveTransitions.has(meta.id) ||
+			this.workspaceRefreshes.has(meta.id) ||
+			this.roleTransitions.has(meta.id) ||
+			this.workspaceMaintenance.has(meta.id) ||
+			this.rebasingWorkspaces.has(meta.id) ||
+			this.sending.has(meta.id) ||
+			this.hasWorkspaceProcess(meta.id) ||
+			this.workers.get(meta.id)?.runningJobs?.length
+		)
+			throw new Conflict(state.recoveryBlockedReason ?? "This fix is unavailable or changing configuration");
+		if (
+			meta.mode !== "build" ||
+			meta.role ||
+			meta.planning ||
+			this.missions?.membership(meta.id) ||
+			meta.fundingMissionId ||
+			meta.fundingBackground ||
+			meta.automation ||
+			meta.job ||
+			!meta.projectId ||
+			meta.archivedAt !== undefined ||
+			meta.continuedTo ||
+			meta.continuationPending ||
+			this.sharing?.membership(meta.id) ||
+			(meta.outcome !== "failed" && meta.outcome !== "stopped")
+		)
+			throw new Conflict("Only a stalled standalone fix can hand over its work");
+		let current: SessionMeta | undefined = meta;
+		const seen = new Set<string>();
+		while (current && current.projectId === meta.projectId && !seen.has(current.id)) {
+			seen.add(current.id);
+			if (this.feedbackFixAdmission?.(current.id, meta.projectId!)) return;
+			const previous: SessionMeta | undefined = current.continuationOf
+				? this.metas.get(current.continuationOf)
+				: undefined;
+			current = previous?.continuedTo === current.id ? previous : undefined;
+		}
+		throw new Conflict("This chat has no saved feedback fix admission");
+	}
+
+	/** Exact recovery lookup. A continuation by another operation is not this operation's receipt. */
+	async prepareFixHandoff(id: string) {
+		const meta = this.require(id);
+		const version = meta.updatedAt;
+		try {
+			this.assertStandaloneFixHandoff(meta);
+			const effective = meta.nextAttemptModel ?? meta;
+			const option = (await this.modelCatalog.list(meta.cwd)).models.find((entry) => entry.id === effective.model);
+			if (!option || (effective.thinking !== undefined && !option.thinkingLevels?.includes(effective.thinking)))
+				return null;
+		} catch {
+			return null;
+		}
+		const originalScope =
+			meta.fixOriginalScope ?? this.originalFixScope((await this.coldSnapshot(meta)).events, meta.pending);
+		const funding = await this.activeFunding();
+		const owner = this.fundingOwner(id);
+		const account = funding
+			? (await funding.read(meta.projectId)).accounts.find(
+					(account) => account.kind === owner.kind && account.id === owner.id,
+				)
+			: undefined;
+		try {
+			this.assertStandaloneFixHandoff(meta);
+		} catch {
+			return null;
+		}
+		if (meta.updatedAt !== version || (funding && !account)) return null;
+		return {
+			projectId: meta.projectId,
+			model: meta.nextAttemptModel?.model ?? meta.model,
+			thinking: (meta.nextAttemptModel ?? meta).thinking ?? "",
+			originalScope,
+			remainingMicros: account?.remainingMicros ?? null,
+			allowanceEnabled: !!funding,
+			updatedAt: meta.updatedAt,
+			inputGeneration: meta.inputGeneration ?? 0,
+		};
+	}
+
+	/** Exact recovery lookup. A continuation by another operation is not this operation's receipt. */
+	async lookupFixHandoff(id: string, operationId: string): Promise<SessionSummary | undefined> {
+		if (this.changingModels.has(id)) return undefined;
+		await this.recoverContinuations();
+		const source = this.require(id);
+		const target = source.continuedTo ? this.metas.get(source.continuedTo) : undefined;
+		if (target?.fixHandoffOperationId === operationId) return this.summary(target);
+		if (source.continuedTo || source.continuationPending || this.changingModels.has(id)) return undefined;
+		// Read-only negative evidence after a crash before rename. A leftover .tmp file is not a commit.
+		const saved = JSON.parse(await readFile(join(this.dir(id), "meta.json"), "utf8")) as SessionMeta;
+		if (saved.id !== id || saved.continuedTo !== undefined || saved.continuationPending !== undefined)
+			return undefined;
+		try {
+			await readFile(join(this.dir(id), "continuation.json"));
+			return undefined;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		// Recheck after disk reads: an active writer or a newly committed owner defeats negative evidence.
+		if (
+			this.metas.get(id) !== source ||
+			source.continuedTo ||
+			source.continuationPending ||
+			this.changingModels.has(id)
+		)
+			return undefined;
+		throw new OperationRejected(
+			"This handoff did not commit. The original chat and your handoff note are kept; you can start a new handoff.",
+		);
+	}
+
+	/** User-authorized handoff shares the continuation drain, journal, custody and funding transfer. */
+	async handoffFix(id: string, operationId: string, note: string, updatedAt: number, inputGeneration: number) {
+		const admission = { operationId, note, updatedAt, inputGeneration, commitStarted: false };
+		try {
+			const meta = this.require(id);
+			this.assertStandaloneFixHandoff(meta);
+			if (!(meta.nextAttemptModel?.model ?? meta.model)) throw new Conflict("The fix has no effective model");
+			return await this.continueModel(
+				id,
+				(meta.nextAttemptModel?.model ?? meta.model)!,
+				this.modelCatalog,
+				(meta.nextAttemptModel ?? meta).thinking,
+				admission,
+			);
+		} catch (error) {
+			if (!admission.commitStarted)
+				throw new OperationRejected(error instanceof Error ? error.message : "Handoff was refused before commit");
+			// Rename can have committed even when its reply was lost. No rejection or automatic replay after it enters.
+			if (error instanceof OperationRejected)
+				throw new Error("Handoff commit needs exact recovery", { cause: error });
+			throw error;
+		}
+	}
+
 	/** Quota-paused work resumes in place only when the provider can interpret its existing context. */
 	async continueModel(
 		id: string,
 		model: string,
 		catalog: Pick<ModelCatalog, "list"> = this.modelCatalog,
 		thinking?: string,
+		fixHandoff?: {
+			operationId: string;
+			note: string;
+			updatedAt: number;
+			inputGeneration: number;
+			commitStarted?: boolean;
+		},
 	): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		let release!: () => void;
@@ -7680,8 +7870,12 @@ ${run.excerpt}`,
 			if (thinking !== undefined && (typeof thinking !== "string" || !thinking))
 				throw new Error("thinking must be a supported level");
 			if (this.closing || this.sleepPause) throw new Conflict("Agents are not available for continuation");
-			if (!this.subscriptionPaused(id)) throw new Conflict("The session is not subscription-paused");
-			if (meta.archivedAt !== undefined || meta.failure || meta.preparing || meta.workspaceRecovery)
+			if (fixHandoff) {
+				this.assertStandaloneFixHandoff(meta);
+				if (meta.updatedAt !== fixHandoff.updatedAt || (meta.inputGeneration ?? 0) !== fixHandoff.inputGeneration)
+					throw new Conflict("This fix changed; read it again before handing over");
+			} else if (!this.subscriptionPaused(id)) throw new Conflict("The session is not subscription-paused");
+			if (meta.archivedAt !== undefined || (!fixHandoff && meta.failure) || meta.preparing || meta.workspaceRecovery)
 				throw new Conflict("Restore a prepared, healthy session before continuing");
 			if (
 				this.changingModels.has(id) ||
@@ -7703,6 +7897,11 @@ ${run.excerpt}`,
 			if (!option) throw new Error(`Model is not available in this session's scope: ${name}`);
 			if (thinking !== undefined && !option.thinkingLevels?.includes(thinking))
 				throw new Error(`Thinking level is not supported by ${name}: ${thinking}`);
+			if (fixHandoff) {
+				this.assertStandaloneFixHandoff(meta, true);
+				if (meta.updatedAt !== fixHandoff.updatedAt || (meta.inputGeneration ?? 0) !== fixHandoff.inputGeneration)
+					throw new Conflict("This fix changed before handoff; read it again");
+			}
 			await this.starting.get(id);
 			await this.unparked(id);
 			if (this.closing || this.sleepPause) throw new Conflict("Agents are not available for continuation");
@@ -7759,7 +7958,7 @@ ${run.excerpt}`,
 			const queuedInputs = continuationQueuedInputs(continuationView.events);
 			if (this.isMissionCoordinator(id) !== !!meta.coordinatorView)
 				throw new Conflict("The chat's workspace role changed during continuation. Try again after it settles.");
-			if (configuredProvider === option.provider && provider === option.provider) {
+			if (!fixHandoff && configuredProvider === option.provider && provider === option.provider) {
 				meta.continuationModel = {
 					model: name,
 					requestId: `model-continuation:${randomUUID()}`,
@@ -7780,6 +7979,11 @@ ${run.excerpt}`,
 				.catch(() => undefined)
 				.then(async () => {
 					await this.recoverPullRequestBinding();
+					if (fixHandoff) {
+						this.assertStandaloneFixHandoff(meta, true);
+						if ((meta.inputGeneration ?? 0) !== fixHandoff.inputGeneration)
+							throw new Conflict("The fix's input changed before ownership commit");
+					}
 					this.coldSnapshots.delete(id);
 					this.coldLoading.delete(id);
 					const view = continuationView!;
@@ -7820,6 +8024,13 @@ ${run.excerpt}`,
 						view.events.filter((event) => event.type !== "queue_update"),
 					);
 					const target: SessionMeta = {
+						fixOriginalScope: meta.fixOriginalScope,
+						...(fixHandoff
+							? {
+									fixHandoffOperationId: fixHandoff.operationId,
+									fixOriginalScope: meta.fixOriginalScope ?? this.originalFixScope(view.events, meta.pending),
+								}
+							: {}),
 						title: meta.title,
 						cwd: meta.cwd,
 						mode: meta.mode,
@@ -7845,6 +8056,9 @@ ${run.excerpt}`,
 						boundPullRequests: [...(meta.boundPullRequests ?? [])],
 						unboundPullRequests: [...(meta.unboundPullRequests ?? [])],
 						prAutoRebases: structuredClone(meta.prAutoRebases),
+						prFollowUp: structuredClone(meta.prFollowUp),
+						prFollowUpResetRequests: structuredClone(meta.prFollowUpResetRequests),
+						agentPushedAt: meta.agentPushedAt,
 						prReportedReviewThreads: structuredClone(meta.prReportedReviewThreads),
 						unpublishedWork: meta.unpublishedWork,
 						pullRequestMergedAt: meta.pullRequestMergedAt,
@@ -7859,7 +8073,19 @@ ${run.excerpt}`,
 						thinking,
 						initializing: true,
 						pending: [
-							{ type: "input", requestId: `continuation:${targetId}`, content: handoff, mode: "followUp" },
+							{
+								type: "input",
+								requestId: `continuation:${targetId}`,
+								content: fixHandoff
+									? [
+											"Continue the same fix, not a new repair. Keep its original scope and remaining allowance.",
+											`Original scope (immutable):\n${meta.fixOriginalScope ?? this.originalFixScope(view.events, meta.pending)}`,
+											handoff,
+											`User handoff note:\n${fixHandoff.note}`,
+										].join("\n\n")
+									: handoff,
+								mode: "followUp",
+							},
 							...queuedInputs.map(
 								(input): PendingCommand => ({
 									type: "input",
@@ -7875,6 +8101,7 @@ ${run.excerpt}`,
 					};
 					const file = join(this.dir(id), "continuation.json");
 					await writeFile(`${file}.tmp`, JSON.stringify(target), { mode: 0o600 });
+					if (fixHandoff) fixHandoff.commitStarted = true;
 					await rename(`${file}.tmp`, file);
 					// From this commit point all failures roll forward, never reopen the old writer.
 					await this.applyContinuation(meta, target);
@@ -8825,6 +9052,7 @@ ${run.excerpt}`,
 		fundingRequired = false,
 		fundingBackground = false,
 		feedbackSources?: AskContext["feedbackSources"],
+		onRollback?: () => void,
 	): Promise<SessionSummary> {
 		guard?.();
 		this.insightsBacklog?.replacements.assertNotRetired(targetId);
@@ -8873,6 +9101,7 @@ ${run.excerpt}`,
 					feedbackImages,
 					job,
 					feedbackSources,
+					onRollback,
 				);
 			return this.repairProject.withBinding(request.diagnosticRepair.binding, async () => {
 				this.assertDiagnosticRepairAdmission(request);
@@ -9003,6 +9232,20 @@ ${run.excerpt}`,
 			saved.id === id &&
 			saved.missionContinuationStart?.operationId === operationId &&
 			saved.missionContinuationStart.admitted
+		);
+	}
+
+	/** Read-only lost-ACK proof for the exact standalone fix creation. */
+	async lookupFeedbackFixStart(id: string, operationId: string, projectId: string): Promise<boolean> {
+		const meta = this.metas.get(id);
+		if (!meta || meta.createOperationId !== operationId || meta.projectId !== projectId) return false;
+		const saved = JSON.parse(await readFile(join(this.dir(id), "meta.json"), "utf8")) as SessionMeta;
+		return (
+			saved.id === id &&
+			saved.createOperationId === operationId &&
+			saved.projectId === projectId &&
+			saved.mode === "build" &&
+			!saved.createMissionId
 		);
 	}
 
@@ -10317,6 +10560,7 @@ ${run.excerpt}`,
 		feedbackImages?: string[],
 		job?: ChatJob,
 		feedbackSources?: AskContext["feedbackSources"],
+		onRollback?: () => void,
 	): Promise<SessionSummary> {
 		if (admission) this.insightsBacklog?.replacements.assertNotRetired(admission.targetId);
 		// Read before admission's synchronous checks. A planning worker started while limits are off stays unlimited.
@@ -10705,6 +10949,7 @@ ${run.excerpt}`,
 			await this.lifecycle.flush();
 			await this.aiUsage.discard(id);
 			await rm(this.dir(id), { recursive: true, force: true });
+			onRollback?.(); // No worker was started, and the admitted metadata was removed.
 			throw error;
 		} finally {
 			this.newSessionAdmissions.delete(folded);

@@ -61,6 +61,16 @@ seam is documented in [day-new-chat.md](day-new-chat.md); its UI hookup is separ
 Published planning uses `day.plan.startWork` with the displayed revision/digest/task/context and a
 separate confirmation. `day.plan.checkWork` reads the retained exact operation only. Both use the
 same native worker, ledger, close fence and saved-form barrier as existing planning commands.
+Feedback work uses the same ledger. A displayed fix pins both the proposal and
+the effective setup digest. The daemon refuses a second start of that proposal
+and settles a lost reply only from the exact durable session record. A linked
+mission creation saves the feedback link with the mission, not as a second UI
+command. A result reads links through the scoped `day.feedback.read` projection;
+its explicit resolution uses the same operation as Feedback, not verification.
+For a stalled fix, `day.chat.handoff` uses the shown chat and the user's note.
+The native receipt lookup cannot start a second writer. The continuation
+journal keeps source history and transfers workspace custody and the logical
+funding owner before the linked chat starts.
 On `day.flush` the adapter saves every waiting answer and Today draft, and
 acknowledges only when each save was answered and none was refused.
 `native/tests/connected.rs` runs the entry on a real `Bridge`. The default

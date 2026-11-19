@@ -452,6 +452,7 @@ async fn run(
             | Command::ChatCheck(_)
             | Command::ChatContinue(_)
             | Command::ChatRecover(_)
+            | Command::ChatHandoff(_)
             | Command::ChatDismiss(_)
             | Command::ChatReply { .. }
     ) {
@@ -766,6 +767,7 @@ async fn run(
         | Command::ChatCheck(_)
         | Command::ChatContinue(_)
         | Command::ChatRecover(_)
+        | Command::ChatHandoff(_)
         | Command::ChatDismiss(_)
         | Command::ChatReply { .. } => {
             unreachable!("handled standalone chat command")

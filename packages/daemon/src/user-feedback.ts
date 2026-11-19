@@ -163,16 +163,43 @@ export class UserFeedbackService {
 	}
 
 	/** One page, newest first, with each item's steps. Passive. */
-	async page(before?: string, limit?: string): Promise<UserFeedbackPage> {
+	async page(
+		before?: string,
+		limit?: string,
+		result?: { kind: string; id: string; projectId: string },
+	): Promise<UserFeedbackPage> {
 		const cursor = before === undefined ? Number.MAX_SAFE_INTEGER : Number(before);
 		const count = limit === undefined ? LIMITS.page : Number(limit);
 		if (!Number.isSafeInteger(cursor) || cursor < 1 || !Number.isSafeInteger(count) || count < 1)
 			throw new OperationRejected("Invalid feedback page");
 		if (count > LIMITS.page) throw new OperationRejected(`Feedback page limit is ${LIMITS.page}`);
 		await this.deps.store.durable();
-		const page = this.deps.store.feedback.page(cursor, count);
+		const page = result ? this.resultPage(result, cursor, count) : this.deps.store.feedback.page(cursor, count);
 		const items = [];
-		for (const item of page.items) items.push({ ...item, work: (await this.deps.work?.view(item.id)) ?? [] });
-		return { ...page, items };
+		const setups = new Map();
+		for (const item of page.items) items.push({ ...item, work: (await this.deps.work?.view(item.id, setups)) ?? [] });
+		return { ...page, items, ...(result ? { result } : {}) };
+	}
+
+	private resultPage(result: NonNullable<UserFeedbackPage["result"]>, cursor: number, count: number) {
+		const projectId = identifier(result.projectId, "project ID");
+		let id = identifier(result.id, "result ID");
+		const store = this.deps.store.feedback;
+		if (result.kind === "mission") return store.resultPage({ kind: "mission", id, projectId }, cursor, count);
+		if (result.kind !== "chat") throw new OperationRejected("Invalid feedback result scope");
+		const seen = new Set<string>();
+		while (!seen.has(id) && seen.size < 32) {
+			const chat = this.deps.sessions.get(id);
+			if (chat?.projectId !== projectId) break;
+			const page = store.resultPage({ kind: "fix", id, projectId }, cursor, count);
+			if (page.items.length) return page;
+			// The daemon's committed continuation chain preserves the original feedback
+			// link. Never follow unverified ancestry or cross projects.
+			const prior = chat.continuationOf;
+			if (!prior || this.deps.sessions.get(prior)?.continuedTo !== id) break;
+			seen.add(id);
+			id = prior;
+		}
+		return { items: [], more: false, before: null };
 	}
 }

@@ -266,6 +266,12 @@ pub struct SavedView {
     /// whose project may be New's old default: it comes back unchosen.
     #[prop(default)]
     pub chat_chosen: bool,
+    /// New's unsent linked mission draft from Feedback, as JSON: the feedback
+    /// and exact proposal it names, whether Plan replaces the other New
+    /// draft, and that other draft. Empty for none. Restoring it never enrolls
+    /// and never erases the other draft.
+    #[prop(default)]
+    pub linked_mission: String,
     /// The Today item the user brought to the front, or empty.
     pub focused: String,
     /// The planning question the user was on in each interview, as "interview/question".
@@ -453,6 +459,7 @@ impl SavedView {
                 .as_ref()
                 .map_or(0, |m| m.mission_id.len() + m.title.len())
             + self.chat.as_ref().map_or(0, |c| c.text_bytes())
+            + self.linked_mission.len()
             + self.id.len()
             + self.focused.len()
             + self.ritual.len()
@@ -608,7 +615,7 @@ impl SavedView {
                     (parts.next(), parts.next(), parts.next()),
                     (Some(at), Some(picks), Some(_))
                         if at.split_once('/').is_some_and(|(chat, question)| id(chat) && (number(question)
-                            || question.strip_prefix("correction-").is_some_and(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))))
+                            || question.strip_prefix("correction-").or_else(|| question.strip_prefix("allowance-")).is_some_and(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))))
                             && (picks.is_empty() || picks.split(',').all(number))
                 )
             });

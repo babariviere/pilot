@@ -77,7 +77,11 @@ export type UserFeedbackWork = {
 	| { kind: "prototype"; sessionId: string; projectId: string; triageSessionId: string; proposalDigest: string }
 	/** triageSessionId: the triage or prototype chat whose exact proposal the fix starts from. */
 	| { kind: "fix"; sessionId: string; projectId: string; triageSessionId: string; proposalDigest: string }
-	| { kind: "mission"; missionId: string; projectId: string }
+	/**
+	 * A mission link. A mission planned from a proposal also names that exact proposal: the triage or prototype
+	 * chat and its digest. Pilot saves that link in the same transaction that creates the mission.
+	 */
+	| { kind: "mission"; missionId: string; projectId: string; triageSessionId?: string; proposalDigest?: string }
 	| { kind: "resolved" | "reopened" }
 	/** The user's answer to the question `questionId` of a triage, prototype or fix chat, as sent to that chat. */
 	| { kind: "answer"; sessionId: string; questionId: number; text: string }
@@ -107,9 +111,13 @@ export interface UserFeedbackQuestion {
 
 /** A work step as a read shows it: the saved step plus what Pilot reads about it now. */
 export type UserFeedbackWorkView = UserFeedbackWork & {
+	/** Current setup for starting the displayed proposal as a standalone fix. Missing on older services. */
+	fixSetup?: UserFeedbackFixSetup;
 	/** A triage, prototype or fix chat now. "missing" when Pilot has no such chat. */
 	chat?: {
 		title: string;
+		/** The current writer after a committed handoff, if different from the saved fix. */
+		currentSessionId?: string;
 		state: "starting" | "working" | "question" | "done" | "failed" | "stopped" | "archived" | "missing";
 		/** Present while the chat waits for a coding slot. */
 		queue?: import("./index.ts").CodingQueueView;
@@ -125,9 +133,18 @@ export type UserFeedbackWorkView = UserFeedbackWork & {
 	proposal?: { value: UserFeedbackProposal; digest: string } | { problem: string; raw?: string; digest: string };
 };
 
+export interface UserFeedbackFixSetup {
+	digest: string;
+	model: string;
+	thinking: string;
+	/** Omitted when limits are off; null when the user must choose an amount. */
+	allowanceMicros?: number | null;
+}
+
 /** GET /api/feedback?before=<sequence>&limit=20. Native authenticated. Newest first, at most 20. */
 export interface UserFeedbackPage {
 	items: Array<UserFeedback & { sequence: number; work: UserFeedbackWorkView[] }>;
+	result?: { kind: string; id: string; projectId: string };
 	more: boolean;
 	/** The cursor for the next older page, or null when none is left. */
 	before: number | null;

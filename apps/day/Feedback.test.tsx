@@ -504,6 +504,8 @@ test("with a chosen project a saved Send starts one triage; Start fix is a separ
 	await app.waitFor("id:feedback-proposal-f1");
 	expect(app.shows("Proposed: a small fix")).toBe(true);
 	expect(app.shows("Show the assignee on each plan row and check it in Plan.test.tsx.")).toBe(true);
+	expect(app.shows("Sonnet · medium")).toBe(true);
+	expect(app.shows("$2.00")).toBe(true);
 	// The proposal itself starts nothing.
 	expect(steps(app)).toBe("Steps: [triage]");
 	await app.press("id:feedback-fix-f1");

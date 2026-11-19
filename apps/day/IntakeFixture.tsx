@@ -18,7 +18,7 @@ import {
 	type TriageIntent,
 } from "./intakeFeed";
 import { openDay } from "./mockFeeds";
-import { goalDraft, planRoute, requestDraft } from "./planView";
+import { goalDraft, linkedMission, planRoute, requestDraft } from "./planView";
 import { Action } from "./ui";
 
 type Item = {
@@ -239,6 +239,22 @@ mount(() => (
 			<Text testID="plan-draft">{`New: ${planRoute()?.kind ?? "closed"} · ${goalDraft().split("\n")[0]} · request ${requestDraft()?.itemId ?? "none"}@${requestDraft()?.revision ?? 0}`}</Text>
 			<View class="flex-row flex-wrap gap-1">
 				<Action label="Lose next answer" onPress={() => lose.set(true)} />
+				<Action
+					label="Hold a linked draft"
+					onPress={() => {
+						goalDraft.set("Linked words");
+						linkedMission.set({
+							feedbackId: "feedback-1",
+							triageSessionId: "triage-1",
+							proposalDigest: "d".repeat(64),
+							title: "Feedback",
+							projectId: "demo-pilot",
+							replace: false,
+							drafted: "Linked words",
+							other: { goal: "Hidden words", pick: null, replaces: null, request: null, funding: null },
+						});
+					}}
+				/>
 				<Action label="Hold answers" onPress={() => hold.set(true)} />
 				<Action
 					label="Release answer"

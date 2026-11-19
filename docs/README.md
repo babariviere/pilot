@@ -117,8 +117,13 @@ before Send and can be read if available. Quote paths with spaces. Known credent
 excluded; extra text files are sanitized and limited to 256000 bytes, without silent truncation.
 Other projects' context and unrelated files are not included.
 Questions use the same form as interviews, with suggestions and your own words. Check answers,
-then Submit answers sends once; choosing or typing only keeps a draft. Start fix, linking a mission and
-Plan a new mission are your own steps; only you mark feedback resolved.
+then Submit answers sends once; choosing or typing only keeps a draft. Start fix uses the scope,
+project, model and allowance shown on the suggestion. It starts one standalone chat, even if the
+suggestion recommends a mission. Draft a linked mission opens an editable goal without starting work.
+It keeps your other New draft unless you choose to replace it.
+If a fix stalls, you can edit a handoff note and start a linked chat. Pilot pauses the old writer first
+and keeps its history, checks and remaining fix allowance. Feedback stays open until you mark it
+resolved in Feedback or on the linked result.
 When the look or behavior is unclear, the triage proposes a prototype. Start prototype makes 2-3 mockups,
 writes no code and asks you to choose on the feedback item; your choice, with its mockup, becomes the fix.
 Remove deletes one item and its steps after you confirm. Its chats and missions stay.

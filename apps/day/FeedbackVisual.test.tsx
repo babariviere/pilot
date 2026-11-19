@@ -21,3 +21,17 @@ test("capture Today feedback question", async () => {
 	await app.wait(250);
 	await app.screenshot("output/today-feedback-question.png");
 });
+
+test("capture the displayed feedback fix", async () => {
+	const app = await open("./FeedbackFixture.tsx", { platform: "macos", width: 1100, height: 1060 });
+	await app.press("id:feedback-open");
+	await app.press("label:Project where agents triage and fix your feedback");
+	await app.press("text:Pilot code");
+	await app.type("id:feedback-text", "The plan page hides who works on each task.");
+	await app.press("id:feedback-send");
+	await app.press("Triage fix");
+	await app.waitFor("id:feedback-fix-f1");
+	await app.scroll("id:feedback-scroll", 640);
+	await app.wait(250);
+	await app.screenshot("output/feedback-fix.png");
+});

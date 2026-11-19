@@ -8,6 +8,123 @@ import { CONTINUE_TEXT } from "./native-chat.ts";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
 import { payloadHash } from "./operation-journal.ts";
 
+test("ordinary Build handoff refusal is a settled native rejection, not a pending operation", async (t) => {
+	const f = await nativeIntakeFixture();
+	t.after(() => f.close());
+	const sessionId = randomUUID();
+	f.sessions["metas"].set(sessionId, {
+		id: sessionId,
+		cwd: f.project.path,
+		projectId: f.project.id,
+		title: "Ordinary Build",
+		mode: "build",
+		model: "fake/model",
+		outcome: "failed",
+		createdAt: 1,
+		updatedAt: 20,
+	});
+	const payload = JSON.stringify({
+		purpose: "chat-handoff",
+		sessionId,
+		message: "Keep scope",
+		updatedAt: 20,
+		inputGeneration: 0,
+	});
+	const op: DurableOperation = {
+		schemaVersion: 1,
+		operationId: randomUUID(),
+		producerId: randomUUID(),
+		sequence: 1,
+		origin: { ...f.host, hostId: "local" },
+		destination: f.host,
+		kind: "chat-handoff",
+		targetId: sessionId,
+		payload,
+		payloadHash: payloadHash(payload),
+		bindingId: "0".repeat(64),
+		bindingGeneration: 1,
+	};
+	const post = async (lookup = false) =>
+		(
+			await fetch(`${f.root}/api/operations${lookup ? "/receipt" : ""}`, {
+				method: "POST",
+				headers: { "content-type": "application/json", "x-pilot-github-capability": f.capability },
+				body: JSON.stringify(op),
+			})
+		).json();
+	const refused = await post();
+	assert.equal(refused.state, "rejected", JSON.stringify(refused));
+	assert.match(refused.reason, /no saved feedback fix admission/);
+	assert.deepEqual(await post(true), refused);
+	assert.deepEqual(await post(), refused);
+	assert.equal(f.sessions.get(sessionId)?.continuedTo, undefined);
+});
+
+test("native fix handoff requires exact authority and resolves lost replies without another handoff", async (t) => {
+	const f = await nativeIntakeFixture();
+	t.after(() => f.close());
+	const sourceId = randomUUID(),
+		successor = randomUUID();
+	let starts = 0,
+		lookups = 0;
+	t.mock.method(
+		f.sessions,
+		"handoffFix",
+		async (id: string, operationId: string, note: string, updatedAt: number, inputGeneration: number) => {
+			starts++;
+			assert.equal(id, sourceId);
+			assert.equal(note, "Keep the evidence links");
+			assert.equal(updatedAt, 20);
+			assert.equal(inputGeneration, 3);
+			assert.equal(operationId, op.operationId);
+			throw new Error("Lost ACK after ownership commit");
+		},
+	);
+	t.mock.method(f.sessions, "lookupFixHandoff", async (id: string, operationId: string) => {
+		lookups++;
+		assert.equal(id, sourceId);
+		assert.equal(operationId, op.operationId);
+		return { id: successor } as NonNullable<ReturnType<typeof f.sessions.get>>;
+	});
+	const payload = JSON.stringify({
+		purpose: "chat-handoff",
+		sessionId: sourceId,
+		message: "Keep the evidence links",
+		updatedAt: 20,
+		inputGeneration: 3,
+	});
+	const op: DurableOperation = {
+		schemaVersion: 1,
+		operationId: randomUUID(),
+		producerId: randomUUID(),
+		sequence: 1,
+		origin: { ...f.host, hostId: "local" },
+		destination: f.host,
+		kind: "chat-handoff",
+		targetId: sourceId,
+		payload,
+		payloadHash: payloadHash(payload),
+		bindingId: "0".repeat(64),
+		bindingGeneration: 1,
+	};
+	const post = async (lookup: boolean, capability = f.capability) =>
+		fetch(`${f.root}/api/operations${lookup ? "/receipt" : ""}`, {
+			method: "POST",
+			headers: { "content-type": "application/json", "x-pilot-github-capability": capability },
+			body: JSON.stringify(op),
+		});
+	assert.notEqual((await post(false, "denied")).status, 200);
+	assert.equal(starts, 0);
+	await post(false);
+	assert.equal(starts, 1);
+	const checked = await (await post(true)).json();
+	assert.equal(checked.state, "accepted", JSON.stringify(checked));
+	assert.deepEqual(checked.result, { sourceSessionId: sourceId, sessionId: successor, operationId: op.operationId });
+	assert.equal(lookups, 1);
+	assert.deepEqual(await (await post(false)).json(), checked);
+	assert.equal(starts, 1);
+});
+
 test("native project inventory/select are passive; exact standalone creation and lookup keep project, mode and words", async (t) => {
 	const f = await nativeIntakeFixture();
 	t.after(() => f.close());

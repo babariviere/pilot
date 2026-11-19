@@ -32,6 +32,7 @@ fn is_chat(r: &planning::PlanningRecord) -> bool {
 /// Continue: one fixed follow-up to one stopped or failed chat. The daemon writes the words.
 pub(super) const CONTINUE: &str = "chat-continue";
 pub(super) const RECOVER: &str = "chat-recover";
+pub(super) const HANDOFF: &str = "chat-handoff";
 /// Mirrors standalone creation's queued-input budget. The page shows byte counts before sending.
 pub(crate) const RECOVERY_INPUT_BYTES: usize = 12_000;
 #[derive(Debug, Deserialize)]
@@ -49,7 +50,7 @@ pub(crate) const REPLY_CHARS: usize = 12_000;
 /// A Continue, Recovery or Dismiss record carries no choice, so its binding is a fixed digest.
 const CONTINUE_BINDING: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 fn is_continue(r: &planning::PlanningRecord) -> bool {
-    r.operation["kind"] == CONTINUE || r.operation["kind"] == RECOVER
+    r.operation["kind"] == CONTINUE || r.operation["kind"] == RECOVER || r.operation["kind"] == HANDOFF
 }
 pub(super) fn pending_recovery(t: &Transport, journal: &Journal, session: &str) -> Option<Value> {
     journal
@@ -90,7 +91,7 @@ pub(super) fn validate_continue(op: &Value) -> Result<(), Error> {
     let p: Value = serde_json::from_str(op["payload"].as_str().ok_or(Error::Storage)?)
         .map_err(|_| Error::Storage)?;
     let session = p["sessionId"].as_str().unwrap_or("");
-    let recovery = op["kind"] == RECOVER;
+    let recovery = op["kind"] == RECOVER || op["kind"] == HANDOFF;
     let reply = op["kind"] == REPLY;
     if !(op["kind"] == CONTINUE || op["kind"] == DISMISS || reply || recovery)
         || p.as_object().is_none_or(|o| {
@@ -387,13 +388,14 @@ pub(super) async fn handle(
         }
         Command::ChatContinue(_)
         | Command::ChatRecover(_)
+        | Command::ChatHandoff(_)
         | Command::ChatDismiss(_)
         | Command::ChatReply { .. } => {
             let session = match command {
                 Command::ChatContinue(session)
                 | Command::ChatDismiss(session)
                 | Command::ChatReply { session, .. } => session,
-                Command::ChatRecover(r) => &r.session_id,
+                Command::ChatRecover(r) | Command::ChatHandoff(r) => &r.session_id,
                 _ => unreachable!(),
             };
             if !super::valid_id(session) {
@@ -410,13 +412,14 @@ pub(super) async fn handle(
                 Command::ChatReply { .. } => return Err(Error::Invalid),
                 // The Recovery payload reads the open chat after check() below.
                 Command::ChatRecover(_) => (RECOVER, Value::Null),
+                Command::ChatHandoff(_) => (HANDOFF, Value::Null),
                 _ => (CONTINUE, json!({"purpose":CONTINUE,"sessionId":session})),
             };
             // An uncertain Continue, Recovery, Dismiss or Reply holds its chat: it is shown for Check, never sent again.
             // Continue and Recovery hold each other.
             if let Some(prior) = journal.planning.values().find(|r| {
                 same_home(&r.source, &t.source)
-                    && (if kind == CONTINUE || kind == RECOVER {
+                    && (if kind == CONTINUE || kind == RECOVER || kind == HANDOFF {
                         is_continue(r)
                     } else {
                         r.operation["kind"] == kind
@@ -428,7 +431,7 @@ pub(super) async fn handle(
             }
             check()?;
             let payload = match command {
-                Command::ChatRecover(r) => {
+                Command::ChatRecover(r) | Command::ChatHandoff(r) => {
                     let chat = shared
                         .session_chat
                         .lock()
@@ -442,7 +445,8 @@ pub(super) async fn handle(
                                 && matches!(c.state, "failed" | "stopped")
                         })
                         .ok_or(Error::Stale)?;
-                    json!({"purpose":RECOVER,"sessionId":session,"message":r.message,"updatedAt":c.updated_at,"inputGeneration":c.input_generation})
+                    if kind == HANDOFF && !c.fix_handoff.is_object() { return Err(Error::Stale); }
+                    json!({"purpose":kind,"sessionId":session,"message":r.message,"updatedAt":c.updated_at,"inputGeneration":c.input_generation})
                 }
                 _ => payload,
             };
@@ -478,9 +482,10 @@ fn unsaved_receipt(journal: &mut Journal, record: &planning::PlanningRecord) -> 
 fn summary(r: &planning::PlanningRecord) -> Value {
     let payload: Value =
         serde_json::from_str(r.operation["payload"].as_str().unwrap_or("")).unwrap_or(Value::Null);
-    json!({"operationId":r.id(),"draftId":r.mission(),"state":if r.not_sent {"not-sent"} else {
+    json!({"operationId":r.id(),"kind":r.operation["kind"],"draftId":r.mission(),"state":if r.not_sent {"not-sent"} else {
         r.receipt.as_ref().and_then(|r| r["state"].as_str()).unwrap_or("unknown")},"receipt":r.receipt,
-        "submittedText":if r.operation["kind"] == RECOVER {payload["message"].as_str()} else {None}})
+        "submittedText":if r.operation["kind"] == RECOVER || r.operation["kind"] == HANDOFF {payload["message"].as_str()} else {None},
+        "sessionId":r.receipt.as_ref().and_then(|r| r["result"]["sessionId"].as_str())})
 }
 
 #[cfg(test)]
@@ -578,6 +583,20 @@ mod tests {
             planning::exact(receipt(json!({"sessionId":"s2","operationId":"op"})), &o).is_err()
         );
         assert!(planning::exact(receipt(json!({"sessionId":"s1","operationId":"x"})), &o).is_err());
+    }
+    #[test]
+    fn handoff_receipt_names_exact_source_operation_and_distinct_successor() {
+        let o = json!({"operationId":"op","targetId":"s1","kind":HANDOFF,"payloadHash":"h", "destination":{"hostId":"daemon"}});
+        let receipt = |result: Value| json!({"operationId":"op","payloadHash":"h","destination":{"hostId":"daemon"},"targetId":"s1","state":"accepted","result":result});
+        assert!(planning::exact(receipt(json!({"sourceSessionId":"s1","sessionId":"s2","operationId":"op"})), &o).is_ok());
+        for result in [json!({"sourceSessionId":"other","sessionId":"s2","operationId":"op"}), json!({"sourceSessionId":"s1","sessionId":"s1","operationId":"op"}), json!({"sourceSessionId":"s1","sessionId":"s2","operationId":"other"})] {
+            assert!(planning::exact(receipt(result), &o).is_err());
+        }
+        let mut operation = op("s1", json!({"purpose":HANDOFF,"sessionId":"s1","message":"Editable note","updatedAt":5,"inputGeneration":0}), CONTINUE_BINDING);
+        operation["kind"] = json!(HANDOFF);
+        assert_eq!(validate_continue(&operation), Ok(()));
+        operation["targetId"] = json!("other");
+        assert_eq!(validate_continue(&operation), Err(Error::Storage));
     }
     #[test]
     fn a_screen_agent_chat_is_a_chat_mode() {

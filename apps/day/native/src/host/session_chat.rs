@@ -104,6 +104,9 @@ pub(crate) struct ChatState {
     pub updated_at: u64,
     pub input_generation: u64,
     pub pending_recovery: Option<Value>,
+    pub fix_handoff: Value,
+    pub continuation_of: Value,
+    pub continued_to: Value,
     pub pages: Pages,
     pub reading: bool,
     /// Why the last read failed. Empty after a good read.
@@ -123,10 +126,10 @@ impl ChatState {
         let rows = json!({"rows":self.pages.rows,"more":self.pages.more,
             "reading":self.reading,"reason":self.reason});
         let chat = crate::plan_activity::chat(&rows);
-        json!({"sessionId":self.session,"title":self.title,"state":self.state,
+        json!({"sessionId":self.session,"projectId":self.project.as_ref().map(|p| &p["projectId"]),"title":self.title,"state":self.state,
             "stateReason":self.state_reason,"queue":self.queue,"canContinue":self.can_continue,"questionSettled":self.question_settled,"specialist":self.specialist,"archived":self.archived,"workspaceKept":self.workspace_kept,"restartOnly":self.restart_only,"rows":chat.rows,"more":chat.more,
             "reading":chat.reading,"reason":chat.reason,"sourcePath":self.source_path,"sourceLabel":self.source_label,"pendingRecovery":self.pending_recovery,"recoveryBlocked":self.recovery_blocked,
-            "liveChangesKey":self.live_workspace.as_ref().map(|(key, _)| key.to_string())})
+            "fixHandoff":self.fix_handoff,"continuationOf":self.continuation_of,"continuedTo":self.continued_to,"liveChangesKey":self.live_workspace.as_ref().map(|(key, _)| key.to_string())})
     }
 
     fn set_workspace(&mut self, read: &Read) {
@@ -550,6 +553,12 @@ async fn read_chat(
                     state.archived = read.session["archivedAt"].is_number();
                     state.workspace_kept = read.session["workspaceCustody"] == "review";
                     state.restart_only = read.session["canRetryStartup"] == true;
+                    state.fix_handoff = read.session["fixHandoff"].clone();
+                    if state.fix_handoff.is_object() {
+                        state.fix_handoff["projectName"] = read.project.as_ref().map(|p| p["name"].clone()).unwrap_or(Value::Null);
+                    }
+                    state.continuation_of = read.session["continuationOf"].clone();
+                    state.continued_to = read.session["continuedTo"].clone();
                     state.recovery_blocked =
                         one_line(&read.session["recoveryBlockedReason"], LINE_CHARS)
                             .unwrap_or_default();
@@ -781,12 +790,15 @@ async fn fetch(
         before.is_none(),
     )?;
     t.gate(false).await?;
-    let current = t.get(&path).await?;
+    let mut current = t.get(&path).await?;
     if current["id"] != session
         || current["projectId"] != meta["projectId"]
         || super::new_chat::inventory(t).await? != catalog
     {
         return Err(Error::Identity);
+    }
+    if current["mode"] == "build" && matches!(current["outcome"].as_str(), Some("failed" | "stopped")) {
+        current["fixHandoff"] = t.get(&format!("{path}/fix-handoff")).await.unwrap_or(Value::Null);
     }
     Ok(Read {
         session: current,

@@ -41,6 +41,7 @@ type Next = "accept" | "unknown" | "reject";
 
 const DIGEST = "d".repeat(64);
 const PROJECTS = [{ projectId: "pilot", name: "Pilot code", contextDigest: DIGEST }];
+const FIX_SETUP = { digest: DIGEST, model: "Sonnet", thinking: "medium", allowanceMicros: 2_000_000 };
 
 /** Saved feedback in memory, newest first, two per page. Nothing leaves the fixture. */
 class ScriptedFeedback implements FeedbackSource {
@@ -316,6 +317,7 @@ class ScriptedFeedback implements FeedbackSource {
 						: {
 								...w,
 								chat: { title: "Triage", state: "done" },
+								fixSetup: FIX_SETUP,
 								proposal: {
 									value: {
 										summary: "The plan page hides who works on each task.",
@@ -356,6 +358,7 @@ class ScriptedFeedback implements FeedbackSource {
 				: {
 						...w,
 						chat: { title: "Prototype", state: "done" },
+						fixSetup: FIX_SETUP,
 						proposal: {
 							value: {
 								summary: "Inline owner chips on plan rows.",

@@ -11,6 +11,7 @@ import type { KernelCommand, KernelPacket, KernelUsage } from "@pilot/kernel";
 import type { SessionAttempt, SessionState, SessionSummary } from "@pilot/protocol";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
+import { OperationRejected } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { CommandRejected, SessionManager, type SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
@@ -134,6 +135,178 @@ test("guarded configuration uses a distinct fail-closed command and revalidates 
 	assert.equal(f.workers[0]!.commands[0]!.type, "changeModelConfiguration");
 	assert.equal(checks, 4);
 	assert.equal(f.sessions["modelConfigurationGuards"].size, 0);
+});
+
+test("standalone fix handoff drains the writer and carries scope, custody, funding and repair budget", async (t) => {
+	const f = await fixture(t);
+	f.sessions.feedbackFixAdmission = (id, projectId) => id === f.id && projectId === "project";
+	const meta = f.sessions["metas"].get(f.id)!;
+	Object.assign(meta, {
+		mode: "build",
+		projectId: "project",
+		outcome: "failed",
+		outcomeAt: 300,
+		fundingId: "original-fix",
+		fundingRequired: true,
+		prFollowUp: { attempts: 3, generation: 8, nextAttemptAt: 1000 },
+		prAutoRebases: [{ url: "https://example.test/pr/1", base: "base" }],
+		boundPullRequests: ["https://example.test/pr/1"],
+	});
+	const worker = new FakeWorker(() => {});
+	f.sessions["workers"].set(f.id, worker);
+	t.mock.method(f.sessions, "coldSnapshot" as never, async () => ({
+		events: [
+			{
+				type: "entry_appended",
+				entry: {
+					id: 1,
+					kind: "pi.user",
+					model: [{ role: "user", content: "Original scope. Evidence: pilot://artifact/original" }],
+				},
+			},
+		],
+	}));
+	let started = "";
+	t.mock.method(f.sessions, "start" as never, async (id: string) => {
+		started = id;
+	});
+	const operationId = randomUUID();
+	const target = await f.sessions.continueModel(f.id, second, f.models, "high", {
+		operationId,
+		note: "Finish the export",
+		updatedAt: 200,
+		inputGeneration: 0,
+	});
+	assert.equal(worker.commands[0]?.type, "continuation.pause");
+	assert.equal(worker.closed, true);
+	assert.equal(started, target.id);
+	assert.equal(target.continuationOf, f.id);
+	assert.equal(f.sessions.get(f.id)?.continuedTo, target.id);
+	const saved = f.sessions["metas"].get(target.id)!;
+	assert.equal(saved.fundingId, "original-fix");
+	assert.equal(saved.fundingRequired, true);
+	assert.equal(saved.fixOriginalScope, "Original scope. Evidence: pilot://artifact/original");
+	assert.deepEqual(saved.prFollowUp, { attempts: 3, generation: 8, nextAttemptAt: 1000 });
+	assert.deepEqual(saved.prAutoRebases, meta.prAutoRebases);
+	assert.deepEqual(saved.boundPullRequests, ["https://example.test/pr/1"]);
+	assert.equal(meta.boundPullRequests, undefined);
+	assert.match(
+		String(saved.pending?.[0]?.type === "input" && saved.pending[0].content),
+		/User handoff note:\nFinish the export/,
+	);
+	assert.equal((await f.sessions.lookupFixHandoff(f.id, operationId))?.id, target.id);
+	assert.equal(await f.sessions.lookupFixHandoff(f.id, randomUUID()), undefined);
+	await assert.rejects(f.sessions.send(f.id, "Duplicate writer"), /read-only/);
+});
+
+async function stalledFeedbackFix(t: TestContext) {
+	const f = await fixture(t);
+	const meta = f.sessions["metas"].get(f.id)!;
+	Object.assign(meta, {
+		mode: "build",
+		projectId: "project",
+		outcome: "failed",
+		outcomeAt: 300,
+		pending: [{ type: "input", requestId: "initial", content: "Original scope and evidence", mode: "followUp" }],
+	});
+	f.sessions.feedbackFixAdmission = (id, projectId) => id === f.id && projectId === "project";
+	t.mock.method(f.sessions["modelCatalog"], "list", async () => ({
+		models: [{ id: first, provider: "provider", name: "First" }],
+	}));
+	t.mock.method(f.sessions, "coldSnapshot" as never, async () => ({ events: [] }));
+	t.mock.method(f.sessions, "start" as never, async () => {});
+	return { ...f, meta };
+}
+
+test("post-crash handoff lookup rejects only proven absence without starting work", async (t) => {
+	const f = await stalledFeedbackFix(t);
+	const file = join(f.dir, "continuation.json");
+	const operationId = randomUUID();
+	await writeFile(`${file}.tmp`, JSON.stringify({ fixHandoffOperationId: operationId }));
+	await assert.rejects(f.sessions.lookupFixHandoff(f.id, operationId), OperationRejected);
+	assert.equal(f.sessions.get(f.id)?.continuedTo, undefined);
+	f.sessions["changingModels"].set(f.id, Promise.resolve());
+	assert.equal(
+		await f.sessions.lookupFixHandoff(f.id, operationId),
+		undefined,
+		"a live lock defeats negative evidence",
+	);
+	f.sessions["changingModels"].delete(f.id);
+	const saved = JSON.parse(await readFile(join(f.dir, "meta.json"), "utf8"));
+	await writeFile(join(f.dir, "meta.json"), JSON.stringify({ ...saved, continuedTo: "unavailable-target" }));
+	assert.equal(
+		await f.sessions.lookupFixHandoff(f.id, operationId),
+		undefined,
+		"persisted ownership defeats negative evidence",
+	);
+	await writeFile(join(f.dir, "meta.json"), JSON.stringify(saved));
+	await mkdir(file);
+	await assert.rejects(
+		f.sessions.lookupFixHandoff(f.id, operationId),
+		(error: unknown) => !(error instanceof OperationRejected),
+		"unreadable journal remains Unknown",
+	);
+});
+
+test("handoff requires saved feedback-fix provenance and prepare checks recovery and model availability", async (t) => {
+	const f = await stalledFeedbackFix(t);
+	f.sessions.feedbackFixAdmission = undefined;
+	assert.equal(await f.sessions.prepareFixHandoff(f.id), null);
+	await assert.rejects(f.sessions.handoffFix(f.id, randomUUID(), "", 200, 0), OperationRejected);
+	f.sessions.feedbackFixAdmission = () => true;
+	assert.equal((await f.sessions.prepareFixHandoff(f.id))?.originalScope, "Original scope and evidence");
+	f.meta.preparing = { source: f.home };
+	assert.equal(await f.sessions.prepareFixHandoff(f.id), null);
+	await assert.rejects(f.sessions.handoffFix(f.id, randomUUID(), "", 200, 0), OperationRejected);
+	delete f.meta.preparing;
+	const rootId = randomUUID();
+	f.sessions["metas"].set(rootId, { ...f.meta, id: rootId, continuedTo: f.id });
+	f.meta.continuationOf = rootId;
+	f.sessions.feedbackFixAdmission = (id) => id === rootId;
+	assert.ok(await f.sessions.prepareFixHandoff(f.id), "a reciprocal continuation of a saved feedback fix qualifies");
+	f.sessions["metas"].get(rootId)!.continuedTo = "elsewhere";
+	assert.equal(await f.sessions.prepareFixHandoff(f.id), null, "unrelated ancestry cannot borrow fix authority");
+	f.sessions["metas"].get(rootId)!.continuedTo = f.id;
+	t.mock.method(f.sessions["modelCatalog"], "list", async () => ({ models: [] }));
+	assert.equal(await f.sessions.prepareFixHandoff(f.id), null);
+	await assert.rejects(f.sessions.handoffFix(f.id, randomUUID(), "", 200, 0), OperationRejected);
+});
+
+test("precommit handoff refusals reject, but rename and committed journal failures remain Unknown", async (t) => {
+	for (const stage of ["stale", "pause", "write", "rename", "committed"] as const) {
+		const f = await stalledFeedbackFix(t);
+		const file = join(f.dir, "continuation.json");
+		if (stage === "pause") {
+			const worker = new FakeWorker(() => {});
+			t.mock.method(worker, "request", async () => {
+				throw new Error("Pause failed");
+			});
+			f.sessions["workers"].set(f.id, worker);
+		}
+		if (stage === "write") await mkdir(`${file}.tmp`);
+		if (stage === "rename") await mkdir(file);
+		const apply =
+			stage === "committed"
+				? t.mock.method(f.sessions, "applyContinuation" as never, async () => {
+						throw new OperationRejected("Lost apply ACK");
+					})
+				: undefined;
+		const operationId = randomUUID();
+		await assert.rejects(
+			f.sessions.handoffFix(f.id, operationId, "Keep note", stage === "stale" ? 199 : 200, 0),
+			(error: unknown) => {
+				assert.equal(error instanceof OperationRejected, stage !== "rename" && stage !== "committed", stage);
+				return true;
+			},
+		);
+		assert.equal(f.sessions.get(f.id)?.continuedTo, undefined);
+		if (stage === "committed") {
+			apply!.mock.restore();
+			const result = await f.sessions.lookupFixHandoff(f.id, operationId);
+			assert.ok(result?.id);
+			assert.equal(result.continuationOf, f.id);
+		}
+	}
 });
 
 for (const boundary of [2, 3, 4])

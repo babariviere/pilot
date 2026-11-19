@@ -15,6 +15,7 @@ import type {
 	SessionSummary,
 	UserFeedback,
 	UserFeedbackArtifact,
+	UserFeedbackFixSetup,
 	UserFeedbackProposal,
 	UserFeedbackQuestion,
 	UserFeedbackRemoved,
@@ -58,6 +59,7 @@ type Intent =
 			feedbackId: string;
 			triageSessionId?: string;
 			proposalDigest?: string;
+			fixSetupDigest?: string;
 			/** A triage only: the screen agent chat that triages instead of a new Ask chat. */
 			adoptSessionId?: string;
 	  } & Omit<Selection, "mode">)
@@ -97,7 +99,13 @@ export function feedbackWorkIntent(op: DurableOperation): Intent {
 		action === "triage"
 			? fields(value, [...base, ...CHOICE, "adoptSessionId"])
 			: action === "fix" || action === "prototype"
-				? fields(value, [...base, ...CHOICE, "triageSessionId", "proposalDigest"])
+				? fields(value, [
+						...base,
+						...CHOICE,
+						"triageSessionId",
+						"proposalDigest",
+						...(action === "fix" ? ["fixSetupDigest"] : []),
+					])
 				: action === "link"
 					? fields(value, [...base, "missionId"])
 					: action === "resolve" || action === "reopen" || action === "remove"
@@ -176,7 +184,14 @@ export function feedbackWorkIntent(op: DurableOperation): Intent {
 	}
 	const proposalDigest = typeof p.proposalDigest === "string" && DIGEST.test(p.proposalDigest) ? p.proposalDigest : "";
 	if (!proposalDigest) fail("Invalid proposal digest");
-	return { ...chat, triageSessionId: id(p.triageSessionId, "triage chat ID"), proposalDigest };
+	if (p.fixSetupDigest !== undefined && (typeof p.fixSetupDigest !== "string" || !DIGEST.test(p.fixSetupDigest)))
+		fail("Invalid fix setup digest");
+	return {
+		...chat,
+		triageSessionId: id(p.triageSessionId, "triage chat ID"),
+		proposalDigest,
+		...(typeof p.fixSetupDigest === "string" ? { fixSetupDigest: p.fixSetupDigest } : {}),
+	};
 }
 
 function text(value: unknown, max: number, nullable = false): string | null {
@@ -246,12 +261,13 @@ export function proposalDigest(p: UserFeedbackProposal): string {
 }
 
 /** Whether a saved feedback reply's (or adopted triage's) lost ACK can be settled by an exact input lookup. */
-export function isFeedbackAnswer(op: DurableOperation): boolean {
+export function hasFeedbackReceiptLookup(op: DurableOperation): boolean {
 	try {
 		const p = JSON.parse(op.payload);
 		return (
 			op.kind === FEEDBACK_WORK &&
-			(["answer", "correct"].includes(p?.action) || (p?.action === "triage" && p.adoptSessionId !== undefined))
+			(["answer", "correct", "fix"].includes(p?.action) ||
+				(p?.action === "triage" && p.adoptSessionId !== undefined))
 		);
 	} catch {
 		return false;
@@ -271,13 +287,29 @@ function chatState(s: SessionSummary | undefined): NonNullable<UserFeedbackWorkV
 	return "starting";
 }
 
+function fixSetup(selection: Selection): UserFeedbackFixSetup {
+	return {
+		digest: payloadHash(canonicalJSON(selection)),
+		model: selection.model,
+		thinking: selection.thinking,
+		...(selection.fundingRequired ? { allowanceMicros: selection.allowanceMicros ?? null } : {}),
+	};
+}
+
 interface Dependencies {
 	store: MissionStore;
 	attachments?: Pick<AttachmentStore, "feedbackPaths" | "releaseFeedback">;
-	chats: Pick<NativeChat, "qualify" | "spawn" | "defaultAllowance">;
+	chats: Pick<NativeChat, "prepare" | "qualify" | "spawn" | "defaultAllowance">;
 	sessions: Pick<
 		SessionManager,
-		"get" | "history" | "pendingQuestion" | "sendDurable" | "lookupNativeAttentionInput" | "artifacts" | "artifact"
+		| "get"
+		| "history"
+		| "pendingQuestion"
+		| "sendDurable"
+		| "lookupNativeAttentionInput"
+		| "artifacts"
+		| "artifact"
+		| "lookupFeedbackFixStart"
 	>;
 }
 
@@ -385,25 +417,53 @@ export class UserFeedbackWorkService {
 	}
 
 	/** One item's steps as a read shows them, oldest first. */
-	async view(feedbackId: string): Promise<UserFeedbackWorkView[]> {
+	async view(
+		feedbackId: string,
+		setups = new Map<string, Promise<UserFeedbackFixSetup | undefined>>(),
+	): Promise<UserFeedbackWorkView[]> {
 		const out: UserFeedbackWorkView[] = [];
-		for (const work of this.deps.store.feedback.work(feedbackId)) {
+		const steps = this.deps.store.feedback.work(feedbackId);
+		const open = steps.findLast((s) => s.kind === "resolved" || s.kind === "reopened")?.kind !== "resolved";
+		for (const work of steps) {
 			if (work.kind === "triage" || work.kind === "prototype" || work.kind === "fix") {
-				const chat = this.deps.sessions.get(work.sessionId);
+				const chat =
+					work.kind === "fix"
+						? this.currentFix(work.sessionId, work.projectId)?.chat
+						: this.deps.sessions.get(work.sessionId);
 				const view: UserFeedbackWorkView = {
 					...work,
 					chat: {
 						title: chat?.title ?? "",
 						state: chatState(chat),
+						...(chat && chat.id !== work.sessionId ? { currentSessionId: chat.id } : {}),
 						...(chat?.codingQueue && !chat.working ? { queue: chat.codingQueue } : {}),
 					},
 				};
 				if (work.kind !== "fix") {
 					const proposal = await this.proposal(work.sessionId, work.kind === "prototype");
 					if (proposal) view.proposal = proposal;
+					if (
+						open &&
+						proposal &&
+						"value" in proposal &&
+						!steps.some(
+							(s) =>
+								s.kind === "fix" &&
+								s.triageSessionId === work.sessionId &&
+								s.proposalDigest === proposal.digest,
+						)
+					) {
+						let setup = setups.get(work.projectId);
+						if (!setup) {
+							setup = this.deps.chats.prepare(work.projectId, "build").then(fixSetup, () => undefined);
+							setups.set(work.projectId, setup);
+						}
+						const prepared = await setup;
+						if (prepared) view.fixSetup = prepared;
+					}
 				}
 				if (view.chat?.state === "question") {
-					const question = await this.question(work.sessionId);
+					const question = await this.question(chat?.id ?? work.sessionId);
 					if (question) view.question = question;
 				}
 				out.push(view);
@@ -420,10 +480,27 @@ export class UserFeedbackWorkService {
 		return out;
 	}
 
+	private currentFix(id: string, projectId: string): { chat: SessionSummary } | undefined {
+		const seen = new Set<string>();
+		let chat = this.deps.sessions.get(id);
+		while (chat?.projectId === projectId && !seen.has(chat.id) && seen.size < 32) {
+			if (!chat.continuedTo) return { chat };
+			seen.add(chat.id);
+			const next = this.deps.sessions.get(chat.continuedTo);
+			if (next?.continuationOf !== chat.id) break;
+			chat = next;
+		}
+		return undefined;
+	}
+
 	private busy(work: UserFeedbackWork[], kind: ChatAction): boolean {
 		return work.some((w) => {
 			if (w.kind !== kind) return false;
-			const state = chatState(this.deps.sessions.get(w.sessionId));
+			const original = this.deps.sessions.get(w.sessionId);
+			const current = w.kind === "fix" ? this.currentFix(w.sessionId, w.projectId)?.chat : original;
+			// A saved start without a readable chat is not proof that the writer stopped.
+			if (w.kind === "fix" && !current) return true;
+			const state = chatState(current);
 			return state === "starting" || state === "working" || state === "question";
 		});
 	}
@@ -545,6 +622,21 @@ export class UserFeedbackWorkService {
 	 */
 	async recover(op: DurableOperation): Promise<UserFeedbackWork> {
 		const p = feedbackWorkIntent(op);
+		if (p.action === "fix") {
+			const { store, sessions } = this.deps;
+			await store.durable();
+			const saved = store.feedback.work(p.feedbackId).find((w) => w.operationId === op.operationId);
+			if (
+				saved?.kind === "fix" &&
+				saved.sessionId === op.targetId &&
+				saved.projectId === p.projectId &&
+				saved.triageSessionId === p.triageSessionId &&
+				saved.proposalDigest === p.proposalDigest &&
+				(await sessions.lookupFeedbackFixStart(op.targetId, op.operationId, p.projectId))
+			)
+				return saved;
+			throw new Error("Fix start is not confirmed. Check never starts a chat.");
+		}
 		if (p.action === "triage" && p.adoptSessionId) {
 			await this.deps.store.durable();
 			const saved = this.deps.store.feedback.workByOperation(op.operationId);
@@ -566,7 +658,14 @@ export class UserFeedbackWorkService {
 		const { store, sessions } = this.deps;
 		const work = store.feedback.work(p.feedbackId);
 		const current = (["triage", "prototype", "fix"] as const).map((k) => work.findLast((w) => w.kind === k));
-		if (!current.some((w) => w && "sessionId" in w && w.sessionId === p.sessionId))
+		if (
+			!current.some(
+				(w) =>
+					w &&
+					"sessionId" in w &&
+					(w.kind === "fix" ? this.currentFix(w.sessionId, w.projectId)?.chat.id : w.sessionId) === p.sessionId,
+			)
+		)
 			fail("That chat is not this feedback's current triage, prototype or fix");
 		if (work.length >= USER_FEEDBACK_LIMITS.work)
 			fail(`This feedback already has ${USER_FEEDBACK_LIMITS.work} steps`);
@@ -758,7 +857,9 @@ export class UserFeedbackWorkService {
 			const from = all.find(
 				(w) => (w.kind === "triage" || w.kind === "prototype") && w.sessionId === p.triageSessionId,
 			);
-			if (!from) fail("That triage or prototype is not about this feedback");
+			if (!from || (from.kind !== "triage" && from.kind !== "prototype"))
+				fail("That triage or prototype is not about this feedback");
+			if (p.projectId !== from.projectId) fail("This proposal belongs to a different project");
 			const proposal = await this.proposal(p.triageSessionId!, from.kind === "prototype");
 			if (!proposal || !("value" in proposal) || proposal.digest !== p.proposalDigest)
 				fail("The proposal changed since you read it. Read it again.");
@@ -783,25 +884,74 @@ export class UserFeedbackWorkService {
 				images.map((path) => `- ${JSON.stringify(path)}`).join("\n");
 		const feedbackSources = p.action === "triage" ? await resolveFeedbackPaths(saved.text) : undefined;
 		const check = await this.deps.chats.qualify(selection, background);
+		if (p.action === "fix" && p.fixSetupDigest) {
+			const current = fixSetup(await this.deps.chats.prepare(p.projectId, "build"));
+			if (current.digest !== p.fixSetupDigest)
+				fail("The project, model or fix allowance changed. Review the suggestion again.");
+			if (
+				current.allowanceMicros === null
+					? typeof p.allowanceMicros !== "number" || p.allowanceMicros <= 0
+					: current.allowanceMicros !== p.allowanceMicros
+			)
+				fail("The fix allowance does not match the one shown");
+		}
 		// The step is saved before the chat, so a crash can never leave an unlinked chat.
 		await add(work, (current) => {
 			if (p.action === "triage" && current.some((w) => w.kind === "triage"))
 				fail("This feedback already has an investigation; correct its exact triage instead");
+			if (p.action === "fix") {
+				if (current.findLast((w) => w.kind === "resolved" || w.kind === "reopened")?.kind === "resolved")
+					fail("This feedback is resolved. Reopen it before starting a fix");
+				if (
+					current.some(
+						(w) =>
+							w.kind === "fix" &&
+							w.triageSessionId === p.triageSessionId &&
+							w.proposalDigest === p.proposalDigest,
+					)
+				)
+					fail("This proposal already has a fix chat");
+			}
 			if (this.busy(current, p.action as ChatAction)) fail(`A ${p.action} is still running`);
 		});
 		const label = { triage: "Triage", prototype: "Prototype", fix: "Fix" }[p.action];
 		const title = `${label}: ${clip(saved.text.replace(/\s+/g, " ").trim(), 60)}`;
-		await this.deps.chats.spawn(
-			selection,
-			sessionId,
-			op.operationId,
-			message,
-			check,
-			title,
-			images,
-			background,
-			feedbackSources,
-		);
+		let entered = false;
+		let rolledBack = false;
+		try {
+			await this.deps.chats.spawn(
+				selection,
+				sessionId,
+				op.operationId,
+				message,
+				check,
+				title,
+				images,
+				background,
+				feedbackSources,
+				p.action === "fix"
+					? () => {
+							entered = true;
+						}
+					: undefined,
+				p.action === "fix"
+					? () => {
+							rolledBack = true;
+						}
+					: undefined,
+			);
+		} catch (error) {
+			// A definite refusal before the call to spawnDurable can release its slot.
+			// From entry on, retain the identity and reconcile by reading durable chat metadata only.
+			if (p.action === "fix" && (rolledBack || (!entered && error instanceof OperationRejected))) {
+				store.feedback.releaseUnenteredFix(p.feedbackId, op.operationId);
+				await store.durable();
+				if (rolledBack) fail("Fix creation was rolled back before a writer started");
+			} else if (p.action === "fix" && entered && error instanceof OperationRejected) {
+				throw new Error("Fix creation may have entered; check its exact receipt", { cause: error });
+			}
+			throw error;
+		}
 		return work;
 	}
 }

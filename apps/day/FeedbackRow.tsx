@@ -17,6 +17,7 @@ import type { ArtifactSource } from "./artifactReads";
 import { openChat } from "./chatView";
 import type { Day } from "./day";
 import { FeedbackQuestion } from "./FeedbackQuestion";
+import { fundingAmount } from "./FundingSettings";
 import type {
 	FeedbackItem,
 	FeedbackMirror,
@@ -32,18 +33,25 @@ import {
 	chatLine,
 	chatState,
 	clip,
-	missionDraft,
 	missionLine,
 	proposalOf,
 	questionOf,
 	running,
 	stepsOf,
 } from "./feedbackSteps";
-import { closeFeedback, feedbackProject, setAnswerDraft, setStepMessage, stepMessages } from "./feedbackView";
+import {
+	answerDrafts,
+	closeFeedback,
+	feedbackProject,
+	setAnswerDraft,
+	setStepMessage,
+	stepMessages,
+} from "./feedbackView";
+import { draftLinkedMission } from "./linkedMission";
 import { OpenChatAction } from "./OpenChatAction";
-import { goalDraft, openNew } from "./planView";
+import { newBusy } from "./planView";
 import { QuestionArtifacts } from "./QuestionArtifacts";
-import { Action, glide, type Mark, MarkLine, Panel, Picker } from "./ui";
+import { Action, Field, glide, type Mark, MarkLine, Panel, Picker } from "./ui";
 import { openMission } from "./view";
 
 /**
@@ -131,8 +139,17 @@ function Proposal(props: {
 	const project = () => v()?.projects?.find((x) => x.projectId === props.triage.projectId) ?? null;
 	const steps = () => stepsOf(props.item);
 	const fixed = () => {
-		const f = steps().fix;
-		return f?.kind === "fix" && "proposalDigest" in f && f.proposalDigest === props.digest;
+		return props.item.work.some(
+			(f) => f.kind === "fix" && f.triageSessionId === props.triage.sessionId && f.proposalDigest === props.digest,
+		);
+	};
+	const setup = () => props.triage.fixSetup;
+	const allowanceKey = () => `${props.triage.sessionId}/allowance-${props.digest}`;
+	const amount = () => answerDrafts()[allowanceKey()]?.text ?? "";
+	const chosenAmount = () => fundingAmount(amount()) || undefined;
+	const fixReady = () => {
+		const s = setup();
+		return !!s && (s.allowanceMicros === null ? chosenAmount() !== undefined : s.allowanceMicros !== 0);
 	};
 	const prototyped = () => {
 		const p = steps().prototype;
@@ -156,11 +173,7 @@ function Proposal(props: {
 		}
 	};
 	const plan = () => {
-		// The user asked for this goal: it replaces whatever New holds.
-		glide();
-		goalDraft.set(missionDraft(props.item, p()));
-		closeFeedback();
-		openNew();
+		draftLinkedMission(props.item, props.triage, { value: p(), digest: props.digest });
 	};
 	return (
 		<Panel testID={`feedback-proposal-${props.item.id}`} class="gap-2.5">
@@ -190,7 +203,70 @@ function Proposal(props: {
 			<Each of={duplicates()} key={(d) => d.id}>
 				{(d) => <Text class="text-xs text-faint">{`Same as: “${clip(d().text)}”`}</Text>}
 			</Each>
+			<If when={!fixed() && project()}>
+				<If when={setup()} else={<Text class="text-xs text-muted-foreground">The fix setup is unavailable.</Text>}>
+					<View class="flex-row flex-wrap gap-x-6 gap-y-2">
+						<View class="gap-0.5">
+							<Text class="text-xs text-muted-foreground">Project</Text>
+							<Text class="text-sm text-foreground">{project()?.name ?? ""}</Text>
+						</View>
+						<View class="gap-0.5">
+							<Text class="text-xs text-muted-foreground">Model</Text>
+							<Text class="text-sm text-foreground">
+								{[setup()?.model, setup()?.thinking].filter(Boolean).join(" · ")}
+							</Text>
+						</View>
+						<If when={setup()?.allowanceMicros !== null}>
+							<View class="gap-0.5">
+								<Text class="text-xs text-muted-foreground">Fix allowance</Text>
+								<Text class="text-sm text-foreground">
+									{setup()?.allowanceMicros === undefined
+										? "Limits off"
+										: `$${((setup()?.allowanceMicros ?? 0) / 1_000_000).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}`}
+								</Text>
+							</View>
+						</If>
+					</View>
+					<If when={setup()?.allowanceMicros === null}>
+						<Field
+							label="Fix allowance (USD)"
+							testID={`feedback-fix-allowance-${props.item.id}`}
+							value={amount()}
+							onChange={(text) => {
+								if (text.length <= 32) setAnswerDraft(allowanceKey(), { picks: [], text });
+							}}
+							placeholder="Choose an amount"
+						/>
+					</If>
+					<If when={setup()?.allowanceMicros === 0}>
+						<Text class="text-xs text-muted-foreground">Set a positive quick-fix default in Funding.</Text>
+					</If>
+				</If>
+			</If>
 			<View class="flex-row flex-wrap items-center gap-2">
+				<If when={!fixed()}>
+					<Action
+						variant={prototype() && !prototyped() ? "plain" : "primary"}
+						label="Start fix"
+						testID={`feedback-fix-${props.item.id}`}
+						disabled={props.busy || !project() || !fixReady() || running(steps().fix)}
+						accessibilityLabel="Start one standalone fix chat for this suggestion."
+						onPress={() => {
+							const choice = setup();
+							if (!choice || !fixReady() || !project()) return;
+							props.send({
+								action: "fix",
+								feedbackId: props.item.id,
+								projectId: props.triage.projectId,
+								contextDigest: project()!.contextDigest,
+								triageSessionId: props.triage.sessionId,
+								proposalDigest: props.digest,
+								fixSetupDigest: choice.digest,
+								...(choice.allowanceMicros === null ? { allowanceMicros: chosenAmount() } : {}),
+							});
+						}}
+					/>
+				</If>
 				<If when={p().next === "existing-mission" && suggested()}>
 					<Action
 						variant="outline"
@@ -203,12 +279,13 @@ function Proposal(props: {
 						}
 					/>
 				</If>
-				<If when={p().next === "new-mission"}>
+				<If when={["fix", "new-mission", "existing-mission"].includes(p().next)}>
 					<Action
 						variant="outline"
-						label="Plan a new mission"
+						label="Draft a linked mission"
 						testID={`feedback-plan-${props.item.id}`}
-						accessibilityLabel="Open New with the suggested goal. Nothing is created until you plan it there."
+						disabled={newBusy() || props.busy}
+						accessibilityLabel="Draft an editable linked mission goal. Nothing starts until you plan the mission."
 						onPress={plan}
 					/>
 				</If>
@@ -222,25 +299,6 @@ function Proposal(props: {
 						onPress={() =>
 							props.send({
 								action: "prototype",
-								feedbackId: props.item.id,
-								projectId: props.triage.projectId,
-								contextDigest: project()?.contextDigest ?? "",
-								triageSessionId: props.triage.sessionId,
-								proposalDigest: props.digest,
-							})
-						}
-					/>
-				</If>
-				<If when={!fixed()}>
-					<Action
-						variant={prototype() ? "plain" : "outline"}
-						label="Start fix"
-						testID={`feedback-fix-${props.item.id}`}
-						disabled={props.busy || !project() || running(steps().fix)}
-						accessibilityLabel="Start one Build chat that makes this change, tied to no mission, under the project's usual limits."
-						onPress={() =>
-							props.send({
-								action: "fix",
 								feedbackId: props.item.id,
 								projectId: props.triage.projectId,
 								contextDigest: project()?.contextDigest ?? "",
@@ -311,6 +369,8 @@ export function FeedbackRow(props: {
 	const send = async (intent: StepIntent): Promise<StepResult> => {
 		setStepMessage(props.item.id, "");
 		const r = await props.mirror.source.step(intent);
+		if (r.status === "accepted" && intent.action === "fix")
+			setAnswerDraft(`${intent.triageSessionId}/allowance-${intent.proposalDigest}`, null);
 		setStepMessage(props.item.id, r.status === "accepted" || r.status === "unknown" ? "" : r.message);
 		if (r.status === "accepted") glide();
 		return r;

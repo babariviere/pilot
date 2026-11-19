@@ -28,6 +28,7 @@ pub const METHODS: &[&str] = &[
     "day.chat.check",
     "day.chat.continue",
     "day.chat.recover",
+    "day.chat.handoff",
     "day.chat.dismiss",
     "day.chat.reply",
     "day.chat.read",
@@ -312,6 +313,7 @@ pub(crate) enum Command {
     /// Continue one stopped or failed chat: the daemon sends its fixed words once.
     ChatContinue(String),
     ChatRecover(crate::host::new_chat::Recovery),
+    ChatHandoff(crate::host::new_chat::Recovery),
     /// Takes one failed chat off Needs you. Sends nothing to the chat.
     ChatDismiss(String),
     /// The user's own words to one chat waiting for a reply, sent once.
@@ -631,13 +633,13 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 workspace: r.workspace_key,
             }
         }
-        "day.chat.recover" => {
+        "day.chat.recover" | "day.chat.handoff" => {
             let r: crate::host::new_chat::Recovery = exact(args)?;
             mission(&r.session_id)?;
             if r.message.len() > crate::host::new_chat::RECOVERY_INPUT_BYTES {
                 return Err(Error::Invalid);
             }
-            C::ChatRecover(r)
+            if name == "day.chat.handoff" { C::ChatHandoff(r) } else { C::ChatRecover(r) }
         }
         "day.chat.continue" | "day.chat.dismiss" => {
             #[derive(Deserialize)]

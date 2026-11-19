@@ -5,6 +5,9 @@
 // access. Choosing a project only reads its setup: nothing starts, and no
 // existing chat moves or changes what it may do. The user always chooses the
 // project: New never picks one, so both starts wait for that choice.
+// A linked mission draft from Feedback (linkedMission.ts) uses the same goal
+// field, planning setup, allowance and Plan. Its project is the proposal's;
+// New's other draft stays saved beside it until the user replaces it.
 import { cleanup, effect, keymap, Scroll, Text, untracked, View } from "nsh";
 import {
 	checkNewChat,
@@ -21,6 +24,13 @@ import type { Day } from "./day";
 import { fundingAmount } from "./FundingSettings";
 import { keepRead } from "./freshness";
 import { keepField, keepScroll } from "./kept";
+import {
+	backToFeedback,
+	confirmLinkedSwitch,
+	discardLinkedMission,
+	linkedConfirm,
+	replaceOtherDraft,
+} from "./linkedMission";
 import { jumpBack } from "./nav";
 import { newFundingDraft } from "./modelSettingsDraft";
 import { OpenChatAction } from "./OpenChatAction";
@@ -35,6 +45,7 @@ import {
 	closePlanning,
 	confirmingStart,
 	goalDraft,
+	linkedMission,
 	newBusy,
 	newMessage,
 	openPlan,
@@ -69,6 +80,137 @@ const MODES: { mode: ChatMode; label: string }[] = [
 function fromRequest(r: { title: string; source: string } | null): string {
 	if (!r) return "";
 	return `From ${r.source}: “${r.title}”. Plan links the request to the mission.`;
+}
+
+/** One labelled value of a linked mission's scope. */
+function Fact(props: { label: string; value: string; testID?: string }) {
+	return (
+		<View class="gap-0.5">
+			<Text class="text-xs text-faint">{props.label}</Text>
+			<Text testID={props.testID} class="text-sm text-foreground">
+				{props.value}
+			</Text>
+		</View>
+	);
+}
+
+/** A change that would drop the linked draft's edits waits here for the user's answer. */
+function LinkedConfirm() {
+	const c = () => linkedConfirm();
+	const next = () => {
+		const now = c();
+		return now?.kind === "switch" ? now.next : null;
+	};
+	return (
+		<If when={c()}>
+			<Notice
+				testID="linked-confirm"
+				text={
+					next()
+						? `Switch to the suggestion from “${next()?.title ?? ""}”?`
+						: "Discard your edits to this linked draft?"
+				}
+				detail={
+					next()
+						? "This linked draft has your edits. Switching drops them. Your other New draft stays saved."
+						: "Your other New draft comes back. Nothing is sent."
+				}
+			>
+				<View class="flex-row flex-wrap gap-2">
+					<Action
+						label={next() ? "Switch draft" : "Discard draft"}
+						disabled={newBusy()}
+						onPress={() => (next() ? confirmLinkedSwitch() : discardLinkedMission(true))}
+					/>
+					<Action label="Keep editing" onPress={() => linkedConfirm.set(null)} />
+				</View>
+			</Notice>
+		</If>
+	);
+}
+
+/** The mission allowance Plan names. Shown once, only when this service needs one. */
+function MissionAllowance() {
+	return (
+		<View class="gap-1.5">
+			<Field
+				label="Mission allowance (USD catalog value)"
+				testID="mission-allowance"
+				placeholder="Choose an amount before planning"
+				value={newFundingDraft()?.mission ?? ""}
+				onChange={(text) => {
+					const d = newFundingDraft();
+					if (d) newFundingDraft.set({ ...d, mission: text });
+				}}
+			/>
+			<Text class="text-xs text-faint">
+				One lifetime allowance includes planning, research, helpers, reviews and retries. Nothing is free because it
+				uses a subscription.
+			</Text>
+		</View>
+	);
+}
+
+/**
+ * A linked draft's scope, shown once: the proposal's project, the model
+ * planning uses there and the mission allowance. Then New's other draft,
+ * which stays saved unless the user chooses to replace it.
+ */
+function LinkedScope(props: { plans: Plans; canPlan: boolean }) {
+	const chats = props.plans.chats;
+	const linked = () => linkedMission();
+	const setup = () => props.plans.planning().setup;
+	const model = () => {
+		if (chatSelecting()) return "Reading this project's setup…";
+		return props.canPlan && props.plans.planning().canCreate ? setup().model : "Not known yet";
+	};
+	const other = () => linked()?.other ?? null;
+	const otherWords = () => {
+		const o = other();
+		if (!o) return "";
+		const words = o.goal.trim().split("\n")[0] ?? "";
+		if (words) return words.length > 120 ? `${words.slice(0, 119)}…` : words;
+		return o.pick ? `A project choice: ${projectName(chats.view(), o.pick.projectId)}` : "";
+	};
+	return (
+		<View testID="linked-scope" class="gap-3">
+			<View class="flex-row flex-wrap gap-x-8 gap-y-2">
+				<Fact
+					label="Project"
+					testID="linked-project"
+					value={projectName(chats.view(), linked()?.projectId ?? "")}
+				/>
+				<Fact label="Model" testID="linked-model" value={model()} />
+			</View>
+			<If when={chatNote()}>
+				<Text testID="project-note" class="text-xs text-needs-ink">
+					{chatNote()}
+				</Text>
+			</If>
+			<If when={props.canPlan && setup().allowanceRequired}>
+				<MissionAllowance />
+			</If>
+			<If when={other()}>
+				<View testID="linked-other" class="gap-2 border-t border-border pt-3">
+					<Text class="text-sm text-foreground">
+						{linked()?.replace
+							? "Your other New draft will be replaced when you plan."
+							: "Your other New draft stays saved."}
+					</Text>
+					<View selectable>
+						<Text class="text-xs text-muted-foreground">{otherWords()}</Text>
+					</View>
+					<View class="flex-row">
+						<Action
+							label={linked()?.replace ? "Keep other draft" : "Replace other draft"}
+							disabled={newBusy()}
+							onPress={() => replaceOtherDraft(!linked()?.replace)}
+						/>
+					</View>
+				</View>
+			</If>
+		</View>
+	);
 }
 
 function ProjectRow(props: { plans: Plans }) {
@@ -297,8 +439,11 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 		);
 	const canStartChat = () =>
 		chatView().availability === "live" && !!picked() && chatView().unsettled.length === 0 && !chatView().creating;
-	// Reopening New renews setup and reads projects: neither is execution authority or a pending send.
+	const linked = () => linkedMission();
+	// Reopening New, or a linked draft coming or going, renews setup and reads projects, then selects
+	// the draft's project again: neither is execution authority or a pending send.
 	effect(() => {
+		linked()?.proposalDigest;
 		untracked(() => {
 			void prepareChat(chats);
 		});
@@ -310,9 +455,9 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 		untracked(() => void props.plans.feed.prepareNew?.());
 	});
 	// Leaving New without words drops the project choice: nothing keeps it.
-	// Words keep it, as their draft's project.
+	// Words keep it, as their draft's project. A linked draft keeps its proposal's project.
 	cleanup(() => {
-		if (goalDraft().trim() === "" && !newBusy()) dropChoice();
+		if (goalDraft().trim() === "" && !newBusy() && !linkedMission()) dropChoice();
 	});
 	// New's place: its scroll, and the goal field's focus and selection.
 	const scroll = keepScroll("new");
@@ -337,14 +482,19 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 		>
 			<Page gap={8}>
 				<View class="gap-3">
-					<PageTitle title="What do you want done?" />
-					<Text class="text-sm leading-relaxed text-muted-foreground">
-						Say it in your own words. A mission starts with questions to clarify what you want.
+					<PageTitle title={linked() ? "Plan a linked mission" : "What do you want done?"} />
+					<Text
+						testID={linked() ? "linked-from" : undefined}
+						class="text-sm leading-relaxed text-muted-foreground"
+					>
+						{linked()
+							? `From Feedback: “${linked()?.title ?? ""}”. Plan links the feedback to the mission. Edit the goal first.`
+							: "Say it in your own words. A mission starts with questions to clarify what you want."}
 					</Text>
 					<TextField
 						testID="goal"
 						ref={goal.ref}
-						accessibilityLabel="What you want done"
+						accessibilityLabel={linked() ? "Mission goal" : "What you want done"}
 						multiline
 						autoFocus
 						readonly={off() && chatsOff()}
@@ -363,7 +513,9 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 						variant="composer"
 						large
 					/>
-					<ProjectRow plans={props.plans} />
+					<If when={linked()} else={<ProjectRow plans={props.plans} />}>
+						<LinkedScope plans={props.plans} canPlan={canPlan()} />
+					</If>
 					<If when={requestDraft()}>
 						<Text testID="new-request" class="text-xs text-faint">
 							{fromRequest(requestDraft())}
@@ -411,29 +563,53 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 					<Action label="Try now" disabled={newBusy()} onPress={() => void setupReads.now()} />
 				</If>
 				<Unconfirmed plans={props.plans} />
+				<LinkedConfirm />
 				<If when={!confirmingStart()}>
 					<View class="gap-3">
 						<View class="flex-row flex-wrap items-center gap-2">
 							<Action
 								variant="primary"
-								label={newBusy() ? "Writing questions…" : similar() ? "Create another" : "Plan a mission"}
+								label={
+									newBusy()
+										? "Writing questions…"
+										: similar()
+											? "Create another"
+											: linked()
+												? "Plan mission"
+												: "Plan a mission"
+								}
 								disabled={off() || empty() || newBusy() || !canPlan()}
 								onPress={() => {
 									if (canPlan()) void planMission(props.plans, similar());
 								}}
 							/>
-							<Action
-								label="Start as one chat"
-								disabled={!canStartChat() || empty() || newBusy()}
-								onPress={() => {
-									newMessage.set("");
-									// A choice whose setup could not be read is read again: passive.
-									const pick = chatPick();
-									if (pick && !chatChoice() && !chatSelecting()) void chooseChat(chats, pick);
-									glide();
-									confirmingStart.set(true);
-								}}
-							/>
+							<If
+								when={!linked()}
+								else={
+									<View class="flex-row flex-wrap gap-2">
+										<Action label="Back to Feedback" disabled={newBusy()} onPress={backToFeedback} />
+										<Action
+											variant="plain"
+											label="Discard linked draft"
+											disabled={newBusy()}
+											onPress={() => discardLinkedMission()}
+										/>
+									</View>
+								}
+							>
+								<Action
+									label="Start as one chat"
+									disabled={!canStartChat() || empty() || newBusy()}
+									onPress={() => {
+										newMessage.set("");
+										// A choice whose setup could not be read is read again: passive.
+										const pick = chatPick();
+										if (pick && !chatChoice() && !chatSelecting()) void chooseChat(chats, pick);
+										glide();
+										confirmingStart.set(true);
+									}}
+								/>
+							</If>
 						</View>
 						<If when={similar()}>
 							<Text class="text-xs text-muted-foreground">
@@ -441,7 +617,7 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 								not a retry. The original stays available to check.
 							</Text>
 						</If>
-						<If when={!picked()}>
+						<If when={!picked() && !linked()}>
 							<Text testID="choose-first" class="text-xs leading-relaxed text-faint">
 								Plan a mission and Start as one chat wait for a project.
 							</Text>
@@ -452,25 +628,14 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 							</Text>
 						</If>
 						<If when={canPlan()}>
-							<If when={planning().setup.allowanceRequired}>
-								<Field
-									label="Mission allowance (USD catalog value)"
-									testID="mission-allowance"
-									placeholder="Choose an amount before planning"
-									value={newFundingDraft()?.mission ?? ""}
-									onChange={(text) => {
-										const d = newFundingDraft();
-										if (d) newFundingDraft.set({ ...d, mission: text });
-									}}
-								/>
+							<If when={!linked()}>
+								<If when={planning().setup.allowanceRequired}>
+									<MissionAllowance />
+								</If>
 								<Text class="text-xs text-faint">
-									One lifetime allowance includes planning, research, helpers, reviews and retries. Nothing is
-									free because it uses a subscription.
+									{planning().canCreate ? `${planning().setup.access} · ${planning().setup.model}` : ""}
 								</Text>
 							</If>
-							<Text class="text-xs text-faint">
-								{planning().canCreate ? `${planning().setup.access} · ${planning().setup.model}` : ""}
-							</Text>
 							<Text class="text-xs leading-relaxed text-faint">
 								Answer one question at a time, or use See all. Submit only when every question is answered.
 								Review and agree to the plan next; building needs a separate Start work confirmation.

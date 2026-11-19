@@ -463,6 +463,8 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 	};
 	sessions.feedbackMetricsScope = (operationId, sessionId) =>
 		missions?.store.feedback.metricsScope(operationId, sessionId);
+	sessions.feedbackFixAdmission = (sessionId, projectId) =>
+		!!missions?.store.feedback.resultPage({ kind: "fix", id: sessionId, projectId }, Number.MAX_SAFE_INTEGER, 1).items.length;
 	const reviewRequests = missions ? optionalReviewRequests(missions.store, sessions, projects) : undefined;
 	const humanReviews = missions
 		? new HumanReviews({
@@ -509,6 +511,9 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 					confirmations: workflowConfirmations,
 					...(missions.knowledge ? { knowledge: missions.knowledge } : {}),
 					...(tracking ? { tracking } : {}),
+					// Read when a mission is planned from feedback; feedbackWork is set up below.
+					feedbackProposal: (sessionId: string, prototype: boolean) =>
+						feedbackWork ? feedbackWork.proposal(sessionId, prototype) : Promise.resolve(undefined),
 				})
 			: undefined;
 	const nativePlanning =

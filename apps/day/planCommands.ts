@@ -7,6 +7,7 @@ import type { Interview, PlanPage, Question } from "pilot-day/native";
 import { dropChoice } from "./chatCommands";
 import { fundingAmount } from "./FundingSettings";
 import { deferred, returnToQuestion } from "./interviewView";
+import { linkedPlanned } from "./linkedMission";
 import { newFundingDraft } from "./modelSettingsDraft";
 import type { Plans } from "./planning";
 import {
@@ -18,6 +19,7 @@ import {
 	drop,
 	goalDraft,
 	keptAnswers,
+	linkedMission,
 	newBusy,
 	newMessage,
 	openPlan,
@@ -420,8 +422,17 @@ export async function planMission(plans: Plans, createAnother = false) {
 	newBusy.set(true);
 	newMessage.set("");
 	const goal = goalDraft();
-	const replaces = replacesDraft()?.missionId ?? null;
-	const from = requestDraft();
+	// A linked draft names only its feedback and proposal: never a request or a re-plan.
+	const linked = linkedMission();
+	const feedback = linked
+		? {
+				feedbackId: linked.feedbackId,
+				triageSessionId: linked.triageSessionId,
+				proposalDigest: linked.proposalDigest,
+			}
+		: null;
+	const replaces = linked ? null : (replacesDraft()?.missionId ?? null);
+	const from = linked ? null : requestDraft();
 	const request = from
 		? { itemId: from.itemId, revision: from.revision, ...(from.manageStatus ? { manageStatus: true } : {}) }
 		: null;
@@ -440,10 +451,12 @@ export async function planMission(plans: Plans, createAnother = false) {
 			setup: setup.digest,
 			replaces,
 			request,
+			feedback,
 			allowanceMicros: amount ?? null,
 		});
 		if (outcome.status === "accepted" && outcome.missionId) {
-			if (goalDraft() === goal) {
+			if (linked) linkedPlanned(linked);
+			else if (goalDraft() === goal) {
 				goalDraft.set("");
 				replacesDraft.set(null);
 				requestDraft.set(null);
@@ -463,10 +476,26 @@ export async function checkCreation(plans: Plans, operationId?: string) {
 	if (newBusy() || !plans.feed.checkNew) return;
 	newBusy.set(true);
 	newMessage.set("");
+	const linked = linkedMission();
+	const creation = plans.planning().setup.creations?.find((c) => c.operationId === operationId);
 	try {
 		const outcome = await plans.feed.checkNew(operationId);
 		newMessage.set(outcome.message);
-		if (outcome.status === "accepted" && outcome.missionId) openPlan(outcome.missionId);
+		if (outcome.status === "accepted" && outcome.missionId) {
+			// Only the creation that sent this exact linked draft's feedback and proposal ends it, as after Plan.
+			// Another creation, even with the same words, leaves both drafts as they are.
+			const from = creation?.feedback;
+			if (
+				linked &&
+				from &&
+				creation.goal === goalDraft() &&
+				from.feedbackId === linked.feedbackId &&
+				from.triageSessionId === linked.triageSessionId &&
+				from.proposalDigest === linked.proposalDigest
+			)
+				linkedPlanned(linked);
+			openPlan(outcome.missionId);
+		}
 	} catch {
 		newMessage.set("Mission creation is not confirmed. Check again; nothing was sent again.");
 	} finally {

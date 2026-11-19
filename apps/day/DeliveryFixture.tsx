@@ -11,6 +11,7 @@ import { DeliveryScreen } from "./DeliveryScreen";
 import { ScriptedDelivery } from "./deliveryDemo";
 import { mirrorDelivery } from "./deliveryFeed";
 import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
+import { ConnectedFeedback, mirrorFeedback } from "./feedbackFeed";
 import { openDay } from "./mockFeeds";
 import { resultReviewDemo } from "./resultReviewDemo";
 import { ToCheck } from "./ToCheck";
@@ -21,6 +22,8 @@ const source = new ScriptedDelivery();
 const review = resultReviewDemo();
 const showReview = signal(false);
 const day = { ...openDay(), delivery: mirrorDelivery(source) };
+const withFeedback = { ...day, feedback: mirrorFeedback(new ConnectedFeedback("fixture")) };
+const showFeedback = signal(false);
 /** Shows one mission's To check, as its overview does, instead of Today's. */
 const missionOnly = signal(false);
 const loseService = () => {
@@ -49,7 +52,13 @@ mount(() => {
 					}
 				>
 					<Each of={deliveryRoute() ? [deliveryRoute() as DeliveryPlace] : []} key={(p) => p.key}>
-						{(p) => <DeliveryScreen day={day} place={p()} reviewSource={showReview() ? review : undefined} />}
+						{(p) => (
+							<DeliveryScreen
+								day={showFeedback() ? withFeedback : day}
+								place={p()}
+								reviewSource={showReview() ? review : undefined}
+							/>
+						)}
 					</Each>
 				</If>
 				{/* As in the app: one artifact in the whole window, over the page, until closed. */}
@@ -63,6 +72,7 @@ mount(() => {
 					<Text testID="reads">{`Source reads: [${source.reads().join(" ")}]`}</Text>
 					<Text testID="work-reads">{`Work reads: ${source.workReads().length}`}</Text>
 					<View class="flex-row flex-wrap gap-1">
+						<Action label="Show linked feedback fixture" onPress={() => showFeedback.set(true)} />
 						<Action
 							label="Show private review fixture"
 							onPress={() => {

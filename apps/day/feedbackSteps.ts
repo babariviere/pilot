@@ -29,12 +29,13 @@ export function stepsOf(item: FeedbackItem): Steps {
 	};
 	const triage = (last("triage") as ChatStep | undefined) ?? null;
 	const answer = last("answer") as AnswerStep | undefined;
+	const fix = last("fix") as ChatStep | undefined;
 	return {
 		resolved: last("resolved", "reopened")?.kind === "resolved",
 		triage,
 		answer: answer && triage && answer.sessionId === triage.sessionId ? answer : null,
 		prototype: (last("prototype") as ChatStep | undefined) ?? null,
-		fix: (last("fix") as ChatStep | undefined) ?? null,
+		fix: fix?.chat?.currentSessionId ? { ...fix, sessionId: fix.chat.currentSessionId } : (fix ?? null),
 		mission: (last("mission") as MissionStep | undefined) ?? null,
 	};
 }

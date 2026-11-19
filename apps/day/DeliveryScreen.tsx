@@ -78,6 +78,7 @@ import {
 	workOnOpen,
 } from "./deliveryView";
 import { keepField, keepScroll } from "./kept";
+import { LinkedFeedback } from "./LinkedFeedback";
 import { goHome } from "./nav";
 import { OutputComparison } from "./OutputComparison";
 import { pageScroll, scrolled } from "./onScreen";
@@ -1159,6 +1160,11 @@ export function DeliveryScreen(props: {
 	const origin = () =>
 		props.place.subject.kind === "task" ? `A task in ${missionTitle() ?? "a mission"}` : "A standalone chat";
 	const fresh = () => !!work() && !entry()?.reason;
+	const subject = props.place.subject;
+	const feedbackScope =
+		subject.kind === "task"
+			? { kind: "mission" as const, id: subject.missionId, projectId: subject.projectId }
+			: { kind: "chat" as const, id: subject.sessionId, projectId: subject.projectId };
 	// A shown source or preview is only for the exact pin of the result as last
 	// read. A newer result, a changed pin or a failed read drops it at once.
 	effect(() => {
@@ -1286,6 +1292,9 @@ export function DeliveryScreen(props: {
 								</If>
 								<Stands work={w()} unsettled={unsettled()} />
 								<YourCheck mirror={mirror} place={props.place} work={w()} title={title()} />
+								<If when={props.day.feedback && w().deliveryId}>
+									<LinkedFeedback mirror={props.day.feedback!} scope={feedbackScope} disabled={!fresh()} />
+								</If>
 							</View>
 						)}
 					</Each>
@@ -1294,5 +1303,6 @@ export function DeliveryScreen(props: {
 		</Scroll>
 	);
 }
+
 import { InspectInWindow } from "./InspectionWindow";
 import { destinationProject } from "./workSearch";

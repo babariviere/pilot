@@ -98,6 +98,7 @@ impl PlanningRecord {
                         | "thread-send"
                         | "chat-continue"
                         | "chat-recover"
+                        | "chat-handoff"
                         | "chat-dismiss"
                         | "chat-reply"
                 )
@@ -129,6 +130,7 @@ impl PlanningRecord {
         }
         if o["kind"] == super::new_chat::CONTINUE
             || o["kind"] == super::new_chat::RECOVER
+            || o["kind"] == super::new_chat::HANDOFF
             || o["kind"] == super::new_chat::DISMISS
             || o["kind"] == super::new_chat::REPLY
         {
@@ -255,6 +257,7 @@ fn record_pinned(
                     | "thread-send"
                     | "chat-continue"
                     | "chat-recover"
+                    | "chat-handoff"
                     | "chat-dismiss"
                     | "chat-reply"
             )
@@ -289,6 +292,7 @@ fn record_pinned(
                     | "thread-send"
                     | "chat-continue"
                     | "chat-recover"
+                    | "chat-handoff"
                     | "chat-dismiss"
                     | "chat-reply"
                     | "revision-pause"
@@ -443,6 +447,13 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
         {
             return Err(Error::Unknown);
         }
+    }
+    if op["kind"] == super::new_chat::HANDOFF && r["state"] == "accepted"
+        && (r["result"]["sourceSessionId"] != op["targetId"]
+            || r["result"]["operationId"] != op["operationId"]
+            || r["result"]["sessionId"] == op["targetId"]
+            || !r["result"]["sessionId"].as_str().is_some_and(super::valid_id)) {
+        return Err(Error::Unknown);
     }
     if (op["kind"] == super::new_chat::CONTINUE
         || op["kind"] == super::new_chat::RECOVER

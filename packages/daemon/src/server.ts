@@ -97,7 +97,7 @@ import { isThreadOperation } from "./mission-threads.ts";
 import type { MissionStore } from "./missions.ts";
 import { MODEL_CONTROLS } from "./model-controls.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
-import { CHAT_CONTINUE, CHAT_DISMISS, CHAT_RECOVER, CHAT_REPLY } from "./native-chat.ts";
+import { CHAT_CONTINUE, CHAT_DISMISS, CHAT_HANDOFF, CHAT_RECOVER, CHAT_REPLY } from "./native-chat.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
 import { isIntakeOperation } from "./native-intake.ts";
 import { isNativePlanningOperation, PlanningInventoryCapacity } from "./native-mission-planning.ts";
@@ -123,7 +123,7 @@ import { terminalSender } from "./terminal-output.ts";
 import { validatePatch } from "./tracked-item-patch.ts";
 import { UsageQueryCapacityError } from "./usage-history.ts";
 import { usageAnalyticsQuery } from "./usage-history-validation.ts";
-import { FEEDBACK_WORK, isFeedbackAnswer } from "./user-feedback-work.ts";
+import { FEEDBACK_WORK, hasFeedbackReceiptLookup } from "./user-feedback-work.ts";
 import { isWorkflowOperation } from "./workflow-confirmations.ts";
 
 const MAX_BODY = 1024 * 1024;
@@ -1230,8 +1230,8 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
-				if (parts[2] === "receipt" && saved?.state === "pending" && isFeedbackAnswer(operation)) {
-					// A lost answer: read whether its chat accepted that exact input. Never sent again.
+				if (parts[2] === "receipt" && saved?.state === "pending" && hasFeedbackReceiptLookup(operation)) {
+					// Settle only from exact durable input or chat evidence. Never enter work again.
 					const end = mutations.begin({ kind: "operation", id: operation.operationId });
 					try {
 						return json(res, 200, await journal.execute(operation, (op) => feedbackWork.recover(op)));
@@ -1309,7 +1309,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					end();
 				}
 			}
-			if (operation?.kind === CHAT_CONTINUE || operation?.kind === CHAT_RECOVER || operation?.kind === CHAT_REPLY) {
+			if (operation?.kind === CHAT_CONTINUE || operation?.kind === CHAT_RECOVER || operation?.kind === CHAT_REPLY || operation?.kind === CHAT_HANDOFF) {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native chat continue unavailable");
 				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
@@ -2616,12 +2616,18 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
 			if (!nativeAuthority || !userFeedback) throw new ServiceUnavailable("User feedback unavailable");
 			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			const resultKind = url.searchParams.get("resultKind");
 			return json(
 				res,
 				200,
 				await userFeedback.page(
 					url.searchParams.get("before") ?? undefined,
 					url.searchParams.get("limit") ?? undefined,
+					resultKind === null ? undefined : {
+						kind: resultKind,
+						id: url.searchParams.get("resultId") ?? "",
+						projectId: url.searchParams.get("projectId") ?? "",
+					},
 				),
 			);
 		}
@@ -3496,6 +3502,11 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (!body || typeof body.branch !== "string" || !body.branch.trim() || body.branch.length > 255)
 				throw new HttpError(400, "branch must be a non-empty string of at most 255 characters");
 			return json(res, 200, await sessions.detachBranch(parts[2]!, body.branch));
+		}
+		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "fix-handoff" && req.method === "GET") {
+			if (!nativeAuthority) throw new ServiceUnavailable("Native handoff unavailable");
+			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			return json(res, 200, await sessions.prepareFixHandoff(parts[2]!));
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && req.method === "POST") {
 			const id = parts[2]!;

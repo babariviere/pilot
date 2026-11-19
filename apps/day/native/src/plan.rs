@@ -95,6 +95,10 @@ pub struct NewCreation {
     pub operation_id: String,
     pub goal: String,
     pub project_id: String,
+    /// The feedback and exact proposal the creation links, as it was sent.
+    /// New ends only that linked draft when Check confirms this creation.
+    #[prop(default)]
+    pub feedback: Option<PlanFeedback>,
 }
 
 /// Where a mission's planning is.
@@ -1319,6 +1323,10 @@ pub struct NewIntent {
     /// The request in New (a Linear issue or Slack message) this plan comes
     /// from, when New was opened from its "Plan a mission". Only Plan sends it.
     pub request: Option<PlanRequest>,
+    /// The saved feedback and the exact proposal this plan comes from, when
+    /// New was opened from Feedback's "Draft a linked mission". Only Plan sends it.
+    #[prop(default)]
+    pub feedback: Option<PlanFeedback>,
 }
 
 /// A request in New, as the screen showed it.
@@ -1333,6 +1341,19 @@ pub struct PlanRequest {
     /// Explicit user choice; omitted is reference only.
     #[prop(default)]
     pub manage_status: Option<bool>,
+}
+
+/// Saved feedback and its investigation's proposal, as the Feedback page showed them.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct PlanFeedback {
+    /// The feedback's ID.
+    pub feedback_id: String,
+    /// The triage or prototype chat whose proposal the user saw.
+    pub triage_session_id: String,
+    /// That proposal's digest, as shown.
+    pub proposal_digest: String,
 }
 
 /// Save one answer as a draft. It never submits or starts anything.

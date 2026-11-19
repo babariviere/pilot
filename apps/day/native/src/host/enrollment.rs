@@ -26,6 +26,10 @@ pub(super) struct PlanningEnrollment {
     /// New and links it to the mission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     request: Option<EnrollRequest>,
+    /// The feedback and exact proposal this plan comes from. The daemon
+    /// saves the feedback's link to the mission in the same creation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    feedback: Option<EnrollFeedback>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -34,6 +38,16 @@ struct EnrollRequest {
     revision: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     manage_status: Option<bool>,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct EnrollFeedback {
+    feedback_id: String,
+    triage_session_id: String,
+    proposal_digest: String,
+}
+fn feedback_valid(feedback_id: &str, triage_session_id: &str, proposal_digest: &str) -> bool {
+    super::valid_id(feedback_id) && super::valid_id(triage_session_id) && hex(proposal_digest, 64)
 }
 #[derive(Debug, Serialize, Deserialize)]
 enum Purpose {
@@ -70,6 +84,9 @@ pub(super) fn validate_record(
         || r.request
             .as_ref()
             .is_some_and(|q| !super::valid_id(&q.item_id) || q.revision == 0)
+        || r.feedback.as_ref().is_some_and(|f| {
+            !feedback_valid(&f.feedback_id, &f.triage_session_id, &f.proposal_digest)
+        })
     {
         return Err(Error::Storage);
     }
@@ -170,6 +187,9 @@ impl Prepared {
                 .request
                 .as_ref()
                 .is_some_and(|q| !super::valid_id(&q.item_id) || q.revision == 0)
+            || intent.feedback.as_ref().is_some_and(|f| {
+                !feedback_valid(&f.feedback_id, &f.triage_session_id, &f.proposal_digest)
+            })
         {
             return Err(Error::Invalid);
         }
@@ -214,6 +234,11 @@ impl Prepared {
                     revision: q.revision,
                     manage_status: q.manage_status.filter(|v| *v),
                 }),
+                feedback: intent.feedback.as_ref().map(|f| EnrollFeedback {
+                    feedback_id: f.feedback_id.clone(),
+                    triage_session_id: f.triage_session_id.clone(),
+                    proposal_digest: f.proposal_digest.clone(),
+                }),
             })
             .map_err(|_| Error::Invalid)?,
         )
@@ -255,6 +280,13 @@ pub(super) async fn prepare(
                 operation_id: r.id().into(),
                 goal: p["goal"].as_str()?.into(),
                 project_id: p["projectId"].as_str()?.into(),
+                feedback: p.get("feedback").and_then(|f| {
+                    Some(crate::plan::PlanFeedback {
+                        feedback_id: f["feedbackId"].as_str()?.into(),
+                        triage_session_id: f["triageSessionId"].as_str()?.into(),
+                        proposal_digest: f["proposalDigest"].as_str()?.into(),
+                    })
+                }),
             })
         })
         .collect::<Vec<_>>();
@@ -411,6 +443,11 @@ pub(super) async fn send(
                     .as_ref()
                     .and_then(|q| q.manage_status)
                     .unwrap_or(false)
+            || request.get("feedback").cloned()
+                != intent
+                    .feedback
+                    .as_ref()
+                    .map(|f| serde_json::to_value(f).unwrap_or(Value::Null))
             || record.not_sent
         {
             return Err(Error::Stale);
@@ -559,6 +596,7 @@ mod tests {
             setup: prepared.setup.digest.clone(),
             replaces: replaces.map(Into::into),
             request: None,
+            feedback: None,
         };
         let payload = |r: &planning::PlanningRecord| -> Value {
             serde_json::from_str(r.operation["payload"].as_str().unwrap()).unwrap()
@@ -593,6 +631,31 @@ mod tests {
         for (item, revision) in [("../x", 3), ("issue-1", 0)] {
             assert_eq!(
                 prepared.record(&source, &from(item, revision)).err(),
+                Some(Error::Invalid)
+            );
+        }
+        // A plan from Feedback names the feedback and the exact proposal shown.
+        let linked = |feedback_id: &str, digest: &str| NewIntent {
+            feedback: Some(crate::plan::PlanFeedback {
+                feedback_id: feedback_id.into(),
+                triage_session_id: "triage-1".into(),
+                proposal_digest: digest.into(),
+            }),
+            ..intent(None)
+        };
+        assert!(payload(&plain).get("feedback").is_none());
+        let digest = "c".repeat(64);
+        let planned = prepared
+            .record(&source, &linked("feedback-1", &digest))
+            .unwrap();
+        assert_eq!(
+            payload(&planned)["feedback"],
+            json!({"feedbackId": "feedback-1", "triageSessionId": "triage-1", "proposalDigest": digest})
+        );
+        assert!(validate_record(&source, &planned.operation, Some(&prepared.setup.digest)).is_ok());
+        for (feedback_id, digest) in [("../f", digest.as_str()), ("feedback-1", "short")] {
+            assert_eq!(
+                prepared.record(&source, &linked(feedback_id, digest)).err(),
                 Some(Error::Invalid)
             );
         }

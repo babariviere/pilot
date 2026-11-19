@@ -1,5 +1,5 @@
 // Synthetic recovery UI only. No daemon, credentials, processes or filesystem.
-import { mount, signal, Text, View } from "nsh";
+import { host, mount, signal, Text, View } from "nsh";
 import { ChatScreen } from "./ChatScreen";
 import type { Day } from "./day";
 import { restoreRecoveryNotes, savedRecoveryNotes } from "./recoveryDraft";
@@ -11,12 +11,14 @@ const checks = signal(0);
 const last = signal("");
 const lost = signal(false);
 const shown = signal(true);
+const handoff = signal(false);
 const chat = signal<SessionChat | null>(null);
 const listeners = new Set<(v: SessionChat | null) => void>();
 const publish = (v: SessionChat | null) => {
 	chat.set(v);
 	for (const l of listeners) l(v);
 };
+host.on("fixture.refresh-chat", () => publish({ ...chat()! }));
 const failed = (): SessionChat => ({
 	sessionId: "recovery-chat",
 	title: "Fix invoice export",
@@ -29,6 +31,19 @@ const failed = (): SessionChat => ({
 	reading: false,
 	reason: "",
 	workspaceKept: true,
+	...(handoff()
+		? {
+				fixHandoff: {
+					projectId: "project",
+					projectName: "Invoices",
+					model: "fake/model",
+					thinking: "high",
+					originalScope: "Fix only CSV export. Evidence: pilot://artifact/original",
+					remainingMicros: 1250000,
+					allowanceEnabled: true,
+				},
+			}
+		: {}),
 });
 const source: SessionChatSource = {
 	chat,
@@ -62,8 +77,27 @@ const source: SessionChatSource = {
 		publish({ ...failed(), state: "working" });
 		return { status: "accepted", message: "", operationId: "recover-1" };
 	},
+	async handoffChat(_id, message) {
+		sends.update((n) => n + 1);
+		last.set(message);
+		if (lost()) {
+			const pending = {
+				status: "unknown" as const,
+				kind: "chat-handoff",
+				operationId: "handoff-1",
+				message: "Check only",
+				submittedText: message,
+			};
+			publish({ ...failed(), pendingRecovery: pending });
+			return pending;
+		}
+		publish({ ...failed(), continuedTo: "successor" });
+		return { status: "accepted", message: "", operationId: "handoff-1" };
+	},
 	async checkContinue() {
 		checks.update((n) => n + 1);
+		if (handoff())
+			return { status: "unknown", kind: "chat-handoff", message: "Check only", operationId: "handoff-1" };
 		publish({ ...failed(), state: "working" });
 		return { status: "accepted", message: "", operationId: "recover-1" };
 	},
@@ -76,6 +110,14 @@ mount(() => (
 			<Action label="Hide chat" onPress={() => shown.set(false)} />
 			<Action label="Reopen chat" onPress={() => shown.set(true)} />
 			<Action label="Lose next answer" onPress={() => lost.set(true)} />
+			<Action
+				label="Offer handoff"
+				onPress={() => {
+					handoff.set(true);
+					publish(failed());
+				}}
+			/>
+			<Action label="Refresh same chat" onPress={() => publish({ ...chat()! })} />
 			<Action label="Fail again" onPress={() => publish(failed())} />
 			<Action label="Startup failure" onPress={() => publish({ ...failed(), restartOnly: true })} />
 			<Action

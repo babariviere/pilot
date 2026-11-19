@@ -71,6 +71,19 @@ test("Plan a mission opens New with the request's words and link; it sends nothi
 	expect(app.shows("id:request-bil-231")).toBe(true);
 });
 
+test("a linked mission draft in New keeps New: Slack and Linear prefills change nothing", async () => {
+	const app = await ready();
+	await app.press("Hold a linked draft");
+	for (const id of ["stripe", "bil-231"]) {
+		await app.press(`id:request-${id}`);
+		await app.press(`id:plan-${id}`);
+		await app.waitFor("You already have a mission draft. Open New to finish or clear it before prefilling another.");
+		expect(app.shows("New: closed · Linked words · request none@0")).toBe(true);
+		await app.press(`id:request-${id}`);
+	}
+	expect(app.shows("Sends: 0 · Checks: 0")).toBe(true);
+});
+
 test("Later and Bring back, Discard and Undo each send once and move the row", async () => {
 	const app = await ready();
 	await app.press("id:request-northwind");

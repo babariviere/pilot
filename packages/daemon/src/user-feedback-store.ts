@@ -23,6 +23,12 @@ CREATE TABLE IF NOT EXISTS user_feedback_work (
  record TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS user_feedback_work_feedback ON user_feedback_work(feedback_id, sequence);
+CREATE INDEX IF NOT EXISTS user_feedback_work_mission
+ ON user_feedback_work(json_extract(record,'$.missionId'), json_extract(record,'$.projectId'))
+ WHERE json_extract(record,'$.kind')='mission';
+CREATE INDEX IF NOT EXISTS user_feedback_work_fix
+ ON user_feedback_work(json_extract(record,'$.sessionId'), json_extract(record,'$.projectId'))
+ WHERE json_extract(record,'$.kind')='fix';
 `;
 
 /** work: saved steps per feedback item. Every triage, fix, link and mark counts; none is evicted. */
@@ -62,6 +68,35 @@ export class UserFeedbackStore {
 	}
 
 	/** The newest saved feedback, for a triage agent's duplicate check. */
+	resultPage(
+		scope: { kind: "fix" | "mission"; id: string; projectId: string },
+		before: number,
+		limit: number,
+	): ReturnType<UserFeedbackStore["page"]> {
+		const target =
+			scope.kind === "fix"
+				? "json_extract(w.record,'$.kind')='fix' AND json_extract(w.record,'$.sessionId')=?"
+				: `json_extract(w.record,'$.kind')='mission' AND json_extract(w.record,'$.missionId')=?
+				AND w.sequence=(SELECT MAX(other.sequence) FROM user_feedback_work other
+					WHERE other.feedback_id=f.id AND json_extract(other.record,'$.kind')='mission')`;
+		const rows = this.db.all(
+			`SELECT f.sequence, f.record FROM user_feedback_work w
+			 JOIN user_feedback f ON w.feedback_id=f.id
+			 WHERE ${target} AND json_extract(w.record,'$.projectId')=? AND f.sequence<?
+			 ORDER BY f.sequence DESC LIMIT ?`,
+			scope.id,
+			scope.projectId,
+			before,
+			limit + 1,
+		);
+		const items = rows.slice(0, limit).map((row) => ({
+			...(JSON.parse(String(row.record)) as UserFeedback),
+			sequence: Number(row.sequence),
+		}));
+		const more = rows.length > limit;
+		return { items, more, before: more ? items.at(-1)!.sequence : null };
+	}
+
 	recent(limit: number): Saved[] {
 		return this.page(Number.MAX_SAFE_INTEGER, limit).items;
 	}
@@ -76,6 +111,15 @@ export class UserFeedbackStore {
 	workByOperation(operationId: string): UserFeedbackWork | undefined {
 		const row = this.db.one("SELECT record FROM user_feedback_work WHERE operation_id=?", operationId);
 		return row ? JSON.parse(String(row.record)) : undefined;
+	}
+
+	/** Only the admission caller can invoke this before chat creation was entered. */
+	releaseUnenteredFix(feedbackId: string, operationId: string): void {
+		this.db.run(
+			"DELETE FROM user_feedback_work WHERE feedback_id=? AND operation_id=? AND json_extract(record,'$.kind')='fix'",
+			feedbackId,
+			operationId,
+		);
 	}
 
 	/** Exact saved native triage/prototype/fix admission, not agent-authored provenance. */

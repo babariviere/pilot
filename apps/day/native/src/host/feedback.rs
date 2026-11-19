@@ -232,16 +232,30 @@ pub(super) async fn put_image(t: &Transport, id: &str, bytes: Vec<u8>) -> Result
 
 /// One page of saved feedback: the newest, or older than `before`. Read only.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Read {
     before: Option<u64>,
     #[serde(default)]
     cached: bool,
+    result: Option<ResultScope>,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ResultScope {
+    kind: String,
+    id: String,
+    project_id: String,
 }
 impl Read {
     pub(crate) fn validate(&self) -> Result<(), Error> {
         if self.before.is_some_and(|n| n == 0 || n > MAX_CURSOR)
-            || (self.cached && self.before.is_some())
+            || (self.cached && (self.before.is_some() || self.result.is_some()))
+            || self.result.as_ref().is_some_and(|r| {
+                !matches!(r.kind.as_str(), "chat" | "mission")
+                    || !valid_id(&r.id)
+                    || !valid_id(&r.project_id)
+            })
         {
             return Err(Error::Invalid);
         }
@@ -264,6 +278,10 @@ pub(crate) struct Step {
     #[serde(default)]
     proposal_digest: Option<String>,
     #[serde(default)]
+    fix_setup_digest: Option<String>,
+    #[serde(default)]
+    allowance_micros: Option<u64>,
+    #[serde(default)]
     mission_id: Option<String>,
     /// answer: the triage question's entry, as the read showed it.
     #[serde(default)]
@@ -284,6 +302,11 @@ impl Step {
         let answer = self.question_id.is_some() || self.message.is_some();
         let adopt = self.adopt_session_id.is_some();
         let ok = valid_id(&self.feedback_id)
+            && (self.fix_setup_digest.is_none()
+                || (self.action == "fix" && digest(&self.fix_setup_digest)))
+            && self.allowance_micros.is_none_or(|n| {
+                self.action == "fix" && self.fix_setup_digest.is_some() && n > 0 && n <= MAX_CURSOR
+            })
             && matches!(self.action.as_str(), "answer" | "correct") == answer
             && (!adopt || (self.action == "triage" && id(&self.adopt_session_id)))
             && match self.action.as_str() {
@@ -425,7 +448,9 @@ pub(super) fn validate_step_record(op: &Value) -> Result<(), Error> {
     };
     // A triage that adopts a screen agent chat names it, and targets it.
     let adopt = usize::from(action == "triage" && o.contains_key("adoptSessionId"));
-    let ok = o.len() == 3 + fields.len() + funding_fields + adopt
+    let setup = usize::from(action == "fix" && o.contains_key("fixSetupDigest"));
+    let ok = o.len() == 3 + fields.len() + funding_fields + adopt + setup
+        && (setup == 0 || valid_digest(str_of("fixSetupDigest")))
         && p.get("adoptSessionId")
             .is_none_or(|v| v.as_str().is_some_and(|s| valid_id(s) && s == target))
         && p.get("allowanceMicros")
@@ -668,6 +693,28 @@ pub(super) async fn handle(
         }
         Command::FeedbackRead(request) => {
             request.validate()?;
+            if let Some(scope) = &request.result {
+                t.profile_gate().await?;
+                let before = request
+                    .before
+                    .map(|n| format!("&before={n}"))
+                    .unwrap_or_default();
+                let snapshot = t
+                    .get(&format!(
+                        "/api/feedback?limit={PAGE}{before}&resultKind={}&resultId={}&projectId={}",
+                        scope.kind, scope.id, scope.project_id
+                    ))
+                    .await?;
+                if snapshot["result"] != json!(scope) || !valid_page(&snapshot, request.before) {
+                    return Err(Error::Invalid);
+                }
+                t.profile_gate().await?;
+                check()?;
+                return Ok(json!({
+                    "snapshot": {"version":1,"items":snapshot["items"],"more":snapshot["more"],"before":snapshot["before"],"older":request.before.is_some()},
+                    "operations": unsettled(t, journal)
+                }));
+            }
             before = request.before;
         }
         Command::FeedbackSend(intent) => {
@@ -743,6 +790,12 @@ pub(super) async fn handle(
                     let project = step.project_id.clone().unwrap_or_default();
                     let profile = super::new_chat::profile_now(t, &project, mode).await?;
                     check()?;
+                    if let Some(setup) = &step.fix_setup_digest {
+                        if profile["contextDigest"] != json!(step.context_digest) {
+                            return Err(Error::Stale);
+                        }
+                        request["fixSetupDigest"] = json!(setup);
+                    }
                     for k in [
                         "projectId",
                         "projectPath",
@@ -756,6 +809,9 @@ pub(super) async fn handle(
                         if let Some(v) = profile.get(k) {
                             request[k] = v.clone();
                         }
+                    }
+                    if let Some(amount) = step.allowance_micros {
+                        request["allowanceMicros"] = json!(amount);
                     }
                     if step.action != "triage" {
                         request["triageSessionId"] = json!(step.triage_session_id);
@@ -1088,7 +1144,8 @@ mod tests {
         assert_eq!(
             Read {
                 before: Some(0),
-                cached: false
+                cached: false,
+                result: None,
             }
             .validate(),
             Err(Error::Invalid)

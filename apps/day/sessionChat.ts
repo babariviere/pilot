@@ -20,6 +20,18 @@ export type SessionChatState = "unknown" | "working" | "question" | "done" | "fa
 /** One chat as read. */
 export type SessionChat = {
 	sessionId: string;
+	projectId?: string;
+	continuationOf?: string;
+	continuedTo?: string;
+	fixHandoff?: {
+		projectId: string;
+		projectName?: string;
+		model: string;
+		thinking: string;
+		originalScope: string;
+		remainingMicros: number | null;
+		allowanceEnabled: boolean;
+	} | null;
 	/** Its title, or "" before a good read. */
 	title: string;
 	sourcePath?: string;
@@ -70,6 +82,7 @@ export interface SessionChatSource {
 	continueChat(sessionId: string): Promise<ContinueResult>;
 	/** Retry or corrected words, in this same failed/stopped chat. Empty means Retry. */
 	recoverChat?(sessionId: string, message: string): Promise<ContinueResult>;
+	handoffChat?(sessionId: string, message: string): Promise<ContinueResult>;
 	/** Takes failed chat `sessionId` off Needs you, once. It sends nothing to the chat. */
 	dismissChat?(sessionId: string): Promise<ContinueResult>;
 	/** Sends the user's own words once to chat `sessionId`, which waits for a reply. */
@@ -85,6 +98,8 @@ export type LiveChangesResult =
 
 /** What one Continue did. Unknown keeps its operation for Check. */
 export type ContinueResult = {
+	kind?: string;
+	sessionId?: string;
 	status: "accepted" | "rejected" | "unknown";
 	message: string;
 	operationId?: string;
@@ -99,6 +114,8 @@ const RECOVERY_UNKNOWN = CONTINUE_UNKNOWN.replace("Continue", "Recovery");
 
 function continueOutcome(x: unknown, unknown = CONTINUE_UNKNOWN): ContinueResult {
 	const o = x as {
+		kind?: string;
+		sessionId?: string;
 		operationId?: unknown;
 		submittedText?: unknown;
 		state?: unknown;
@@ -106,7 +123,8 @@ function continueOutcome(x: unknown, unknown = CONTINUE_UNKNOWN): ContinueResult
 	} | null;
 	const operationId = typeof o?.operationId === "string" ? o.operationId : undefined;
 	const submittedText = typeof o?.submittedText === "string" ? o.submittedText : undefined;
-	if (o?.state === "accepted") return { status: "accepted", message: "", operationId, submittedText };
+	if (o?.state === "accepted")
+		return { status: "accepted", message: "", operationId, submittedText, sessionId: o.sessionId, kind: o.kind };
 	if (o?.state === "rejected" || o?.state === "not-sent") {
 		const reason = typeof o.receipt?.reason === "string" ? o.receipt.reason : "";
 		return {
@@ -115,7 +133,7 @@ function continueOutcome(x: unknown, unknown = CONTINUE_UNKNOWN): ContinueResult
 			operationId,
 		};
 	}
-	return { status: "unknown", message: unknown, operationId, submittedText };
+	return { status: "unknown", message: unknown, operationId, submittedText, kind: o?.kind };
 }
 
 function refusedContinue(refusal: Refusal, unknown = CONTINUE_UNKNOWN): ContinueResult {
@@ -145,6 +163,10 @@ function chatOf(x: unknown, sessionId: string): SessionChat | null {
 	if (!c || c.sessionId !== sessionId || !Array.isArray(c.rows)) return null;
 	return {
 		sessionId,
+		projectId: typeof c.projectId === "string" ? c.projectId : undefined,
+		continuationOf: c.continuationOf,
+		continuedTo: c.continuedTo,
+		fixHandoff: c.fixHandoff,
 		title: typeof c.title === "string" ? c.title : "",
 		sourcePath: typeof c.sourcePath === "string" ? c.sourcePath : "",
 		sourceLabel: typeof c.sourceLabel === "string" ? c.sourceLabel : "",
@@ -287,6 +309,18 @@ export class ConnectedSessionChat implements SessionChatSource {
 		void this.refresh();
 		if (!r.ok) return refusedContinue(r.refusal, RECOVERY_UNKNOWN);
 		return continueOutcome(r.value.outcome, RECOVERY_UNKNOWN);
+	}
+	async handoffChat(sessionId: string, message: string): Promise<ContinueResult> {
+		const r = await call<unknown>(this.#window, "day.chat.handoff", { sessionId, message });
+		await this.refresh();
+		if (!r.ok)
+			return this.#chat?.sessionId === sessionId && this.#chat.pendingRecovery?.kind === "chat-handoff"
+				? this.#chat.pendingRecovery
+				: refusedContinue(r.refusal, RECOVERY_UNKNOWN);
+		return continueOutcome(
+			r.value.outcome,
+			"Handoff is Unknown. Pilot checks its saved result without starting another chat.",
+		);
 	}
 
 	async dismissChat(sessionId: string): Promise<ContinueResult> {

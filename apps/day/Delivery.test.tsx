@@ -29,6 +29,70 @@ const CSV_ROW = "id:check-task.mock-project.native.native-4";
 const DOCS_ROW = "id:check-chat.mock-project.explain-exports";
 const CHECK = "role:button[Check whether it happened. This reads Pilot's saved answer and sends nothing.]";
 
+test("linked feedback resolution on a result is explicit and does not verify the result", async () => {
+	let resolved = false;
+	let writes = 0;
+	const app = await open("./DeliveryFixture.tsx", {
+		...desktop,
+		host: { params: { day: { version: 1, window: "fixture" } } },
+		modules: {
+			nsh: {
+				"host.call": (name: string, request: { args: Record<string, unknown> }) => {
+					const mark = { operationId: "mark", kind: "resolved", recordedAt: 2 };
+					if (name === "day.feedback.step") {
+						writes++;
+						expect(request.args).toEqual({ action: "resolve", feedbackId: "feedback-1" });
+						resolved = true;
+						return { version: 1, value: { operations: [], outcome: { state: "accepted" } } };
+					}
+					expect(name).toBe("day.feedback.read");
+					expect(request.args.result).toEqual({ kind: "mission", projectId: "mock-project", id: "native" });
+					return {
+						version: 1,
+						value: {
+							operations: [],
+							snapshot: {
+								version: 1,
+								more: false,
+								before: null,
+								older: false,
+								items: [
+									{
+										id: "feedback-1",
+										text: "CSV exports forget the title.",
+										origin: null,
+										operationId: "saved",
+										recordedAt: 1,
+										sequence: 1,
+										work: [
+											{
+												operationId: "linked",
+												kind: "mission",
+												projectId: "mock-project",
+												missionId: "native",
+												recordedAt: 1,
+											},
+											...(resolved ? [mark] : []),
+										],
+									},
+								],
+							},
+						},
+					};
+				},
+			},
+		},
+	});
+	await app.press("Show linked feedback fixture");
+	await app.press(CSV_ROW);
+	await app.waitFor("id:result-feedback-mark-feedback-1");
+	expect(writes).toBe(0);
+	await app.press("id:result-feedback-mark-feedback-1");
+	await app.waitFor("Resolved by you.");
+	expect(writes).toBe(1);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
 async function ready() {
 	const app = await open("./DeliveryFixture.tsx", desktop);
 	await app.waitFor("id:to-check");

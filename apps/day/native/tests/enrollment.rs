@@ -125,6 +125,7 @@ fn intent(host: &NativeHost) -> NewIntent {
         goal: "  Clarify this exact goal\n💬  ".into(),
         replaces: None,
         request: None,
+        feedback: None,
     }
 }
 fn mission(host: &NativeHost) -> String {
@@ -511,6 +512,7 @@ fn FeedProbe(props: FeedProbeProps) -> impl IntoElement {
             setup: shown.setup.digest,
             replaces: None,
             request: None,
+            feedback: None,
         };
         assert_eq!(
             pilot_day_native::PlanFeed::start(feed.clone(), new.clone())

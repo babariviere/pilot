@@ -10,7 +10,15 @@ import {
 	type PlanningWorkerReply,
 	type PlanningWorkerRequest,
 } from "@pilot/kernel";
-import type { DurableOperation, MissionPlan, MissionTask, OperationReceipt, PlanQuestion } from "@pilot/protocol";
+import type {
+	DurableOperation,
+	MissionPlan,
+	MissionTask,
+	OperationReceipt,
+	PlanQuestion,
+	UserFeedbackWork,
+	UserFeedbackWorkView,
+} from "@pilot/protocol";
 import { Conflict, PublishedStartRefused } from "./errors.ts";
 import { interviewDigest, interviewExact, interviewId, interviewText } from "./mission-interview-contract.ts";
 import { MissionInterviews } from "./mission-interviews.ts";
@@ -58,7 +66,13 @@ export interface PlanningEnrollment {
 	replaces?: string;
 	/** The request in New (a Linear issue or Slack message) this mission is planned from, as the user saw it. */
 	request?: { itemId: string; revision: number; manageStatus?: boolean };
+	/**
+	 * The saved feedback and the exact triage or prototype proposal this mission is planned from, as the user saw it.
+	 * The feedback's mission link is saved in the enrollment transaction.
+	 */
+	feedback?: PlannedFeedback;
 }
+type PlannedFeedback = { feedbackId: string; triageSessionId: string; proposalDigest: string };
 interface Dependencies {
 	home: string;
 	store: MissionStore;
@@ -70,8 +84,33 @@ interface Dependencies {
 	knowledge?: KnowledgeService;
 	/** Requests in New, for missions planned from one. */
 	tracking?: Pick<SourceRegistry, "items" | "patch">;
+	/** A finished feedback triage's or prototype's proposal now, for missions planned from one. Passive. */
+	feedbackProposal?: (sessionId: string, prototype: boolean) => Promise<UserFeedbackWorkView["proposal"] | undefined>;
 }
 const hash = (value: unknown) => payloadHash(canonicalJSON(value));
+/**
+ * Whether a mission may be planned from the feedback's exact triage or prototype, given its saved steps: that chat is
+ * about this feedback in this project, the user has not resolved the feedback, and no mission came from that proposal.
+ */
+function feedbackPlannable(steps: UserFeedbackWork[], projectId: string, from: PlannedFeedback): void {
+	const chat = steps.find(
+		(w) => (w.kind === "triage" || w.kind === "prototype") && w.sessionId === from.triageSessionId,
+	);
+	if (!chat || (chat.kind !== "triage" && chat.kind !== "prototype"))
+		throw new Conflict("That investigation is not about this feedback");
+	if (chat.projectId !== projectId) throw new Conflict("This suggestion belongs to a different project");
+	if (steps.findLast((s) => s.kind === "resolved" || s.kind === "reopened")?.kind === "resolved")
+		throw new Conflict("This feedback is resolved. Reopen it before planning a mission from it");
+	if (
+		steps.some(
+			(s) =>
+				s.kind === "mission" &&
+				s.triageSessionId === from.triageSessionId &&
+				s.proposalDigest === from.proposalDigest,
+		)
+	)
+		throw new Conflict("A mission was already planned from this suggestion");
+}
 /**
  * Thread messages one mission keeps waiting for its planning agent. It protects the agent from a flood of messages
  * in one turn and keeps the waiting list short enough to read. A person writes far fewer while one round waits.
@@ -1666,6 +1705,7 @@ export class PlanningWorkers {
 			];
 			if (request && typeof request === "object" && Object.hasOwn(request, "replaces")) keys.push("replaces");
 			if (request && typeof request === "object" && Object.hasOwn(request, "request")) keys.push("request");
+			if (request && typeof request === "object" && Object.hasOwn(request, "feedback")) keys.push("feedback");
 			if (request && Object.hasOwn(request, "allowanceMicros")) keys.push("allowanceMicros");
 			if (funding && (!Number.isSafeInteger(request.allowanceMicros) || request.allowanceMicros! < 0))
 				throw new Conflict("Choose a mission allowance before planning");
@@ -1685,6 +1725,16 @@ export class PlanningWorkers {
 				interviewId(request.request.itemId);
 				if (!Number.isSafeInteger(request.request.revision) || request.request.revision < 1)
 					throw new Conflict("Invalid request revision");
+			}
+			if (request.feedback !== undefined) {
+				interviewExact(request.feedback, ["feedbackId", "triageSessionId", "proposalDigest"]);
+				interviewId(request.feedback.feedbackId);
+				interviewId(request.feedback.triageSessionId);
+				if (
+					typeof request.feedback.proposalDigest !== "string" ||
+					!/^[a-f0-9]{64}$/.test(request.feedback.proposalDigest)
+				)
+					throw new Conflict("Invalid feedback proposal digest");
 			}
 			interviewText(request.title, 200);
 			interviewText(request.goal, 12000);
@@ -1717,6 +1767,7 @@ export class PlanningWorkers {
 		try {
 			check();
 			if (request.request !== undefined) origin = await this.requestOpen(request.projectId, request.request);
+			if (request.feedback !== undefined) await this.feedbackOpen(request.projectId, request.feedback);
 			check();
 		} catch (e) {
 			throw new OperationRejected(e instanceof Error ? e.message : String(e));
@@ -1757,6 +1808,23 @@ export class PlanningWorkers {
 					request.projectId,
 					op.operationId,
 				);
+			// The feedback's link to its new mission is part of this creation: both are saved, or neither.
+			if (request.feedback !== undefined) {
+				const from = request.feedback;
+				this.deps.store.feedback.addWork(
+					from.feedbackId,
+					{
+						operationId: op.operationId,
+						recordedAt: Date.now(),
+						kind: "mission",
+						missionId: interview.fence.missionId,
+						projectId: request.projectId,
+						triageSessionId: from.triageSessionId,
+						proposalDigest: from.proposalDigest,
+					},
+					(current) => feedbackPlannable(current, request.projectId, from),
+				);
+			}
 			return {
 				version: 1,
 				binding: {
@@ -1783,6 +1851,19 @@ export class PlanningWorkers {
 			};
 		});
 		await this.deps.store.durable();
+		if (request.feedback !== undefined) {
+			// Context for the planner, not a request to start work. The saved link is the feedback's step.
+			const saved = this.deps.store.feedback.get(request.feedback.feedbackId);
+			try {
+				if (saved)
+					this.deps.store.log(state.binding.missionId, {
+						text: `The user planned this mission from their feedback about Pilot and its investigation's proposal. It is context, not agreed scope: “${saved.text.slice(0, 2800)}”`,
+					});
+				await this.deps.store.durable();
+			} catch (error) {
+				console.warn(`pilotd: planning ${state.binding.missionId} could not note its feedback: ${String(error)}`);
+			}
+		}
 		const setupGuard = () => {
 			if (
 				this.closing.signal.aborted ||
@@ -3274,6 +3355,20 @@ export class PlanningWorkers {
 		)
 			throw new Conflict("That request changed or already started. Look at it again in New.");
 		return item;
+	}
+	/** The feedback a mission is planned from must still offer the exact proposal the user saw, in this project. */
+	private async feedbackOpen(projectId: string, from: PlannedFeedback): Promise<void> {
+		const { store, feedbackProposal } = this.deps;
+		if (!feedbackProposal) throw new Conflict("Feedback is unavailable here");
+		if (!store.feedback.get(from.feedbackId)) throw new Conflict("This feedback no longer exists");
+		const steps = store.feedback.work(from.feedbackId);
+		feedbackPlannable(steps, projectId, from);
+		const chat = steps.find(
+			(w) => (w.kind === "triage" || w.kind === "prototype") && w.sessionId === from.triageSessionId,
+		);
+		const proposal = await feedbackProposal(from.triageSessionId, chat?.kind === "prototype");
+		if (!proposal || !("value" in proposal) || proposal.digest !== from.proposalDigest)
+			throw new Conflict("The suggestion changed since you read it. Read it again in Feedback.");
 	}
 	/** Only an authenticated, explicit native Start enters this method. No submission calls it. */
 	start(op: DurableOperation, firstEntry: boolean): Promise<unknown> {

@@ -235,6 +235,23 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	assert.match(fixMeta.pending[0].content, /Add the assignee name to PlanRow/);
 	assert.equal(f.stats().sessions, 2);
 
+	t.mock.method(f.sessions, "get", (sid: string) => {
+		const s = real(sid);
+		if (sid === fix.targetId && s) return { ...s, working: false, outcome: "done", outcomeAt: 9 } as SessionSummary;
+		return sid === triage.targetId && s
+			? ({ ...s, working: false, outcome: "done", outcomeAt: 7 } as SessionSummary)
+			: s;
+	});
+	// A second window uses a different transport operation. The exact proposal stays used after the fix ends.
+	const duplicate = step({
+		action: "fix",
+		...build,
+		triageSessionId: triage.targetId,
+		proposalDigest: proposal.digest,
+	});
+	assert.equal((await post(duplicate)).state, "rejected");
+	assert.equal(f.stats().sessions, 2);
+
 	// Any proposal, here a new mission, can also be done as one chat, tied to no mission.
 	answer = JSON.stringify({
 		...JSON.parse(answer),
@@ -242,15 +259,39 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 		goal: "Show who owns each plan row",
 		detail: "A few steps across plans and Today.",
 	});
+	let successorWorking = true;
+	const successorId = randomUUID();
 	t.mock.method(f.sessions, "get", (sid: string) => {
 		const s = real(sid);
-		if (sid === fix.targetId && s) return { ...s, working: false, outcome: "done", outcomeAt: 9 } as SessionSummary;
+		if (sid === successorId)
+			return {
+				...real(fix.targetId)!,
+				id: successorId,
+				continuationOf: fix.targetId,
+				working: successorWorking,
+				...(successorWorking ? {} : { outcome: "done" as const, outcomeAt: 10 }),
+			};
+		if (sid === fix.targetId && s)
+			return {
+				...s,
+				working: false,
+				outcome: "stopped",
+				outcomeAt: 9,
+				continuedTo: successorId,
+			} as SessionSummary;
 		return sid === triage.targetId && s
 			? ({ ...s, working: false, outcome: "done", outcomeAt: 10 } as SessionSummary)
 			: s;
 	});
 	const planned = (await page()).items.find((i) => i.id === id)!.work[0]!.proposal!;
 	assert("value" in planned, JSON.stringify(planned));
+	const another = step({ action: "fix", ...build, triageSessionId: triage.targetId, proposalDigest: planned.digest });
+	assert.equal((await post(another)).state, "rejected", "the successor is still writing this feedback's fix");
+	assert.equal(
+		(await page()).items.find((i) => i.id === id)!.work.find((w) => w.kind === "fix")!.chat?.currentSessionId,
+		successorId,
+	);
+	successorWorking = false;
 	const chat = step({ action: "fix", ...build, triageSessionId: triage.targetId, proposalDigest: planned.digest });
 	const chatAck = await post(chat);
 	assert.equal(chatAck.state, "accepted", JSON.stringify(chatAck));
@@ -266,10 +307,33 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	assert.equal((await post(step({ action: "link", missionId: "missing" }, "missing"))).state, "rejected");
 	assert(f.store.events(mission.id).some((e) => e.text.includes("context, not a request to start work")));
 	assert.equal(f.stats().sessions, 3);
+	const linkedFor = (kind: string, target: string, projectId = f.project.id) =>
+		get(
+			`/api/feedback?limit=1&resultKind=${kind}&resultId=${target}&projectId=${projectId}`,
+		) as Promise<UserFeedbackPage>;
+	assert.deepEqual(
+		(await linkedFor("mission", mission.id)).items.map((item) => item.id),
+		[id],
+	);
+	assert.deepEqual(
+		(await linkedFor("chat", chat.targetId)).items.map((item) => item.id),
+		[id],
+	);
+	assert.deepEqual((await linkedFor("chat", triage.targetId)).items, [], "a suggestion is not a fix result");
+	assert.deepEqual(
+		(await linkedFor("chat", successorId)).items.map((item) => item.id),
+		[id],
+	);
+	assert.deepEqual(
+		(await linkedFor("mission", mission.id, f.other.id)).items,
+		[],
+		"a different project exposes no link",
+	);
 
 	// Only the user's mark resolves it; a mark repeats nothing.
 	assert.equal((await post(step({ action: "reopen" }, id))).state, "rejected");
 	assert.equal((await post(step({ action: "resolve" }, id))).state, "accepted");
+	assert.equal((await linkedFor("mission", mission.id)).items[0]!.work.at(-1)?.kind, "resolved");
 	assert.equal((await post(step({ action: "resolve" }, id))).state, "rejected");
 	assert.equal((await post(step({ action: "reopen" }, id))).state, "accepted");
 
@@ -543,32 +607,70 @@ test("feedback work honors limits-off and only configured quick-fix defaults", a
 	}));
 	const proposal = (await work())[0]!.proposal!;
 	assert("value" in proposal);
-	const fix = () =>
+	const fix = (profile: Record<string, unknown>, setupDigest?: string) =>
 		operation(
 			randomUUID(),
 			{
 				purpose: "feedback-work",
 				feedbackId: saved.targetId,
 				action: "fix",
-				...ask,
+				...profile,
+				...(setupDigest ? { fixSetupDigest: setupDigest } : {}),
 				triageSessionId: op.targetId,
 				proposalDigest: proposal.digest,
 			},
 			ask.contextDigest,
 		);
-	const unmetered = fix();
-	assert.equal((await post(unmetered)).state, "accepted");
-	assert.equal(f.sessions.fundingRequired(unmetered.targetId), false);
+	const build = async () => {
+		const { mode: _mode, ...profile } = await (
+			await fetch(`${f.root}/api/projects/${f.project.id}/chat-profile?mode=build`, { headers })
+		).json();
+		return profile;
+	};
+	const unmetered = fix(await build(), (await work())[0]!.fixSetup!.digest);
 	assert.equal((await funding.read()).accounts.length, 0);
 	await funding.setEnabled((await funding.read()).revision, true);
-	assert.equal((await post(fix())).state, "rejected", "enabled limits never guess a missing allowance");
-	assert.equal((await work()).length, 2);
-	await configure(3_000_000);
-	const configured = fix();
-	assert.equal((await post(configured)).state, "accepted");
-	assert.equal(f.sessions.fundingRequired(configured.targetId), true);
 	assert.equal(
-		(await funding.read()).accounts.find((account) => account.id === configured.targetId)?.limitMicros,
+		(await post(unmetered)).state,
+		"rejected",
+		"a displayed unmetered fix cannot start once limits turn on",
+	);
+	assert.equal(
+		(await post(fix(await build(), (await work())[0]!.fixSetup!.digest))).state,
+		"rejected",
+		"enabled limits never guess a missing allowance",
+	);
+	assert.equal((await work()).length, 1);
+	await configure(3_000_000);
+	const shownSetup = (await work())[0]!.fixSetup!;
+	assert.equal(shownSetup.allowanceMicros, 3_000_000);
+	assert.equal(
+		(await post(fix({ ...(await build()), allowanceMicros: 4_000_000 }, shownSetup.digest))).state,
+		"rejected",
+		"the shown default cannot be silently increased",
+	);
+	const configured = fix(await build(), shownSetup.digest);
+	const unavailable = t.mock.method(funding, "open", async () => {
+		throw new Error("Funding disk is unavailable before chat entry");
+	});
+	assert.equal((await post(configured)).state, "rejected", "a pre-entry failure does not hold the fix");
+	assert.equal((await work()).length, 1, "the unentered slot is released");
+	unavailable.mock.restore();
+	const retry = fix(await build(), shownSetup.digest);
+	const save = f.sessions["save"].bind(f.sessions);
+	const interrupted = t.mock.method(f.sessions, "save" as never, (...args: Parameters<typeof save>) => {
+		if (args[0].id === retry.targetId) throw new Error("Interrupted before launch");
+		return save(...args);
+	});
+	assert.equal((await post(retry)).state, "rejected", "a fully rolled-back admission never started a writer");
+	assert.equal((await work()).length, 1);
+	assert.equal(f.sessions.get(retry.targetId), undefined);
+	interrupted.mock.restore();
+	const launched = fix(await build(), shownSetup.digest);
+	assert.equal((await post(launched)).state, "accepted");
+	assert.equal(f.sessions.fundingRequired(launched.targetId), true);
+	assert.equal(
+		(await funding.read()).accounts.find((account) => account.id === launched.targetId)?.limitMicros,
 		3_000_000,
 	);
 });
@@ -821,6 +923,9 @@ test("feedback triage shares daily background funding; unusable output and exact
 		store: f.store,
 		sessions: f.sessions,
 		chats: {
+			prepare: async () => {
+				throw new Error("No available model");
+			},
 			defaultAllowance: async () => ({}),
 			qualify: async () => {
 				throw new Error("passive read");

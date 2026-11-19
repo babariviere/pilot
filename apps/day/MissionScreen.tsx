@@ -27,7 +27,7 @@ import { PreviousMission } from "./PreviousMission";
 import { Problems } from "./Problems";
 import { askRevisit } from "./planCommands";
 import type { Plans } from "./planning";
-import { goalDraft, openNew, openPlan, replacesDraft, requestDraft } from "./planView";
+import { goalDraft, linkedMission, openNew, openPlan, replacesDraft, requestDraft } from "./planView";
 import { MissionThreadsSection } from "./ThreadScreen";
 import { ToCheck } from "./ToCheck";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
@@ -629,6 +629,11 @@ function Replan(props: { day: Day; page: MissionPage }) {
 	// Replacing an existing draft is an explicit choice. Its old project and
 	// request association cannot silently move to this replacement goal.
 	const useDraft = () => {
+		// A linked draft from Feedback keeps New, and the other draft it holds aside: nothing replaces either.
+		if (linkedMission()) {
+			note.set("New has a linked mission draft from Feedback. Plan or discard it there first. Nothing changed.");
+			return;
+		}
 		glide();
 		dropChoice();
 		requestDraft.set(null);

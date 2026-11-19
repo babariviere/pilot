@@ -8,14 +8,127 @@
 // offers Continue: one explicit press sends fixed words once.
 import { cleanup, Keyboard, keymap, Scroll, signal, Text, View } from "nsh";
 import { ChatTranscript } from "./ChatRows";
-import { closeChat } from "./chatView";
+import { chatRoute, closeChat, openChat } from "./chatView";
 import { queueLine } from "./codingQueue";
 import { DiagnosisReply } from "./DiagnosisSettings";
 import type { Day } from "./day";
+import { LinkedFeedback } from "./LinkedFeedback";
 import { LiveChanges } from "./LiveChanges";
 import { RECOVERY_INPUT_BYTES, recoveryBytes, recoveryNote, setRecoveryNote } from "./recoveryDraft";
 import type { ContinueResult, SessionChat, SessionChatMirror, SessionChatSource } from "./sessionChat";
 import { Action, type MarkKind, MarkLine, Page, PageTitle, TextField } from "./ui";
+
+/** The note is editable; scope and evidence remain in the original history. */
+function FixHandoffRow(props: { mirror: SessionChatMirror; sessionId: string }) {
+	let alive = true;
+	cleanup(() => {
+		alive = false;
+	});
+	const key = `handoff_${props.sessionId}`;
+	const editing = signal(!!recoveryNote(key));
+	const sending = signal(false);
+	const result = signal<ContinueResult | null>(null);
+	const chat = () => props.mirror.chat();
+	const nativePending = () => (chat()?.pendingRecovery?.kind === "chat-handoff" ? chat()?.pendingRecovery : null);
+	const pending = () =>
+		result()?.status === "unknown" && !result()?.operationId
+			? (nativePending() ?? result())
+			: (result() ?? nativePending());
+	const unknown = () => pending()?.status === "unknown";
+	const note = () => recoveryNote(key);
+	const accept = (r: ContinueResult, submitted: string) => {
+		if (alive) result.set(r);
+		if (r.status === "accepted") {
+			if (note() === submitted) setRecoveryNote(key, "");
+			if (r.sessionId && (alive || chatRoute()?.sessionId === props.sessionId)) openChat(r.sessionId, "Chat");
+		}
+	};
+	const check = async () => {
+		const id = pending()?.operationId;
+		if (!id || sending()) return;
+		sending.set(true);
+		try {
+			accept(await props.mirror.source.checkContinue(id), pending()?.submittedText ?? note());
+		} finally {
+			sending.set(false);
+		}
+	};
+	const start = async () => {
+		if (sending() || unknown()) return;
+		Keyboard.dismiss();
+		const submitted = note();
+		sending.set(true);
+		try {
+			let r = await props.mirror.source.handoffChat!(props.sessionId, submitted);
+			// Lost writes are looked up automatically, never submitted again.
+			for (let attempt = 0; r.status === "unknown" && r.operationId && attempt < 3; attempt++)
+				r = await props.mirror.source.checkContinue(r.operationId);
+			accept(r, submitted);
+		} finally {
+			sending.set(false);
+		}
+	};
+	// A reopened uncertain handoff looks up only its saved operation.
+	if (unknown()) void check();
+	return (
+		<View class="gap-3 border-t border-border pt-3">
+			<Text class="text-sm text-foreground">Continue in a linked chat</Text>
+			<Text class="text-xs text-muted-foreground">
+				Pilot pauses the original writer before handing over its working copy. Its history and evidence stay
+				available. This is the same fix, not a new allowance.
+			</Text>
+			<If when={!!chat()?.fixHandoff}>
+				<Text
+					testID="chat-handoff-context"
+					class="text-xs text-muted-foreground"
+				>{`${chat()?.fixHandoff?.projectName || chat()?.fixHandoff?.projectId} · ${chat()?.fixHandoff?.model}${chat()?.fixHandoff?.thinking ? ` (${chat()?.fixHandoff?.thinking})` : ""} · ${!chat()?.fixHandoff?.allowanceEnabled ? "Spending limits off" : chat()?.fixHandoff?.remainingMicros == null ? "Unlimited remaining" : `$${((chat()?.fixHandoff?.remainingMicros ?? 0) / 1_000_000).toFixed(2)} remaining`}`}</Text>
+			</If>
+			<If when={!editing() && !unknown()}>
+				<Action label="Prepare handoff…" testID="chat-handoff-prepare" onPress={() => editing.set(true)} />
+			</If>
+			<If when={editing() && !unknown()}>
+				<View class="gap-2">
+					<Text class="text-xs text-muted-foreground">Original scope (kept unchanged)</Text>
+					<View selectable>
+						<Text testID="chat-handoff-scope" class="text-xs text-muted-foreground">
+							{chat()?.fixHandoff?.originalScope ?? ""}
+						</Text>
+					</View>
+					<TextField
+						testID="chat-handoff-note"
+						accessibilityLabel="Handoff note"
+						multiline
+						rows={3}
+						value={note()}
+						onChange={({ value }) => setRecoveryNote(key, value)}
+						disabled={sending()}
+					/>
+					<Action
+						label={sending() ? "Starting…" : "Start linked chat"}
+						testID="chat-handoff-start"
+						disabled={sending() || recoveryBytes(note()) > RECOVERY_INPUT_BYTES}
+						onPress={() => void start()}
+					/>
+					<Action label="Cancel" disabled={sending()} onPress={() => editing.set(false)} />
+					<If when={recoveryBytes(note()) > RECOVERY_INPUT_BYTES}>
+						<Text class="text-xs text-muted-foreground">{`This note is ${recoveryBytes(note())} bytes. The limit is ${RECOVERY_INPUT_BYTES}; shorten it before starting. Your draft is kept.`}</Text>
+					</If>
+				</View>
+			</If>
+			<If when={unknown()}>
+				<Action
+					label={sending() ? "Checking…" : "Check"}
+					testID="chat-handoff-check"
+					disabled={sending()}
+					onPress={() => void check()}
+				/>
+			</If>
+			<If when={pending()?.message}>
+				<Text class="text-xs text-muted-foreground">{pending()?.message ?? ""}</Text>
+			</If>
+		</View>
+	);
+}
 
 /** Explicit recovery, never a new chat, clone, grant or allowance. */
 function RecoveryRow(props: { mirror: SessionChatMirror; sessionId: string; restartOnly: boolean }) {
@@ -256,6 +369,27 @@ export function ChatScreen(props: { day: Day; sessionId: string; onBackFromJump?
 						<MarkLine testID="chat-state" kind={state()?.mark ?? "still"}>
 							<Text class="text-sm text-foreground">{state()?.text ?? ""}</Text>
 						</MarkLine>
+						<If when={chat()?.continuedTo}>
+							<Action
+								label="Open linked chat"
+								testID="chat-successor"
+								onPress={() => openChat(chat()!.continuedTo!, "Chat")}
+							/>
+						</If>
+						<If when={chat()?.continuationOf}>
+							<Action
+								label="Original chat and evidence"
+								testID="chat-predecessor"
+								onPress={() => openChat(chat()!.continuationOf!, "Chat")}
+							/>
+						</If>
+						<If
+							when={
+								!!mirror.source.handoffChat && !!chat()?.fixHandoff && !chat()?.continuedTo && !chat()?.archived
+							}
+						>
+							<FixHandoffRow mirror={mirror} sessionId={props.sessionId} />
+						</If>
 						<If when={mirror.source.readLiveChanges && chat()?.liveChangesKey}>
 							{(key) => (
 								<LiveChanges
@@ -267,6 +401,7 @@ export function ChatScreen(props: { day: Day; sessionId: string; onBackFromJump?
 						<If
 							when={
 								chat()?.canContinue &&
+								!chat()?.continuedTo &&
 								!chat()?.specialist &&
 								!chat()?.recoveryBlocked &&
 								!chat()?.archived &&
@@ -286,6 +421,8 @@ export function ChatScreen(props: { day: Day; sessionId: string; onBackFromJump?
 						<If
 							when={
 								(chat()?.state === "failed" || chat()?.state === "stopped" || chat()?.pendingRecovery) &&
+								!chat()?.continuedTo &&
+								chat()?.pendingRecovery?.kind !== "chat-handoff" &&
 								(!chat()?.recoveryBlocked || chat()?.pendingRecovery) &&
 								!chat()?.specialist &&
 								!chat()?.archived &&
@@ -320,6 +457,20 @@ export function ChatScreen(props: { day: Day; sessionId: string; onBackFromJump?
 					onEarlier={() => void mirror.source.earlier()}
 					read={() => mirror.source.refresh()}
 				/>
+				<If
+					when={
+						!!props.day.feedback &&
+						!!chat()?.projectId &&
+						chat()?.state === "done" &&
+						!chat()?.continuedTo &&
+						!chat()?.specialist
+					}
+				>
+					<LinkedFeedback
+						mirror={props.day.feedback!}
+						scope={{ kind: "chat", id: props.sessionId, projectId: chat()!.projectId! }}
+					/>
+				</If>
 				<If when={chat()?.specialist && props.day.diagnosis}>
 					<DiagnosisReply controls={props.day.diagnosis!} sessionId={props.sessionId} />
 				</If>

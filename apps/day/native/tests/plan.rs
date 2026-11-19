@@ -458,6 +458,7 @@ fn new_names_the_setup_shown_and_small_asks_start_directly() {
         setup: "old".into(),
         replaces: None,
         request: None,
+        feedback: None,
     };
     assert_eq!(
         desk.begin_start(&stale).unwrap_err().status,
@@ -470,6 +471,7 @@ fn new_names_the_setup_shown_and_small_asks_start_directly() {
         setup: setup.clone(),
         replaces: None,
         request: None,
+        feedback: None,
     };
     assert_eq!(
         desk.begin_plan(&blank).unwrap_err().status,
@@ -482,6 +484,7 @@ fn new_names_the_setup_shown_and_small_asks_start_directly() {
         setup: setup.clone(),
         replaces: None,
         request: None,
+        feedback: None,
     };
     let id = desk.begin_start(&ask).unwrap();
     desk.settle_start(&id);
@@ -494,6 +497,7 @@ fn new_names_the_setup_shown_and_small_asks_start_directly() {
         setup,
         replaces: None,
         request: None,
+        feedback: None,
     };
     let mission = desk.begin_plan(&goal).unwrap();
     assert_eq!(desk.page(&mission).unwrap().interview, None);
@@ -515,6 +519,7 @@ fn unavailable_planning_sends_nothing() {
         setup,
         replaces: None,
         request: None,
+        feedback: None,
     };
     assert_eq!(
         desk.begin_plan(&goal).unwrap_err().message,
