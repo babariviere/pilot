@@ -15,6 +15,8 @@ planning setup. Choosing starts nothing. Plan a mission starts planning only;
 building still needs the separate Start work confirmation.
 The planner gives each task a [work profile](connections.md#work-profiles) and a size. Pilot starts the
 least busy model for them, and sends a turn blocked as cyber work again in projects that allow Cyber.
+In such a project you can also switch a chat to a profile's model yourself, such as Cyber's, even when it is
+not in your chat model list.
 If a mission creation reply is lost, Check status reads that request's saved receipt.
 A similar goal offers Create another as a separate request, never a replay; the first stays checkable.
 Other goals and drafts remain available. Re-planning an old mission offers context to carry over

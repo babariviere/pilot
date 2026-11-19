@@ -8548,6 +8548,13 @@ ${run.excerpt}`,
 	}
 
 	/** A parked idle conversation may reopen; configuration changes never interrupt or queue behind work. */
+	/** Whether `model` belongs to a work profile that `projectId` allows. */
+	private async projectProfileModel(projectId: string | undefined, model: string): Promise<boolean> {
+		const project = projectId ? this.projects.get(projectId) : undefined;
+		if (!project) return false;
+		return allowedProfiles(await this.workProfiles(), project).some((p) => profileHasModel(p, model));
+	}
+
 	async changeModel(
 		id: string,
 		model: string,
@@ -8585,6 +8592,9 @@ ${run.excerpt}`,
 			locked = true;
 			const name = model.trim();
 			const option = profileModel ? undefined : (await catalog.list(meta.cwd)).models.find((m) => m.id === name);
+			// The user may also pick a model of a profile that the chat's project allows (Cyber in phishing): like a
+			// profile start, it needs only a sign-in, not the chat model list.
+			if (!option && !profileModel) profileModel = await this.projectProfileModel(meta.projectId, name);
 			if (profileModel ? !(await this.modelCatalog.signedIn()).has(name) : !option)
 				throw new Error(`Model is not available in this session's scope: ${name}`);
 			if (option && thinking !== undefined && !option.thinkingLevels?.includes(thinking))

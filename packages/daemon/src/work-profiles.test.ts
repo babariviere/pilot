@@ -335,6 +335,16 @@ test("an out-of-scope model starts only from an allowed profile", async (t) => {
 	assert.equal((await f.sessions.selectStartModel(f.project.id, { profile: "ui" })).route, undefined);
 });
 
+test("the user may switch a chat to a model of a profile that its project allows", async (t) => {
+	const f = await fixture(t);
+	await assert.rejects(f.sessions.changeModel(f.chatId, CYBER), /not available in this session's scope/);
+	await f.allow("cyber", true);
+	const chat = await f.sessions.changeModel(f.chatId, CYBER);
+	assert.equal(chat.model, CYBER);
+	const change = f.workers.flatMap((w) => w.commands).find((c) => c.type === "changeModel");
+	assert.deepEqual(change && { model: change.model, signedIn: change.signedIn }, { model: CYBER, signedIn: true });
+});
+
 test("a provider at its limit is skipped; with every entry skipped the default starts and says why", async (t) => {
 	const f = await fixture(t, { anthropic: 100 });
 	const ui = await f.sessions.selectStartModel(f.project.id, { profile: "ui", size: "large" });
