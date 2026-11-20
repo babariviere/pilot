@@ -31,9 +31,7 @@
 			"!skills-lock.json",
 			"!**/.pi",
 			"!**/.nsh",
-			"!apps/day/macos",
-			"!.agents/skills/impeccable",
-			"!.agents/skills/intent"
+			"!apps/day/macos"
 		]
 	},
 	"overrides": [

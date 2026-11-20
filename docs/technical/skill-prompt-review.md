@@ -32,9 +32,7 @@ references are the sources; [AGENTS.md](../../AGENTS.md) sets project precedence
 | Skills and purpose | Provenance, adaptations and checks |
 | --- | --- |
 | [frontend-design](../../.agents/skills/frontend-design/SKILL.md), native interface design | [UPSTREAM.md](../../.agents/skills/frontend-design/UPSTREAM.md) records Anthropic sources, exact revisions, Apache-2.0 attribution and local precedence. |
-| [impeccable](../../.agents/skills/impeccable/SKILL.md), visual critique; [Intent skills](../../.agents/skills/intent), UX disciplines | Their [Impeccable](../../.agents/skills/impeccable/UPSTREAM.md) and [Intent](../../.agents/skills/intent/UPSTREAM.md) manifests pin versions, licenses, references and compatibility blocks. |
-| [rust-best-practices](../../.agents/skills/rust-best-practices/SKILL.md), [rust-port](../../.agents/skills/rust-port/SKILL.md), [rust-review](../../.agents/skills/rust-review/SKILL.md) | Their respective [best-practices](../../.agents/skills/rust-best-practices/UPSTREAM.md), [port](../../.agents/skills/rust-port/UPSTREAM.md), and [review](../../.agents/skills/rust-review/UPSTREAM.md) manifests pin BeautifulRust, attribution, licenses and compatibility blocks. |
-| [NSH](../../.agents/skills/nsh/SKILL.md), [NSH design](../../.agents/skills/nsh-design-guides/SKILL.md), [GPUI Kit](../../.agents/skills/gpui-kit/SKILL.md), [Pilot Next design](../../.agents/skills/pilot-next-design/SKILL.md) | Local coding/design guidance and adjacent references. Exact upstream provenance and separate skill-level automated checks were not established in this audit; do not infer a pin from runtime dependency versions. GPUI guidance concerns the retained legacy desktop, not Day's NSH UI. |
+| [NSH](../../.agents/skills/nsh/SKILL.md), [NSH design](../../.agents/skills/nsh-design-guides/SKILL.md) | Day coding and design guidance. [skills-lock.json](../../skills-lock.json) records the upstream paths and content hashes. |
 
 The provenance manifests provide the source URLs, precise pins, attribution, licenses, adaptations
 and hash manifests where recorded. Review those and adjacent references when changing a skill.
@@ -53,7 +51,7 @@ The SDK can load user/project templates and instructions at runtime; their conte
 checked-in Pilot template inventory. Mission state, task text and memory are dynamic data, not
 static prompt copies. The [role examples](system-prompts-by-role.md) are synthetic and may drift;
 compare them with current source before using them as evidence. Historical docs, fixtures and
-test canaries are not production instructions. Retained legacy desktop guidance is labeled above.
+test canaries are not production instructions.
 
 ## Review and maintenance
 
