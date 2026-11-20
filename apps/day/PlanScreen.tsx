@@ -55,6 +55,7 @@ import {
 	Columns,
 	Disclosure,
 	EmptyLine,
+	Link,
 	type MarkKind,
 	Notice,
 	Page,
@@ -806,9 +807,22 @@ function PlanBody(props: {
 			<Panel
 				testID="plan-panel"
 				notice={
-					<If when={p().note}>
-						<Notice kind="needs" role="alert" placement="panel" text={p().note} />
-					</If>
+					<>
+						<If when={p().note}>
+							<Notice kind="needs" role="alert" placement="panel" text={p().note} />
+						</If>
+						{/* A review can arrive while another tab is open. A live update never moves the tab, so say where it is. */}
+						<If when={review() && shownTab() !== "plan"}>
+							<Notice
+								testID="plan-review-waits"
+								placement="panel"
+								text="The proposed plan waits for your review."
+								action={
+									<Link testID="plan-open-review" label="Open the plan" onPress={() => tab.set("plan")} />
+								}
+							/>
+						</If>
+					</>
 				}
 				tabs={
 					<If when={p().available}>
@@ -822,6 +836,7 @@ function PlanBody(props: {
 							<Tab
 								testID="plan-tab-plan"
 								label="Plan"
+								count={review() ? 1 : null}
 								selected={shownTab() === "plan"}
 								onPress={() => tab.set("plan")}
 							/>

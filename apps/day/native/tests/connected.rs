@@ -585,6 +585,9 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
     app.press("id:submit").unwrap();
 
     // The real coordinator proposes the agreement in a NEW complete review.
+    // It arrives while the Questions tab is open. A live update never moves the tab, so the page says where it is.
+    wait(&mut app, "The proposed plan waits for your review.");
+    app.press("id:plan-open-review").unwrap();
     wait(&mut app, "The proposed plan");
     wait(&mut app, "Your review");
     f.cmd("held", false);
