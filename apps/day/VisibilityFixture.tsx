@@ -91,7 +91,7 @@ day.today.update((t) => ({
 			id: "session:waiting-chat",
 			title: "Show working agents on Today",
 			cause: "Its chat ended its turn without a result or a question. It may be waiting for your reply.",
-			nextStep: "Reply to it, or Continue to let it go on without your words.",
+			nextStep: "Reply to it, or continue without reply.",
 			missionId: "native",
 			projectId: "fixture-project",
 			sessionId: "waiting-chat",

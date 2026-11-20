@@ -8,7 +8,9 @@ import {
 	imageSize,
 	isArtifactKind,
 	loadArtifactImage,
+	MAX_IMAGE_BYTES,
 	MAX_IMAGE_SOURCE_BYTES,
+	NSH_SOURCE_BYTES,
 	type NshRendered,
 	writeNshScratchSource,
 } from "@pilot/artifacts";
@@ -23,13 +25,14 @@ import { Type } from "typebox";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { StringEnum } from "./schema.ts";
 
-const MAX_SOURCE_BYTES = 512 * 1024;
+const NSH_LIMIT = `${NSH_SOURCE_BYTES / 1024} KiB UTF-8`;
+const IMAGE_LIMIT = `${MAX_IMAGE_BYTES / 1024 / 1024} MiB decoded`;
 const kind = StringEnum(["image", "nsh"] as const);
 const writeProperties = {
 	title: Type.String({ minLength: 1, maxLength: 160, description: "Short human-readable artifact title." }),
 	source: Type.String({
 		maxLength: MAX_IMAGE_SOURCE_BYTES,
-		description: "Image only: a local file path or base64 image data URL (16 MiB decoded max).",
+		description: `Image only: a local file path or base64 image data URL (${IMAGE_LIMIT} max).`,
 	}),
 };
 const summaryProperties = {
@@ -73,8 +76,8 @@ export interface ArtifactToolOptions {
 }
 
 function checkSource(write: ArtifactWrite): void {
-	if (write.kind !== "image" && Buffer.byteLength(write.source, "utf8") > MAX_SOURCE_BYTES)
-		throw new Error("Artifact source exceeds the 512 KiB UTF-8 limit");
+	if (write.kind !== "image" && Buffer.byteLength(write.source, "utf8") > NSH_SOURCE_BYTES)
+		throw new Error(`Artifact source exceeds the ${NSH_LIMIT} limit`);
 }
 
 function summary(value: ArtifactSummary) {
@@ -165,7 +168,7 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 - get: read source and metadata by id, optionally at a historical revision. Local artifacts read latest when revision is omitted. Linked mission/task references are read-only: omission uses the pinned revision, or latest for unpinned links; conflicting pins require an explicit linked revision.
 - list: list current session summaries without source.
 Publish kind ${nsh ? "nsh or image" : "image"}.
-${nsh ? `NSH: ${options.ask ? `pass the complete TSX as source and a .tsx basename as sourcePath; the tool writes that one file in ${scratch}, then captures it. Ask writes nothing else.` : `kind nsh captures one sourcePath (.tsx basename or absolute path in ${scratch}). Do not pass inline source.`} The tool compiles it and runs it once headless like Day's preview: errors publish nothing (fix and retry), and the result says what it shows. Not a full TypeScript typecheck. Saved UTF-8 bytes are immutable and survive scratch cleanup. No local/remote imports or assets are loaded. Source: 512 KiB UTF-8 max.\n` : ""}Images: 16 MiB decoded max. ${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Pass a local PNG, JPEG, GIF or WebP path or an inline data URL, never a remote URL."}
+${nsh ? `NSH: ${options.ask ? `pass the complete TSX as source and a .tsx basename as sourcePath; the tool writes that one file in ${scratch}, then captures it. Ask writes nothing else.` : `kind nsh captures one sourcePath (.tsx basename or absolute path in ${scratch}). Do not pass inline source.`} The tool compiles it and runs it once headless like Day's preview: errors publish nothing (fix and retry), and the result says what it shows. Not a full TypeScript typecheck. Saved UTF-8 bytes are immutable and survive scratch cleanup. No local/remote imports or assets are loaded. Source: ${NSH_LIMIT} max.\n` : ""}Images: ${IMAGE_LIMIT} max. ${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Pass a local PNG, JPEG, GIF or WebP path or an inline data URL, never a remote URL."}
 Get the current source before updating, and pass its revision as expectedRevision.`,
 			promptSnippet: nsh
 				? "Publish NSH or image artifacts; inspect saved source"
@@ -195,8 +198,8 @@ Get the current source before updating, and pass its revision as expectedRevisio
 						? Type.String({
 								maxLength: MAX_IMAGE_SOURCE_BYTES,
 								description: nsh
-									? "Image: an inline base64 image data URL (16 MiB decoded max), never a file path. NSH: the complete TSX file text (512 KiB UTF-8 max)."
-									: "Image only: an inline base64 image data URL (16 MiB decoded max). File paths are not allowed in Ask.",
+									? `Image: an inline base64 image data URL (${IMAGE_LIMIT} max), never a file path. NSH: the complete TSX file text (${NSH_LIMIT} max).`
+									: `Image only: an inline base64 image data URL (${IMAGE_LIMIT} max). File paths are not allowed in Ask.`,
 							})
 						: writeProperties.source,
 				),

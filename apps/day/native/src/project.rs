@@ -11,7 +11,7 @@ use crate::{
         ChatLine, ControlAsk, ControlState, ControlView, Currentness, Decision, DecisionKind,
         Delivery, Freshness, FreshnessState, MemberLine, MemberState, MissionLink, MissionPage,
         MissionRow, MissionState, Movement, Output, OutputKind, Problem, Progress, ReportLine,
-        ReportedDelivery, TaskLine, TaskStatus,
+        ReportedDelivery, TaskStatus,
     },
 };
 
@@ -450,7 +450,7 @@ pub fn problems(overview: &c::DayOverview) -> Vec<Problem> {
                 "tool_stall" | "long_job" => "Inspect the running work before stopping or continuing it.",
                 "no_pr" if standalone => "Its chat finished with changes but no pull request. See the work, then mark it done or send it back.",
                 "no_pr" => "Its task finished with changes but no pull request. Open the mission to see the work.",
-                "waits" => "Reply to it, or Continue to let it go on without your words.",
+                "waits" => "Reply to it, or continue without reply.",
                 _ if can_continue => "Continue asks it to try again, once. Or dismiss it.",
                 _ if can_dismiss => "Read its work to choose what to do next, or dismiss it.",
                 _ => "Inspect the originating work before choosing how to continue. Nothing is retried here.",

@@ -7,10 +7,11 @@
 // What Pilot could not read stays unknown, never zero or empty.
 import { type Signal, signal } from "nsh";
 import type { Planning, Today } from "pilot-day/native";
-import { call, type Refusal } from "./bridge";
+import { call } from "./bridge";
+import { passing, raced, type Refusal, readReason } from "./refusals";
 import { type CodingQueue, queueOf } from "./codingQueue";
 import type { DeliveredWork, VerificationSubject } from "./deliveryContract";
-import { FAILED_TRIES, retryDelay, staleLine, staleWarning } from "./freshness";
+import { FAILED_TRIES, readRetry, staleLine, staleWarning } from "./freshness";
 
 /** Passive results from another project. No actions can use that project's root. */
 export type ScopeResults = {
@@ -124,22 +125,8 @@ export function restoreTodayScope(saved = "") {
 
 /** Why the scope read is not shown, in one calm sentence. */
 export function scopeReason(refusal: Refusal): string {
-	switch (refusal) {
-		case "offline":
-			return "Pilot could not reach its service.";
-		case "identity":
-			return "The Pilot service changed. Open Pilot again.";
-		case "closed":
-		case "busy":
-			return "Pilot is closing.";
-		case "denied":
-		case "unavailable":
-			return "This Pilot service cannot read your other projects here yet.";
-		case "invalid":
-			return "Pilot's service answered in a way this app does not understand.";
-		default:
-			return "Pilot could not read your other projects.";
-	}
+	const unavailable = "This Pilot service cannot read your other projects here yet.";
+	return readReason(refusal, { denied: unavailable, unavailable, other: "Pilot could not read your other projects." });
 }
 
 function count(x: unknown): ScopeCount | null {
@@ -338,9 +325,6 @@ export type ScopeMirror = {
 // the root rejects an older one.
 let generation = Date.now();
 
-/** Refusals that pass: the service is down, slow, busy or changing. Pilot tries again by itself. */
-const PASSING = new Set<Refusal>(["offline", "unknown", "stale", "busy", "lost"]);
-
 /** Mirrors `source` for one window. */
 export function mirrorScope(source: ScopeSource): ScopeMirror {
 	const view = signal<ScopeView>({ state: "reading", reason: "", snapshot: null });
@@ -356,12 +340,8 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 	// The scope last asked for, and how many passing failures in a row it had.
 	let wanted = "";
 	let failures = 0;
-	let retry: ReturnType<typeof setTimeout> | null = null;
 	let closed = false;
-	const stopRetry = () => {
-		if (retry !== null) clearTimeout(retry);
-		retry = null;
-	};
+	const retry = readRetry(() => void read(wanted));
 	// The last good read of each recent scope, so switching back shows it at
 	// once. At most 4: All projects and the 3 projects chosen last. Each read
 	// can be large (it holds every selected project's Today), so older ones go.
@@ -372,6 +352,7 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 		while (goods.size > 4) goods.delete(goods.keys().next().value as string);
 	};
 	const read = async (scope: string) => {
+		if (closed) return;
 		const mine = ++generation;
 		const epoch = invalidated;
 		newest = mine;
@@ -398,29 +379,23 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 						: { state: "reading", reason: "", snapshot: null },
 				);
 		}
-		stopRetry();
+		retry.cancel();
 		const r = await source
 			.read(scope, mine, first)
 			.catch(() => ({ ok: false as const, refusal: "invalid" as Refusal }));
 		// A newer read was asked for: this answer means nothing now.
-		if (mine !== newest) return;
+		if (closed || mine !== newest) return;
 		// An ordinary notice orders another read; it does not erase the last
 		// successful read. Only a failure makes a known scope incomplete.
 		if (!r.ok) incomplete.set(true);
 		else if (epoch === invalidated) incomplete.set(false);
-		if (!r.ok && PASSING.has(r.refusal)) {
+		if (!r.ok && passing(r.refusal)) {
 			// A passing failure: the service is down, slow or busy. Pilot tries
 			// again with backoff. Rows of this scope stay without a note until
 			// they are old (freshness.ts); with none, it reads quietly, and says
 			// so only after 3 failed tries.
-			activity.set(
-				r.refusal === "offline"
-					? "disconnected"
-					: r.refusal === "stale" || r.refusal === "busy"
-						? "stale"
-						: "failed",
-			);
-			if (r.refusal !== "stale" && r.refusal !== "busy") failures += 1;
+			activity.set(r.refusal === "offline" ? "disconnected" : raced(r.refusal) ? "stale" : "failed");
+			if (!raced(r.refusal)) failures += 1;
 			const earlier = view().snapshot;
 			const keep = earlier && earlier.scope === scope ? earlier : null;
 			const at = goods.get(scope)?.at ?? null;
@@ -435,10 +410,7 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 					: { state: "reading", reason: "", snapshot: null };
 			const v = view();
 			if (v.state !== next.state || v.reason !== next.reason || v.snapshot !== next.snapshot) view.set(next);
-			retry = setTimeout(() => {
-				retry = null;
-				if (!closed && wanted === scope && mine === newest) void read(scope);
-			}, retryDelay(failures));
+			retry.wait(failures);
 			return;
 		}
 		if (!r.ok) {
@@ -536,11 +508,7 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 		activity.set(epoch === invalidated ? "live" : "stale");
 		// The chosen project shows; now the complete read fills in the others.
 		if (snapshot.partial && mine === newest) void read(scope);
-		else if (retryPlanning)
-			retry = setTimeout(() => {
-				retry = null;
-				if (!closed && wanted === scope && mine === newest) void read(scope);
-			}, retryDelay(failures));
+		else if (retryPlanning) retry.wait(failures);
 	};
 	return {
 		view,
@@ -549,12 +517,13 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 		catalog,
 		read,
 		invalidate: () => {
+			if (closed) return;
 			invalidated++;
 			if (activity() === "live") activity.set("stale");
 		},
 		close: () => {
 			closed = true;
-			stopRetry();
+			retry.cancel();
 		},
 	};
 }

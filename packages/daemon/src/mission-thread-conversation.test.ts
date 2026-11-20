@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { type ConversationId, type EntryId, MemoryStorage } from "@earendil-works/pi-durable";
-import type { EntryRecord } from "@pilot/protocol";
-import type { MissionThread } from "../../protocol/src/mission-thread.ts";
+import type { EntryRecord, MissionThread } from "@pilot/protocol";
 import { threadConversationEntries, threadQuestionText } from "./mission-thread-conversation.ts";
 
 test("coordinator output needs explicit links, not adjacency or matching text", async () => {

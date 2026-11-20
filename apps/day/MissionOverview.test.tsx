@@ -102,7 +102,7 @@ test("opening a mission names the work now, its owner and what is next, without 
 	// The map, interview and plan stay one press away.
 	expect(app.shows("id:mission-plan")).toBe(false);
 	expect(app.shows("id:mission-section-map")).toBe(true);
-	expect(app.shows("Tasks · 8")).toBe(true);
+	expect(app.shows("Tasks · 9")).toBe(true);
 	expect(app.shows("Results and evidence · 2")).toBe(true);
 });
 
@@ -120,14 +120,29 @@ test("a task line names its profile, size, model and why; Change opens Settings"
 	await app.waitUntil(() => !app.shows("id:next-search-4"));
 });
 
-test("blockers tell a task dependency from a task marked blocked and an unavailable prerequisite", async () => {
+test("blockers group tasks by what they wait for, say each dependency once and keep every other reason", async () => {
 	const app = await opened();
 	expect(app.shows("id:blocked-search-5 >> text:Waits for earlier work")).toBe(true);
-	expect(app.shows("id:prerequisites-search-5 >> text:#4 Release pull request · To do")).toBe(true);
+	// #5 and #9 wait for the same task: one group names it once, and each row keeps its own state and reason.
+	expect(app.shows("id:blocked-group-search-4 >> text:Waits for #4 Release pull request · To do")).toBe(true);
+	expect(app.shows("id:blocked-group-search-4 >> id:blocked-search-5")).toBe(true);
+	expect(app.shows("id:blocked-group-search-4 >> id:blocked-search-9")).toBe(true);
+	expect(app.shows("id:blocked-search-9 >> text:Blocked")).toBe(true);
+	expect(app.shows("id:blocked-search-9 >> text:Marked blocked until the filter design is agreed.")).toBe(true);
+	// The host's "Waiting for #4" line, the same for both, is what the group's label says: no row repeats it.
+	expect(app.count("text:Waiting for #4 Release pull request.")).toBe(0);
+	expect(app.count("text:Waits for #4 Release pull request · To do")).toBe(1);
+	expect(app.shows("id:prerequisites-search-5")).toBe(false);
+	// A task marked blocked with no prerequisite is apart from the groups.
+	expect(app.shows("id:blocked-group-other >> text:Other blockers")).toBe(true);
+	expect(app.shows("id:blocked-group-other >> id:blocked-search-6")).toBe(true);
 	expect(app.shows("id:blocked-search-6 >> text:Marked blocked. No blocking prerequisite is recorded.")).toBe(true);
-	expect(app.shows("id:prerequisites-search-6")).toBe(false);
-	expect(app.shows("id:prerequisites-search-7 >> text:Prerequisite unavailable · Status unknown")).toBe(true);
-	expect(app.shows("Prerequisite gone-9 is unavailable; it is not known done.")).toBe(true);
+	expect(app.shows("id:blocked-group-gone-9 >> text:Waits for Prerequisite unavailable · Status unknown")).toBe(true);
+	// A dependency line the label does not say shows once, under the label, and not in the row.
+	expect(app.shows("id:blocked-notes-gone-9 >> text:Prerequisite gone-9 is unavailable; it is not known done.")).toBe(
+		true,
+	);
+	expect(app.count("text:Prerequisite gone-9 is unavailable; it is not known done.")).toBe(1);
 	expect(app.shows("text:/#0/")).toBe(false);
 });
 
@@ -182,7 +197,7 @@ test("a live update moves a task from Next to Now and keeps its details open, it
 	await app.waitFor("id:now-search-4");
 	expect(app.shows("id:next-search-4")).toBe(false);
 	expect(app.shows("Writing the release notes.")).toBe(true);
-	expect(app.shows("id:prerequisites-search-5 >> text:#4 Release pull request · In progress")).toBe(true);
+	expect(app.shows("id:blocked-group-search-4 >> text:Waits for #4 Release pull request · In progress")).toBe(true);
 	expect(app.shows("Nothing is queued in the plan.")).toBe(true);
 	// Its details are still open in its card, and the focus followed it: the keyboard closes them.
 	expect(app.shows("id:now-search-4 >> text:Open the release pull request with the benchmark chart.")).toBe(true);
@@ -204,13 +219,40 @@ test("a live update keeps a title being renamed, and its keyboard focus", async 
 	expect(app.value("id:mission-title")).toBe("Search v2x");
 });
 
-test("waiting for you: the task's question is in Now and the mission's decision in Blockers", async () => {
+test("waiting for you: the chat's question is in attention, Now refers to it, and the decision is in Blockers", async () => {
 	const app = await opened();
 	await situation(app, "waiting");
 	await app.waitFor("Which Linux distributions count for the release?");
 	expect(app.shows("id:now-search-3 >> text:Waiting for you")).toBe(true);
 	expect(app.shows("id:mission-waiting")).toBe(true);
 	expect(app.shows("id:mission-waiting >> text:Waiting for you")).toBe(true);
+	// Attention shows the task in full: the agent's words, the reply field, both ways on and its chat.
+	expect(app.shows("id:problem-session:w-search >> text:Agent reply")).toBe(true);
+	expect(app.shows("id:problem-session:w-search >> text:Your reply")).toBe(true);
+	expect(app.shows("id:chat-waits-continue-w-search >> text:Continue without reply")).toBe(true);
+	expect(app.shows("id:problem-chat-session:w-search >> text:Open agent chat")).toBe(true);
+	expect(app.count("text:Which Linux distributions count for the release?")).toBe(1);
+	// Now keeps a short reference. Attention links the same chat, so Now has no second link.
+	expect(app.shows("id:now-attention-search-3 >> text:In Work that needs attention above.")).toBe(true);
+	expect(app.shows("id:now-chat-search-3")).toBe(false);
+	expect(app.shows("Owner: Build · Sonnet")).toBe(false);
+	// What attention does not show stays one press away: owner, model and details, not the question again.
+	await app.press("id:now-details-search-3");
+	await app.waitFor("Owner: Build · Sonnet");
+	expect(app.shows("id:now-model-search-3")).toBe(true);
+	expect(app.shows("Run the integration suite on Ubuntu and Fedora with a large workspace.")).toBe(true);
+	expect(app.count("text:Which Linux distributions count for the release?")).toBe(1);
+	// #8's attention row names no chat: Now keeps #8's own link, and attention offers none.
+	expect(app.shows("id:now-attention-search-8")).toBe(true);
+	expect(app.shows("id:now-chat-search-8")).toBe(true);
+	expect(app.shows("id:problem-chat-task:search-8")).toBe(false);
+	await app.press("id:now-details-search-8");
+	await app.waitFor("Commit 4be1c07 is ready for review.");
+	await app.press("id:problem-chat-session:w-search");
+	await app.waitFor("Read only. Reading it sends nothing and changes nothing.");
+	await app.press("id:back");
+	await app.waitFor("id:now-attention-search-3");
+	expect(app.shows("Owner: Build · Sonnet")).toBe(true);
 });
 
 test("paused: active held work stays in Now, unstarted held work in Next, and Resume only in the control panel", async () => {
@@ -227,9 +269,14 @@ test("paused: active held work stays in Now, unstarted held work in Next, and Re
 	expect(app.shows("No prerequisite blockers in this read.")).toBe(false);
 	// A hold does not hide what already blocks a task: it stays in Blockers with its prerequisite and reason.
 	expect(app.shows("id:blocked-search-5 >> text:Held")).toBe(true);
-	expect(app.shows("id:prerequisites-search-5 >> text:#4 Release pull request · To do")).toBe(true);
+	expect(app.shows("id:blocked-group-search-4 >> text:Waits for #4 Release pull request · To do")).toBe(true);
+	expect(app.shows("id:blocked-search-9 >> text:Held")).toBe(true);
+	// A reason that is not about the dependency stays in every row.
+	expect(app.shows("id:blocked-search-5 >> text:Mission is paused.")).toBe(true);
+	expect(app.shows("id:blocked-search-9 >> text:Mission is paused.")).toBe(true);
+	expect(app.shows("id:blocked-search-9 >> text:Marked blocked until the filter design is agreed.")).toBe(true);
 	expect(app.shows("id:blocked-search-6 >> text:Marked blocked. No blocking prerequisite is recorded.")).toBe(true);
-	expect(app.shows("id:blocked-search-7 >> text:Prerequisite unavailable · Status unknown")).toBe(true);
+	expect(app.shows("id:blocked-group-gone-9 >> text:Waits for Prerequisite unavailable · Status unknown")).toBe(true);
 	expect(app.shows("id:now-search-8 >> text:In review")).toBe(true);
 });
 
@@ -241,7 +288,7 @@ test("completed: no task is next, and a chat still working after its task is don
 	expect(app.shows("Chats working in this mission")).toBe(true);
 	expect(app.shows("id:mission-chat-w-search")).toBe(true);
 	expect(app.shows("text:/^Nothing is working/")).toBe(false);
-	expect(app.shows("Results and evidence · 8")).toBe(true);
+	expect(app.shows("Results and evidence · 9")).toBe(true);
 });
 
 test("empty and unread task lists are said plainly and differently", async () => {
@@ -262,7 +309,7 @@ test("an older service without work states places no task and infers nothing fro
 	const app = await opened();
 	await situation(app, "older");
 	await app.waitFor("id:mission-unplaced");
-	expect(app.shows("6 tasks have no work state in this read. Tasks shows their recorded status.")).toBe(true);
+	expect(app.shows("7 tasks have no work state in this read. Tasks shows their recorded status.")).toBe(true);
 	for (const id of ["now-search-3", "now-search-8", "next-search-4", "blocked-search-5"]) {
 		expect(app.shows(`id:${id}`)).toBe(false);
 	}

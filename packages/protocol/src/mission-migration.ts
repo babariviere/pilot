@@ -1,5 +1,5 @@
-import type { Mission, MissionBrief, MissionResource, MissionTask } from "./index.ts";
 import type { MissionPlan } from "./mission-plan.ts";
+import type { Mission, MissionBrief, MissionResource, MissionTask } from "./missions.ts";
 
 /** Native-only read. No transfer, archive, Start or grant occurs on preview. */
 export interface MissionSuccessorPreview {

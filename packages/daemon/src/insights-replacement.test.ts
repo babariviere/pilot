@@ -22,7 +22,7 @@ import { InsightsReplacement } from "./insights-replacement.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
-import { OperationJournal, payloadHash } from "./operation-journal.ts";
+import { canonicalJSON, OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
@@ -401,7 +401,7 @@ test("completed replacement keeps its exact receipt while current Stop blocks st
 	assert.equal(accepted.state, "accepted");
 	const file = join(f.home, "operations", `${payloadHash(op.operationId)}.json`);
 	const bytes = await readFile(file);
-	const rules = f.schedules.list();
+	const rules = canonicalJSON(f.schedules.list());
 	await f.sessions.stop(op.targetId);
 	for (let n = 0; n < 2; n++) {
 		const status = await f.replacement.status(op);
@@ -410,7 +410,7 @@ test("completed replacement keeps its exact receipt while current Stop blocks st
 		assert.deepEqual(status.receipt, accepted, "current Stop never rewrites historical acceptance");
 		assert.deepEqual(await f.run(op), accepted, "completed command remains receipt lookup only");
 		assert.deepEqual(await readFile(file), bytes);
-		assert.deepEqual(f.schedules.list(), rules);
+		assert.equal(canonicalJSON(f.schedules.list()), rules);
 		if (n === 0) await f.reopen();
 	}
 	assert.equal(f.starts, 0);
@@ -500,9 +500,6 @@ test("admitted creation, worker, saves and uncertain old reviews refuse without 
 	f.sessions["workers"].set(f.oldId, {} as never);
 	assert.equal((await f.preview()).reason, "old_work_admitted_wait_for_quiescence");
 	f.sessions["workers"].delete(f.oldId);
-	f.sessions["diagnosticContextReads"].set(`${f.oldId}:synthetic`, new AbortController());
-	assert.equal((await f.preview()).reason, "old_work_admitted_wait_for_quiescence");
-	f.sessions["diagnosticContextReads"].clear();
 	const key = randomUUID();
 	f.sessions["durableCreateAdmissions"].set(key, {
 		targetId: key,
@@ -601,8 +598,8 @@ for (const effect of ["fence", "cancel", "chat", "schedule", "complete"] as cons
 						fail(() => (original as typeof store.complete)(...args)),
 					);
 			} else if (effect === "cancel") {
-				const original = f.schedules.cancelInsights.bind(f.schedules);
-				t.mock.method(f.schedules, "cancelInsights", (...args: Parameters<typeof original>) =>
+				const original = f.schedules.insights.cancelInsights.bind(f.schedules.insights);
+				t.mock.method(f.schedules.insights, "cancelInsights", (...args: Parameters<typeof original>) =>
 					fail(() => original(...args)),
 				);
 			} else if (effect === "chat") {
@@ -611,8 +608,8 @@ for (const effect of ["fence", "cancel", "chat", "schedule", "complete"] as cons
 					fail(() => original(...args)),
 				);
 			} else {
-				const original = f.schedules.createInsights.bind(f.schedules);
-				t.mock.method(f.schedules, "createInsights", (...args: Parameters<typeof original>) =>
+				const original = f.schedules.insights.createInsights.bind(f.schedules.insights);
+				t.mock.method(f.schedules.insights, "createInsights", (...args: Parameters<typeof original>) =>
 					fail(() => original(...args)),
 				);
 			}
@@ -628,11 +625,11 @@ for (const effect of ["fence", "cancel", "chat", "schedule", "complete"] as cons
 				effect === "fence"
 					? t.mock.method(f.missions.insights.replacements, "fence")
 					: effect === "cancel"
-						? t.mock.method(f.schedules, "cancelInsights")
+						? t.mock.method(f.schedules.insights, "cancelInsights")
 						: effect === "chat"
 							? t.mock.method(f.sessions, "spawnInsightsDurable")
 							: effect === "schedule"
-								? t.mock.method(f.schedules, "createInsights")
+								? t.mock.method(f.schedules.insights, "createInsights")
 								: null;
 			await f.journal.recover(
 				(op) => f.replacement.replace(op, JSON.parse(op.payload)),
@@ -682,8 +679,8 @@ test("exact old rule CAS drift after fencing refuses successor admission", async
 	const f = await fixture(t);
 	await f.deleteOld();
 	const op = await f.intent();
-	const original = f.schedules.cancelInsights.bind(f.schedules);
-	t.mock.method(f.schedules, "cancelInsights", async (...args: Parameters<typeof original>) => {
+	const original = f.schedules.insights.cancelInsights.bind(f.schedules.insights);
+	t.mock.method(f.schedules.insights, "cancelInsights", async (...args: Parameters<typeof original>) => {
 		await f.scheduleStore.replace(f.oldRule, { ...f.oldRule, paused: true });
 		return original(...args);
 	});

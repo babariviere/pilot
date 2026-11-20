@@ -408,7 +408,7 @@ test("Continue also takes a User Stop hold and a safe failed run; Dismiss takes 
 	assert.equal(await sent(done), 0);
 });
 
-test("Reply sends the user's own words once, only to a chat waiting for a reply", async (t) => {
+test("Reply sends the user's own words once, to an eligible existing chat", async (t) => {
 	const f = await nativeIntakeFixture();
 	t.after(() => f.close());
 	const headers = { "x-pilot-github-capability": f.capability, "content-type": "application/json" };
@@ -461,13 +461,12 @@ test("Reply sends the user's own words once, only to a chat waiting for a reply"
 				content: string;
 			}[]
 		).filter((p) => p.content === "Postgres, please.").length;
-	// A finished chat that does not wait for a reply refuses it.
+	// Structured questions use their own answer path.
+	metas.get(sessionId)!.outcome = "question";
+	assert.equal(f.sessions.get(sessionId)?.canReply, undefined);
 	assert.equal((await post(reply("Postgres, please."))).state, "rejected");
-	const real = f.sessions.get.bind(f.sessions);
-	t.mock.method(f.sessions, "get", (id: string) => {
-		const chat = real(id);
-		return chat && id === sessionId ? { ...chat, waitsForReply: true as const } : chat;
-	});
+	metas.get(sessionId)!.outcome = "stopped";
+	assert.equal(f.sessions.get(sessionId)?.canReply, true);
 	for (const bad of [reply(""), reply(42), reply("x".repeat(12_001)), reply("ok", { note: "x" })])
 		assert.equal((await post(bad)).state ?? "rejected", "rejected");
 	const op = reply("Postgres, please.");

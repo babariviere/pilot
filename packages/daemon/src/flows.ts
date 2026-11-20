@@ -1,4 +1,5 @@
 import type { AgentFlow, FlowOutcome, FlowProgress, FlowStartRequest } from "@pilot/protocol";
+import { flowInputId } from "./input-requests.ts";
 
 export interface FlowVisit {
 	node: number;
@@ -157,7 +158,7 @@ export function validateFlowState(flow: FlowState, rootId: string): void {
 			!Number.isSafeInteger(visit.after) ||
 			visit.after < -1 ||
 			typeof visit.admitted !== "boolean" ||
-			visit.inputId !== `automation:flow:${rootId}:${visit.round}:${visit.node}` ||
+			visit.inputId !== flowInputId(rootId, visit.round, visit.node) ||
 			!/^([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(visit.sessionId) ||
 			(visit.node === 0 && visit.sessionId !== rootId)
 		)

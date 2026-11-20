@@ -13,7 +13,7 @@ import type { InsightsAdmission } from "./insights-admission.ts";
 import { INSIGHTS_REPLACEMENT_SCHEMA, InsightsReplacementStore } from "./insights-replacement-store.ts";
 import { INSIGHTS_REVIEW_SCHEMA, InsightsReviews } from "./insights-review.ts";
 import { INSIGHTS_SETTINGS_SCHEMA, InsightsSettings } from "./insights-settings.ts";
-import type { KnowledgeDb } from "./project-knowledge-store.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export const INSIGHTS_SCHEMA = `${INSIGHTS_REVIEW_SCHEMA}${INSIGHTS_SETTINGS_SCHEMA}${INSIGHTS_REPLACEMENT_SCHEMA}
 CREATE TABLE IF NOT EXISTS insights_items (
@@ -224,11 +224,45 @@ export function parseInsightsBacklog(input: unknown): InsightsBacklogRequest {
 	return { action: action as "save_report" | "save_checkpoint", ...common, record: record(x.record) };
 }
 
-export interface InsightsDb extends KnowledgeDb {
-	durable(): Promise<void>;
+export interface InsightsDb extends MissionDbPort {
 	validateMission(missionId: string, projectId: string): void;
 	createTask(missionId: string, draft: InsightsFindingDraft, sessionId: string): string;
-	projectTask(missionId: string, taskId: string, draft: InsightsFindingDraft, lifecycle: InsightsLifecycle): void;
+	/** Sets the task's title, body and status. Done tasks get a completion time. */
+	updateTask(
+		missionId: string,
+		taskId: string,
+		fields: { title: string; body: string; status: "todo" | "in_progress" | "done" | "dropped" },
+	): void;
+}
+
+/** The mission task that tracks a finding: its text and the task status for its lifecycle. */
+function findingTask(draft: InsightsFindingDraft, lifecycle: InsightsLifecycle) {
+	const status =
+		lifecycle === "shipped" || lifecycle === "verified"
+			? "done"
+			: lifecycle === "dismissed"
+				? "dropped"
+				: lifecycle === "in_progress"
+					? "in_progress"
+					: "todo";
+	const body = [
+		`Finding: ${lifecycle}. Priority: ${draft.priority}.`,
+		`Affects: ${draft.targets.length ? draft.targets.map((target) => `${target.label} (${target.projectId})`).join(", ") : "unspecified"}`,
+		...(draft.cost
+			? [
+					`Cost estimate (not measured): ${draft.cost.estimate}`,
+					`Baseline: ${draft.cost.baseline}`,
+					`Assumptions: ${draft.cost.assumptions}`,
+					`Quality risks: ${draft.cost.qualityRisks}`,
+					`Later measured result: ${draft.cost.laterResult || "not yet measured"}`,
+				]
+			: []),
+		"Tracking only. Implementation requires separate approval and work.",
+		draft.observation,
+		`Proposal: ${draft.proposedChange}`,
+		`Benefit: ${draft.expectedBenefit}`,
+	].join("\n\n");
+	return { title: draft.title, body, status } as const;
 }
 
 export class InsightsBacklog {
@@ -257,173 +291,178 @@ export class InsightsBacklog {
 	async call(admission: InsightsAdmission, input: unknown): Promise<unknown> {
 		const request = parseInsightsBacklog(input);
 		if (Buffer.byteLength(JSON.stringify(request)) > 64000) throw new Conflict("Insights request exceeds 64 KB");
-		const result = this.db.transaction(() => {
-			const mission = this.validate(admission);
-			const session = admission.binding.reportSessionId;
-			const x = request;
-			if (x.action === "review_context") return this.reviews.context(admission, x.cursor ?? 0);
-			if (x.action === "receipt") {
-				const row = this.db.one(
-					"SELECT result FROM insights_operations WHERE mission_id=? AND session_id=? AND operation_id=?",
+		const result = this.db.transaction(
+			() => {
+				const mission = this.validate(admission);
+				const session = admission.binding.reportSessionId;
+				const x = request;
+				if (x.action === "review_context") return this.reviews.context(admission, x.cursor ?? 0);
+				if (x.action === "receipt") {
+					const row = this.db.one(
+						"SELECT result FROM insights_operations WHERE mission_id=? AND session_id=? AND operation_id=?",
+						mission,
+						session,
+						x.operationId,
+					);
+					return row ? { state: "committed", receipt: JSON.parse(row.result as string) } : { state: "unknown" };
+				}
+				if (x.action === "list") {
+					const rows = this.db.all(
+						"SELECT seq AS cursor, kind, key, revision, task_id AS taskId, lifecycle, updated_at AS updatedAt FROM insights_items WHERE mission_id=? AND kind=? AND seq>? ORDER BY seq LIMIT ?",
+						mission,
+						x.kind,
+						x.cursor ?? 0,
+						(x.limit ?? 20) + 1,
+					);
+					return this.page(rows, x.limit ?? 20);
+				}
+				if (x.action === "get") return this.item(mission, x.kind, x.key);
+				if (x.action === "history" || x.action === "evidence") {
+					this.item(mission, x.action === "history" ? x.kind : "finding", x.key);
+					const rows =
+						x.action === "history"
+							? this.db.all(
+									"SELECT seq AS cursor, revision, payload, lifecycle, authority, at FROM insights_revisions WHERE mission_id=? AND kind=? AND key=? AND seq>? ORDER BY seq LIMIT ?",
+									mission,
+									x.kind,
+									x.key,
+									x.cursor ?? 0,
+									(x.limit ?? 20) + 1,
+								)
+							: this.db.all(
+									"SELECT seq AS cursor, payload FROM insights_evidence WHERE mission_id=? AND finding_key=? AND seq>? ORDER BY seq LIMIT ?",
+									mission,
+									x.key,
+									x.cursor ?? 0,
+									(x.limit ?? 20) + 1,
+								);
+					return this.page(
+						rows.map((r) => ({ ...r, payload: JSON.parse(r.payload as string) })),
+						x.limit ?? 20,
+					);
+				}
+				if (!("expectedRevision" in x)) throw new Conflict("Invalid write");
+				const hash = createHash("sha256")
+					.update(JSON.stringify({ binding: admission.binding, request: x }))
+					.digest("hex");
+				const old = this.db.one(
+					"SELECT request_hash, result FROM insights_operations WHERE mission_id=? AND session_id=? AND operation_id=?",
 					mission,
 					session,
 					x.operationId,
 				);
-				return row ? { state: "committed", receipt: JSON.parse(row.result as string) } : { state: "unknown" };
-			}
-			if (x.action === "list") {
-				const rows = this.db.all(
-					"SELECT seq AS cursor, kind, key, revision, task_id AS taskId, lifecycle, updated_at AS updatedAt FROM insights_items WHERE mission_id=? AND kind=? AND seq>? ORDER BY seq LIMIT ?",
+				if (old) {
+					if (old.request_hash !== hash) throw new Conflict("Operation ID already used with another request");
+					return JSON.parse(old.result as string);
+				}
+				const finding = "draft" in x;
+				const kind = finding ? "finding" : x.action === "save_report" ? "report" : "checkpoint";
+				const previous = this.db.one(
+					"SELECT * FROM insights_items WHERE mission_id=? AND kind=? AND key=?",
 					mission,
-					x.kind,
-					x.cursor ?? 0,
-					(x.limit ?? 20) + 1,
+					kind,
+					x.key,
 				);
-				return this.page(rows, x.limit ?? 20);
-			}
-			if (x.action === "get") return this.item(mission, x.kind, x.key);
-			if (x.action === "history" || x.action === "evidence") {
-				this.item(mission, x.action === "history" ? x.kind : "finding", x.key);
-				const rows =
-					x.action === "history"
-						? this.db.all(
-								"SELECT seq AS cursor, revision, payload, lifecycle, authority, at FROM insights_revisions WHERE mission_id=? AND kind=? AND key=? AND seq>? ORDER BY seq LIMIT ?",
-								mission,
-								x.kind,
-								x.key,
-								x.cursor ?? 0,
-								(x.limit ?? 20) + 1,
-							)
-						: this.db.all(
-								"SELECT seq AS cursor, payload FROM insights_evidence WHERE mission_id=? AND finding_key=? AND seq>? ORDER BY seq LIMIT ?",
-								mission,
-								x.key,
-								x.cursor ?? 0,
-								(x.limit ?? 20) + 1,
+				if (Number(previous?.revision ?? 0) !== x.expectedRevision)
+					throw new Conflict("Insights revision changed; read before amending");
+				if (finding && (x.action === "propose" ? !!previous : !previous))
+					throw new Conflict("Propose requires a new key; amend requires an existing finding");
+				const revision = x.expectedRevision + 1;
+				const lifecycle = finding ? ((previous?.lifecycle as InsightsLifecycle | undefined) ?? "proposed") : null;
+				let taskId = previous?.task_id as string | undefined;
+				if (finding) {
+					this.reviews.pattern(admission, x.key, x.patternKey);
+					if (previous) {
+						const oldDraft = JSON.parse(previous.payload as string) as InsightsFindingDraft;
+						if (oldDraft.implementationLinks.some((link) => !x.draft.implementationLinks.includes(link)))
+							throw new Conflict("Implementation references are append-only");
+						const subject = (d: InsightsFindingDraft) =>
+							JSON.stringify({
+								...d,
+								implementationLinks: [],
+								...(d.cost ? { cost: { ...d.cost, laterResult: "" } } : {}),
+							});
+						if (lifecycle !== "proposed" && subject(oldDraft) !== subject(x.draft))
+							throw new Conflict(
+								"User-confirmed finding scope is frozen; append evidence/links/result claims only",
 							);
-				return this.page(
-					rows.map((r) => ({ ...r, payload: JSON.parse(r.payload as string) })),
-					x.limit ?? 20,
-				);
-			}
-			if (!("expectedRevision" in x)) throw new Conflict("Invalid write");
-			const hash = createHash("sha256")
-				.update(JSON.stringify({ binding: admission.binding, request: x }))
-				.digest("hex");
-			const old = this.db.one(
-				"SELECT request_hash, result FROM insights_operations WHERE mission_id=? AND session_id=? AND operation_id=?",
-				mission,
-				session,
-				x.operationId,
-			);
-			if (old) {
-				if (old.request_hash !== hash) throw new Conflict("Operation ID already used with another request");
-				return JSON.parse(old.result as string);
-			}
-			const finding = "draft" in x;
-			const kind = finding ? "finding" : x.action === "save_report" ? "report" : "checkpoint";
-			const previous = this.db.one(
-				"SELECT * FROM insights_items WHERE mission_id=? AND kind=? AND key=?",
-				mission,
-				kind,
-				x.key,
-			);
-			if (Number(previous?.revision ?? 0) !== x.expectedRevision)
-				throw new Conflict("Insights revision changed; read before amending");
-			if (finding && (x.action === "propose" ? !!previous : !previous))
-				throw new Conflict("Propose requires a new key; amend requires an existing finding");
-			const revision = x.expectedRevision + 1;
-			const lifecycle = finding ? ((previous?.lifecycle as InsightsLifecycle | undefined) ?? "proposed") : null;
-			let taskId = previous?.task_id as string | undefined;
-			if (finding) {
-				this.reviews.pattern(admission, x.key, x.patternKey);
-				if (previous) {
-					const oldDraft = JSON.parse(previous.payload as string) as InsightsFindingDraft;
-					if (oldDraft.implementationLinks.some((link) => !x.draft.implementationLinks.includes(link)))
-						throw new Conflict("Implementation references are append-only");
-					const subject = (d: InsightsFindingDraft) =>
-						JSON.stringify({
-							...d,
-							implementationLinks: [],
-							...(d.cost ? { cost: { ...d.cost, laterResult: "" } } : {}),
-						});
-					if (lifecycle !== "proposed" && subject(oldDraft) !== subject(x.draft))
-						throw new Conflict(
-							"User-confirmed finding scope is frozen; append evidence/links/result claims only",
+					}
+					// New evidence cannot replace an earlier observation, even with a new operation ID.
+					for (const e of x.evidence) {
+						const payload = JSON.stringify({ ...e, host: admission.binding.host });
+						const prior = this.db.one(
+							"SELECT payload FROM insights_evidence WHERE mission_id=? AND finding_key=? AND evidence_key=?",
+							mission,
+							x.key,
+							e.key,
 						);
+						if (prior && prior.payload !== payload)
+							throw new Conflict("Evidence keys are immutable; append a correction with a new key");
+						this.db.run(
+							"INSERT OR IGNORE INTO insights_evidence(mission_id,finding_key,evidence_key,payload) VALUES (?,?,?,?)",
+							mission,
+							x.key,
+							e.key,
+							payload,
+						);
+					}
+					taskId ??= this.db.createTask(mission, x.draft, session);
+					this.db.updateTask(mission, taskId, findingTask(x.draft, lifecycle!));
+				} else {
+					for (const key of x.record.findingKeys) this.item(mission, "finding", key);
+					const priorRecord = previous
+						? (JSON.parse(previous.payload as string) as InsightsReviewRecord)
+						: undefined;
+					const sessions = new Set<string>();
+					for (const point of x.record.checkpoints) {
+						if (sessions.has(point.sessionId)) throw new Conflict("Duplicate checkpoint session");
+						sessions.add(point.sessionId);
+						const prior = priorRecord?.checkpoints.find((p) => p.sessionId === point.sessionId);
+						if (
+							(!point.streamId || (prior && prior.streamId !== point.streamId)) &&
+							(!point.gaps.length || point.coverage === "sampled")
+						)
+							throw new Conflict("Unknown or changed streams require an explicit partial/unavailable gap");
+						if (
+							prior &&
+							point.streamId &&
+							point.streamId === prior.streamId &&
+							prior.throughEntry !== null &&
+							point.throughEntry !== null &&
+							point.throughEntry < prior.throughEntry &&
+							!point.gaps.length
+						)
+							throw new Conflict("Checkpoint regression requires an explicit gap");
+					}
 				}
-				// New evidence cannot replace an earlier observation, even with a new operation ID.
-				for (const e of x.evidence) {
-					const payload = JSON.stringify({ ...e, host: admission.binding.host });
-					const prior = this.db.one(
-						"SELECT payload FROM insights_evidence WHERE mission_id=? AND finding_key=? AND evidence_key=?",
-						mission,
-						x.key,
-						e.key,
-					);
-					if (prior && prior.payload !== payload)
-						throw new Conflict("Evidence keys are immutable; append a correction with a new key");
-					this.db.run(
-						"INSERT OR IGNORE INTO insights_evidence(mission_id,finding_key,evidence_key,payload) VALUES (?,?,?,?)",
-						mission,
-						x.key,
-						e.key,
-						payload,
-					);
-				}
-				taskId ??= this.db.createTask(mission, x.draft, session);
-				this.db.projectTask(mission, taskId, x.draft, lifecycle!);
-			} else {
-				for (const key of x.record.findingKeys) this.item(mission, "finding", key);
-				const priorRecord = previous ? (JSON.parse(previous.payload as string) as InsightsReviewRecord) : undefined;
-				const sessions = new Set<string>();
-				for (const point of x.record.checkpoints) {
-					if (sessions.has(point.sessionId)) throw new Conflict("Duplicate checkpoint session");
-					sessions.add(point.sessionId);
-					const prior = priorRecord?.checkpoints.find((p) => p.sessionId === point.sessionId);
-					if (
-						(!point.streamId || (prior && prior.streamId !== point.streamId)) &&
-						(!point.gaps.length || point.coverage === "sampled")
-					)
-						throw new Conflict("Unknown or changed streams require an explicit partial/unavailable gap");
-					if (
-						prior &&
-						point.streamId &&
-						point.streamId === prior.streamId &&
-						prior.throughEntry !== null &&
-						point.throughEntry !== null &&
-						point.throughEntry < prior.throughEntry &&
-						!point.gaps.length
-					)
-						throw new Conflict("Checkpoint regression requires an explicit gap");
-				}
-			}
-			const payload = JSON.stringify(
-				finding
-					? x.draft
-					: {
-							...(x.action === "save_report" ? this.reviews.finish(admission, x.key, x.record) : x.record),
-							authority: "review_claim_only",
-							host: admission.binding.host,
-						},
-			);
-			this.save(mission, kind, x.key, revision, taskId, payload, lifecycle);
-			const receipt = { operationId: x.operationId, kind, key: x.key, revision, taskId: taskId ?? null };
-			this.db.run(
-				"INSERT INTO insights_operations(mission_id,session_id,operation_id,request_hash,result) VALUES (?,?,?,?,?)",
-				mission,
-				session,
-				x.operationId,
-				hash,
-				JSON.stringify(receipt),
-			);
-			this.validate(admission);
-			return receipt;
-		});
+				const payload = JSON.stringify(
+					finding
+						? x.draft
+						: {
+								...(x.action === "save_report" ? this.reviews.finish(admission, x.key, x.record) : x.record),
+								authority: "review_claim_only",
+								host: admission.binding.host,
+							},
+				);
+				this.save(mission, kind, x.key, revision, taskId, payload, lifecycle);
+				const receipt = { operationId: x.operationId, kind, key: x.key, revision, taskId: taskId ?? null };
+				this.db.run(
+					"INSERT INTO insights_operations(mission_id,session_id,operation_id,request_hash,result) VALUES (?,?,?,?,?)",
+					mission,
+					session,
+					x.operationId,
+					hash,
+					JSON.stringify(receipt),
+				);
+				this.validate(admission);
+				return receipt;
+			},
+			{ reconcile: true },
+		);
 		await this.db.durable();
 		if (request.action === "save_report") this.reviews.changed();
 		if (["propose", "amend", "save_report", "save_checkpoint"].includes(request.action))
-			this.db.changed(admission.binding.missionId);
+			this.db.changed(admission.binding.missionId, "passive");
 		this.validate(admission);
 		if (Buffer.byteLength(JSON.stringify(result)) > 64 * 1024)
 			throw new Conflict("Insights response exceeds 64 KiB; use a smaller page");
@@ -511,60 +550,63 @@ export class InsightsBacklog {
 		integer(expectedRevision);
 		operation(operationId);
 		choice(lifecycle, ["proposed", "approved", "in_progress", "shipped", "verified", "deferred", "dismissed"]);
-		const result = this.db.transaction(() => {
-			const mission = this.validate(admission);
-			const session = admission.binding.reportSessionId;
-			const hash = createHash("sha256")
-				.update(
-					JSON.stringify({
-						action: "user_lifecycle",
-						key,
-						expectedRevision,
-						lifecycle,
-						binding: admission.binding,
-					}),
-				)
-				.digest("hex");
-			const old = this.db.one(
-				"SELECT request_hash,result FROM insights_operations WHERE mission_id=? AND session_id=? AND operation_id=?",
-				mission,
-				session,
-				operationId,
-			);
-			if (old) {
-				if (old.request_hash !== hash) throw new Conflict("Operation ID already used");
-				return JSON.parse(old.result as string);
-			}
-			const current = this.item(mission, "finding", key);
-			if (current.revision !== expectedRevision) throw new Conflict("Insights revision changed");
-			if (lifecycle === "verified" && current.lifecycle !== "shipped")
-				throw new Conflict("Only shipped findings can be verified by the user");
-			const revision = expectedRevision + 1;
-			this.db.projectTask(mission, current.taskId as string, current.payload, lifecycle);
-			this.save(
-				mission,
-				"finding",
-				key,
-				revision,
-				current.taskId as string,
-				JSON.stringify(current.payload),
-				lifecycle,
-				"explicit_user_confirmation",
-			);
-			const receipt = { operationId, kind: "finding", key, revision, taskId: current.taskId };
-			this.db.run(
-				"INSERT INTO insights_operations VALUES (?,?,?,?,?)",
-				mission,
-				session,
-				operationId,
-				hash,
-				JSON.stringify(receipt),
-			);
-			this.validate(admission);
-			return receipt;
-		});
+		const result = this.db.transaction(
+			() => {
+				const mission = this.validate(admission);
+				const session = admission.binding.reportSessionId;
+				const hash = createHash("sha256")
+					.update(
+						JSON.stringify({
+							action: "user_lifecycle",
+							key,
+							expectedRevision,
+							lifecycle,
+							binding: admission.binding,
+						}),
+					)
+					.digest("hex");
+				const old = this.db.one(
+					"SELECT request_hash,result FROM insights_operations WHERE mission_id=? AND session_id=? AND operation_id=?",
+					mission,
+					session,
+					operationId,
+				);
+				if (old) {
+					if (old.request_hash !== hash) throw new Conflict("Operation ID already used");
+					return JSON.parse(old.result as string);
+				}
+				const current = this.item(mission, "finding", key);
+				if (current.revision !== expectedRevision) throw new Conflict("Insights revision changed");
+				if (lifecycle === "verified" && current.lifecycle !== "shipped")
+					throw new Conflict("Only shipped findings can be verified by the user");
+				const revision = expectedRevision + 1;
+				this.db.updateTask(mission, current.taskId as string, findingTask(current.payload, lifecycle));
+				this.save(
+					mission,
+					"finding",
+					key,
+					revision,
+					current.taskId as string,
+					JSON.stringify(current.payload),
+					lifecycle,
+					"explicit_user_confirmation",
+				);
+				const receipt = { operationId, kind: "finding", key, revision, taskId: current.taskId };
+				this.db.run(
+					"INSERT INTO insights_operations VALUES (?,?,?,?,?)",
+					mission,
+					session,
+					operationId,
+					hash,
+					JSON.stringify(receipt),
+				);
+				this.validate(admission);
+				return receipt;
+			},
+			{ reconcile: true },
+		);
 		await this.db.durable();
-		this.db.changed(admission.binding.missionId);
+		this.db.changed(admission.binding.missionId, "passive");
 		this.validate(admission);
 		return result;
 	}

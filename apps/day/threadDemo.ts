@@ -8,7 +8,7 @@
 // answer. `holdReads` keeps page reads waiting until `releaseReads()`.
 // `writes`, `sends`, `checks` and `reads` count calls, to prove nothing is resent.
 import { signal } from "nsh";
-import type { Refusal } from "./bridge";
+import type { Refusal } from "./refusals";
 import {
 	acceptedWords,
 	type HistoryEntry,

@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { RepositoryChanges } from "../../packages/daemon/src/changes.ts";
 import { MissionStore } from "../../packages/daemon/src/missions.ts";
 import { type ProcessOptions, subprocesses } from "../../packages/daemon/src/subprocess.ts";
+import { hermeticGitEnv } from "../../packages/daemon/src/testing/git-env.ts";
 import { untrackedStats } from "../../packages/daemon/src/untracked-stats.ts";
 
 const root = mkdtempSync(join(tmpdir(), "pilot-metadata-bench-"));
@@ -15,15 +16,7 @@ const git = (...args: string[]) =>
 	execFileSync("git", args, {
 		cwd: root,
 		encoding: "utf8",
-		env: {
-			...process.env,
-			GIT_CONFIG_NOSYSTEM: "1",
-			GIT_CONFIG_GLOBAL: "/dev/null",
-			GIT_AUTHOR_NAME: "Fixture",
-			GIT_AUTHOR_EMAIL: "fixture@example.com",
-			GIT_COMMITTER_NAME: "Fixture",
-			GIT_COMMITTER_EMAIL: "fixture@example.com",
-		},
+		env: hermeticGitEnv(),
 	});
 const median = (values: number[]) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)]!;
 let store: MissionStore | undefined;
@@ -103,7 +96,7 @@ try {
 		commands++;
 		return run(command, args, {
 			...options,
-			env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+			env: hermeticGitEnv(),
 		});
 	};
 	for (let round = 0; round < 4; round++) {

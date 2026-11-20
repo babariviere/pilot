@@ -6,14 +6,12 @@ import { test } from "node:test";
 import {
 	DISCOVERY_FILES,
 	DISCOVERY_LIMITS,
-	MISE_LOCAL_FILES,
 	parseDiscoveredFile,
 	readDiscoveryFiles,
 	resolveDiscovery,
 	satisfies,
 	satisfiesRange,
 } from "./environment-discovery.ts";
-import { localConfigs } from "./workspaces.ts";
 
 async function checkout(files: Record<string, string>): Promise<string> {
 	const root = await mkdtemp(join(tmpdir(), "pilot-environment-discovery-"));
@@ -363,9 +361,4 @@ test("version constraints", () => {
 	assert.equal(satisfiesRange("20.1.0", "~20.2"), false);
 	assert.equal(satisfiesRange("1.2.3", "1.x"), true);
 	assert.equal(satisfiesRange("1.2.3", "workspace:*"), undefined);
-});
-
-test("the read list includes every copied local mise config", () => {
-	assert.deepEqual(MISE_LOCAL_FILES, localConfigs);
-	for (const path of localConfigs) assert.ok(DISCOVERY_FILES.includes(path), path);
 });

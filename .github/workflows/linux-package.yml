@@ -33,7 +33,6 @@ jobs:
           for script in scripts/linux/*.sh; do bash -n "$script"; done
           node --test scripts/linux/*.test.mjs
           python3 -B -m unittest discover -s scripts/linux -p 'test_*.py'
-          python3 -B -m unittest discover -s apps/day/scripts -p 'test_bundle_runtime.py'
           python3 -B -m unittest discover -s apps/day/macos/scripts/tests -p 'test_release_metadata.py'
       - name: Build private Node and production native dependencies in a bounded ABI toolchain
         # A build toolchain, not a destination distro. Every ELF's actual required symbols are audited.

@@ -24,7 +24,7 @@ test("an explorer chat whose question the plan settled does not say it waits for
 async function ready() {
 	const app = await open("./ChatFixture.tsx", desktop);
 	await app.waitFor("What do you want done?");
-	await app.waitFor("No project is chosen for you.");
+	await app.waitFor("id:choose-first");
 	return app;
 }
 
@@ -71,7 +71,7 @@ test("New starts with no project: both starts wait for the user's choice, and ch
 	expect(counts(app)).toContain(COUNTS(0, 0, 0));
 	await app.type("id:goal", "Fix the flaky upload test 👩🏽‍💻");
 	expect(app.shows("Choose a project")).toBe(true);
-	expect(app.shows("Plan a mission and Start as one chat wait for a project.")).toBe(true);
+	expect(app.shows("Choose a project to see what can start there.")).toBe(true);
 	expect(app.enabled("role:button[Plan a mission]")).toBe(false);
 	expect(app.enabled("role:button[Start as one chat]")).toBe(false);
 	await choose(app, "website");
@@ -123,7 +123,7 @@ test("a chat starts once in the chosen project, with the access chosen and the e
 	expect(app.value("id:goal")).toBe("");
 	expect(app.shows("A chat in website")).toBe(true);
 	// The next words need a project of their own: New does not reuse the last one.
-	await app.waitFor("No project is chosen for you.");
+	await app.waitFor("id:choose-first");
 	await app.type("id:goal", "Next ask");
 	expect(app.enabled("role:button[Start as one chat]")).toBe(false);
 	expect(app.enabled("role:button[Plan a mission]")).toBe(false);
@@ -227,7 +227,7 @@ test("an older save's project was never the user's choice: it comes back with no
 	await choose(app, "website");
 	await app.waitFor("/Users/you/src/website");
 	await app.press("Reopen as an older save");
-	await app.waitFor("No project is chosen for you.");
+	await app.waitFor("id:choose-first");
 	expect(app.value("id:goal")).toBe("Older save 日本語");
 	expect(app.enabled("role:button[Start as one chat]")).toBe(false);
 	expect(app.enabled("role:button[Plan a mission]")).toBe(false);
@@ -241,7 +241,7 @@ test("leaving New without words drops the project; words keep it", async () => {
 	await app.keyboard.press("escape");
 	expect(app.shows("What do you want done?")).toBe(false);
 	await app.press("Open New");
-	await app.waitFor("No project is chosen for you.");
+	await app.waitFor("id:choose-first");
 	await app.type("id:goal", "Kept with its project");
 	await choose(app, "website");
 	await app.waitFor("/Users/you/src/website");

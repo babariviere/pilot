@@ -1,7 +1,7 @@
 /** Isolated real native diagnostics settings and receipt storage. No providers. */
 
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import { serveCommands } from "./commands.ts";
 import { mock } from "node:test";
 import { ModelCatalog } from "../models.ts";
 import { nativePlanningFixture } from "../native-mission-planning.fixture.ts";
@@ -37,11 +37,8 @@ console.log(
 		},
 	}),
 );
-for await (const line of createInterface({ input: process.stdin })) {
-	const c = JSON.parse(line);
-	if (c.action === "quit") break;
+await serveCommands(async (c) => {
 	if (c.action === "lost") lost = true;
-	console.log(JSON.stringify({ writes, sessions: f.sessions.list().length }));
-}
-process.stdin.destroy();
+	return { writes, sessions: f.sessions.list().length };
+});
 await f.close();

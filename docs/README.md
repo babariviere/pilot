@@ -22,7 +22,8 @@ Connected Day keeps earlier reads marked as older while it refreshes. An
 unavailable attention read never means that nothing needs you. Read again only
 reads; it does not resend an answer or start work.
 Day opens the global dashboard without a project or model selection. Today's
-header defaults to All projects and saves its filter per window. A project filter
+header defaults to All projects and saves its filter per window. All projects omits empty project groups;
+a project filter keeps its empty states, and unavailable projects stay visible. A project filter
 still counts attention elsewhere and never retargets work or New's draft. New
 requires an explicit project choice; saved choices stay with their drafts.
 In a profile-only window, New reads that project's configured model and trusted
@@ -56,7 +57,9 @@ New Slack requests wait in Needs you after the results, one card each: the messa
 reporter when Pilot found them, and where work starts. **Start work** (⌘↩) asks once before it starts one Build
 chat; **Change** picks a mission instead or plans a new one. **Later** (L) and **Discard** set the request aside;
 the folded lists below Needs you bring it back. **Open in Slack** shows the message in your browser. Today's
-headline counts these cards and the results with the questions. **New** lists Slack requests.
+headline separates stopped chats, other attention and incoming requests. Requests alone show only their count;
+an incomplete read never means all clear. Request rows show up to two title lines.
+**New** lists Slack requests.
 When Linear is connected, its own Today tab shows Pilot's saved copy of your issues.
 **Finished today** lists completed chat runs in your local day. Finishing a run does not mark its result reviewed
 or merged. Results that need your review still wait in Needs you.
@@ -190,11 +193,11 @@ window you are looking at. It reads the window's controls, takes a picture of it
 it never sends, starts, approves or saves anything in Pilot: it tells you which control to press. Point lets you
 click the control you mean first. Make feedback drafts feedback from the conversation; Send feedback is yours,
 and the conversation becomes that feedback's triage. Esc hides the bar; the conversation stays with the window.
-Open the triage chat or Open the fix chat shows that chat read only: your messages, Pilot's replies,
-one line per tool step and whether it works, finished or failed. A chat started from New, and a
-mission's coordinator, task and working chats on its overview, open the same way. Chat actions sit at the top
-right of their headers, separate from actions that start work. Reading a chat sends
-nothing.
+Open the triage chat or Open the fix chat to see the conversation and its tool activity.
+Open a group of tool steps to see what the agent used and which steps failed.
+In chats that accept messages, write at the bottom and choose **Send** (⌘↩).
+During a turn, messages wait until the turn ends. If Pilot cannot confirm a send, **Check** only looks up
+the original receipt. It never sends again. Opening and reading a chat sends nothing.
 A stopped chat, or a failed one that is safe to retry, shows **Continue**, on its page, on Today's
 **Needs a look** and on a task result that has nothing yet. It asks the agent once to pick up where it
 stopped, or to ask a lost question again. A Continue that Pilot could not confirm shows Check and is never

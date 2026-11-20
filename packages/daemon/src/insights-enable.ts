@@ -54,10 +54,7 @@ export interface InsightsEnableDependencies {
 		| "insightsReplacementGuard"
 		| "insightsReplacementAbsent"
 	>;
-	schedules: Pick<
-		ScheduleService,
-		"list" | "createInsights" | "insightsEnableAvailable" | "cancelInsights" | "insightsReplacementAvailable"
-	>;
+	schedules: Pick<ScheduleService, "list" | "insights">;
 	journal: OperationJournal;
 	now?: () => number;
 }
@@ -259,7 +256,7 @@ export class InsightsEnable {
 				return block("enable_pending_use_status");
 			if ([...references].some((id) => !candidates.some((candidate) => candidate.sessionId === id)))
 				return block("report_identity_unavailable");
-			this.deps.schedules.insightsEnableAvailable(this.deps.host);
+			this.deps.schedules.insights.insightsEnableAvailable(this.deps.host);
 			if (candidates.length > 1) return block("multiple_report_chats");
 			if (candidates[0] && !candidates[0].available) return block("report_chat_unavailable");
 			if (candidates[0] && (candidates[0].projectId !== projectId || candidates[0].missionId !== missionId))
@@ -309,7 +306,7 @@ export class InsightsEnable {
 				(chat && !equal(chat, this.deps.sessions.insightsEnableChat(targetId)))
 			)
 				return block("preflight_changed");
-			this.deps.schedules.insightsEnableAvailable(this.deps.host);
+			this.deps.schedules.insights.insightsEnableAvailable(this.deps.host);
 			if (
 				chat &&
 				!equal(
@@ -359,7 +356,7 @@ export class InsightsEnable {
 			payload.context !== this.context(payload.projectId, payload.missionId)
 		)
 			throw new Conflict("Insights home/project/backlog changed");
-		this.deps.schedules.insightsEnableAvailable(payload.expectedHome);
+		this.deps.schedules.insights.insightsEnableAvailable(payload.expectedHome);
 		const candidates = this.candidates(payload.projectId, payload.missionId);
 		if (candidates.length !== 1 || candidates[0]!.sessionId !== chat.sessionId)
 			throw new Conflict("Report binding is no longer unambiguous");
@@ -439,7 +436,7 @@ export class InsightsEnable {
 						throw new Conflict("Insights context changed");
 					if (this.candidates(payload.projectId, payload.missionId).length)
 						throw new Conflict("An existing report binding appeared; do not create a substitute");
-					this.deps.schedules.insightsEnableAvailable(payload.expectedHome);
+					this.deps.schedules.insights.insightsEnableAvailable(payload.expectedHome);
 					await this.deps.sessions.spawnInsightsDurable(
 						{
 							projectId: payload.projectId,
@@ -478,7 +475,7 @@ export class InsightsEnable {
 				guard();
 				if (!payload.schedule) {
 					if (this.rules(op.targetId).length) throw new Conflict("A recurring rule appeared; do not add another");
-					await this.deps.schedules.createInsights(
+					await this.deps.schedules.insights.createInsights(
 						{
 							trigger: "recurring",
 							title: "Weekly Insights",

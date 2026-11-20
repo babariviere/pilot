@@ -1,7 +1,6 @@
 /** Last observations only, process-local and bounded. No content, tool arguments, cursor or event history. */
 import type { RefreshLiveHealth, RefreshObservation, RefreshOutcome, RefreshReason } from "@pilot/protocol";
-export const SOURCE_REFRESH_CADENCE_MS = 300_000;
-export const SOURCE_REFRESH_TIMEOUT_MS = 90_000;
+import { SOURCE_REFRESH_TIMEOUT_MS } from "./source-poll.ts";
 
 export class SourceRefreshDiagnostics {
 	onChange?: () => void;

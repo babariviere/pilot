@@ -13,6 +13,7 @@ import { createSession, LiveDoc, UserEntry } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { collectChangeSummary } from "../../packages/daemon/src/changes.ts";
 import { subprocesses } from "../../packages/daemon/src/subprocess.ts";
+import { hermeticGitEnv } from "../../packages/daemon/src/testing/git-env.ts";
 import { untrackedStats } from "../../packages/daemon/src/untracked-stats.ts";
 import { loadBaseline } from "./baseline.ts";
 
@@ -20,9 +21,7 @@ const { assignJson } = await import(
 	new URL("./harness/json.js", import.meta.resolve("@earendil-works/pi-durable")).href
 );
 const home = await mkdtemp(join(tmpdir(), "pilot-io-bench-"));
-process.env.GIT_CONFIG_GLOBAL = "/dev/null";
-process.env.GIT_CONFIG_NOSYSTEM = "1";
-process.env.GIT_OPTIONAL_LOCKS = "0";
+Object.assign(process.env, hermeticGitEnv({ GIT_OPTIONAL_LOCKS: "0" }));
 const git = (...args: string[]) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], { cwd: home });
 let cleanupBaseline: (() => Promise<void>) | undefined;
 

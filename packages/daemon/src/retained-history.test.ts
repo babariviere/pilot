@@ -8,7 +8,7 @@ import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
-import { openSessionStorage } from "../../kernel/src/storage.ts";
+import { openSessionStorage } from "@pilot/kernel/testing";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";

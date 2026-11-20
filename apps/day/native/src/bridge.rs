@@ -154,7 +154,6 @@ pub const METHODS: &[&str] = &[
     "day.plan.checkWork",
     "day.plan.check",
     "day.plan.checkNew",
-    "day.plan.dismissNew",
     "day.plan.chat",
     "day.plan.chatSnapshot",
     "day.plan.leave",
@@ -171,7 +170,6 @@ pub const METHODS: &[&str] = &[
     "day.update.read",
     "day.update.prepare",
     "day.update.confirm",
-    "day.update.forceConfirm",
     "day.update.cancel",
     "day.update.check",
     "day.update.restored",
@@ -247,40 +245,6 @@ pub struct Bridge {
     gate: Arc<Mutex<Gate>>,
     _notice: Arc<dyn Fn() + Send + Sync>,
     _screen: Arc<dyn Fn() + Send + Sync>,
-}
-
-/// Native-only capability for this window's update feed. It uses the SAME
-/// gate, worker and capture notification as its released JSON channel.
-/// It is not exported to the VM and cannot select a host or forge a gate.
-#[derive(Clone)]
-pub struct UpdateWindow {
-    host: crate::host::NativeHost,
-    window: String,
-    gate: Arc<Mutex<Gate>>,
-}
-impl UpdateWindow {
-    pub(crate) fn host(&self) -> crate::host::NativeHost {
-        self.host.clone()
-    }
-    pub(crate) fn request(
-        &self,
-        command: Command,
-    ) -> async_channel::Receiver<Result<crate::model::IntentOutcome, Error>> {
-        let (tx, rx) = async_channel::bounded(1);
-        self.host.bridge(
-            command,
-            "native.request",
-            self.window.clone(),
-            self.gate.clone(),
-            Box::new(move |result| {
-                let result = result.and_then(|value| {
-                    nsh_core::element::from_json(&value["outcome"]).map_err(|_| Error::Unknown)
-                });
-                let _ = tx.try_send(result);
-            }),
-        );
-        rx
-    }
 }
 
 #[derive(Deserialize)]
@@ -490,7 +454,6 @@ pub(crate) enum Command {
         interview: String,
     },
     CheckNew(Option<String>),
-    DismissNew,
     Attention,
     Reply(crate::model::ReplyIntent),
     /// A clarification question about one decision. The decision stays open.
@@ -511,7 +474,6 @@ pub(crate) enum Command {
     UpdateRead,
     UpdatePrepare(crate::update::PrepareIntent),
     UpdateConfirm(crate::update::ConfirmIntent),
-    UpdateForceConfirm(crate::update::UpdateRef),
     UpdateCancel(crate::update::UpdateRef),
     UpdateCheck,
     UpdateRestored(crate::update::UpdateRef),
@@ -1176,11 +1138,6 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             }
         }
         "day.update.prepare" => C::UpdatePrepare(decode(&args)?),
-        "day.update.forceConfirm" => {
-            let r: crate::update::UpdateRef = decode(&args)?;
-            id(&r.id)?;
-            C::UpdateForceConfirm(r)
-        }
         "day.update.confirm" => {
             let r: crate::update::ConfirmIntent = decode(&args)?;
             id(&r.confirmation)?;
@@ -1269,7 +1226,6 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
         | "day.window.read"
         | "day.plan.prepare"
         | "day.attention.read"
-        | "day.plan.dismissNew"
         | "day.plan.inventory"
         | "day.plan.inventorySnapshot"
         | "day.ritual.read"
@@ -1283,7 +1239,6 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 "day.today.refresh" => C::Refresh,
                 "day.window.read" => C::WindowRead,
                 "day.plan.prepare" => C::Prepare,
-                "day.plan.dismissNew" => C::DismissNew,
                 "day.plan.inventory" => C::PlanningInventory,
                 "day.plan.inventorySnapshot" => C::PlanningInventorySnapshot,
                 "day.ritual.read" => C::RitualRead,
@@ -1801,18 +1756,6 @@ impl Bridge {
         self.root.host().set_screen_picture(taker);
     }
 
-    pub(crate) fn saved_capture(&self) -> Option<crate::host::window::SavedWindow> {
-        self.root.host().saved_window()
-    }
-
-    pub fn update_window(&self) -> UpdateWindow {
-        UpdateWindow {
-            host: self.root.host().clone(),
-            window: self.window.clone(),
-            gate: self.gate.clone(),
-        }
-    }
-
     /// Fence new effects and ask the still-live engine to save ALL form state.
     /// This is not an acknowledgement or a native preedit capture.
     pub fn request_flush(&self) -> Result<u32, Error> {
@@ -1963,22 +1906,6 @@ impl Bridge {
                     .as_u128()
             && gate.generation == receipt.generation
             && gate.save_sequence == receipt.save_sequence
-    }
-
-    /// Separate native accepted-loss seal. Never creates a normal FlushReceipt,
-    /// native capture or form-save ACK. All entered host work must still join.
-    pub(crate) fn seal_loss(&self, loss: &crate::host::update_loss::Accepted) -> Result<(), Error> {
-        if loss.window() != self.window
-            || !self.root.host().loss_binding(loss.source(), loss.journal())
-        {
-            return Err(Error::Identity);
-        }
-        let mut gate = self.gate.lock().expect("bridge gate poisoned");
-        if gate.closed || gate.sealed {
-            return Err(Error::Closed);
-        }
-        gate.sealed = true;
-        Ok(())
     }
 
     /// Native-only entry after the attached editor owner rechecked and sealed

@@ -126,7 +126,7 @@ dedupe proves placement or deferral only, never that the worker applied the guid
 
 ## Verification
 
-Guidance-contract fixtures in `policy.test.ts`, `mission-tools.test.ts` and
+Guidance-contract fixtures in `policy.fast.test.ts`, `mission-tools.test.ts` and
 `mission-service.test.ts` check substantive choices, the D67 coordination pattern,
 status, preferences, unagreed proposals, specific approvals, provenance and unchanged
 history/permission boundaries. They verify delivered instructions, not that a model

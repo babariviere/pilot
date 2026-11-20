@@ -33,9 +33,11 @@
 		"@earendil-works/pi-ai": "1.5.2",
 		"@earendil-works/pi-durable": "1.5.2",
 		"@pilot/kernel": "workspace:*",
+		"@pilot/protocol": "workspace:*",
 		"@types/node": "^26.6.6",
+		"@types/ws": "^8.18.2",
 		"@typescript/native-preview": "latest",
 		"tsx": "^4.23.15",
-		"ws": "^8.22.1"
+		"ws": "^8.23.0"
 	}
 }

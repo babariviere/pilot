@@ -4,6 +4,7 @@ import { open } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { Conflict } from "./errors.ts";
 import { durableJSON } from "./operation-journal.ts";
+import { originIdentity } from "./project-origin.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { RuntimeBlocker, RuntimeResources } from "./runtime-admission.ts";
 import type { RuntimeBuild } from "./runtime-owner.ts";
@@ -342,7 +343,7 @@ export class LiveUpdateService {
 		return structuredClone(next);
 	}
 	async eligible(projectId: string): Promise<boolean> {
-		return (await this.projects.origin(projectId)).identity === '["github.com","babariviere/pilot"]';
+		return (await this.projects.origin(projectId)).identity === originIdentity("github.com", "babariviere/pilot");
 	}
 	propose(
 		sessionId: string,

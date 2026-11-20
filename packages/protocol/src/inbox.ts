@@ -1,4 +1,4 @@
-import type { DashboardNeedsYouItem, DashboardPullRequest, DashboardSection } from "./index.ts";
+import type { DashboardNeedsYouItem, DashboardPullRequest, DashboardSection } from "./dashboard.ts";
 import type { TrackedItem } from "./tracking.ts";
 
 /** A needs-you row of the Inbox, with the project it belongs to. */

@@ -57,29 +57,30 @@ import { autoCompactionThreshold, shouldAutoCompact } from "./auto-compaction.ts
 import { canonicalJSON } from "./canonical-json.ts";
 import { chatEvents, compactionEvents } from "./chat-events.ts";
 import { createChatReportTool } from "./chat-report-tool.ts";
-import { createDiagnosticContextTool, type DiagnosticContextCall } from "./diagnostic-context-tool.ts";
-import { createDiagnosticHistoryTool, type DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
-import { createDiagnosticLogTool, type DiagnosticLogCall } from "./diagnostic-log-tool.ts";
-import { createDiagnosticsTool, type DiagnosticsCall } from "./diagnostics-tool.ts";
+import { createDiagnosticContextTool } from "./diagnostic-context-tool.ts";
+import { createDiagnosticHistoryTool } from "./diagnostic-history-tool.ts";
+import { createDiagnosticLogTool } from "./diagnostic-log-tool.ts";
+import { createDiagnosticsTool } from "./diagnostics-tool.ts";
+import { ACTIVITY_ENTRY } from "./entry-kinds.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import {
 	admitWithHeld,
 	discardHeld,
 	finishQuestionReply,
-	HeldInputsDoc,
 	holdOnStop,
 	initializeQuestionHold,
 	pauseInputs,
 	pendingQuestionToolBlock,
 	publishQuestionWithHeld,
 	questionBoundary,
-	type SystemMessageStateEvent,
 } from "./held-inputs.ts";
+import { HeldInputsDoc, type SystemMessageStateEvent } from "./held-inputs-doc.ts";
 import { createHistoryRecallTool } from "./history-recall.ts";
+import { hostCallTools } from "./host-calls.ts";
 import { submitIdleInput } from "./idle-input.ts";
 import { InputOrigins, inputOrigin } from "./input-origin.ts";
-import { createInsightsBacklogTool, type InsightsBacklogCall } from "./insights-backlog-tool.ts";
+import { createInsightsBacklogTool } from "./insights-backlog-tool.ts";
 import { createInsightsHistoryTool } from "./insights-history-tool.ts";
 import { validateInsightsOwnerBinding } from "./insights-owner-binding.ts";
 import { interviewQuestion, StandaloneInterviewDoc } from "./interview-state.ts";
@@ -109,7 +110,7 @@ import {
 } from "./planning-worker.ts";
 import type { WorkspaceContext } from "./policy.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
-import type { KernelSpec, KernelSubagent } from "./protocol.ts";
+import type { HostCall, KernelSpec, KernelSubagent } from "./protocol.ts";
 import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
 import { type ClarificationRequest, QuestionClarifications } from "./question-clarifications.ts";
 import { createQuestionTool, type PublishQuestion } from "./question-tool.ts";
@@ -123,10 +124,10 @@ import {
 import { refActivity } from "./ref-activity.ts";
 import { createReferenceSourcesTool } from "./reference-sources.ts";
 import { createRepairDiagnosticsTools } from "./repair-diagnostics-tools.ts";
-import { createRepairProposalTool, type RepairProposalCall } from "./repair-proposal-tool.ts";
+import { createRepairProposalTool } from "./repair-proposal-tool.ts";
 import { createScopedMetricsTool } from "./scoped-metrics-tool.ts";
 import { createScreenTools } from "./screen-tools.ts";
-import { createSlackStatusTool, SLACK_STATUS_TOOL, type SlackStatusCall } from "./slack-status-tool.ts";
+import { createSlackStatusTool, SLACK_STATUS_TOOL } from "./slack-status-tool.ts";
 import { findInputReceipt, openSessionStorage } from "./storage.ts";
 import { SubagentBridge, type SubagentCommand } from "./subagents.ts";
 import { createTodoTool } from "./todo-tool.ts";
@@ -172,11 +173,8 @@ async function pinnedAgent(
 }
 
 export interface KernelSessionHooks {
-	callPlanning?(request: PlanningWorkerRequest, signal?: AbortSignal): Promise<PlanningWorkerReply>;
-	guardPlanning?(operationId: string): Promise<void>;
-	reportUsageHistory?: import("./usage-capture.ts").PublishUsage;
-	acquireUsageEpoch?: import("./usage-capture.ts").AcquireUsageEpoch;
-	reportSubscriptionLimit?: import("./subscription-limit.ts").ReportSubscriptionLimit;
+	/** Calls pilotd. Without it, no tool that needs pilotd is registered. */
+	call?: HostCall;
 	onSystemMessageState?(event: SystemMessageStateEvent): void;
 	onWorking(
 		working: boolean,
@@ -196,7 +194,6 @@ export interface KernelSessionHooks {
 	onArtifactsChanged?(): void;
 	/** Created by an agent tool, committed before notification; replayed on open. */
 	onPullRequestCreated?(url: string): void;
-	publicationSource?(bookmark?: string): Promise<import("@pilot/protocol").PublicationSource>;
 	/** A gh PR creation ran but its URL could not be confirmed. Hint only; not replayed. */
 	onPullRequestAttempted?(): void;
 	/** A tool call may have changed branches or bookmarks. Hint only; may repeat. */
@@ -206,33 +203,6 @@ export interface KernelSessionHooks {
 	onMcpUsed?(namespaces: string[], failed: boolean): void;
 	/** Full replacement whenever the subagents extension reports a change. */
 	onSubagentsChanged?(subagents: KernelSubagent[]): void;
-	/** Executes a `mission` tool call in pilotd. Without it, the tool is not registered. */
-	callMission?: MissionCall;
-	readCoordinatorSources?: import("./coordinator-sources.ts").ReadCoordinatorSources;
-	readReferenceSources?: import("./reference-sources.ts").ReadReferenceSources;
-	callMemory?: MemoryCall;
-	/** Executes a `knowledge` tool call in pilotd. Registered for writable project chats only. */
-	callKnowledge?: import("./knowledge-tools.ts").KnowledgeCall;
-	callInsightsBacklog?: InsightsBacklogCall;
-	/** Proposes a local release for native approval, never executes an update. */
-	callLiveUpdateProposal?: import("./live-update-tool.ts").LiveUpdateProposalCall;
-	/** Executes a `slack_status` tool call in pilotd. The tool is declared only while the chat has a Slack message. */
-	callSlackStatus?: SlackStatusCall;
-	/** Executes a `chat_report` tool call in pilotd. Declared only for job chats (`pilot.job`). */
-	callChatReport?: import("./chat-report-tool.ts").ChatReportCall;
-	/** Reads bounded host-local diagnostics through pilotd without touching target workers or transcripts. */
-	callDiagnostics?: DiagnosticsCall;
-	callDiagnosticContext?: DiagnosticContextCall;
-	/** Asks the Day window bound to a screen agent chat. Registered for role "screen" only. */
-	callScreen?: import("./screen-tools.ts").ScreenCall;
-	/** Reads bounded history only for an explicitly authorized diagnostic target. */
-	callDiagnosticHistory?: DiagnosticHistoryCall;
-	/** Reads fixed-catalogue Pilot logs on the diagnostics specialist's admitted host. */
-	callDiagnosticLogs?: DiagnosticLogCall;
-	/** Publishes a bounded, non-executing specialist proposal for explicit user review. */
-	callRepairProposal?: RepairProposalCall;
-	/** Read-only artifact references, authorized by pilotd on every call. */
-	readArtifactReference?: ArtifactToolOptions["readReference"];
 	prepareWorkspace?(): Promise<WorkspaceContext | undefined>;
 }
 
@@ -328,6 +298,7 @@ export class KernelSession {
 	}
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
+		const host = hooks.call ? hostCallTools(hooks.call) : undefined;
 		if (
 			spec.dayInsightsRunId !== undefined &&
 			(!spec.insightsOwnerBinding ||
@@ -342,8 +313,8 @@ export class KernelSession {
 				spec.pilot?.ask ||
 				spec.role ||
 				!spec.pilot?.coordinatorView ||
-				!hooks.callPlanning ||
-				!hooks.guardPlanning ||
+				!host?.callPlanning ||
+				!host?.guardPlanning ||
 				spec.planning.ownerSessionId !== spec.sessionId ||
 				spec.planning.projectId !== spec.projectId ||
 				spec.planning.missionId !== spec.mission?.id
@@ -421,7 +392,7 @@ export class KernelSession {
 		else delete process.env.PILOT_EXECUTION_PERMISSION;
 		// Recovery may launch descendants while native extensions initialize, before this
 		// worker's Harness exists. They must already inherit the host-issued capture epoch.
-		if (spec.usageHistory && hooks.reportUsageHistory)
+		if (spec.usageHistory && host?.reportUsageHistory)
 			process.env.PILOT_USAGE_HISTORY = JSON.stringify({
 				...spec.usageHistory,
 				attribution: {
@@ -450,7 +421,7 @@ export class KernelSession {
 		const planningCall = async (request: PlanningWorkerRequest, signal?: AbortSignal): Promise<unknown> => {
 			let reply: PlanningWorkerReply;
 			try {
-				reply = await hooks.callPlanning!(request, signal);
+				reply = await host!.callPlanning(request, signal);
 			} catch (error) {
 				if (artifactConversation && ["write", "questions"].includes(request.action))
 					await artifactConversation.commit(async (tx) => {
@@ -470,7 +441,7 @@ export class KernelSession {
 		const subagents = new SubagentBridge(hooks.onSubagentsChanged);
 		const toolDrain = new ToolDrain();
 		const mission: { current?: MissionContext } = { current: spec.mission };
-		const callMission: MissionCall | undefined = hooks.callMission
+		const callMission: MissionCall | undefined = host?.callMission
 			? async (action, args) => {
 					const owner = openedSession;
 					const missionId = mission.current?.id;
@@ -481,7 +452,7 @@ export class KernelSession {
 						missionId;
 					if (track) owner.#decisionWrites++;
 					try {
-						const result = await hooks.callMission!(
+						const result = await host!.callMission(
 							action,
 							action === "decisions"
 								? { ...args, _promptDecisions: mission.current?.decisionEntries ?? [] }
@@ -608,11 +579,11 @@ export class KernelSession {
 			return result.result;
 		};
 		let wakePrompt = "";
-		if (spec.projectId && hooks.callMemory && !spec.pilot?.ask && !spec.planning) {
+		if (spec.projectId && host?.callMemory && !spec.pilot?.ask && !spec.planning) {
 			let wakeTimer: ReturnType<typeof setTimeout> | undefined;
 			try {
 				const wake = await Promise.race([
-					hooks.callMemory("wake", {}),
+					host?.callMemory("wake", {}),
 					new Promise<never>((_, reject) => {
 						wakeTimer = setTimeout(() => reject(new Error("Project memory wake timed out")), 1200);
 					}),
@@ -664,7 +635,7 @@ export class KernelSession {
 							return appendGitHubAction(state, action);
 						}, context);
 						if (added) hooks.onGitHubAction?.(action);
-					}, hooks.publicationSource)
+					}, host?.publicationSource)
 				: undefined;
 			const active = await activeConversation(owned.storage, context);
 			if (spec.dayInsightsRunId && (await owned.storage.scanConversations({}, 1, undefined, context)).items.length)
@@ -679,7 +650,7 @@ export class KernelSession {
 				...(spec.pilot?.executionPermission ? { executionPermission: { ...spec.pilot.executionPermission } } : {}),
 				...(spec.role ? { role: spec.role } : {}),
 				ghStack,
-				projectMemory: !spec.role && !spec.planning && !!spec.projectId && !!hooks.callMemory,
+				projectMemory: !spec.role && !spec.planning && !!spec.projectId && !!host?.callMemory,
 			};
 			const refreshWorkspace = hooks.prepareWorkspace;
 			const prepareWorkspace = refreshWorkspace
@@ -707,7 +678,7 @@ export class KernelSession {
 			const artifactOptions: ArtifactToolOptions = {
 				store: artifacts,
 				...(nshAvailable ? { nshSessionDirectory: dirname(spec.storageDir) } : {}),
-				readReference: hooks.readArtifactReference,
+				readReference: host?.readArtifactReference,
 				onArtifactsChanged: hooks.onArtifactsChanged,
 				onArtifactPublished: async (artifact, image) => {
 					if (!artifactConversation) throw new Error("Artifact publication requires a bound Harness conversation");
@@ -729,9 +700,9 @@ export class KernelSession {
 			if (!spec.pilot?.ask)
 				parentBridge = await startParentBridge(
 					callTodo,
-					hooks.reportSubscriptionLimit,
-					hooks.reportUsageHistory,
-					hooks.acquireUsageEpoch,
+					host?.reportSubscriptionLimit,
+					host?.reportUsageHistory,
+					host?.acquireUsageEpoch,
 				);
 			const diagnosticScope = spec.diagnosticTarget
 				? ({ kind: "chat", target: spec.diagnosticTarget } as const)
@@ -761,13 +732,13 @@ export class KernelSession {
 				posthorseEligible: () => !spec.role,
 				onToolsRunningChanged: hooks.onToolsRunningChanged,
 				subscriptionPolicy: spec.subscriptionPolicy,
-				reportSubscriptionLimit: hooks.reportSubscriptionLimit,
+				reportSubscriptionLimit: host?.reportSubscriptionLimit,
 				connectivityPolicy: spec.connectivityPolicy,
 				cwd: spec.cwd,
 				...(pilot.coordinatorView
 					? {
 							coordinatorSources:
-								hooks.readCoordinatorSources ??
+								host?.readCoordinatorSources ??
 								(async () => {
 									throw new Error("Coordinator source admission is unavailable");
 								}),
@@ -775,8 +746,8 @@ export class KernelSession {
 					: {}),
 				ask: spec.pilot?.ask,
 				// Ordinary project chats only. Specialist roles keep their closed tool sets.
-				...(!spec.role && spec.projectId && hooks.readReferenceSources
-					? { readReferenceSources: hooks.readReferenceSources }
+				...(!spec.role && spec.projectId && host?.readReferenceSources
+					? { readReferenceSources: host?.readReferenceSources }
 					: {}),
 				diagnostics: spec.role === "diagnostics",
 				insights: spec.role === "insights",
@@ -808,55 +779,55 @@ export class KernelSession {
 				],
 				subagents,
 				hostTools: [
-					...(spec.feedbackLogs && hooks.callDiagnosticLogs
-						? [createDiagnosticLogTool(hooks.callDiagnosticLogs, { kind: "feedback" })]
+					...(spec.feedbackLogs && host?.callDiagnosticLogs
+						? [createDiagnosticLogTool(host?.callDiagnosticLogs, { kind: "feedback" })]
 						: []),
-					...(!spec.dayInsightsRunId && spec.scopedMetrics && hooks.callDiagnosticContext
-						? [createScopedMetricsTool(hooks.callDiagnosticContext)]
+					...(!spec.dayInsightsRunId && spec.scopedMetrics && host?.callDiagnosticContext
+						? [createScopedMetricsTool(host?.callDiagnosticContext)]
 						: []),
-					...(spec.role === "insights" && hooks.callInsightsBacklog
-						? [createInsightsBacklogTool(hooks.callInsightsBacklog)]
+					...(spec.role === "insights" && host?.callInsightsBacklog
+						? [createInsightsBacklogTool(host?.callInsightsBacklog)]
 						: []),
-					...(spec.role === "insights" && !spec.insightsOwnerBinding && hooks.callDiagnosticContext
-						? [createInsightsHistoryTool(hooks.callDiagnosticContext)]
+					...(spec.role === "insights" && !spec.insightsOwnerBinding && host?.callDiagnosticContext
+						? [createInsightsHistoryTool(host?.callDiagnosticContext)]
 						: []),
-					...(spec.role === "screen" && hooks.callScreen
+					...(spec.role === "screen" && host?.callScreen
 						? [
-								...createScreenTools(hooks.callScreen),
-								...(hooks.callDiagnosticContext
-									? [createDiagnosticContextTool(hooks.callDiagnosticContext)]
+								...createScreenTools(host?.callScreen),
+								...(host?.callDiagnosticContext
+									? [createDiagnosticContextTool(host?.callDiagnosticContext)]
 									: []),
 							]
 						: []),
-					...(spec.repairDiagnostics && hooks.callDiagnostics && hooks.callDiagnosticLogs
+					...(spec.repairDiagnostics && host
 						? createRepairDiagnosticsTools(spec.repairDiagnostics, {
-								diagnostics: hooks.callDiagnostics,
-								logs: hooks.callDiagnosticLogs,
-								history: hooks.callDiagnosticHistory,
+								diagnostics: host?.callDiagnostics,
+								logs: host?.callDiagnosticLogs,
+								history: host?.callDiagnosticHistory,
 							})
 						: []),
-					...(spec.role === "diagnostics" && hooks.callDiagnostics && hooks.callDiagnosticLogs && diagnosticScope
+					...(spec.role === "diagnostics" && host && diagnosticScope
 						? [
-								createDiagnosticsTool(hooks.callDiagnostics, diagnosticScope),
-								...(hooks.callDiagnosticContext
-									? [createDiagnosticContextTool(hooks.callDiagnosticContext)]
+								createDiagnosticsTool(host?.callDiagnostics, diagnosticScope),
+								...(host?.callDiagnosticContext
+									? [createDiagnosticContextTool(host?.callDiagnosticContext)]
 									: []),
-								createDiagnosticLogTool(hooks.callDiagnosticLogs, diagnosticScope),
-								...(hooks.callDiagnosticHistory
-									? [createDiagnosticHistoryTool(hooks.callDiagnosticHistory, spec.diagnosticTarget)]
+								createDiagnosticLogTool(host?.callDiagnosticLogs, diagnosticScope),
+								...(host?.callDiagnosticHistory
+									? [createDiagnosticHistoryTool(host?.callDiagnosticHistory, spec.diagnosticTarget)]
 									: []),
-								...(hooks.callRepairProposal ? [createRepairProposalTool(hooks.callRepairProposal)] : []),
+								...(host?.callRepairProposal ? [createRepairProposalTool(host?.callRepairProposal)] : []),
 							]
 						: []),
 					...missionTools,
 					questionTool,
-					...(!spec.role && spec.projectId && hooks.readReferenceSources
-						? [createReferenceSourcesTool(hooks.readReferenceSources)]
+					...(!spec.role && spec.projectId && host?.readReferenceSources
+						? [createReferenceSourcesTool(host?.readReferenceSources)]
 						: []),
 					...(interviewTool ? [interviewTool] : []),
 					...(!spec.pilot?.ask ? [createTodoTool(callTodo, () => spec.sessionId)] : []),
-					...(!spec.pilot?.ask && hooks.callSlackStatus ? [createSlackStatusTool(hooks.callSlackStatus)] : []),
-					...(spec.pilot?.job && hooks.callChatReport ? [createChatReportTool(hooks.callChatReport)] : []),
+					...(!spec.pilot?.ask && host?.callSlackStatus ? [createSlackStatusTool(host?.callSlackStatus)] : []),
+					...(spec.pilot?.job && host?.callChatReport ? [createChatReportTool(host?.callChatReport)] : []),
 				],
 				...(spec.role
 					? {}
@@ -866,15 +837,15 @@ export class KernelSession {
 								sessionOptions: {
 									customTools: [
 										...createArtifactTools(artifactOptions),
-										...createLiveUpdateTools(spec, hooks.callLiveUpdateProposal),
+										...createLiveUpdateTools(spec, host?.callLiveUpdateProposal),
 										...(historyRecall ? [createHistoryRecallTool(() => artifactConversation)] : []),
-										...(spec.projectId && hooks.callMemory
-											? createMemoryTools(hooks.callMemory, spec.sessionId)
+										...(spec.projectId && host?.callMemory
+											? createMemoryTools(host?.callMemory, spec.sessionId)
 											: []),
-										...(spec.projectId && hooks.callKnowledge
+										...(spec.projectId && host?.callKnowledge
 											? [
-													createKnowledgeTool(hooks.callKnowledge),
-													createProjectPreferencesTool(hooks.callKnowledge),
+													createKnowledgeTool(host?.callKnowledge),
+													createProjectPreferencesTool(host?.callKnowledge),
 												]
 											: []),
 									],
@@ -892,7 +863,7 @@ export class KernelSession {
 			if (missionTools.length) adapter.setToolActive(MISSION_TOOL, !!mission.current);
 			if (!spec.pilot?.ask) adapter.setToolActive("todo", mission.current?.coordinator !== "self");
 			// Likewise slack_status, declared once pilotd reports the chat attached to a Slack triage message.
-			if (!spec.pilot?.ask && hooks.callSlackStatus) adapter.setToolActive(SLACK_STATUS_TOOL, false);
+			if (!spec.pilot?.ask && host?.callSlackStatus) adapter.setToolActive(SLACK_STATUS_TOOL, false);
 			const prepare = (extension: Extension) => {
 				const prepared = replayUnsafe(
 					withPilotPolicy(
@@ -905,8 +876,8 @@ export class KernelSession {
 						async (input, context) => {
 							await prepareWorkspace?.();
 						},
-						!spec.role && !spec.pilot?.ask && spec.projectId && hooks.callKnowledge
-							? () => hooks.callKnowledge!("context", {})
+						!spec.role && !spec.pilot?.ask && spec.projectId && host?.callKnowledge
+							? () => host!.callKnowledge("context", {})
 							: undefined,
 					),
 				);
@@ -945,7 +916,7 @@ export class KernelSession {
 				progress: { partialIntervalMs: 250, outputIntervalMs: 250, persistWithinMs: 0 },
 			};
 			const usageCapture =
-				spec.usageHistory && hooks.reportUsageHistory
+				spec.usageHistory && host?.reportUsageHistory
 					? new UsageCapture(
 							{
 								...spec.usageHistory,
@@ -956,8 +927,8 @@ export class KernelSession {
 								},
 								purpose: "agent",
 							},
-							hooks.reportUsageHistory,
-							hooks.acquireUsageEpoch,
+							host?.reportUsageHistory,
+							host?.acquireUsageEpoch,
 							join(spec.storageDir, "usage-capture.json"),
 						)
 					: undefined;
@@ -1048,7 +1019,7 @@ export class KernelSession {
 				!!spec.pilot?.ask,
 				mission,
 				callMission,
-				hooks.callMemory,
+				host?.callMemory,
 			);
 			openedSession = session;
 			session.parentBridge = parentBridge;
@@ -1131,7 +1102,7 @@ export class KernelSession {
 			});
 			await adapter.refreshUsage(context);
 			session.planningBinding = spec.planning;
-			session.planningGuard = hooks.guardPlanning;
+			session.planningGuard = host?.guardPlanning;
 			if (
 				spec.planning &&
 				(spec.planningHeldOnOpen || (await harness.snapshot(PlanningWorkerDoc, conversation.id, context))?.hold)
@@ -1265,7 +1236,7 @@ export class KernelSession {
 			{
 				type: "write",
 				requestId,
-				entry: { kind: "pilot.activity", data: { text, ...(event ? { event: { ...event } } : {}) }, model: [] },
+				entry: { kind: ACTIVITY_ENTRY, data: { text, ...(event ? { event: { ...event } } : {}) }, model: [] },
 			},
 			context,
 		);

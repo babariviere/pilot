@@ -22,7 +22,13 @@ import {
 	type SessionSummary,
 } from "@pilot/protocol";
 import type { MissionStore, MissionTaskProgress } from "./missions.ts";
-import { hasMissingPullRequest, reasonLine, sessionNeedsYouReason } from "./needs-you-reason.ts";
+import {
+	chatFailed,
+	hasMissingPullRequest,
+	isReadyPullRequest,
+	reasonLine,
+	sessionNeedsYouReason,
+} from "./needs-you-reason.ts";
 import type { ProjectStore } from "./projects.ts";
 import { readinessReasonLabel } from "./pull-request-readiness.ts";
 import type { ReviewStore } from "./reviews.ts";
@@ -151,25 +157,22 @@ function needsReview(session: SessionSummary, isUnread: DashboardInput["isUnread
 	// (questionSettled) waits for nobody.
 	if (session.outcome === "question") return !session.questionSettled;
 	// A chat Pilot started for a map question reports to the planner, which used its findings: never unread for the user.
-	if (session.mapExplorer && !failed(session)) return false;
+	if (session.mapExplorer && !chatFailed(session)) return false;
 	if (hasTerminalPullRequest(session)) return false;
 	// A failure waits until it is retried or the user dismisses it, not until the chat is viewed.
 	// An explorer's failure its plan settled (questionSettled) waits for nobody.
-	if (failed(session)) return !session.failureDismissed && !session.questionSettled;
-	// Mirror SessionSummary.isReadyToMerge: coordinators never represent their PR as ready chat work.
+	if (chatFailed(session)) return !session.failureDismissed && !session.questionSettled;
+	// Coordinators never represent their PR as ready chat work.
 	if (
 		!(session.missionCoordinator ?? session.activeMissionCoordinator) &&
-		session.pullRequest?.state === "open" &&
-		session.pullRequest.readiness?.state === "ready"
+		session.pullRequest &&
+		isReadyPullRequest(session.pullRequest)
 	)
 		return false;
 	if (session.outcomeAt !== undefined && Number.isFinite(session.outcomeAt))
 		return session.outcome !== undefined && isUnread(session.id, session.outcomeAt);
 	return false;
 }
-
-const failed = (session: SessionSummary) =>
-	session.outcome === "failed" || (!session.outcome && session.state === "failed");
 
 export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_SECTION_LIMIT): ProjectDashboard {
 	const { projectId, sessions, isUnread } = input;
@@ -197,7 +200,7 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 			attentionReason.kind === "tool_stall"
 				? attentionReason.kind
 				: undefined;
-		const isFailure = !attention && failed(session);
+		const isFailure = !attention && chatFailed(session);
 		const waits = !attention && attentionReason.kind === "waits";
 		const reason = reasonLine(
 			attention || waits
@@ -293,9 +296,11 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 			});
 		}
 	}
-	const isReady = (pr: DashboardPullRequest) => pr.state === "open" && pr.readiness?.state === "ready";
 	const pullRequests = [...byUrl.values()].sort(
-		(a, b) => Number(isReady(b)) - Number(isReady(a)) || b.checkedAt - a.checkedAt || b.number - a.number,
+		(a, b) =>
+			Number(isReadyPullRequest(b)) - Number(isReadyPullRequest(a)) ||
+			b.checkedAt - a.checkedAt ||
+			b.number - a.number,
 	);
 
 	const workingByMission = new Map<string, number>();
@@ -336,7 +341,7 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 			working: working.length,
 			needsYou: needsYou.filter((item) => item.countsInBadge !== false).length,
 			openPullRequests: pullRequests.length,
-			readyPullRequests: pullRequests.filter(isReady).length,
+			readyPullRequests: pullRequests.filter(isReadyPullRequest).length,
 			activeMissions: missions.length,
 		},
 		needsYou: section(needsYou, limit),
@@ -357,7 +362,7 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 	};
 }
 
-export interface DashboardServiceDeps {
+interface DashboardServiceDeps {
 	sessions: {
 		list(query: { archived: "false"; projectId?: string }): SessionSummary[];
 		onChange(listener: (session: SessionSummary) => void): () => void;
@@ -439,8 +444,7 @@ export class ProjectDashboardService {
 					busy.add(item.sessionId);
 			}
 			for (const pr of dashboard.pullRequests.items)
-				if (pr.state === "open" && pr.readiness?.state === "ready" && !busy.has(pr.sessionId))
-					ready.push({ ...pr, projectId: id });
+				if (isReadyPullRequest(pr) && !busy.has(pr.sessionId)) ready.push({ ...pr, projectId: id });
 		}
 		items.sort(compareAttention);
 		ready.sort((a, b) => b.checkedAt - a.checkedAt || a.url.localeCompare(b.url));

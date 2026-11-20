@@ -82,7 +82,7 @@ nsh test
 ```
 
 `nsh test` runs the layout checks headless: it needs no Rust build, window or GPU. The kernel check is
-`node --test packages/kernel/src/artifact-skill.test.ts`. The examples, the library embedding and the older kit names
+`node --test packages/kernel/src/artifact-skill.fast.test.ts`. The examples, the library embedding and the older kit names
 run in `apps/day/native`: `../scripts/cargo test --locked --test artifact_examples --test artifact_library`.
 
 ## Not established here

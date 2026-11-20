@@ -46,6 +46,12 @@ pub fn step_words(step: &Value) -> String {
         }
         ("mission_plan", "check") => ("Checking a saved request", "Checked a saved request"),
         ("mission_plan", _) => ("Working on the plan", "Worked on the plan"),
+        ("nested_more", _) => return target.to_owned(),
+        ("codemode", _) => ("Running a tool script", "Ran a tool script"),
+        ("bash" | "powershell", _) => ("Running a command", "Ran a command"),
+        ("edit" | "write" | "applyPatch" | "apply_patch", _) => ("Editing files", "Edited files"),
+        ("jobs", _) => ("Managing background jobs", "Managed background jobs"),
+        ("subagent" | "subagents", _) => ("Working with subagents", "Worked with subagents"),
         ("read", _) if !target.is_empty() => ("Reading", "Read"),
         ("ls", _) if !target.is_empty() => ("Listing", "Listed"),
         ("find", _) if !target.is_empty() => ("Looking through", "Looked through"),

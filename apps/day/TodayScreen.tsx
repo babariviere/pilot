@@ -37,14 +37,16 @@ import {
 	OtherToCheck,
 	otherMissionsCount,
 	otherNeedsCount,
+	otherRequestsCount,
+	otherResultsCount,
 	ProjectLabel,
 	ScopeControl,
 	ScopeNote,
-	scopedHeadline,
 	type TodayScope,
 	todayScope,
 } from "./ScopeRows";
 import { resultTitle, ToCheck, todayResults, unsettledCount } from "./ToCheck";
+import { attentionCounts, attentionHeadline } from "./todayHeadline";
 import {
 	Arrive,
 	Button,
@@ -107,7 +109,7 @@ function headline(day: Day, additional: number, interviewsKnown: boolean): strin
 	}
 	const left = today.decisions.length + today.actions.length;
 	const w = waiting(day);
-	const extra = w.results + w.requests + additional;
+	const extra = w.results + additional;
 	if (left + extra + newFeedback(day).length === 0 && !interviewsKnown) return "What needs you is not fully known.";
 	if (newFeedback(day).length > 0 && left + extra === 0) return "Feedback needs a look.";
 	if (today.notes.length === 0) {
@@ -307,7 +309,17 @@ function NeedsYou(props: { day: Day; ctx: TodayScope; interviews: PlannerIntervi
 		otherNeedsCount(props.ctx) === 0;
 	return (
 		<Section title="Needs you" count={needsCount(props.day, props.ctx, props.interviews)}>
-			<If when={props.ctx.tagged()}>
+			<If
+				when={
+					props.ctx.tagged() &&
+					(items().length > 0 ||
+						checks() > 0 ||
+						!readable() ||
+						props.day.today().notes.length > 0 ||
+						incomingFeedback(props.day).length > 0 ||
+						props.interviews.rows().some((r) => r.projectId === props.ctx.own()))
+				}
+			>
 				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
 			</If>
 			{/* Only a connected window can read project setup; mock worlds have no model controls. */}
@@ -366,6 +378,7 @@ function NeedsYou(props: { day: Day; ctx: TodayScope; interviews: PlannerIntervi
 										: "needs"
 							}
 							title={`${upNext(item())}${itemTitle(props.day, item())}`}
+							titleLines={item().kind === "request" ? 2 : undefined}
 							trailing={<Num>{effortOf(item())}</Num>}
 						/>
 					)}
@@ -400,6 +413,7 @@ function New(props: { day: Day; filtered: boolean }) {
 								testID={`new-${r().request.id}`}
 								mark="new"
 								title={r().request.title}
+								titleLines={2}
 								meta={requestLine(r().request)}
 								accessibilityLabel={`${r().request.title}. Bring it forward in Needs you.`}
 								onPress={() => {
@@ -524,10 +538,15 @@ function Missions(props: { day: Day; ctx: TodayScope; plans?: Plans; all: boolea
 					: undefined
 			}
 		>
-			<If when={props.ctx.tagged()}>
+			<If when={props.ctx.tagged() && own().length > 0}>
 				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
 			</If>
-			<If when={own().length === 0}>
+			<If
+				when={
+					missionsCount(props.day, props.ctx) === 0 &&
+					props.ctx.others().every((p) => p.today && p.currentness !== "unavailable" && !p.errors.today)
+				}
+			>
 				<EmptyLine text="No active missions." />
 			</If>
 			<Each of={groups()} key={(g) => g.group}>
@@ -799,12 +818,56 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 	const interviews = plannerInterviews(props.day);
 	const working = workingList(props.day, ctx);
 	const title = () => {
-		if (ctx.showsOwn())
-			return headline(props.day, interviews.rows().length + otherNeedsCount(ctx), interviews.known());
-		const scoped = scopedHeadline(ctx);
-		return !interviews.known() && scoped.startsWith("Nothing needs you")
-			? "What needs you is not fully known."
-			: scoped;
+		const own = ctx.showsOwn();
+		const others = ctx.others();
+		// Keep the local answered-card wording when there is no cross-project summary.
+		if (!ctx.on() && today().problems.length === 0 && todayRequests(props.day).length === 0)
+			return headline(props.day, interviews.rows().length, interviews.known());
+		const counts = own ? attentionCounts(today()) : { stopped: 0, other: 0 };
+		const requests = otherRequestsCount(ctx) + (own ? todayRequests(props.day).length : 0);
+		let other =
+			counts.other +
+			interviews.rows().length +
+			otherResultsCount(ctx) +
+			(own ? todayResults(props.day).length + newFeedback(props.day).length : 0);
+		for (const p of others) {
+			if (!p.today) continue;
+			const next = attentionCounts(p.today);
+			counts.stopped += next.stopped;
+			other += next.other;
+		}
+		const scope = props.day.scope?.view();
+		const snapshot = scope?.snapshot;
+		const complete =
+			interviews.known() &&
+			(!own ||
+				(today().problemsKnown &&
+					today().attention.state === "live" &&
+					today().freshness.state === "live" &&
+					!today().intake.trouble.length &&
+					(!props.day.intake ||
+						(props.day.intake.view().availability === "live" &&
+							!props.day.intake.view().intake.trouble.length)))) &&
+			(!ctx.on() ||
+				(scope?.state === "live" &&
+					snapshot?.scope === ctx.scope() &&
+					snapshot.catalogComplete &&
+					snapshot.complete &&
+					!snapshot.partial)) &&
+			others.every(
+				(p) =>
+					p.currentness === "live" &&
+					p.today?.problemsKnown &&
+					p.today.attention.state === "live" &&
+					p.needsYou.complete &&
+					!p.errors.today &&
+					!p.errors.attention &&
+					!p.errors.planning &&
+					!p.errors.intake &&
+					!p.today.intake.trouble.length &&
+					p.results?.complete !== false,
+			);
+		return attentionHeadline({ stopped: counts.stopped, other, requests, complete: !!complete });
 	};
 	const linear = todayLinear(
 		props.day,

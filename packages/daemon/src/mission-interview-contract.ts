@@ -1,10 +1,9 @@
 import type { InterviewAnswer, InterviewQuestion, MissionInterview } from "@pilot/protocol";
 import * as round from "@pilot/kernel/interview-round";
 import { Conflict } from "./errors.ts";
-import { canonicalJSON } from "./operation-journal.ts";
 export const interviewDigest = round.interviewDigest;
 export const ANSWERS_LIMIT = round.ANSWERS_LIMIT;
-export const AGREEMENT_LIMIT = 28 * 1024;
+const AGREEMENT_LIMIT = 28 * 1024;
 function checked<T>(work: () => T): T {
 	try {
 		return work();

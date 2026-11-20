@@ -5,14 +5,14 @@ import type { DurableOperation } from "@pilot/protocol";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
 import { payloadHash } from "./operation-journal.ts";
 import { safeSlackLink } from "./slack-controls.ts";
+import { SlackImportRefused } from "./slack-tracking.ts";
 import { SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-tool-rules.ts";
-import { SlackImportRefused } from "./sources.ts";
 
 test("native Slack settings are passive, capability-gated and fenced; imports work with tracking off", async (t) => {
 	const f = await nativeIntakeFixture();
 	t.after(() => f.close());
 	let imports = 0;
-	f.tracking.slackAdder = async (_context, link) => {
+	f.setSlackAdder(async (_context, link) => {
 		imports++;
 		return {
 			externalId: `${link.channel}/${link.threadTs}`,
@@ -23,7 +23,7 @@ test("native Slack settings are passive, capability-gated and fenced; imports wo
 			updatedAt: Date.now(),
 			slack: { type: "bug", label: null, severity: "medium", status: "open", overrides: {} },
 		};
-	};
+	});
 	const headers = { "x-pilot-github-capability": f.capability, "content-type": "application/json" };
 	const read = async () => {
 		const r = await fetch(`${f.root}/api/slack-controls?projectId=${f.project.id}`, { headers });
@@ -143,23 +143,23 @@ test("known pre-save import failures reject with a reason; persistence uncertain
 		).json();
 	assert.equal((await post(operation())).state, "rejected", "missing connector is not Unknown");
 	for (const error of [new SourceSignInRequired(), new SourceToolError("private remote payload", "access_denied")]) {
-		f.tracking.slackAdder = async () => {
+		f.setSlackAdder(async () => {
 			throw error;
-		};
+		});
 		const r = await post(operation());
 		assert.equal(r.state, "rejected");
 		assert.match(r.reason, /Sign in|Couldn't read/);
 		assert.doesNotMatch(r.reason, /private remote/);
 	}
 	let commits = 0;
-	f.tracking.slackAdder = async () => ({
+	f.setSlackAdder(async () => ({
 		externalId: "COTHER/1794843000.000001",
 		title: "Saved import",
 		url: "https://example.slack.com/archives/COTHER/p1794843000000001",
 		status: "open",
 		metadata: { manual: true, channel: "COTHER" },
 		updatedAt: Date.now(),
-	});
+	}));
 	const commit = f.items.commit.bind(f.items);
 	const mocked = t.mock.method(f.items, "commit", async (...args: Parameters<typeof commit>) => {
 		commits++;
@@ -173,9 +173,9 @@ test("known pre-save import failures reject with a reason; persistence uncertain
 	assert.deepEqual(await post(lost), pending);
 	assert.equal(commits, 1);
 	mocked.mock.restore();
-	f.tracking.slackAdder = async () => {
+	f.setSlackAdder(async () => {
 		throw new SourceRateLimited(60_000);
-	};
+	});
 	assert.equal((await post(operation())).state, "rejected");
 	assert.equal(
 		(await post(operation())).state,
@@ -191,14 +191,14 @@ test("known pre-save import failures reject with a reason; persistence uncertain
 				url: "https://example.slack.com/archives/COTHER/p1794843000000001",
 			}),
 		});
-	const refused = t.mock.method(f.tracking, "addSlackMessage", async () => {
+	const refused = t.mock.method(f.tracking.slack, "add", async () => {
 		throw new SlackImportRefused("Sign in to Slack to add this message");
 	});
 	const known = await legacy();
 	assert.equal(known.status, 503);
 	await known.arrayBuffer();
 	refused.mock.restore();
-	t.mock.method(f.tracking, "addSlackMessage", async () => {
+	t.mock.method(f.tracking.slack, "add", async () => {
 		throw new Error("private provider payload");
 	});
 	const unknown = await legacy();

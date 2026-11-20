@@ -29,6 +29,7 @@ import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { pauseParticipants } from "./testing/pause-participants.ts";
 
 export async function nativeAttentionFixture() {
 	const home = await mkdtemp(join(tmpdir(), "native-attention-"));
@@ -117,14 +118,17 @@ export async function nativeAttentionFixture() {
 				store,
 				service: {
 					reports: new MissionReports(store),
-					controls: new MissionControls(store, {
-						checkpointMission: async () => {
-							throw new Error("No execution");
-						},
-						resumeMission: async () => {
-							throw new Error("No execution");
-						},
-					}),
+					controls: new MissionControls(
+						store,
+						pauseParticipants({
+							checkpointMission: async () => {
+								throw new Error("No execution");
+							},
+							resumeMission: async () => {
+								throw new Error("No execution");
+							},
+						}),
+					),
 				} as MissionService,
 			},
 		};

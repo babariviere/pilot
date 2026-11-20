@@ -13,9 +13,9 @@ import {
 } from "@earendil-works/pi-ai";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { ConversationBusy, Harness, InboxDoc } from "@earendil-works/pi-durable";
-import { HeldInputsDoc } from "./held-inputs.ts";
+import { QUESTION_ENTRY } from "./entry-kinds.ts";
+import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
-import { QUESTION_ENTRY } from "./question-tool.ts";
 import { queueGuardToken } from "./queue.ts";
 import { KernelSession } from "./session.ts";
 import { openSessionReader } from "./storage.ts";

@@ -1,5 +1,5 @@
 //! Copies one Day source into a test's own copy of the app. FeedbackScreen
-//! imports one shared, Node-free leaf from the kernel by a path outside the
+//! imports one shared, Node-free leaf from the protocol by a path outside the
 //! app; the copy moves it beside the sources so it builds on its own.
 use std::path::Path;
 

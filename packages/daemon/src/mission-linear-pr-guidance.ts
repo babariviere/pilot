@@ -1,5 +1,5 @@
-import type { MissionResource } from "@pilot/protocol";
 import type { MissionStore } from "./missions.ts";
+import { LINEAR_ISSUE_ID } from "./resource-url.ts";
 
 /** Sync owns remote status, manual pauses, freshness, and accepted contributor scope. */
 export type LinearClosingGuard = (
@@ -109,21 +109,22 @@ export async function linearPrGuidance(
 /** Linear's full documented closing-keyword set, not only GitHub's Fixes/Closes subset. */
 const closing =
 	/\b(?:clos(?:e|es|ed|ing)|fix(?:es|ed|ing)?|resolv(?:e|es|ed|ing)|complet(?:e|es|ed|ing)|implement(?:s|ed|ing)?|linear\s+issue)\b\s*:?\s*/gi;
-export function closingMentions(text: string, ref: Pick<MissionResource, "externalId" | "url">): boolean {
-	return !!ref.externalId && closingIssueIds(text).has(ref.externalId.toUpperCase());
-}
+const issueToken = new RegExp(
+	`^(?:\\[[^\\]\\n]{1,500}\\]\\(https?://linear\\.app/[^\\s)]+\\)|https?://linear\\.app/[^\\s,)]+|${LINEAR_ISSUE_ID}\\b)`,
+	"i",
+);
+const issuePath = new RegExp(`/issue/(${LINEAR_ISSUE_ID})\\b`, "i");
+const issueWord = new RegExp(`\\b(${LINEAR_ISSUE_ID})\\b`, "i");
 
 export function closingIssueIds(text: string): Set<string> {
 	const ids = new Set<string>();
 	// Each keyword introduces issue tokens, not arbitrary later prose. No repeated whole-line scans.
-	const token =
-		/^(?:\[[^\]\n]{1,500}\]\(https?:\/\/linear\.app\/[^\s)]+\)|https?:\/\/linear\.app\/[^\s,)]+|[a-z0-9]+-[1-9]\d*\b)/i;
 	for (const match of text.matchAll(closing)) {
 		let rest = text.slice(match.index! + match[0].length);
 		for (;;) {
-			const item = token.exec(rest);
+			const item = issueToken.exec(rest);
 			if (!item) break;
-			const id = /\/issue\/([a-z0-9]+-[1-9]\d*)\b/i.exec(item[0]) ?? /\b([a-z0-9]+-[1-9]\d*)\b/i.exec(item[0]);
+			const id = issuePath.exec(item[0]) ?? issueWord.exec(item[0]);
 			if (id) ids.add(id[1]!.toUpperCase());
 			rest = rest.slice(item[0].length);
 			const separator = /^(?:\s*,\s*(?:and\s+)?|\s+(?:and|&)\s+|\s+)/i.exec(rest);

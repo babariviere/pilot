@@ -8,10 +8,7 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession } from "@earendil-works/pi-durable";
-import { HeldInputsDoc } from "../../kernel/src/held-inputs-doc.ts";
-import { QuestionClarifications } from "../../kernel/src/question-clarifications.ts";
-import { openSessionStorage } from "../../kernel/src/storage.ts";
-import { TodoProgressDoc } from "../../kernel/src/todos.ts";
+import { HeldInputsDoc, openSessionStorage, QuestionClarifications, TodoProgressDoc } from "@pilot/kernel/testing";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { ServiceUnavailable } from "./errors.ts";
 

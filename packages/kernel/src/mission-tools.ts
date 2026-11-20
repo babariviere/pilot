@@ -2,7 +2,18 @@
 import type { JsonValue } from "@earendil-works/chord/json";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
-import { MISSION_WRITE_LIMITS, validateMissionWrite } from "./mission-write.ts";
+import {
+	COORDINATOR_ACTIONS,
+	MISSION_DELIVERY_LIMITS,
+	MISSION_OPENING_MESSAGE_LIMIT,
+	MISSION_REPORT_LIMITS,
+	MISSION_STORE_LIMITS,
+	MISSION_TASK_STATUSES,
+	MISSION_WORKER_CAP,
+	MISSION_WRITE_LIMITS,
+	TASK_PROTOTYPE_LIMITS,
+	validateMissionWrite,
+} from "./mission-write.ts";
 import { StringEnum } from "./schema.ts";
 
 export const MISSION_TOOL = "mission";
@@ -33,40 +44,14 @@ const MEMBER_ACTIONS = [
 	"prGuidance",
 	"prototype",
 ] as const;
-export const MISSION_ACTIONS = [
-	...MEMBER_ACTIONS,
-	"checkIn",
-	"complete",
-	"revision-source",
-	"revision-propose",
-	"revision",
-	"claim",
-	"release",
-	"propose",
-	"supersede",
-	"delete",
-	"group",
-	"phase",
-	"start",
-	"send",
-	"status",
-	"bindPr",
-	"unbindPr",
-	"split",
-	"updateLink",
-	"answer",
-	"archiveWorker",
-	"restoreWorker",
-	"requestReview",
-	"retireReview",
-] as const;
+export const MISSION_ACTIONS = [...MEMBER_ACTIONS, ...COORDINATOR_ACTIONS] as const;
 /** Every action pilotd takes. A thread chat's own (thread, handoff) are only in its tool (THREAD_ACTIONS). */
 export type MissionAction = (typeof MISSION_ACTIONS)[number] | "thread" | "handoff";
 
 /** Sends one call to pilotd and resolves with its JSON result. */
 export type MissionCall = (action: MissionAction, args: Record<string, JsonValue>) => Promise<JsonValue>;
 
-const taskStatus = StringEnum(["todo", "in_progress", "blocked", "in_review", "delegated", "done", "dropped"] as const);
+const taskStatus = StringEnum(MISSION_TASK_STATUSES);
 
 export function createMissionTool(call: MissionCall, coordinator = false): ToolDefinition {
 	const tool = defineTool({
@@ -87,7 +72,7 @@ Workers report facts with report/log, never change canonical task status, comple
 - brief: read a revision, or replace the spec with markdown and expectedRevision (stale writes fail).
 - update: change the mission title or goal.
 - tasks: list tasks, filter open (default), done or all, mine and phase (name or ID, "" for none). Prefer filtered lists or get with id for detail. task: id alone aliases get with id; title creates one, other fields update it (body, status, phase, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "delegated" for work owned by someone else (not finished or startable). Only coordinator/user changes status, including status "done" or status "dropped" without a commit, preserving history; this is not review or merge approval. Workers submit report facts instead.
-- complete (coordinator only): record canonical code completion with id and completion {commit, checks, issues} after reading current scope, owner/assignment, reports and dependencies. May complete worker-owned tasks. commit is a full 40-character lowercase hex hash, checked for shape, not landing. checks max 2000, issues max 1000 (or ""). Saves one immutable record; exact retries only return it, never repeat closure after reopening. Not user acceptance, review or merge authority. No independent reviewer or ACK gate.
+- complete (coordinator only): record canonical code completion with id and completion {commit, checks, issues} after reading current scope, owner/assignment, reports and dependencies. May complete worker-owned tasks. commit is a full 40-character lowercase hex hash, checked for shape, not landing. checks max ${MISSION_DELIVERY_LIMITS.checks}, issues max ${MISSION_DELIVERY_LIMITS.issues} (or ""). Saves one immutable record; exact retries only return it, never repeat closure after reopening. Not user acceptance, review or merge authority. No independent reviewer or ACK gate.
 - claim (coordinator only): take id or ids (IDs, numbers or ranges such as ["1-5","#8"]). Returns claimed tasks and skipped tasks with reasons; never takes another chat's task.
 - release (coordinator only): clear claims using the same selectors. Resets active/blocked to todo, preserves other states and links.
 - decide: record a substantive agreed mission choice about scope, behavior or tradeoffs, audience all, coordinator or reference (default). Keep the human answer/source reference and limits in text; do not invent agreement from discussion, a proposal, a displayed recommendation or an agent report. Do not re-ask settled choices or turn every suggested interview option into a decision. Record material explicit authority changes with their source and limits, but use existing approval/permission controls for specific actions; decision text never grants tool/runtime permission. Active decisions override the brief; text edits/removals remain user-only.
@@ -122,7 +107,7 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 - group (coordinator only): set milestone on every task selected by ids (IDs, numbers or ranges such as ["1-5", "#8"]). Use milestone "" to clear the group. All references must exist; the batch is atomic.
 - task order (coordinator only): set order when creating or updating a task to reorder it. Read tasks for current sort keys. Lower numbers sort first; fractional keys are allowed; ties sort by task number. Numbers and dependencies do not change.
 - task model/thinking (coordinator only): set the task's preferred model and thinking for new chats, validated like start; model "" clears. User-set preferences cannot be changed.
-- start (coordinator only): start one chat for id or ids (IDs/numbers/ranges, like claim), optional message/model/thinking/artifacts/links. In planningVersion 1, role explorer|builder|reviewer (default builder) is fixed at admission. Explorer uses Ask read/search/web and session-local artifacts, never bash/write/edit or planning ownership; coordinator-authorized research may precede brief approval. Reviewer is metadata only, with existing permissions, not a review engine. Roles do not isolate hostile shells/loopback REST. All tasks must be unclaimed and unfinished; admission is all-or-none. Runs in dependency order, then given order; outside dependencies must be done. One PR per code task, stacked in that order. Supplied references attach to every task; artifacts must be linked or member-owned. The whole opening prompt (bodies, guidance, references) must fit 4000 characters or start rejects with its size. Durable context belongs in the brief, decisions or task links. Model defaults to the task's preferred model, then the project's (a user-set preference cannot be overridden); validation errors list allowed model IDs, prices and supported thinking levels. Pick cheaper models for small tasks, strongest allowed model for hard ones. Start only within current user authorization. Add a stable operationId to queue one authorized slice durably until dependencies and a worker slot clear (max 2 chats that can change code, reviewers included; explorers take none); get shows waiting reasons. Exact retries are lookup only, including Unknown. Queue before parking when authorized work can continue. Dispatch also requires a qualified current host policy; unavailable gates stay blocked. This does not enable Autopilot or grant spend.
+- start (coordinator only): start one chat for id or ids (IDs/numbers/ranges, like claim), optional message/model/thinking/artifacts/links. In planningVersion 1, role explorer|builder|reviewer (default builder) is fixed at admission. Explorer uses Ask read/search/web and session-local artifacts, never bash/write/edit or planning ownership; coordinator-authorized research may precede brief approval. Reviewer is metadata only, with existing permissions, not a review engine. Roles do not isolate hostile shells/loopback REST. All tasks must be unclaimed and unfinished; admission is all-or-none. Runs in dependency order, then given order; outside dependencies must be done. One PR per code task, stacked in that order. Supplied references attach to every task; artifacts must be linked or member-owned. The whole opening prompt (bodies, guidance, references) must fit ${MISSION_OPENING_MESSAGE_LIMIT} characters or start rejects with its size. Durable context belongs in the brief, decisions or task links. Model defaults to the task's preferred model, then the project's (a user-set preference cannot be overridden); validation errors list allowed model IDs, prices and supported thinking levels. Pick cheaper models for small tasks, strongest allowed model for hard ones. Start only within current user authorization. Add a stable operationId to queue one authorized slice durably until dependencies and a worker slot clear (max ${MISSION_WORKER_CAP} chats that can change code, reviewers included; explorers take none); get shows waiting reasons. Exact retries are lookup only, including Unknown. Queue before parking when authorized work can continue. Dispatch also requires a qualified current host policy; unavailable gates stay blocked. This does not enable Autopilot or grant spend.
 - send (coordinator only): send message to member targetSessionId; wakes idle/paused chats, optional mode steer for corrections that change current work, followUp (default) for anything that can wait. Steer joins a running turn at its next step; either mode starts an idle chat. Returns delivery delivered/queued/rejected, mode and reason; restore archived chats first.
 - revision-source / revision-propose / revision (coordinator only): read the current source, save {operationId,source,summary,delta}, or read saved id. Revisit only when requested: compare current agreement/work, reuse settled answers and trusted planning skills, interview genuine gaps only. Age permits a suggestion, never automatic replanning. Proposals never apply themselves. Before previewing an applicable revision, use existing explicit Mission Pause to checkpoint work safely; never restart/reset/compact automatically. User confirmation of the exact saved digest uses the native/user route only, not an agent action. Completed tasks/history remain. Decisions replace/withdraw with reason and human source. Instruction/permission corrections remain separate unapplied proposals; confirmation changes no runtime grants or Stop/holds.
 - answer (coordinator only): answer a member's pending ordinary question using targetSessionId, questionId from status and message. Use approved mission scope and decisions; ask the user for missing decisions, scope changes or approvals. Never grants database access or other user-only permissions. Ordinary send/steer does not answer questions. After uncertain delivery, inspect status; never blindly replay.
@@ -177,19 +162,21 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 			report: Type.Optional(
 				Type.Object({
 					version: Type.Literal(1),
-					reportId: Type.String({ maxLength: 128 }),
-					taskId: Type.String({ maxLength: 128 }),
+					reportId: Type.String({ maxLength: MISSION_REPORT_LIMITS.id }),
+					taskId: Type.String({ maxLength: MISSION_REPORT_LIMITS.id }),
 					source: Type.String({ pattern: "^[a-f0-9]{64}$" }),
-					expectedPreviousId: Type.Union([Type.String({ maxLength: 128 }), Type.Null()]),
+					expectedPreviousId: Type.Union([Type.String({ maxLength: MISSION_REPORT_LIMITS.id }), Type.Null()]),
 					movement: StringEnum(["moving", "not_moving", "unknown"] as const),
-					summary: Type.String({ maxLength: 2000 }),
-					nextStep: Type.String({ maxLength: 1000 }),
-					evidence: Type.Array(Type.String({ maxLength: 1000 }), { maxItems: 16 }),
+					summary: Type.String({ maxLength: MISSION_REPORT_LIMITS.summary }),
+					nextStep: Type.String({ maxLength: MISSION_REPORT_LIMITS.nextStep }),
+					evidence: Type.Array(Type.String({ maxLength: MISSION_REPORT_LIMITS.evidence }), {
+						maxItems: MISSION_REPORT_LIMITS.evidenceItems,
+					}),
 					delivery: Type.Optional(
 						Type.Object({
 							commit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}$" })),
-							checks: Type.String({ minLength: 1, maxLength: 2000 }),
-							issues: Type.String({ maxLength: 1000 }),
+							checks: Type.String({ minLength: 1, maxLength: MISSION_DELIVERY_LIMITS.checks }),
+							issues: Type.String({ maxLength: MISSION_DELIVERY_LIMITS.issues }),
 							screens: Type.Optional(
 								Type.Union([
 									Type.Object({
@@ -236,7 +223,7 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 			title: Type.Optional(
 				Type.String({ description: `Task title: max ${MISSION_WRITE_LIMITS.title} Unicode code points.` }),
 			),
-			goal: Type.Optional(Type.String({ maxLength: 4000 })),
+			goal: Type.Optional(Type.String({ maxLength: MISSION_STORE_LIMITS.goal })),
 			body: Type.Optional(
 				Type.String({ description: `Task details: max ${MISSION_WRITE_LIMITS.body} Unicode code points.` }),
 			),
@@ -244,8 +231,8 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 			completion: Type.Optional(
 				Type.Object({
 					commit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
-					checks: Type.String({ minLength: 1, maxLength: 2000 }),
-					issues: Type.String({ maxLength: 1000 }),
+					checks: Type.String({ minLength: 1, maxLength: MISSION_DELIVERY_LIMITS.checks }),
+					issues: Type.String({ maxLength: MISSION_DELIVERY_LIMITS.issues }),
 				}),
 			),
 			notification: Type.Optional(StringEnum(["action", "urgent", "informational", "ack"] as const)),
@@ -453,22 +440,28 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 			artifactId: Type.Optional(Type.String({ maxLength: 128 })),
 			requestId: Type.Optional(
 				Type.String({
-					pattern: "^[A-Za-z0-9_-]{1,128}$",
+					pattern: TASK_PROTOTYPE_LIMITS.requestId.source,
 					description: "prototype: your own stable ID for this request; the same ID again only reads it.",
 				}),
 			),
 			question: Type.Optional(
-				Type.String({ maxLength: 4000, description: "prototype: what to compare and which variants." }),
+				Type.String({
+					maxLength: TASK_PROTOTYPE_LIMITS.question,
+					description: "prototype: what to compare and which variants.",
+				}),
 			),
 			prototypeModel: Type.Optional(
 				Type.String({
-					maxLength: 256,
+					maxLength: TASK_PROTOTYPE_LIMITS.model,
 					description:
 						"prototype: provider/modelId of the chat that makes it, within the price cap. Errors list allowed models.",
 				}),
 			),
 			prototypeThinking: Type.Optional(
-				Type.String({ maxLength: 32, description: "prototype: thinking level for that model." }),
+				Type.String({
+					maxLength: TASK_PROTOTYPE_LIMITS.thinking,
+					description: "prototype: thinking level for that model.",
+				}),
 			),
 			resourceId: Type.Optional(
 				Type.String({

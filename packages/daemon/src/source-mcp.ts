@@ -14,6 +14,11 @@ import {
 } from "./source-tool-rules.ts";
 import { isWatchNotice } from "./worker-notice.ts";
 
+/** MCP calls in flight at once, each in its own worker with its own server connection. The client refuses more.
+ * Inbox sources, mission Linear sync and the Linear publisher share one client. The source scheduler counts only
+ * its own work against this limit, so the client's refusal is the real limit. */
+export const SOURCE_SLOTS = 2;
+
 export interface SourceMcpClient {
 	close?(): Promise<void>;
 	call(
@@ -125,7 +130,7 @@ export class PiSourceMcpClient implements SourceMcpClient {
 			(!beforeWrite ||
 				this.stopped ||
 				signal.aborted ||
-				this.callWorkers.size >= 2 ||
+				this.callWorkers.size >= SOURCE_SLOTS ||
 				!validSourceArguments(tool, args))
 		)
 			throw new SourceNotDispatched("Linear publisher could not enter the connector.");
@@ -133,7 +138,7 @@ export class PiSourceMcpClient implements SourceMcpClient {
 		if (signal.aborted) return Promise.reject(signal.reason);
 		if (Buffer.byteLength(JSON.stringify(args)) > 256 * 1024)
 			return Promise.reject(new Error("MCP arguments exceed 256 KiB"));
-		if (this.callWorkers.size >= 2) return Promise.reject(new Error("MCP client busy, retry shortly"));
+		if (this.callWorkers.size >= SOURCE_SLOTS) return Promise.reject(new Error("MCP client busy, retry shortly"));
 		if (!validSourceArguments(tool, args)) return Promise.reject(new Error("Invalid Linear or Slack start update"));
 		if (!dedicatedSourceTool(kind, tool)) return Promise.reject(new Error("Unknown dedicated MCP source tool"));
 		const worker = this.startWorker("./source-mcp-worker.ts", {

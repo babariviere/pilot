@@ -9,6 +9,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
+import { until } from "../../packages/daemon/src/testing/wait.ts";
 
 const [sessionDir] = process.argv.slice(2);
 if (!sessionDir) throw new Error("usage: daemon-reopen.ts <session-dir>");
@@ -18,15 +19,8 @@ const port = 4400 + Math.floor(Math.random() * 500);
 const base = `http://127.0.0.1:${port}`;
 let daemon: ChildProcess | undefined;
 
-async function until<T>(check: () => Promise<T | undefined>, timeoutMs = 60_000): Promise<T> {
-	const deadline = Date.now() + timeoutMs;
-	for (;;) {
-		const value = await check().catch(() => undefined);
-		if (value !== undefined) return value;
-		if (Date.now() > deadline) throw new Error("timed out");
-		await new Promise((resolve) => setTimeout(resolve, 50));
-	}
-}
+const settled = (check: () => Promise<true | undefined>) =>
+	until(() => check().catch(() => undefined), { timeoutMs: 60_000, intervalMs: 50, message: "timed out" });
 
 async function state(): Promise<string> {
 	const response = await fetch(`${base}/api/sessions/${meta.id}`);
@@ -60,13 +54,13 @@ try {
 		env: { ...process.env, PILOT_HOME: home, PILOT_PORT: String(port), PILOT_IDLE_PARK_MS: "1000" },
 		stdio: ["ignore", "ignore", "inherit"],
 	});
-	await until(async () => ((await fetch(`${base}/api/sessions`)).ok ? true : undefined));
+	await settled(async () => ((await fetch(`${base}/api/sessions`)).ok ? true : undefined));
 	// Let the daemon settle and fork its spare, as it would long before a user opens a chat.
 	await new Promise((resolve) => setTimeout(resolve, 5_000));
 	const runs: number[] = [];
 	for (let i = 0; i < 5; i++) {
 		runs.push(await reopen());
-		await until(async () => ((await state()) === "parked" ? true : undefined));
+		await settled(async () => ((await state()) === "parked" ? true : undefined));
 		await new Promise((resolve) => setTimeout(resolve, 5_500));
 	}
 	console.log(`reopen after parking (warm spare): ${runs.map((ms) => `${ms.toFixed(0)}ms`).join(" ")}`);

@@ -5,6 +5,8 @@ import type {
 	AgentEvent,
 	ArtifactRevision,
 	DeliveryMode,
+	DiagnosticLogRequest,
+	DiagnosticLogResult,
 	DiagnosticTargetReference,
 	OperationHost,
 	RewindAction,
@@ -15,115 +17,18 @@ import type {
 	SessionSubagent,
 	ToolActivitySnapshot,
 } from "@pilot/protocol";
-import type { TraceCarrier } from "@pilot/telemetry";
+import type { TelemetryEnvironment, TelemetryHostKind, TraceCarrier } from "@pilot/telemetry";
 import type { CredentialEndpoint } from "./credential-rpc.ts";
 import type { MissionAction } from "./mission-tools.ts";
 import type { MissionContext, PilotContext, WorkspaceContext } from "./policy.ts";
 import type { KernelUsage } from "./usage.ts";
 
-export type { KernelUsage } from "./usage.ts";
 /** Durable Harness identities, never inferred from wall-clock outcome timestamps. */
 export interface ExecutionEvidence {
 	attemptId: string;
 	inputSubmissionId?: number;
 	inputOperationId?: string;
 	completionEntry?: number;
-}
-
-export type DiagnosticLogSourceId =
-	| "app"
-	| "next_app"
-	| "day_app"
-	| "daemon"
-	| "kernel_worker"
-	| "native_report"
-	| "lifecycle"
-	| "request_timing"
-	| "tool_activity";
-
-/** sessionId is a feedback-only selector; ordinary diagnostics retain their pinned target. */
-export type DiagnosticLogRequest = { sessionId?: string } & (
-	| { action: "inventory" }
-	| {
-			action: "search";
-			source: DiagnosticLogSourceId;
-			q?: string;
-			since?: string;
-			cursor?: string;
-			limit?: number;
-	  }
-	| { action: "excerpt"; ref: string; before?: number; after?: number }
-);
-
-export interface DiagnosticLogSourceInventory {
-	id: DiagnosticLogSourceId;
-	scope: "host" | "target";
-	availability: "available" | "unavailable" | "disabled";
-	coverage: string;
-	retention: "current_process" | "current_and_rotated" | "bounded_local" | "os_managed" | "none";
-	availableFiles: number;
-	rotatedFiles: number;
-	catalogTruncated: boolean;
-	reason?:
-		| "not_recorded"
-		| "missing"
-		| "inaccessible"
-		| "disabled"
-		| "journal_unavailable"
-		| "unsafe_source"
-		| "no_target";
-}
-
-export interface DiagnosticLogRecord {
-	ref: string;
-	at?: string;
-	text: string;
-	truncated: boolean;
-}
-
-export type NextAppLogOmissions = Partial<
-	Record<"legacy" | "unbound" | "identity" | "expired" | "future" | "invalid" | "cleared", number>
->;
-
-export interface DiagnosticLogPage {
-	source: DiagnosticLogSourceId;
-	status: "ok" | "unavailable" | "disabled" | "stale_cursor" | "source_changed";
-	records: DiagnosticLogRecord[];
-	scannedBytes: number;
-	maxScanBytes: number;
-	encodedBytes: number;
-	maxBytes: number;
-	oversizedRecords: number;
-	omissions?: NextAppLogOmissions;
-	truncated: boolean;
-	nextCursor?: string;
-	reason?: string;
-}
-
-export interface DiagnosticLogExcerpt {
-	omissions?: NextAppLogOmissions;
-	source: DiagnosticLogSourceId;
-	status: "ok" | "unavailable" | "stale_ref" | "source_changed";
-	record?: DiagnosticLogRecord;
-	before: DiagnosticLogRecord[];
-	after: DiagnosticLogRecord[];
-	scannedBytes: number;
-	maxScanBytes: number;
-	truncated: boolean;
-	reason?: string;
-}
-
-export interface DiagnosticLogResult {
-	schemaVersion: 1;
-	host: OperationHost;
-	scope: "app" | "chat";
-	targetSessionId?: string;
-	collectedAt: string;
-	untrusted: true;
-	action: DiagnosticLogRequest["action"];
-	sources?: DiagnosticLogSourceInventory[];
-	page?: DiagnosticLogPage;
-	excerpt?: DiagnosticLogExcerpt;
 }
 
 /** A subagent as reported by the kernel, including where its read-only transcript lives. */
@@ -204,24 +109,106 @@ export interface KernelTelemetryConfiguration {
 	enabled: boolean;
 	endpoint?: string;
 	serviceVersion: string;
-	environment: "release" | "development" | "test";
-	hostKind: "local" | "devbox";
+	environment: TelemetryEnvironment;
+	hostKind: TelemetryHostKind;
 	hostId: string;
 	localDiagnostics: boolean;
 }
 
+/**
+ * Calls a kernel tool makes to pilotd. The kernel sends `host.call` with the method and its arguments, and pilotd answers
+ * with one `host.result` (a result or an error). `host.cancel` aborts the call in pilotd. pilotd checks the caller's
+ * identity and role from the supervised worker, never from these arguments.
+ */
+export interface HostCalls {
+	/** Re-checks a clarification admission right before the kernel commits it. */
+	"question.guard": { args: { requestId: string }; result: void };
+	/** The planning profile's bound native port. */
+	planning: {
+		args: { request: import("./planning-worker.ts").PlanningWorkerRequest };
+		result: import("./planning-worker.ts").PlanningWorkerReply;
+	};
+	"planning.guard": { args: { operationId: string }; result: void };
+	"model.configuration.guard": { args: { requestId: string }; result: void };
+	"usage-history": {
+		args: { row: import("@pilot/protocol").UsageObservation };
+		result: import("@pilot/protocol").UsageHistoryWriteResult;
+	};
+	"usage-history.epoch": { args: Record<string, never>; result: import("./usage-capture.ts").UsageCaptureEpoch };
+	/** Confirm a provider-reported usage hold before retrying only its pending request. */
+	"subscription.limit": { args: { limit: import("./subscription-limit.ts").SubscriptionLimitReport }; result: void };
+	/** A `mission` tool call. */
+	mission: { args: { action: MissionAction; args: Record<string, JsonValue> }; result: JsonValue };
+	"insights.backlog": { args: { request: unknown }; result: JsonValue };
+	/** Only the supervised coordinator may request its current scope. */
+	"source.scope": { args: Record<string, never>; result: import("./coordinator-sources.ts").CoordinatorSources };
+	/** pilotd resolves this session's project dependency and linked-project roots. */
+	"source.references": { args: Record<string, never>; result: import("./reference-sources.ts").ReferenceSource[] };
+	memory: {
+		args: { operationId?: string; action: "wake" | "note" | "recall" | "zoom"; args: Record<string, JsonValue> };
+		result: JsonValue;
+	};
+	/** pilotd derives project, author and write capability from this session. */
+	knowledge: {
+		args: {
+			operationId?: string;
+			action: import("./knowledge-tools.ts").KnowledgeAction | import("./knowledge-tools.ts").ProjectContextAction;
+			args: Record<string, JsonValue>;
+		};
+		result: JsonValue;
+	};
+	/** Proposal only. pilotd rechecks scope and validates the release. */
+	"liveUpdate.propose": {
+		args: { operationId: string; args: import("@pilot/protocol").LiveUpdateProposalArgs };
+		result: JsonValue;
+	};
+	/** A `slack_status` tool call. Applies only to Slack messages linked to this chat. */
+	slack: { args: { args: Record<string, JsonValue> }; result: JsonValue };
+	/** A `chat_report` tool call. Only job chats (`pilot.job`) declare the tool. */
+	chatReport: { args: { args: Record<string, JsonValue> }; result: JsonValue };
+	/** Content-free diagnostic read. */
+	diagnostics: {
+		args: { sessionId?: string; limit?: number };
+		result: import("@pilot/protocol").DiagnosticSnapshot;
+	};
+	"diagnostics.context": {
+		args: { request: import("@pilot/protocol").DiagnosticContextRequest };
+		result: import("@pilot/protocol").DiagnosticContextResponse;
+	};
+	/** A ui_* tool call of a screen agent chat, answered by the bound Day window. For a screenshot: ScreenPictureData. */
+	screen: { args: { operation: import("@pilot/protocol").ScreenOperation }; result: JsonValue };
+	/** Explicitly granted target-history read. */
+	"diagnostics.history": {
+		args: { sessionId: string; before?: number; limit?: number };
+		result: import("@pilot/protocol").DiagnosticHistoryPage;
+	};
+	/** Fixed-host Pilot log inventory, search and excerpts. No caller-supplied paths or host or session selectors. */
+	"diagnostics.logs": { args: { request: DiagnosticLogRequest }; result: DiagnosticLogResult };
+	/** Limited proposal publication. This cannot create or change a repair or target chat. */
+	"diagnostics.proposal": {
+		args: { proposal: import("@pilot/protocol").DiagnosticRepairProposalDraft };
+		result: import("@pilot/protocol").DiagnosticRepairProposal;
+	};
+	/** Read-only linked source lookup. */
+	"artifact.reference": { args: { id: string; revision?: number }; result: Omit<ArtifactRevision, "html"> };
+	/** Passive exact-bookmark custody read, no caller-supplied repository or ownership. */
+	"publication.source": { args: { bookmark?: string }; result: import("@pilot/protocol").PublicationSource };
+}
+
+export type HostMethod = keyof HostCalls;
+export type HostCallPacket = {
+	[M in HostMethod]: { type: "host.call"; callId: string; method: M; args: HostCalls[M]["args"] };
+}[HostMethod];
+export type HostCall = <M extends HostMethod>(
+	method: M,
+	args: HostCalls[M]["args"],
+	signal?: AbortSignal,
+) => Promise<HostCalls[M]["result"]>;
+
 export type KernelCommand =
 	| { type: "question.clarify"; requestId: string; questionId: number; question: string }
-	| { type: "question.guard.result"; callId: string; error?: string }
 	| { type: "planning.input"; requestId: string; input: import("./planning-worker.ts").PlanningInput }
 	| { type: "plan.start"; requestId: string; content: string }
-	| {
-			type: "planning.result";
-			callId: string;
-			result?: import("./planning-worker.ts").PlanningWorkerReply;
-			error?: string;
-	  }
-	| { type: "planning.guard.result"; callId: string; error?: string }
 	| { type: "start"; spec: KernelSpec }
 	/** Older workers cannot ignore this mode and resume a recovered inbox. */
 	| { type: "startConfiguration"; spec: KernelSpec }
@@ -262,7 +249,6 @@ export type KernelCommand =
 	| { type: "changeModel"; requestId: string; model: string; thinking?: string; signedIn?: true }
 	/** Distinct command: older workers cannot silently ignore the configuration-only guard. */
 	| { type: "changeModelConfiguration"; requestId: string; model: string; thinking?: string }
-	| { type: "model.configuration.result"; callId: string; error?: string }
 	/** Idle-only extension/resource and MCP configuration reload. Busy is a refusal, never an abort. */
 	| { type: "reloadPi"; requestId: string }
 	/** Drain committed tool effects and quiesce children before relinquishing workspace ownership. */
@@ -296,74 +282,8 @@ export type KernelCommand =
 	| { type: "unwatch"; watchId: string }
 	/** Replaces the mission context; omitted when the chat left its mission. */
 	| { type: "mission.context"; context?: MissionContext }
-	| { type: "mission.result"; callId: string; result?: JsonValue; error?: string }
-	| {
-			type: "publication.source.result";
-			callId: string;
-			result?: import("@pilot/protocol").PublicationSource;
-			error?: string;
-	  }
-	| {
-			type: "source.scope.result";
-			callId: string;
-			result?: import("./coordinator-sources.ts").CoordinatorSources;
-			error?: string;
-	  }
-	| {
-			type: "source.references.result";
-			callId: string;
-			result?: import("./reference-sources.ts").ReferenceSource[];
-			error?: string;
-	  }
-	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
-	| { type: "knowledge.result"; callId: string; result?: JsonValue; error?: string }
-	| { type: "insights.backlog.result"; callId: string; result?: JsonValue; error?: string }
-	| { type: "liveUpdate.result"; callId: string; result?: JsonValue; error?: string }
-	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
-	| { type: "chatReport.result"; callId: string; result?: JsonValue; error?: string }
-	/** The bound Day window's answer to a screen.call. For a screenshot: ScreenPictureData. */
-	| { type: "screen.result"; callId: string; result?: JsonValue; error?: string }
-	| {
-			type: "diagnostics.context.result";
-			callId: string;
-			result?: import("@pilot/protocol").DiagnosticContextResponse;
-			error?: string;
-	  }
-	| {
-			type: "diagnostics.result";
-			callId: string;
-			result?: import("@pilot/protocol").DiagnosticSnapshot;
-			error?: string;
-	  }
-	| {
-			type: "diagnostics.history.result";
-			callId: string;
-			result?: import("@pilot/protocol").DiagnosticHistoryPage;
-			error?: string;
-	  }
-	| { type: "diagnostics.logs.result"; callId: string; result?: DiagnosticLogResult; error?: string }
-	| {
-			type: "diagnostics.proposal.result";
-			callId: string;
-			result?: import("@pilot/protocol").DiagnosticRepairProposal;
-			error?: string;
-	  }
 	/** Whether the chat is attached to a Slack triage message, which declares or withdraws `slack_status`. */
 	| { type: "slack.linked"; linked: boolean }
-	| { type: "subscription.limit.result"; callId: string; error?: string }
-	| {
-			type: "usage-history.result";
-			callId: string;
-			result?: import("@pilot/protocol").UsageHistoryWriteResult;
-			error?: string;
-	  }
-	| {
-			type: "usage-history.epoch.result";
-			callId: string;
-			result?: import("./usage-capture.ts").UsageCaptureEpoch;
-			error?: string;
-	  }
-	| { type: "artifact.reference.result"; callId: string; result?: Omit<ArtifactRevision, "html">; error?: string }
 	| { type: "workspace.prepared"; callId: string; workspace?: WorkspaceContext }
 	| { type: "update.pause"; id: string }
 	| { type: "checkpointUpdate"; requestId: string }
@@ -372,17 +292,14 @@ export type KernelCommand =
 	| { type: "telemetry.configure"; configuration: KernelTelemetryConfiguration }
 	| { type: "diagnostics.configure"; enabled: boolean }
 	| { type: "diagnostics.clear.prepare"; requestId: string }
+	| { type: "host.result"; callId: string; result?: unknown; error?: string }
 	| { type: "shutdown" };
 
 export type KernelPacket =
-	| { type: "question.guard"; callId: string; requestId: string }
-	| { type: "planning.call"; callId: string; request: import("./planning-worker.ts").PlanningWorkerRequest }
-	| { type: "planning.guard"; callId: string; operationId: string }
-	| { type: "model.configuration.guard"; callId: string; requestId: string }
 	| { type: "piReloaded"; requestId: string; commands: SessionCommand[] }
 	/** Lifecycle admission, never mere queue placement. Acknowledged before publishing completion. */
 	| { type: "update.paused"; id: string; error?: string }
-	| { type: "systemMessageState"; event: import("./held-inputs.ts").SystemMessageStateEvent }
+	| { type: "systemMessageState"; event: import("./held-inputs-doc.ts").SystemMessageStateEvent }
 	| {
 			type: "ready";
 			/** Provider-free model configuration command and host-boundary guard handshake. */
@@ -412,10 +329,6 @@ export type KernelPacket =
 	| { type: "question.awaited"; question?: string }
 	| { type: "todos.changed"; openCount: number }
 	| { type: "usage"; usage: KernelUsage }
-	| { type: "usage-history"; callId: string; row: import("@pilot/protocol").UsageObservation }
-	| { type: "usage-history.epoch"; callId: string }
-	/** Confirm a provider-reported usage hold before retrying only its pending request. */
-	| { type: "subscription.limit"; callId: string; limit: import("./subscription-limit.ts").SubscriptionLimitReport }
 	| { type: "children"; requestId: string; hasChildren: boolean }
 	/** Private final child identities and independent census after durable close, before its ACK. */
 	| {
@@ -441,61 +354,10 @@ export type KernelPacket =
 	| { type: "github.action"; action: import("@pilot/protocol").GitHubAction }
 	/** A top-level tool call reached for MCP servers (namespaces, dashes as underscores). A hint, at most once a minute. */
 	| { type: "mcp.used"; namespaces: string[]; failed: boolean }
-	/** A `mission` tool call, answered by `mission.result`. */
-	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
-	| { type: "insights.backlog.call"; callId: string; request: unknown }
-	/** No caller-supplied identity or roots. Only the supervised coordinator may request its current scope. */
-	| { type: "source.scope"; callId: string }
-	/** pilotd resolves this session's project dependency and linked-project roots. No caller-supplied roots. */
-	| { type: "source.references"; callId: string }
-	| {
-			type: "memory.call";
-			callId: string;
-			operationId?: string;
-			action: "wake" | "note" | "recall" | "zoom";
-			args: Record<string, JsonValue>;
-	  }
-	/** A `knowledge` tool call. pilotd derives project, author and write capability from this session. */
-	| {
-			type: "knowledge.call";
-			callId: string;
-			operationId?: string;
-			action: import("./knowledge-tools.ts").KnowledgeAction | import("./knowledge-tools.ts").ProjectContextAction;
-			args: Record<string, JsonValue>;
-	  }
-	/** Proposal only, answered by `liveUpdate.result`. Host rechecks scope and validates the release. */
-	| {
-			type: "liveUpdate.propose";
-			callId: string;
-			operationId: string;
-			args: import("@pilot/protocol").LiveUpdateProposalArgs;
-	  }
-	/** A `slack_status` tool call, answered by `slack.result`. Applies only to Slack messages linked to this chat. */
-	| { type: "slack.call"; callId: string; args: Record<string, JsonValue> }
-	/** A `chat_report` tool call, answered by `chatReport.result`. Only job chats (`pilot.job`) declare the tool. */
-	| { type: "chatReport.call"; callId: string; args: Record<string, JsonValue> }
-	/** Content-free diagnostic read. Caller identity is derived from this supervised worker. */
-	| { type: "diagnostics.call"; callId: string; sessionId?: string; limit?: number }
-	| { type: "diagnostics.context.call"; callId: string; request: import("@pilot/protocol").DiagnosticContextRequest }
-	| { type: "diagnostics.context.cancel"; callId: string }
-	/** A ui_* tool call of a screen agent chat, answered by screen.result. Cancelled like a context read. */
-	| { type: "screen.call"; callId: string; operation: import("@pilot/protocol").ScreenOperation }
-	/** Explicitly granted target-history read. Caller identity and target scope come from the supervised worker. */
-	| { type: "diagnostics.history.call"; callId: string; sessionId: string; before?: number; limit?: number }
-	/** Fixed-host Pilot log inventory/search/excerpts. No caller-supplied paths or host/session selectors. */
-	| { type: "diagnostics.logs.call"; callId: string; request: DiagnosticLogRequest }
-	/** Bounded proposal publication. This cannot create or mutate a repair or target chat. */
-	| {
-			type: "diagnostics.proposal";
-			callId: string;
-			proposal: import("@pilot/protocol").DiagnosticRepairProposalDraft;
-	  }
-	/** Read-only linked source lookup. Caller identity comes from the supervised worker, not this packet. */
-	| { type: "artifact.reference.get"; callId: string; id: string; revision?: number }
 	/** The kernel is awaiting its first prompt preparation. No model or tools are running. */
 	| { type: "workspace.prepare"; callId: string }
-	/** Passive exact-bookmark custody read, no caller-supplied repository or ownership. */
-	| { type: "publication.source"; callId: string; bookmark?: string }
+	| HostCallPacket
+	| { type: "host.cancel"; callId: string }
 	| { type: "accepted"; requestId: string; delivery?: "delivered" | "queued" | "not_started"; reason?: string }
 	/** `withdrawn` holds the user's own queued messages, in delivery order, which Stop restores to the composer. */
 	| { type: "aborted"; requestId: string; withdrawn?: { requestId?: string; content: string }[] }

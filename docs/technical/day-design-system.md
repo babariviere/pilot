@@ -73,6 +73,6 @@ The move added these checks:
   unit tests in `artifact_library.rs` check that the embedded files equal `ui/`, that imports follow the rule, that
   the exports equal `ui/index.ts` without the registry, that every icon and font has a chunk, that previews draw
   with Day's theme and fonts, and that the bundled examples and older `pilot-artifact/ui` names still render.
-- `node --test packages/kernel/src/artifact-skill.test.ts` keeps the bundled file list and import allowlist.
+- `node --test packages/kernel/src/artifact-skill.fast.test.ts` keeps the bundled file list and import allowlist.
 
 Headless tests do not prove native appearance, fonts, focus or scrolling.

@@ -4,7 +4,7 @@ import { access, link, mkdir, open, realpath, rename, rm } from "node:fs/promise
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { McpSetupApplyRequest, McpSetupEntry, McpSetupSnapshot, McpShareConfig } from "@pilot/protocol";
-import { mcpSetupName, mcpSetupNamespace, projectMcpSetup } from "./mcp-setup-projection.ts";
+import { mcpNamespace, mcpSetupName, projectMcpSetup } from "./mcp-setup-projection.ts";
 import { withModelSettingsLock } from "./model-settings.ts";
 
 const MAX_BYTES = 1_048_576;
@@ -47,7 +47,7 @@ function preservedRoot(bytes: Buffer | undefined): Record<string, unknown> {
 	) as Record<string, unknown>;
 }
 
-export function mcpSetupInput(value: unknown): McpSetupApplyRequest {
+function mcpSetupInput(value: unknown): McpSetupApplyRequest {
 	if (
 		!object(value) ||
 		Object.keys(value).some((key) => !["expectedRevision", "entries"].includes(key)) ||
@@ -70,7 +70,7 @@ export function mcpSetupInput(value: unknown): McpSetupApplyRequest {
 		if (!safe.config) fail(400, "invalid_mcp_setup");
 		return { name: entry.name, config: safe.config };
 	});
-	if (new Set(entries.map((entry) => mcpSetupNamespace(entry.name))).size !== entries.length)
+	if (new Set(entries.map((entry) => mcpNamespace(entry.name))).size !== entries.length)
 		fail(400, "invalid_mcp_setup");
 	return { expectedRevision: value.expectedRevision, entries };
 }
@@ -179,9 +179,9 @@ export class McpSetupStore {
 					)
 						return; // Lost acknowledgment: read-only exact desired-value reconciliation.
 					if (raw.revision !== input.expectedRevision) fail(409, "mcp_setup_conflict");
-					const namespaces = new Set(Object.keys(raw.servers).map(mcpSetupNamespace));
+					const namespaces = new Set(Object.keys(raw.servers).map(mcpNamespace));
 					for (const entry of input.entries) {
-						if (namespaces.has(mcpSetupNamespace(entry.name))) fail(409, "mcp_setup_name_conflict");
+						if (namespaces.has(mcpNamespace(entry.name))) fail(409, "mcp_setup_name_conflict");
 					}
 					if (Object.keys(raw.servers).length + input.entries.length > 64) fail(409, "mcp_setup_limit");
 					for (const entry of input.entries) {

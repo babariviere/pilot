@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { MissionContext } from "@pilot/kernel";
-import { decisionNotice } from "../../kernel/src/mission-decisions.ts";
+import { decisionNotice } from "@pilot/kernel/testing";
 import { operations } from "./event-loop-watchdog.ts";
 import { missionContextFixture } from "./testing/mission-context.ts";
 

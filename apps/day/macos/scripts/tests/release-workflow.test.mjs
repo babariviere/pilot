@@ -106,7 +106,7 @@ test("PR runs cancel superseded pushes and main runs cancel superseded commits",
 	assert.doesNotMatch(read("release.yaml"), /cancel-in-progress: true/);
 });
 
-test("portable tests run on Linux and native coverage plus packaging stay on macOS", () => {
+test("all Node suites run on Linux; macOS repeats platform coverage and checks packaging", () => {
 	const job = jobOf(read("tests.yaml"));
 	const linux = job("node");
 	const macos = job("macos");
@@ -114,7 +114,7 @@ test("portable tests run on Linux and native coverage plus packaging stay on mac
 	assert.match(linux, /apt-get install --yes python3 make g\+\+/);
 	assert.match(linux, /run: pnpm install --frozen-lockfile/);
 	assert.match(linux, /run: pnpm typecheck/);
-	assert.match(linux, /pnpm test -- --lane=portable/);
+	assert.match(linux, /run: pnpm test -- --timings\s/);
 	assert.match(macos, /runs-on: macos-15/);
 	assert.match(macos, /pnpm test -- --lane=macos/);
 	assert.match(macos, /python3 -B -m unittest discover/);
@@ -176,7 +176,7 @@ test("shared Rust helper jobs keep platform boundaries without building GPUI art
 	assert.match(portable, /bash crates\/scripts\/ci\.sh updater-check/);
 	assert.match(portable, /bash crates\/scripts\/ci\.sh updater-linux-tests/);
 	assert.match(portable, /python3 crates\/scripts\/verify_update_lifecycle\.py/);
-	assert.match(portable, /python3 scripts\/validate-workflows\.py/);
+	assert.match(job("workflows"), /python3 scripts\/validate-workflows\.py/);
 	assert.match(native, /runs-on: macos-15/);
 	assert.match(native, /bash crates\/scripts\/ci\.sh updater-mac-tests/);
 	assert.match(job("day-contracts"), /unittest discover -s apps\/day\/scripts/);

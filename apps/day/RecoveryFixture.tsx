@@ -10,6 +10,7 @@ const sends = signal(0);
 const checks = signal(0);
 const last = signal("");
 const lost = signal(false);
+const receiptReady = signal(false);
 const shown = signal(true);
 const handoff = signal(false);
 const chat = signal<SessionChat | null>(null);
@@ -98,6 +99,7 @@ const source: SessionChatSource = {
 		checks.update((n) => n + 1);
 		if (handoff())
 			return { status: "unknown", kind: "chat-handoff", message: "Check only", operationId: "handoff-1" };
+		if (!receiptReady()) return chat()!.pendingRecovery!;
 		publish({ ...failed(), state: "working" });
 		return { status: "accepted", message: "", operationId: "recover-1" };
 	},
@@ -111,6 +113,7 @@ mount(() => (
 				<Button label="Hide chat" onPress={() => shown.set(false)} />
 				<Button label="Reopen chat" onPress={() => shown.set(true)} />
 				<Button label="Lose next answer" onPress={() => lost.set(true)} />
+				<Button label="Receipt ready" onPress={() => receiptReady.set(true)} />
 				<Button
 					label="Offer handoff"
 					onPress={() => {

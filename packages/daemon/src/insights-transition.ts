@@ -117,7 +117,7 @@ export class InsightsTransition {
 			throw new Conflict("legacy_immutable_home_proof_unavailable_use_exact_recovery");
 		if (captured.references.items.some((r) => r.state !== "accepted"))
 			throw new Conflict("legacy_operation_pending_use_exact_check");
-		const rules = this.deps.schedules.store.legacyInsightsItems(s.reportSessionId);
+		const rules = this.deps.schedules.insights.legacyItems(s.reportSessionId);
 		const records = captured.envelopes.map(
 			(e) =>
 				JSON.parse(e.original) as {
@@ -237,7 +237,7 @@ export class InsightsTransition {
 			this.deps.sessions.insightsReplacementGuard(a.owner.reportSessionId, s.projectId, s.missionId, s.expectedHome);
 			if (!allowOwner && this.deps.workspace.current(a)) throw new Conflict("workspace_already_reserved");
 			this.deps.schedules.store.assertSettled();
-			if (!same(expectedRules, this.deps.schedules.store.legacyInsightsItems(s.reportSessionId)))
+			if (!same(expectedRules, this.deps.schedules.insights.legacyItems(s.reportSessionId)))
 				throw new Conflict("legacy_rules_changed_during_transfer");
 			if (!same(snapshot.manifest, this.deps.store.snapshot(s, projection).manifest))
 				throw new Conflict("legacy_tracking_changed_during_transfer");
@@ -361,7 +361,7 @@ export class InsightsTransition {
 					cancelledRules: acknowledged,
 				});
 				c.guard();
-				const ack = await this.deps.schedules.cancelLegacyForTransfer(rule, p.legacy, c.guard);
+				const ack = await this.deps.schedules.insights.cancelLegacyForTransfer(rule, p.legacy, c.guard);
 				c.acknowledge(ack);
 				acknowledged.push(ack);
 				c.guard();
@@ -421,7 +421,7 @@ export class InsightsTransition {
 			this.deps.store.assertTransferred(a, record.operationId);
 			this.deps.sessions.assertOnlyTransferredLegacy(record.payload.legacy);
 			if (!same(control, controlNow())) throw new Conflict("legacy_Stop_or_control_changed_after_transfer");
-			this.deps.schedules.assertTransferredLegacy(
+			this.deps.schedules.insights.assertTransferredLegacy(
 				a.owner.expectedHome,
 				acknowledged,
 				record.payload.legacy.reportSessionId,

@@ -11,19 +11,17 @@ test("failed chat retries in place while final archive stays unavailable", async
 	expect(app.shows("id:chat-retry")).toBe(false);
 	expect(app.shows("id:chat-final-archive-wait")).toBe(true);
 });
-test("corrected follow-up keeps exact text and an uncertain send offers only Check", async () => {
+test("corrected follow-up reads its receipt automatically and keeps exact text", async () => {
 	const app = await open("./RecoveryFixture.tsx", desktop);
 	await app.waitFor("id:chat-retry");
 	await app.press("Lose next answer");
+	await app.press("Receipt ready");
 	await app.press("id:chat-correct");
 	await app.type("id:chat-recovery-note", "Keep the original files. Fix only CSV export.");
 	await app.press("id:chat-recovery-send");
-	await app.waitFor("id:chat-recovery-check");
-	expect(app.shows("Sends: 1 / Checks: 0")).toBe(true);
-	expect(app.shows("id:chat-retry")).toBe(false);
-	await app.press("id:chat-recovery-check");
 	await app.waitFor("Working.");
 	expect(app.shows("Sends: 1 / Checks: 1")).toBe(true);
+	expect(app.shows("id:chat-recovery-check")).toBe(false);
 	expect(app.shows("Sent: [Keep the original files. Fix only CSV export.]")).toBe(true);
 });
 
@@ -45,11 +43,12 @@ test("saved correction restores without sending; startup and archived states do 
 
 test("loading and failed earlier-history reads keep every recovery and custody safeguard", async () => {
 	let reads = 0;
-	const app = await open("./fixtures/recovery/Projection.tsx", {
+	const app = await open("./ChatProjectionFixture.tsx", {
 		...desktop,
-		host: {
-			handlers: {
-				"day.chat.read": () => {
+		modules: {
+			nsh: {
+				"host.call": (name: string) => {
+					expect(name).toBe("day.chat.read");
 					reads++;
 					if (reads > 1) return { version: 1, error: "offline" };
 					return {
@@ -119,10 +118,12 @@ test("reopening an uncertain correction keeps Check and clears only its unchange
 	await app.press("Reopen chat");
 	await app.waitFor("id:chat-recovery-check");
 	expect(app.shows("id:chat-retry")).toBe(false);
+	expect(app.shows("Sends: 1 / Checks: 3")).toBe(true);
+	await app.press("Receipt ready");
 	await app.press("id:chat-recovery-check");
 	await app.waitFor("Working.");
 	await app.press("Fail again");
 	await app.press("id:chat-correct");
 	expect(app.value("id:chat-recovery-note")).toBe("");
-	expect(app.shows("Sends: 1 / Checks: 1")).toBe(true);
+	expect(app.shows("Sends: 1 / Checks: 4")).toBe(true);
 });

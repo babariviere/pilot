@@ -7,6 +7,7 @@ export function sessionObservers() {
 	const artifacts = new Set<Parameters<SessionManager["onArtifactsChanged"]>[0]>();
 	const reviews = new Set<() => void>();
 	const power = new Set<() => void>();
+	const capacity = new Set<() => void>();
 	let bridge: Parameters<SessionManager["setPlanningBridge"]>[0] | undefined;
 	return {
 		piReload: new PiReload<never>(
@@ -39,6 +40,12 @@ export function sessionObservers() {
 				power.delete(listener);
 			};
 		}) satisfies SessionManager["onPowerResume"],
+		onCodingCapacityChange: ((listener) => {
+			capacity.add(listener);
+			return () => {
+				capacity.delete(listener);
+			};
+		}) satisfies SessionManager["onCodingCapacityChange"],
 		setPlanningBridge: ((next) => {
 			if (bridge) throw new Error("Planning bridge already installed in fixture");
 			bridge = next;

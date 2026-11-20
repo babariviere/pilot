@@ -1,27 +1,25 @@
 /** Session registry and kernel worker supervision. */
 
-import { type ChildProcess, fork } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import {
 	type AskContext,
-	type DiagnosticLogRequest,
-	type DiagnosticLogResult,
 	type ExecutionPermission,
 	formatFailure,
+	type HostCallPacket,
 	inheritedExecutionPermission,
 	inputOrigin,
 	type KernelCommand,
 	type KernelPacket,
 	type KernelSubagent,
 	type KernelTelemetryConfiguration,
-	type KernelUsage,
 	type MissionContext,
 	type PersistedSessionView,
 	type SubagentTranscriptRead,
@@ -31,7 +29,6 @@ import {
 	type WorkspaceReset,
 	workerEntry,
 } from "@pilot/kernel";
-import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import type {
 	AgentEvent,
 	AIUsageBudget,
@@ -46,6 +43,8 @@ import type {
 	DiagnosticEvidence,
 	DiagnosticEvidenceSubject,
 	DiagnosticHistoryPage,
+	DiagnosticLogRequest,
+	DiagnosticLogResult,
 	DiagnosticPauseReason,
 	DiagnosticRepairProjectSetup,
 	DiagnosticRepairProposal,
@@ -70,7 +69,6 @@ import type {
 	SessionJob,
 	SessionListQuery,
 	SessionPullRequest,
-	SessionState,
 	SessionSubagent,
 	SessionSummary,
 	SessionTrackedSource,
@@ -79,11 +77,11 @@ import type {
 	StopResponse,
 	SubagentTranscript,
 	SubscriptionPause,
-	ToolActivitySnapshot,
 	UpdatePreparation,
 	WorkProfile,
 	WorkSize,
 } from "@pilot/protocol";
+import { TARGET_LOG_SOURCES } from "@pilot/kernel";
 import { nodeTelemetry, type TraceCarrier } from "@pilot/telemetry";
 import release from "../../../package.json" with { type: "json" };
 import { AIUsageLedger } from "./ai-usage.ts";
@@ -122,6 +120,24 @@ import {
 	parseInsightsHistory,
 	validateInsightsGrant,
 } from "./insights-admission.ts";
+import {
+	automationRequestId,
+	flowInputId,
+	insightsReviewRequestId,
+	insightsReviewRunId,
+	isAutomationRequest,
+	isFlowInput,
+	isInsightsReview,
+	isMissionNotice,
+	isMissionWait,
+	isPiReload,
+	isScheduleRequest,
+	isSlackReply,
+	isWorkspaceSetup,
+	missionWaitRequestId,
+	piReloadRequestId,
+	workspaceSetupRequestId,
+} from "./input-requests.ts";
 import { insightsSourceAllowed } from "./insights-settings.ts";
 import { type JjProjectScope, workerScope } from "./jj-ownership-contract.ts";
 import {
@@ -134,11 +150,19 @@ import {
 import { LifecycleDiagnostics } from "./lifecycle-diagnostics.ts";
 import { LongJobTimers, longJobAttention } from "./long-jobs.ts";
 import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
+import {
+	CommandRejected,
+	type SessionWorker,
+	Worker,
+	type WorkerOptions,
+	WorkerPool,
+	WorkerUnavailable,
+} from "./kernel-worker.ts";
 import { McpChatAttention, type McpStatusSource } from "./mcp-attention.ts";
 import { ModelCatalog } from "./models.ts";
 import { NativeDiagnosticsStore } from "./native-diagnostics.ts";
 import { NativeReviewReader, NoRetainedBinding } from "./native-review.ts";
-import { reasonLine, stuckPullRequestReason } from "./needs-you-reason.ts";
+import { asksUser, reasonLine, stuckPullRequestReason } from "./needs-you-reason.ts";
 import { canonicalJSON, OperationRejected, payloadHash } from "./operation-journal.ts";
 import { PiReload } from "./pi-reload.ts";
 import {
@@ -170,6 +194,7 @@ import { ReviewSnapshotStore } from "./review-snapshots.ts";
 import { type RunBoundary, type RunFinished, readRunFiles, runChangedFiles, runSnapshot } from "./run-finished.ts";
 import type { ScheduleInputGate } from "./schedules.ts";
 import { continuationAnswer, continuationHandoff, continuationQueuedInputs } from "./session-continuation.ts";
+import { HostCallDispatcher, type HostCallPool, type HostCallTable } from "./session-host-calls.ts";
 import { readSessionDiagnostics } from "./session-diagnostics.ts";
 import {
 	applyActivity,
@@ -203,10 +228,8 @@ import { hasUnpublishedWork } from "./unpublished-work.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { UsageHistoryStore } from "./usage-history.ts";
 import { allowedProfiles, isCyberBlock, type ModelState, pickProfileModel, profileHasModel } from "./work-profiles.ts";
-import { WorkerActivity } from "./worker-activity.ts";
 import { WorkerReviewDelivery } from "./worker-review-delivery.ts";
 import { WorkerStarts } from "./worker-starts.ts";
-import { workspaceCommandEnvironment } from "./workspace-environment.ts";
 import {
 	WORKSPACE_SETUP_HOLD_MS,
 	type WorkspaceSetupContext,
@@ -226,13 +249,10 @@ import {
 	workspaceLeftovers,
 } from "./workspaces.ts";
 
-export { NotFound } from "./errors.ts";
-
 type PendingCommand = Extract<KernelCommand, { type: "input" | "abort" | "pauseInputs" | "resumeInputs" }> & {
 	scheduleEntry?: true;
 };
 type WorkerSpec = Extract<KernelCommand, { type: "start" }>["spec"];
-type MissionCallPacket = Extract<KernelPacket, { type: "mission.call" }>;
 
 /** Write-ahead handoff, replayed before workers or PR discovery start. */
 export interface PullRequestBinding {
@@ -248,7 +268,7 @@ export interface PullRequestBinding {
 }
 
 /** Internal mission start selection, passed separately from untrusted request fields. */
-export interface MissionSpawnAdmission {
+interface MissionSpawnAdmission {
 	/** Host-owned resource fence, checked before saving and after asynchronous admission. */
 	guard?(): void;
 	role?: import("@pilot/protocol").MissionWorkerRole;
@@ -331,7 +351,7 @@ export interface SessionMissionBridge {
 	passiveMissionLifecycle?(missionId: string): boolean;
 	/** User title edits also rename the shared planning scope when this chat leads it. */
 	renameCoordinator?(sessionId: string, title: string): void;
-	call(sessionId: string, call: MissionCallPacket): Promise<unknown>;
+	call(sessionId: string, call: import("@pilot/kernel").HostCalls["mission"]["args"]): Promise<unknown>;
 	readArtifactReference?(sessionId: string, id: string, revision?: number): Promise<Omit<ArtifactRevision, "html">>;
 	pullRequestCreated?(sessionId: string, url: string): void;
 	githubAction?(sessionId: string, action: import("@pilot/protocol").GitHubAction): void;
@@ -348,65 +368,6 @@ export interface SessionMissionBridge {
 	systemMessageState?(sessionId: string, event: import("@pilot/kernel").SystemMessageStateEvent): void;
 	/** Resolves once mission writes so far are on disk; undefined if they already are. Await before acknowledging. */
 	whenDurable?(): Promise<void> | undefined;
-}
-
-/** An explicit kernel rejection, unlike a disconnect with uncertain durable admission. */
-export class CommandRejected extends Error {
-	readonly code?: "busy" | "stopped" | "stale_question";
-
-	constructor(message: string, code?: "busy" | "stopped" | "stale_question") {
-		super(message);
-		if (code) this.code = code;
-	}
-}
-
-/** Transport loss is uncertain admission, never an explicit durable rejection. */
-export class WorkerUnavailable extends Error {}
-/** A known pre-entry hold, not transport uncertainty. Keep the saved schedule input. */
-
-export interface WorkerOptions {
-	/** Startup channel check cadence. A connected, live worker is allowed to be slow. Defaults to two minutes. */
-	startupTimeoutMs?: number;
-	/** Admission channel check cadence, not model/tool execution. Defaults to one minute. */
-	commandTimeoutMs?: number;
-	/** Injectable IPC process for deterministic supervision tests. */
-	child?: ChildProcess;
-}
-
-/** Injectable daemon boundaries for deterministic startup tests. */
-export interface SessionWorker {
-	readonly ready: Promise<void>;
-	modelConfiguration?: 1;
-	questionClarification?: 1;
-	/** Includes outstanding acknowledgements and accepted input not yet observed in the event stream. */
-	readonly busy?: boolean;
-	state: SessionState;
-	error?: string;
-	usage?: KernelUsage;
-	send(command: KernelCommand): void;
-	request(command: Extract<KernelCommand, { requestId: string }>): Promise<void>;
-	close(): Promise<void>;
-	/** Whether the kernel has live subprocesses (background jobs, subagents). Such workers are never parked. */
-	hasChildren?(): Promise<boolean>;
-	jobs?(): Promise<SessionJob[]>;
-	/** Stop one running job for the user. The kernel tells the agent, whose follow-up turn ends the wait. */
-	stopJob?(jobId: string): Promise<void>;
-	runningJobs?: SessionJob[];
-	toolsRunning?: boolean;
-	toolActivity?: ToolActivitySnapshot;
-	toolStallKey?: string;
-	/** Committed chat todo count, supplied on ready and after every mutation. */
-	openTodoCount?: number;
-	/** Epoch ms when this worker last reported a run start. Absent while idle. */
-	workingSince?: number;
-	/** The live run awaits this blocking ask_user question. Presentation only; cleared with the worker. */
-	awaitedQuestion?: { text: string; at: number };
-	/** Live-worker work continues between the last job ending and its result turn completing. */
-	awaitingJobFollowUp?: boolean;
-	/** Stop holds automatic follow-ups (job and subagent results) until the next run starts. */
-	followUpsHeld?: boolean;
-	/** A compaction is summarizing the conversation. Shown as work without starting a turn. */
-	compacting?: boolean;
 }
 
 export interface SessionManagerOptions {
@@ -525,7 +486,6 @@ interface SessionMeta extends OutcomeMeta {
 	/** Latest proposal only. Replaced proposals cannot admit new repairs, while committed create receipts survive. */
 	diagnosticRepairStart?: { proposalId: string; operationId: string; targetId: string; digest: string };
 	executionEvidence?: import("@pilot/kernel").ExecutionEvidence;
-	/** Durable execution-ownership fence. Never cleared by reconnect, restart or a fresh input. */
 	/** Mission tasks this chat was started for. Kept after a claim is released, so a restarted task can resume here. */
 	taskIds?: string[];
 	/** Stable create reservation. Never reuse this session ID for another operation. */
@@ -576,6 +536,8 @@ interface SessionMeta extends OutcomeMeta {
 	inputGeneration?: number;
 	/** Interrupted durable work, retained until a replacement kernel is ready. */
 	kernelRestartPending?: boolean;
+	/** Proof of a complete idle child census, close ACK and worker exit. */
+	parkedChildrenProof?: string;
 	id: string;
 	title: string;
 	/** Latest attempt list reported by the kernel, kept while it is parked. */
@@ -750,7 +712,6 @@ const emptySnapshot: AgentEvent = {
 };
 
 const ID_PATTERN = /^[0-9a-f-]{36}$/i;
-/** A run the kernel failed in automatic handoff ("Compaction failed: <handoff error>"). */
 const HANDOFF_FAILURE = /^Compaction failed: .*handoff/is;
 const HANDOFF_RETRY_TEXT =
 	"The automatic context handoff failed, and the user asked to retry it. Continue the task from where you left off.";
@@ -758,9 +719,8 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 /** What Pilot sends once when a mission builder's turn ended with no result and no question. */
 export const WAIT_NUDGE_TEXT =
 	"Your turn ended without delivering a result or asking the user. If you need the user (a choice, a review of a mockup, agreement), ask with your question tool and attach the mockup; if your work is done, deliver it; otherwise continue.";
-/** One reminder per user input: the ID names the chat and its last input, so the kernel never takes it twice. */
 const waitNudgeId = (meta: { id: string; lastUserMessageAt?: number; createdAt: number }) =>
-	`mission-wait:${meta.id}:${meta.lastUserMessageAt ?? meta.createdAt}`;
+	missionWaitRequestId(meta.id, meta.lastUserMessageAt ?? meta.createdAt);
 /**
  * Characters of a waiting chat's last message that Day shows: a request in prose fits in a few short paragraphs, as
  * for the planner's last words (planning-workers PLANNER_SAYS_CHARS). It keeps Day's reads small.
@@ -911,417 +871,11 @@ function publicSubagent({
 	return subagent;
 }
 
-function forkWorker(spec?: WorkerSpec): ChildProcess {
-	const view = spec?.pilot?.coordinatorView;
-	if (view) throw new Error("Coordinator workers require a fresh, validated isolated child; refusing warm-pool reuse");
-	return fork(fileURLToPath(workerEntry), [], {
-		// The worker runs the project's own tools: they must load the project config, and nothing may prompt.
-		env: workspaceCommandEnvironment({ ...process.env, ...credentialEnvironment(spec?.credentials) }),
-		execArgv: [],
-		serialization: "advanced",
-		stdio: ["ignore", "inherit", "inherit", "ipc"],
-	});
-}
-
-/**
- * One pre-forked kernel process that has already loaded its modules and waits for its start command, so
- * opening a session skips Node startup and module loading.
- */
-class WorkerPool {
-	private spare?: ChildProcess;
-	private timer?: ReturnType<typeof setTimeout>;
-	private closed = false;
-
-	take(): ChildProcess {
-		const spare = this.spare;
-		this.spare = undefined;
-		// Do not compete with the session that is starting right now.
-		this.refill(5_000);
-		if (spare?.connected && spare.exitCode === null && spare.signalCode === null) {
-			spare.ref();
-			spare.channel?.ref();
-			return spare;
-		}
-		spare?.kill();
-		return forkWorker();
-	}
-
-	refill(delayMs: number): void {
-		if (this.closed || this.spare || this.timer) return;
-		this.timer = setTimeout(() => {
-			this.timer = undefined;
-			if (this.closed || this.spare) return;
-			const child = forkWorker();
-			// An unused spare must not keep the daemon (or a test) alive.
-			child.unref();
-			child.channel?.unref();
-			child.once("exit", () => {
-				if (this.spare === child) this.spare = undefined;
-			});
-			this.spare = child;
-		}, delayMs);
-		this.timer.unref();
-	}
-
-	close(): void {
-		this.closed = true;
-		clearTimeout(this.timer);
-		this.spare?.kill();
-		this.spare = undefined;
-	}
-}
-
-export class Worker implements SessionWorker {
-	modelConfiguration?: 1;
-	questionClarification?: 1;
-	private exited = false;
-	private initialized = false;
-	readonly child: ChildProcess;
-	readonly ready: Promise<void>;
-	state: SessionState = "starting";
-	error?: string;
-	workingSince?: number;
-	/** Ephemeral context estimate and physical provider, reported by the live kernel. */
-	usage?: KernelUsage;
-	runningJobs?: SessionJob[];
-	toolsRunning?: boolean;
-	toolActivity?: ToolActivitySnapshot;
-	toolStallKey?: string;
-	openTodoCount?: number;
-	awaitingJobFollowUp?: boolean;
-	followUpsHeld?: boolean;
-	awaitedQuestion?: { text: string; at: number };
-	compacting = false;
-	private readonly pending = new Map<
-		string,
-		{
-			resolve(): void;
-			reject(error: Error): void;
-			timer: ReturnType<typeof setTimeout>;
-			onlyIfIdle?: boolean;
-			inspection?: boolean;
-			checkpoint?: boolean;
-		}
-	>();
-	private startupTimer?: ReturnType<typeof setTimeout>;
-	private killTimer?: ReturnType<typeof setTimeout>;
-	private unavailable?: WorkerUnavailable;
-	private failReady!: (error: Error) => void;
-	private readonly commandTimeoutMs: number;
-	private children = true;
-	private checkingChildren?: Promise<boolean>;
-	private checkingJobs?: Promise<SessionJob[]>;
-	private readonly jobResults = new Map<string, SessionJob[]>();
-	private closing?: Promise<void>;
-	private shutdownRequested = false;
-	private readonly activity = new WorkerActivity();
-	private activityWatchId?: string;
-
-	get busy(): boolean {
-		return (
-			this.pending.size !== 0 ||
-			this.state === "starting" ||
-			this.state === "working" ||
-			(this.state === "idle" && this.activity.busy)
-		);
-	}
-
-	get transportUnavailable(): boolean {
-		return this.unavailable !== undefined;
-	}
-
-	/** Keeps when the current run started, for passive activity reads. */
-	private setWorking(working: boolean): void {
-		if (!working) this.workingSince = undefined;
-		else if (this.state !== "working") this.workingSince = Date.now();
-		this.state = working ? "working" : "idle";
-	}
-
-	private readonly onPacket: (packet: KernelPacket) => void;
-
-	constructor(
-		spec: Extract<KernelCommand, { type: "start" }>["spec"],
-		onPacket: (packet: KernelPacket) => void,
-		onExit: (worker: SessionWorker, code: number | null, signal?: NodeJS.Signals | null) => void,
-		pool?: WorkerPool,
-		options: WorkerOptions = {},
-	) {
-		this.onPacket = onPacket;
-		this.child = operations.time(
-			"worker.acquire",
-			() => options.child ?? (spec.pilot?.coordinatorView ? forkWorker(spec) : (pool?.take() ?? forkWorker())),
-		);
-		this.commandTimeoutMs = options.commandTimeoutMs ?? 60_000;
-		let markReady!: () => void;
-		let markFailed!: (error: Error) => void;
-		this.ready = new Promise<void>((resolve, reject) => {
-			markReady = resolve;
-			markFailed = reject;
-		});
-		this.ready.catch(() => undefined);
-		this.failReady = markFailed;
-		this.startupTimer = this.checkChannel(options.startupTimeoutMs ?? 120_000);
-		const handle = (message: unknown) => {
-			if (this.unavailable || this.exited) return;
-			const packet = message as KernelPacket;
-			if (packet.type === "events" && packet.watchId === this.activityWatchId) {
-				this.activity.observe(packet.events);
-				return;
-			}
-			if (packet.type === "ready") {
-				this.modelConfiguration = packet.modelConfiguration;
-				this.questionClarification = packet.questionClarification;
-				clearTimeout(this.startupTimer);
-				this.usage = packet.usage;
-				this.toolsRunning = packet.toolsRunning;
-				this.openTodoCount = packet.openTodoCount;
-				this.initialized = true;
-				this.setWorking(packet.working);
-				this.compacting = packet.compacting === true;
-				markReady();
-			} else if (packet.type === "todos.changed") {
-				this.openTodoCount = packet.openCount;
-			} else if (packet.type === "tool.activity") {
-				this.toolActivity = packet.activity;
-			} else if (packet.type === "tools.running") {
-				this.toolsRunning = packet.running;
-			} else if (packet.type === "compacting") {
-				this.compacting = packet.compacting;
-			} else if (packet.type === "usage") {
-				this.usage = packet.usage;
-			} else if (packet.type === "working") {
-				this.setWorking(packet.working);
-			} else if (packet.type === "modelChanged") {
-				this.usage = packet.usage;
-				this.settle(packet.requestId);
-			} else if (packet.type === "piReloaded") {
-				this.error = undefined;
-				this.settle(packet.requestId);
-			} else if (packet.type === "rewound") {
-				this.settle(packet.requestId);
-			} else if (packet.type === "children") {
-				this.children = packet.hasChildren !== false;
-				this.settle(packet.requestId);
-			} else if (packet.type === "jobs") {
-				if (this.pending.has(packet.requestId)) this.jobResults.set(packet.requestId, packet.jobs);
-				this.settle(packet.requestId);
-				return;
-			} else if (packet.type === "accepted" || packet.type === "aborted") {
-				// IPC acceptance can precede working=true. A fresh committed snapshot is the idle barrier,
-				// including idempotent retries which produce no new run/inbox events.
-				if (packet.type === "accepted" && !this.pending.get(packet.requestId)?.checkpoint) this.refreshActivity();
-				this.settle(packet.requestId);
-			} else if (packet.type === "error") {
-				const inspection =
-					packet.requestId &&
-					(this.pending.get(packet.requestId)?.inspection || packet.requestId.startsWith("inspectJobs:"));
-				const idleRejection =
-					packet.code === "busy" && packet.requestId && this.pending.get(packet.requestId)?.onlyIfIdle;
-				if (packet.requestId) this.settle(packet.requestId, new CommandRejected(packet.message, packet.code));
-				else if (!this.initialized) {
-					clearTimeout(this.startupTimer);
-					markFailed(new Error(packet.message));
-					this.state = "failed";
-				}
-				if (!idleRejection && !inspection) this.error = packet.message;
-				if (inspection) return;
-			}
-			if ((packet.type === "ready" || packet.type === "working") && packet.working) this.error = undefined;
-			this.onPacket(packet);
-		};
-		// Large snapshots and their listeners run synchronously here. Attribute them if the event loop stalls.
-		this.child.on("message", (message) =>
-			operations.time(
-				() => `kernel ${(message as KernelPacket).type} packet for ${spec.sessionId}`,
-				() => handle(message),
-				250,
-			),
-		);
-		this.child.on("error", (error) => {
-			this.failTransport(new WorkerUnavailable(error.message, { cause: error }));
-		});
-		this.child.on("disconnect", () => this.failTransport(new WorkerUnavailable("Kernel IPC disconnected")));
-		this.child.on("exit", (code, signal) => {
-			this.exited = true;
-			clearTimeout(this.startupTimer);
-			clearTimeout(this.killTimer);
-			this.killTimer = undefined;
-			const error =
-				this.unavailable ??
-				new WorkerUnavailable(signal ? `Kernel exited with signal ${signal}` : `Kernel exited with code ${code}`);
-			markFailed(error);
-			for (const id of [...this.pending.keys()]) this.settle(id, error);
-			onExit(this, code, signal);
-		});
-		this.send({ type: spec.configurationOnly ? "startConfiguration" : "start", spec });
-		this.refreshActivity();
-	}
-
-	/** Only OS/channel evidence can retire a writer. Starvation cannot revoke its storage lease. */
-	private checkChannel(intervalMs: number): ReturnType<typeof setTimeout> {
-		const timer = setTimeout(() => {
-			if (this.unavailable || this.exited || this.shutdownRequested) return;
-			if (!this.child.connected || this.child.exitCode !== null || this.child.signalCode != null)
-				this.failTransport(new WorkerUnavailable("Kernel IPC disconnected"));
-			else timer.refresh();
-		}, intervalMs);
-		timer.unref();
-		return timer;
-	}
-
-	private refreshActivity(): void {
-		const previous = this.activityWatchId;
-		this.activityWatchId = randomUUID();
-		this.activity.reset();
-		if (previous) this.send({ type: "unwatch", watchId: previous });
-		this.send({ type: "watch", watchId: this.activityWatchId, includeTodos: false, activityOnly: true });
-	}
-
-	send(command: KernelCommand): void {
-		if (this.unavailable || this.exited) return;
-		if (!this.child.connected) {
-			queueMicrotask(() => this.failTransport(new WorkerUnavailable("Kernel IPC disconnected")));
-			return;
-		}
-		try {
-			// Includes synchronous IPC serialization, not the asynchronous acknowledgement or provider work.
-			operations.time("worker.send", () =>
-				this.child.send(command, (error: Error | null) => {
-					if (error)
-						queueMicrotask(() => this.failTransport(new WorkerUnavailable(error.message, { cause: error })));
-				}),
-			);
-		} catch (error) {
-			queueMicrotask(() => this.failTransport(new WorkerUnavailable("Kernel IPC send failed", { cause: error })));
-		}
-	}
-
-	hasChildren(): Promise<boolean> {
-		// The kernel owns exact MCP transport identities. Unknown children still protect jobs/subagents.
-		this.checkingChildren ??= this.request({ type: "inspectChildren", requestId: randomUUID() })
-			.then(
-				() => this.children,
-				() => true,
-			)
-			.finally(() => {
-				this.checkingChildren = undefined;
-			});
-		return this.checkingChildren;
-	}
-
-	/** Coalesce concurrent viewers without retaining snapshots after the read. */
-	jobs(): Promise<SessionJob[]> {
-		if (this.checkingJobs) return this.checkingJobs;
-		const requestId = `inspectJobs:${randomUUID()}`;
-		this.checkingJobs = this.request({ type: "inspectJobs", requestId })
-			.then(() => {
-				const jobs = this.jobResults.get(requestId);
-				if (!jobs) throw new Error("Kernel did not return a jobs list");
-				return jobs;
-			})
-			.finally(() => {
-				this.jobResults.delete(requestId);
-				this.checkingJobs = undefined;
-			});
-		return this.checkingJobs;
-	}
-
-	stopJob(jobId: string): Promise<void> {
-		return this.request({ type: "stopJob", requestId: `stopJob:${randomUUID()}`, jobId });
-	}
-
-	/** Send a command and wait for its accepted/aborted/error acknowledgement. */
-	request(command: Extract<KernelCommand, { requestId: string }>): Promise<void> {
-		if (this.unavailable) return Promise.reject(this.unavailable);
-		if (this.exited || !this.child.connected) return Promise.reject(new WorkerUnavailable("Kernel is disconnected"));
-		return new Promise((resolve, reject) => {
-			// Job-stop errors and delays belong to that job, not the session transport.
-			const inspection =
-				command.type === "inspectChildren" || command.type === "inspectJobs" || command.type === "stopJob";
-			// Inspections and job controls retain their bounded deadline and conservative busy fallback.
-			// Mutations must retain their waiter/ID until acknowledged or the peer actually dies.
-			const timer = inspection
-				? setTimeout(
-						() => {
-							this.settle(
-								command.requestId,
-								new WorkerUnavailable(`Kernel ${command.type} acknowledgement timed out`),
-							);
-						},
-						Math.min(this.commandTimeoutMs, 10_000),
-					)
-				: this.checkChannel(this.commandTimeoutMs);
-			timer.unref();
-			this.pending.set(command.requestId, {
-				resolve,
-				reject,
-				timer,
-				...(inspection ? { inspection: true } : {}),
-				...(command.type === "checkpointLifecycle" ? { checkpoint: true } : {}),
-				...(command.type === "reloadPi" || (command.type === "input" && command.onlyIfIdle)
-					? { onlyIfIdle: true }
-					: {}),
-			});
-			this.send(command);
-		});
-	}
-
-	close(): Promise<void> {
-		// Set before sending: disconnect or a send failure can arrive synchronously.
-		this.shutdownRequested = true;
-		this.closing ??= new Promise((resolve) => {
-			if (this.exited || this.child.exitCode !== null) return resolve();
-			this.armKillDeadline();
-			this.child.once("exit", () => {
-				resolve();
-			});
-			this.send({ type: "shutdown" });
-		});
-		return this.closing;
-	}
-
-	private armKillDeadline(): void {
-		if (this.killTimer || this.exited) return;
-		this.killTimer = setTimeout(() => {
-			if (!this.exited) this.child.kill("SIGKILL");
-			// Still await confirmed exit before another worker may acquire the storage lease.
-		}, 8_000);
-		this.killTimer.unref();
-	}
-
-	private failTransport(error: WorkerUnavailable): void {
-		// Expected IPC teardown must not turn an intentional close into a session failure.
-		// The close deadline still waits for confirmed exit and escalates if necessary.
-		if (this.unavailable || this.exited || this.shutdownRequested) return;
-		// The kernel reports its own startup failure, then exits. Keep that reason, not the IPC teardown after it.
-		const reported = !this.initialized && this.state === "failed" ? this.error : undefined;
-		this.unavailable = reported ? new WorkerUnavailable(reported, { cause: error }) : error;
-		this.error = this.unavailable.message;
-		this.state = "failed";
-		clearTimeout(this.startupTimer);
-		this.failReady(this.unavailable);
-		for (const id of [...this.pending.keys()]) this.settle(id, this.unavailable);
-		this.armKillDeadline();
-		this.onPacket({ type: "error", message: this.unavailable.message });
-		// Give SDK shutdown/process-exit hooks a chance to reap detached MCP transport groups.
-		if (!this.exited) this.child.kill("SIGTERM");
-	}
-
-	private settle(requestId: string, error?: Error): void {
-		const waiter = this.pending.get(requestId);
-		if (!waiter) return;
-		this.pending.delete(requestId);
-		clearTimeout(waiter.timer);
-		if (error) waiter.reject(error);
-		else waiter.resolve();
-	}
-}
-
-export type MessageDelivery =
+type MessageDelivery =
 	| { delivery: "delivered" | "queued" }
 	| { delivery: "not_started"; reason: string; error?: string };
 
-export interface MainMoved {
+interface MainMoved {
 	projectId: string;
 	head: string;
 	repository: string;
@@ -1351,12 +905,21 @@ function sameTrackedSource(a?: SessionTrackedSource, b?: SessionTrackedSource): 
 	);
 }
 
-/**
- * Planners read and record project Knowledge for their research. Documentation batches stay with coordinators.
- * Mission ticket reads limited, linked Linear context without writes.
+interface HostCallContext {
+	meta: SessionMeta;
+	worker: SessionWorker;
+}
+
+/*
+ * Host call limits protect pilotd's event loop and disk from a worker that floods calls. Each read path used 8
+ * before the host-call table; no measurement chose it.
  */
-export const planningHostCallAllowed = (type: string, action: string | undefined): boolean =>
-	(type === "knowledge.call" && action !== "batch") || (type === "mission.call" && action === "ticket");
+const PLANNING_CALL_LIMIT = 8;
+const INSIGHTS_BACKLOG_POOL: HostCallPool = { limit: 8, busy: "Insights backlog is busy" };
+const SOURCE_SCOPE_POOL: HostCallPool = { limit: 8, busy: "Source admissions are busy; retry" };
+/** Context and log reads share one pool. */
+const DIAGNOSTIC_READ_POOL: HostCallPool = { limit: 8, busy: "Diagnostic reads are busy" };
+const DIAGNOSTIC_READ_TIMEOUT_MS = 10_000;
 
 /** A finished resume leaves its checkpoint as "resume-acknowledged"; work may go on (see openWorker). */
 const lifecycleHeld = (meta: SessionMeta): boolean =>
@@ -1373,7 +936,7 @@ export class SessionManager {
 		): Promise<import("@pilot/kernel").PlanningWorkerReply>;
 		close(): Promise<void>;
 	};
-	private readonly planningCalls = new Set<Promise<unknown>>();
+	private readonly hostCalls = new HostCallDispatcher(this.hostCallTable());
 	private readonly planningGuards = new Map<string, { worker: SessionWorker; guard(): void }>();
 	private readonly clarificationGuards = new Map<string, { worker: SessionWorker; guard(): void }>();
 	private readonly planningIdleWaiters = new Map<string, Set<() => void>>();
@@ -1631,9 +1194,6 @@ export class SessionManager {
 			else check();
 		});
 	}
-	private pullRequestObserver?: (
-		observation: import("./tracked-items-disk.ts").SlackPullRequestObservation,
-	) => Promise<void>;
 	/**
 	 * Runs a chat's slack_status tool call against its linked Slack messages, and tells which chats are the latest chat
 	 * of a Slack triage message. Only those chats declare the tool. Without it, no chat does.
@@ -1652,11 +1212,6 @@ export class SessionManager {
 	private readonly trackedSources = new Map<string, SessionTrackedSource>();
 	/** Coalesced per project like slackLinkRefresh. */
 	private readonly trackedSourceRefresh = new Map<string, { again: boolean }>();
-
-	/** Receives durable chat PR state, never streaming transcript updates. Install before load. */
-	setPullRequestObserver(observer: NonNullable<SessionManager["pullRequestObserver"]>): void {
-		this.pullRequestObserver = observer;
-	}
 
 	setSlackStatus(handler: NonNullable<SessionManager["slackStatus"]>): void {
 		this.slackStatus = handler;
@@ -1737,19 +1292,6 @@ export class SessionManager {
 			.finally(() => this.slackLinkRefresh.delete(projectId));
 	}
 
-	private async observePullRequests(meta: SessionMeta): Promise<void> {
-		if (!meta.projectId || !this.pullRequestObserver) return;
-		const prs = sessionPullRequests(meta);
-		if (!prs.length) return;
-		await this.pullRequestObserver({
-			projectId: meta.projectId,
-			sessionId: meta.id,
-			prs,
-			pending: (meta.boundPullRequests ?? []).some(
-				(url) => !prs.some((pr) => pr.url.toLowerCase() === url.toLowerCase()),
-			),
-		});
-	}
 	private subscriptionResetTimer?: ReturnType<typeof setTimeout>;
 	private subscriptionPolicyWrites: Promise<void> = Promise.resolve();
 	private readonly writtenSubscriptionPolicies = new Map<string, string>();
@@ -1757,8 +1299,8 @@ export class SessionManager {
 	private readonly deliveryReports = new Map<string, MessageDelivery | undefined>();
 	private readonly metas = new Map<string, SessionMeta>();
 	private readonly workers = new Map<string, SessionWorker>();
-	/** sessionId -> watchId -> listener */
 	private readonly recentWatches = new Set<string>();
+	/** sessionId -> watchId -> listener */
 	private readonly watchers = new Map<string, Map<string, EventListener>>();
 	private readonly coldWatches = new Map<string, () => void>();
 	private readonly changeListeners = new Set<(session: SessionSummary) => void>();
@@ -1907,6 +1449,16 @@ export class SessionManager {
 	private readonly updatePausing = new Map<SessionWorker, { id: string; ready: boolean; error?: string }>();
 	/** Admissions waiting for acknowledgement must not race archiving. */
 	private readonly sending = new Map<string, number>();
+
+	/** Keep archive and lifecycle guards held until the last overlapping admission finishes. */
+	private acquireSending(id: string): () => void {
+		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+		return () => {
+			const count = this.sending.get(id)! - 1;
+			if (count === 0) this.sending.delete(id);
+			else this.sending.set(id, count);
+		};
+	}
 	/**
 	 * Held synchronously through catalog lookup, worker reopen and durable model acknowledgement, and through attempt
 	 * changes (rewind, activate) until the replacement kernel is ready.
@@ -1996,8 +1548,6 @@ export class SessionManager {
 		SessionWorker,
 		{ operationId: string; requestId: string; children: KernelSubagent[]; clear: boolean }
 	>();
-	/** Same-daemon proof only. Saved child history does not prove a cold worker ever drained. */
-	private readonly parkedQuiescent = new WeakMap<SessionMeta, KernelSubagent[]>();
 	/** Invalidated whenever a new worker starts. Also supplements persisted reads after parking. */
 	private readonly coldSnapshots = new Map<
 		string,
@@ -2026,8 +1576,6 @@ export class SessionManager {
 	private readonly insightsOwnerConfigurationWorkers = new WeakSet<SessionWorker>();
 	private readonly insightsOwnerReady = new WeakMap<SessionWorker, Promise<void>>();
 	private sessionInventoryQualified = false;
-	private insightsBacklogCalls = 0;
-	private readonly insightsBacklogPending = new Map<string, Set<Promise<void>>>();
 	private readonly insightsStopEpochs = new Map<string, number>();
 	/** Confirmation freshness only, never durable grant identity or incarnation inferred from daemon IDs. */
 	readonly insightsAdmissionEpoch = randomUUID();
@@ -2428,10 +1976,9 @@ export class SessionManager {
 			this.changingModels.has(id) ||
 			this.durableCreateAdmissions.has(id.toLowerCase()) ||
 			this.newSessionAdmissions.has(id.toLowerCase()) ||
-			this.insightsBacklogPending.get(id)?.size ||
-			this.insightsAccounting.get(id)?.size ||
-			this.insightsReviewPending.size ||
-			[...this.diagnosticContextReads.keys()].some((key) => key.startsWith(`${id}:`))
+			this.hostCalls.running(id, ["insights.backlog", "usage-history", "diagnostics.context", "diagnostics.logs"])
+				.length ||
+			this.insightsReviewPending.size
 		)
 			throw new Conflict("legacy_executor_not_quiescent_or_grant_not_revoked");
 		this.insightsBacklog?.replacements.assertNoUncertainReview(id);
@@ -2540,10 +2087,10 @@ export class SessionManager {
 				allowed,
 			);
 			reviews.assertActive(admission, request.runId);
-			const requestId = `insights-review:${request.runId}`;
+			const requestId = insightsReviewRequestId(request.runId);
 			if (!this.canSendNotice(id, requestId)) throw new Conflict("Owner report is not idle");
 			const meta = this.require(id);
-			this.sending.set(id, 1);
+			const releaseSending = this.acquireSending(id);
 			try {
 				meta.insightsReviewRun = request.runId;
 				meta.pending ??= [];
@@ -2562,7 +2109,7 @@ export class SessionManager {
 					throw new Conflict("Owner input placement unknown");
 				await reviews.sent(admission, request.runId);
 			} finally {
-				this.sending.delete(id);
+				releaseSending();
 			}
 		} catch {
 			if (this.isDayInsightsReport(id))
@@ -2593,8 +2140,7 @@ export class SessionManager {
 		return this.insightsOwnerStore!.backlog(this.insightsWorkspaceStore!, lease, admission, input);
 	}
 	async drainInsightsOwner(id: string): Promise<void> {
-		await Promise.allSettled(this.insightsBacklogPending.get(id) ?? []);
-		await Promise.all(this.insightsAccounting.get(id) ?? []);
+		await Promise.allSettled(this.hostCalls.running(id, ["insights.backlog", "usage-history"]));
 		await this.saving.get(id);
 		if (this.get(id)?.working || this.starting.has(id) || this.sending.has(id) || this.changingModels.has(id))
 			throw new Conflict("owner_execution_not_quiescent");
@@ -2672,7 +2218,6 @@ export class SessionManager {
 	private assertHistoryWritable(meta: SessionMeta): void {
 		if (this.isRetainedHistory(meta)) throw new Conflict("Retained conversation is read-only");
 	}
-	/** The role service joins synchronously after this guard, so input cannot interleave. */
 	private readonly agentDir?: string;
 	private readonly factories: SessionFactories;
 
@@ -2885,7 +2430,7 @@ export class SessionManager {
 			throw new Conflict("Flow definitions changed");
 		const definition = validateFlowItems(config.flows ?? []).find((f) => f.id === request.flowId && f.enabled);
 		if (!definition) throw new Conflict("Flow is missing or disabled");
-		const inputId = `automation:flow:${request.requestId}:1:0`;
+		const inputId = flowInputId(request.requestId, 1, 0);
 		const flow: FlowState = {
 			definition,
 			definitionRevision: config.revision,
@@ -2938,9 +2483,7 @@ export class SessionManager {
 					this.startPostRun(current);
 				}
 				this.startFlowAdvance(meta);
-				const input = current?.pending?.find(
-					(c) => c.type === "input" && c.requestId.startsWith("automation:flow:"),
-				);
+				const input = current?.pending?.find((c) => c.type === "input" && isFlowInput(c.requestId));
 				if (current && input && this.flowInputAllowed(current, input.requestId)) void this.start(current.id);
 			}
 	}
@@ -2950,7 +2493,7 @@ export class SessionManager {
 		this.scheduleAdmission = gate;
 	}
 	private async assertScheduledInput(id: string, requestId: string, content: string): Promise<void> {
-		if (!requestId.startsWith("schedule:")) return;
+		if (!isScheduleRequest(requestId)) return;
 		const state = this.scheduleAdmission?.check(id, requestId, content) ?? "held";
 		if (state === "ready") return;
 		if (state === "held") throw new ScheduleInputHeld("Scheduled input is held before admission");
@@ -2958,14 +2501,14 @@ export class SessionManager {
 		throw new CommandRejected(`Scheduled input ${state}; nothing replayed`, "stopped");
 	}
 	private assertScheduledInputNow(id: string, requestId: string, content: string): void {
-		if (!requestId.startsWith("schedule:")) return;
+		if (!isScheduleRequest(requestId)) return;
 		const state = this.scheduleAdmission?.check(id, requestId, content) ?? "held";
 		if (state === "held") throw new ScheduleInputHeld("Scheduled input is held before admission");
 		if (state !== "ready") throw new CommandRejected(`Scheduled input ${state}; nothing replayed`, "stopped");
 	}
 	private async scheduledHeadReady(meta: SessionMeta, rejected: Map<string, Error>): Promise<boolean> {
 		const command = meta.pending?.[0];
-		if (command?.type !== "input" || !command.requestId.startsWith("schedule:")) return true;
+		if (command?.type !== "input" || !isScheduleRequest(command.requestId)) return true;
 		if (command.scheduleEntry) {
 			const at = this.scheduleAdmission?.acceptedAt(meta.id, command.requestId, command.content);
 			if (at !== undefined) {
@@ -3005,7 +2548,7 @@ export class SessionManager {
 	async resumeScheduled(): Promise<void> {
 		for (const meta of this.metas.values()) {
 			const command = meta.pending?.[0];
-			if (command?.type !== "input" || !command.requestId.startsWith("schedule:")) continue;
+			if (command?.type !== "input" || !isScheduleRequest(command.requestId)) continue;
 			const state = this.scheduleAdmission?.check(meta.id, command.requestId, command.content) ?? "held";
 			if (state === "held") continue;
 			try {
@@ -3018,7 +2561,7 @@ export class SessionManager {
 	}
 	pendingScheduled(): boolean {
 		for (const m of this.metas.values())
-			if (m.pending?.some((c) => c.type === "input" && !c.scheduleEntry && c.requestId.startsWith("schedule:")))
+			if (m.pending?.some((c) => c.type === "input" && !c.scheduleEntry && isScheduleRequest(c.requestId)))
 				return true;
 		return false;
 	}
@@ -3272,8 +2815,7 @@ export class SessionManager {
 		if (summary.outcome === "stopped" || current.automation?.stopped)
 			return this.endFlow(root, "cancelled", "Flow stopped");
 		if (summary.outcome === "failed") return this.endFlow(root, "failed", "Flow node failed");
-		const waiting = summary.outcome === "question" || summary.attentionReason?.kind === "asks";
-		if (waiting) {
+		if (asksUser(summary)) {
 			if (flow.progress.state !== "waiting") {
 				flow.progress.state = "waiting";
 				flow.progress.reason = "Waiting for an answer in the current chat";
@@ -3342,7 +2884,7 @@ export class SessionManager {
 			node: next,
 			round,
 			sessionId,
-			inputId: `automation:flow:${root.id}:${round}:${next}`,
+			inputId: flowInputId(root.id, round, next),
 			after: next === 0 ? (root.outcomeAt ?? -1) : -1,
 			admitted: false,
 		};
@@ -3748,7 +3290,7 @@ export class SessionManager {
 		details: { checks?: string[]; names?: string } = {},
 	): void {
 		const previous = meta.automation!.followUps!;
-		const requestId = `automation:${event.triggerId}`;
+		const requestId = automationRequestId(event.triggerId);
 		meta.automation!.followUps = {
 			...previous,
 			attempts: previous.attempts + 1,
@@ -3986,7 +3528,7 @@ export class SessionManager {
 			if (hooks.length || this.workspaceSetup) {
 				const activity = {
 					type: "activity" as const,
-					requestId: `workspace-setup:${setup.triggerId}`,
+					requestId: workspaceSetupRequestId(setup.triggerId),
 					text: [
 						setup.detail,
 						...records.map(
@@ -4006,12 +3548,12 @@ ${run.excerpt}`,
 					meta.prActivities.push(activity);
 				const kept = new Set(
 					meta.prActivities
-						.filter((entry) => entry.requestId.startsWith("workspace-setup:"))
+						.filter((entry) => isWorkspaceSetup(entry.requestId))
 						.slice(-8)
 						.map((entry) => entry.requestId),
 				);
 				meta.prActivities = meta.prActivities.filter(
-					(entry) => !entry.requestId.startsWith("workspace-setup:") || kept.has(entry.requestId),
+					(entry) => !isWorkspaceSetup(entry.requestId) || kept.has(entry.requestId),
 				);
 			}
 		}
@@ -4264,8 +3806,6 @@ ${run.excerpt}`,
 		// Read limits before any recovery kernel can dispatch a request.
 		await this.subscriptionUsage?.start();
 		this.scheduleSubscriptionReset();
-		// Seed silent, durable baselines before the first GitHub refresh starts.
-		for (const meta of this.metas.values()) await this.observePullRequests(meta);
 		// Durable work interrupted by a restart continues as soon as its kernel reopens.
 		for (const meta of this.metas.values())
 			if (this.missions && (this.isMissionCoordinator(meta.id) || meta.coordinatorView))
@@ -4411,6 +3951,7 @@ ${run.excerpt}`,
 	): Promise<void> {
 		// Obtain the final census after kernel shutdown of its work, not the idle preflight observation.
 		const census = { operationId: randomUUID(), requestId: randomUUID(), children, clear: false };
+		const proof = this.parkedChildrenProof(meta, children);
 		this.parkingCensus.set(worker, census);
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		let acknowledged = false;
@@ -4433,7 +3974,19 @@ ${run.excerpt}`,
 			this.parkingCensus.delete(worker);
 		}
 		await worker.close();
-		if (acknowledged && census.clear && meta.subagents === children) this.parkedQuiescent.set(meta, children);
+		if (
+			acknowledged &&
+			census.clear &&
+			meta.subagents === children &&
+			proof === this.parkedChildrenProof(meta, children)
+		) {
+			meta.parkedChildrenProof = proof;
+			await this.save(meta, undefined, undefined, true);
+		}
+	}
+
+	private parkedChildrenProof(meta: SessionMeta, children: KernelSubagent[]): string {
+		return payloadHash(canonicalJSON([meta.id, meta.createdAt, meta.inputGeneration ?? 0, children]));
 	}
 
 	/** Wait for an inactivity close, so the next worker can take the session's storage lease. */
@@ -5134,21 +4687,15 @@ ${run.excerpt}`,
 	feedbackFixAdmission?: (sessionId: string, projectId: string) => boolean;
 	diagnosticDomainRead?: (request: DiagnosticContextRequest) => Promise<DiagnosticContextResponse>;
 	diagnosticFeatureUsage?: (host: OperationHost) => import("@pilot/protocol").FeatureUsageSnapshot;
-	private diagnosticContextReads = new Map<string, AbortController>();
 	/** Asks the Day window bound to a screen agent chat (ScreenBroker.call). Missing means no window can answer. */
 	screenCall?: (
 		sessionId: string,
 		operation: import("@pilot/protocol").ScreenOperation,
 		signal: AbortSignal,
 	) => Promise<unknown>;
-	/** Waiting ui_* calls by `sessionId:callId`, so a kernel abort or a worker change cancels them. */
-	private screenCalls = new Map<string, AbortController>();
-	private coordinatorSourceReads = new Set<string>();
 	private readonly dependencySources = new DependencySources();
 	/** Last background main-view refresh per linked project. */
 	private readonly linkedViewRefreshes = new Map<string, number>();
-	/** Already-admitted own-chat accounting drains before revocation acknowledges. */
-	private readonly insightsAccounting = new Map<string, Set<Promise<void>>>();
 
 	/** Trusted native setup only, after durable operation reservation. No HTTP/model surface mints grants. */
 	async spawnInsightsDurable(
@@ -5265,9 +4812,8 @@ ${run.excerpt}`,
 			aliases(this.changingModels.keys()) ||
 			aliases(this.durableCreateAdmissions.keys()) ||
 			aliases(this.newSessionAdmissions) ||
-			[...this.diagnosticContextReads.keys()].some((key) => key.toLowerCase().startsWith(`${oldId}:`)) ||
-			(this.insightsBacklogPending.get(oldId)?.size ?? 0) > 0 ||
-			(this.insightsAccounting.get(oldId)?.size ?? 0) > 0 ||
+			this.hostCalls.running(oldId, ["insights.backlog", "usage-history", "diagnostics.context", "diagnostics.logs"])
+				.length > 0 ||
 			this.insightsReviewPending.size > 0
 		)
 			throw new Conflict("old_work_admitted_wait_for_quiescence");
@@ -5567,10 +5113,10 @@ ${run.excerpt}`,
 					allowed,
 				);
 				reviews.assertActive(admission, request.runId);
-				const requestId = `insights-review:${request.runId}`;
+				const requestId = insightsReviewRequestId(request.runId);
 				if (!this.canSendNotice(id, requestId)) throw new Conflict("Report chat is not idle; review not sent");
 				const meta = this.require(id);
-				this.sending.set(id, 1);
+				const releaseSending = this.acquireSending(id);
 				try {
 					meta.insightsReviewRun = request.runId;
 					meta.pending ??= [];
@@ -5590,9 +5136,7 @@ ${run.excerpt}`,
 						throw new WorkerUnavailable("Review input placement unknown");
 					await reviews.sent(admission, request.runId);
 				} finally {
-					const count = (this.sending.get(id) ?? 1) - 1;
-					if (count) this.sending.set(id, count);
-					else this.sending.delete(id);
+					releaseSending();
 				}
 			} catch {
 				await reviews.interrupt(
@@ -5665,8 +5209,7 @@ ${run.excerpt}`,
 
 	private async persistInsightsRevocation(meta: SessionMeta): Promise<void> {
 		await this.insightsBacklog?.reviews.interrupt(meta.id, "cancelled", "Grant revoked; never replay this run");
-		await Promise.allSettled(this.insightsBacklogPending.get(meta.id) ?? []);
-		await Promise.all(this.insightsAccounting.get(meta.id) ?? []);
+		await Promise.allSettled(this.hostCalls.running(meta.id, ["insights.backlog", "usage-history"]));
 		await this.save(meta, undefined, undefined, true);
 	}
 
@@ -6403,7 +5946,7 @@ ${run.excerpt}`,
 	}
 
 	/** Role changes wait for the current turn to finish; the live policy revokes writes immediately. */
-	private async prepareCoordinatorRole(id: string): Promise<void> {
+	async prepareCoordinatorRole(id: string): Promise<void> {
 		const existing = this.roleTransitions.get(id);
 		if (existing) {
 			await existing;
@@ -6792,16 +6335,6 @@ ${run.excerpt}`,
 			});
 		this.workspaceRefreshes.set(id, task);
 		return task;
-	}
-
-	/** PR merges share the existing project scheduler and emit a single main-moved event. */
-	coordinatorBaseMerged(id: string): void {
-		const meta = this.metas.get(id);
-		if (meta?.projectId && this.isMissionCoordinator(id)) this.requestMainRefresh(meta.projectId);
-	}
-
-	async refreshCoordinatorWorkspace(id: string, _turnBoundary = false): Promise<void> {
-		await this.prepareCoordinatorRole(id);
 	}
 
 	private missionSummary(
@@ -7466,8 +6999,7 @@ ${run.excerpt}`,
 		const funding = this.funding;
 		return funding && (await funding.enabled()) ? funding : undefined;
 	}
-	backgroundSubscription?: import("./background-subscription.ts").BackgroundSubscription;
-	fundingOwner(id: string): import("../../protocol/src/funding.ts").FundingOwner {
+	fundingOwner(id: string): import("@pilot/protocol").FundingOwner {
 		const meta = this.require(id);
 		if (meta.archivedAt) throw new Conflict("Archived work cannot spend");
 		const member = this.missions?.membership(id);
@@ -7493,7 +7025,7 @@ ${run.excerpt}`,
 		);
 	}
 	/** Recheck live admission after budget I/O, not merely display ownership. */
-	fundingRequestOwner(id: string): import("../../protocol/src/funding.ts").FundingOwner {
+	fundingRequestOwner(id: string): import("@pilot/protocol").FundingOwner {
 		const meta = this.require(id);
 		this.assertNotContinued(meta);
 		const member = this.missions?.membership(id);
@@ -8458,7 +7990,6 @@ ${run.excerpt}`,
 		if (meta.nextAttemptModel) meta.recoveryModel = { ...meta.nextAttemptModel };
 	}
 
-	/** A parked idle conversation may reopen; configuration changes never interrupt or queue behind work. */
 	/** Whether `model` belongs to a work profile that `projectId` allows. */
 	private async projectProfileModel(projectId: string | undefined, model: string): Promise<boolean> {
 		const project = projectId ? this.projects.get(projectId) : undefined;
@@ -9562,8 +9093,9 @@ ${run.excerpt}`,
 		if (!meta.lifecycleCheckpoint || meta.lifecycleCheckpoint === prior) {
 			const children = meta.subagents;
 			const parkedWithProof =
-				children &&
-				this.parkedQuiescent.get(meta) === children &&
+				children?.length &&
+				meta.parkedChildrenProof !== undefined &&
+				meta.parkedChildrenProof === this.parkedChildrenProof(meta, children) &&
 				children.every((child) => child.state === "idle") &&
 				!meta.pending?.length &&
 				!meta.failure &&
@@ -11241,7 +10773,7 @@ ${run.excerpt}`,
 		if (!this.canSendNotice(id, requestId) || !this.missions?.noticeAllowed?.(id, requestId)) return false;
 		const end = this.updateGate.begin();
 		const meta = this.require(id);
-		this.sending.set(id, 1);
+		const releaseSending = this.acquireSending(id);
 		try {
 			meta.pending ??= [];
 			const existing = meta.pending.find((command) => command.requestId === requestId);
@@ -11277,9 +10809,7 @@ ${run.excerpt}`,
 				throw new WorkerUnavailable("Notice admission acknowledgement is uncertain");
 			return true;
 		} finally {
-			const count = (this.sending.get(id) ?? 1) - 1;
-			if (count) this.sending.set(id, count);
-			else this.sending.delete(id);
+			releaseSending();
 			end();
 		}
 	}
@@ -11299,11 +10829,9 @@ ${run.excerpt}`,
 		if (!this.missions?.waitsForReply?.(id, meta.lastUserMessageAt ?? meta.createdAt)) return false;
 		if (!this.canSendNotice(id, requestId) || this.missionWorkHeld(id) || this.postRunTasks.has(id)) return undefined;
 		const end = this.updateGate.begin();
-		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+		const releaseSending = this.acquireSending(id);
 		const release = () => {
-			const count = (this.sending.get(id) ?? 1) - 1;
-			if (count) this.sending.set(id, count);
-			else this.sending.delete(id);
+			releaseSending();
 			end();
 		};
 		try {
@@ -11415,7 +10943,7 @@ ${run.excerpt}`,
 		const meta = this.metas.get(id);
 		const worker = this.workers.get(id);
 		if (!meta || !worker || meta.slackReplyAdmission || !this.canSendNotice(id, requestId)) return false;
-		if (!requestId.startsWith("slack-reply:")) throw new Error("Invalid Slack reply request");
+		if (!isSlackReply(requestId)) throw new Error("Invalid Slack reply request");
 		let fence: string;
 		const guard = () => {
 			itemGuard();
@@ -11479,7 +11007,7 @@ ${run.excerpt}`,
 		}
 	}
 	private assertSlackReply(id: string, requestId: string): void {
-		if (!requestId.startsWith("slack-reply:")) return;
+		if (!isSlackReply(requestId)) return;
 		const entry = this.slackReplyGuards.get(requestId);
 		if (!entry || this.workers.get(id) !== entry.worker)
 			throw new CommandRejected("Slack reply requires its original live worker", "busy");
@@ -11594,13 +11122,12 @@ ${run.excerpt}`,
 			flowRoot?.flow &&
 			flowActive(flowRoot.flow) &&
 			!inputOrigin(requestId) &&
-			!requestId.startsWith("slack-reply:") &&
 			answerQuestionId === undefined &&
 			this.summary(meta).outcome !== "question" &&
 			this.summary(meta).attentionReason?.kind !== "asks"
 		)
 			await this.endFlow(flowRoot, "cancelled", "Manual input cancelled automatic flow advancement");
-		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+		const releaseSending = this.acquireSending(id);
 		// Diagnostics must never decide whether an input is admitted or acknowledged.
 		const observe = <T>(action: () => T): T | undefined => {
 			try {
@@ -11659,11 +11186,10 @@ ${run.excerpt}`,
 			this.assertSlackReply(id, requestId);
 			admissionGuard?.();
 			if (
-				!requestId.startsWith("slack-reply:") &&
+				!isSlackReply(requestId) &&
 				(inputGeneration === undefined || inputGeneration === (meta.inputGeneration ?? 0))
 			) {
-				if (!report && !inputOrigin(requestId) && !requestId.startsWith("slack-reply:"))
-					delete meta.missionUserStopGeneration;
+				if (!report && !inputOrigin(requestId)) delete meta.missionUserStopGeneration;
 				delete meta.cancelled;
 				delete meta.recoveryStopped;
 				if (!report && !inputOrigin(requestId)) delete meta.slackReplyAdmission;
@@ -11694,10 +11220,10 @@ ${run.excerpt}`,
 				});
 			}
 			meta.updatedAt = Date.now();
-			if (!requestId.startsWith("slack-reply:")) meta.lastUserMessageAt = meta.updatedAt;
+			if (!isSlackReply(requestId)) meta.lastUserMessageAt = meta.updatedAt;
 			// The user saw the chat; a server it could not reach stays in Settings › Connections.
-			if (!requestId.startsWith("slack-reply:")) this.mcpAttention?.clear(meta.id);
-			if (!requestId.startsWith("slack-reply:") && !meta.prFollowUpResetRequests?.includes(requestId)) {
+			if (!isSlackReply(requestId)) this.mcpAttention?.clear(meta.id);
+			if (!isSlackReply(requestId) && !meta.prFollowUpResetRequests?.includes(requestId)) {
 				meta.prFollowUpResetRequests ??= [];
 				meta.prFollowUpResetRequests.push(requestId);
 				if (!inputOrigin(requestId) && meta.automation) {
@@ -11712,7 +11238,7 @@ ${run.excerpt}`,
 				meta.prFollowUp = { attempts: 0, nextAttemptAt: 0, generation: (meta.prFollowUp?.generation ?? 0) + 1 };
 			}
 			// Persist the hold before dispatch, so a daemon crash cannot turn unknown admission into new work.
-			if (requestId.startsWith("slack-reply:")) meta.slackReplyAdmission = requestId;
+			if (isSlackReply(requestId)) meta.slackReplyAdmission = requestId;
 			await this.save(meta, undefined, undefined, durable);
 			this.assertSlackReply(id, requestId);
 			if (resumesStoppedRecovery && !this.workers.has(id)) this.nextWorkerLaunchReason.set(id, "user_resume");
@@ -11748,7 +11274,7 @@ ${run.excerpt}`,
 				if (meta.failure) throw new Error(meta.failure);
 			}
 		} catch (error) {
-			if (requestId.startsWith("slack-reply:")) {
+			if (isSlackReply(requestId)) {
 				const entry = this.slackReplyGuards.get(requestId);
 				if (entry?.attempted && !(error instanceof CommandRejected)) meta.slackReplyAdmission = requestId;
 				else if (meta.slackReplyAdmission === requestId) delete meta.slackReplyAdmission;
@@ -11758,9 +11284,7 @@ ${run.excerpt}`,
 			if (!admissionFinished) observe(() => admissionSpan?.finish("failed"));
 			throw error;
 		} finally {
-			const count = (this.sending.get(id) ?? 1) - 1;
-			if (count) this.sending.set(id, count);
-			else this.sending.delete(id);
+			releaseSending();
 		}
 	}
 
@@ -11867,7 +11391,6 @@ ${run.excerpt}`,
 		return meta.startupRecoveryOperationId === operationId;
 	}
 
-	/** The idle chat's last run failed in automatic handoff, and nothing else blocks an explicit user retry. */
 	private canRetryHandoff(meta: SessionMeta): boolean {
 		return (
 			!meta.failure &&
@@ -11999,7 +11522,7 @@ ${run.excerpt}`,
 				(command) =>
 					command.type === "input" &&
 					command.requestId !== delivering &&
-					!command.requestId.startsWith("insights-review:") &&
+					!isInsightsReview(command.requestId) &&
 					inputOrigin(command.requestId) !== undefined,
 			)
 			.map((command) => ({ ...command, onlyIfIdle: false }));
@@ -12083,9 +11606,7 @@ ${run.excerpt}`,
 			const automatic = (meta.pending ?? [])
 				.filter(
 					(command) =>
-						command.type === "input" &&
-						!command.requestId.startsWith("insights-review:") &&
-						inputOrigin(command.requestId),
+						command.type === "input" && !isInsightsReview(command.requestId) && inputOrigin(command.requestId),
 				)
 				.map((command) => ({ ...command, onlyIfIdle: false }));
 			meta.pending = [
@@ -12160,9 +11681,7 @@ ${run.excerpt}`,
 			if (current.thinking === undefined && current.effectiveThinking === undefined)
 				throw new Conflict("owner_default_thinking_not_reported");
 		}
-		const reviewRun = command.requestId.startsWith("insights-review:")
-			? command.requestId.slice("insights-review:".length)
-			: undefined;
+		const reviewRun = insightsReviewRunId(command.requestId);
 		if (this.isDayInsightsReport(id) && reviewRun !== this.dayInsightsRunId(id))
 			throw new CommandRejected("Day report accepts only its exact fresh run input", "stopped");
 		const assertReview = () => {
@@ -12186,15 +11705,11 @@ ${run.excerpt}`,
 			await this.captureRunBoundary(this.require(id), command.requestId);
 			this.assertScheduledInputNow(id, command.requestId, command.content);
 			if (this.closing || this.sleepPause) throw new WorkerUnavailable("Input admission paused");
-			if (
-				command.requestId.startsWith("automation:flow:") &&
-				!this.flowInputAllowed(this.require(id), command.requestId)
-			)
+			if (isFlowInput(command.requestId) && !this.flowInputAllowed(this.require(id), command.requestId))
 				throw new WorkerUnavailable("Flow input admission paused or cancelled");
 			if (
 				command.onlyIfIdle &&
-				command.requestId.startsWith("automation:") &&
-				!command.requestId.startsWith("automation:flow:") &&
+				isAutomationRequest(command.requestId) &&
 				(!this.automationsEnabled() ||
 					this.require(id).automation?.stopped ||
 					this.require(id).automation?.followUps?.requestId !== command.requestId)
@@ -12212,7 +11727,7 @@ ${run.excerpt}`,
 			if (
 				insights &&
 				meta.insightsReviewRun !== reviewRun &&
-				(reviewRun || (!inputOrigin(command.requestId) && !command.requestId.startsWith("schedule:")))
+				(reviewRun || (!inputOrigin(command.requestId) && !isScheduleRequest(command.requestId)))
 			) {
 				if (reviewRun) meta.insightsReviewRun = reviewRun;
 				else delete meta.insightsReviewRun;
@@ -12220,16 +11735,16 @@ ${run.excerpt}`,
 				insights.revalidate();
 				assertReview();
 			}
-			if (command.requestId.startsWith("schedule:")) {
+			if (isScheduleRequest(command.requestId)) {
 				// A crash after this write is Unknown, even if IPC was not entered yet.
 				// Never redispatch this input automatically on a later policy event.
 				command.scheduleEntry = true;
 				await this.save(meta, undefined, undefined, true);
 			}
-			if (command.requestId.startsWith("schedule:") && meta.pending?.[0] !== command)
+			if (isScheduleRequest(command.requestId) && meta.pending?.[0] !== command)
 				throw new CommandRejected("Scheduled input withdrawn before entry", "stopped");
 			if (
-				command.requestId.startsWith("schedule:") &&
+				isScheduleRequest(command.requestId) &&
 				command.inputGeneration !== undefined &&
 				command.inputGeneration !== (meta.inputGeneration ?? 0)
 			)
@@ -12251,14 +11766,14 @@ ${run.excerpt}`,
 			});
 			if (slackReply) slackReply.delivered = !dedupeOnly;
 			settled = true;
-			if (command.requestId.startsWith("schedule:"))
+			if (isScheduleRequest(command.requestId))
 				await this.scheduleAdmission?.accepted(id, command.requestId, entryAt);
 		} catch (error) {
 			settled = error instanceof CommandRejected || error instanceof ScheduleInputHeld;
 			const meta = this.require(id);
 			if (
 				settled &&
-				command.requestId.startsWith("schedule:") &&
+				isScheduleRequest(command.requestId) &&
 				(command.scheduleEntry || meta.automation?.boundary?.id === command.requestId)
 			) {
 				delete command.scheduleEntry;
@@ -12282,7 +11797,7 @@ ${run.excerpt}`,
 		guardToken?: string,
 	): Promise<void> {
 		const end = this.updateGate.begin();
-		let admitted = false;
+		let releaseSending: (() => void) | undefined;
 		try {
 			const meta = this.require(id);
 			const transition = this.archiveTransitions.get(id);
@@ -12294,8 +11809,7 @@ ${run.excerpt}`,
 			if (mode !== undefined && mode !== "steer" && mode !== "followUp")
 				throw new Error("mode must be steer or followUp");
 			if (guardToken !== undefined) {
-				this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
-				admitted = true;
+				releaseSending = this.acquireSending(id);
 			}
 			await this.unparked(id);
 			const worker = await this.ensureWorker(id);
@@ -12313,11 +11827,7 @@ ${run.excerpt}`,
 			await this.save(meta);
 			this.emit(meta);
 		} finally {
-			if (admitted) {
-				const count = (this.sending.get(id) ?? 1) - 1;
-				if (count) this.sending.set(id, count);
-				else this.sending.delete(id);
-			}
+			releaseSending?.();
 			end();
 		}
 	}
@@ -12393,7 +11903,7 @@ ${run.excerpt}`,
 		this.changingModels.set(id, settled);
 		try {
 			this.assertMissionWorkOpen(id);
-			await worker.request({ type: "reloadPi", requestId: `piReload:${randomUUID()}` });
+			await worker.request({ type: "reloadPi", requestId: piReloadRequestId(randomUUID()) });
 			return true;
 		} catch (error) {
 			if (error instanceof CommandRejected && error.code === "busy") return false;
@@ -12413,8 +11923,6 @@ ${run.excerpt}`,
 		if (!worker || worker.state === "failed" || worker.state === "starting") return [];
 		return (await worker.jobs?.()) ?? [];
 	}
-
-	/** Content-free in-memory worker/admission state, without transcript or storage reads. */
 
 	/** Content-free host/app projection. It does not enumerate, open, subscribe to or wake chats. */
 	appDiagnostics(host = this.diagnosticHost): AppDiagnostics {
@@ -12538,8 +12046,6 @@ ${run.excerpt}`,
 			? (await this.diagnostics(subject.sessionId, { host: subject.host, limit: 128 })).evidence
 			: this.appDiagnosticEvidence(subject.host).evidence;
 	}
-
-	/** Registered identity only. Never accepts a path and never starts a worker. */
 
 	/** Content-free local evidence. Reading a parked or archived chat never starts, subscribes to or mutates it. */
 	async diagnostics(id: string, options: { host?: OperationHost; limit?: number } = {}): Promise<SessionDiagnostics> {
@@ -12860,7 +12366,7 @@ ${run.excerpt}`,
 				read,
 				signal,
 				false,
-				new Set(["lifecycle", "request_timing", "tool_activity"]),
+				new Set(TARGET_LOG_SOURCES),
 			);
 			this.feedbackLogTarget(specialist, sessionId);
 			if (signal?.aborted || epoch !== this.diagnosticControlsEpoch || this.diagnosticHost !== host)
@@ -12986,7 +12492,7 @@ ${run.excerpt}`,
 	async compact(id: string, instructions?: string): Promise<void> {
 		this.assertHistoryWritable(this.require(id));
 		const end = this.updateGate.begin();
-		let admitted = false;
+		let releaseSending: (() => void) | undefined;
 		try {
 			const meta = this.require(id);
 			if (instructions !== undefined && typeof instructions !== "string")
@@ -12999,8 +12505,7 @@ ${run.excerpt}`,
 			if (this.closing) throw new Error("pilotd is shutting down");
 			if (meta.failure) throw new Error(meta.failure);
 			// Prevent archiving between the checks above, worker readiness, and the acknowledgement.
-			this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
-			admitted = true;
+			releaseSending = this.acquireSending(id);
 			await this.unparked(id);
 			const worker = await this.ensureWorker(id);
 			await worker.ready;
@@ -13017,11 +12522,7 @@ ${run.excerpt}`,
 			}
 			this.lastUse.set(id, Date.now());
 		} finally {
-			if (admitted) {
-				const count = (this.sending.get(id) ?? 1) - 1;
-				if (count) this.sending.set(id, count);
-				else this.sending.delete(id);
-			}
+			releaseSending?.();
 			end();
 		}
 	}
@@ -13029,11 +12530,10 @@ ${run.excerpt}`,
 	/** Explicit user actions, only over the held automatic input. */
 	async heldMessages(id: string, action: "send" | "discard", submissionId?: number): Promise<void> {
 		const end = this.updateGate.begin();
-		let admitted = false;
+		let releaseSending: (() => void) | undefined;
 		try {
 			const meta = this.require(id);
-			this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
-			admitted = true;
+			releaseSending = this.acquireSending(id);
 			const transition = this.archiveTransitions.get(id);
 			if (transition) await transition.promise;
 			if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session first");
@@ -13053,11 +12553,7 @@ ${run.excerpt}`,
 						},
 			);
 		} finally {
-			if (admitted) {
-				const count = (this.sending.get(id) ?? 1) - 1;
-				if (count) this.sending.set(id, count);
-				else this.sending.delete(id);
-			}
+			releaseSending?.();
 			end();
 		}
 	}
@@ -13065,7 +12561,7 @@ ${run.excerpt}`,
 	/** Withdraw durable queued input, never daemon outbox commands or placed messages. */
 	async removeQueuedMessage(id: string, submissionId: number, guardToken?: string): Promise<void> {
 		const end = this.updateGate.begin();
-		let admitted = false;
+		let releaseSending: (() => void) | undefined;
 		try {
 			const meta = this.require(id);
 			const transition = this.archiveTransitions.get(id);
@@ -13073,8 +12569,7 @@ ${run.excerpt}`,
 			if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before removing messages");
 			if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
 			// Prevent archiving between the check above, worker readiness, and the acknowledgement.
-			this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
-			admitted = true;
+			releaseSending = this.acquireSending(id);
 			await this.unparked(id);
 			const worker = await this.ensureWorker(id);
 			await worker.ready;
@@ -13089,11 +12584,7 @@ ${run.excerpt}`,
 			await this.save(meta);
 			this.emit(meta);
 		} finally {
-			if (admitted) {
-				const count = (this.sending.get(id) ?? 1) - 1;
-				if (count) this.sending.set(id, count);
-				else this.sending.delete(id);
-			}
+			releaseSending?.();
 			end();
 		}
 	}
@@ -13327,7 +12818,7 @@ ${run.excerpt}`,
 		command: { action: "stop" } | { action: "send"; message: string; mode?: DeliveryMode; requestId?: string },
 	): Promise<void> {
 		const end = this.updateGate.begin();
-		let admitted = false;
+		let releaseSending: (() => void) | undefined;
 		try {
 			const meta = this.require(id);
 			this.assertNotContinued(meta);
@@ -13345,8 +12836,7 @@ ${run.excerpt}`,
 			if (command.action === "send" && command.mode !== undefined && !["steer", "followUp"].includes(command.mode))
 				throw new Error("mode must be steer or followUp");
 			// Prevent archiving between the checks above, worker readiness, and the acknowledgement.
-			this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
-			admitted = true;
+			releaseSending = this.acquireSending(id);
 			await this.unparked(id);
 			const worker = await this.ensureWorker(id);
 			await worker.ready;
@@ -13364,11 +12854,7 @@ ${run.excerpt}`,
 					: { type: "subagent", action: "stop", requestId: randomUUID(), name },
 			);
 		} finally {
-			if (admitted) {
-				const count = (this.sending.get(id) ?? 1) - 1;
-				if (count) this.sending.set(id, count);
-				else this.sending.delete(id);
-			}
+			releaseSending?.();
 			end();
 		}
 	}
@@ -13572,7 +13058,7 @@ ${run.excerpt}`,
 	/** Same worker and question, no input outbox or new session. */
 	async clarifyQuestion(id: string, operationId: string, questionId: number, question: string, guard: () => void) {
 		const end = this.updateGate.begin();
-		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+		const releaseSending = this.acquireSending(id);
 		const check = () => {
 			this.assertPlanningOpen(id);
 			const meta = this.require(id);
@@ -13606,9 +13092,7 @@ ${run.excerpt}`,
 			return saved;
 		} finally {
 			this.clarificationGuards.delete(operationId);
-			const count = (this.sending.get(id) ?? 1) - 1;
-			if (count) this.sending.set(id, count);
-			else this.sending.delete(id);
+			releaseSending();
 			end();
 		}
 	}
@@ -13809,7 +13293,6 @@ ${run.excerpt}`,
 		return transition;
 	}
 
-	/** Called only after a later full wake with connectivity, or an explicit policy disable. */
 	/** Called once each time Pilot's sleep pause ends, so work that waited for it can start. */
 	onPowerResume(listener: () => void): () => void {
 		this.powerResumeListeners.add(listener);
@@ -13892,11 +13375,10 @@ ${run.excerpt}`,
 	}
 
 	async shutdown(): Promise<void> {
+		this.closing = true;
+		this.hostCalls.beginClosing();
 		this.piReload.stop();
 		this.clearAppEvidence();
-		for (const controller of this.diagnosticContextReads.values()) controller.abort();
-		this.diagnosticContextReads.clear();
-		this.closing = true;
 		const drainPlanning = this.planningBridge?.close();
 		this.insightsReviewClosing ??= Promise.all([
 			this.insightsBacklog?.reviews.interruptAll(),
@@ -13929,11 +13411,11 @@ ${run.excerpt}`,
 		await this.dissociation;
 		await Promise.allSettled(this.coordinatorUnbindings.values());
 		await Promise.allSettled(this.roleTransitions.values());
-		await Promise.allSettled([...this.insightsBacklogPending.values()].flatMap((pending) => [...pending]));
+		await Promise.allSettled(this.hostCalls.running(undefined, ["insights.backlog"]));
 		await Promise.allSettled([...this.insightsReviewPending]);
 		await drainInsightsReviews;
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
-		await Promise.allSettled([...this.planningCalls]);
+		await Promise.allSettled(this.hostCalls.writesToDrain());
 		await drainPlanning;
 		await Promise.allSettled([...this.parking.values()]);
 		await this.coldReader.close();
@@ -13994,7 +13476,6 @@ ${run.excerpt}`,
 		}
 	}
 
-	/** One initializer/outbox drain per session. Save before IPC; remove only after acknowledgement. */
 	/** A durable held mission notice is not permission to launch a kernel during recovery. */
 	private passiveNoticeOnly(meta: SessionMeta): boolean {
 		return !!(
@@ -14003,13 +13484,13 @@ ${run.excerpt}`,
 			!this.backgroundWorking(meta) &&
 			!meta.prActivities?.length &&
 			meta.pending.every(
-				(command) =>
-					command.type === "input" && command.onlyIfIdle && command.requestId.startsWith("mission-notice:"),
+				(command) => command.type === "input" && command.onlyIfIdle && isMissionNotice(command.requestId),
 			) &&
 			this.missions?.passiveMissionLifecycle?.(this.missions.membership(meta.id)?.missionId ?? "")
 		);
 	}
 
+	/** One initializer/outbox drain per session. Save before IPC; remove only after acknowledgement. */
 	private start(id: string, admitted = false): Promise<Map<string, Error>> {
 		const existing = this.starting.get(id);
 		if (existing) return existing;
@@ -14057,7 +13538,7 @@ ${run.excerpt}`,
 				const staleSlack = meta.pending?.filter(
 					(command) =>
 						command.type === "input" &&
-						command.requestId.startsWith("slack-reply:") &&
+						isSlackReply(command.requestId) &&
 						!this.slackReplyGuards.has(command.requestId),
 				);
 				if (staleSlack?.length) {
@@ -14220,23 +13701,23 @@ ${run.excerpt}`,
 						if (
 							command.type === "input" &&
 							command.onlyIfIdle &&
-							((command.requestId.startsWith("mission-notice:")
+							((isMissionNotice(command.requestId)
 								? !this.missions?.noticeAllowed?.(id, command.requestId) || meta.archivedAt !== undefined
-								: command.requestId.startsWith("mission-wait:")
+								: isMissionWait(command.requestId)
 									? meta.waitNudge !== command.requestId ||
 										meta.missionUserStopGeneration !== undefined ||
 										meta.archivedAt !== undefined
-									: command.requestId.startsWith("automation:flow:")
+									: isFlowInput(command.requestId)
 										? false
-										: command.requestId.startsWith("automation:")
+										: isAutomationRequest(command.requestId)
 											? !this.automationsEnabled() ||
 												meta.automation?.followUps?.requestId !== command.requestId
-											: !command.requestId.startsWith("schedule:") &&
-												!command.requestId.startsWith("insights-review:") &&
+											: !isScheduleRequest(command.requestId) &&
+												!isInsightsReview(command.requestId) &&
 												meta.prFollowUp?.requestId !== command.requestId) ||
 								meta.pending.some((pending) => pending !== command))
 						) {
-							if (command.requestId.startsWith("automation:flow:")) {
+							if (isFlowInput(command.requestId)) {
 								const root = this.flowRoot(meta);
 								if (root)
 									await this.endFlow(
@@ -14292,7 +13773,7 @@ ${run.excerpt}`,
 							if (
 								error instanceof CommandRejected &&
 								command.type === "input" &&
-								command.requestId.startsWith("schedule:")
+								isScheduleRequest(command.requestId)
 							) {
 								const state = this.scheduleAdmission?.check(id, command.requestId, command.content);
 								if (state === "invalid" || state === "expired" || state === "stale_input")
@@ -14302,12 +13783,12 @@ ${run.excerpt}`,
 							rejected.set(command.requestId, failure);
 							if (
 								command.type === "input" &&
-								(command.onlyIfIdle || command.requestId.startsWith("slack-reply:")) &&
+								(command.onlyIfIdle || isSlackReply(command.requestId)) &&
 								error instanceof CommandRejected &&
 								error.code === "busy"
 							) {
 								// An idle-guard rejection is not an agent failure or a consumed attempt.
-								if (command.requestId.startsWith("automation:flow:")) {
+								if (isFlowInput(command.requestId)) {
 									const root = this.flowRoot(meta);
 									if (root)
 										await this.endFlow(
@@ -14349,13 +13830,10 @@ ${run.excerpt}`,
 					return;
 				}
 			} catch (error) {
-				if (
-					error instanceof CommandRejected &&
-					meta.pending?.some((command) => command.requestId.startsWith("slack-reply:"))
-				) {
-					for (const command of meta.pending.filter((command) => command.requestId.startsWith("slack-reply:")))
+				if (error instanceof CommandRejected && meta.pending?.some((command) => isSlackReply(command.requestId))) {
+					for (const command of meta.pending.filter((command) => isSlackReply(command.requestId)))
 						rejected.set(command.requestId, error);
-					meta.pending = meta.pending.filter((command) => !command.requestId.startsWith("slack-reply:"));
+					meta.pending = meta.pending.filter((command) => !isSlackReply(command.requestId));
 					await this.save(meta);
 					return;
 				}
@@ -14468,7 +13946,17 @@ ${run.excerpt}`,
 		this.validateMode(meta, true);
 		this.coldSnapshots.delete(id);
 		this.coldLoading.delete(id);
-		this.parkedQuiescent.delete(meta);
+		// Never start a worker while disk can still claim the previous worker was the last one to run.
+		if (meta.parkedChildrenProof !== undefined) {
+			const proof = meta.parkedChildrenProof;
+			delete meta.parkedChildrenProof;
+			try {
+				await this.save(meta, undefined, undefined, true);
+			} catch (error) {
+				meta.parkedChildrenProof = proof; // The next attempt must retry the durable clear.
+				throw error;
+			}
+		}
 		this.workerGenerations.set(id, (this.workerGenerations.get(id) ?? 0) + 1);
 		const createWorker =
 			this.factories.worker ??
@@ -14783,96 +14271,450 @@ ${run.excerpt}`,
 		}
 	}
 
-	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
-		if (packet.type === "question.guard") {
-			let error: string | undefined;
-			try {
-				const entry = this.clarificationGuards.get(packet.requestId);
-				if (!entry || entry.worker !== worker || this.workers.get(meta.id) !== worker || this.parked.has(worker))
-					throw new Conflict("No exact clarification admission");
-				entry.guard();
-			} catch (e) {
-				error = e instanceof Error ? e.message : "Clarification refused";
-			}
-			worker.send({ type: "question.guard.result", callId: packet.callId, ...(error ? { error } : {}) });
-			return;
-		}
-		if (packet.type === "planning.guard") {
-			let error: string | undefined;
-			try {
-				const entry = this.planningGuards.get(packet.operationId);
-				if (!entry || entry.worker !== worker || this.workers.get(meta.id) !== worker)
-					throw new Conflict("No exact planning admission");
-				entry.guard();
-			} catch (e) {
-				error = e instanceof Error ? e.message : "Planning refused";
-			}
-			worker.send({ type: "planning.guard.result", callId: packet.callId, ...(error ? { error } : {}) });
-			return;
-		}
-		if (packet.type === "planning.call") {
-			const guard = () => {
-				if (this.closing || this.workers.get(meta.id) !== worker || this.parked.has(worker))
-					throw new Conflict("Planning worker changed");
-			};
-			const call = Promise.resolve()
-				.then(() => {
-					if (
-						!meta.planning ||
-						!this.planningBridge ||
-						this.planningCalls.size > 8 ||
-						this.workers.get(meta.id) !== worker ||
-						this.parked.has(worker)
-					)
-						throw new Conflict("Trusted planning worker unavailable");
-					this.planningBridge.assert(meta.planning);
-					return this.planningBridge.call(meta.planning, packet.request, guard);
-				})
-				.then(
-					(result) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({ type: "planning.result", callId: packet.callId, result });
-					},
-					(error) => {
-						if (this.workers.get(meta.id) !== worker) return;
+	/** One handler per host call method. HOST_CALL_PROFILES says which methods a restricted profile may use. */
+	private hostCallTable(): HostCallTable<HostCallContext> {
+		const current = ({ meta, worker }: HostCallContext) => this.workers.get(meta.id) === worker;
+		return {
+			"question.guard": {
+				whileParked: true,
+				failure: (error) => (error instanceof Error ? error.message : "Clarification refused"),
+				handle: async ({ meta, worker }, { requestId }) => {
+					const entry = this.clarificationGuards.get(requestId);
+					if (!entry || entry.worker !== worker || this.workers.get(meta.id) !== worker || this.parked.has(worker))
+						throw new Conflict("No exact clarification admission");
+					entry.guard();
+				},
+			},
+			"planning.guard": {
+				whileParked: true,
+				failure: (error) => (error instanceof Error ? error.message : "Planning refused"),
+				handle: async ({ meta, worker }, { operationId }) => {
+					const entry = this.planningGuards.get(operationId);
+					if (!entry || entry.worker !== worker || this.workers.get(meta.id) !== worker)
+						throw new Conflict("No exact planning admission");
+					entry.guard();
+				},
+			},
+			planning: {
+				whileParked: true,
+				failure: (error) => formatFailure(error, "Planning"),
+				handle: async ({ meta, worker }, { request }) => {
+					const guard = () => {
+						if (this.closing || this.workers.get(meta.id) !== worker || this.parked.has(worker))
+							throw new Conflict("Planning worker changed");
+					};
+					try {
+						if (
+							!meta.planning ||
+							!this.planningBridge ||
+							this.hostCalls.size(["planning"]) >= PLANNING_CALL_LIMIT ||
+							this.workers.get(meta.id) !== worker ||
+							this.parked.has(worker)
+						)
+							throw new Conflict("Trusted planning worker unavailable");
+						this.planningBridge.assert(meta.planning);
+						return await this.planningBridge.call(meta.planning, request, guard);
+					} catch (error) {
 						let blocked = true;
 						try {
 							if (meta.planning && this.planningBridge) blocked = this.planningBridge.held(meta.planning);
 						} catch {
 							/* Unavailable stays held. */
 						}
-						worker.send({
-							type: "planning.result",
-							callId: packet.callId,
-							result: { value: { state: "rejected", reason: formatFailure(error, "Planning") }, blocked },
-						});
-					},
-				);
-			this.planningCalls.add(call);
-			void call.finally(() => this.planningCalls.delete(call));
+						return { value: { state: "rejected", reason: formatFailure(error, "Planning") }, blocked };
+					}
+				},
+			},
+			"model.configuration.guard": {
+				failure: (error) => (error instanceof Error ? error.message : "Configuration refused"),
+				handle: async ({ meta, worker }, { requestId }) => {
+					const entry = this.modelConfigurationGuards.get(requestId);
+					if (!entry || entry.worker !== worker || this.workers.get(meta.id) !== worker)
+						throw new Conflict("No matching native model configuration admission");
+					entry.guard();
+				},
+			},
+			"usage-history.epoch": {
+				whileClosing: true,
+				failure: "Usage history unavailable",
+				handle: async ({ meta, worker }) => {
+					const admission = meta.role === "insights" ? this.ownerAccountingAdmission(meta.id, worker) : undefined;
+					const { generation, captureFloor, retentionFloor } = await this.usageHistory.status();
+					admission?.revalidate();
+					return { generation, captureFloor, retentionFloor, mission: this.missions?.usageAttribution?.(meta.id) };
+				},
+			},
+			"usage-history": {
+				whileClosing: true,
+				failure: "Usage history unavailable",
+				handle: async ({ meta, worker }, { row: reported }) => {
+					const admission = meta.role === "insights" ? this.ownerAccountingAdmission(meta.id, worker) : undefined;
+					// Accounting is not model authority to write another chat's attribution or source namespace.
+					const row = admission
+						? {
+								...reported,
+								sourceId: admission.binding.grantId,
+								operationId: createHash("sha256")
+									.update(JSON.stringify([reported.sourceId, reported.operationId]))
+									.digest("hex"),
+								scope: "direct" as const,
+								parent: undefined,
+								attribution: {
+									chatId: meta.id,
+									projectId: meta.projectId,
+									mission: this.missions?.usageAttribution?.(meta.id),
+								},
+							}
+						: reported;
+					admission?.revalidate();
+					const result = await this.usageHistory.put(row);
+					admission?.revalidate();
+					return result;
+				},
+			},
+			"subscription.limit": {
+				failure: "Could not save usage pause",
+				handle: async (context, { limit }) => {
+					const { meta } = context;
+					if (!current(context)) throw new Conflict("Worker changed");
+					try {
+						const { provider, resetsAt } = limit;
+						if (
+							!SUBSCRIPTION_PROVIDERS.includes(provider) ||
+							(resetsAt !== undefined &&
+								(typeof resetsAt !== "string" || !Number.isFinite(Date.parse(resetsAt))))
+						)
+							throw new Error("Invalid subscription limit");
+						meta.subscriptionPolicy = recordSubscriptionLimit(
+							meta.subscriptionPolicy,
+							this.subscriptionUsage,
+							limit,
+						);
+						await Promise.all([this.save(meta), this.syncSubscriptionPolicy(meta)]);
+						this.scheduleSubscriptionReset();
+						this.emit(meta);
+					} catch (error) {
+						this.subscriptionPolicyFailed(meta, error);
+						throw error;
+					}
+				},
+			},
+			mission: {
+				failure: (error) => formatFailure(error, "Tool mission"),
+				handle: async ({ meta }, call) => {
+					if (!this.missions) throw new Error("Missions are unavailable");
+					return ((await this.missions.call(meta.id, call)) ?? null) as JsonValue;
+				},
+			},
+			"insights.backlog": {
+				pool: INSIGHTS_BACKLOG_POOL,
+				failure: (error) =>
+					error instanceof Conflict || error instanceof NotFound
+						? error.message
+						: "Insights backlog unavailable; look up the operation receipt before any retry",
+				handle: async ({ meta, worker }, { request }) => {
+					// Admit before the first await, so Stop also fences a queued call before its transaction.
+					const admission = this.executionAdmission(meta.id, worker);
+					if (!this.insightsBacklog) throw new Conflict("Insights backlog unavailable");
+					const result = meta.insightsOwner
+						? await this.insightsOwnerBacklog(meta.id, request, worker)
+						: await this.insightsBacklog.call(admission as InsightsAdmission, request);
+					admission.revalidate();
+					return result as JsonValue;
+				},
+			},
+			"source.scope": {
+				readOnly: true,
+				pool: SOURCE_SCOPE_POOL,
+				failure: (error) => formatFailure(error, "Source admission"),
+				handle: async (context) => {
+					if (!current(context)) throw new Conflict("Only the current worker may inspect sources");
+					return this.coordinatorSources(context.meta);
+				},
+			},
+			"source.references": {
+				readOnly: true,
+				failure: (error) => formatFailure(error, "Reference sources"),
+				handle: ({ meta }) => this.referenceSources(meta),
+			},
+			"artifact.reference": {
+				readOnly: true,
+				failure: (error) => formatFailure(error, "Tool artifact"),
+				handle: async ({ meta }, { id, revision }) => {
+					if (!this.missions?.readArtifactReference) throw new Error("Artifact reference is not authorized");
+					return this.missions.readArtifactReference(meta.id, id, revision);
+				},
+			},
+			"publication.source": {
+				failure: "Publication custody unavailable",
+				handle: async (context, { bookmark }) => {
+					const { meta } = context;
+					const authorize = () => {
+						if (
+							!current(context) ||
+							meta.mode !== "build" ||
+							!meta.projectId ||
+							this.isMissionCoordinator(meta.id)
+						)
+							throw new Error("Publication custody unavailable");
+					};
+					try {
+						authorize();
+						const binding = () =>
+							this.retainedWorkerBinding(
+								meta.id,
+								this.missions?.membership(meta.id)?.missionId,
+								meta.projectId!,
+								authorize,
+								!!meta.retainedScope,
+							);
+						const before = await binding();
+						const result = await this.sharedWorkspaces.ownership.publicationSource(before, bookmark);
+						if (JSON.stringify(before) !== JSON.stringify(await binding()))
+							throw new Error("Publication custody changed");
+						return result;
+					} catch {
+						return { status: "unknown" };
+					}
+				},
+			},
+			"diagnostics.context": {
+				readOnly: true,
+				pool: DIAGNOSTIC_READ_POOL,
+				failure: "Diagnostic evidence is unavailable",
+				handle: async (context, { request }, signal) => {
+					const { meta, worker } = context;
+					const read = AbortSignal.any([signal, AbortSignal.timeout(DIAGNOSTIC_READ_TIMEOUT_MS)]);
+					if (!current(context)) throw new Conflict("Worker changed");
+					if (this.isDayInsightsReport(meta.id))
+						throw new Conflict("Day report diagnostic/metrics reads are not admitted");
+					if (request.action === "scoped_metrics") return this.scopedMetrics(meta.id, request, read);
+					const insights = meta.role === "insights" ? this.executionAdmission(meta.id, worker) : undefined;
+					const result = insights
+						? await this.insightsHistory(meta.id, worker, request, read)
+						: await this.diagnosticContext(meta.id, request, read);
+					insights?.revalidate();
+					if (read.aborted) throw new Error("Diagnostic read cancelled");
+					return result;
+				},
+			},
+			screen: {
+				readOnly: true,
+				failure: (error) => (error instanceof Error ? error.message : "The window did not answer"),
+				handle: async (context, { operation }, signal) => {
+					if (!current(context) || context.meta.role !== "screen")
+						throw new Error("Only a screen agent chat can use the window");
+					if (!this.screenCall) throw new Error("No Day window can answer here");
+					return (await this.screenCall(context.meta.id, operation, signal)) as JsonValue;
+				},
+			},
+			diagnostics: {
+				readOnly: true,
+				failure: (error) => formatFailure(error, "Tool diagnostics"),
+				handle: async (context, { sessionId, limit }): Promise<AppDiagnostics | SessionDiagnostics> => {
+					const { meta } = context;
+					if (!current(context)) throw new Conflict("Only the live worker may read diagnostics");
+					const repair = this.repairDiagnosticSubject(meta);
+					if (meta.role !== "diagnostics" && !repair)
+						throw new Error("Only an admitted diagnostics specialist may read agent diagnostics");
+					this.validateMode(meta);
+					if (repair) {
+						if (repair.kind === "app") {
+							if (sessionId !== undefined) throw new Conflict("App repair does not authorize chat diagnostics");
+							return this.appDiagnostics(repair.host);
+						}
+						if (sessionId !== undefined && sessionId !== repair.sessionId)
+							throw new Conflict("Diagnostics are limited to the approved repair subject");
+						return this.diagnostics(repair.sessionId, { host: repair.host, limit });
+					}
+					if (!sessionId) return this.appDiagnostics(this.diagnosticExecutionHost(meta));
+					const target = this.require(sessionId);
+					return await this.diagnostics(target.id, { ...(limit === undefined ? {} : { limit }) });
+				},
+			},
+			"diagnostics.history": {
+				readOnly: true,
+				failure: (error) => formatFailure(error, "Tool diagnostic_history"),
+				handle: async (context, { sessionId, before, limit }) => {
+					if (!current(context)) throw new Error("Only the live diagnostics specialist may read target history");
+					return this.diagnosticHistory(context.meta, sessionId, before, limit);
+				},
+			},
+			"diagnostics.logs": {
+				readOnly: true,
+				pool: DIAGNOSTIC_READ_POOL,
+				failure: (error) => formatFailure(error, "Tool diagnostic_logs"),
+				handle: async (context, { request }, signal) => {
+					if (!current(context)) throw new Error("Only the live diagnostics specialist may read Pilot logs");
+					return this.diagnosticLogsCall(context.meta, request, signal);
+				},
+			},
+			"diagnostics.proposal": {
+				failure: (error) => formatFailure(error, "Repair proposal"),
+				handle: async (context, { proposal: submitted }) => {
+					const { meta } = context;
+					if (!current(context) || meta.role !== "diagnostics")
+						throw new Error("Only the live diagnostics specialist may publish a repair proposal");
+					const draft = validatedDiagnosticProposal(submitted);
+					const subject = this.diagnosticSubject(meta, draft.subject);
+					const evidence = await this.diagnosticSubjectEvidence(subject);
+					if (!current(context) || meta.role !== "diagnostics")
+						throw new Conflict("Diagnostics specialist changed while preparing the proposal");
+					const refs = new Set(evidence.map((item) => item.ref));
+					if (draft.evidenceRefs.some((ref) => !refs.has(ref)))
+						throw new Conflict("Proposed diagnostic evidence is no longer available");
+					const proposal: DiagnosticRepairProposal = {
+						schemaVersion: 1,
+						id: `diagnostic-proposal:v1:${randomUUID()}`,
+						...(subject.kind === "chat" ? { targetSessionId: subject.sessionId } : {}),
+						createdAt: new Date().toISOString(),
+						...draft,
+						subject,
+					};
+					meta.diagnosticRepairProposal = proposal;
+					meta.updatedAt = Date.now();
+					await this.save(meta);
+					this.emit(meta);
+					return proposal;
+				},
+			},
+			"liveUpdate.propose": {
+				failure: (error) => formatFailure(error, "Pilot update proposal"),
+				handle: async (context, { operationId, args }) => {
+					const { meta } = context;
+					const projectId = meta.projectId;
+					const authorize = () => {
+						if (
+							!current(context) ||
+							!this.canProposeLiveUpdate(meta) ||
+							meta.projectId !== projectId ||
+							this.closing ||
+							meta.archivedAt !== undefined ||
+							this.isRetainedHistory(meta) ||
+							meta.continuedTo
+						)
+							throw new Conflict("Live update proposals are unavailable in this chat");
+					};
+					authorize();
+					const end = this.updateGate.begin();
+					try {
+						const result = await this.liveUpdate!.propose(meta.id, projectId!, operationId, args, authorize);
+						return (result ?? null) as unknown as JsonValue;
+					} finally {
+						end();
+					}
+				},
+			},
+			knowledge: {
+				failure: (error) => formatFailure(error, "Tool knowledge"),
+				handle: async (context, { action, args, operationId }) => {
+					const { meta } = context;
+					// Identity, project and write capability come from this supervised session, never tool arguments.
+					if (!this.knowledge || !meta.projectId) throw new Error("Project knowledge is unavailable");
+					const result = await this.knowledge.call(
+						{
+							sessionId: meta.id,
+							projectId: meta.projectId,
+							assertCurrent: (write) => {
+								if (!current(context)) throw new Conflict("Project context worker changed");
+								if (write) this.assertPlanningOpen(meta.id);
+								if (meta.planning) {
+									if (!this.planningBridge) throw new Conflict("Planning project context unavailable");
+									this.planningBridge.assert(meta.planning);
+									if (write && this.planningBridge.held(meta.planning)) throw new Conflict("Planning is held");
+								}
+							},
+							readOnly:
+								!!meta.ask ||
+								meta.mode === "ask" ||
+								meta.role !== undefined ||
+								meta.executionPermission?.level === "investigate",
+						},
+						action,
+						args,
+						operationId,
+					);
+					return (result ?? null) as JsonValue;
+				},
+			},
+			memory: {
+				failure: (error) => formatFailure(error, "Tool memory"),
+				handle: async ({ meta }, { action, args }) => {
+					if (args.projectId !== undefined) throw new Error("Ordinary chats use their implicit project memory");
+					if (!meta.projectId || !this.memory) throw new Error("Project memory is unavailable");
+					let result: unknown;
+					switch (action) {
+						case "wake":
+							result = await this.memory.wake(meta.projectId, 96);
+							break;
+						case "note":
+							if (typeof args.text !== "string") throw new Error("Memory note requires text");
+							if (args.replaces !== undefined && !Array.isArray(args.replaces))
+								throw new Error("Memory note replaces must be a list of note indices");
+							result = await this.memory.note(
+								meta.projectId,
+								args.text,
+								meta.id,
+								args.replaces as number[] | undefined,
+							);
+							break;
+						case "recall":
+							if (typeof args.regex !== "string") throw new Error("Memory recall requires regex");
+							result = await this.memory.recall(meta.projectId, args.regex, 96);
+							break;
+						case "zoom":
+							if (typeof args.lo !== "number" || typeof args.hi !== "number")
+								throw new Error("Memory zoom requires an inclusive range");
+							result = await this.memory.zoom(meta.projectId, args.lo, args.hi);
+							break;
+					}
+					return (result ?? null) as JsonValue;
+				},
+			},
+			chatReport: {
+				failure: (error) => formatFailure(error, "Tool chat_report"),
+				handle: async ({ meta }, { args }) => {
+					if (!meta.job) throw new Error("chat_report is only for chats started from Slack, Linear or a schedule");
+					const report = parseChatReport(args, Date.now());
+					await saveChatReport(this.dir(meta.id), report);
+					return { saved: true, at: report.at };
+				},
+			},
+			slack: {
+				failure: (error) => formatFailure(error, "Tool slack_status"),
+				handle: async ({ meta }, { args }) => {
+					if (!this.slackStatus || meta.ask) throw new Error("Slack status is unavailable in this chat");
+					return (await this.slackStatus.call(meta.id, args)) as JsonValue;
+				},
+			},
+		};
+	}
+
+	private hostCall(meta: SessionMeta, worker: SessionWorker, packet: HostCallPacket): void {
+		if (this.workers.get(meta.id) !== worker) return;
+		const parked = this.parked.has(worker);
+		if (!parked) this.lastUse.set(meta.id, Date.now());
+		this.hostCalls.dispatch(
+			{
+				sessionId: meta.id,
+				worker,
+				context: { meta, worker },
+				profile: meta.planning ? "planning" : meta.role === "insights" ? "insights" : undefined,
+				parked,
+				reply: (command) => {
+					if (this.workers.get(meta.id) === worker) worker.send(command);
+				},
+			},
+			packet,
+		);
+	}
+
+	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
+		if (packet.type === "host.call") return this.hostCall(meta, worker, packet);
+		if (packet.type === "host.cancel") {
+			if (this.workers.get(meta.id) === worker && !this.parked.has(worker))
+				this.hostCalls.cancel(meta.id, worker, packet.callId);
 			return;
-		}
-		if (
-			meta.planning &&
-			!planningHostCallAllowed(packet.type, "action" in packet ? String(packet.action) : undefined)
-		) {
-			const denied = {
-				"mission.call": "mission.result",
-				"memory.call": "memory.result",
-				"knowledge.call": "knowledge.result",
-				"slack.call": "slack.result",
-				"liveUpdate.propose": "liveUpdate.result",
-				"insights.backlog.call": "insights.backlog.result",
-			} as const;
-			const resultType = denied[packet.type as keyof typeof denied];
-			if (resultType && "callId" in packet) {
-				worker.send({
-					type: resultType,
-					callId: packet.callId,
-					error: "Planning profile permits only its bound native port",
-				});
-				return;
-			}
 		}
 		// A user Stop can be admitted while this exact worker is closing. Its reply
 		// still belongs to the waiting Stop, not to discarded lifecycle display state.
@@ -14931,51 +14773,12 @@ ${run.excerpt}`,
 			return;
 		}
 		if (this.parked.has(worker)) return;
-		if (packet.type === "model.configuration.guard") {
-			let error: string | undefined;
-			try {
-				const entry = this.modelConfigurationGuards.get(packet.requestId);
-				if (!entry || entry.worker !== worker || this.workers.get(meta.id) !== worker)
-					throw new Conflict("No matching native model configuration admission");
-				entry.guard();
-			} catch (cause) {
-				error = cause instanceof Error ? cause.message : "Configuration refused";
-			}
-			worker.send({ type: "model.configuration.result", callId: packet.callId, ...(error ? { error } : {}) });
-			return;
-		}
 		// Independent host boundary, including forged IPC from an otherwise restricted kernel.
 		if (meta.role === "insights") {
 			if (this.workers.get(meta.id) !== worker) return;
-			const denied = {
-				"mission.call": "mission.result",
-				"memory.call": "memory.result",
-				"knowledge.call": "knowledge.result",
-				"slack.call": "slack.result",
-				"liveUpdate.propose": "liveUpdate.result",
-				"diagnostics.call": "diagnostics.result",
-				"diagnostics.history.call": "diagnostics.history.result",
-				"diagnostics.logs.call": "diagnostics.logs.result",
-				"diagnostics.proposal": "diagnostics.proposal.result",
-				"artifact.reference.get": "artifact.reference.result",
-				"source.scope": "source.scope.result",
-				"source.references": "source.references.result",
-				"publication.source": "publication.source.result",
-			} as const;
-			const resultType = denied[packet.type as keyof typeof denied];
-			if (resultType && "callId" in packet) {
-				if (this.workers.get(meta.id) === worker)
-					worker.send({ type: resultType, callId: packet.callId, error: "Insights denies this capability" });
-				return;
-			}
 			// Closed status/read transport. New packet capabilities are denied until explicitly admitted.
 			if (
 				![
-					"insights.backlog.call",
-					"diagnostics.context.call",
-					"diagnostics.context.cancel",
-					"usage-history.epoch",
-					"usage-history",
 					"update.paused",
 					"accepted",
 					"aborted",
@@ -14990,7 +14793,6 @@ ${run.excerpt}`,
 					"compacting",
 					"tools.running",
 					"tool.activity",
-					"subscription.limit",
 				].includes(packet.type)
 			)
 				return;
@@ -15000,36 +14802,7 @@ ${run.excerpt}`,
 			return;
 		}
 		// Reload's own refusal is not a new idle notification (and must not create a retry loop).
-		if (packet.type === "error" && packet.requestId?.startsWith("piReload:")) return;
-		if (packet.type === "usage-history.epoch") {
-			if (this.workers.get(meta.id) !== worker) return;
-			void Promise.resolve()
-				.then(async () => {
-					const admission = meta.role === "insights" ? this.ownerAccountingAdmission(meta.id, worker) : undefined;
-					const { generation, captureFloor, retentionFloor } = await this.usageHistory.status();
-					admission?.revalidate();
-					if (this.workers.get(meta.id) === worker)
-						worker.send({
-							type: "usage-history.epoch.result",
-							callId: packet.callId,
-							result: {
-								generation,
-								captureFloor,
-								retentionFloor,
-								mission: this.missions?.usageAttribution?.(meta.id),
-							},
-						});
-				})
-				.catch(() => {
-					if (this.workers.get(meta.id) === worker)
-						worker.send({
-							type: "usage-history.epoch.result",
-							callId: packet.callId,
-							error: "Usage history unavailable",
-						});
-				});
-			return;
-		}
+		if (packet.type === "error" && packet.requestId !== undefined && isPiReload(packet.requestId)) return;
 		if (packet.type === "update.paused") {
 			const pause = this.updatePausing.get(worker);
 			if (pause?.id === packet.id) {
@@ -15061,53 +14834,6 @@ ${run.excerpt}`,
 		// Parking already detached this worker. Cleanup errors and late packets belong
 		// to its shutdown, not the session's completed work or a replacement worker.
 		if (this.parked.has(worker)) return;
-		if (packet.type === "usage-history") {
-			if (this.workers.get(meta.id) !== worker) return;
-			const writing = Promise.resolve()
-				.then(async () => {
-					const admission = meta.role === "insights" ? this.ownerAccountingAdmission(meta.id, worker) : undefined;
-					// Accounting is not model authority to write another chat's attribution or source namespace.
-					const row = admission
-						? {
-								...packet.row,
-								sourceId: admission.binding.grantId,
-								operationId: createHash("sha256")
-									.update(JSON.stringify([packet.row.sourceId, packet.row.operationId]))
-									.digest("hex"),
-								scope: "direct" as const,
-								parent: undefined,
-								attribution: {
-									chatId: meta.id,
-									projectId: meta.projectId,
-									mission: this.missions?.usageAttribution?.(meta.id),
-								},
-							}
-						: packet.row;
-					admission?.revalidate();
-					const result = await this.usageHistory.put(row);
-					admission?.revalidate();
-					if (this.workers.get(meta.id) === worker)
-						worker.send({ type: "usage-history.result", callId: packet.callId, result });
-				})
-				.catch(() => {
-					if (this.workers.get(meta.id) === worker)
-						worker.send({
-							type: "usage-history.result",
-							callId: packet.callId,
-							error: "Usage history unavailable",
-						});
-				});
-			if (meta.role === "insights") {
-				const pending = this.insightsAccounting.get(meta.id) ?? new Set<Promise<void>>();
-				this.insightsAccounting.set(meta.id, pending);
-				pending.add(writing);
-				void writing.finally(() => {
-					pending.delete(writing);
-					if (!pending.size) this.insightsAccounting.delete(meta.id);
-				});
-			}
-			return;
-		}
 		if (
 			this.workers.get(meta.id) === worker &&
 			(packet.type === "ready" || packet.type === "usage" || packet.type === "modelChanged")
@@ -15165,548 +14891,10 @@ ${run.excerpt}`,
 			this.workers.get(meta.id) === worker
 		)
 			this.lastUse.set(meta.id, Date.now());
-		if (packet.type === "artifact.reference.get") {
-			const reply = (result: { result?: Omit<ArtifactRevision, "html">; error?: string }) => {
-				if (this.workers.get(meta.id) === worker)
-					worker.send({ type: "artifact.reference.result", callId: packet.callId, ...result });
-			};
-			const call = Promise.resolve().then(() => {
-				if (!this.missions?.readArtifactReference) throw new Error("Artifact reference is not authorized");
-				return this.missions.readArtifactReference(meta.id, packet.id, packet.revision);
-			});
-			void call.then(
-				(result) => reply({ result }),
-				(error: unknown) => reply({ error: formatFailure(error, "Tool artifact") }),
-			);
-			return;
-		}
-		if (packet.type === "source.references") {
-			void this.referenceSources(meta).then(
-				(result) => {
-					if (this.workers.get(meta.id) === worker)
-						worker.send({ type: "source.references.result", callId: packet.callId, result });
-				},
-				(error: unknown) => {
-					if (this.workers.get(meta.id) === worker)
-						worker.send({
-							type: "source.references.result",
-							callId: packet.callId,
-							error: formatFailure(error, "Reference sources"),
-						});
-				},
-			);
-			return;
-		}
-		if (packet.type === "source.scope") {
-			const key = `${meta.id}:${packet.callId}`;
-			if (this.coordinatorSourceReads.size >= 8 || this.coordinatorSourceReads.has(key)) {
-				if (this.workers.get(meta.id) === worker)
-					worker.send({
-						type: "source.scope.result",
-						callId: packet.callId,
-						error: "Source admissions are busy; retry",
-					});
-				return;
-			}
-			this.coordinatorSourceReads.add(key);
-			void Promise.resolve()
-				.then(() => {
-					if (this.workers.get(meta.id) !== worker)
-						throw new Conflict("Only the current worker may inspect sources");
-					return this.coordinatorSources(meta);
-				})
-				.then(
-					(result) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({ type: "source.scope.result", callId: packet.callId, result });
-					},
-					(error) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({
-								type: "source.scope.result",
-								callId: packet.callId,
-								error: formatFailure(error, "Source admission"),
-							});
-					},
-				)
-				.finally(() => this.coordinatorSourceReads.delete(key));
-			return;
-		}
-		if (packet.type === "subscription.limit") {
-			if (this.workers.get(meta.id) !== worker) return;
-			const persist = async () => {
-				const { provider, resetsAt } = packet.limit;
-				if (
-					!SUBSCRIPTION_PROVIDERS.includes(provider) ||
-					(resetsAt !== undefined && (typeof resetsAt !== "string" || !Number.isFinite(Date.parse(resetsAt))))
-				)
-					throw new Error("Invalid subscription limit");
-				meta.subscriptionPolicy = recordSubscriptionLimit(
-					meta.subscriptionPolicy,
-					this.subscriptionUsage,
-					packet.limit,
-				);
-				await Promise.all([this.save(meta), this.syncSubscriptionPolicy(meta)]);
-				this.scheduleSubscriptionReset();
-				this.emit(meta);
-			};
-			void persist().then(
-				() => {
-					if (this.workers.get(meta.id) === worker)
-						worker.send({ type: "subscription.limit.result", callId: packet.callId });
-				},
-				(error: unknown) => {
-					this.subscriptionPolicyFailed(meta, error);
-					if (this.workers.get(meta.id) === worker)
-						worker.send({
-							type: "subscription.limit.result",
-							callId: packet.callId,
-							error: "Could not save usage pause",
-						});
-				},
-			);
-			return;
-		}
-		if (packet.type === "insights.backlog.call") {
-			if (this.insightsBacklogCalls >= 8) {
-				worker.send({ type: "insights.backlog.result", callId: packet.callId, error: "Insights backlog is busy" });
-				return;
-			}
-			this.insightsBacklogCalls++;
-			let admission: import("./insights-admission.ts").InsightsReviewAdmission | undefined;
-			let admissionError: unknown;
-			try {
-				// Capture before yielding, so Stop also fences a queued call before its transaction.
-				admission = this.executionAdmission(meta.id, worker);
-			} catch (error) {
-				admissionError = error;
-			}
-			const pending = this.insightsBacklogPending.get(meta.id) ?? new Set<Promise<void>>();
-			this.insightsBacklogPending.set(meta.id, pending);
-			const call = Promise.resolve()
-				.then(async () => {
-					if (!admission) throw admissionError;
-					if (!this.insightsBacklog) throw new Conflict("Insights backlog unavailable");
-					const result = meta.insightsOwner
-						? await this.insightsOwnerBacklog(meta.id, packet.request, worker)
-						: await this.insightsBacklog.call(admission as InsightsAdmission, packet.request);
-					admission.revalidate();
-					worker.send({
-						type: "insights.backlog.result",
-						callId: packet.callId,
-						result: result as import("@earendil-works/chord/json").JsonValue,
-					});
-				})
-				.catch((error: unknown) => {
-					if (this.workers.get(meta.id) === worker)
-						worker.send({
-							type: "insights.backlog.result",
-							callId: packet.callId,
-							error:
-								error instanceof Conflict || error instanceof NotFound
-									? error.message
-									: "Insights backlog unavailable; look up the operation receipt before any retry",
-						});
-				})
-				.finally(() => {
-					this.insightsBacklogCalls--;
-					pending.delete(call);
-					if (!pending.size) this.insightsBacklogPending.delete(meta.id);
-				});
-			pending.add(call);
-			return;
-		}
-		if (packet.type === "diagnostics.context.cancel") {
-			this.diagnosticContextReads.get(`${meta.id}:${packet.callId}`)?.abort();
-			this.screenCalls.get(`${meta.id}:${packet.callId}`)?.abort();
-			return;
-		}
-		if (packet.type === "screen.call") {
-			const key = `${meta.id}:${packet.callId}`;
-			const controller = new AbortController();
-			this.screenCalls.get(key)?.abort();
-			this.screenCalls.set(key, controller);
-			void Promise.resolve()
-				.then(() => {
-					if (this.workers.get(meta.id) !== worker || meta.role !== "screen")
-						throw new Error("Only a screen agent chat can use the window");
-					if (!this.screenCall) throw new Error("No Day window can answer here");
-					return this.screenCall(meta.id, packet.operation, controller.signal);
-				})
-				.then(
-					(result) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({
-								type: "screen.result",
-								callId: packet.callId,
-								result: result as import("@earendil-works/chord/json").JsonValue,
-							});
-					},
-					(error: unknown) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({
-								type: "screen.result",
-								callId: packet.callId,
-								error: error instanceof Error ? error.message : "The window did not answer",
-							});
-					},
-				)
-				.finally(() => {
-					if (this.screenCalls.get(key) === controller) this.screenCalls.delete(key);
-				});
-			return;
-		}
-		if (packet.type === "diagnostics.context.call") {
-			let insights: import("./insights-admission.ts").InsightsReviewAdmission | undefined;
-			const key = `${meta.id}:${packet.callId}`;
-			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), 10_000);
-			if (this.diagnosticContextReads.size >= 8 || this.diagnosticContextReads.has(key)) {
-				clearTimeout(timer);
-				worker.send({
-					type: "diagnostics.context.result",
-					callId: packet.callId,
-					error: "Diagnostic reads are busy",
-				});
-				return;
-			}
-			this.diagnosticContextReads.set(key, controller);
-			void Promise.resolve()
-				.then(() => {
-					if (this.workers.get(meta.id) !== worker) throw new Conflict("Worker changed");
-					if (this.isDayInsightsReport(meta.id))
-						throw new Conflict("Day report diagnostic/metrics reads are not admitted");
-					// Synchronous snapshots are admitted in the delivery turn below.
-					if (packet.request.action === "scoped_metrics") return;
-					if (meta.role === "insights") insights = this.executionAdmission(meta.id, worker);
-					return meta.role === "insights"
-						? this.insightsHistory(meta.id, worker, packet.request, controller.signal)
-						: this.diagnosticContext(meta.id, packet.request, controller.signal);
-				})
-				.then((result) => {
-					insights?.revalidate();
-					if (this.workers.get(meta.id) === worker && !controller.signal.aborted) {
-						const evidence =
-							packet.request.action === "scoped_metrics"
-								? this.scopedMetrics(meta.id, packet.request, controller.signal)
-								: result;
-						worker.send({ type: "diagnostics.context.result", callId: packet.callId, result: evidence });
-					}
-				})
-				.catch(() => {
-					if (this.workers.get(meta.id) === worker)
-						worker.send({
-							type: "diagnostics.context.result",
-							callId: packet.callId,
-							error: "Diagnostic evidence is unavailable",
-						});
-				})
-				.finally(() => {
-					clearTimeout(timer);
-					this.diagnosticContextReads.delete(key);
-				});
-			return;
-		}
-		if (packet.type === "diagnostics.call") {
-			void Promise.resolve()
-				.then(async (): Promise<AppDiagnostics | SessionDiagnostics> => {
-					if (this.workers.get(meta.id) !== worker)
-						throw new Conflict("Only the live worker may read diagnostics");
-					const repair = this.repairDiagnosticSubject(meta);
-					if (meta.role !== "diagnostics" && !repair)
-						throw new Error("Only an admitted diagnostics specialist may read agent diagnostics");
-					this.validateMode(meta);
-					if (repair) {
-						if (repair.kind === "app") {
-							if (packet.sessionId !== undefined)
-								throw new Conflict("App repair does not authorize chat diagnostics");
-							return this.appDiagnostics(repair.host);
-						}
-						if (packet.sessionId !== undefined && packet.sessionId !== repair.sessionId)
-							throw new Conflict("Diagnostics are limited to the approved repair subject");
-						return this.diagnostics(repair.sessionId, { host: repair.host, limit: packet.limit });
-					}
-					if (!packet.sessionId) return this.appDiagnostics(this.diagnosticExecutionHost(meta));
-					const target = this.require(packet.sessionId);
-					return await this.diagnostics(target.id, {
-						...(packet.limit === undefined ? {} : { limit: packet.limit }),
-					});
-				})
-				.then(
-					(result) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({ type: "diagnostics.result", callId: packet.callId, result });
-					},
-					(error) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({
-								type: "diagnostics.result",
-								callId: packet.callId,
-								error: formatFailure(error, "Tool diagnostics"),
-							});
-					},
-				);
-			return;
-		}
-		if (packet.type === "diagnostics.history.call") {
-			void Promise.resolve()
-				.then(() => {
-					if (this.workers.get(meta.id) !== worker)
-						throw new Error("Only the live diagnostics specialist may read target history");
-					return this.diagnosticHistory(meta, packet.sessionId, packet.before, packet.limit);
-				})
-				.then(
-					(result) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({ type: "diagnostics.history.result", callId: packet.callId, result });
-					},
-					(error) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({
-								type: "diagnostics.history.result",
-								callId: packet.callId,
-								error: formatFailure(error, "Tool diagnostic_history"),
-							});
-					},
-				);
-			return;
-		}
-		if (packet.type === "diagnostics.logs.call") {
-			const key = `${meta.id}:${packet.callId}`;
-			if (this.diagnosticContextReads.size >= 8 || this.diagnosticContextReads.has(key)) {
-				worker.send({ type: "diagnostics.logs.result", callId: packet.callId, error: "Diagnostic reads are busy" });
-				return;
-			}
-			const controller = new AbortController();
-			this.diagnosticContextReads.set(key, controller);
-			void Promise.resolve()
-				.then(() => {
-					if (this.workers.get(meta.id) !== worker)
-						throw new Error("Only the live diagnostics specialist may read Pilot logs");
-					return this.diagnosticLogsCall(meta, packet.request, controller.signal);
-				})
-				.then(
-					(result) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({ type: "diagnostics.logs.result", callId: packet.callId, result });
-					},
-					(error) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({
-								type: "diagnostics.logs.result",
-								callId: packet.callId,
-								error: formatFailure(error, "Tool diagnostic_logs"),
-							});
-					},
-				)
-				.finally(() => this.diagnosticContextReads.delete(key));
-			return;
-		}
-		if (packet.type === "diagnostics.proposal") {
-			void Promise.resolve()
-				.then(async () => {
-					if (this.workers.get(meta.id) !== worker || meta.role !== "diagnostics")
-						throw new Error("Only the live diagnostics specialist may publish a repair proposal");
-					const draft = validatedDiagnosticProposal(packet.proposal);
-					const subject = this.diagnosticSubject(meta, draft.subject);
-					const evidence = await this.diagnosticSubjectEvidence(subject);
-					if (this.workers.get(meta.id) !== worker || meta.role !== "diagnostics")
-						throw new Conflict("Diagnostics specialist changed while preparing the proposal");
-					const refs = new Set(evidence.map((item) => item.ref));
-					if (draft.evidenceRefs.some((ref) => !refs.has(ref)))
-						throw new Conflict("Proposed diagnostic evidence is no longer available");
-					const proposal: DiagnosticRepairProposal = {
-						schemaVersion: 1,
-						id: `diagnostic-proposal:v1:${randomUUID()}`,
-						...(subject.kind === "chat" ? { targetSessionId: subject.sessionId } : {}),
-						createdAt: new Date().toISOString(),
-						...draft,
-						subject,
-					};
-					meta.diagnosticRepairProposal = proposal;
-					meta.updatedAt = Date.now();
-					await this.save(meta);
-					this.emit(meta);
-					return proposal;
-				})
-				.then(
-					(result) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({ type: "diagnostics.proposal.result", callId: packet.callId, result });
-					},
-					(error) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({
-								type: "diagnostics.proposal.result",
-								callId: packet.callId,
-								error: formatFailure(error, "Repair proposal"),
-							});
-					},
-				);
-			return;
-		}
-		if (packet.type === "mission.call") {
-			const reply = (result: { result?: unknown; error?: string }) => {
-				if (this.workers.get(meta.id) === worker)
-					worker.send({ type: "mission.result", callId: packet.callId, ...(result as { result?: never }) });
-			};
-			const call = this.missions
-				? Promise.resolve().then(() => this.missions!.call(meta.id, packet))
-				: Promise.reject(new Error("Missions are unavailable"));
-			void call.then(
-				(result) => reply({ result: result ?? null }),
-				(error: unknown) => reply({ error: formatFailure(error, "Tool mission") }),
-			);
-			return;
-		}
-		if (packet.type === "liveUpdate.propose") {
-			const projectId = meta.projectId;
-			const authorize = () => {
-				if (
-					this.workers.get(meta.id) !== worker ||
-					!this.canProposeLiveUpdate(meta) ||
-					meta.projectId !== projectId ||
-					this.closing ||
-					meta.archivedAt !== undefined ||
-					this.isRetainedHistory(meta) ||
-					meta.continuedTo
-				)
-					throw new Conflict("Live update proposals are unavailable in this chat");
-			};
-			const call = Promise.resolve().then(async () => {
-				authorize();
-				const end = this.updateGate.begin();
-				try {
-					return await this.liveUpdate!.propose(meta.id, projectId!, packet.operationId, packet.args, authorize);
-				} finally {
-					end();
-				}
-			});
-			void call.then(
-				(result) => {
-					if (this.workers.get(meta.id) === worker)
-						worker.send({ type: "liveUpdate.result", callId: packet.callId, result: result as never });
-				},
-				(error: unknown) => {
-					if (this.workers.get(meta.id) === worker)
-						worker.send({
-							type: "liveUpdate.result",
-							callId: packet.callId,
-							error: formatFailure(error, "Pilot update proposal"),
-						});
-				},
-			);
-			return;
-		}
-		if (packet.type === "knowledge.call") {
-			const reply = (result: { result?: unknown; error?: string }) => {
-				if (this.workers.get(meta.id) === worker)
-					worker.send({ type: "knowledge.result", callId: packet.callId, ...(result as { result?: never }) });
-			};
-			const call = Promise.resolve().then(() => {
-				// Identity, project and write capability come from this supervised session, never tool arguments.
-				if (!this.knowledge || !meta.projectId) throw new Error("Project knowledge is unavailable");
-				return this.knowledge.call(
-					{
-						sessionId: meta.id,
-						projectId: meta.projectId,
-						assertCurrent: (write) => {
-							if (this.workers.get(meta.id) !== worker) throw new Conflict("Project context worker changed");
-							if (write) this.assertPlanningOpen(meta.id);
-							if (meta.planning) {
-								if (!this.planningBridge) throw new Conflict("Planning project context unavailable");
-								this.planningBridge.assert(meta.planning);
-								if (write) {
-									if (this.planningBridge.held(meta.planning)) throw new Conflict("Planning is held");
-								}
-							}
-						},
-						readOnly:
-							!!meta.ask ||
-							meta.mode === "ask" ||
-							meta.role !== undefined ||
-							meta.executionPermission?.level === "investigate",
-					},
-					packet.action,
-					packet.args,
-					packet.operationId,
-				);
-			});
-			void call.then(
-				(result) => reply({ result: result ?? null }),
-				(error: unknown) => reply({ error: formatFailure(error, "Tool knowledge") }),
-			);
-			return;
-		}
-		if (packet.type === "memory.call") {
-			const reply = (result: { result?: unknown; error?: string }) => {
-				if (this.workers.get(meta.id) === worker)
-					worker.send({ type: "memory.result", callId: packet.callId, ...(result as { result?: never }) });
-			};
-			const call = Promise.resolve().then(async () => {
-				if (packet.args.projectId !== undefined)
-					throw new Error("Ordinary chats use their implicit project memory");
-				if (!meta.projectId || !this.memory) throw new Error("Project memory is unavailable");
-				const args = packet.args;
-				switch (packet.action) {
-					case "wake":
-						return this.memory.wake(meta.projectId, 96);
-					case "note":
-						if (typeof args.text !== "string") throw new Error("Memory note requires text");
-						if (args.replaces !== undefined && !Array.isArray(args.replaces))
-							throw new Error("Memory note replaces must be a list of note indices");
-						return this.memory.note(meta.projectId, args.text, meta.id, args.replaces as number[] | undefined);
-					case "recall":
-						if (typeof args.regex !== "string") throw new Error("Memory recall requires regex");
-						return this.memory.recall(meta.projectId, args.regex, 96);
-					case "zoom":
-						if (typeof args.lo !== "number" || typeof args.hi !== "number")
-							throw new Error("Memory zoom requires an inclusive range");
-						return this.memory.zoom(meta.projectId, args.lo, args.hi);
-				}
-			});
-			void call.then(
-				(result) => reply({ result }),
-				(error: unknown) => reply({ error: formatFailure(error, "Tool memory") }),
-			);
-			return;
-		}
-		if (packet.type === "chatReport.call") {
-			const reply = (result: { result?: unknown; error?: string }) => {
-				if (this.workers.get(meta.id) === worker)
-					worker.send({ type: "chatReport.result", callId: packet.callId, ...(result as { result?: never }) });
-			};
-			const call = (async () => {
-				if (!meta.job) throw new Error("chat_report is only for chats started from Slack, Linear or a schedule");
-				const report = parseChatReport(packet.args, Date.now());
-				await saveChatReport(this.dir(meta.id), report);
-				return { saved: true, at: report.at };
-			})();
-			void call.then(
-				(result) => reply({ result }),
-				(error: unknown) => reply({ error: formatFailure(error, "Tool chat_report") }),
-			);
-			return;
-		}
-		if (packet.type === "slack.call") {
-			const reply = (result: { result?: unknown; error?: string }) => {
-				if (this.workers.get(meta.id) === worker)
-					worker.send({ type: "slack.result", callId: packet.callId, ...(result as { result?: never }) });
-			};
-			const call = Promise.resolve().then(() => {
-				if (!this.slackStatus || meta.ask) throw new Error("Slack status is unavailable in this chat");
-				return this.slackStatus.call(meta.id, packet.args);
-			});
-			void call.then(
-				(result) => reply({ result }),
-				(error: unknown) => reply({ error: formatFailure(error, "Tool slack_status") }),
-			);
-			return;
-		}
 		if (packet.type === "workspace.prepare") {
 			if (this.workers.get(meta.id) !== worker) return;
 			const prepare = async () => {
-				await this.refreshCoordinatorWorkspace(meta.id, true);
+				await this.prepareCoordinatorRole(meta.id);
 				// Policy sections must see the base from any admitted workspace update.
 				while (this.workspaceRefreshes.has(meta.id)) await this.workspaceRefreshes.get(meta.id);
 			};
@@ -15803,47 +14991,6 @@ ${run.excerpt}`,
 			}
 			return;
 		}
-		if (packet.type === "publication.source") {
-			const authorize = () => {
-				if (
-					this.workers.get(meta.id) !== worker ||
-					meta.mode !== "build" ||
-					!meta.projectId ||
-					this.isMissionCoordinator(meta.id)
-				)
-					throw new Error("Publication custody unavailable");
-			};
-			void (async () => {
-				try {
-					authorize();
-					const binding = await this.retainedWorkerBinding(
-						meta.id,
-						this.missions?.membership(meta.id)?.missionId,
-						meta.projectId!,
-						authorize,
-						!!meta.retainedScope,
-					);
-					const result = await this.sharedWorkspaces.ownership.publicationSource(binding, packet.bookmark);
-					const current = await this.retainedWorkerBinding(
-						meta.id,
-						this.missions?.membership(meta.id)?.missionId,
-						meta.projectId!,
-						authorize,
-						!!meta.retainedScope,
-					);
-					if (JSON.stringify(binding) !== JSON.stringify(current)) throw new Error("Publication custody changed");
-					worker.send({ type: "publication.source.result", callId: packet.callId, result });
-				} catch {
-					if (this.workers.get(meta.id) === worker)
-						worker.send({
-							type: "publication.source.result",
-							callId: packet.callId,
-							result: { status: "unknown" },
-						});
-				}
-			})();
-			return;
-		}
 		if (packet.type === "mcp.used") {
 			if (
 				this.workers.get(meta.id) === worker &&
@@ -15859,10 +15006,7 @@ ${run.excerpt}`,
 			this.watchers.get(meta.id)?.get(packet.watchId)?.(packet.events);
 			return;
 		}
-		if (packet.type === "todos.changed") {
-			if (this.workers.get(meta.id) === worker) worker.openTodoCount = packet.openCount;
-			return;
-		}
+		if (packet.type === "todos.changed") return;
 		if (packet.type === "compacting") {
 			if (this.workers.get(meta.id) === worker) this.emit(meta, worker);
 			return;
@@ -15880,7 +15024,6 @@ ${run.excerpt}`,
 		}
 		if (packet.type === "tools.running") {
 			if (this.workers.get(meta.id) !== worker) return;
-			worker.toolsRunning = packet.running;
 			for (const check of this.planningIdleWaiters.get(meta.id) ?? []) check();
 			// No extra summary fan-out in ordinary streaming work.
 			if (this.internetOnline === false || this.subscriptionPaused(meta.id)) this.emit(meta, worker);
@@ -15888,7 +15031,6 @@ ${run.excerpt}`,
 		}
 		if (packet.type === "tool.activity") {
 			if (this.workers.get(meta.id) === worker) {
-				worker.toolActivity = packet.activity;
 				this.refreshToolStallWatch(meta, worker);
 				for (const listener of this.toolActivityListeners) listener(meta.id);
 			}
@@ -16052,7 +15194,7 @@ ${run.excerpt}`,
 					.then(() => this.resumeRoleWork(meta.id))
 					.catch((error) => console.warn(`pilotd: role workspace transition failed: ${error}`));
 			if (!packet.working && meta.workspaceRefreshDue)
-				void this.refreshCoordinatorWorkspace(meta.id).catch((error: unknown) =>
+				void this.prepareCoordinatorRole(meta.id).catch((error: unknown) =>
 					console.warn(`pilotd: base refresh failed: ${error}`),
 				);
 			// A finished turn may have left changes without a PR, added work after a merge, or published it.
@@ -16267,6 +15409,27 @@ ${run.excerpt}`,
 				meta.missionUserStopGeneration !== undefined ||
 				(meta.outcome === "failed" && !!failedModelSource) ||
 				waitsForReply);
+		const canReply =
+			!retainedHistory &&
+			!coordinator &&
+			!meta.control &&
+			!meta.role &&
+			!meta.planning &&
+			membership.missionRole !== "explorer" &&
+			!awaitedQuestion &&
+			meta.outcome !== "question" &&
+			meta.outcome !== "failed" &&
+			kernelState !== "failed" &&
+			!heldAtQuota &&
+			!offlinePaused &&
+			!paused &&
+			!subscriptionPause &&
+			workHolds.every((hold) => hold === "User Stop hold") &&
+			!this.codingQueue.has(meta.id) &&
+			!meta.preparing &&
+			!meta.continuedTo &&
+			!meta.continuationPending &&
+			meta.archivedAt === undefined;
 		const longJob = meta.archivedAt === undefined ? longJobAttention(worker?.runningJobs ?? []) : undefined;
 		const mcpAttention =
 			meta.archivedAt === undefined && !longJob ? this.mcpAttention?.attention(meta.id) : undefined;
@@ -16418,6 +15581,7 @@ ${run.excerpt}`,
 			...(this.canRetryHandoff(meta) ? { canRetryHandoff: true } : {}),
 			...(canContinue ? { canContinue: true as const } : {}),
 			...(waitsForReply ? { waitsForReply: true as const } : {}),
+			...(canReply ? { canReply: true as const } : {}),
 			...(questionSettled ? { questionSettled: true as const } : {}),
 			...(explorer ? { mapExplorer: true as const } : {}),
 			...(meta.outcome === "failed" &&
@@ -16648,8 +15812,6 @@ ${run.excerpt}`,
 			);
 		else for (const pr of discovered) this.missions?.pullRequestCreated?.(meta.id, pr.url);
 		for (const pr of [next, ...(result.others ?? [])]) if (pr) this.missions?.pullRequestUpdated?.(pr);
-		if (!result.error && fresh) await this.observePullRequests(meta);
-		// Observers announce terminal PRs only after every discovered head is linked and reconciled.
 		if (fresh || changed) this.emit(meta);
 		// Health was looked up by the sync before this result was applied. Stale lookups are dropped here.
 		// A ready follow-up waits only across consecutive checks that all saw running CI.
@@ -17171,11 +16333,9 @@ ${run.excerpt}`,
 				: []),
 			"After pushing or rebasing, report and finish; Pilot waits for fresh CI and sends another follow-up after a push or new review feedback. Do not wait for CI with jobs, polling loops, gh pr checks --watch or gh run watch.",
 		].join("\n");
-		this.sending.set(meta.id, (this.sending.get(meta.id) ?? 0) + 1);
+		const releaseSending = this.acquireSending(meta.id);
 		const release = () => {
-			const count = (this.sending.get(meta.id) ?? 1) - 1;
-			if (count) this.sending.set(meta.id, count);
-			else this.sending.delete(meta.id);
+			releaseSending();
 			end();
 		};
 		try {
@@ -17511,7 +16671,8 @@ ${run.excerpt}`,
 		const bindingOperation = meta.prBindingOperation;
 		const write = async () => {
 			// Any queued lifecycle save may carry the tombstone, not only the revoker's save.
-			if (meta.insightsGrant?.enabled === false) await Promise.all(this.insightsAccounting.get(meta.id) ?? []);
+			if (meta.insightsGrant?.enabled === false)
+				await Promise.allSettled(this.hostCalls.running(meta.id, ["usage-history"]));
 			const file = join(this.dir(meta.id), "meta.json");
 			const temp = `${file}.${randomUUID()}.tmp`;
 			const persisted = operations.time("sessions.metadata.parse", () => JSON.parse(snapshot) as SessionMeta);

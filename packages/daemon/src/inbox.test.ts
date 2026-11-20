@@ -178,24 +178,21 @@ test("GET /api/inbox and the sidebar counts follow sources, scope and hidden lab
 	assert.deepEqual(shown.slack?.hidden, []);
 	assert.equal((await get<ProjectDashboardCounts>("/dashboard/counts")).projects[project.id]?.tracked, 2);
 
-	// A close label dismisses its messages: listed with closedByLabel=true and counted in the footer.
+	// Old close labels remain readable but cannot update a report's status.
 	await projects.update(project.id, {
 		tracking: { slackChannels: ["C1"], slackLabels: [{ ...labels[0]!, effect: "close" }] },
 	});
-	const closed = await get<Inbox>(`/inbox?projectId=${project.id}`);
-	assert.equal(closed.slack?.total, 1);
-	assert.deepEqual(closed.slack?.hidden, [{ label: "Product", count: 1, closed: true }]);
+	const withLegacyLabel = await get<Inbox>(`/inbox?projectId=${project.id}`);
+	assert.equal(withLegacyLabel.slack?.total, 2);
+	assert.deepEqual(withLegacyLabel.slack?.hidden, []);
 	const list = await get<{ items: Array<{ slack?: { closedByLabel?: string } }> }>(
 		`/tracked-items?projectId=${project.id}&kind=slack&closedByLabel=true`,
 	);
-	assert.deepEqual(
-		list.items.map((item) => item.slack?.closedByLabel),
-		["Product"],
-	);
+	assert.deepEqual(list.items, []);
 	assert.equal((await fetch(`${root}/tracked-items?projectId=${project.id}&closedByLabel=yes`)).status, 400);
 
 	// One item by ID, as a chat's source chip opens it in triage.
-	const one = list.items[0] as { id: string; title: string };
+	const one = withLegacyLabel.slack!.items[0]!;
 	assert.deepEqual(await get<{ id: string; title: string }>(`/tracked-items/${one.id}`), await items.require(one.id));
 	assert.equal((await fetch(`${root}/tracked-items/missing`)).status, 404);
 });

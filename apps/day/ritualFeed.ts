@@ -17,6 +17,9 @@ import type {
 	RitualWrite,
 	Today,
 } from "pilot-day/native";
+import { call } from "./bridge";
+import { refusalOutcome } from "./refusals";
+import { Feed } from "./source";
 
 /** How many results a ritual lists. Today lists the rest. */
 export const RECAP_LIMIT = 5;
@@ -185,4 +188,73 @@ export function rootRecap(_today: Today, progress: RitualSnapshot): Recap {
 		more: Math.max(0, progress.results.length - RECAP_LIMIT),
 		limited: progress.resultsLimited,
 	};
+}
+
+/**
+ * The start and end of day's saved progress over the root. Reads sample the
+ * root's clock and write nothing; a visit or save sends the exact context and
+ * revision once. After any refusal the root's last confirmed view is read
+ * again from its cache, which samples, writes and invalidates nothing.
+ */
+export class ConnectedRituals implements RitualSource {
+	#window: string;
+	#view: RitualSnapshot;
+	#feed = new Feed(() => this.#view);
+
+	constructor(window: string, first: RitualSnapshot | null) {
+		this.#window = window;
+		this.#view = first ?? NO_PROGRESS;
+	}
+
+	snapshot(): RitualSnapshot {
+		return this.#view;
+	}
+
+	onChange(listener: (view: RitualSnapshot) => void): () => void {
+		return this.#feed.onChange(listener);
+	}
+
+	#take(view: RitualSnapshot | null | undefined) {
+		if (view && typeof view === "object") this.#view = view;
+		this.#feed.publish();
+	}
+
+	/** The root's last confirmed view, from its cache. Run after an invalidation. */
+	async sync(): Promise<void> {
+		const r = await call<RitualSnapshot>(this.#window, "day.ritual.snapshot", {});
+		if (r.ok) this.#take(r.snapshot);
+	}
+
+	async #call(name: string, args: unknown, write: boolean): Promise<IntentOutcome> {
+		const r = await call<RitualSnapshot>(this.#window, name, args);
+		if (r.ok) {
+			this.#take(r.snapshot);
+			return r.outcome ?? { status: "accepted", revision: this.#view.revision, message: "" };
+		}
+		await this.sync();
+		// A read that got no answer changed nothing; only a write's lost answer is Unknown.
+		if (!write && r.refusal === "lost") return refusalOutcome("unavailable", this.#view.revision);
+		return refusalOutcome(r.refusal, this.#view.revision);
+	}
+
+	refresh(): Promise<IntentOutcome> {
+		return this.#call("day.ritual.read", {}, false);
+	}
+
+	refreshResults(): Promise<IntentOutcome> {
+		return this.#call("day.ritual.results", {}, false);
+	}
+
+	visit(intent: RitualVisit): Promise<IntentOutcome> {
+		return this.#call("day.ritual.visit", { context: intent.context, revision: intent.revision }, true);
+	}
+
+	save(intent: RitualWrite): Promise<IntentOutcome> {
+		const { context, revision, ritual, mark, step } = intent;
+		return this.#call("day.ritual.save", { context, revision, ritual, mark, step }, true);
+	}
+
+	dispose(): void {
+		this.#feed.close();
+	}
 }

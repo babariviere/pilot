@@ -21,6 +21,7 @@ import type {
 	UserFeedbackWorkView,
 } from "@pilot/protocol";
 import { Conflict, PublishedStartRefused } from "./errors.ts";
+import { explorerChatTitle } from "./explorer-questions.ts";
 import { interviewDigest, interviewExact, interviewId, interviewText } from "./mission-interview-contract.ts";
 import { MissionInterviews } from "./mission-interviews.ts";
 import { PLAN_STATE_LIMIT, publishedDefinition, sliceTaskBody } from "./mission-plan-store.ts";
@@ -32,7 +33,7 @@ import {
 	planQuestionDigest,
 	planResearchFrontier,
 } from "./mission-plans.ts";
-import { taskMessage } from "./mission-service.ts";
+import { taskMessage } from "./mission-task-message.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
 import { UnstickLog } from "./planning-unstick-log.ts";
@@ -125,7 +126,7 @@ function feedbackPlannable(steps: UserFeedbackWork[], projectId: string, from: P
  * in one turn and keeps the waiting list short enough to read. A person writes far fewer while one round waits.
  * Past it, Send is refused with the limit named, and the words stay in the reply box.
  */
-export const WAITING_MESSAGES = 20;
+const WAITING_MESSAGES = 20;
 /** Each part of a fingerprint, hashed on its own, so a changed fingerprint can say which part changed. */
 const digests = (parts: Record<string, unknown>): Record<string, string> =>
 	Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, hash(v)]));
@@ -151,8 +152,11 @@ const RECENT_MISSIONS = 50;
 /** Research chats a mission may run at once. The mission's worker cap also applies. */
 const RESEARCH_CHATS = 2;
 const RESEARCH_RETRY_MS = 60_000;
-/** A start Pilot could not make by rule (no worker slot, paused, held) waits this long before the next try. Same as research. */
-const EXECUTION_RETRY_MS = RESEARCH_RETRY_MS;
+/**
+ * A start Pilot could not make by rule (no worker slot, paused, held) waits this long before the next try. Coding
+ * capacity changes and power resume clear the wait, so it only limits how long a missed signal delays a start.
+ */
+const EXECUTION_RETRY_MS = 60_000;
 /**
  * What a planner may do with a thread request. A revision proposal is inert: only the user's confirmation applies it.
  */
@@ -300,6 +304,14 @@ function prototypeDue(plan: MissionPlan, q: PlanQuestion, prior: PlanningResearc
 	return prior.state === "failed" || (prior.state === "reported" && prior.questionDigest !== planQuestionDigest(q));
 }
 
+/** Instructions every prototype chat gets, for planning questions and for builders' tasks. */
+const UI_VARIANTS =
+	"Make several clearly different variants of the same screen, inside a realistic copy of the screen around it, switchable from a small bar. The user flips between them and picks one or combines parts. Start from the skill's nsh/examples/prototype.tsx and switch with its Choices helper.";
+const PUBLISH_ONE_ARTIFACT =
+	"Publish exactly one NSH artifact with the artifact tool, with every variant in it. Use mock data that looks real and keep state in memory. No live data, credentials, network or real actions. To fix it, update the same artifact; do not create others.";
+const REPORT_WITHOUT_DECIDING =
+	"End with a short report in Markdown: what each variant shows, what the user should compare, and what stays open. Do not decide for the user.";
+
 function prototypeMessage(
 	missionTitle: string,
 	q: PlanQuestion,
@@ -318,10 +330,10 @@ function prototypeMessage(
 			: "",
 		'Read the bundled pilot-artifacts skill and its NSH guide first. mission({action:"map"}) shows the planning map. Use source tools to match the real app: its layout, words and density.',
 		p.experimentType === "ui"
-			? "Make several clearly different variants of the same screen, inside a realistic copy of the screen around it, switchable from a small bar. The user flips between them and picks one or combines parts. Start from the skill's nsh/examples/prototype.tsx and switch with its Choices helper."
+			? UI_VARIANTS
 			: "Make the logic visible: the states, the events between them and a few scenarios the user can step through, with controls to drive them.",
-		"Publish exactly one NSH artifact with the artifact tool, with every variant in it. Use mock data that looks real and keep state in memory. No live data, credentials, network or real actions. To fix it, update the same artifact; do not create others.",
-		"End with a short report in Markdown: what each variant shows, what the user should compare, and what stays open. Do not decide for the user.",
+		PUBLISH_ONE_ARTIFACT,
+		REPORT_WITHOUT_DECIDING,
 	]
 		.filter(Boolean)
 		.join("\n\n");
@@ -336,16 +348,16 @@ function taskPrototypeMessage(missionTitle: string, task: MissionTask, p: TaskPr
 			? `An earlier prototype for this task exists: artifact ${p.earlier.artifactId}, revision ${p.earlier.revision}, of chat ${p.earlier.sessionId}. The request says what to change. Start from it.`
 			: "",
 		`mission({action:"get", id:"${task.id}"}) shows the full task. Read the bundled pilot-artifacts skill and its NSH guide first. Use source tools to match the real app: its layout, words and density.`,
-		"Make several clearly different variants of the same screen, inside a realistic copy of the screen around it, switchable from a small bar. The user flips between them and picks one or combines parts. Start from the skill's nsh/examples/prototype.tsx and switch with its Choices helper.",
-		"Publish exactly one NSH artifact with the artifact tool, with every variant in it. Use mock data that looks real and keep state in memory. No live data, credentials, network or real actions. To fix it, update the same artifact; do not create others.",
-		"End with a short report in Markdown: what each variant shows, what the user should compare, and what stays open. Do not decide for the user.",
+		UI_VARIANTS,
+		PUBLISH_ONE_ARTIFACT,
+		REPORT_WITHOUT_DECIDING,
 	]
 		.filter(Boolean)
 		.join("\n\n");
 }
 
 /** A short plain summary of a research report: the start of its findings, for the Knowledge synopsis. */
-export function researchSynopsis(report: string): string {
+function researchSynopsis(report: string): string {
 	const at = report.search(/^#{1,6}\s+.*(finding|conclusion)/im);
 	const text = (at >= 0 ? report.slice(at).replace(/^.*\n/, "") : report)
 		.replace(/^#{1,6}\s+/gm, "")
@@ -655,7 +667,7 @@ export class PlanningWorkers {
 			s.threadQueue = [...(s.threadQueue ?? []), { ...message, at: Date.now() }];
 		});
 		trace(`pilotd: planning ${missionId} thread message waits for the planning agent (${message.operationId})`);
-		this.scheduleResearch(missionId);
+		this.scheduleReconcile(missionId);
 	}
 	/** Whether this thread-send operation was saved to wait (it may have been delivered since). */
 	queuedMessage(missionId: string, operationId: string): boolean {
@@ -1127,7 +1139,6 @@ export class PlanningWorkers {
 				s.phase = "continuing";
 			});
 		}
-		// Waiting thread messages go with the user's Continue.
 		state = this.carryMessages(state, op.operationId);
 		let release!: () => void;
 		const turn = new Promise<void>((r) => {
@@ -1445,7 +1456,7 @@ export class PlanningWorkers {
 			while (Object.keys(s.asks).length > ASKS_KEPT && done.length) delete s.asks[done.shift()![0]];
 		});
 		await this.deps.store.durable();
-		this.scheduleResearch(op.targetId);
+		this.scheduleReconcile(op.targetId);
 		return { askId: op.operationId };
 	}
 	/** What Unstick's repair agent starts from: the planning state it looks at. */
@@ -1511,7 +1522,7 @@ export class PlanningWorkers {
 		trace(`pilotd: planning ${op.targetId} repair agent requested (${op.operationId})`);
 		this.recordUnstick(op.targetId, "repair-agent", { operationId: op.operationId });
 		await this.deps.store.durable();
-		this.scheduleResearch(op.targetId);
+		this.scheduleReconcile(op.targetId);
 		return { repairId: op.operationId };
 	}
 	/** Starts the repair chat, then collects its proposal once it finishes. */
@@ -1964,10 +1975,11 @@ export class PlanningWorkers {
 		};
 	}
 	/**
-	 * Starts read-only research chats for ready research questions (decision D28) and sends their
-	 * findings to the planner. Existing limits still apply: worker slots, Pause, Stop and dispatch holds.
+	 * Starts the per-mission reconcile loop: stalled starts, asks, repair, thread handoffs and messages, request
+	 * links, task prototypes, research chats (decision D28) and execution auto-start. None of them runs before this.
+	 * Existing limits still apply: worker slots, Pause, Stop and dispatch holds.
 	 */
-	startResearch(): void {
+	startReconciling(): void {
 		if (this.research || this.closing.signal.aborted) return;
 		const research = {
 			dirty: new Set<string>(),
@@ -1977,64 +1989,41 @@ export class PlanningWorkers {
 		this.research = research;
 		const wakeExecution = () => {
 			for (const id of this.deps.store.planningWorkers.missionIds())
-				if (this.deps.store.planningWorkers.get(id)?.start) this.scheduleResearch(id);
+				if (this.deps.store.planningWorkers.get(id)?.start) this.scheduleReconcile(id);
 		};
-		const offStore = this.deps.store.onChange((missionId, _passive, preferenceOnly, readModelOnly) => {
-			if (this.deps.store.planningWorkers.get(missionId)) this.scheduleResearch(missionId);
-			if (!this.deps.sessions.onCodingCapacityChange && !preferenceOnly && !readModelOnly) wakeExecution();
+		const offStore = this.deps.store.onChange((missionId) => {
+			if (this.deps.store.planningWorkers.get(missionId)) this.scheduleReconcile(missionId);
 		});
-		const occupancy = new Map<string, string>();
-		const offCapacity = this.deps.sessions.onCodingCapacityChange?.(() => {
+		const offCapacity = this.deps.sessions.onCodingCapacityChange(() => {
 			this.executionRetryAt.clear();
 			wakeExecution();
 		});
 		const offSessions = this.deps.sessions.onChange((session) => {
-			if (
-				!offCapacity &&
-				session.mode !== "ask" &&
-				!session.missionCoordinator &&
-				!session.role &&
-				!session.control
-			) {
-				const signature = canonicalJSON([
-					session.projectId,
-					session.working,
-					session.state,
-					session.archivedAt,
-					session.runningJobs?.length ?? 0,
-				]);
-				if (occupancy.get(session.id) !== signature) {
-					if (session.archivedAt !== undefined) occupancy.delete(session.id);
-					else occupancy.set(session.id, signature);
-					this.executionRetryAt.clear();
-					wakeExecution();
-				}
-			}
 			const missionId = this.deps.store.missionOf(session.id) ?? this.repairChats.get(session.id);
-			if (missionId && this.deps.store.planningWorkers.get(missionId)) this.scheduleResearch(missionId);
+			if (missionId && this.deps.store.planningWorkers.get(missionId)) this.scheduleReconcile(missionId);
 		});
-		// Tasks Pilot could not start while work was paused for sleep start once it ends. Test doubles may not have it.
-		const offResume = this.deps.sessions.onPowerResume?.(() => {
+		// Tasks Pilot could not start while work was paused for sleep start once it ends.
+		const offResume = this.deps.sessions.onPowerResume(() => {
 			this.executionRetryAt.clear();
-			for (const id of this.deps.store.planningWorkers.missionIds()) this.scheduleResearch(id);
+			for (const id of this.deps.store.planningWorkers.missionIds()) this.scheduleReconcile(id);
 		});
 		research.off = () => {
 			offStore();
 			offSessions();
-			offCapacity?.();
-			offResume?.();
+			offCapacity();
+			offResume();
 		};
 		for (const id of this.deps.store.planningWorkers.missionIds()) {
 			const repair = this.deps.store.planningWorkers.get(id)?.repair;
 			if (repair?.sessionId) this.repairChats.set(repair.sessionId, id);
-			this.scheduleResearch(id);
+			this.scheduleReconcile(id);
 		}
 	}
-	/** Waits for scheduled research reconciliation (tests and shutdown). */
-	async settleResearch(): Promise<void> {
+	/** Waits for scheduled reconciliation (tests and shutdown). */
+	async settleReconciling(): Promise<void> {
 		while (this.research?.running) await this.research.running;
 	}
-	scheduleResearch(missionId: string): void {
+	scheduleReconcile(missionId: string): void {
 		const research = this.research;
 		if (!research || this.closing.signal.aborted) return;
 		research.dirty.add(missionId);
@@ -2045,7 +2034,7 @@ export class PlanningWorkers {
 					const ids = [...research.dirty];
 					research.dirty.clear();
 					for (const id of ids) {
-						await this.reconcileResearch(id).catch((error: unknown) =>
+						await this.reconcileMission(id).catch((error: unknown) =>
 							console.warn(`pilotd: planning research for ${id} failed: ${error}`),
 						);
 						await this.reconcileExecution(id).catch((error: unknown) =>
@@ -2061,7 +2050,7 @@ export class PlanningWorkers {
 		research.running = running;
 		this.tasks.add(running);
 	}
-	private async reconcileResearch(missionId: string): Promise<void> {
+	private async reconcileMission(missionId: string): Promise<void> {
 		let state = this.deps.store.planningWorkers.get(missionId);
 		if (!state || state.phase === "setup") return;
 		try {
@@ -2258,7 +2247,7 @@ export class PlanningWorkers {
 					projectId: state.binding.projectId,
 					missionId,
 					mode: "ask",
-					title: (p ? `Prototype: ${q.title} (about $${p.maxCostUsd})` : `Research: ${q.title}`).slice(0, 200),
+					title: explorerChatTitle(q.title, p?.maxCostUsd),
 					message: p ? prototypeMessage(mission.title, q, earlier) : researchMessage(mission.title, q),
 					...selection,
 				},
@@ -3458,7 +3447,7 @@ export class PlanningWorkers {
 				this.tasks.delete(work);
 				if (firstEntry) {
 					this.enteringStarts.delete(op.targetId);
-					this.scheduleResearch(op.targetId);
+					this.scheduleReconcile(op.targetId);
 				}
 			})
 			.catch(() => {});

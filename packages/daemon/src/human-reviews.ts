@@ -14,6 +14,7 @@ import { identifier } from "./jj-ownership-contract.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
 import type { ReviewSourceRef } from "./review-snapshot-contract.ts";
 import { dispositionPayload, type QualifiedReviewDispositionSource } from "./workflow-confirmations.ts";
+import { OPAQUE_ID } from "./validate.ts";
 
 export interface QualifiedFeedbackComparison {
 	snapshot: NativeReviewSnapshot;
@@ -227,7 +228,7 @@ export class HumanReviews implements QualifiedReviewDispositionSource {
 		return record ? { recordId: record.id } : undefined;
 	}
 	async saveDraft(id: string, expectedRevision: number, input: HumanReviewContent): Promise<HumanReviewDraft> {
-		identifier(id, /^[A-Za-z0-9_-]{1,128}$/);
+		identifier(id, OPAQUE_ID);
 		if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Conflict("Invalid draft revision");
 		const value = dispositionPayload(
 			{ ...input, purpose: "review-disposition", expectedPriorRecordId: null, packageDigest: "0".repeat(64) },
@@ -247,7 +248,7 @@ export class HumanReviews implements QualifiedReviewDispositionSource {
 		return draft;
 	}
 	async draft(id: string) {
-		identifier(id, /^[A-Za-z0-9_-]{1,128}$/);
+		identifier(id, OPAQUE_ID);
 		const draft = this.deps.store.draft(id);
 		if (!draft) return undefined;
 		const access = await this.comparisons(draft.content.targets);
@@ -268,7 +269,7 @@ export class HumanReviews implements QualifiedReviewDispositionSource {
 	}
 	/** Read-time projection only. Never edits anchors, resolves a thread or carries approval forward. */
 	async projectAnnotation(id: string, target: ReviewDispositionTarget) {
-		identifier(id, /^[A-Za-z0-9_-]{1,128}$/);
+		identifier(id, OPAQUE_ID);
 		const record = this.deps.store.annotationRecord(id);
 		if (!record) throw new Conflict("Original annotation unavailable");
 		const access = await this.comparisons(record.confirmed.targets);

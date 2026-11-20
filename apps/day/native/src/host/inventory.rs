@@ -1,23 +1,12 @@
 //! Passive inventory on the existing serialized worker. No journal or continuation.
-use super::{Error, NativeHost, Shared, Transport, Work};
+use super::{Error, NativeHost, Shared, Transport};
 use crate::{
-    model::IntentOutcome,
     plan::{PlanAvailability, Planning},
     plan_host,
 };
-use async_channel::Receiver;
 use std::sync::atomic::Ordering;
 
 impl NativeHost {
-    /// Read every planning mission in the selected project, within the fixed limit.
-    pub fn read_planning_inventory(&self) -> Receiver<Result<IntentOutcome, Error>> {
-        self.0
-            .shared
-            .planning_inventory_wanted
-            .store(true, Ordering::SeqCst);
-        self.request(Work::PlanningInventory)
-    }
-
     /// Projection only. Missing, failed and invalidated reads never mean an empty inventory.
     pub fn planning_inventory_snapshot(&self) -> Planning {
         let read = self

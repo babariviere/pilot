@@ -20,7 +20,7 @@ const NODE_FILES = [
 	"bun.lock",
 ];
 
-export interface GoRequirement {
+interface GoRequirement {
 	path: string;
 	version: string;
 	indirect: boolean;
@@ -96,7 +96,7 @@ function replacement(words: string[]): { from: string; fromVersion?: string; to?
 	};
 }
 
-export interface CargoPackage {
+interface CargoPackage {
 	name: string;
 	version: string;
 }
@@ -185,7 +185,7 @@ async function signature(root: string, names: string[]): Promise<string> {
 	return parts.join("|");
 }
 
-export interface DependencyLocations {
+interface DependencyLocations {
 	/** $(go env GOMODCACHE). Found once per daemon when omitted. */
 	goModCache?: string;
 	/** CARGO_HOME, default ~/.cargo. */

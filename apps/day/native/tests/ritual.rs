@@ -50,12 +50,15 @@ impl Fixture {
     }
     fn open_user(&self, user_id: u32) -> NativeHost {
         let clock = self.clock.clone();
-        NativeHost::open_day(
+        NativeHost::open_with_options(
             self.source.clone(),
             self.root.join("native.ledger"),
-            DaySource {
-                user_id,
-                clock: Arc::new(move || clock.lock().unwrap().clone()),
+            pilot_day_native::host::Options {
+                day: Some(DaySource {
+                    user_id,
+                    clock: Arc::new(move || clock.lock().unwrap().clone()),
+                }),
+                ..Default::default()
             },
         )
         .unwrap()

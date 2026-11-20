@@ -2,7 +2,7 @@
 // the trouble world's first read. The test scripts every root reply.
 import { host, mount, View } from "nsh";
 import { TodayFeed } from "pilot-day/native";
-import { ConnectedToday } from "./bridge";
+import { ConnectedToday } from "./todayFeed";
 import { mirrorDay } from "./day";
 import { MockDayScreen } from "./mockFeeds";
 import { Block, Button, WindowCanvas } from "./ui";

@@ -8,7 +8,8 @@ import { type TestContext, test } from "node:test";
 import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import type { SessionState } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
-import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
+import { type SessionWorker } from "./kernel-worker.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 type Command = Extract<KernelCommand, { requestId: string }>;

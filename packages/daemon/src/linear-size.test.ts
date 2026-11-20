@@ -6,7 +6,7 @@ import { test } from "node:test";
 import type { Project, TrackingJson } from "@pilot/protocol";
 import { createLinearSizePoller, parseSize } from "./linear-size.ts";
 import { linearPrefill } from "./linear-source.ts";
-import type { SourcePollContext } from "./sources.ts";
+import type { SourcePollContext } from "./source-poll.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 import { TrackedItemDisk } from "./tracked-items-disk.ts";
 

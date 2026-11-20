@@ -1,25 +1,33 @@
 /** Small native edits of Pi's model defaults. Unrelated advanced configuration stays byte-for-byte. */
-import { createHash, randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, open, readFile, realpath, rename, rm, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { stat } from "node:fs/promises";
+import { dirname } from "node:path";
+import { MODEL_THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-schema";
 import type { ProfileModel, WorkProfile } from "@pilot/protocol";
-import { editModelSetting } from "./model-scope.ts";
-import { settingsPath, withModelSettingsLock } from "./model-settings.ts";
+import {
+	agentSettingsFile,
+	editAgentSettings,
+	editModelSetting,
+	readSettingsFile,
+	SettingsMayHaveChanged,
+	withModelSettingsLock,
+} from "./model-settings.ts";
 
-const KEYS = ["defaultProvider", "defaultModel", "defaultThinkingLevel", "pilotTaskPriceLimit"] as const;
+const isThinkingLevel = (level: string) => (MODEL_THINKING_LEVELS as readonly string[]).includes(level);
+const PRICE_LIMIT_KEY = "pilotTaskPriceLimit";
+const KEYS = ["defaultProvider", "defaultModel", "defaultThinkingLevel", PRICE_LIMIT_KEY] as const;
 /** Pilot-owned key for work profiles, beside Pi's own model defaults. */
-export const PROFILES_KEY = "pilotWorkProfiles";
-const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const PROFILES_KEY = "pilotWorkProfiles";
 /**
  * Most work profiles a list holds. It protects model tokens: the planner reads every profile's ID, name and
  * covers line (at most about 250 bytes) on each plan read. Chosen as four times the starting set of three.
  */
-export const MAX_PROFILES = 12;
+const MAX_PROFILES = 12;
 /**
  * Most models in one size list. Settings shows every entry of an opened profile and each start counts the working
  * chats of each entry. Chosen as four times the two entries of the starting lists.
  */
-export const MAX_PROFILE_MODELS = 8;
+const MAX_PROFILE_MODELS = 8;
 const sol = (thinking = "medium"): ProfileModel => ({ model: "openai-codex/gpt-6.2-sol", thinking });
 const terra = (thinking = "medium"): ProfileModel => ({ model: "openai-codex/gpt-6.1-terra", thinking });
 const opus = (thinking = "high"): ProfileModel => ({ model: "anthropic/claude-opus-5-5", thinking });
@@ -89,8 +97,8 @@ export function workProfilesProblem(value: unknown): string | undefined {
 					return `Each ${size} entry of ${p.id} has exactly model and thinking`;
 				if (typeof e.model !== "string" || e.model.length > 256 || !/^[^\s/]+\/\S+$/.test(e.model))
 					return `Each ${size} entry of ${p.id} needs a model as provider/modelId`;
-				if (typeof e.thinking !== "string" || !THINKING.includes(e.thinking))
-					return `Each ${size} entry of ${p.id} needs a thinking level: ${THINKING.join(", ")}`;
+				if (typeof e.thinking !== "string" || !isThinkingLevel(e.thinking))
+					return `Each ${size} entry of ${p.id} needs a thinking level: ${MODEL_THINKING_LEVELS.join(", ")}`;
 			}
 			if (new Set(list.map((e) => (e as { model: string }).model)).size !== list.length)
 				return `A model appears twice in the ${size} list of ${p.id}`;
@@ -119,24 +127,9 @@ function values(text: string): { defaults: ModelDefaults; profiles: WorkProfile[
 	if (profiles !== null && workProfilesProblem(profiles)) throw new ModelDefaultsRefused("Invalid work profiles");
 	return { defaults: selected as ModelDefaults, profiles: profiles as WorkProfile[] | null };
 }
-async function contents(path: string): Promise<string> {
-	try {
-		return await readFile(path, "utf8");
-	} catch (e) {
-		if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-		// A dangling link is unreadable, not an absent configuration.
-		if (
-			await lstat(path).catch((e: NodeJS.ErrnoException) => {
-				if (e.code !== "ENOENT") throw e;
-			})
-		)
-			throw new Error("Unreadable settings");
-		return "{}\n";
-	}
-}
 /** `profiles` is the starting set until the user saves a list. */
 export async function readModelDefaults(agentDir: string) {
-	const path = join(settingsPath(agentDir), "settings.json");
+	const path = agentSettingsFile(agentDir);
 	let read: ReturnType<typeof values>;
 	if (
 		!(await stat(dirname(path)).catch((e: NodeJS.ErrnoException) => {
@@ -144,7 +137,7 @@ export async function readModelDefaults(agentDir: string) {
 		}))
 	)
 		read = values("{}");
-	else read = await withModelSettingsLock(path, async () => values(await contents(path)));
+	else read = await withModelSettingsLock(path, async () => values((await readSettingsFile(path)) ?? "{}\n"));
 	return {
 		defaults: read.defaults,
 		profiles: read.profiles ?? structuredClone([...STARTER_PROFILES]),
@@ -165,8 +158,7 @@ export async function writeModelDefaults(agentDir: string, expectedHash: string,
 		[next.defaultProvider, next.defaultModel].some(
 			(v) => v !== null && (typeof v !== "string" || !v.trim() || v.length > 256 || /[\x00-\x1f]/.test(v)),
 		) ||
-		(next.defaultThinkingLevel !== null &&
-			!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(next.defaultThinkingLevel))) ||
+		(next.defaultThinkingLevel !== null && !isThinkingLevel(String(next.defaultThinkingLevel))) ||
 		(next.pilotTaskPriceLimit !== null &&
 			(typeof next.pilotTaskPriceLimit !== "number" ||
 				!Number.isFinite(next.pilotTaskPriceLimit) ||
@@ -179,55 +171,22 @@ export async function writeModelDefaults(agentDir: string, expectedHash: string,
 	});
 }
 async function edit(agentDir: string, expectedHash: string, change: (text: string) => string) {
-	const path = join(settingsPath(agentDir), "settings.json");
-	let mayHaveWritten = false;
 	try {
-		await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-		await withModelSettingsLock(
-			path,
-			async (assertOwned) => {
-				const before = await contents(path);
-				const current = values(before);
-				if (defaultsHash(current.defaults, current.profiles) !== expectedHash)
-					throw new ModelDefaultsRefused("Model defaults changed. Read again before saving.");
-				const text = change(before);
-				const destination = await realpath(path).catch((e: NodeJS.ErrnoException) => {
-					if (e.code !== "ENOENT") throw e;
-					return path;
-				});
-				const temporary = `${destination}.${randomUUID()}.tmp`;
-				const mode = await stat(destination).then(
-					(s) => s.mode & 0o777,
-					() => 0o600,
-				);
-				try {
-					const file = await open(temporary, "wx", mode);
-					try {
-						await file.writeFile(text);
-						await file.sync();
-					} finally {
-						await file.close();
-					}
-					await chmod(temporary, mode);
-					assertOwned();
-					mayHaveWritten = true;
-					await rename(temporary, destination);
-					const dir = await open(dirname(destination), "r");
-					try {
-						await dir.sync();
-					} finally {
-						await dir.close();
-					}
-				} finally {
-					await rm(temporary, { force: true });
-				}
-			},
-			undefined,
-			true,
-		);
+		await editAgentSettings(agentDir, (before) => {
+			const current = values(before);
+			if (defaultsHash(current.defaults, current.profiles) !== expectedHash)
+				throw new ModelDefaultsRefused("Model defaults changed. Read again before saving.");
+			return change(before);
+		});
 	} catch (error) {
-		if (mayHaveWritten) throw error;
+		if (error instanceof SettingsMayHaveChanged) throw error.cause;
 		if (error instanceof ModelDefaultsRefused) throw error;
 		throw new ModelDefaultsRefused("Model defaults were not saved. Read again before a new edit.");
 	}
+}
+
+/** The replacement task price limit, when the user saved a usable one. */
+export function taskPriceLimit(settings: Record<string, unknown>): number | undefined {
+	const limit = settings[PRICE_LIMIT_KEY];
+	return typeof limit === "number" && Number.isFinite(limit) && limit > 0 ? limit : undefined;
 }

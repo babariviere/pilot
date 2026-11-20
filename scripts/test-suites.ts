@@ -1,34 +1,35 @@
-/** Unknown tests stay in the integration gate; fast feedback is an explicit opt-in. */
+/** A test's suite comes from its file name: `*.fast.test.ts` is fast, `*.stress.test.ts` is stress, and every
+ * other test is integration. */
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+
+export const SUITES = ["fast", "integration", "stress"] as const;
+export type Suite = (typeof SUITES)[number];
+export const TEST_LANES = ["all", "macos"] as const;
+export type TestLane = (typeof TEST_LANES)[number];
+
+async function testFiles(root: string, folder: string, recursive: boolean): Promise<string[]> {
+	try {
+		return (await readdir(join(root, folder), { recursive }))
+			.filter((path) => path.endsWith(".test.ts"))
+			.map((path) => `${folder}/${path}`);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw error;
+	}
+}
 
 export async function discoverTests(root: string): Promise<string[]> {
 	const packages = (await readdir(join(root, "packages"), { withFileTypes: true })).filter((entry) =>
 		entry.isDirectory(),
 	);
-	const groups = await Promise.all(
-		packages.map(async ({ name }) => {
-			try {
-				return (await readdir(join(root, "packages", name, "src"), { recursive: true }))
-					.filter((path) => path.endsWith(".test.ts"))
-					.map((path) => `packages/${name}/src/${path}`);
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-				throw error;
-			}
-		}),
-	);
-	return groups
-		.flat()
-		.concat(
-			(await readdir(join(root, "scripts")))
-				.filter((path) => path.endsWith(".test.ts"))
-				.map((path) => `scripts/${path}`),
-		);
+	const groups = await Promise.all([
+		...packages.map(({ name }) => testFiles(root, `packages/${name}/src`, true)),
+		testFiles(root, "apps/day/node-tests", false),
+		testFiles(root, "scripts", false),
+	]);
+	return groups.flat();
 }
-
-export type Suite = "fast" | "integration" | "stress";
-export type TestLane = "all" | "portable" | "macos";
 
 // Repeat OS-sensitive paths on Darwin while the broad suite runs on Linux.
 const macosCoverage = new Set([
@@ -36,7 +37,7 @@ const macosCoverage = new Set([
 	"packages/daemon/src/coordinator-role.test.ts",
 	"packages/daemon/src/main-view.test.ts",
 	"packages/daemon/src/platform.test.ts",
-	"packages/daemon/src/schedule-detection.test.ts",
+	"packages/daemon/src/schedule-detection.fast.test.ts",
 	"packages/daemon/src/terminals.test.ts",
 	"packages/daemon/src/pty-input.test.ts",
 	"packages/daemon/src/terminal-output.test.ts",
@@ -45,19 +46,21 @@ const macosCoverage = new Set([
 	"packages/kernel/src/runtime-environment.test.ts",
 ]);
 
-export function testInLane(path: string, lane: TestLane): boolean {
-	if (lane === "all") return true;
-	if (lane === "portable") return true;
-	return macosCoverage.has(path);
-}
+/** Known subprocess-heavy files start first to avoid a long serial tail. Concurrency stays limited. */
+const weights: [RegExp, number][] = [
+	[/shared-workspaces-/, 4],
+	[/session-workspaces-/, 3],
+	[/\/(ask-sessions|changes|workspaces)[.]/, 2],
+];
 
+/** Fails when a configured path or weight pattern no longer names a discovered file. */
 export function testLaneFiles(files: string[], lane: TestLane): string[] {
-	if (lane === "macos") {
-		const discovered = new Set(files);
-		const missing = [...macosCoverage].filter((path) => !discovered.has(path));
-		if (missing.length) throw new Error(`Configured macos tests were not discovered: ${missing.join(", ")}`);
-	}
-	return files.filter((path) => testInLane(path, lane));
+	const stale = weights
+		.filter(([pattern]) => !files.some((path) => pattern.test(path)))
+		.map(([pattern]) => String(pattern));
+	if (lane === "macos") stale.push(...[...macosCoverage].filter((path) => !files.includes(path)));
+	if (stale.length) throw new Error(`Configured tests were not discovered: ${stale.join(", ")}`);
+	return lane === "all" ? files : files.filter((path) => macosCoverage.has(path));
 }
 
 export function testLimits(env: Record<string, string | undefined>) {
@@ -71,67 +74,12 @@ export function testLimits(env: Record<string, string | undefined>) {
 	return { concurrency: positive("PILOT_TEST_CONCURRENCY", 2), timeoutMs: positive("PILOT_TEST_TIMEOUT_MS", 120_000) };
 }
 
-const fast = new Set([
-	"artifacts/image",
-	"daemon/backpressure",
-	"daemon/config",
-	"daemon/event-loop-watchdog",
-	"daemon/github",
-	"daemon/linear-source",
-	"daemon/mission-notices",
-	"daemon/mission-task-refs",
-	"daemon/origin",
-	"daemon/power",
-	"daemon/project-dashboard",
-	"daemon/pull-request-health",
-	"daemon/pull-request-readiness",
-	"daemon/pull-requests",
-	"daemon/reviews",
-	"daemon/schedule-detection",
-	"daemon/session-activity",
-	"daemon/session-outcomes",
-	"daemon/session-pr-follow-ups",
-	"daemon/session-pull-requests",
-	"daemon/slack-cache",
-	"daemon/slack-classifier",
-	"daemon/slack-format",
-	"daemon/slack-source",
-	"daemon/sources",
-	"daemon/service-cassettes",
-	"daemon/testing/cassette",
-	"daemon/subscription-usage",
-	"daemon/ttl-cache",
-	"daemon/update-gate",
-	"daemon/worker-activity",
-	"daemon/worker-starts",
-	"kernel/artifact-skill",
-	"kernel/artifact-tools",
-	"kernel/attention",
-	"kernel/context-digest",
-	"kernel/gh-stack",
-	"kernel/history-privacy",
-	"kernel/history-recall",
-	"kernel/idle-input",
-	"kernel/input-origin",
-	"kernel/policy",
-	"kernel/pull-request-provenance",
-	"kernel/queue",
-	"kernel/ref-activity",
-	"kernel/usage",
-	"kernel/worker",
-]);
-
 export function testSuite(path: string): Suite {
-	if (path === "scripts/test-suites.test.ts") return "fast";
+	if (path.endsWith(".fast.test.ts")) return "fast";
 	if (path.endsWith(".stress.test.ts")) return "stress";
-	const match = /^packages\/([^/]+)\/src\/(.+)\.test\.ts$/.exec(path);
-	return match && fast.has(`${match[1]}/${match[2]}`) ? "fast" : "integration";
+	return "integration";
 }
 
-/** Start known subprocess-heavy files first to avoid a long serial tail. Concurrency stays bounded. */
 export function testWeight(path: string): number {
-	if (/shared-workspaces-/.test(path)) return 4;
-	if (/session-workspaces-/.test(path)) return 3;
-	if (/\/(ask-sessions|changes|workspaces)[.]/.test(path)) return 2;
-	return 1;
+	return weights.find(([pattern]) => pattern.test(path))?.[1] ?? 1;
 }

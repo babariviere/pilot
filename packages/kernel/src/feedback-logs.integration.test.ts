@@ -7,6 +7,7 @@ import { fauxProvider, InMemoryCredentialStore, InMemoryModelsStore } from "@ear
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
+import { fakeHostCall } from "./testing/host-calls.ts";
 
 test("feedback Ask registers only restricted protected logs across native reloads", { timeout: 30_000 }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-feedback-logs-"));
@@ -60,12 +61,14 @@ test("feedback Ask registers only restricted protected logs across native reload
 			},
 			{
 				onWorking: () => {},
-				callDiagnosticLogs: async (request) => {
-					calls.push(request);
-					return {} as never;
-				},
-				callDiagnosticHistory: async () => assert.fail("feedback has no transcript grant"),
-				callDiagnosticContext: async () => assert.fail("feedback has no app-wide discovery"),
+				call: fakeHostCall({
+					"diagnostics.logs": async ({ request }) => {
+						calls.push(request);
+						return {} as never;
+					},
+					"diagnostics.history": async () => assert.fail("feedback has no transcript grant"),
+					"diagnostics.context": async () => assert.fail("feedback has no app-wide discovery"),
+				}),
 			},
 		);
 		for (const reload of [false, true]) {

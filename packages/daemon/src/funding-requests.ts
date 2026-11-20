@@ -1,7 +1,7 @@
 /** Canonical pricing and caller attribution for inherited worker capabilities. */
 import type { CredentialRequest } from "@pilot/kernel/credential-rpc";
-import { modelLimitedOutputApis } from "../../kernel/src/funding-runtime.ts";
-import type { FundingOwner, FundingQuote, FundingRate } from "../../protocol/src/funding.ts";
+import { modelLimitedOutputApis } from "@pilot/kernel/funding";
+import type { FundingOwner, FundingQuote, FundingRate } from "@pilot/protocol";
 import type { Funding } from "./funding.ts";
 import type { SharedCatalogService } from "./shared-model-catalog.ts";
 

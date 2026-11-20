@@ -15,6 +15,7 @@ import { identifier } from "./jj-ownership-contract.ts";
 import type { NativeReviewReader } from "./native-review.ts";
 import { canonicalJSON } from "./operation-journal.ts";
 import type { ReviewRequestStore } from "./review-request-store.ts";
+import { OPAQUE_ID } from "./validate.ts";
 
 interface Dependencies {
 	projectId: string;
@@ -151,7 +152,7 @@ export class LandedChanges {
 	}
 	/** Explicit observation only. Reusing an ID reads its original result, never refreshes or replays effects. */
 	async observe(observationId: string, snapshotId: string) {
-		identifier(observationId, /^[A-Za-z0-9_-]{1,128}$/);
+		identifier(observationId, OPAQUE_ID);
 		const access = await this.access(snapshotId);
 		const prior = this.deps.store.lookup(observationId, access.target);
 		if (prior) {

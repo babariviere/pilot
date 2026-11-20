@@ -2,6 +2,7 @@
 import type { Context } from "@earendil-works/chord/context";
 import type { ConversationId, EntryRecord, Storage } from "@earendil-works/pi-durable";
 import type { SessionHistoryPage, TranscriptContext, TranscriptHistory } from "@pilot/protocol";
+import { QUESTION_ENTRY } from "./entry-kinds.ts";
 
 export const RECENT_ENTRIES = 60;
 const PAGE_BYTES = 256 * 1024;
@@ -12,7 +13,7 @@ export function questionBoundary(entries: readonly EntryRecord[]): EntryRecord |
 	let boundary: EntryRecord | null | undefined;
 	for (const entry of entries) {
 		if (Number(entry.id) <= latest) continue;
-		if (entry.kind === "pilot.question") {
+		if (entry.kind === QUESTION_ENTRY) {
 			latest = Number(entry.id);
 			boundary = entry;
 		} else if (entry.kind !== "pi.compaction" && entry.model?.some((m) => m.role === "user")) {

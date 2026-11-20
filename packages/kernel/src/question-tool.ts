@@ -5,8 +5,6 @@ import type { AgentQuestion } from "@pilot/protocol";
 import { Type } from "typebox";
 
 export const QUESTION_TOOL = "ask_user";
-/** Transcript entry kind holding an `AgentQuestion`. Written outside model context, so codemode calls show it too. */
-export { QUESTION_ENTRY } from "./question-entry.ts";
 export const MAX_QUESTION_OPTIONS = 9;
 /** At most this many artifacts per question: a question shows them all at once, so a few keep it readable. */
 export const MAX_QUESTION_ARTIFACTS = 3;

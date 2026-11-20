@@ -60,6 +60,32 @@ mount(() => (
 					<Button small label="Billing readable" onPress={() => (scope.script.billingReadable = true)} />
 					<Button
 						small
+						label="Empty billing"
+						onPress={() => {
+							scope.script.billingReadable = true;
+							scope.script.emptyBilling = true;
+							readAgain();
+						}}
+					/>
+					<Button
+						small
+						label="Website requests only"
+						onPress={() => {
+							scope.script.requestsOnly = true;
+							readAgain();
+						}}
+					/>
+					<Button
+						small
+						label="Two stopped website chats"
+						onPress={() => {
+							scope.script.requestsOnly = true;
+							scope.script.stoppedWebsite = true;
+							readAgain();
+						}}
+					/>
+					<Button
+						small
 						label="Focus website"
 						onPress={() => {
 							scope.script.own = "demo-website";

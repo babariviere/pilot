@@ -1,7 +1,7 @@
 //! Pilot Day for the Native Shell TSX app. Rust owns the Today read
 //! model and the rules for changing it ([`desk::Desk`]). Missions are
-//! projected ([`project`]) from the daemon's v1 contracts ([`contract`]). TSX receives typed
-//! read models and sends typed intents through [`TodayFeed`]; it has no
+//! projected ([`project`]) from the daemon's v1 contracts ([`contract`]). The connected
+//! app reaches the native host only through the JSON bridge ([`bridge`]); TSX has no
 //! transport of its own, and the app's capabilities deny network, sockets,
 //! files and processes. The isolated connected runner grants only the exact
 //! native methods in [`bridge::METHODS`]; the development config grants none.
@@ -20,7 +20,6 @@ pub mod artifact_library;
 pub mod artifact_runtime;
 #[cfg(unix)]
 pub mod artifact_source;
-mod attention_feed;
 pub mod attention_host;
 mod attention_interview;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]

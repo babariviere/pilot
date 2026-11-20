@@ -7,7 +7,7 @@ import { test } from "node:test";
 import type { Automation, AutomationRunRecord, SessionOutcome } from "@pilot/protocol";
 import { automationMatches, checkFollowUp, continueFollowUp, filesMatch } from "./post-run.ts";
 import type { RunFinished } from "./run-finished.ts";
-import { CommandRejected, type SessionWorker } from "./sessions.ts";
+import { CommandRejected, type SessionWorker } from "./kernel-worker.ts";
 import { fixture, until } from "./testing/session-workspace.ts";
 
 const check = (id: string, shell = "printf 'API_KEY=secret'; exit 7"): Automation => ({

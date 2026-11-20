@@ -1,4 +1,4 @@
-import type { SQLInputValue } from "node:sqlite";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export interface IssueText {
 	title: string;
@@ -41,17 +41,10 @@ CREATE TABLE IF NOT EXISTS linear_publisher_missions (
 );
 `;
 
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(work: () => T): T;
-	durable(): Promise<void>;
-}
-
 /** Keep issue identities even if a task is dropped. Do not touch mission links or status management. */
 export class LinearPublisherStore {
-	private readonly port: Port;
-	constructor(port: Port) {
+	private readonly port: MissionDbPort;
+	constructor(port: MissionDbPort) {
 		this.port = port;
 	}
 	durable() {

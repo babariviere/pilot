@@ -19,11 +19,27 @@ export interface ConnectivityState {
 }
 
 const REACHABILITY_URLS = ["https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204"] as const;
+const TEMPORARY_SUFFIX = ".tmp";
 
-/** Atomic, so the daemon never reads a half-written origin. Temporary `.tmp` names are ignored by it. */
+/**
+ * Hint files that kernels write beside the connectivity policy file and pilotd watches for. Pass a full path to
+ * write, or the policy file's base name to match watched names. One origin file per provider origin, so concurrent
+ * kernels never overwrite each other's target.
+ */
+export function connectivityHints(policyFile: string) {
+	const check = `${policyFile}.check`;
+	return {
+		check,
+		reachable: `${policyFile}.reachable`,
+		origin: (origin: string) => `${check}.${createHash("sha256").update(origin).digest("hex").slice(0, 16)}`,
+		isOrigin: (name: string) => name.startsWith(`${check}.`) && !name.endsWith(TEMPORARY_SUFFIX),
+	};
+}
+
+/** Atomic, so the daemon never reads a half-written origin. */
 async function writeOriginHint(path: string, origin: string): Promise<void> {
-	const file = `${path}.check.${createHash("sha256").update(origin).digest("hex").slice(0, 16)}`;
-	const temp = `${file}.${randomUUID()}.tmp`;
+	const file = connectivityHints(path).origin(origin);
+	const temp = `${file}.${randomUUID()}${TEMPORARY_SUFFIX}`;
 	try {
 		await writeFile(temp, origin, { mode: 0o600 });
 		await rename(temp, file);
@@ -137,11 +153,10 @@ export class OfflineGate {
 	private readonly reportReachable: () => Promise<void>;
 	constructor(
 		path = process.env.PILOT_CONNECTIVITY_POLICY,
-		// One file per provider origin, so concurrent kernels never overwrite each other's target.
 		requestCheck = (origin?: string) =>
-			origin ? writeOriginHint(path!, origin) : writeFile(`${path}.check`, "", { mode: 0o600 }),
+			origin ? writeOriginHint(path!, origin) : writeFile(connectivityHints(path!).check, "", { mode: 0o600 }),
 		timing: OfflineTiming = {},
-		reportReachable = () => writeFile(`${path}.reachable`, "", { mode: 0o600 }),
+		reportReachable = () => writeFile(connectivityHints(path!).reachable, "", { mode: 0o600 }),
 	) {
 		this.path = path;
 		this.requestCheck = requestCheck;

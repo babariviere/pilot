@@ -3,6 +3,7 @@ import type { SQLInputValue } from "node:sqlite";
 import type { ChangeLandingRecord, ChangeLandingResult, ReviewDispositionTarget } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { targetKey } from "./human-review-store.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export const CHANGE_LANDING_SCHEMA = `
 CREATE TABLE IF NOT EXISTS change_landing_observations (
@@ -12,18 +13,11 @@ CREATE TABLE IF NOT EXISTS change_landing_observations (
 CREATE INDEX IF NOT EXISTS change_landing_target ON change_landing_observations(target_digest,sequence);
 CREATE INDEX IF NOT EXISTS change_landing_status ON change_landing_observations(target_digest,json_extract(record,'$.result.status'),sequence);
 `;
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(work: () => T): T;
-	durable(): Promise<void>;
-}
 const parse = (row: Record<string, SQLInputValue> | undefined): ChangeLandingRecord | undefined =>
 	row ? { ...JSON.parse(String(row.record)), sequence: Number(row.sequence) } : undefined;
 export class ChangeLandingStore {
-	private readonly port: Port;
-	constructor(port: Port) {
+	private readonly port: MissionDbPort;
+	constructor(port: MissionDbPort) {
 		this.port = port;
 	}
 	lookup(id: string, target: ReviewDispositionTarget) {

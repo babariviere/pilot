@@ -1,24 +1,17 @@
 /** Fixed-host Pilot log reader. pilotd owns source catalogues, path safety, authorization and redaction. */
 
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { DiagnosticTargetReference, OperationHost } from "@pilot/protocol";
+import {
+	type DiagnosticLogRequest,
+	type DiagnosticLogResult,
+	type DiagnosticTargetReference,
+	type OperationHost,
+} from "@pilot/protocol";
+import { DIAGNOSTIC_LOG_SOURCES, TARGET_LOG_SOURCES } from "./diagnostic-log-sources.ts";
 import { type TProperties, Type } from "typebox";
-import type { DiagnosticLogRequest, DiagnosticLogResult, DiagnosticLogSourceId } from "./protocol.ts";
 
 export const DIAGNOSTIC_LOG_TOOL = "diagnostic_logs";
 export type DiagnosticLogCall = (request: DiagnosticLogRequest, signal?: AbortSignal) => Promise<DiagnosticLogResult>;
-
-const sources = [
-	"app",
-	"next_app",
-	"day_app",
-	"daemon",
-	"kernel_worker",
-	"native_report",
-	"lifecycle",
-	"request_timing",
-	"tool_activity",
-] as const satisfies readonly DiagnosticLogSourceId[];
 
 export function createDiagnosticLogTool(
 	call: DiagnosticLogCall,
@@ -30,9 +23,7 @@ export function createDiagnosticLogTool(
 	const target = scope.kind === "chat" ? scope.target : undefined;
 	const host = scope.kind === "chat" ? scope.target.host : scope.kind === "app" ? scope.host : undefined;
 	const feedback = scope.kind === "feedback";
-	const selected = feedback
-		? sources.filter((source) => ["lifecycle", "request_timing", "tool_activity"].includes(source))
-		: sources;
+	const selected = feedback ? TARGET_LOG_SOURCES : DIAGNOSTIC_LOG_SOURCES;
 	const selector: TProperties = feedback
 		? {
 				sessionId: Type.Optional(

@@ -1,5 +1,5 @@
-import type { MissionSuccessorLink } from "./index.ts";
 import type { InterviewFence } from "./mission-interview.ts";
+import type { MissionSuccessorLink } from "./missions.ts";
 
 /** Passive native planning list. No answer, receipt or execution capability. */
 export interface PlanningInventoryItem {

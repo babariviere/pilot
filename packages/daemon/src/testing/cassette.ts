@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import type { TrackingJson } from "@pilot/protocol";
 import type { Runner } from "../workspaces.ts";
 
-export interface CassetteEntry {
+interface CassetteEntry {
 	request: unknown;
 	response: TrackingJson;
 }

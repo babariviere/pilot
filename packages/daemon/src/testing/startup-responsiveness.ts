@@ -14,7 +14,8 @@ import { EventLoopWatchdog, threadCpuMs } from "../event-loop-watchdog.ts";
 import { LIFECYCLE_FILE } from "../lifecycle-diagnostics.ts";
 import type { ModelCatalog } from "../models.ts";
 import { ProjectStore } from "../projects.ts";
-import { SessionManager, type SessionWorker } from "../sessions.ts";
+import { SessionManager } from "../sessions.ts";
+import { type SessionWorker } from "../kernel-worker.ts";
 import type { TerminalManager } from "../terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./daemon-server.ts";
 

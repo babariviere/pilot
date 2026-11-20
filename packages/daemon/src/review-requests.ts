@@ -12,6 +12,7 @@ import { exact, identifier } from "./jj-ownership-contract.ts";
 import { canonicalJSON } from "./operation-journal.ts";
 import type { ReviewRequestActor, ReviewRequestRecord, ReviewRequestStore } from "./review-request-store.ts";
 import { dispositionPayload } from "./workflow-confirmations.ts";
+import { OPAQUE_ID } from "./validate.ts";
 
 interface Dependencies {
 	store: ReviewRequestStore;
@@ -20,7 +21,7 @@ interface Dependencies {
 		target: ReviewDispositionTarget,
 	): Promise<QualifiedFeedbackComparison & { comparison: NativeReviewComparison }>;
 }
-const id = (v: unknown) => identifier(v, /^[A-Za-z0-9_-]{1,128}$/);
+const id = (v: unknown) => identifier(v, OPAQUE_ID);
 function text(v: unknown, max: number) {
 	if (typeof v !== "string" || !v.trim() || v.length > max) throw new Conflict("Invalid review suggestion text");
 }

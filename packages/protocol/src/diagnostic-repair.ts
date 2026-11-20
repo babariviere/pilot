@@ -1,4 +1,4 @@
-import type { DiagnosticTargetReference } from "./index.ts";
+import type { DiagnosticTargetReference } from "./diagnostic-context.ts";
 import type { OperationHost } from "./operations.ts";
 
 /** Evidence provenance is independent of the registered source project used to repair the application. */
@@ -32,4 +32,19 @@ export interface DiagnosticRepairProjectSetup {
 	projectId: string;
 	path: string;
 	origin: string;
+}
+
+/** Native-confirmed source authority for a separate Build spawned from a diagnostics proposal. */
+export interface DiagnosticRepairAdmission {
+	specialistSessionId: string;
+	proposalId: string;
+	/** Legacy chat-only receipt. Never fabricates a chat for app-wide diagnoses. */
+	target?: DiagnosticTargetReference;
+	subject?: import("./diagnostic-repair.ts").DiagnosticEvidenceSubject;
+	binding?: import("./diagnostic-repair.ts").DiagnosticRepairProjectBinding;
+	repairTitle?: string;
+	/** Native disclosed follow-through only. Does not grant an agent archive authority. */
+	archiveSpecialistOnStart?: boolean;
+	/** Native confirmation grants bounded read-only diagnostics for this exact subject/host. Absent means no grant. */
+	readDiagnostics?: boolean;
 }

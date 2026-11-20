@@ -6,7 +6,8 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type { SessionPullRequest, SessionSummary } from "@pilot/protocol";
 import { MissionNotices } from "./mission-notices.ts";
-import { MissionStore, NOTICE_MAX_DELAY_MS } from "./missions.ts";
+import { MissionStore } from "./missions.ts";
+import { NOTICE_MAX_DELAY_MS } from "./notice-dispatcher.ts";
 import type { SessionManager } from "./sessions.ts";
 
 function setup(file = ":memory:") {

@@ -1,12 +1,5 @@
-// A chat Pilot started for the user, read only: a feedback triage or fix,
-// or a chat started from New. It shows what the user and Pilot said, one
-// quiet line per tool step, and whether the chat works, finished or failed.
-// What the chat says is its own report, not a checked result. Opening,
-// reading earlier rows and leaving send nothing; while the page is open,
-// Pilot reads the chat again as it changes.
-// A chat the service says can continue (stopped, or failed with a safe retry)
-// offers Continue: one explicit press sends fixed words once.
 import { cleanup, Keyboard, keymap, Scroll, signal, View } from "nsh";
+import { ChatComposer } from "./ChatComposer";
 import { ChatTranscript } from "./ChatRows";
 import { chatRoute, closeChat, openChat } from "./chatView";
 import { queueLine } from "./codingQueue";
@@ -15,7 +8,13 @@ import type { Day } from "./day";
 import { LinkedFeedback } from "./LinkedFeedback";
 import { LiveChanges } from "./LiveChanges";
 import { RECOVERY_INPUT_BYTES, recoveryBytes, recoveryNote, setRecoveryNote } from "./recoveryDraft";
-import type { ContinueResult, SessionChat, SessionChatMirror, SessionChatSource } from "./sessionChat";
+import {
+	type ContinueResult,
+	type SessionChat,
+	type SessionChatMirror,
+	type SessionChatSource,
+	settle,
+} from "./sessionChat";
 import {
 	Block,
 	Body,
@@ -74,11 +73,8 @@ function FixHandoffRow(props: { mirror: SessionChatMirror; sessionId: string }) 
 		const submitted = note();
 		sending.set(true);
 		try {
-			let r = await props.mirror.source.handoffChat!(props.sessionId, submitted);
-			// Lost writes are looked up automatically, never submitted again.
-			for (let attempt = 0; r.status === "unknown" && r.operationId && attempt < 3; attempt++)
-				r = await props.mirror.source.checkContinue(r.operationId);
-			accept(r, submitted);
+			const source = props.mirror.source;
+			accept(await settle(source, await source.handoffChat!(props.sessionId, submitted)), submitted);
 		} finally {
 			sending.set(false);
 		}
@@ -162,7 +158,8 @@ function RecoveryRow(props: { mirror: SessionChatMirror; sessionId: string; rest
 		submitted = message;
 		sending.set(true);
 		try {
-			const r = await props.mirror.source.recoverChat!(props.sessionId, message);
+			const source = props.mirror.source;
+			const r = await settle(source, await source.recoverChat!(props.sessionId, message));
 			submitted = r.submittedText ?? message;
 			result.set(r);
 			if (r.status === "accepted" && text() === submitted) setRecoveryNote(props.sessionId, "");
@@ -291,7 +288,7 @@ export function ContinueRow(props: {
 	const unknown = () => (result()?.status === "unknown" ? (result()?.operationId ?? null) : null);
 	const go = async () => {
 		sending.set(true);
-		const r = await props.source.continueChat(props.sessionId);
+		const r = await settle(props.source, await props.source.continueChat(props.sessionId));
 		result.set(r);
 		sending.set(false);
 		if (r.status === "accepted") props.onSent?.();
@@ -356,6 +353,7 @@ export function ChatScreen(props: { day: Day; sessionId: string; onBackFromJump?
 		return c?.sessionId === props.sessionId ? c : null;
 	};
 	const state = () => stateLine(chat());
+	const showComposer = () => !!mirror.source.replyChat && !!(chat()?.canReply || chat()?.reply?.status === "unknown");
 	const canContinue = () =>
 		chat()?.canContinue &&
 		!chat()?.continuedTo &&
@@ -376,60 +374,64 @@ export function ChatScreen(props: { day: Day; sessionId: string; onBackFromJump?
 		!chat()?.archived &&
 		mirror.source.recoverChat;
 	return (
-		<Scroll class="flex-1">
-			<Page testID="chat">
-				<PageHead
-					title={chat()?.title || "Chat"}
-					text={
-						chat()?.specialist
-							? "Read-only specialist. Its findings are an assessment, not a verified cause. Reading sends nothing."
-							: mirror.source.recoverChat && chat()?.state === "failed" && !chat()?.archived
-								? "Reading sends nothing. Recovery starts only when you choose it."
-								: "Read only. Reading it sends nothing and changes nothing."
-					}
-					actions={
-						<If when={state()}>
-							<If when={chat()?.continuedTo}>
-								<Button
-									label="Open linked chat"
-									testID="chat-successor"
-									onPress={() => openChat(chat()!.continuedTo!, "Chat")}
-								/>
-							</If>
-							<If when={chat()?.continuationOf}>
-								<Button
-									label="Original chat and evidence"
-									testID="chat-predecessor"
-									onPress={() => openChat(chat()!.continuationOf!, "Chat")}
-								/>
-							</If>
-						</If>
-					}
-				>
+		<Page testID="chat" fill>
+			<PageHead
+				title={chat()?.title || "Chat"}
+				text={
+					chat()?.specialist
+						? "Read-only specialist. Its findings are an assessment, not a verified cause. Reading sends nothing."
+						: mirror.source.recoverChat && chat()?.state === "failed" && !chat()?.archived
+							? "Reading sends nothing. Recovery starts only when you choose it."
+							: showComposer()
+								? undefined
+								: state()
+									? "This chat does not accept ordinary messages right now."
+									: undefined
+				}
+				actions={
 					<If when={state()}>
-						<If when={!chat()?.specialist && chat()?.sourcePath}>
-							<View selectable>
-								<Caption>{chat()?.sourceLabel ?? "Working copy"}</Caption>
-								<Caption testID="chat-source-path" tone="faint">
-									{chat()?.sourcePath ?? ""}
-								</Caption>
-								<Caption tone="faint">
-									Use this location in your terminal. Local files may change while work runs.
-								</Caption>
-							</View>
+						<If when={chat()?.continuedTo}>
+							<Button
+								label="Open linked chat"
+								testID="chat-successor"
+								onPress={() => openChat(chat()!.continuedTo!, "Chat")}
+							/>
 						</If>
-						<State testID="chat-state" kind={state()?.mark ?? "paused"} label={state()?.text ?? ""} plain />
+						<If when={chat()?.continuationOf}>
+							<Button
+								label="Original chat and evidence"
+								testID="chat-predecessor"
+								onPress={() => openChat(chat()!.continuationOf!, "Chat")}
+							/>
+						</If>
 					</If>
-				</PageHead>
-				<Panel
-					testID="chat-panel"
-					notice={
-						<If when={state() && chat()?.state === "failed" && chat()?.recoveryBlocked}>
-							<Notice placement="panel" text={chat()?.recoveryBlocked ?? ""} />
-						</If>
-					}
-				>
-					{/* One column at a reading width, as a conversation reads. */}
+				}
+			>
+				<If when={state()}>
+					<If when={!chat()?.specialist && chat()?.sourcePath}>
+						<View selectable>
+							<Caption>{chat()?.sourceLabel ?? "Working copy"}</Caption>
+							<Caption testID="chat-source-path" tone="faint">
+								{chat()?.sourcePath ?? ""}
+							</Caption>
+							<Caption tone="faint">
+								Use this location in your terminal. Local files may change while work runs.
+							</Caption>
+						</View>
+					</If>
+					<State testID="chat-state" kind={state()?.mark ?? "paused"} label={state()?.text ?? ""} plain />
+				</If>
+			</PageHead>
+			<Panel
+				testID="chat-panel"
+				fill
+				notice={
+					<If when={state() && chat()?.state === "failed" && chat()?.recoveryBlocked}>
+						<Notice placement="panel" text={chat()?.recoveryBlocked ?? ""} />
+					</If>
+				}
+			>
+				<Scroll class="min-h-0 flex-1" testID="chat-scroll">
 					<Column centered>
 						<If when={state() && (canContinue() || canRecover())}>
 							<Block gap={3}>
@@ -512,8 +514,9 @@ export function ChatScreen(props: { day: Day; sessionId: string; onBackFromJump?
 							</Block>
 						</If>
 					</Column>
-				</Panel>
-			</Page>
-		</Scroll>
+				</Scroll>
+				<ChatComposer mirror={mirror} sessionId={props.sessionId} visible={showComposer()} />
+			</Panel>
+		</Page>
 	);
 }

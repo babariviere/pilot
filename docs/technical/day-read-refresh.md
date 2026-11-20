@@ -63,7 +63,7 @@ and HTTP 503 can preserve earlier complete display data, with stale status.
 Fast adapter loop, with only the exact NSH host channel scripted:
 
 ```sh
-node --test scripts/day-refresh.test.ts
+node --test apps/day/node-tests/refresh.test.ts
 ```
 
 Real isolated HTTP/WS host and connected QuickJS window:

@@ -14,7 +14,7 @@ import { Conflict, NotFound } from "./errors.ts";
 import { parseInsightsBacklog } from "./insights-backlog.ts";
 import { validateInsightsSettings } from "./insights-settings.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
-import type { KnowledgeDb } from "./project-knowledge-store.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export const INSIGHTS_WORKSPACE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS insights_workspace_owners (
@@ -70,9 +70,7 @@ export interface InsightsWorkspaceAdmission {
 	revision: number;
 	revalidate(): void;
 }
-export interface InsightsWorkspaceDb extends Omit<KnowledgeDb, "changed"> {
-	durable(): Promise<void>;
-}
+export type InsightsWorkspaceDb = Omit<MissionDbPort, "changed">;
 
 const same = (a: unknown, b: unknown) => canonicalJSON(a) === canonicalJSON(b);
 const lifecycleValues = ["proposed", "approved", "in_progress", "shipped", "verified", "deferred", "dismissed"];

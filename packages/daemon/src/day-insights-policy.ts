@@ -1,6 +1,6 @@
 import type { DayInsightsSettings, InsightsReviewSettings } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
-import { INSIGHTS_INITIAL_DEFAULTS } from "./insights-defaults.ts";
+import { INSIGHTS_INITIAL_DEFAULTS, INSIGHTS_THINKING_LEVELS } from "./insights-defaults.ts";
 
 export function dayInsightsExact(value: unknown, keys: string[], optional: string[] = []): Record<string, unknown> {
 	if (
@@ -25,7 +25,7 @@ export function validateDayInsightsSettings(value: unknown): DayInsightsSettings
 		typeof s.model !== "string" ||
 		!s.model.trim() ||
 		s.model.length > 512 ||
-		(s.thinking !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh"].includes(String(s.thinking)))
+		(s.thinking !== undefined && !INSIGHTS_THINKING_LEVELS.includes(String(s.thinking)))
 	)
 		throw new Conflict("day_insights_invalid_model");
 	const source = dayInsightsExact(s.source, ["projects", "excludeProjects", "excludeSessions"]);

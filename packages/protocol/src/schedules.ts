@@ -1,5 +1,5 @@
-import type { SpawnRequest } from "./index.ts";
 import type { InsightsReviewDispatch, InsightsReviewRun } from "./insights.ts";
+import type { SpawnRequest } from "./session.ts";
 
 /** Calendar deadlines, stored and executed on one host. */
 export type ScheduleTrigger = "at" | "recurring";

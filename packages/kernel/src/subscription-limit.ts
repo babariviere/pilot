@@ -2,6 +2,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
 import { awaitWithContext, BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
+import { subscriptionProvider } from "./subscription-provider.ts";
 
 export interface SubscriptionLimitReport {
 	provider: "anthropic" | "openai";
@@ -14,7 +15,7 @@ export function subscriptionLimitReport(
 	piProvider: string,
 	now = Date.now(),
 ): SubscriptionLimitReport | undefined {
-	const provider = piProvider === "openai-codex" ? "openai" : piProvider === "anthropic" ? "anthropic" : undefined;
+	const provider = subscriptionProvider(piProvider);
 	if (!provider) return;
 	const parts: string[] = [];
 	const seen = new Set<unknown>();

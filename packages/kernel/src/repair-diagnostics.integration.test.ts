@@ -8,6 +8,7 @@ import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { DiagnosticEvidenceSubject } from "@pilot/protocol";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
+import { fakeHostCall } from "./testing/host-calls.ts";
 
 test("repair Build registers only granted diagnostic readers across native reloads", { timeout: 30_000 }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-repair-diagnostics-"));
@@ -62,14 +63,16 @@ test("repair Build registers only granted diagnostic readers across native reloa
 			},
 			{
 				onWorking: () => {},
-				callDiagnostics: async (...args) => {
-					calls.push(args);
-					return {} as never;
-				},
-				callDiagnosticLogs: async () => ({}) as never,
-				callDiagnosticHistory: async () => ({}) as never,
-				callDiagnosticContext: async () => assert.fail("repair must not gain app-wide discovery"),
-				callRepairProposal: async () => assert.fail("repair must not publish proposals"),
+				call: fakeHostCall({
+					diagnostics: async ({ sessionId, limit }) => {
+						calls.push([sessionId, limit]);
+						return {} as never;
+					},
+					"diagnostics.logs": async () => ({}) as never,
+					"diagnostics.history": async () => ({}) as never,
+					"diagnostics.context": async () => assert.fail("repair must not gain app-wide discovery"),
+					"diagnostics.proposal": async () => assert.fail("repair must not publish proposals"),
+				}),
 			},
 		);
 		for (const reload of [false, true]) {

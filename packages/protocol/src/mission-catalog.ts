@@ -1,4 +1,4 @@
-import type { MissionStatus } from "./index.ts";
+import type { MissionStatus } from "./missions.ts";
 import type { OperationHost } from "./operations.ts";
 
 /** Bounded, cached Local mission discovery. No agent or coordinator authority. */

@@ -83,7 +83,7 @@ export class InsightsReplacement {
 		if (!equal(p.expectedHome, this.deps.host) || p.context !== this.enable.context(p.projectId, p.missionId))
 			throw new Conflict("replacement_home_or_context_changed");
 		this.deps.sessions.insightsReplacementGuard(p.oldSessionId, p.projectId, p.missionId, p.expectedHome);
-		this.deps.schedules.insightsReplacementAvailable(p.expectedHome);
+		this.deps.schedules.insights.insightsReplacementAvailable(p.expectedHome);
 		if (progress && progress.phase !== "fence_pending") {
 			const link = this.store.link(p.oldSessionId);
 			if (
@@ -368,7 +368,7 @@ export class InsightsReplacement {
 					progress = { ...progress, phase: "cancel_pending" };
 					await this.deps.journal.checkpoint(op, progress);
 					await this.revalidate(p, op, progress);
-					const ack = await this.deps.schedules.cancelInsights(expected, p.expectedHome, () =>
+					const ack = await this.deps.schedules.insights.cancelInsights(expected, p.expectedHome, () =>
 						this.guard(p, progress),
 					);
 					progress = {
@@ -420,7 +420,7 @@ export class InsightsReplacement {
 				progress = { ...progress, phase: "schedule_pending" };
 				await this.deps.journal.checkpoint(op, progress);
 				await this.revalidate(p, op, progress);
-				await this.deps.schedules.createInsights(
+				await this.deps.schedules.insights.createInsights(
 					{
 						trigger: "recurring",
 						title: "Weekly Insights",

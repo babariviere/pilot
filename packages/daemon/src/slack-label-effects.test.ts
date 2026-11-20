@@ -43,7 +43,8 @@ test("labels organize reports without changing open, waiting, tackled or dismiss
 		}
 		disk.commit("p", "slack", [message("new", "Product")]);
 		assert.equal(disk.require(ids(disk)("new")).slack?.status, "open");
-		assert.equal(disk.slackLabelEffects("p", []), false);
+		disk.slackLabelEffects("p", []);
+		assert.equal(disk.require(ids(disk)("new")).slack?.status, "open");
 	} finally {
 		disk.close();
 	}

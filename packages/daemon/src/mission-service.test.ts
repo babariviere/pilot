@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } f
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { backup, DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -20,7 +20,8 @@ import { Conflict } from "./errors.ts";
 import type { NonCodePolicyWrite } from "./mission-non-code-acceptance.ts";
 import type { ReviewProducer, ReviewResultWrite } from "./mission-review-contract.ts";
 import { optionalReviewSeeds } from "./mission-review-seeds.ts";
-import { draftMessage, MissionService, type RetainedBriefConfiguration } from "./mission-service.ts";
+import { MissionService, type RetainedBriefConfiguration } from "./mission-service.ts";
+import { draftMessage } from "./mission-task-message.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { NativeReviewReader } from "./native-review.ts";
@@ -30,11 +31,13 @@ import type { PullRequestOptions } from "./pull-requests.ts";
 import { DependencySources } from "./reference-sources.ts";
 import { retainedReviewDescriptor } from "./retained-review-contract.ts";
 import type { ReviewSnapshot, ReviewSnapshotStore } from "./review-snapshots.ts";
-import { CommandRejected, SessionManager, type SessionWorker } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
+import { CommandRejected, type SessionWorker } from "./kernel-worker.ts";
 import { SUBSCRIPTION_USAGE_MAX_AGE_MS, type SubscriptionUsageSource } from "./subscription-usage.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
+import type { HostResult } from "./testing/fake-kernel-worker.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 
@@ -142,11 +145,11 @@ test("source scope IPC trusts current coordinator membership, retains delivered 
 	const scope = async (id = lead.id, extras: Record<string, unknown> = {}) => {
 		const worker = f.workers.get(id)!;
 		const callId = `source-scope-${sequence++}`;
-		worker.onPacket({ type: "source.scope", callId, ...extras } as KernelPacket);
+		worker.onPacket({ type: "host.call", method: "source.scope", callId, args: { ...extras } } as KernelPacket);
 		return until(
 			() =>
-				worker.sent.find((command) => command.type === "source.scope.result" && command.callId === callId) as
-					| Extract<KernelCommand, { type: "source.scope.result" }>
+				worker.sent.find((command) => command.type === "host.result" && command.callId === callId) as
+					| HostResult<"source.scope">
 					| undefined,
 		);
 	};
@@ -218,11 +221,11 @@ test("reference sources IPC lists linked main views and pinned modules, never un
 	const references = async () => {
 		const worker = f.workers.get(chat.id)!;
 		const callId = `references-${sequence++}`;
-		worker.onPacket({ type: "source.references", callId } as KernelPacket);
+		worker.onPacket({ type: "host.call", method: "source.references", callId, args: {} } as KernelPacket);
 		return until(
 			() =>
-				worker.sent.find((command) => command.type === "source.references.result" && command.callId === callId) as
-					| Extract<KernelCommand, { type: "source.references.result" }>
+				worker.sent.find((command) => command.type === "host.result" && command.callId === callId) as
+					| HostResult<"source.references">
 					| undefined,
 		);
 	};
@@ -1432,12 +1435,14 @@ test("project preferences IPC scopes planning coordinators; Knowledge is open to
 	const worker = await until(() => f.workers.get(lead.id));
 	const call = async (action: string, args: Record<string, unknown> = {}) => {
 		const callId = randomUUID();
-		worker.onPacket({ type: "knowledge.call", callId, action: action as never, args: args as never });
+		worker.onPacket({
+			type: "host.call",
+			method: "knowledge",
+			callId,
+			args: { action: action as never, args: args as never },
+		});
 		return await until(() =>
-			worker.sent.find(
-				(p): p is Extract<KernelCommand, { type: "knowledge.result" }> =>
-					p.type === "knowledge.result" && p.callId === callId,
-			),
+			worker.sent.find((p): p is HostResult<"knowledge"> => p.type === "host.result" && p.callId === callId),
 		);
 	};
 	assert.equal((await call("context")).error, undefined);
@@ -1479,10 +1484,15 @@ test("knowledge IPC derives identity from the supervised chat and keeps explorer
 	const call = async (sessionId: string, action: string, args: Record<string, unknown>, operationId?: string) => {
 		const worker = await until(() => f.workers.get(sessionId));
 		const callId = randomUUID();
-		worker.onPacket({ type: "knowledge.call", callId, action: action as never, args: args as never, operationId });
+		worker.onPacket({
+			type: "host.call",
+			method: "knowledge",
+			callId,
+			args: { action: action as never, args: args as never, operationId },
+		});
 		return (await until(() =>
-			worker.sent.find((command) => command.type === "knowledge.result" && command.callId === callId),
-		)) as Extract<KernelCommand, { type: "knowledge.result" }>;
+			worker.sent.find((command) => command.type === "host.result" && command.callId === callId),
+		)) as HostResult<"knowledge">;
 	};
 	const report = await testArtifacts(f, explorer.id).create({
 		title: "Findings",
@@ -1526,24 +1536,23 @@ test("knowledge IPC derives identity from the supervised chat and keeps explorer
 	const worker = f.workers.get(member.id)!;
 	const held = randomUUID();
 	worker.onPacket({
-		type: "knowledge.call",
+		type: "host.call",
+		method: "knowledge",
 		callId: held,
-		action: "create" as never,
-		args: { ...entry, title: "Held" } as never,
-		operationId: "held-op",
+		args: { action: "create" as never, args: { ...entry, title: "Held" } as never, operationId: "held-op" },
 	});
 	// The entry is committed in memory; its ACK is still waiting on disk.
 	await until(() => release);
 	for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
 	assert.equal(
-		worker.sent.some((command) => command.type === "knowledge.result" && command.callId === held),
+		worker.sent.some((command) => command.type === "host.result" && command.callId === held),
 		false,
 	);
 	release!();
 	f.store.durable = durable;
 	const heldResult = (await until(() =>
-		worker.sent.find((command) => command.type === "knowledge.result" && command.callId === held),
-	)) as Extract<KernelCommand, { type: "knowledge.result" }>;
+		worker.sent.find((command) => command.type === "host.result" && command.callId === held),
+	)) as HostResult<"knowledge">;
 	assert.equal(heldResult.error, undefined);
 	f.store.durable = () => Promise.reject(new Error("disk full"));
 	assert.match((await call(member.id, "create", { ...entry, title: "Lost" }, "failed-op")).error ?? "", /disk full/);
@@ -1667,10 +1676,15 @@ test("planning v1 binds worker IPC identity and keeps coordinator/user no-PR com
 	const call = async (sessionId: string, action: string, args: Record<string, unknown>) => {
 		const worker = f.workers.get(sessionId)!;
 		const callId = randomUUID();
-		worker.onPacket({ type: "mission.call", callId, action: action as never, args: args as never });
+		worker.onPacket({
+			type: "host.call",
+			method: "mission",
+			callId,
+			args: { action: action as never, args: args as never },
+		});
 		return (await until(() =>
-			worker.sent.find((command) => command.type === "mission.result" && command.callId === callId),
-		)) as Extract<KernelCommand, { type: "mission.result" }>;
+			worker.sent.find((command) => command.type === "host.result" && command.callId === callId),
+		)) as HostResult<"mission">;
 	};
 	for (const [action, args] of [
 		["brief", { markdown: "Unauthorized", expectedRevision: 0 }],
@@ -2626,21 +2640,21 @@ test("replacement IPC acknowledgement waits for durability and rejects inconsist
 	});
 	const worker = f.workers.get(lead.id)!;
 	worker.onPacket({
-		type: "mission.call",
+		type: "host.call",
+		method: "mission",
 		callId: "supersede",
-		action: "supersede",
-		args: { decisionId: "D1", replacementDecisionId: "D2" },
+		args: { action: "supersede", args: { decisionId: "D1", replacementDecisionId: "D2" } },
 	});
 	await until(() => waiting);
 	assert.ok(f.store.detail(mission.id).decisions[0]!.replacement);
 	assert.equal(
-		worker.sent.some((c) => c.type === "mission.result" && c.callId === "supersede"),
+		worker.sent.some((c) => c.type === "host.result" && c.callId === "supersede"),
 		false,
 	);
 	release();
-	const reply = await until(() => worker.sent.find((c) => c.type === "mission.result" && c.callId === "supersede"));
-	assert.equal(reply.type, "mission.result");
-	if (reply.type === "mission.result") assert.equal(reply.error, undefined);
+	const reply = await until(() => worker.sent.find((c) => c.type === "host.result" && c.callId === "supersede"));
+	assert.equal(reply.type, "host.result");
+	if (reply.type === "host.result") assert.equal(reply.error, undefined);
 	const wrongProject = await f.spawn(f.other.id);
 	f.store.join(wrongProject.id, mission.id);
 	f.store.update(mission.id, { coordinatorSessionId: wrongProject.id });
@@ -2835,20 +2849,20 @@ test("withdrawal proposals retain guidance until user acceptance and IPC waits f
 		return gate;
 	});
 	const native = f.workers.get(lead.id)!;
-	native.onPacket({ type: "mission.call", callId: "withdrawal", action: "propose", args });
+	native.onPacket({ type: "host.call", method: "mission", callId: "withdrawal", args: { action: "propose", args } });
 	await until(() => waiting);
 	const proposal = f.store.proposals(mission.id)[0]!;
 	assert.equal(proposal.kind, "withdraw");
 	assert.equal(
-		native.sent.some((c) => c.type === "mission.result" && c.callId === "withdrawal"),
+		native.sent.some((c) => c.type === "host.result" && c.callId === "withdrawal"),
 		false,
 	);
 	assert.deepEqual(f.service.context(worker.id)?.decisions, before.decisions);
 	assert.equal(f.service.context(worker.id)?.decisionVersion, before.decisionVersion);
 	release();
-	const reply = await until(() => native.sent.find((c) => c.type === "mission.result" && c.callId === "withdrawal"));
-	assert.equal(reply.type, "mission.result");
-	if (reply.type === "mission.result") assert.equal(reply.error, undefined);
+	const reply = await until(() => native.sent.find((c) => c.type === "host.result" && c.callId === "withdrawal"));
+	assert.equal(reply.type, "host.result");
+	if (reply.type === "host.result") assert.equal(reply.error, undefined);
 	assert.deepEqual(await f.service.call(lead.id, "propose", args), proposal);
 	const definition = f.store.sharedDefinitionRevision(task.id);
 	f.store.resolveProposal(mission.id, proposal.id, true);
@@ -3816,7 +3830,7 @@ async function fixture(
 	usageSource?: SubscriptionUsageSource,
 	deliverySnapshots?: Pick<ReviewSnapshotStore, "get">,
 	reviewProducerObserver?: (sessionId: string, request: ReviewResultWrite) => Promise<ReviewProducer>,
-	options: { realCodingCapacity?: true } = {},
+	options: { realCodingCapacity?: true; disk?: true } = {},
 ) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-missions-"));
 	const projectDir = join(home, "project");
@@ -3862,7 +3876,7 @@ async function fixture(
 			};
 		else delete meta.coordinatorView;
 	});
-	const store = new MissionStore(":memory:");
+	const store = new MissionStore(options.disk ? join(home, "data", "missions.sqlite") : ":memory:");
 	// Fake workers have no durable transcript to read.
 	t.mock.method(sessions, "pendingQuestion", async () => null);
 	t.mock.method(sessions, "selectTaskModel", async (_cwd: string, model?: string, thinking?: string) => ({
@@ -3889,11 +3903,16 @@ async function fixture(
 		onChange: () => () => {},
 	});
 	await sessions.load();
+	let stopped: Promise<void> | undefined;
+	const stop = () =>
+		(stopped ??= (async () => {
+			await service.continuations.stop();
+			await service.notices.stop();
+			await sessions.shutdown();
+			await Promise.allSettled(sessions["saving"].values());
+		})());
 	t.after(async () => {
-		await service.continuations.stop();
-		await service.notices.stop();
-		await sessions.shutdown();
-		await Promise.allSettled(sessions["saving"].values());
+		await stop();
 		store.close();
 		await rm(home, { recursive: true, force: true });
 	});
@@ -3903,7 +3922,7 @@ async function fixture(
 		await until(() => !sessions["starting"].has(session.id));
 		return session;
 	};
-	return { home, projects, project, other, sessions, store, service, workers, spawn };
+	return { home, projects, project, other, sessions, store, service, workers, spawn, stop };
 }
 
 test("real mission admission counts owned work and uncertain starts, not the coordinator or read-only review", async (t) => {
@@ -5761,11 +5780,16 @@ test("agent calls run against the chat's mission and update its context", async 
 	const worker = f.workers.get(chat.id)!;
 	const call = async (action: string, args: Record<string, unknown>, target = worker) => {
 		const callId = `call-${Math.random()}`;
-		target.onPacket({ type: "mission.call", callId, action: action as never, args: args as never });
+		target.onPacket({
+			type: "host.call",
+			method: "mission",
+			callId,
+			args: { action: action as never, args: args as never },
+		});
 		const reply = await until(() =>
-			target.sent.find((command) => command.type === "mission.result" && command.callId === callId),
+			target.sent.find((command) => command.type === "host.result" && command.callId === callId),
 		);
-		return reply as Extract<KernelCommand, { type: "mission.result" }>;
+		return reply as HostResult<"mission">;
 	};
 	const created = await call("task", { title: "Auth endpoints" });
 	assert.equal((created.result as { number: number }).number, 1);
@@ -5979,11 +6003,11 @@ test("artifact reference IPC reads pinned and latest sources for later members w
 	const requests = f.workers.get(author.id)!.requests.length;
 	const read = async (id: string, revision?: number) => {
 		const callId = `read:${worker.sent.length}`;
-		worker.onPacket({ type: "artifact.reference.get", callId, id, revision });
+		worker.onPacket({ type: "host.call", method: "artifact.reference", callId, args: { id, revision } });
 		return await until(() =>
 			worker.sent.find(
-				(command): command is Extract<KernelCommand, { type: "artifact.reference.result" }> =>
-					command.type === "artifact.reference.result" && command.callId === callId,
+				(command): command is HostResult<"artifact.reference"> =>
+					command.type === "host.result" && command.callId === callId,
 			),
 		);
 	};
@@ -9054,8 +9078,8 @@ test("non-code exact recovery checks current actor project again after durabilit
 	});
 	await assert.rejects(f.service.lookupNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request), /project/);
 });
-async function retainedBriefFixture(t: TestContext, persisted = "Plan\r\né😀") {
-	const f = await fixture(t);
+async function retainedBriefFixture(t: TestContext, persisted = "Plan\r\né😀", disk?: true) {
+	const f = await fixture(t, undefined, undefined, undefined, undefined, { disk });
 	const lead = await f.spawn(),
 		worker = await f.spawn(),
 		peer = await f.spawn();
@@ -9093,7 +9117,7 @@ async function retainedBriefFixture(t: TestContext, persisted = "Plan\r\né😀"
 	f.store.writeBrief(mission.id, "seed", 0);
 	// Seed exact persisted history, including bytes ordinary write trimming can discard.
 	// biome-ignore lint/complexity/useLiteralKeys: Raw SQLite fixture, not a production mutation API.
-	f.store["db"]
+	f.store["database"]
 		.prepare("UPDATE brief_revisions SET markdown=? WHERE mission_id=? AND revision=1")
 		.run(persisted, mission.id);
 	await f.service.saveReviewProfile(lead.id, {
@@ -9283,7 +9307,7 @@ for (const change of [
 		if (change === "brief") f.store.writeBrief(f.mission.id, "New plan", 1);
 		if (change === "missing" || change === "raw-edit") {
 			// biome-ignore lint/complexity/useLiteralKeys: Corrupt/missing immutable source negative control.
-			const db = f.store["db"];
+			const db = f.store["database"];
 			if (change === "missing")
 				db.prepare("DELETE FROM brief_revisions WHERE mission_id=? AND revision=1").run(f.mission.id);
 			else
@@ -9482,26 +9506,24 @@ test("retained brief reopen snapshots descriptors and suppresses an aborted in-f
 });
 
 test("retained brief reopens serialized input against restarted source store/service and vault", async (t) => {
-	const f = await retainedBriefFixture(t, "\uFEFFPlan\r\né😀\r\n");
+	const f = await retainedBriefFixture(t, "\uFEFFPlan\r\né😀\r\n", true);
 	const input = await f.captured();
 	const descriptor = JSON.parse(JSON.stringify(input.descriptor));
-	const root = await mkdtemp(join(tmpdir(), "brief-source-reopen-"));
-	const path = join(root, "missions.sqlite");
-	// Persist exactly the fixture source database, not reconstructed DTO/display fields.
-	// biome-ignore lint/complexity/useLiteralKeys: Test-only SQLite persistence checkpoint.
-	await backup(f.store["db"], path);
+	const path = join(f.home, "data", "missions.sqlite");
+	await f.store.durable();
 	await f.restartVault();
 	const store = new MissionStore(path);
 	const service = new MissionService(store, f.sessions, f.projects);
-	t.after(async () => {
+	try {
+		const reopened = await service.reopenRetainedBrief(f.lead.id, f.task.id, descriptor, f.config);
+		assert.equal(reopened.inputSha256, input.inputSha256);
+		assert.equal(reopened.runtimeSha256, input.runtimeSha256);
+		assert.equal(reopened.contextSha256, input.contextSha256);
+		assert.equal(reopened.profileSha256, input.profileSha256);
+	} finally {
 		await service.notices.stop();
+		await f.stop();
 		await store.durable();
 		store.close();
-		await rm(root, { recursive: true, force: true });
-	});
-	const reopened = await service.reopenRetainedBrief(f.lead.id, f.task.id, descriptor, f.config);
-	assert.equal(reopened.inputSha256, input.inputSha256);
-	assert.equal(reopened.runtimeSha256, input.runtimeSha256);
-	assert.equal(reopened.contextSha256, input.contextSha256);
-	assert.equal(reopened.profileSha256, input.profileSha256);
+	}
 });

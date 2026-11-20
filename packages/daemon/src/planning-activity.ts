@@ -1,5 +1,7 @@
 /** Live planning activity and a compact planning chat for the native planning page. Reads saved history and the
  * worker's in-memory run facts only. It never starts, wakes or subscribes to the coordinator. */
+
+import { PLANNING_INPUT_ENTRY } from "@pilot/kernel";
 import type { EntryRecord, PlanningActivity, PlanningChatPage, PlanningChatRow, PlanningStep } from "@pilot/protocol";
 
 /** At most this many UTF-8 bytes of one chat message are shown. */
@@ -100,7 +102,7 @@ export function planningActivity(
 		const saved = results(entries);
 		// Only the current run's steps: stop at the input that started it.
 		for (const entry of [...entries].sort((a, b) => Number(b.id) - Number(a.id))) {
-			if (entry.kind === "pi.user" || entry.kind === "pilot.planning-input") break;
+			if (entry.kind === "pi.user" || entry.kind === PLANNING_INPUT_ENTRY) break;
 			if (entry.kind !== "pi.assistant") continue;
 			const last = calls(entry).at(-1);
 			if (last) step = planningStep(last, input.cwd, saved.get(last.id));
@@ -141,13 +143,13 @@ function texts(message: Message): string {
  * Compact rows for one history page, oldest first. Tool results only mark their step done or failed.
  * Only the newest page can have a running step: an older page's results may sit in a newer page.
  */
-export function planningChatRows(entries: readonly EntryRecord[], cwd: string, newest: boolean): PlanningChatRow[] {
+function planningChatRows(entries: readonly EntryRecord[], cwd: string, newest: boolean): PlanningChatRow[] {
 	const saved = results(entries);
 	const rows: PlanningChatRow[] = [];
 	for (const entry of [...entries].sort((a, b) => Number(a.id) - Number(b.id))) {
 		const entryId = Number(entry.id);
 		if (!Number.isSafeInteger(entryId)) continue;
-		if (entry.kind === "pilot.planning-input") {
+		if (entry.kind === PLANNING_INPUT_ENTRY) {
 			rows.push({ key: `${entryId}`, entryId, role: "request" });
 			continue;
 		}

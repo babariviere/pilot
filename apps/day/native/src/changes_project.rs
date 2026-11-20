@@ -341,6 +341,30 @@ pub(crate) fn exact(snapshot_id: &str, h: &c::History, row: Option<&c::ChangeRow
         && same_row
 }
 
+/// Canonical JSON for review digests. serde_json's map order can change when
+/// NSH enables preserve_order, so keys are sorted explicitly.
+pub(crate) fn canonical(v: &serde_json::Value) -> String {
+    use serde_json::{Value, json};
+    match v {
+        Value::Object(o) => {
+            let mut keys: Vec<_> = o.keys().collect();
+            keys.sort();
+            format!(
+                "{{{}}}",
+                keys.into_iter()
+                    .map(|k| format!("{}:{}", json!(k), canonical(&o[k])))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+        Value::Array(a) => format!(
+            "[{}]",
+            a.iter().map(canonical).collect::<Vec<_>>().join(",")
+        ),
+        _ => v.to_string(),
+    }
+}
+
 /// Hex SHA-256 of a text's UTF-8 bytes.
 pub fn sha256(text: &str) -> String {
     Sha256::digest(text.as_bytes())

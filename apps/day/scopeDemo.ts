@@ -4,7 +4,7 @@
 // generation, and a read can be held to answer out of order.
 import { signal } from "nsh";
 import { type Today, TodayFeed } from "pilot-day/native";
-import type { Refusal } from "./bridge";
+import type { Refusal } from "./refusals";
 import type { DeliveredWork } from "./deliveryContract";
 import type { ScopeSource } from "./todayScope";
 
@@ -16,6 +16,12 @@ export type ScopeScript = {
 	hold: boolean;
 	/** Whether billing can be read. */
 	billingReadable: boolean;
+	/** Billing has no attention, requests or missions. */
+	emptyBilling?: boolean;
+	/** Website has incoming requests only, with no work awaiting attention. */
+	requestsOnly?: boolean;
+	/** Two chats in website ended without a result or question. */
+	stoppedWebsite?: boolean;
 	/** The project the window acts on, as the native root names it. Undefined sends no `own`. */
 	own?: string | null;
 	/** Refuse every read with this, as a busy or changing root does. */
@@ -65,7 +71,46 @@ export class ScriptedScope implements ScopeSource {
 		const needs = (t: Today) => t.decisions.length + t.actions.length;
 		const rows = SCOPE_PROJECTS.map((p) => {
 			const selected = scope === "all" || scope === p.id;
-			const today = p.id === "demo-pilot" ? this.#own() : p.id === "demo-website" ? this.#website : this.#billing;
+			const base = p.id === "demo-pilot" ? this.#own() : p.id === "demo-website" ? this.#website : this.#billing;
+			const empty = p.id === "demo-billing" && this.script.emptyBilling;
+			const requestsOnly = p.id === "demo-website" && this.script.requestsOnly;
+			const today =
+				empty || requestsOnly
+					? {
+							...base,
+							decisions: [],
+							actions: [],
+							moving: [],
+							notMoving: [],
+							unreported: [],
+							problems:
+								requestsOnly && this.script.stoppedWebsite
+									? ["one", "two"].map((id) => ({
+											id: `stopped-${id}`,
+											title: `Stopped website chat ${id}`,
+											projectId: p.id,
+											sessionId: `stopped-${id}`,
+											nextStep: "Reply or continue",
+											canContinue: true,
+											canDismiss: false,
+											canReply: true,
+										}))
+									: [],
+							intake: {
+								...base.intake,
+								requests: empty
+									? []
+									: base.intake.requests.map((r, i) =>
+											i === 0
+												? {
+														...r,
+														title: "Northwind cannot export invoices to CSV when filters include multiple currencies and the export spans more than one reporting period",
+													}
+												: r,
+										),
+							},
+						}
+					: base;
 			const readable = p.id !== "demo-billing" || this.script.billingReadable;
 			return {
 				id: p.id,
@@ -75,14 +120,14 @@ export class ScriptedScope implements ScopeSource {
 				observedAt: "",
 				needsYou: readable ? { count: needs(today), complete: true } : { count: null, complete: false },
 				today: selected && readable ? today : null,
-				planning: null,
+				planning: this.script.requestsOnly || this.script.emptyBilling ? { availability: "live", plans: [] } : null,
 				intake: null,
 				results: {
 					complete: readable,
 					more: false,
 					reason: readable ? "" : "Delivered results could not be read.",
 					items:
-						selected && p.id === "demo-website"
+						selected && p.id === "demo-website" && !requestsOnly
 							? [
 									{
 										subject: { kind: "task", projectId: p.id, missionId: "site", taskId: "copy" },

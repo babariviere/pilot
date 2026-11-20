@@ -13,12 +13,11 @@ import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { CredentialClient, credentialEnvironment } from "@pilot/kernel/credential-client";
 import { CredentialChannel } from "@pilot/kernel/credential-rpc";
-import { NativeAdapter } from "../../kernel/src/native-adapter.ts";
-import { ownModelCatalog } from "../../kernel/src/model-catalog-owner.ts";
+import { NativeAdapter, ownModelCatalog } from "@pilot/kernel/testing/runtime";
 import { CredentialBroker } from "./credential-broker.ts";
 import { workerProbe } from "./mcp-status.ts";
-import { approve, oauthFixture } from "./mcp-test-fixtures.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
+import { approve, oauthFixture } from "./testing/mcp-test-fixtures.ts";
 
 const credential = (access = "old", refresh = "rotate-0"): OAuthCredential => ({
 	type: "oauth",
@@ -378,7 +377,7 @@ export default pi=>{const faux=fauxProvider();for(let i=0;i<12;i++)pi.registerPr
 	// The immutable child profile loads this through Jiti after native ESM installed it.
 	await writeFile(
 		join(dir, "second-loader.ts"),
-		`import {installCredentialBrokerHooks} from ${JSON.stringify(new URL("../../kernel/src/credential-hooks.ts", import.meta.url).href)};export default async()=>{await installCredentialBrokerHooks()};`,
+		`import {installCredentialBrokerHooks} from ${JSON.stringify(import.meta.resolve("@pilot/kernel/credential-hooks"))};export default async()=>{await installCredentialBrokerHooks()};`,
 	);
 	const old = credentialEnvironment();
 	for (const key of Object.keys(old)) old[key] = process.env[key];

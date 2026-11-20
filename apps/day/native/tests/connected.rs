@@ -186,7 +186,7 @@ fn first_planning_read(app: &mut Headless) {
 fn an_unreadable_service_shows_its_state_and_forms_save_before_close() {
     let dir = std::env::temp_dir().join(format!("day-connected-root-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&dir).unwrap();
-    let host = NativeHost::open(
+    let host = NativeHost::open_with_options(
         Source {
             profile: dir.join("missing-profile"),
             port: 1,
@@ -200,6 +200,7 @@ fn an_unreadable_service_shows_its_state_and_forms_save_before_close() {
             }),
         },
         dir.join("journal"),
+        Default::default(),
     )
     .unwrap();
     let bridge = Bridge::new(DayRoot::new(host));
@@ -1043,7 +1044,8 @@ fn search_back_restores_the_previous_project_before_returning_to_the_draft() {
         serde_json::to_value(pilot_day_native::update::SavedView {
             goal: "Keep my Atlas draft".into(),
             ..Default::default()
-        }).unwrap(),
+        })
+        .unwrap(),
     );
     root.reply("day.navigation.restore", Value::Null);
     root.reply(
@@ -1064,16 +1066,29 @@ fn search_back_restores_the_previous_project_before_returning_to_the_draft() {
     wait(&mut app, "id:new-open");
     app.press("id:new-open").unwrap();
     wait(&mut app, "id:goal");
-    assert_eq!(app.screen().input_text("id:goal"), Ok(Some("Keep my Atlas draft")));
+    assert_eq!(
+        app.screen().input_text("id:goal"),
+        Ok(Some("Keep my Atlas draft"))
+    );
     app.press("id:search-open").unwrap();
     wait(&mut app, "Export comparison");
-    app.press("role:option[Export comparison, Output in Harbor]").unwrap();
+    app.press("role:option[Export comparison, Output in Harbor]")
+        .unwrap();
     wait(&mut app, "This exact output");
     app.press("role:button[Back to New]").unwrap();
     wait(&mut app, "id:goal");
-    assert_eq!(app.screen().input_text("id:goal"), Ok(Some("Keep my Atlas draft")));
-    assert_eq!(root.args("day.navigation.restore").last(), Some(&json!({"projectId":"atlas"})));
-    assert_eq!(root.args("day.search.output").last().unwrap()["artifact"]["revision"], 3);
+    assert_eq!(
+        app.screen().input_text("id:goal"),
+        Ok(Some("Keep my Atlas draft"))
+    );
+    assert_eq!(
+        root.args("day.navigation.restore").last(),
+        Some(&json!({"projectId":"atlas"}))
+    );
+    assert_eq!(
+        root.args("day.search.output").last().unwrap()["artifact"]["revision"],
+        3
+    );
     assert_eq!(root.count("day.attention.reply"), 0);
     drop(app);
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());

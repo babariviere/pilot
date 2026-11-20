@@ -2,20 +2,15 @@
 
 import { randomUUID } from "node:crypto";
 import { serialize } from "node:v8";
-import type { JsonValue } from "@earendil-works/chord/json";
 import { ConversationBusy } from "@earendil-works/pi-durable";
-import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
+import { configureNodeTelemetry, localHostKind, nodeTelemetry, telemetryEnvironment } from "@pilot/telemetry";
 import release from "../../../package.json" with { type: "json" };
-import type { DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
-import type { DiagnosticsCall } from "./diagnostics-tool.ts";
 import { formatFailure } from "./failure.ts";
 import { InputGenerationRefused, QuestionReplyRefused } from "./held-inputs.ts";
-import type { MissionCall } from "./mission-tools.ts";
 import { preparePerformanceClear, setPerformanceCollectionEnabled } from "./performance.ts";
 import type { MissionContext, WorkspaceContext } from "./policy.ts";
-import type { KernelCommand, KernelPacket } from "./protocol.ts";
+import type { HostCall, HostCallPacket, HostCalls, HostMethod, KernelCommand, KernelPacket } from "./protocol.ts";
 import { KernelSession } from "./session.ts";
-import type { SlackStatusCall } from "./slack-status-tool.ts";
 import { prepareToolActivityClear, setToolActivityCollectionEnabled } from "./tool-activity.ts";
 
 const errorText = formatFailure;
@@ -136,9 +131,8 @@ export function runKernelWorker(): void {
 		enabled: false,
 		serviceName: "pilot.kernel",
 		serviceVersion: release.version,
-		environment:
-			process.env.NODE_ENV === "test" ? "test" : process.env.NODE_ENV === "production" ? "release" : "development",
-		hostKind: process.platform === "linux" ? "devbox" : "local",
+		environment: telemetryEnvironment(),
+		hostKind: localHostKind(),
 	});
 	let session: KernelSession | undefined;
 	let initialization: Promise<void> | undefined;
@@ -160,7 +154,7 @@ export function runKernelWorker(): void {
 			...(configuration.endpoint ? { endpoint: configuration.endpoint } : {}),
 		});
 	};
-	const daemonCalls = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
+	const hostCalls = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
 	const workspaceCalls = new Map<string, (workspace?: WorkspaceContext) => void>();
 	const prepareWorkspace = () =>
 		new Promise<WorkspaceContext | undefined>((resolve) => {
@@ -191,33 +185,37 @@ export function runKernelWorker(): void {
 	const send = (packet: KernelPacket) => sender.send(packet);
 	// Notification hooks cannot await. Their retention is still bounded by the same FIFO.
 	const notify = (packet: KernelPacket) => void send(packet).catch(() => undefined);
-	const callDaemon = <T>(
-		packet: (callId: string) => KernelPacket,
-		signal?: AbortSignal,
-		notifyCancellation = true,
-	): Promise<T> =>
-		new Promise<T>((resolve, reject) => {
+	const call: HostCall = <M extends HostMethod>(method: M, args: HostCalls[M]["args"], signal?: AbortSignal) =>
+		new Promise((resolve, reject) => {
 			const callId = randomUUID();
 			if (signal?.aborted) {
 				reject(new Error("Diagnostic read cancelled"));
 				return;
 			}
 			const cancel = () => {
-				daemonCalls.get(callId)?.reject(new Error("Diagnostic read cancelled"));
-				daemonCalls.delete(callId);
-				if (notifyCancellation) void send({ type: "diagnostics.context.cancel", callId }).catch(() => undefined);
+				hostCalls.get(callId)?.reject(new Error("Diagnostic read cancelled"));
+				hostCalls.delete(callId);
+				// These host reads already support cancellation. Other calls only stop waiting locally.
+				if (method === "diagnostics.context" || method === "diagnostics.logs" || method === "screen")
+					notify({ type: "host.cancel", callId });
 			};
 			const timer = setTimeout(() => {
 				signal?.removeEventListener("abort", cancel);
-				daemonCalls.delete(callId);
+				hostCalls.delete(callId);
 				reject(new Error("pilotd did not answer the tool call"));
 			}, 60_000);
 			timer.unref();
-			daemonCalls.set(callId, {
+			hostCalls.set(callId, {
 				resolve: (value) => {
 					signal?.removeEventListener("abort", cancel);
 					clearTimeout(timer);
-					resolve(value as T);
+					const nullable =
+						method === "mission" ||
+						method === "memory" ||
+						method === "knowledge" ||
+						method === "insights.backlog" ||
+						method === "liveUpdate.propose";
+					resolve((value ?? (nullable ? null : undefined)) as HostCalls[M]["result"]);
 				},
 				reject: (error) => {
 					signal?.removeEventListener("abort", cancel);
@@ -226,52 +224,11 @@ export function runKernelWorker(): void {
 				},
 			});
 			signal?.addEventListener("abort", cancel, { once: true });
-			send(packet(callId)).catch((error: unknown) => {
-				daemonCalls.get(callId)?.reject(error instanceof Error ? error : new Error(String(error)));
-				daemonCalls.delete(callId);
+			send({ type: "host.call", callId, method, args } as HostCallPacket).catch((error: unknown) => {
+				hostCalls.get(callId)?.reject(error instanceof Error ? error : new Error(String(error)));
+				hostCalls.delete(callId);
 			});
 		});
-	const callMission: MissionCall = (action, args) =>
-		callDaemon<JsonValue>((callId) => ({ type: "mission.call", callId, action, args }));
-	const callInsightsBacklog: import("./insights-backlog-tool.ts").InsightsBacklogCall = (request) =>
-		callDaemon<JsonValue>((callId) => ({ type: "insights.backlog.call", callId, request }));
-	const readCoordinatorSources: import("./coordinator-sources.ts").ReadCoordinatorSources = (signal) =>
-		callDaemon((callId) => ({ type: "source.scope", callId }), signal, false);
-	const readReferenceSources: import("./reference-sources.ts").ReadReferenceSources = (signal) =>
-		callDaemon((callId) => ({ type: "source.references", callId }), signal, false);
-	const callMemory: import("./memory-tools.ts").MemoryCall = (action, args, operationId) =>
-		callDaemon<JsonValue>((callId) => ({ type: "memory.call", callId, operationId, action, args }));
-	const callKnowledge: import("./knowledge-tools.ts").KnowledgeCall = (action, args, operationId) =>
-		callDaemon<JsonValue>((callId) => ({ type: "knowledge.call", callId, operationId, action, args }));
-	const callLiveUpdateProposal: import("./live-update-tool.ts").LiveUpdateProposalCall = (args, operationId) =>
-		callDaemon<JsonValue>((callId) => ({ type: "liveUpdate.propose", callId, operationId, args }));
-	const callSlackStatus: SlackStatusCall = (args) =>
-		callDaemon<JsonValue>((callId) => ({ type: "slack.call", callId, args }));
-	const callChatReport: import("./chat-report-tool.ts").ChatReportCall = (args) =>
-		callDaemon<JsonValue>((callId) => ({ type: "chatReport.call", callId, args }));
-	const callDiagnostics: DiagnosticsCall = (sessionId, limit) =>
-		callDaemon((callId) => ({
-			type: "diagnostics.call",
-			callId,
-			...(sessionId === undefined ? {} : { sessionId }),
-			...(limit === undefined ? {} : { limit }),
-		}));
-	const callDiagnosticContext: import("./diagnostic-context-tool.ts").DiagnosticContextCall = (request, signal) =>
-		callDaemon((callId) => ({ type: "diagnostics.context.call", callId, request }), signal);
-	const callScreen: import("./screen-tools.ts").ScreenCall = (operation, signal) =>
-		callDaemon((callId) => ({ type: "screen.call", callId, operation }), signal);
-	const callDiagnosticHistory: DiagnosticHistoryCall = (sessionId, before, limit) =>
-		callDaemon((callId) => ({
-			type: "diagnostics.history.call",
-			callId,
-			sessionId,
-			...(before === undefined ? {} : { before }),
-			...(limit === undefined ? {} : { limit }),
-		}));
-	const callDiagnosticLogs: import("./diagnostic-log-tool.ts").DiagnosticLogCall = (request, signal) =>
-		callDaemon((callId) => ({ type: "diagnostics.logs.call", callId, request }), signal);
-	const callRepairProposal: import("./repair-proposal-tool.ts").RepairProposalCall = (proposal) =>
-		callDaemon((callId) => ({ type: "diagnostics.proposal", callId, proposal }));
 
 	async function shutdown(code = 0): Promise<void> {
 		if (exiting) return;
@@ -404,12 +361,7 @@ export function runKernelWorker(): void {
 					command.thinking,
 					command.type === "changeModelConfiguration"
 						? {
-								revalidate: () =>
-									callDaemon<void>((callId) => ({
-										type: "model.configuration.guard",
-										callId,
-										requestId: command.requestId,
-									})),
+								revalidate: () => call("model.configuration.guard", { requestId: command.requestId }),
 							}
 						: undefined,
 					command.type === "changeModel" && command.signedIn === true,
@@ -476,46 +428,11 @@ export function runKernelWorker(): void {
 			void shutdown();
 			return;
 		}
-		if (
-			command.type === "planning.result" ||
-			command.type === "planning.guard.result" ||
-			command.type === "question.guard.result" ||
-			command.type === "model.configuration.result" ||
-			command.type === "mission.result" ||
-			command.type === "publication.source.result" ||
-			command.type === "memory.result" ||
-			command.type === "knowledge.result" ||
-			command.type === "insights.backlog.result" ||
-			command.type === "liveUpdate.result" ||
-			command.type === "slack.result" ||
-			command.type === "chatReport.result" ||
-			command.type === "screen.result" ||
-			command.type === "diagnostics.result" ||
-			command.type === "diagnostics.context.result" ||
-			command.type === "diagnostics.history.result" ||
-			command.type === "diagnostics.logs.result" ||
-			command.type === "diagnostics.proposal.result" ||
-			command.type === "subscription.limit.result" ||
-			command.type === "usage-history.result" ||
-			command.type === "usage-history.epoch.result" ||
-			command.type === "artifact.reference.result" ||
-			command.type === "source.scope.result" ||
-			command.type === "source.references.result"
-		) {
-			const call = daemonCalls.get(command.callId);
-			daemonCalls.delete(command.callId);
-			if (command.error !== undefined) call?.reject(new Error(command.error));
-			else
-				call?.resolve(
-					("result" in command ? command.result : undefined) ??
-						(command.type === "mission.result" ||
-						command.type === "memory.result" ||
-						command.type === "knowledge.result" ||
-						command.type === "insights.backlog.result" ||
-						command.type === "liveUpdate.result"
-							? null
-							: undefined),
-				);
+		if (command.type === "host.result") {
+			const pending = hostCalls.get(command.callId);
+			hostCalls.delete(command.callId);
+			if (command.error !== undefined) pending?.reject(new Error(command.error));
+			else pending?.resolve(command.result);
 			return;
 		}
 		if (command.type === "workspace.prepared") {
@@ -577,10 +494,7 @@ export function runKernelWorker(): void {
 					process.env.PILOT_EXECUTION_PERMISSION = JSON.stringify(command.spec.pilot.executionPermission);
 				else delete process.env.PILOT_EXECUTION_PERMISSION;
 				const opened = await KernelSession.open(command.spec, {
-					callPlanning: (request, signal) =>
-						callDaemon((callId) => ({ type: "planning.call", callId, request }), signal, false),
-					guardPlanning: (operationId) =>
-						callDaemon((callId) => ({ type: "planning.guard", callId, operationId })),
+					call,
 					onSystemMessageState: (event) => {
 						void send({ type: "systemMessageState", event });
 					},
@@ -599,42 +513,15 @@ export function runKernelWorker(): void {
 						notify({ type: "question.awaited", ...(question !== undefined ? { question } : {}) }),
 					onTodosChanged: (openCount) => notify({ type: "todos.changed", openCount }),
 					onUsageChanged: (usage) => notify({ type: "usage", usage }),
-					reportUsageHistory: (row) => callDaemon((callId) => ({ type: "usage-history", callId, row })),
-					acquireUsageEpoch: () =>
-						callDaemon((callId) => ({ type: "usage-history.epoch", callId }), AbortSignal.timeout(100), false),
-					reportSubscriptionLimit: (limit) =>
-						callDaemon<void>((callId) => ({ type: "subscription.limit", callId, limit })),
 					onArtifactsChanged: () => notify({ type: "artifacts.changed" }),
 					onPullRequestCreated: (url) => notify({ type: "pullRequest.created", url }),
-					publicationSource: (bookmark) =>
-						callDaemon(
-							(callId) => ({ type: "publication.source", callId, bookmark }),
-							AbortSignal.timeout(15_000),
-							false,
-						),
 					onPullRequestAttempted: () => notify({ type: "pullRequest.attempted" }),
 					onRefsChanged: () => notify({ type: "refs.changed" }),
 					onGitHubAction: (action) => notify({ type: "github.action", action }),
 					onMcpUsed: (namespaces, failed) => notify({ type: "mcp.used", namespaces, failed }),
 					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
-					callMission,
-					readCoordinatorSources,
-					readReferenceSources,
-					callMemory,
-					callKnowledge,
-					callInsightsBacklog,
-					callLiveUpdateProposal,
-					callSlackStatus,
-					callChatReport,
-					callDiagnostics,
-					callDiagnosticHistory,
-					callDiagnosticContext,
-					callScreen,
-					callDiagnosticLogs,
-					callRepairProposal,
-					readArtifactReference: (id, revision) =>
-						callDaemon((callId) => ({ type: "artifact.reference.get", callId, id, revision })),
-					prepareWorkspace,
+					// The closed Insights profile has no workspace. Its daemon allowlist drops this request.
+					...(command.spec.role !== "insights" ? { prepareWorkspace } : {}),
 				});
 				if (pendingMission) opened.setMission(pendingMission.context);
 				if (pendingSlackLinked !== undefined) opened.setSlackLinked(pendingSlackLinked);
@@ -713,11 +600,7 @@ export function runKernelWorker(): void {
 				if (!session) throw new Error("Kernel has not started");
 				await session.clarifyQuestion(
 					{ operationId: command.requestId, questionId: command.questionId, question: command.question },
-					(signal) =>
-						callDaemon<void>(
-							(callId) => ({ type: "question.guard", callId, requestId: command.requestId }),
-							signal,
-						),
+					(signal) => call("question.guard", { requestId: command.requestId }, signal),
 				);
 				await send({ type: "accepted", requestId: command.requestId });
 			})().catch((error) =>

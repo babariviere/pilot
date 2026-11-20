@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { DurableOperation } from "@pilot/protocol";
+import { PILOT_CAPABILITY_HEADER } from "../native-app-capability.ts";
 import { WebSocket, WebSocketServer } from "ws";
 import { planningWorkerFixture } from "../planning-workers.fixture.ts";
 
@@ -112,7 +113,7 @@ const proxy = createServer(async (req, res) => {
 				const request = JSON.parse(op.payload);
 				assert.equal(f.sessions.get(request.ownerSessionId), undefined, "new owner, never adopted");
 				const discovery = await fetch(`${f.base}/api/projects/${f.project.id}/planning-profile`, {
-					headers: { "x-pilot-github-capability": f.capability },
+					headers: { [PILOT_CAPABILITY_HEADER]: f.capability },
 				}).then((r) => r.json());
 				assert.deepEqual(request.profile, discovery.profile);
 				assert.equal(request.configurationDigest, discovery.configurationDigest);
@@ -137,7 +138,7 @@ const proxy = createServer(async (req, res) => {
 			method: req.method,
 			headers: {
 				"content-type": "application/json",
-				"x-pilot-github-capability": String(req.headers["x-pilot-github-capability"] ?? ""),
+				[PILOT_CAPABILITY_HEADER]: String(req.headers[PILOT_CAPABILITY_HEADER] ?? ""),
 			},
 			...(bytes.length ? { body: bytes } : {}),
 		});

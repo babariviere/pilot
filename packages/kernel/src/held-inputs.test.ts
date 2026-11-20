@@ -5,12 +5,12 @@ import { createSession, GenerationTask, InboxDoc, LiveDoc, MemoryStorage } from 
 import {
 	admitWithHeld,
 	discardHeld,
-	HeldInputsDoc,
 	holdOnStop,
 	initializeQuestionHold,
 	pauseInputs,
 	publishQuestionWithHeld,
 } from "./held-inputs.ts";
+import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { editQueuedMessage, queueUpdateForDisplay, removeQueuedMessage } from "./queue.ts";
 
 async function fixture() {

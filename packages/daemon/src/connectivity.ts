@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { type FSWatcher, watch } from "node:fs";
 import { open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { type ConnectivityState, providerOrigin } from "@pilot/kernel";
+import { type ConnectivityState, connectivityHints, providerOrigin } from "@pilot/kernel";
 import type { ScheduleDetection } from "./schedule-detection.ts";
 
 /** Wi-Fi roaming, VPN reconnects and helper startup report brief path loss. Only a lasting loss is an outage. */
@@ -60,13 +60,12 @@ export class ConnectivityService {
 	async start(): Promise<void> {
 		// Unknown admits requests: a failure decides. Never reuse a pre-crash offline hold either.
 		await this.save({ version: 1, online: true, checkedAt: 0 });
-		const check = `${basename(this.file)}.check`;
-		const reachable = `${basename(this.file)}.reachable`;
+		const hints = connectivityHints(basename(this.file));
 		this.watcher = watch(dirname(this.file), (_event, name) => {
 			if (this.stopped) return;
-			if (name === reachable) this.recovered();
-			if (name === check) this.requestCheck();
-			else if (name?.startsWith(`${check}.`) && !name.endsWith(".tmp"))
+			if (name === hints.reachable) this.recovered();
+			if (name === hints.check) this.requestCheck();
+			else if (name && hints.isOrigin(name))
 				void this.readOrigin(join(dirname(this.file), name)).finally(() => this.requestCheck());
 		});
 		this.watcher.on("error", (error) => console.warn(`pilotd: connectivity hints: ${error}`));

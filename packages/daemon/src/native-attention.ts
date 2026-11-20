@@ -23,6 +23,7 @@ import { attentionURL, verifyAttentionResources } from "./attention-resources.ts
 import { AttentionError, AttentionService } from "./attention-service.ts";
 import { attentionDigest } from "./attention-store.ts";
 import type { MissionStore } from "./missions.ts";
+import { asksUser } from "./needs-you-reason.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, sameHost } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
@@ -367,7 +368,7 @@ export class NativeAttention {
 					!s.control &&
 					!s.continuedTo &&
 					!s.questionSettled &&
-					(s.outcome === "question" || s.attentionReason?.kind === "asks"),
+					asksUser(s),
 			);
 		if (candidates.length > 4096) fail("unavailable", "Attention read capacity reached (4096); nothing was evicted");
 		const questions: NativeAttentionQuestion[] = [];

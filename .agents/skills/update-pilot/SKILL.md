@@ -37,8 +37,8 @@ bash .agents/skills/update-pilot/scripts/build.sh [<source-commit>] [<build>]
 ```
 
 The build number defaults to today's next `YYYYMMDD.N` after the installed one. Output goes to
-`${PILOT_BUILD_ROOT:-/tmp/day-build}/<build>/app/Pilot.app`. The build uses stock Rust 1.99.1 Cargo from
-`rustup which`, even if your local `cargo` is the fork.
+`${PILOT_BUILD_ROOT:-/tmp/day-build}/<build>/app/Pilot.app`. The build uses
+`cargo` on `PATH` with no separate build cache.
 Done when the log ends with `BUILT <build>`.
 
 ## 4. Install

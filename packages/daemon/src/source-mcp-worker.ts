@@ -9,6 +9,7 @@ import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import {
 	decodeMcpResult,
 	dedicatedSourceTool,
+	SOURCE_WRITE_TOOLS,
 	SourceRateLimited,
 	SourceToolError,
 	slackAlreadyReacted,
@@ -142,9 +143,7 @@ try {
 	const tool = connection.tools.find((tool) => tool.name === name);
 	if (
 		!tool ||
-		(logicalTool !== "startIssue" &&
-			logicalTool !== "publishIssueWrite" &&
-			logicalTool !== "startSlack" &&
+		(!SOURCE_WRITE_TOOLS.has(logicalTool) &&
 			(tool.annotations?.readOnlyHint === false || tool.annotations?.destructiveHint === true))
 	)
 		throw new SetupError("Tracking tool is missing or advertises writes");

@@ -42,9 +42,11 @@ const ROW_FIELDS = [
 	"durationMs",
 	"outcome",
 ];
-const COVERAGE = ["committed", "legacy", "partial"];
-const OUTCOMES = ["success", "failure", "cancelled", "unknown"];
-const PURPOSES = [
+const COVERAGE: readonly string[] = ["committed", "legacy", "partial"] satisfies UsageObservation["coverage"][];
+const OUTCOMES: readonly string[] = ["success", "failure", "cancelled", "unknown"] satisfies NonNullable<
+	UsageObservation["outcome"]
+>[];
+const PURPOSES: readonly string[] = [
 	"agent",
 	"control",
 	"follow_up",
@@ -55,7 +57,7 @@ const PURPOSES = [
 	"compaction",
 	"other",
 	"unknown",
-];
+] satisfies UsageObservation["purpose"][];
 const TOKEN_FIELDS = ["input", "output", "cacheRead", "cacheWrite", "reasoning", "reasoningStatus"];
 const TOKEN_AMOUNTS = ["input", "output", "cacheRead", "cacheWrite"];
 const REASONING_STATUS = ["reported", "partial", "unavailable"];

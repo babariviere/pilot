@@ -83,8 +83,8 @@ async function prototypes(t: TestContext, questions: unknown[]) {
 		return {} as never;
 	});
 	const settle = async () => {
-		f.workers.scheduleResearch(f.missionId);
-		await f.workers.settleResearch();
+		f.workers.scheduleReconcile(f.missionId);
+		await f.workers.settleReconciling();
 	};
 	const finish = async (id: string) => {
 		chats.set(id, { id, state: "idle", working: false, outcome: "done" });
@@ -105,8 +105,8 @@ test("a ready prototype starts one read-only chat with its planner's model; its 
 		prototype("p2", { model: "faux/sol" }),
 		research("r"),
 	]);
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.deepEqual(
 		f.spawned.map((s) => [s.title, s.mode, s.role, s.model]),
 		[
@@ -154,8 +154,8 @@ test("a ready prototype starts one read-only chat with its planner's model; its 
 
 test("a prototype chat has no time limit, even with a time saved by an older plan", async (t) => {
 	const f = await prototypes(t, [prototype("p1", { maxMinutes: 5 })]);
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.equal(f.spawned.length, 1);
 	const state = f.store.planningWorkers.get(f.missionId)!;
 	f.store.planningWorkers.change(f.missionId, state.revision, (s) => {
@@ -173,8 +173,8 @@ test("a prototype chat has no time limit, even with a time saved by an older pla
 
 test("a prototype is made again only when the planner changes its question, never a third time", async (t) => {
 	const f = await prototypes(t, [prototype("p1")]);
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	f.publish("chat-1", "variants", 2);
 	await f.finish("chat-1");
 	assert.equal(f.inputs.length, 1);
@@ -221,8 +221,8 @@ test("a prototype waits for its planner to choose the model, and Unstick and Con
 	const legacy = prototype("p1");
 	delete (legacy.prototype as { model?: string }).model;
 	const f = await prototypes(t, [legacy]);
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.equal(f.spawned.length, 0, "no prototype chat without the planner's model");
 	const unstick = f.workers.unstickView(f.missionId);
 	assert.equal(unstick.state, "stuck");

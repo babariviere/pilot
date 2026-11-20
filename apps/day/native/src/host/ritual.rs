@@ -1,6 +1,7 @@
 //! Local ritual records share the native host's single writer and close drain.
 use super::{Error, NativeHost, Shared, Source, journal::Journal};
 use crate::{
+    changes_contract as c,
     model::{DayPart, IntentOutcome, OutcomeStatus, Visit},
     ritual::{
         RitualAvailability, RitualKind, RitualMark, RitualProgress, RitualSnapshot, RitualVisit,
@@ -458,7 +459,7 @@ pub(super) async fn read_results(
             state.observed_at,
         )
     };
-    let read = super::changes::ritual_results(t, shared, epoch, after, through).await;
+    let read = kept_results(t, shared, epoch, after, through).await;
     apply(&t.source, day, journal, shared, Work::Read)?;
     let mut state = shared.ritual.lock().expect("ritual state poisoned");
     if state.view.context != context {
@@ -480,6 +481,218 @@ pub(super) async fn read_results(
     drop(state);
     shared.change(|_| ());
     outcome
+}
+
+// Daemon inventories cap at 100 chats; each feed page has at most 20 rows.
+// Refuse an incomplete inventory rather than calling oldest-first partial data complete.
+const MAX_CHATS: usize = 100;
+const MAX_PAGES: usize = 100;
+const MAX_ROWS: usize = 2000;
+const MAX_METADATA: usize = 8 * 1024 * 1024;
+
+#[derive(Debug, PartialEq, Deserialize)]
+struct Chat {
+    id: String,
+}
+#[derive(Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Inventory {
+    project_id: String,
+    chats: Vec<Chat>,
+    more: bool,
+}
+
+async fn inventory(t: &super::Transport) -> Result<Inventory, Error> {
+    let i: Inventory = serde_json::from_value(
+        t.get(&format!(
+            "/api/projects/{}/review",
+            t.source.project()?.project_id
+        ))
+        .await?,
+    )
+    .map_err(|_| Error::Invalid)?;
+    if i.project_id != t.source.project()?.project_id {
+        return Err(Error::Identity);
+    }
+    if i.more || i.chats.len() > MAX_CHATS {
+        return Err(Error::Busy);
+    }
+    let mut ids = std::collections::HashSet::new();
+    if i.chats
+        .iter()
+        .any(|c| !super::valid_id(&c.id) || !ids.insert(&c.id))
+    {
+        return Err(Error::Invalid);
+    }
+    Ok(i)
+}
+
+async fn history(t: &super::Transport, row: &c::ChangeRow) -> Result<c::History, Error> {
+    let raw = t
+        .get(&format!(
+            "/api/sessions/{}/review/{}/history?expectedProjectId={}",
+            row.target.session_id,
+            row.target.snapshot_id,
+            t.source.project()?.project_id
+        ))
+        .await?;
+    let snapshot = &raw["snapshot"];
+    let digest = crate::changes_project::sha256(&crate::changes_project::canonical(
+        &serde_json::json!({"snapshotId":snapshot["snapshotId"], "request":snapshot["request"], "diff":snapshot["diff"]}),
+    ));
+    if snapshot["workerId"] != row.target.session_id
+        || snapshot["diff"]["sha256"] != row.target.diff_sha256
+        || snapshot["request"]["scope"]["kind"] != row.target.layer
+        || digest != row.target.comparison_digest
+    {
+        return Err(Error::Invalid);
+    }
+    let h: c::History = serde_json::from_value(raw).map_err(|_| Error::Invalid)?;
+    // Projection validates full comparison identity; native scope adds project/session.
+    if h.target != row.target || h.comparison != row.comparison {
+        return Err(Error::Stale);
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    crate::changes_project::page(
+        &row.target.snapshot_id,
+        &crate::changes_project::PageInputs {
+            history: &h,
+            patch: Err("Not read".into()),
+            row: Some(row),
+            request: None,
+            newer: None,
+            titles: &std::collections::HashMap::new(),
+            local: None,
+            now,
+            read_at: now,
+        },
+    )
+    .map_err(|_| Error::Invalid)?;
+    Ok(h)
+}
+
+/// Every kept comparison row of the project, from a complete inventory read
+/// twice. An unreadable slot makes the whole read unavailable.
+async fn kept_rows(
+    t: &super::Transport,
+    shared: &Shared,
+    epoch: u64,
+) -> Result<Vec<c::ChangeRow>, Error> {
+    let authority = t.local()?;
+    t.gate(false).await?;
+    let before = inventory(t).await?;
+    let mut rows = std::collections::HashMap::new();
+    let (mut pages, mut bytes) = (0, 0);
+    for chat in &before.chats {
+        let mut after = 0;
+        loop {
+            shared.current(epoch)?;
+            if pages >= MAX_PAGES {
+                return Err(Error::Busy);
+            }
+            let v = t
+                .get(&format!(
+                    "/api/sessions/{}/review?view=changes&expectedProjectId={}&after={after}",
+                    chat.id,
+                    t.source.project()?.project_id
+                ))
+                .await?;
+            bytes += v.to_string().len();
+            pages += 1;
+            if bytes > MAX_METADATA || pages > MAX_PAGES {
+                return Err(Error::Busy);
+            }
+            let page: c::ChangesPage = serde_json::from_value(v).map_err(|_| Error::Invalid)?;
+            if page.version != 1
+                || page.scope != "retained-comparisons-only"
+                || page.status != "available"
+            {
+                return Err(Error::Unavailable);
+            }
+            if page.changes.len() > 20 {
+                return Err(Error::Invalid);
+            }
+            for entry in page.changes {
+                let c::PageEntry::Row(r) = entry else {
+                    return Err(Error::Unavailable);
+                };
+                if r.target.project_id != t.source.project()?.project_id
+                    || r.target.session_id != chat.id
+                    || r.target.snapshot_id != r.comparison.snapshot_id
+                    || !super::valid_id(&r.target.snapshot_id)
+                    || rows.insert(r.target.snapshot_id.clone(), *r).is_some()
+                {
+                    return Err(Error::Invalid);
+                }
+            }
+            if rows.len() > MAX_ROWS {
+                return Err(Error::Busy);
+            }
+            match page.next {
+                Some(n) if n <= after || n > 999_999_999_999_999 => return Err(Error::Invalid),
+                Some(n) => after = n,
+                None => break,
+            }
+        }
+    }
+    if inventory(t).await? != before {
+        return Err(Error::Stale);
+    }
+    t.gate(false).await?;
+    if t.local()? != authority {
+        return Err(Error::Identity);
+    }
+    shared.current(epoch)?;
+    Ok(rows.into_values().collect())
+}
+
+/// The recap's results: the newest 20 kept changes and whether there were
+/// more. A limited recap is not a claim about every project result.
+async fn kept_results(
+    t: &super::Transport,
+    shared: &Shared,
+    epoch: u64,
+    after: u64,
+    through: u64,
+) -> Result<(Vec<crate::model::DoneEntry>, bool), Error> {
+    let mut rows = kept_rows(t, shared, epoch).await?;
+    let limited = rows.len() > 20;
+    rows.sort_by_key(|r| {
+        std::cmp::Reverse((r.comparison.captured_at, r.target.snapshot_id.clone()))
+    });
+    rows.truncate(20);
+    let authority = t.local()?;
+    let mut entries = Vec::new();
+    for row in rows {
+        let h = history(t, &row).await?;
+        // HTTP already bounds every body; record counts bound projection work as well.
+        if h.landing.records.len() > 100
+            || h.reviews.records.len() > 100
+            || h.reported.claims.len() > 100
+            || h.landing.next.is_some()
+            || h.reviews.next.is_some()
+        {
+            return Err(Error::Unavailable);
+        }
+        if let Some(entry) = crate::ritual_results::result(&h, after, through) {
+            entries.push(entry);
+        }
+    }
+    t.gate(false).await?;
+    if authority != t.local()? {
+        return Err(Error::Identity);
+    }
+    shared.current(epoch)?;
+    if !shared.connected.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(Error::Stale);
+    }
+    entries.sort_by_key(|(at, entry)| std::cmp::Reverse((*at, entry.id.clone())));
+    Ok((
+        entries.into_iter().map(|(_, entry)| entry).collect(),
+        limited,
+    ))
 }
 
 #[cfg(test)]

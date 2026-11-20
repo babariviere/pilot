@@ -3,8 +3,13 @@ import { randomUUID } from "node:crypto";
 import { type TestContext, test } from "node:test";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { type ConversationId, type EntryId, MemoryStorage } from "@earendil-works/pi-durable";
-import type { EntryRecord, SessionSummary, SpawnRequest } from "@pilot/protocol";
-import type { MissionThreadReference, MissionThreadWrite } from "../../protocol/src/mission-thread.ts";
+import type {
+	EntryRecord,
+	MissionThreadReference,
+	MissionThreadWrite,
+	SessionSummary,
+	SpawnRequest,
+} from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionThreads } from "./mission-threads.ts";

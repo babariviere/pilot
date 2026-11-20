@@ -3,7 +3,8 @@
 import { type ChildProcess, fork } from "node:child_process";
 import { chmod, lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type CredentialEndpoint, credentialEnvironment } from "@pilot/kernel/credential-client";
+import { credentialEnvironment } from "@pilot/kernel/credential-client";
+import type { CredentialEndpoint } from "@pilot/kernel/credential-rpc";
 import { forkLinuxCoordinator } from "./linux-coordinator.ts";
 import { type Runner, run } from "./workspaces.ts";
 

@@ -8,10 +8,10 @@
 // journaled operation Rust sends once; a lost answer stays Unknown and Check
 // only looks up its receipt. Talking here never starts, approves, resumes or
 // stops work. A send the service accepted is not the coordinator's answer.
-import { type Signal, signal } from "nsh";
-import { AutoCheck } from "./autoCheck";
-import { call, type Refusal, type Reply } from "./bridge";
-import { glide } from "./ui";
+import type { Signal } from "nsh";
+import { call, type Reply } from "./bridge";
+import { LOST, type Refusal, readReason, writeRefusal } from "./refusals";
+import { type Coalesced, Feed, mirror } from "./source";
 
 /** What a topic links: a canonical task or decision, or one original coordinator entry. */
 export type ThreadReference =
@@ -298,62 +298,37 @@ export function utf8Bytes(text: string): number {
 	return n;
 }
 
-export const UNKNOWN_WRITE =
-	"Pilot sent this but heard nothing back. It will not send it again; Check only reads. Your words stay.";
+export const UNKNOWN_WRITE = `${LOST} Your words stay.`;
 
 /** Why a mission's threads could not be read, in one calm sentence. */
 export function threadsReason(refusal: Refusal): string {
-	switch (refusal) {
-		case "offline":
-			return "Pilot could not reach its service.";
-		case "identity":
-			return "The Pilot service changed. Open Pilot again to see threads.";
-		case "closed":
-		case "busy":
-			return "Pilot is closing.";
-		case "stale":
-			return "Threads need this mission's current coordinator in this project, and Pilot cannot confirm that now.";
-		case "denied":
-		case "unavailable":
-			return "This Pilot service cannot show mission threads yet.";
-		case "invalid":
-			return "Pilot's service answered in a way this app does not understand.";
-		case "lost":
-			return "Pilot asked its service for this mission's threads and heard nothing back.";
-		default:
-			return "Pilot could not read this mission's threads.";
-	}
+	const unavailable = "This Pilot service cannot show mission threads yet.";
+	return readReason(refusal, {
+		stale: "Threads need this mission's current coordinator in this project, and Pilot cannot confirm that now.",
+		denied: unavailable,
+		unavailable,
+		lost: "Pilot asked its service for this mission's threads and heard nothing back.",
+		other: "Pilot could not read this mission's threads.",
+	});
 }
 
 /** What a refused or lost write means. Only a lost or uncertain one may have been sent. */
 export function refusedWrite(refusal: Refusal): WriteResult {
-	const r = (status: WriteResult["status"], message: string): WriteResult => ({
-		status,
-		message,
-		operationId: null,
-		topicId: null,
-	});
-	switch (refusal) {
-		case "lost":
-			return r("unknown", UNKNOWN_WRITE);
-		case "unknown":
-			return r("unknown", "An earlier action on this mission is not confirmed. Check it first; nothing was sent.");
-		case "stale":
-			return r("stale", "This mission's threads changed since you read them. Nothing was sent; your words stay.");
-		case "busy":
-			return r("refused", "Pilot is saving this window. Nothing was sent; try again after.");
-		case "closed":
-			return r("refused", "Pilot is closing. Nothing was sent.");
-		case "offline":
-			return r("refused", "Pilot could not reach its service. Nothing was sent; your words stay.");
-		case "identity":
-			return r("refused", "The Pilot service changed. Open Pilot again. Nothing was sent.");
-		case "denied":
-		case "unavailable":
-			return r("refused", "This Pilot service cannot take thread changes yet. Nothing was sent.");
-		default:
-			return r("refused", "Pilot could not send this. Nothing was sent; your words stay.");
-	}
+	const unavailable = "This Pilot service cannot take thread changes yet. Nothing was sent.";
+	const message = writeRefusal(
+		refusal,
+		{
+			lost: UNKNOWN_WRITE,
+			unknown: "An earlier action on this mission is not confirmed. Check it first; nothing was sent.",
+			stale: "This mission's threads changed since you read them. Nothing was sent; your words stay.",
+			denied: unavailable,
+			unavailable,
+			other: "Pilot could not send this. Nothing was sent; your words stay.",
+		},
+		"Nothing was sent; your words stay.",
+	);
+	const status = refusal === "lost" || refusal === "unknown" ? "unknown" : refusal === "stale" ? "stale" : "refused";
+	return { status, message, operationId: null, topicId: null };
 }
 
 /** The words for an accepted write. A sent message is not an answer. */
@@ -753,14 +728,11 @@ export const NO_CONVERSATION =
 
 /** Why a topic's conversation could not be read. Never shown as an empty one. */
 export function conversationReason(refusal: Refusal): string {
-	switch (refusal) {
-		case "stale":
-			return "Pilot cannot read this thread's conversation now: the thread, its chat or access changed.";
-		case "offline":
-			return "Pilot could not reach its service to read this thread's conversation.";
-		default:
-			return "Pilot could not read this thread's conversation.";
-	}
+	return readReason(refusal, {
+		stale: "Pilot cannot read this thread's conversation now: the thread, its chat or access changed.",
+		offline: "Pilot could not reach its service to read this thread's conversation.",
+		other: "Pilot could not read this thread's conversation.",
+	});
 }
 
 /** A read that failed: what showed stays, said to be from the last read. */
@@ -1021,23 +993,19 @@ export class ConnectedThreads implements ThreadsSource {
 		string,
 		{ snapshot: ThreadsSnapshot | null; refusal: Refusal | null; ops: ThreadOp[]; asked: boolean }
 	>();
-	#reading = new Map<string, Promise<void>>();
-	#again = new Set<string>();
+	#reads = new Map<string, Coalesced>();
 	#writing = new Set<string>();
 	#checking = new Set<string>();
-	// Writes whose reply was lost, by mission and operation: Pilot checks them by itself.
-	#auto = new AutoCheck(
+	// Writes whose reply was lost are followed by mission and operation.
+	#feed = new Feed(
+		() => this.state(),
 		(key) => this.#lookUp(key),
-		() => this.#publish(),
 	);
 	#topics = new TopicReads(
 		(missionId, topicId, before, sessionId) => this.#page(missionId, topicId, before, sessionId),
-		() => this.#publish(),
-		() => this.#closed,
+		() => this.#feed.publish(),
+		() => this.#feed.closed,
 	);
-	#listeners = new Map<number, (state: ThreadsState) => void>();
-	#next = 0;
-	#closed = false;
 
 	constructor(window: string) {
 		this.#window = window;
@@ -1065,7 +1033,7 @@ export class ConnectedThreads implements ThreadsSource {
 				ops: m.ops.map(
 					(o): ThreadOp =>
 						this.#checking.has(o.operationId) ||
-						(o.state === "unknown" && this.#auto.checking(opKey(id, o.operationId)))
+						(o.state === "unknown" && this.#feed.checking(opKey(id, o.operationId)))
 							? { ...o, state: "checking" }
 							: o,
 				),
@@ -1080,17 +1048,7 @@ export class ConnectedThreads implements ThreadsSource {
 	}
 
 	onChange(listener: (state: ThreadsState) => void): () => void {
-		const id = this.#next++;
-		this.#listeners.set(id, listener);
-		return () => {
-			this.#listeners.delete(id);
-		};
-	}
-
-	#publish() {
-		if (this.#closed) return;
-		const s = this.state();
-		for (const l of this.#listeners.values()) l(s);
+		return this.#feed.onChange(listener);
 	}
 
 	/** Applies a reply's snapshot and saved writes. A read for another mission is never shown here. */
@@ -1098,7 +1056,7 @@ export class ConnectedThreads implements ThreadsSource {
 		const m = this.#mission(missionId);
 		if (r.ok) {
 			// The first answer after the service could not be reached: look the lost writes up again.
-			if (isRead && (m.refusal === "offline" || m.refusal === "lost")) this.#auto.restart();
+			if (isRead && (m.refusal === "offline" || m.refusal === "lost")) this.#feed.restart();
 			const snapshot = snapshotOf(r.snapshot, missionId);
 			if (snapshot) {
 				m.snapshot = snapshot;
@@ -1121,40 +1079,33 @@ export class ConnectedThreads implements ThreadsSource {
 		const keys: string[] = [];
 		for (const [id, m] of this.#missions)
 			for (const o of m.ops) if (o.state === "unknown") keys.push(opKey(id, o.operationId));
-		this.#auto.watch(keys);
+		this.#feed.watch(keys);
 	}
 
 	/** One automatic Check: a receipt read only. It never sends the write again. */
 	async #lookUp(key: string): Promise<void> {
 		const [missionId, operationId] = key.split("\n") as [string, string];
 		const r = await call<unknown>(this.#window, "day.threads.check", { operationId });
-		if (this.#closed || !r.ok) return;
+		if (this.#feed.closed || !r.ok) return;
 		this.#apply(missionId, r, false);
-		this.#publish();
+		this.#feed.publish();
 	}
 
 	read(missionId: string): Promise<void> {
-		const running = this.#reading.get(missionId);
-		if (running) {
-			this.#again.add(missionId);
-			return running;
+		let reads = this.#reads.get(missionId);
+		if (!reads) {
+			reads = this.#feed.coalesce(async () => {
+				const r = await call<unknown>(this.#window, "day.threads.read", { missionId });
+				if (this.#feed.closed) return;
+				this.#apply(missionId, r, true);
+				this.#feed.publish();
+			});
+			this.#reads.set(missionId, reads);
 		}
 		this.#mission(missionId).asked = true;
-		const work = (async () => {
-			do {
-				this.#again.delete(missionId);
-				const r = await call<unknown>(this.#window, "day.threads.read", { missionId });
-				if (this.#closed) return;
-				this.#apply(missionId, r, true);
-				this.#publish();
-			} while (this.#again.has(missionId) && !this.#closed);
-		})().finally(() => {
-			this.#reading.delete(missionId);
-			this.#publish();
-		});
-		this.#reading.set(missionId, work);
-		this.#publish();
-		return work;
+		const reading = reads().finally(() => this.#feed.publish());
+		this.#feed.publish();
+		return reading;
 	}
 
 	/** One day.threads.history page. `sessionId` only names an exact conversation a cursor or a message gave. */
@@ -1194,39 +1145,39 @@ export class ConnectedThreads implements ThreadsSource {
 	async write(missionId: string, source: string, write: ThreadWrite): Promise<WriteResult> {
 		if (this.#writing.has(missionId)) return refusedWrite("busy");
 		this.#writing.add(missionId);
-		this.#publish();
+		this.#feed.publish();
 		let r: Reply<unknown>;
 		try {
 			r = await call<unknown>(this.#window, "day.threads.write", { missionId, source, ...write });
 		} finally {
 			this.#writing.delete(missionId);
 		}
-		if (this.#closed) return refusedWrite("closed");
+		if (this.#feed.closed) return refusedWrite("closed");
 		if (!r.ok) {
 			// A lost answer may hide a saved write: the next read lists it as Unknown.
 			void this.read(missionId);
-			this.#publish();
+			this.#feed.publish();
 			return refusedWrite(r.refusal);
 		}
 		this.#apply(missionId, r, false);
 		if (!snapshotOf(r.snapshot, missionId)) void this.read(missionId);
-		this.#publish();
+		this.#feed.publish();
 		return outcomeOf(r.value.outcome, write);
 	}
 
 	async check(missionId: string, operationId: string): Promise<WriteResult> {
 		if (this.#checking.has(operationId)) return refusedWrite("busy");
 		this.#checking.add(operationId);
-		this.#publish();
+		this.#feed.publish();
 		let r: Reply<unknown>;
 		try {
 			r = await call<unknown>(this.#window, "day.threads.check", { operationId });
 		} finally {
 			this.#checking.delete(operationId);
 		}
-		if (this.#closed) return refusedWrite("closed");
+		if (this.#feed.closed) return refusedWrite("closed");
 		if (!r.ok) {
-			this.#publish();
+			this.#feed.publish();
 			return {
 				status: "unknown",
 				message: "Pilot could not check it now. Nothing was sent; it stays not confirmed.",
@@ -1235,7 +1186,7 @@ export class ConnectedThreads implements ThreadsSource {
 			};
 		}
 		this.#apply(missionId, r, false);
-		this.#publish();
+		this.#feed.publish();
 		const result = outcomeOf(r.value.outcome);
 		if (result.status === "unknown")
 			result.message = "Pilot's service has no result for it yet. Nothing was sent again.";
@@ -1243,9 +1194,7 @@ export class ConnectedThreads implements ThreadsSource {
 	}
 
 	dispose(): void {
-		this.#closed = true;
-		this.#auto.close();
-		this.#listeners.clear();
+		this.#feed.close();
 	}
 }
 
@@ -1259,14 +1208,11 @@ export const ORIGINAL_MISSING = "Pilot could not find that exact message in its 
 
 /** Why a coordinator conversation could not be read. Never shown as an empty one. */
 export function historyReason(refusal: Refusal): string {
-	switch (refusal) {
-		case "stale":
-			return "Pilot cannot read the coordinator's conversation now: the mission's coordinator or access changed.";
-		case "offline":
-			return "Pilot could not reach its service to read the conversation.";
-		default:
-			return "Pilot could not read the coordinator's conversation.";
-	}
+	return readReason(refusal, {
+		stale: "Pilot cannot read the coordinator's conversation now: the mission's coordinator or access changed.",
+		offline: "Pilot could not reach its service to read the conversation.",
+		other: "Pilot could not read the coordinator's conversation.",
+	});
 }
 
 /** The threads' state, mirrored in one signal that only the source's listener sets. */
@@ -1280,22 +1226,10 @@ export type ThreadsMirror = {
 
 /** Mirrors `source`. Topics that arrive or leave glide to their places. */
 export function mirrorThreads(source: ThreadsSource): ThreadsMirror {
-	const state = signal(source.state());
 	const shape = (s: ThreadsState) =>
 		Object.entries(s.missions)
 			.map(([id, m]) => `${id}:${(m.snapshot?.topics ?? []).map((t) => `${t.id}=${t.disposition}`).join(",")}`)
 			.join("|");
-	const stop = source.onChange((next) => {
-		if (shape(next) !== shape(state())) glide();
-		state.set(next);
-	});
-	return {
-		source,
-		state,
-		mission: (id) => state().missions[id] ?? EMPTY,
-		close: () => {
-			stop();
-			source.dispose();
-		},
-	};
+	const { view: state, close } = mirror(source, source.state(), shape);
+	return { source, state, mission: (id) => state().missions[id] ?? EMPTY, close };
 }

@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { DaemonHello } from "@pilot/protocol";
+import { PILOT_CAPABILITY_HEADER } from "../native-app-capability.ts";
 import { WebSocketServer } from "ws";
 import { GitHubSetupService } from "../github-setup.ts";
 import { daemonHello } from "../hello.ts";
@@ -24,6 +25,7 @@ import { SessionManager } from "../sessions.ts";
 import { TerminalManager } from "../terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "../testing/daemon-server.ts";
 import { fixture, jj } from "../testing/shared-workspace.ts";
+import { pauseParticipants } from "../testing/pause-participants.ts";
 
 const f = fixture();
 const home = join(realpathSync(f.root), "home");
@@ -116,10 +118,13 @@ await store.durable();
 const service = () =>
 	({
 		reports: new MissionReports(store),
-		controls: new MissionControls(store, {
-			checkpointMission: async () => "paused",
-			resumeMission: async () => "resumed",
-		}),
+		controls: new MissionControls(
+			store,
+			pauseParticipants({
+				checkpointMission: async () => "paused",
+				resumeMission: async () => "resumed",
+			}),
+		),
 	}) as MissionService;
 let server!: ReturnType<typeof createDaemonServer>;
 let port = 0;
@@ -145,7 +150,7 @@ await start();
 const upstream = async (path: string, method = "GET", body?: unknown) => {
 	const r = await fetch(`http://127.0.0.1:${port}${path}`, {
 		method,
-		headers: { "content-type": "application/json", "x-pilot-github-capability": token },
+		headers: { "content-type": "application/json", [PILOT_CAPABILITY_HEADER]: token },
 		...(body === undefined ? {} : { body: JSON.stringify(body) }),
 	});
 	assert.equal(r.status, 200, await r.clone().text());
@@ -209,7 +214,7 @@ const proxy = createServer(async (req, res) => {
 			method: req.method,
 			headers: {
 				"content-type": "application/json",
-				"x-pilot-github-capability": String(req.headers["x-pilot-github-capability"] ?? ""),
+				[PILOT_CAPABILITY_HEADER]: String(req.headers[PILOT_CAPABILITY_HEADER] ?? ""),
 			},
 			...(bytes.length ? { body: bytes } : {}),
 		});

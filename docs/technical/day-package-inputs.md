@@ -12,8 +12,8 @@ install, register, or start an app or service.
 The input is a full immutable Pilot commit, not a working tree or bookmark.
 The builder extracts Git objects into a fresh private directory, then:
 
-1. Checks the native macOS arm64 host, installed stock Rust/Cargo 1.99.1,
-   and official Longbridge NSH 0.6.1. The installed CLI checksum
+1. Checks the native macOS arm64 host and compiler, and official
+   Longbridge NSH 0.6.1. The installed CLI checksum
    is pinned. Day's lock must select only release 2f51d86 NSH crates and
    must not contain GPUI. There is no CLI-build or source-patch fallback.
 2. Builds Day's own `pilot-desktop`, with `macos-host`, and the existing
@@ -39,9 +39,10 @@ a distinct receipt kind and omits the update helper and NSH artifact host.
 Both selections use the same source-matched recipe hash and installed dependency
 sources. No separate candidate-specific builder is added.
 
-Cargo is offline and uses the pinned stock executable, independently of the
-user's global Cargo. The builder keeps the real HOME so Cargo can read installed
-dependency sources. Build outputs remain in the private checkout.
+Cargo is offline and comes from `PATH` by default. CI explicitly supplies its
+pinned Cargo and Rust compiler. The builder keeps the real HOME so Cargo can
+read installed dependencies, and leaves target and cache paths to Cargo.
+There is no separate package build cache to clean.
 Ambient trust, provider/discovery credentials, compiler wrappers, Cargo tuning,
 NSH resource overrides and package-manager configuration are not inherited.
 Missing dependencies fail, rather than bootstrapping or repairing shared state.
@@ -77,13 +78,11 @@ not a successful update.
 
 ## Entry points
 
-Prepare dependencies/tools separately. The builder never bootstraps them.
-Use absolute paths to the qualified tools and a fresh output directory:
+Prepare dependencies and tools separately. The builder never bootstraps them.
+Use the verified NSH executable and a fresh output directory:
 
 ```sh
 export NSH_DAY_CLI=/absolute/installed/longbridge/nsh
-export NSH_DAY_REAL_CARGO="$(rustup which --toolchain 1.99.1 cargo)"
-export RUSTC="$(rustup which --toolchain 1.99.1 rustc)"
 python3 apps/day/scripts/bundle_runtime.py rust \
   --source FULL_COMMIT --output /private/build/day-inputs
 ```

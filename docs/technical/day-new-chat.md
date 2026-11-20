@@ -114,7 +114,14 @@ New (`NewScreen.tsx`, `chatFeed.ts`, `chatCommands.ts`) consumes this seam.
 Opening New reads the projects and selects the user's earlier choice. New never
 picks a project for the user: not `current`, not Today's scope and not the last
 one used. Until the user chooses, the picker reads "Choose a project" and both
-Plan a mission and Start as one chat stay unavailable. A pick whose project is
+Plan a mission and Start as one chat stay unavailable, and one hint asks for a
+project. New shows no planning warning or planning guidance before the choice.
+Once the chosen project's setup read answers, a project that cannot plan
+missions says so and names one chat as the other way when that can start. A
+failed or refused setup read says that Pilot could not read the project, never
+that planning is off, and Pilot reads it again with backoff. Plans whose tasks
+exist list apart under Tasks created: with Today's state when Today has the
+mission, else with View status only. A pick whose project is
 gone stays unchosen. The screen drops answers
 to older selections, and Start chat sends only the newest accepted choice with
 the exact words. An accepted creation that cleared its words uses the choice

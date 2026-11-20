@@ -2,7 +2,7 @@
 // (bridge.ts), and the flush a close runs. The test scripts every root reply.
 import { mount, signal } from "nsh";
 import type { PlanPage } from "pilot-day/native";
-import { ConnectedPlans } from "./bridge";
+import { ConnectedPlans } from "./planFeed";
 import { ScriptedChats } from "./chatDemo";
 import { mirrorChats } from "./chatFeed";
 import { InterviewDoc } from "./InterviewDoc";

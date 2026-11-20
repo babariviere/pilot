@@ -1,11 +1,7 @@
-import type {
-	CodingQueueView,
-	DashboardRecentItem,
-	DashboardSection,
-	MissionCodeCompletion,
-	ProjectDashboard,
-} from "./index.ts";
+import type { CodingQueueView } from "./coding-queue.ts";
+import type { DashboardRecentItem, DashboardSection, ProjectDashboard } from "./dashboard.ts";
 import type { MissionControl } from "./mission-controls.ts";
+import type { MissionCodeCompletion } from "./missions.ts";
 
 /** One screen captured from the real app: image artifact IDs, Before at the landed commit's parent. No Before: new. */
 export interface MissionScreenPair {

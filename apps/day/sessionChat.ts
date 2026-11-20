@@ -1,4 +1,4 @@
-// One chat Pilot started for the user, read only: a feedback triage or fix,
+// One chat Pilot started for the user: a feedback triage or fix,
 // or a chat started from New. `day.chat.read` opens it and reads its newest
 // rows, or the page before what shows; `day.chat.snapshot` reads what the
 // root last read (it reads the chat again as it changes, while it is open);
@@ -7,11 +7,13 @@
 // `day.chat.continue` asks a stopped or failed chat to go on with fixed words
 // the service writes, sent once. `day.chat.dismiss` takes a failed chat off
 // Needs you and sends nothing to it. `day.chat.reply` sends the user's own
-// words, once, to a chat waiting for a reply. `day.chat.check` reads any of
+// words, once, to an eligible chat. `day.chat.check` reads any of
 // these receipts.
-import { type Signal, signal } from "nsh";
+import type { Signal } from "nsh";
 import type { ChatRow } from "pilot-day/native";
-import { call, type Refusal } from "./bridge";
+import { call } from "./bridge";
+import { type Refusal, writeRefusal } from "./refusals";
+import { CallOrder, Feed, mirror } from "./source";
 import { type CodingQueue, queueOf } from "./codingQueue";
 
 /** Where the chat is: working, asking, finished, failed, stopped, quiet, or not read yet. */
@@ -43,6 +45,8 @@ export type SessionChat = {
 	queue?: CodingQueue | null;
 	/** The service says Continue can move it: stopped, or failed with a safe retry. */
 	canContinue?: boolean;
+	canReply?: boolean;
+	reply?: ContinueResult | null;
 	/** Its question no longer needs the user: the plan settled it. */
 	questionSettled?: boolean;
 	specialist?: boolean;
@@ -62,6 +66,17 @@ export type SessionChat = {
 	/** Why the chat or its newest part cannot be shown. Empty when it can. */
 	reason: string;
 };
+
+/**
+ * A chat write whose answer was lost is looked up right away, a few times, before the screen shows it as Unknown
+ * with Check. Each look reads its receipt only and never sends the write again.
+ */
+export async function settle(source: SessionChatSource, first: ContinueResult): Promise<ContinueResult> {
+	let r = first;
+	for (let look = 0; look < 3 && r.status === "unknown" && r.operationId; look++)
+		r = await source.checkContinue(r.operationId);
+	return r;
+}
 
 /** The chat page's source. The connected window asks its root; tests use a script. */
 export interface SessionChatSource {
@@ -85,7 +100,7 @@ export interface SessionChatSource {
 	handoffChat?(sessionId: string, message: string): Promise<ContinueResult>;
 	/** Takes failed chat `sessionId` off Needs you, once. It sends nothing to the chat. */
 	dismissChat?(sessionId: string): Promise<ContinueResult>;
-	/** Sends the user's own words once to chat `sessionId`, which waits for a reply. */
+	/** Sends the user's own words once to chat `sessionId`, if it accepts ordinary follow-ups. */
 	replyChat?(sessionId: string, message: string): Promise<ContinueResult>;
 	/** Reads one Continue's exact receipt. Nothing is sent again. */
 	checkContinue(operationId: string): Promise<ContinueResult>;
@@ -137,23 +152,12 @@ function continueOutcome(x: unknown, unknown = CONTINUE_UNKNOWN): ContinueResult
 }
 
 function refusedContinue(refusal: Refusal, unknown = CONTINUE_UNKNOWN): ContinueResult {
-	switch (refusal) {
-		case "lost":
-			return {
-				status: "unknown",
-				message:
-					unknown === RECOVERY_UNKNOWN
-						? "Recovery is Unknown. Reopen this chat to find its saved attempt. Nothing will be sent again."
-						: `${unknown} Press ${unknown === CONTINUE_UNKNOWN ? "Continue" : "Reply"} again to find it.`,
-			};
-		case "offline":
-			return { status: "rejected", message: "Pilot could not reach its service. Nothing was sent." };
-		case "busy":
-		case "closed":
-			return { status: "rejected", message: "Pilot is busy or closing. Nothing was sent." };
-		default:
-			return { status: "rejected", message: "Pilot could not send this. Nothing was sent." };
-	}
+	const lost =
+		unknown === RECOVERY_UNKNOWN
+			? "Recovery is Unknown. Reopen this chat to find its saved attempt. Nothing will be sent again."
+			: `${unknown} ${unknown === CONTINUE_UNKNOWN ? "Press Continue again to find it." : "Check for its receipt."}`;
+	const message = writeRefusal(refusal, { lost, other: "Pilot could not send this. Nothing was sent." });
+	return { status: refusal === "lost" ? "unknown" : "rejected", message };
 }
 
 const UNREAD = "Pilot could not read this chat. Nothing was sent.";
@@ -174,6 +178,8 @@ function chatOf(x: unknown, sessionId: string): SessionChat | null {
 		stateReason: typeof c.stateReason === "string" ? c.stateReason : "",
 		queue: queueOf(c.queue),
 		canContinue: c.canContinue === true,
+		canReply: c.canReply === true,
+		reply: c.reply ? continueOutcome(c.reply, REPLY_UNKNOWN) : null,
 		questionSettled: c.questionSettled === true,
 		specialist: c.specialist === true,
 		archived: c.archived === true,
@@ -193,9 +199,8 @@ function chatOf(x: unknown, sessionId: string): SessionChat | null {
 export class ConnectedSessionChat implements SessionChatSource {
 	#window: string;
 	#chat: SessionChat | null = null;
-	#listeners = new Map<number, (chat: SessionChat | null) => void>();
-	#next = 0;
-	#closed = false;
+	#reads = new CallOrder();
+	#feed = new Feed(() => this.#chat);
 
 	constructor(window: string) {
 		this.#window = window;
@@ -206,19 +211,12 @@ export class ConnectedSessionChat implements SessionChatSource {
 	}
 
 	onChange(listener: (chat: SessionChat | null) => void): () => void {
-		const id = this.#next++;
-		this.#listeners.set(id, listener);
-		return () => {
-			this.#listeners.delete(id);
-		};
-	}
-
-	#publish() {
-		if (this.#closed) return;
-		for (const listener of this.#listeners.values()) listener(this.#chat);
+		return this.#feed.onChange(listener);
 	}
 
 	async #read(sessionId: string, older: boolean) {
+		if (this.#feed.closed) return;
+		const order = this.#reads.next();
 		const prior = this.#chat?.sessionId === sessionId ? this.#chat : null;
 		this.#chat = {
 			...prior,
@@ -232,13 +230,13 @@ export class ConnectedSessionChat implements SessionChatSource {
 			reading: true,
 			reason: prior?.reason ?? "",
 		};
-		this.#publish();
+		this.#feed.publish();
 		const r = await call<unknown>(this.#window, "day.chat.read", { sessionId, older });
-		// Closed or another chat opened meanwhile: drop the answer.
-		if (this.#chat?.sessionId !== sessionId) return;
+		// A close and reopen of the same chat also retires an older read.
+		if (this.#feed.closed || !this.#reads.latest(order) || this.#chat?.sessionId !== sessionId) return;
 		const read = r.ok ? chatOf(r.snapshot, sessionId) : null;
 		this.#chat = read ?? { ...this.#chat, reading: false, reason: UNREAD };
-		this.#publish();
+		this.#feed.publish();
 	}
 
 	open(sessionId: string): Promise<void> {
@@ -253,26 +251,28 @@ export class ConnectedSessionChat implements SessionChatSource {
 
 	async refresh(): Promise<void> {
 		const id = this.#chat?.sessionId;
-		if (!id) return;
+		if (!id || this.#feed.closed || this.#chat?.reading) return;
+		const order = this.#reads.next();
 		const r = await call<unknown>(this.#window, "day.chat.snapshot", { sessionId: id });
-		if (this.#chat?.sessionId !== id || !r.ok) return;
+		if (this.#feed.closed || !this.#reads.latest(order) || this.#chat?.sessionId !== id || !r.ok) return;
 		const read = chatOf(r.snapshot, id);
 		if (!read) return;
 		this.#chat = read;
-		this.#publish();
+		this.#feed.publish();
 	}
 
 	close(sessionId: string): void {
 		const id = this.#chat?.sessionId;
-		if (id !== sessionId) return;
+		if (this.#feed.closed || id !== sessionId) return;
+		this.#reads.next();
 		this.#chat = null;
-		this.#publish();
+		this.#feed.publish();
 		void call(this.#window, "day.chat.close", { sessionId: id });
 	}
 
 	async readLiveChanges(sessionId: string, workspaceKey: string): Promise<LiveChangesResult> {
 		const current = () =>
-			!this.#closed && this.#chat?.sessionId === sessionId && this.#chat.liveChangesKey === workspaceKey;
+			!this.#feed.closed && this.#chat?.sessionId === sessionId && this.#chat.liveChangesKey === workspaceKey;
 		if (!current()) return { status: "stale" };
 		const r = await call<{
 			sessionId?: unknown;
@@ -346,8 +346,7 @@ export class ConnectedSessionChat implements SessionChatSource {
 	}
 
 	dispose(): void {
-		this.#closed = true;
-		this.#listeners.clear();
+		this.#feed.close();
 	}
 }
 
@@ -359,14 +358,6 @@ export type SessionChatMirror = {
 };
 
 export function mirrorSessionChat(source: SessionChatSource): SessionChatMirror {
-	const chat = signal(source.chat());
-	const stop = source.onChange((next) => chat.set(next));
-	return {
-		source,
-		chat,
-		close: () => {
-			stop();
-			source.dispose();
-		},
-	};
+	const { view, close } = mirror(source, source.chat());
+	return { source, chat: view, close };
 }

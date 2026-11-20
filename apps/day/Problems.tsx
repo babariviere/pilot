@@ -4,12 +4,14 @@
 // fixed follow-up, sent once on a press), and a failed chat offers Dismiss,
 // which takes it off this list and sends nothing to the chat. A lost answer is
 // checked, never sent again. A chat that ended its turn with no result and no
-// question shows its last message with Reply and Continue (ChatWaits.tsx).
+// question shows its last message with Reply and Continue without reply
+// (ChatWaits.tsx). On a mission page a row with a chat links it, read only.
 // Nothing here retries on its own.
 import { signal, View } from "nsh";
 import type { Problem } from "pilot-day/native";
 import { ChatWaits } from "./ChatWaits";
 import { openDelivery } from "./deliveryView";
+import { OpenChatAction } from "./OpenChatAction";
 import type { ContinueResult, SessionChatSource } from "./sessionChat";
 import { Button, Caption, EmptyLine, Row, RowDetail, Rows, Section } from "./ui";
 import { openMission } from "./view";
@@ -84,6 +86,8 @@ export function Problems(props: {
 	earlier?: boolean;
 	/** Sends Continue and Dismiss. Without it, rows offer only their way to the work. */
 	chat?: SessionChatSource;
+	/** Opens a row's chat, read only. Without it, rows offer no chat link. */
+	openChat?: (sessionId: string) => void;
 	actionProject?: string | null;
 	project?: (id: string) => string;
 	unreadProjects?: string[];
@@ -132,6 +136,14 @@ export function Problems(props: {
 											<ChatActions p={p()} chat={props.chat as SessionChatSource} />
 										</If>
 										<View class="flex-row flex-wrap gap-2">
+											<If when={props.openChat && p().sessionId}>
+												<OpenChatAction
+													label="Open agent chat"
+													testID={`problem-chat-${p().id}`}
+													accessibilityLabel={`Open agent chat for ${p().title}, read only. Opening it sends nothing.`}
+													onPress={() => props.openChat?.(p().sessionId as string)}
+												/>
+											</If>
 											<If when={p().taskId || (p().sessionId && !p().missionId)}>
 												<Button
 													small

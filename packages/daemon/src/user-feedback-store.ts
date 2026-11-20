@@ -1,9 +1,9 @@
 /** User feedback shares MissionStore's transaction, disk replica and durability boundary. */
 import type { UserFeedback, UserFeedbackWork } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
-import type { KnowledgeDb } from "./project-knowledge-store.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
-type FeedbackDb = Pick<KnowledgeDb, "all" | "one" | "run" | "transaction">;
+type FeedbackDb = Pick<MissionDbPort, "all" | "one" | "run" | "transaction">;
 
 export const USER_FEEDBACK_SCHEMA = `
 CREATE TABLE IF NOT EXISTS user_feedback (

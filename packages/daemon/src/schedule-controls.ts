@@ -1,13 +1,17 @@
 /** Native schedule edits use the existing durable journal. Recovery is lookup-only. */
 import { createHash } from "node:crypto";
 import type { DurableOperation, OperationHost, SchedulePatch, ScheduleRequest } from "@pilot/protocol";
-import { canonicalJSON, OperationRejected, sameHost } from "./operation-journal.ts";
+import { canonicalJSON } from "./canonical.ts";
+import { SerialAdmissions } from "./native-intent.ts";
+import { OperationRejected, sameHost } from "./operation-journal.ts";
+import type { ControlOperation } from "./operations.ts";
 import type { ProjectStore } from "./projects.ts";
 import { RecurrenceCalendar, validateRecurrence } from "./schedule-recurrence.ts";
 import type { ScheduleService } from "./schedules.ts";
 import type { SessionManager } from "./sessions.ts";
 
 export const SCHEDULE_CONTROLS = "schedule-controls";
+const OUTCOME_UNKNOWN = "Schedule outcome unknown; lookup only";
 type Intent = {
 	purpose: typeof SCHEDULE_CONTROLS;
 	binding: string;
@@ -86,7 +90,7 @@ export function validateScheduleIntent(op: DurableOperation, host: OperationHost
 	}
 }
 export class ScheduleControls {
-	private tail: Promise<unknown> = Promise.resolve();
+	private readonly admissions = new SerialAdmissions(OUTCOME_UNKNOWN);
 	private readonly schedules: ScheduleService;
 	private readonly sessions: Pick<SessionManager, "list" | "automationHistory">;
 	private readonly projects: Pick<ProjectStore, "list">;
@@ -158,8 +162,7 @@ export class ScheduleControls {
 		};
 	}
 	admit(op: DurableOperation, firstEntry: boolean) {
-		if (!firstEntry) return Promise.reject(new Error("Schedule outcome unknown; lookup only"));
-		const work = this.tail.then(async () => {
+		return this.admissions.admit(firstEntry, async () => {
 			const p = validateScheduleIntent(op, this.host);
 			const snapshot = this.read(p.page, {
 				editId: typeof p.value.id === "string" ? p.value.id : undefined,
@@ -212,7 +215,24 @@ export class ScheduleControls {
 			const updated = await this.schedules.update(row.id, { ...patch, expectedHome } as SchedulePatch);
 			return { action: p.action, scheduleId: row.id, revision: updated.revision };
 		});
-		this.tail = work.catch(() => {});
-		return work;
 	}
 }
+
+export const scheduleOperations = (
+	controls: ScheduleControls | undefined,
+	host: OperationHost | undefined,
+): ControlOperation => ({
+	kind: SCHEDULE_CONTROLS,
+	unavailable: "Native schedules unavailable",
+	outcomeUnknown: OUTCOME_UNKNOWN,
+	validate: host
+		? (op) => {
+				try {
+					validateScheduleIntent(op, host);
+				} catch {
+					throw new Error("Invalid native schedule intent");
+				}
+			}
+		: undefined,
+	admit: controls && ((op, firstEntry) => controls.admit(op, firstEntry)),
+});

@@ -130,6 +130,15 @@ const AI_LAUNCH_REASONS = [
 export type TelemetryServiceName = "pilot.daemon" | "pilot.kernel";
 export type TelemetryEnvironment = "release" | "development" | "test";
 export type TelemetryHostKind = "local" | "devbox";
+
+export function telemetryEnvironment(nodeEnv = process.env.NODE_ENV): TelemetryEnvironment {
+	return nodeEnv === "test" ? "test" : nodeEnv === "production" ? "release" : "development";
+}
+
+/** Pilot devboxes run Linux; local hosts run macOS. */
+export function localHostKind(): TelemetryHostKind {
+	return process.platform === "linux" ? "devbox" : "local";
+}
 export type TelemetrySpanName = (typeof SPAN_NAMES)[number];
 
 export type TelemetryToolCategory = (typeof TOOL_CATEGORIES)[number];

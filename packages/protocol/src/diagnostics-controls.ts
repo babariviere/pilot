@@ -1,5 +1,6 @@
-import type { ModelOption, SessionState } from "./index.ts";
+import type { ModelOption } from "./models.ts";
 import type { OperationHost } from "./operations.ts";
+import type { SessionState } from "./session.ts";
 import type { TelemetrySettings } from "./telemetry.ts";
 
 export interface DiagnosticsPrivacyValue {

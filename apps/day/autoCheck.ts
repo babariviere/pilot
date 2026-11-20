@@ -2,6 +2,7 @@
 // Unknown; Check only reads its receipt and never sends again, so running it
 // without a click is safe. The window checks right away, then less often,
 // and offers Check again only after these tries. A reconnect starts over.
+import { errorText, logEvent } from "./dayLog";
 
 /**
  * When each automatic look happens, from the moment an item is Unknown.
@@ -76,7 +77,7 @@ export class AutoCheck {
 				if (this.#closed || !this.#tries.has(id)) return;
 				this.#running.add(id);
 				void this.#look(id)
-					.catch(() => {})
+					.catch((error: unknown) => logEvent("ui.error", errorText(error)))
 					.finally(() => {
 						this.#running.delete(id);
 						// Settled items were forgotten by `watch` meanwhile.

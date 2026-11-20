@@ -1,4 +1,5 @@
-import { cleanup, signal, View } from "nsh";
+import { cleanup, effect, signal, untracked, View } from "nsh";
+import { AutoCheck } from "./autoCheck";
 import { call, windowId } from "./bridge";
 import {
 	Body,
@@ -157,11 +158,13 @@ export function LinearPublisher(props: { missionId: string; request?: Request })
 	const load = async (op: PublisherIntent) => {
 		if (busy() || disposed) return;
 		busy.set(op.action);
-		trouble.set("");
+		// A lookup keeps the words about the publish it looks up until it settles it.
+		if (op.action !== "check") trouble.set("");
 		try {
 			const next = await send(props.missionId, op);
 			if (disposed) return;
 			if (!next) {
+				if (op.action === "check") return;
 				if (op.action === "publish") unknown.set(true);
 				trouble.set(
 					op.action === "publish"
@@ -171,6 +174,7 @@ export function LinearPublisher(props: { missionId: string; request?: Request })
 				return;
 			}
 			unknown.set(false);
+			if (!next.pending) trouble.set("");
 			snapshot.set(next);
 			if (!next.parentUrls.includes(parent())) parent.set(next.parentUrls.length === 1 ? next.parentUrls[0]! : "");
 			tasks.set(tasks().filter((id) => next.tasks.some((t) => t.id === id)));
@@ -185,12 +189,21 @@ export function LinearPublisher(props: { missionId: string; request?: Request })
 	const start = async () => {
 		open.set(true);
 		await load({ action: "read" });
-		if (!disposed && open() && snapshot()?.pending) await load({ action: "check" });
 	};
 	const view = () => snapshot();
 	const draft = () => view()?.preview;
 	const conflict = () => !!draft()?.edits.length || !!draft()?.links.some((l) => l.change === "removed-in-linear");
 	const needsCheck = () => !!view()?.pending || unknown();
+	// A publish Pilot did not hear back about is looked up by its receipt automatically; Check is the fallback.
+	const auto = new AutoCheck(
+		() => load({ action: "check" }),
+		() => {},
+	);
+	cleanup(() => auto.close());
+	effect(() => {
+		const follow = open() && needsCheck();
+		untracked(() => auto.watch(follow ? [props.missionId] : []));
+	});
 	const reset = () => {
 		const last = snapshot();
 		if (last) snapshot.set({ ...last, preview: null });
@@ -202,11 +215,6 @@ export function LinearPublisher(props: { missionId: string; request?: Request })
 		// Remove the old button before dispatch. An absent reply can only be checked.
 		reset();
 		await load({ action, pin, parentUrl: parent(), taskIds: tasks() });
-		if (!disposed && action === "publish" && needsCheck()) {
-			const last = trouble() || view()?.message || "";
-			await load({ action: "check" });
-			if (needsCheck() && !trouble()) trouble.set(last);
-		}
 	};
 	const count = (kind: Draft["change"]) => draft()?.issues.filter((i) => i.change === kind).length ?? 0;
 	return (

@@ -11,7 +11,8 @@ import type { LifecycleCheckpoint } from "./lifecycle-checkpoint.ts";
 import { canonicalJSON, OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
-import { SessionManager, Worker } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
+import { Worker } from "./kernel-worker.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const host = { hostId: "local", daemonId: "daemon", lineageId: "lineage" };

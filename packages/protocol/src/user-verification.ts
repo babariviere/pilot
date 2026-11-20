@@ -1,14 +1,12 @@
+import type { MissionDeliveryScreens } from "./mission-reports.ts";
 import type {
-	DurableOperation,
 	MissionArtifactLink,
 	MissionCodeCompletion,
 	MissionNonCodeDelivery,
 	MissionNonCodeDeliveryReference,
 	MissionResource,
-	OperationReceipt,
-} from "./index.ts";
-import type { MissionDeliveryScreens } from "./mission-reports.ts";
-
+} from "./missions.ts";
+import type { DurableOperation, OperationReceipt } from "./operations.ts";
 import type { VerificationSubject } from "./verification-subject.ts";
 
 export type { VerificationSubject } from "./verification-subject.ts";
@@ -70,7 +68,7 @@ export interface DeliveredWork {
 		state: "working" | "queued" | "question" | "waiting" | "stopped" | "failed" | "done" | "idle";
 		reason?: string;
 		/** With `queued`: its place in line and what holds the slots. */
-		queue?: import("./index.ts").CodingQueueView;
+		queue?: import("./coding-queue.ts").CodingQueueView;
 		canContinue?: true;
 		says?: string;
 	};

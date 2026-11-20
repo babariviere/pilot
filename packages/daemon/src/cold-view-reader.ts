@@ -7,8 +7,12 @@ import {
 	type SubagentTranscriptRead,
 	snapshotWorkerEntry,
 } from "@pilot/kernel";
-import type { DiagnosticHistoryPage, DiagnosticTargetReference, TranscriptContext } from "@pilot/protocol";
-import type { MissionThreadInputCausality } from "../../protocol/src/mission-thread.ts";
+import type {
+	DiagnosticHistoryPage,
+	DiagnosticTargetReference,
+	MissionThreadInputCausality,
+	TranscriptContext,
+} from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
 import { isWatchNotice } from "./worker-notice.ts";
 

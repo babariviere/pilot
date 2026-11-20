@@ -1,6 +1,6 @@
-import type { SQLInputValue } from "node:sqlite";
 import type { AssistanceRecord, AssistanceRequest, HumanActionCommand, HumanActionRecord } from "@pilot/protocol";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export const attentionDigest = (value: unknown): string => payloadHash(canonicalJSON(value));
 export const ATTENTION_SCHEMA = `
@@ -15,19 +15,11 @@ CREATE TABLE IF NOT EXISTS human_action_operations (
 );
 `;
 
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(work: () => T): T;
-	durable(): Promise<void>;
-}
-
 /** Only accessed by AttentionService, which checks authority and validates inputs. No work dispatch. */
 export class AttentionStore {
-	private readonly port: Port;
+	private readonly port: MissionDbPort;
 	private readonly listeners = new Set<() => void>();
-	constructor(port: Port) {
+	constructor(port: MissionDbPort) {
 		this.port = port;
 	}
 	durable(): Promise<void> {

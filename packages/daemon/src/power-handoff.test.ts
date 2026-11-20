@@ -65,6 +65,7 @@ test("mission completion notice and coordinator admission stay awake across the 
 		...sessions,
 		get: (id: string) => rows.get(id),
 		canSendNotice: () => true,
+		ownedPullRequests: () => [],
 		sendNotice: async (id: string, _content: string, requestId: string) => {
 			assert.equal(id, "lead");
 			assert.equal(notices.allowed(id, requestId), true);

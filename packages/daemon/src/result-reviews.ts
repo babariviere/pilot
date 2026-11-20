@@ -1,12 +1,13 @@
 /** Private discussion and personal notes. No approval, provider, PR or agent effects. */
-import type { DeliveredWork, VerificationSubject } from "@pilot/protocol";
 import type {
+	DeliveredWork,
 	ResultAnchor,
 	ResultReviewEdit,
 	ResultReviewEntry,
 	ResultReviewPage,
 	ResultReviewReceipt,
-} from "../../protocol/src/result-review.ts";
+	VerificationSubject,
+} from "@pilot/protocol";
 import { lineExcerpt } from "./human-review-anchors.ts";
 import type { MissionStore } from "./missions.ts";
 import type { NativeReviewReader } from "./native-review.ts";
@@ -121,7 +122,7 @@ export class ResultReviews {
 	async diff(subject: VerificationSubject, snapshotId: string) {
 		const { shown, reader, snapshot } = await this.source(subject, snapshotId);
 		let bytes = 0;
-		const files: import("../../protocol/src/result-review.ts").ResultDiff["files"] = [];
+		const files: import("@pilot/protocol").ResultDiff["files"] = [];
 		for (const change of snapshot.changes) {
 			let reason = "";
 			const side = async (which: "before" | "after", path: string | null) => {

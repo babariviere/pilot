@@ -1,6 +1,5 @@
 //! Released JSON -> canonical host -> real native lifecycle. Offline only.
 //! No signature bypass, fake successful update, launchd call or provider send.
-use nsh_core::prelude::*;
 use nsh_engine::EngineConfig;
 use nsh_testing::{Headless, compile_tsx};
 use pilot_day_native::{
@@ -496,64 +495,22 @@ fn official_root_check_keeps_original_unknown_operation_instead_of_a_new_offer()
     );
 }
 
-#[component]
-fn NativeFeedProbe() -> impl IntoElement {
-    let window =
-        nsh_core::element::engine_context::<pilot_day_native::bridge::UpdateWindow>().unwrap();
-    let status = signal("waiting".to_owned());
-    spawn(async move {
-        use pilot_day_native::{
-            OutcomeStatus, UpdateFeed,
-            update::{ConfirmIntent, PrepareIntent, SavedView, UpdateKind},
-        };
-        let feed = Instance::new(UpdateFeed::from_host(window.as_ref().clone()));
-        UpdateFeed::check(feed.clone()).await;
-        let revision = feed.with(|f| f.snapshot().revision);
-        feed.with_mut(|f| {
-            f.prepare(PrepareIntent {
-                mode: None,
-                kind: UpdateKind::App,
-                revision,
-            })
-        });
-        UpdateFeed::check(feed.clone()).await; // FIFO barrier after prepare, not a mutation retry
-        let confirmation = feed.with(|f| f.snapshot().pending.unwrap().id);
-        let result = UpdateFeed::confirm(
-            feed.clone(),
-            ConfirmIntent {
-                confirmation,
-                view: SavedView {
-                    goal: "native exact form".into(),
-                    ..Default::default()
-                },
-            },
-        )
-        .await;
-        assert_eq!(result.status, OutcomeStatus::Accepted);
-        status.set("feed-confirmed".into());
-    });
-    text(move || status.get())
-}
-
 #[test]
-fn from_host_confirmation_uses_the_same_gate_and_wakes_the_native_capture_owner() {
+fn a_bridge_confirmation_saves_the_exact_view_and_wakes_the_native_capture_owner() {
     let f = Fixture::new(false);
     let wake = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let count = wake.clone();
     f.bridge.set_flush_wakeup(Arc::new(move || {
         count.fetch_add(1, Ordering::SeqCst);
     }));
-    let mut config = EngineConfig::new(nsh_engine::Root::of::<NativeFeedProbe>());
-    config.clock = nsh_engine::Clock::manual(std::time::UNIX_EPOCH);
-    config.context = nsh_core::element::EngineContext::default().with(f.bridge.update_window());
-    let mut app = Headless::start(config).unwrap();
-    app.wait_for("feed-confirmed").unwrap();
+    let r = f.run(&format!("const p=await call('day.update.prepare',{{kind:'app',revision:1}});const id=p.value.snapshot.pending.id;return await call('day.update.confirm',{{confirmation:id,view:{VIEW}}});"));
+    assert!(r["error"].is_null(), "{r}");
     assert!(f.bridge.pending_update().is_some());
     assert_eq!(wake.load(Ordering::SeqCst), 1);
     assert!(
         std::fs::read_to_string(f.path.join("journal"))
             .unwrap()
-            .contains("native exact form")
+            .contains("unsent")
     );
     assert!(!f.source.profile.join(".daemon-upgrade.json").exists());
 }

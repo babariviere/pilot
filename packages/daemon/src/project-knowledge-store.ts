@@ -16,6 +16,7 @@ import type {
 	MissionKnowledgeLink,
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 type Row = Record<string, SQLInputValue>;
 
@@ -93,14 +94,21 @@ CREATE TABLE IF NOT EXISTS project_knowledge_documentation_tasks (
 );
 `;
 
-/** The few MissionStore primitives the catalog uses: the same in-memory connection, transactions and replica. */
-export interface KnowledgeDb {
-	all(sql: string, ...params: SQLInputValue[]): Row[];
-	one(sql: string, ...params: SQLInputValue[]): Row | undefined;
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(work: () => T): T;
-	/** Notifies mission listeners after a commit, so mission views reread their linked subset. */
-	changed(missionId: string): void;
+export type MissionSource = Extract<KnowledgeSource, { type: "mission" }>;
+
+/** A change to a mission record that Knowledge can cite. A delivery is a task completion with its commit. */
+export type MissionSourceChange =
+	| { missionId: string; kind: "decision"; decisionId: string }
+	| { missionId: string; kind: "brief"; revision: number }
+	| { missionId: string; kind: "delivery"; projectId: string; taskId: string; commit: string };
+
+/** The mission facts Knowledge cites. MissionStore owns them; Knowledge reads them and hears when they change. */
+export interface MissionSources {
+	missionProject(missionId: string): string | undefined;
+	missingCitation(source: MissionSource): string | undefined;
+	sourceRecords(source: MissionSource): unknown[];
+	isOpenTask(taskId: string): boolean;
+	onSourceChange(listener: (change: MissionSourceChange) => void): () => void;
 }
 
 export interface PreparedKnowledgeWrite {
@@ -138,9 +146,12 @@ function json<T>(value: SQLInputValue | undefined, fallback: T): T {
 }
 
 export class ProjectKnowledgeStore {
-	private readonly db: KnowledgeDb;
-	constructor(db: KnowledgeDb) {
+	private readonly db: MissionDbPort;
+	private readonly missions: MissionSources;
+	constructor(db: MissionDbPort, missions: MissionSources) {
 		this.db = db;
+		this.missions = missions;
+		missions.onSourceChange((change) => this.missionSourceChanged(change));
 	}
 
 	private freshness(row: Row | undefined, revision: number, current: number, detailed = false): KnowledgeFreshness {
@@ -338,26 +349,8 @@ export class ProjectKnowledgeStore {
 	}
 
 	/** The first cited mission record that does not exist, by exact ID. */
-	missingMissionCitation(source: Extract<KnowledgeSource, { type: "mission" }>): string | undefined {
-		const exists = (sql: string, value: SQLInputValue) => !!this.db.one(sql, source.missionId, value);
-		if (
-			source.decisionId !== undefined &&
-			!exists("SELECT 1 FROM decisions WHERE mission_id = ? AND id = ?", source.decisionId)
-		)
-			return "decision";
-		if (source.taskId !== undefined && !exists("SELECT 1 FROM tasks WHERE mission_id = ? AND id = ?", source.taskId))
-			return "task";
-		if (
-			source.eventId !== undefined &&
-			!exists("SELECT 1 FROM events WHERE mission_id = ? AND id = ?", source.eventId)
-		)
-			return "event";
-		if (
-			source.briefRevision !== undefined &&
-			!exists("SELECT 1 FROM brief_revisions WHERE mission_id = ? AND revision = ?", source.briefRevision)
-		)
-			return "brief revision";
-		return undefined;
+	missingMissionCitation(source: MissionSource): string | undefined {
+		return this.missions.missingCitation(source);
 	}
 
 	/** Whether the exact revision exists in this project, for knowledge citations. */
@@ -382,113 +375,116 @@ export class ProjectKnowledgeStore {
 	 */
 	write(projectId: string, knowledgeId: string | undefined, write: PreparedKnowledgeWrite): KnowledgeWriteResult {
 		let notify: string[] = [];
-		const result = this.db.transaction((): KnowledgeWriteResult => {
-			const saved = this.db.one(
-				"SELECT * FROM project_knowledge_revisions WHERE project_id = ? AND operation_id = ?",
-				projectId,
-				write.operationId,
-			);
-			if (saved) {
-				if (saved.request_hash !== write.requestHash)
-					throw new Conflict("This operation ID was already used for a different knowledge write");
-				const id = String(saved.knowledge_id);
-				return {
-					operationId: write.operationId,
-					replayed: true,
-					entry: this.summary(projectId, id)!,
-					revision: this.revisionSummaryFrom(saved),
-				};
-			}
-			const now = Date.now();
-			let id: string;
-			let revision: number;
-			if (knowledgeId === undefined) {
-				if (write.expectedRevision !== 0) throw new Conflict("Create requires expectedRevision 0");
-				for (const missionId of write.origin?.missionId ? [write.origin.missionId] : []) {
-					const mission = this.db.one("SELECT project_id FROM missions WHERE id = ?", missionId);
-					if (!mission || mission.project_id !== projectId)
-						throw new Conflict("The originating mission is not in this project");
-				}
-				id = randomUUID();
-				revision = 1;
-				const origin: KnowledgeOrigin = { ...write.origin, recordedAt: now };
-				this.db.run(
-					"INSERT INTO project_knowledge VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)",
-					id,
+		const result = this.db.transaction(
+			(): KnowledgeWriteResult => {
+				const saved = this.db.one(
+					"SELECT * FROM project_knowledge_revisions WHERE project_id = ? AND operation_id = ?",
 					projectId,
-					write.kind,
-					JSON.stringify(origin),
-					write.title,
-					write.synopsis,
-					now,
-					now,
+					write.operationId,
 				);
-			} else {
-				const entry = this.entryRow(projectId, knowledgeId);
-				if (!entry) throw new NotFound("Knowledge entry not found in this project");
-				if (entry.kind !== write.kind) throw new Conflict("An entry's kind cannot change");
-				if (Number(entry.revision) !== write.expectedRevision)
-					throw new Conflict(
-						`Knowledge changed: current revision is ${entry.revision}, not ${write.expectedRevision}. Reread before appending.`,
+				if (saved) {
+					if (saved.request_hash !== write.requestHash)
+						throw new Conflict("This operation ID was already used for a different knowledge write");
+					const id = String(saved.knowledge_id);
+					return {
+						operationId: write.operationId,
+						replayed: true,
+						entry: this.summary(projectId, id)!,
+						revision: this.revisionSummaryFrom(saved),
+					};
+				}
+				const now = Date.now();
+				let id: string;
+				let revision: number;
+				if (knowledgeId === undefined) {
+					if (write.expectedRevision !== 0) throw new Conflict("Create requires expectedRevision 0");
+					for (const missionId of write.origin?.missionId ? [write.origin.missionId] : []) {
+						const mission = this.db.one("SELECT project_id FROM missions WHERE id = ?", missionId);
+						if (!mission || mission.project_id !== projectId)
+							throw new Conflict("The originating mission is not in this project");
+					}
+					id = randomUUID();
+					revision = 1;
+					const origin: KnowledgeOrigin = { ...write.origin, recordedAt: now };
+					this.db.run(
+						"INSERT INTO project_knowledge VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)",
+						id,
+						projectId,
+						write.kind,
+						JSON.stringify(origin),
+						write.title,
+						write.synopsis,
+						now,
+						now,
 					);
-				id = knowledgeId;
-				revision = Number(entry.revision) + 1;
+				} else {
+					const entry = this.entryRow(projectId, knowledgeId);
+					if (!entry) throw new NotFound("Knowledge entry not found in this project");
+					if (entry.kind !== write.kind) throw new Conflict("An entry's kind cannot change");
+					if (Number(entry.revision) !== write.expectedRevision)
+						throw new Conflict(
+							`Knowledge changed: current revision is ${entry.revision}, not ${write.expectedRevision}. Reread before appending.`,
+						);
+					id = knowledgeId;
+					revision = Number(entry.revision) + 1;
+					this.db.run(
+						"UPDATE project_knowledge SET revision = ?, title = ?, synopsis = ?, updated_at = ? WHERE id = ?",
+						revision,
+						write.title,
+						write.synopsis,
+						now,
+						id,
+					);
+					notify = this.linkedMissions(id);
+				}
 				this.db.run(
-					"UPDATE project_knowledge SET revision = ?, title = ?, synopsis = ?, updated_at = ? WHERE id = ?",
+					"INSERT INTO project_knowledge_revisions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					id,
 					revision,
+					projectId,
+					write.operationId,
+					write.requestHash,
 					write.title,
 					write.synopsis,
+					write.body,
+					JSON.stringify(write.sources),
+					write.reason ?? null,
+					JSON.stringify(write.author),
 					now,
-					id,
 				);
-				notify = this.linkedMissions(id);
-			}
-			this.db.run(
-				"INSERT INTO project_knowledge_revisions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-				id,
-				revision,
-				projectId,
-				write.operationId,
-				write.requestHash,
-				write.title,
-				write.synopsis,
-				write.body,
-				JSON.stringify(write.sources),
-				write.reason ?? null,
-				JSON.stringify(write.author),
-				now,
-			);
-			// Catalog revisions have host-recorded documentation origin. Mark citations, never launch work.
-			const dependents = this.db.all(
-				`SELECT DISTINCT k.id FROM project_knowledge k
+				// Catalog revisions have host-recorded documentation origin. Mark citations, never launch work.
+				const dependents = this.db.all(
+					`SELECT DISTINCT k.id FROM project_knowledge k
 				JOIN project_knowledge_revisions r ON r.knowledge_id=k.id AND r.revision=k.revision, json_each(r.sources) s
 				WHERE k.project_id=? AND json_extract(s.value, '$.type')='knowledge'
 				AND json_extract(s.value, '$.knowledgeId')=?`,
-				projectId,
-				id,
-			);
-			for (const dependent of dependents)
-				this.markPending(
 					projectId,
-					String(dependent.id),
-					"Documentation source revised; original citation retained",
-					`knowledge:${id}:${revision}`,
+					id,
 				);
-			return {
-				operationId: write.operationId,
-				replayed: false,
-				entry: this.summary(projectId, id)!,
-				revision: {
-					revision,
-					title: write.title,
-					synopsis: write.synopsis,
-					...(write.reason !== undefined ? { reason: write.reason } : {}),
-					author: write.author,
-					recordedAt: now,
-				},
-			};
-		});
-		for (const missionId of notify) this.db.changed(missionId);
+				for (const dependent of dependents)
+					this.markPending(
+						projectId,
+						String(dependent.id),
+						"Documentation source revised; original citation retained",
+						`knowledge:${id}:${revision}`,
+					);
+				return {
+					operationId: write.operationId,
+					replayed: false,
+					entry: this.summary(projectId, id)!,
+					revision: {
+						revision,
+						title: write.title,
+						synopsis: write.synopsis,
+						...(write.reason !== undefined ? { reason: write.reason } : {}),
+						author: write.author,
+						recordedAt: now,
+					},
+				};
+			},
+			{ reconcile: true },
+		);
+		for (const missionId of notify) this.db.changed(missionId, "passive");
 		return result;
 	}
 
@@ -507,10 +503,10 @@ export class ProjectKnowledgeStore {
 
 	/** Same-project mission and entry, else NotFound. Returns the entry's current revision. */
 	private admitLink(missionId: string, knowledgeId: string): number {
-		const mission = this.db.one("SELECT project_id FROM missions WHERE id = ?", missionId);
-		if (!mission) throw new NotFound("Mission not found");
+		const projectId = this.missions.missionProject(missionId);
+		if (projectId === undefined) throw new NotFound("Mission not found");
 		const entry = this.db.one("SELECT project_id, revision FROM project_knowledge WHERE id = ?", knowledgeId);
-		if (!entry || entry.project_id !== mission.project_id)
+		if (!entry || entry.project_id !== projectId)
 			throw new NotFound("Knowledge entry not found in this mission's project");
 		return Number(entry.revision);
 	}
@@ -540,48 +536,53 @@ export class ProjectKnowledgeStore {
 		next: { linked: true; pinnedRevision?: number } | { linked: false },
 		actor: KnowledgeAuthor,
 	): MissionKnowledgeLink {
-		const result = this.db.transaction(() => {
-			const current = this.admitLink(missionId, knowledgeId);
-			if (
-				next.linked &&
-				next.pinnedRevision !== undefined &&
-				(next.pinnedRevision < 1 || next.pinnedRevision > current)
-			)
-				throw new NotFound(`Knowledge revision ${next.pinnedRevision} does not exist`);
-			const row = this.db.one(
-				"SELECT link_revision, linked FROM mission_knowledge_links WHERE mission_id = ? AND knowledge_id = ?",
-				missionId,
-				knowledgeId,
-			);
-			const revision = Number(row?.link_revision ?? 0);
-			if (expectedLinkRevision !== revision)
-				throw new Conflict(`Mission link changed: current link revision is ${revision}. Reread before retrying.`);
-			if (!next.linked && Number(row?.linked ?? 0) !== 1)
-				throw new Conflict("This entry is not linked to the mission");
-			this.db.run(
-				`INSERT INTO mission_knowledge_links VALUES (?, ?, ?, ?, ?, ?, ?)
+		const result = this.db.transaction(
+			() => {
+				const current = this.admitLink(missionId, knowledgeId);
+				if (
+					next.linked &&
+					next.pinnedRevision !== undefined &&
+					(next.pinnedRevision < 1 || next.pinnedRevision > current)
+				)
+					throw new NotFound(`Knowledge revision ${next.pinnedRevision} does not exist`);
+				const row = this.db.one(
+					"SELECT link_revision, linked FROM mission_knowledge_links WHERE mission_id = ? AND knowledge_id = ?",
+					missionId,
+					knowledgeId,
+				);
+				const revision = Number(row?.link_revision ?? 0);
+				if (expectedLinkRevision !== revision)
+					throw new Conflict(
+						`Mission link changed: current link revision is ${revision}. Reread before retrying.`,
+					);
+				if (!next.linked && Number(row?.linked ?? 0) !== 1)
+					throw new Conflict("This entry is not linked to the mission");
+				this.db.run(
+					`INSERT INTO mission_knowledge_links VALUES (?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(mission_id, knowledge_id) DO UPDATE SET link_revision = excluded.link_revision,
 				linked = excluded.linked, pinned_revision = excluded.pinned_revision, updated_at = excluded.updated_at,
 				updated_by = excluded.updated_by`,
-				missionId,
-				knowledgeId,
-				revision + 1,
-				next.linked ? 1 : 0,
-				next.linked ? (next.pinnedRevision ?? null) : null,
-				Date.now(),
-				JSON.stringify(actor),
-			);
-			return this.linkFrom(
-				missionId,
-				knowledgeId,
-				this.db.one(
-					"SELECT * FROM mission_knowledge_links WHERE mission_id = ? AND knowledge_id = ?",
 					missionId,
 					knowledgeId,
-				),
-			);
-		});
-		this.db.changed(missionId);
+					revision + 1,
+					next.linked ? 1 : 0,
+					next.linked ? (next.pinnedRevision ?? null) : null,
+					Date.now(),
+					JSON.stringify(actor),
+				);
+				return this.linkFrom(
+					missionId,
+					knowledgeId,
+					this.db.one(
+						"SELECT * FROM mission_knowledge_links WHERE mission_id = ? AND knowledge_id = ?",
+						missionId,
+						knowledgeId,
+					),
+				);
+			},
+			{ reconcile: true },
+		);
+		this.db.changed(missionId, "passive");
 		return result;
 	}
 
@@ -590,34 +591,37 @@ export class ProjectKnowledgeStore {
 	 * Returns the new generation.
 	 */
 	markPending(projectId: string, id: string, reason: string, trigger?: string): number {
-		return this.db.transaction(() => {
-			if (!this.entryRow(projectId, id)) throw new NotFound("Knowledge entry not found in this project");
-			const row = this.check(id);
-			const active = row && Number(row.pending_generation) > Number(row.cleared_generation);
-			const reasons = active ? json<string[]>(row.pending_reasons, []) : [];
-			const triggers = active ? json<string[]>(row.pending_triggers, []) : [];
-			if (active && trigger !== undefined && triggers.includes(trigger) && reasons.includes(reason))
-				return Number(row.pending_generation);
-			if (!reasons.includes(reason) && reasons.length < MAX_PENDING_REASONS) reasons.push(reason);
-			// Overflow is visible as broader pending coverage, not silently dropped work.
-			if (trigger !== undefined && !triggers.includes(trigger)) {
-				if (triggers.length < MAX_PENDING_TRIGGERS) triggers.push(trigger);
-				else if (!reasons.includes("More triggers than retained")) reasons.push("More triggers than retained");
-			}
-			const generation = Number(row?.pending_generation ?? 0) + 1;
-			this.db.run(
-				`INSERT INTO project_knowledge_checks (knowledge_id, pending_generation, pending_since, pending_reasons, pending_triggers)
+		return this.db.transaction(
+			() => {
+				if (!this.entryRow(projectId, id)) throw new NotFound("Knowledge entry not found in this project");
+				const row = this.check(id);
+				const active = row && Number(row.pending_generation) > Number(row.cleared_generation);
+				const reasons = active ? json<string[]>(row.pending_reasons, []) : [];
+				const triggers = active ? json<string[]>(row.pending_triggers, []) : [];
+				if (active && trigger !== undefined && triggers.includes(trigger) && reasons.includes(reason))
+					return Number(row.pending_generation);
+				if (!reasons.includes(reason) && reasons.length < MAX_PENDING_REASONS) reasons.push(reason);
+				// Overflow is visible as broader pending coverage, not silently dropped work.
+				if (trigger !== undefined && !triggers.includes(trigger)) {
+					if (triggers.length < MAX_PENDING_TRIGGERS) triggers.push(trigger);
+					else if (!reasons.includes("More triggers than retained")) reasons.push("More triggers than retained");
+				}
+				const generation = Number(row?.pending_generation ?? 0) + 1;
+				this.db.run(
+					`INSERT INTO project_knowledge_checks (knowledge_id, pending_generation, pending_since, pending_reasons, pending_triggers)
 				VALUES (?, ?, ?, ?, ?) ON CONFLICT(knowledge_id) DO UPDATE SET pending_generation = excluded.pending_generation,
 				pending_since = ${active ? "pending_since" : "excluded.pending_since"}, pending_reasons = excluded.pending_reasons,
 				pending_triggers = excluded.pending_triggers`,
-				id,
-				generation,
-				Date.now(),
-				JSON.stringify(reasons),
-				JSON.stringify(triggers),
-			);
-			return generation;
-		});
+					id,
+					generation,
+					Date.now(),
+					JSON.stringify(reasons),
+					JSON.stringify(triggers),
+				);
+				return generation;
+			},
+			{ reconcile: true },
+		);
 	}
 
 	/** Bounded keyset scan for maintenance, separate from all passive catalog reads. */
@@ -643,58 +647,77 @@ export class ProjectKnowledgeStore {
 
 	/** Persist only changed observations. Comparing source bytes makes duplicate/missed hints cheap. */
 	observe(projectId: string, id: string, observation: KnowledgeObservation, expectedGeneration: number): void {
-		this.db.transaction(() => {
-			if (Number(this.entryRow(projectId, id)?.revision) !== observation.revision)
-				throw new Conflict("Knowledge changed during source observation");
-			if (this.pendingGeneration(id) !== expectedGeneration)
-				throw new Conflict("Pending work changed during source observation");
-			const previous = this.observation(id);
-			const encoded = JSON.stringify(observation.sources);
-			if (previous?.revision === observation.revision && JSON.stringify(previous.sources) === encoded) return;
-			this.db.run(
-				`INSERT INTO project_knowledge_observations VALUES (?, ?, ?, ?)
+		this.db.transaction(
+			() => {
+				if (Number(this.entryRow(projectId, id)?.revision) !== observation.revision)
+					throw new Conflict("Knowledge changed during source observation");
+				if (this.pendingGeneration(id) !== expectedGeneration)
+					throw new Conflict("Pending work changed during source observation");
+				const previous = this.observation(id);
+				const encoded = JSON.stringify(observation.sources);
+				if (previous?.revision === observation.revision && JSON.stringify(previous.sources) === encoded) return;
+				this.db.run(
+					`INSERT INTO project_knowledge_observations VALUES (?, ?, ?, ?)
 				ON CONFLICT(knowledge_id) DO UPDATE SET revision = excluded.revision, at = excluded.at, sources = excluded.sources`,
-				id,
-				observation.revision,
-				observation.at,
-				encoded,
-			);
-			this.markPending(
-				projectId,
-				id,
-				"Registered sources need a check",
-				`observation:${observation.revision}:${createHash("sha256").update(encoded).digest("hex")}`,
-			);
-			const unavailable = observation.sources.filter((source) => source.version === null);
-			if (unavailable.length)
-				this.recordFailure(
+					id,
+					observation.revision,
+					observation.at,
+					encoded,
+				);
+				this.markPending(
 					projectId,
 					id,
-					`Unavailable coverage: ${unavailable
-						.map((s) => s.coverage)
-						.join("; ")
-						.slice(0, 900)}`,
+					"Registered sources need a check",
+					`observation:${observation.revision}:${createHash("sha256").update(encoded).digest("hex")}`,
 				);
-		});
+				const unavailable = observation.sources.filter((source) => source.version === null);
+				if (unavailable.length)
+					this.recordFailure(
+						projectId,
+						id,
+						`Unavailable coverage: ${unavailable
+							.map((s) => s.coverage)
+							.join("; ")
+							.slice(0, 900)}`,
+					);
+			},
+			{ reconcile: true },
+		);
 	}
 
 	recordFailure(projectId: string, id: string, reason: string): void {
-		this.db.transaction(() => {
-			if (!this.entryRow(projectId, id)) throw new NotFound("Knowledge entry not found in this project");
-			if (!this.summary(projectId, id)?.freshness.pending)
-				this.markPending(projectId, id, "Check failed; needs another check");
-			this.db.run(
-				`INSERT INTO project_knowledge_checks (knowledge_id, failure_at, failure_reason) VALUES (?, ?, ?)
+		this.db.transaction(
+			() => {
+				if (!this.entryRow(projectId, id)) throw new NotFound("Knowledge entry not found in this project");
+				if (!this.summary(projectId, id)?.freshness.pending)
+					this.markPending(projectId, id, "Check failed; needs another check");
+				this.db.run(
+					`INSERT INTO project_knowledge_checks (knowledge_id, failure_at, failure_reason) VALUES (?, ?, ?)
 			ON CONFLICT(knowledge_id) DO UPDATE SET failure_at = excluded.failure_at, failure_reason = excluded.failure_reason`,
-				id,
-				Date.now(),
-				reason.slice(0, 1000),
-			);
-		});
+					id,
+					Date.now(),
+					reason.slice(0, 1000),
+				);
+			},
+			{ reconcile: true },
+		);
 	}
 
-	/** Atomic with canonical mutations in this database. No source fanout or worker launch. */
-	invalidateMission(missionId: string, field: "decisionId" | "taskId" | "briefRevision", ref: string | number): void {
+	/** Runs inside the mission write's transaction. No source fanout or worker launch. */
+	private missionSourceChanged(change: MissionSourceChange): void {
+		if (change.kind === "decision") this.invalidateMission(change.missionId, "decisionId", change.decisionId);
+		else if (change.kind === "brief") this.invalidateMission(change.missionId, "briefRevision", change.revision);
+		else {
+			this.invalidateMission(change.missionId, "taskId", change.taskId);
+			this.invalidateDelivery(change.projectId, change.missionId, change.taskId, change.commit);
+		}
+	}
+
+	private invalidateMission(
+		missionId: string,
+		field: "decisionId" | "taskId" | "briefRevision",
+		ref: string | number,
+	): void {
 		const rows = this.db.all(
 			`SELECT DISTINCT k.id, k.project_id FROM project_knowledge k
 			JOIN project_knowledge_revisions r ON r.knowledge_id=k.id AND r.revision=k.revision, json_each(r.sources) s
@@ -714,24 +737,27 @@ export class ProjectKnowledgeStore {
 
 	/** A coordinator explicitly reuses a task. This does not create, assign, start or complete one. */
 	bindDocumentationTask(projectId: string, ids: string[], missionId: string, taskId: string): void {
-		this.db.transaction(() => {
-			for (const id of ids) {
-				if (!this.summary(projectId, id)?.freshness.pending) throw new Conflict("Entry has no pending check");
-				const previous = this.check(id)?.task_id;
-				if (
-					previous &&
-					previous !== taskId &&
-					this.db.one("SELECT 1 FROM tasks WHERE id = ? AND status NOT IN ('done', 'dropped')", previous)
-				)
-					throw new Conflict("Reuse the existing open documentation task");
-				this.db.run("UPDATE project_knowledge_checks SET task_id = ? WHERE knowledge_id = ?", taskId, id);
-			}
-			this.db.run("INSERT OR IGNORE INTO project_knowledge_documentation_tasks VALUES (?, ?)", missionId, taskId);
-		});
+		this.db.transaction(
+			() => {
+				for (const id of ids) {
+					if (!this.summary(projectId, id)?.freshness.pending) throw new Conflict("Entry has no pending check");
+					const previous = this.check(id)?.task_id;
+					if (
+						previous &&
+						previous !== taskId &&
+						this.missions.isOpenTask(String(previous))
+					)
+						throw new Conflict("Reuse the existing open documentation task");
+					this.db.run("UPDATE project_knowledge_checks SET task_id = ? WHERE knowledge_id = ?", taskId, id);
+				}
+				this.db.run("INSERT OR IGNORE INTO project_knowledge_documentation_tasks VALUES (?, ?)", missionId, taskId);
+			},
+			{ reconcile: true },
+		);
 	}
 
 	/** Completion receipts carry no changed-path proof. Keep mapping explicitly unknown, not 'unaffected'. */
-	invalidateDelivery(projectId: string, missionId: string, taskId: string, commit: string): void {
+	private invalidateDelivery(projectId: string, missionId: string, taskId: string, commit: string): void {
 		const rows = this.db.all(
 			`SELECT DISTINCT k.id FROM project_knowledge k
 			JOIN project_knowledge_revisions r ON r.knowledge_id=k.id AND r.revision=k.revision, json_each(r.sources) s
@@ -757,38 +783,10 @@ export class ProjectKnowledgeStore {
 	}
 
 	/** Current canonical state, not the historical quotation/pin. Exact body pins remain in the revision. */
-	missionSourceVersion(source: Extract<KnowledgeSource, { type: "mission" }>, projectId: string): unknown {
-		if (this.db.one("SELECT project_id FROM missions WHERE id = ?", source.missionId)?.project_id !== projectId)
+	missionSourceVersion(source: MissionSource, projectId: string): unknown {
+		if (this.missions.missionProject(source.missionId) !== projectId)
 			throw new NotFound("Mission source is unavailable in this project");
-		const records: unknown[] = [];
-		if (source.decisionId) {
-			const decision = this.db.one(
-				"SELECT id, text, audience, replacement, withdrawn FROM decisions WHERE mission_id = ? AND id = ?",
-				source.missionId,
-				source.decisionId,
-			);
-			// Preserve pre-link observation tokens for unchanged legacy decisions.
-			if (decision && !decision.replacement) delete decision.replacement;
-			if (decision && !decision.withdrawn) delete decision.withdrawn;
-			records.push(decision);
-		}
-		if (source.taskId)
-			records.push(
-				this.db.one(
-					`SELECT t.id, t.title, t.body, t.status, t.updated_at, c.record FROM tasks t
-			LEFT JOIN task_completions c ON c.task_id=t.id WHERE t.mission_id = ? AND t.id = ?`,
-					source.missionId,
-					source.taskId,
-				),
-			);
-		if (source.eventId)
-			records.push(
-				this.db.one("SELECT * FROM events WHERE mission_id = ? AND id = ?", source.missionId, source.eventId),
-			);
-		if (source.briefRevision !== undefined)
-			records.push(this.db.one("SELECT brief_revision FROM missions WHERE id = ?", source.missionId));
-		if (!records.length)
-			records.push(this.db.one("SELECT brief_revision, status FROM missions WHERE id = ?", source.missionId));
+		const records = this.missions.sourceRecords(source);
 		if (records.some((record) => !record)) throw new NotFound("Registered mission source is unavailable");
 		return records;
 	}
@@ -808,36 +806,40 @@ export class ProjectKnowledgeStore {
 			sourceVersions: unknown;
 		},
 	): void {
-		this.db.transaction(() => {
-			const entry = this.entryRow(projectId, id);
-			if (!entry) throw new NotFound("Knowledge entry not found in this project");
-			if (Number(entry.revision) !== check.revision) throw new Conflict("Knowledge changed since the check began");
-			const row = this.check(id);
-			if (Number(row?.pending_generation ?? 0) !== check.pendingGeneration)
-				throw new Conflict("Newer pending work arrived since the check began");
-			const observation = this.observation(id);
-			if (
-				observation &&
-				(observation.revision !== check.revision ||
-					JSON.stringify(observation.sources) !== JSON.stringify(check.sourceVersions))
-			)
-				throw new Conflict("Observed sources changed since the check began");
-			this.db.run(
-				`INSERT INTO project_knowledge_checks (knowledge_id, checked_revision, checked_at, checker, coverage,
+		this.db.transaction(
+			() => {
+				const entry = this.entryRow(projectId, id);
+				if (!entry) throw new NotFound("Knowledge entry not found in this project");
+				if (Number(entry.revision) !== check.revision)
+					throw new Conflict("Knowledge changed since the check began");
+				const row = this.check(id);
+				if (Number(row?.pending_generation ?? 0) !== check.pendingGeneration)
+					throw new Conflict("Newer pending work arrived since the check began");
+				const observation = this.observation(id);
+				if (
+					observation &&
+					(observation.revision !== check.revision ||
+						JSON.stringify(observation.sources) !== JSON.stringify(check.sourceVersions))
+				)
+					throw new Conflict("Observed sources changed since the check began");
+				this.db.run(
+					`INSERT INTO project_knowledge_checks (knowledge_id, checked_revision, checked_at, checker, coverage,
 				source_versions, pending_generation, cleared_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(knowledge_id) DO UPDATE SET checked_revision = excluded.checked_revision,
 				checked_at = excluded.checked_at, checker = excluded.checker, coverage = excluded.coverage,
 				source_versions = excluded.source_versions, cleared_generation = excluded.cleared_generation,
 				pending_reasons = NULL, pending_triggers = NULL, pending_since = NULL, failure_at = NULL, failure_reason = NULL`,
-				id,
-				check.revision,
-				Date.now(),
-				check.checker,
-				check.coverage,
-				JSON.stringify(check.sourceVersions ?? null),
-				check.pendingGeneration,
-				check.pendingGeneration,
-			);
-		});
+					id,
+					check.revision,
+					Date.now(),
+					check.checker,
+					check.coverage,
+					JSON.stringify(check.sourceVersions ?? null),
+					check.pendingGeneration,
+					check.pendingGeneration,
+				);
+			},
+			{ reconcile: true },
+		);
 	}
 }

@@ -61,7 +61,7 @@ export interface TelemetryClearResponse {
 /** Private Local control, never remote telemetry or delivery evidence. */
 export interface NextDiagnosticsControl {
 	schemaVersion: 1;
-	host: import("./index.ts").OperationHost;
+	host: import("./operations.ts").OperationHost;
 	localDiagnostics: boolean;
 	epoch: number;
 }

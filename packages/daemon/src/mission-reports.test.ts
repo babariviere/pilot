@@ -308,7 +308,7 @@ test("failed notice insertion rolls back the report in the same transaction", as
 	const f = fixture(t);
 	const write = f.write();
 	// biome-ignore lint/complexity/useLiteralKeys: Inject a SQLite failure in the private event transaction.
-	const db = f.store["db"];
+	const db = f.store["database"];
 	db.exec(
 		"CREATE TRIGGER fail_report_notice BEFORE INSERT ON events WHEN NEW.kind='update' BEGIN SELECT RAISE(ABORT,'notice insert failed'); END",
 	);

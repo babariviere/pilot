@@ -11,6 +11,7 @@ import { PiSourceMcpClient } from "./source-mcp.ts";
 import {
 	decodeMcpResult,
 	dedicatedSourceTool,
+	SOURCE_WRITE_TOOLS,
 	SourceConfigurationError,
 	SourceRateLimited,
 	SourceSignInRequired,
@@ -166,62 +167,13 @@ test("Slack reaction confirmations accept result wrappers but preserve failures 
 	}
 });
 
-test("check reads expose only reaction metadata and no done reaction write exists", () => {
-	assert.equal(dedicatedSourceTool("slack", "reactions"), "slack_get_reactions");
+test("Slack has no reaction read or done reaction write; every write tool is a dedicated tool", () => {
+	assert.equal(dedicatedSourceTool("slack", "reactions"), undefined);
 	assert.equal(dedicatedSourceTool("slack", "doneSlack"), undefined);
 	const args = { channel_id: "CEXAMPLE", message_ts: "1780000000.123456", emoji: "white_check_mark" };
 	assert.equal(validSourceArguments("startSlack", args), false);
-	const { emoji: _, ...readArgs } = args;
-	assert.equal(validSourceArguments("reactions", readArgs), true);
-	assert.equal(validSourceArguments("reactions", args), false);
-	for (const response of [
-		{ structuredContent: { reactions: [{ name: "white_check_mark", count: 2, users: ["private-name"] }] } },
-		{ content: [{ type: "text", text: '{"reactions":[{"name":"white_check_mark","count":1}]}' }] },
-		{ content: [{ type: "text", text: "Reactions:\n:white_check_mark: (2)\nUsers: private-name" }] },
-		{
-			content: [
-				{
-					type: "text",
-					text: JSON.stringify({
-						result:
-							"Reactions on message:\n\n:eyes: × 1 — Someone (U000000001)\n:white_check_mark: × 2 — Someone (U000000001)",
-					}),
-				},
-			],
-		},
-	])
-		assert.deepEqual(decodeMcpResult(response, "reactions"), { present: true });
-	for (const result of [
-		"No reactions found on this message.",
-		"Reactions on message:\n\n:fire: × 3 — Someone (U000000001)\n:pray: × 1 — Someone (U000000001)",
-		"Reactions on message:\n\n:white_check_mark: × 0 — ",
-	])
-		assert.deepEqual(
-			decodeMcpResult({ content: [{ type: "text", text: JSON.stringify({ result }) }] }, "reactions"),
-			{
-				present: false,
-			},
-		);
-	for (const reactions of [
-		[],
-		[{ name: "eyes", count: 2 }],
-		[{ name: "white_check_mark", count: 0 }],
-		"No reactions on this message.",
-	])
-		assert.deepEqual(decodeMcpResult({ structuredContent: { reactions } }, "reactions"), { present: false });
-	assert.deepEqual(
-		decodeMcpResult(
-			{ structuredContent: { message: { text: "Reactions: white_check_mark (1)", reactions: [] } } },
-			"reactions",
-		),
-		{ present: false },
-	);
-	for (const response of [
-		{ structuredContent: { reactions: [{ name: "white_check_mark", count: -1 }] } },
-		{ content: [{ type: "text", text: "white_check_mark" }] },
-		{ structuredContent: { ok: false, error: "private" } },
-	])
-		assert.throws(() => decodeMcpResult(response, "reactions"), /Slack reactions response|read Slack reactions/);
+	for (const tool of SOURCE_WRITE_TOOLS)
+		assert.ok(dedicatedSourceTool("linear", tool) || dedicatedSourceTool("slack", tool), tool);
 });
 
 test("in-flight stdio cancellation waits for process-group shutdown before returning", async () => {

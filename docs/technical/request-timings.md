@@ -68,7 +68,7 @@ polling uses the SDK's separate polling path and is outside this stream instrume
 ```sh
 node --test --test-force-exit --test-concurrency=2 \
   packages/kernel/src/performance.test.ts packages/kernel/src/model.integration.test.ts
-node --expose-gc scripts/bench/request-timings.ts 5
+node --expose-gc packages/kernel/scripts/bench-request-timings.ts 5
 ```
 
 The fixture takes the sample count as its optional argument (five per variant by default), alternates

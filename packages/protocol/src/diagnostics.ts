@@ -281,7 +281,7 @@ export interface SessionDiagnostics {
 	current: SessionDiagnosticCurrent;
 	resources: SessionDiagnosticResources;
 	/** Durable aggregate-only usage evidence. It contains no provider, model, prompt, path or chat identity. */
-	ai?: import("./index.ts").AIUsageAccounting;
+	ai?: import("./usage.ts").AIUsageAccounting;
 	/** Optional configured comparison derived at read time. It never controls execution. */
 	aiBudget?: import("./telemetry.ts").AIUsageBudgetComparison;
 	sources: DiagnosticSourceStatus[];

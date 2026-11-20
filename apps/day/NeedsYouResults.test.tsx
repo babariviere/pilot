@@ -63,8 +63,8 @@ test("Slack requests wait behind the results; Start, Later and Discard work from
 	const stripe = "Update the Stripe SDK to v15";
 	// A result is in front; the requests queue after every result.
 	expect(app.shows(request)).toBe(false);
-	// The headline counts every card Needs you holds: five results and two Slack requests.
-	expect(app.shows("Seven things need you.")).toBe(true);
+	// Results need attention. The two unstarted Slack requests stay a separate count.
+	expect(app.shows("Five things need you. Two incoming requests.")).toBe(true);
 	expect(app.shows("text:/ Five results to check and two Slack requests wait for you\\.$/")).toBe(true);
 	expect(app.shows(`Up next, Slack request: ${northwind}`)).toBe(true);
 	const texts = app.texts();

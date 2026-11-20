@@ -16,10 +16,13 @@ import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
 import { SessionManager } from "./sessions.ts";
+import type { SlackAdder } from "./slack-source.ts";
+import { SlackImportRefused } from "./slack-tracking.ts";
 import { SourceRegistry } from "./sources.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
+import { pauseParticipants } from "./testing/pause-participants.ts";
 
 export async function nativeIntakeFixture(
 	options: { tracking?: boolean; nativeAuth?: boolean; projectSetup?: boolean; schedules?: boolean } = {},
@@ -61,12 +64,25 @@ export async function nativeIntakeFixture(
 	await items.commit(project.id, "linear", [input("one"), input("two")]);
 	await items.commit(other.id, "linear", [input("foreign")]);
 	let external = 0;
-	const tracking = new SourceRegistry(projects, items, {
-		async call() {
-			external++;
-			throw new Error("No external writes or reads");
+	let slackAdder: SlackAdder | undefined;
+	const tracking = new SourceRegistry(
+		projects,
+		items,
+		{
+			async call() {
+				external++;
+				throw new Error("No external writes or reads");
+			},
 		},
-	});
+		{
+			slack: {
+				adder: (context, link) => {
+					if (!slackAdder) throw new SlackImportRefused("Adding Slack messages is unavailable");
+					return slackAdder(context, link);
+				},
+			},
+		},
+	);
 	const sessions = new SessionManager(home, projects);
 	// Use real durable session metadata/admission but do not open a provider or worker.
 	Object.defineProperty(sessions, "start", { value: async () => new Map() });
@@ -83,16 +99,20 @@ export async function nativeIntakeFixture(
 	args.missions = {
 		store,
 		service: {
+			setSchedules() {},
 			reports: new MissionReports(store),
-			controls: new MissionControls(store, {
-				checkpointMission: async () => {
-					throw new Error("No mission work");
-				},
-				resumeMission: async () => {
-					throw new Error("No mission work");
-				},
-			}),
-		} as MissionService,
+			controls: new MissionControls(
+				store,
+				pauseParticipants({
+					checkpointMission: async () => {
+						throw new Error("No mission work");
+					},
+					resumeMission: async () => {
+						throw new Error("No mission work");
+					},
+				}),
+			),
+		} as unknown as MissionService,
 	};
 	args.tracking = options.tracking === false ? undefined : tracking;
 	args.hello = hello;
@@ -126,6 +146,10 @@ export async function nativeIntakeFixture(
 		root,
 		schedules,
 		capability,
+		/** Reads a pasted Slack message in place of Slack. */
+		setSlackAdder(adder: SlackAdder) {
+			slackAdder = adder;
+		},
 		stats: () => ({ external, sessions: sessions.list().length }),
 		async close() {
 			await schedules?.stop();

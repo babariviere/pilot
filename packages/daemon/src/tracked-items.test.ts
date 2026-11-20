@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import { NotFound, ServiceUnavailable } from "./errors.ts";
 import { type TrackedInput, TrackedItemStore } from "./tracked-items.ts";
 
 export function trackedInput(externalId = "issue-1", updatedAt = 10): TrackedInput {
@@ -16,6 +17,16 @@ export function trackedInput(externalId = "issue-1", updatedAt = 10): TrackedInp
 		updatedAt,
 	};
 }
+test("worker limits pending calls, maps missing rows and frees capacity", async (t) => {
+	const store = new TrackedItemStore(":memory:");
+	t.after(() => store.close());
+	const requests = Array.from({ length: 64 }, () => store.list({ projectId: "p" }));
+	await assert.rejects(store.list({ projectId: "p" }), ServiceUnavailable);
+	await Promise.all(requests);
+	await assert.rejects(store.require("missing"), NotFound);
+	await store.commit("p", "linear", [trackedInput()]);
+	assert.equal(store.preview("p", "linear").total, 1);
+});
 test("active membership migration and retirement preserve legacy item identity and local links", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-tracked-migration-")),
 		path = join(home, "items.sqlite");
@@ -26,6 +37,13 @@ test("active membership migration and retirement preserve legacy item identity a
 		dismissed INTEGER NOT NULL DEFAULT 0, session_id TEXT, mission_id TEXT,
 		created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(project_id,kind,external_id));
 		INSERT INTO tracked_items VALUES ('local-id','p','linear','issue-1','Bug','https://example.com','Todo','{}',1,'s','m',1,10);`);
+	legacy.exec(`
+		ALTER TABLE tracked_items ADD COLUMN slack_reaction_seen INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE tracked_items ADD COLUMN slack_reaction_checked INTEGER NOT NULL DEFAULT 0;
+		UPDATE tracked_items SET slack_reaction_seen=1, slack_reaction_checked=123;
+		CREATE TABLE slack_pr_observations (session_id TEXT, url TEXT, state TEXT, checked_at INTEGER, merge_seen INTEGER);
+		INSERT INTO slack_pr_observations VALUES ('s','https://example.com/pr/1','merged',123,1);
+	`);
 	legacy.close();
 	const store = new TrackedItemStore(path);
 	try {
@@ -38,6 +56,15 @@ test("active membership migration and retirement preserve legacy item identity a
 		assert.equal(item.id, "local-id");
 		assert.equal(item.sessionId, "s");
 		assert.equal(item.missionId, "m");
+		const check = new DatabaseSync(path, { readOnly: true });
+		try {
+			const row = check.prepare("SELECT slack_reaction_seen, slack_reaction_checked FROM tracked_items").get();
+			assert.equal(row?.slack_reaction_seen, 1);
+			assert.equal(row?.slack_reaction_checked, 123);
+			assert.equal(check.prepare("SELECT merge_seen FROM slack_pr_observations").get()?.merge_seen, 1);
+		} finally {
+			check.close();
+		}
 	} finally {
 		await store.close();
 		await rm(home, { recursive: true, force: true });

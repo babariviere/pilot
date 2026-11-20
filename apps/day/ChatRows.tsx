@@ -1,14 +1,40 @@
-// A chat's rows, read only: the user's messages, Pilot's words, and one
-// quiet line per tool step or request. The planning chat and the chats
+// A chat's rows: user messages, Pilot replies, tool steps and requests. The planning chat and the chats
 // Pilot started (ChatScreen.tsx) show the same way. Show earlier reads the
 // rows before what shows; it sends nothing.
-import { View } from "nsh";
+import { computed, signal, View } from "nsh";
 import type { ChatRow } from "pilot-day/native";
 import { keepRead, staleLine } from "./freshness";
-import { Body, Bubble, Caption, Event, Link, Notice, Reply, Steps } from "./ui";
+import { Body, Bubble, Caption, Disclosure, Event, Link, Notice, Reply, Steps } from "./ui";
 
 /** What the transcript needs of a chat as read. */
 export type ChatRead = { rows: ChatRow[]; more: boolean; reading: boolean; reason: string };
+
+function groups(rows: ChatRow[]): ChatRow[][] {
+	const result: ChatRow[][] = [];
+	for (const row of rows) {
+		const last = result.at(-1);
+		if (row.role === "step" && last?.[0].role === "step") last.push(row);
+		else result.push([row]);
+	}
+	return result;
+}
+
+function ToolRun(props: { rows: ChatRow[]; id: string }) {
+	const open = signal<boolean | undefined>(undefined);
+	const running = () => props.rows.some((row) => row.running);
+	const failed = () => props.rows.filter((row) => row.failed).length;
+	const expanded = () => open() ?? (running() || failed() > 0);
+	const label = () => {
+		const count = props.rows.length;
+		const issue = failed();
+		return `${count} tool steps${issue ? ` · ${issue} failed` : running() ? " · Working" : ""}`;
+	};
+	return (
+		<Disclosure label={label()} testID={props.id} open={expanded()} onToggle={() => open.set(!expanded())}>
+			<Steps steps={props.rows.map((r) => ({ id: r.key, text: r.text, running: r.running, failed: r.failed }))} />
+		</Disclosure>
+	);
+}
 
 /**
  * A chat's rows with Show earlier, a quiet reason when a read failed, and a
@@ -26,6 +52,7 @@ export function ChatTranscript(props: {
 	read?: () => Promise<unknown>;
 }) {
 	const chat = () => props.chat;
+	const items = computed(() => groups(chat()?.rows ?? []));
 	const reads = keepRead(
 		() => props.read?.() ?? Promise.resolve(),
 		() => !!props.read && !!chat()?.reason,
@@ -57,8 +84,12 @@ export function ChatTranscript(props: {
 			<If when={chat() && !chat()?.reading && !chat()?.reason && chat()?.rows.length === 0}>
 				<Body tone="muted">{props.emptyWords}</Body>
 			</If>
-			<Each of={chat()?.rows ?? []} key={(r) => r.key}>
-				{(r) => <ChatLine row={r()} testID={`${props.id}-${r().key}`} />}
+			<Each of={items()} key={(rows) => rows[0].key}>
+				{(rows) => (
+					<If when={rows().length > 1} else={<ChatLine row={rows()[0]} testID={`${props.id}-${rows()[0].key}`} />}>
+						<ToolRun rows={rows()} id={`${props.id}-steps-${rows()[0].key}`} />
+					</If>
+				)}
 			</Each>
 		</View>
 	);

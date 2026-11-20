@@ -1,5 +1,6 @@
 // Window-local mirror. Native owns addresses, authority, operation IDs and receipts.
 import { signal } from "nsh";
+import { AutoCheck } from "./autoCheck";
 import { call } from "./bridge";
 import { scheduleDraft } from "./scheduleDraft";
 export type ScheduleRow = {
@@ -86,6 +87,8 @@ export interface ScheduleControls {
 	read(page?: number): Promise<void>;
 	write(action: "create" | "update" | "cancel", value: unknown, binding: string, draftId?: string): Promise<boolean>;
 	check(id: string): Promise<void>;
+	/** Stops the automatic lookups. */
+	close?(): void;
 }
 export function connectedScheduleControls(window: string): ScheduleControls {
 	const snapshot = signal<ScheduleSnapshot | null>(null),
@@ -94,10 +97,20 @@ export function connectedScheduleControls(window: string): ScheduleControls {
 		operations = signal<ScheduleOperation[]>([]);
 	const blocked = signal(false);
 	let lost = false;
+	// Unknown saves are looked up by their receipt automatically; Check is the fallback.
+	const auto = new AutoCheck(
+		(operationId) => controls.check(operationId),
+		() => {},
+	);
 	function receive(r: { snapshot: ScheduleSnapshot | null; value: Record<string, unknown> }) {
 		if (r.snapshot) snapshot.set(r.snapshot);
 		else if (snapshot()) snapshot.set({ ...snapshot()!, binding: "" });
 		operations.set((r.value.operations ?? []) as ScheduleOperation[]);
+		auto.watch(
+			operations()
+				.filter((o) => o.pending)
+				.map((o) => o.operationId),
+		);
 	}
 	async function read(page = snapshot()?.page ?? 0) {
 		if (busy()) return;
@@ -121,7 +134,7 @@ export function connectedScheduleControls(window: string): ScheduleControls {
 			busy.set(false);
 		}
 	}
-	return {
+	const controls: ScheduleControls = {
 		blocked,
 		begin() {
 			if (!lost && !operations().some((o) => o.pending)) blocked.set(false);
@@ -196,5 +209,7 @@ export function connectedScheduleControls(window: string): ScheduleControls {
 				busy.set(false);
 			}
 		},
+		close: () => auto.close(),
 	};
+	return controls;
 }

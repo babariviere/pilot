@@ -15,8 +15,6 @@ import {
 	strings,
 } from "./tool-policy.ts";
 
-export { commandArguments, githubPosting } from "./tool-policy.ts";
-
 export interface WorkspaceContext {
 	/** The user's checkout this isolated workspace came from. */
 	source: string;

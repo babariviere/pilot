@@ -120,7 +120,7 @@ export type UserFeedbackWorkView = UserFeedbackWork & {
 		currentSessionId?: string;
 		state: "starting" | "working" | "question" | "done" | "failed" | "stopped" | "archived" | "missing";
 		/** Present while the chat waits for a coding slot. */
-		queue?: import("./index.ts").CodingQueueView;
+		queue?: import("./coding-queue.ts").CodingQueueView;
 	};
 	/** A chat waiting on the user: its pending question. */
 	question?: UserFeedbackQuestion;

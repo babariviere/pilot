@@ -9,6 +9,7 @@ import type {
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import type { InsightsBacklog } from "./insights-backlog.ts";
+import { INSIGHTS_THINKING_LEVELS } from "./insights-defaults.ts";
 import { OperationRejected } from "./operation-journal.ts";
 import type { SessionManager } from "./sessions.ts";
 
@@ -54,8 +55,7 @@ export async function admitInsightsOperation(
 				typeof payload.model !== "string" ||
 				!payload.model.trim() ||
 				(payload.thinking !== undefined &&
-					(typeof payload.thinking !== "string" ||
-						!["off", "minimal", "low", "medium", "high", "xhigh"].includes(payload.thinking))) ||
+					(typeof payload.thinking !== "string" || !INSIGHTS_THINKING_LEVELS.includes(payload.thinking))) ||
 				payload.disclosure !== INSIGHTS_DISCLOSURE
 			)
 				throw new OperationRejected("Invalid Insights setup or disclosure");

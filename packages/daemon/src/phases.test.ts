@@ -28,16 +28,14 @@ test("phase definition writes use ordinary reconciliation and non-passive public
 	const store = new MissionStore(":memory:");
 	t.after(() => store.close());
 	const { id } = store.create({ projectId: "p", title: "Definition audit" });
-	const changes: { id: string; passive: boolean; preferenceOnly: boolean }[] = [];
-	store.onChange((id, passive, preferenceOnly) =>
-		changes.push({ id, passive: !!passive, preferenceOnly: !!preferenceOnly }),
-	);
+	const changes: { id: string; kind: string }[] = [];
+	store.onChange((id, kind) => changes.push({ id, kind }));
 	const linear = t.mock.method(store as unknown as { reconcileLinearSync(): void }, "reconcileLinearSync", () => {});
 	const phase = store.addPhase(id, { name: "Build" });
 	store.updatePhase(id, phase.id, { goal: "Edited description" });
 	assert.deepEqual(changes, [
-		{ id, passive: false, preferenceOnly: false },
-		{ id, passive: false, preferenceOnly: false },
+		{ id, kind: "full" },
+		{ id, kind: "full" },
 	]);
 	assert.equal(linear.mock.calls.length, 2, "both writes enter global Linear reconciliation");
 });
@@ -253,7 +251,7 @@ test("gating derives blocked state, follows ordering and requires user override 
 	assert.throws(() => store.prepareTaskStart(id, [a.id, b.id]), /earlier phases/);
 	assert.equal(store.claimTasks(id, [b.id], "chat").skipped.length, 1);
 	store.updateTask(id, b.id, { body: "Edit while gated" });
-	assert.equal(store["db"].prepare("SELECT status FROM tasks WHERE id = ?").get(b.id)!.status, "todo");
+	assert.equal(store["database"].prepare("SELECT status FROM tasks WHERE id = ?").get(b.id)!.status, "todo");
 	assert.throws(() => store.updateTask(id, b.id, { sessionId: "chat" }), /earlier phases/);
 	store.updateTask(id, b.id, { sessionId: "chat", overridePhaseGating: true });
 	store.releaseTask(id, b.id);

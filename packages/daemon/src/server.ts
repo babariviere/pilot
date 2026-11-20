@@ -1,3 +1,4 @@
+import { PILOT_CAPABILITY_HEADER } from "./native-app-capability.ts";
 /** HTTP API and WebSocket event streams. */
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
@@ -38,8 +39,8 @@ import type {
 	QueuedMessageGuard,
 	RenameSessionRequest,
 	RepositorySelection,
-	RetryHandoffRequest,
 	ReviewRequest,
+	RetryHandoffRequest,
 	RewindRequest,
 	SchedulePatch,
 	ScheduleRequest,
@@ -67,14 +68,12 @@ import { type WebSocket, WebSocketServer } from "ws";
 import { createSocketSender } from "./backpressure.ts";
 import { InvalidChatSettings } from "./chat-settings.ts";
 import { ChatStreams } from "./chat-streams.ts";
-import { CONNECTION_CONTROLS } from "./connection-controls.ts";
 import type { DaemonServices } from "./daemon-services.ts";
 import { dayMissionAgents } from "./day-mission-agents.ts";
 import { dayWaiting, dayWorking } from "./day-working.ts";
 import { awaitDiagnosticRead } from "./diagnostic-context.ts";
-import { DIAGNOSTICS_CONTROLS, isDiagnosticsRevocation, validateDiagnosticsIntent } from "./diagnostics-controls.ts";
 import { EnvironmentApprovalRequired } from "./environment-profile.ts";
-import { Conflict, ServiceUnavailable } from "./errors.ts";
+import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import { dispositionTarget } from "./human-reviews.ts";
 import { insightsSetupDefaults } from "./insights-defaults.ts";
@@ -92,7 +91,6 @@ import { parseMissionLifecycle } from "./mission-lifecycle.ts";
 import type { MissionService } from "./mission-service.ts";
 import { isThreadOperation } from "./mission-threads.ts";
 import type { MissionStore } from "./missions.ts";
-import { MODEL_CONTROLS } from "./model-controls.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
 import { CHAT_CONTINUE, CHAT_DISMISS, CHAT_HANDOFF, CHAT_RECOVER, CHAT_REPLY } from "./native-chat.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
@@ -111,13 +109,10 @@ import { AutomationsRevisionConflict, EnvironmentRevisionConflict, expandHome } 
 import { PTY_INPUT_CHUNK } from "./pty-input.ts";
 import { ResultReviews } from "./result-reviews.ts";
 import { RuntimeResources } from "./runtime-admission.ts";
-import { SCHEDULE_CONTROLS, validateScheduleIntent } from "./schedule-controls.ts";
 import { projectScreenPairs } from "./screen-pairs.ts";
-import { NotFound } from "./sessions.ts";
 import { SetupError } from "./setup-error.ts";
-import { SLACK_CONTROLS } from "./slack-controls.ts";
 import { parseSlackMessageLink } from "./slack-format.ts";
-import { SlackImportRefused } from "./sources.ts";
+import { SlackImportRefused } from "./slack-tracking.ts";
 import { parseTaskModel } from "./task-model.ts";
 import type { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { terminalSender } from "./terminal-output.ts";
@@ -457,12 +452,12 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		if (parts[1] === "native-attention" && req.method === "POST" && parts.length <= 3) {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority || !nativeAttention) throw new ServiceUnavailable("Native attention unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 			const end = mutations.begin({ kind: "operation", id: "native-attention" });
 			try {
 				const answer = await nativeAttention.dispatch(await readJson(req), parts[2] === "receipt");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				return json(res, 200, answer);
 			} finally {
 				end();
@@ -471,7 +466,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		if (parts[1] === "runtime-update") {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority || !liveUpdate) throw new ServiceUnavailable("Coordinated live update is unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			await runtimeReady;
 			if (parts.length === 2 && req.method === "GET")
 				return json(res, 200, { update: liveUpdate.service.snapshot(), frozen: liveUpdate.service.frozen });
@@ -558,7 +553,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		if (parts[1] === "github-import") {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority || !githubImport) throw new SetupError(503, "GitHub import is unavailable on this host.");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			if (parts.length === 3 && parts[2] === "preview" && req.method === "POST") {
 				const body = await readJson<{ url: string; destination?: string }>(req);
 				return json(res, 200, await githubImport.preview(body.url, body.destination));
@@ -576,7 +571,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		if (parts[1] === "slack-controls") {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority || !slackControls) throw new ServiceUnavailable("Native Slack unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			if (parts.length === 2 && req.method === "GET")
 				return json(
 					res,
@@ -591,7 +586,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		if (parts[1] === "connection-controls") {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority) throw new ServiceUnavailable("Native connections unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			if (parts.length === 2 && req.method === "GET") return json(res, 200, await connectionControls.read());
 			if (parts.length === 3 && parts[2] === "check" && req.method === "POST") {
 				if (!mcp) throw new ServiceUnavailable("Connection checks unavailable");
@@ -602,7 +597,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		if (parts[1] === "schedule-controls" && parts.length === 2 && req.method === "GET") {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority || !scheduleControls) throw new ServiceUnavailable("Native schedules unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			return json(
 				res,
 				200,
@@ -616,13 +611,13 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		if (parts[1] === "diagnostics-controls" && parts.length === 2 && req.method === "GET") {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority || !diagnosticsControls) throw new ServiceUnavailable("Native diagnostics unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			return json(res, 200, await diagnosticsControls.read());
 		}
 		if (parts[1] === "model-controls") {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority) throw new ServiceUnavailable("Native model settings unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			if (parts.length === 4 && parts[2] === "recovery" && req.method === "GET") {
 				try {
 					return json(res, 200, await modelControls.recovery(url.searchParams.get("projectId") ?? "", parts[3]!));
@@ -658,7 +653,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (parts[2] === "github" && parts.length === 3) {
 				if (!githubSetup || !nativeAuthority)
 					throw new SetupError(503, "GitHub setup requires a paired host identity.");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (req.method === "GET") return json(res, 200, await githubSetup.status());
 				if (req.method === "POST") return json(res, 200, await githubSetup.act(await readJson(req)));
 				throw new SetupError(404, "Unknown GitHub setup operation.");
@@ -756,7 +751,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
 			if (!insightsLegacy || !nativeAuthority)
 				throw new ServiceUnavailable("Legacy Insights projection unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			for (const key of url.searchParams.keys())
 				if (!["selector", "cursor"].includes(key) || url.searchParams.getAll(key).length !== 1)
 					throw new HttpError(400, "Invalid legacy query");
@@ -785,7 +780,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (!insightsTransition || !journal || !nativeAuthority)
 				throw new ServiceUnavailable("Insights transition unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			if (parts.length !== 5 || !["preflight", "check"].includes(parts[4]!)) throw new HttpError(404, "Not found");
 			if (parts[4] === "check") {
 				if (req.method !== "POST" || [...url.searchParams.keys()].length)
@@ -809,7 +804,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		if (parts[1] === "insights" && parts[2] === "day") {
 			res.setHeader("cache-control", "no-store");
 			if (!dayInsights || !nativeAuthority) throw new ServiceUnavailable("Day Insights unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const legacy = parts.length === 4 && parts[3] === "legacy";
 			for (const key of url.searchParams.keys())
 				if (!legacy || key !== "cursor" || url.searchParams.getAll(key).length !== 1)
@@ -833,7 +828,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (!insightsOwner || !insightsWorkspace || !journal || !nativeAuthority)
 				throw new ServiceUnavailable("Owner Insights execution unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			if ([...url.searchParams.keys()].length) throw new HttpError(400, "Execution queries must be exact");
 			if (parts.length === 5 && parts[4] === "check") {
 				if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
@@ -1031,7 +1026,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (operation?.kind === "attention-answer") {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !nativeAttention) throw new ServiceUnavailable("Native attention unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await nativeAttention.lookupAnswer(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1049,7 +1044,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (operation?.kind === "planning-enroll") {
 				if (!nativeAuthority || !planningWorkers)
 					throw new ServiceUnavailable("Planning worker enrollment unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1064,107 +1059,30 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					end();
 				}
 			}
-			if (operation?.kind === SLACK_CONTROLS) {
+			const control = services.controlOperations.get(operation?.kind);
+			if (control) {
 				res.setHeader("cache-control", "no-store");
-				if (!nativeAuthority || !slackControls) throw new ServiceUnavailable("Native Slack unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				const { admit } = control;
+				if (!nativeAuthority || !admit) throw new ServiceUnavailable(control.unavailable);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
-				const saved = await journal.lookup(operation);
-				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
-				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				// Validate before lookup or reservation so an unsafe diagnostics payload never enters the journal.
 				try {
-					return json(
-						res,
-						200,
-						await journal.execute(operation, (op, entry) => slackControls.admit(op, journal, entry.firstEntry)),
-					);
-				} finally {
-					end();
-				}
-			}
-			if (operation?.kind === CONNECTION_CONTROLS) {
-				res.setHeader("cache-control", "no-store");
-				if (!nativeAuthority) throw new ServiceUnavailable("Native connections unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
-				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
-				const saved = await journal.lookup(operation);
-				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
-				const end = mutations.begin({ kind: "operation", id: operation.operationId });
-				try {
-					return json(
-						res,
-						200,
-						await journal.execute(operation, (op, entry) =>
-							connectionControls.admit(op, journal, entry.firstEntry),
-						),
-					);
-				} finally {
-					end();
-				}
-			}
-			if (operation?.kind === SCHEDULE_CONTROLS) {
-				res.setHeader("cache-control", "no-store");
-				if (!nativeAuthority || !scheduleControls) throw new ServiceUnavailable("Native schedules unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
-				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
-				try {
-					validateScheduleIntent(operation, journal.destination);
-				} catch {
-					throw new HttpError(400, "Invalid native schedule intent");
+					control.validate?.(operation);
+				} catch (error) {
+					throw new HttpError(400, error instanceof Error ? error.message : String(error));
 				}
 				const saved = await journal.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
 				const end = mutations.begin({ kind: "operation", id: operation.operationId });
 				try {
+					const options = control.safetyReduction
+						? { safetyReduction: control.safetyReduction(operation) }
+						: undefined;
 					return json(
 						res,
 						200,
-						await journal.execute(operation, (op, entry) => scheduleControls.admit(op, entry.firstEntry)),
-					);
-				} finally {
-					end();
-				}
-			}
-			if (operation?.kind === DIAGNOSTICS_CONTROLS) {
-				res.setHeader("cache-control", "no-store");
-				if (!nativeAuthority || !diagnosticsControls)
-					throw new ServiceUnavailable("Native diagnostics unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
-				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
-				// Validate BEFORE lookup/reservation: unsafe collector strings never enter the durable journal.
-				try {
-					validateDiagnosticsIntent(operation, journal.destination);
-				} catch {
-					throw new HttpError(400, "Invalid native diagnostics intent");
-				}
-				const saved = await journal.lookup(operation);
-				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
-				const end = mutations.begin({ kind: "operation", id: operation.operationId });
-				try {
-					return json(
-						res,
-						200,
-						await journal.execute(operation, (op, entry) => diagnosticsControls.admit(op, entry.firstEntry), {
-							safetyReduction: isDiagnosticsRevocation(operation),
-						}),
-					);
-				} finally {
-					end();
-				}
-			}
-			if (operation?.kind === MODEL_CONTROLS) {
-				res.setHeader("cache-control", "no-store");
-				if (!nativeAuthority) throw new ServiceUnavailable("Native model settings unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
-				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
-				const saved = await journal.lookup(operation);
-				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
-				const end = mutations.begin({ kind: "operation", id: operation.operationId });
-				try {
-					return json(
-						res,
-						200,
-						await journal.execute(operation, (op, entry) => modelControls.admit(op, journal, entry.firstEntry)),
+						await journal.execute(operation, (op, entry) => admit(op, entry.firstEntry), options),
 					);
 				} finally {
 					end();
@@ -1175,7 +1093,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				const preferences = missions?.knowledge?.preferences;
 				if (!nativeAuthority || !preferences)
 					throw new ServiceUnavailable("Native project preferences unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1195,7 +1113,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (operation?.kind === "user-feedback") {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !userFeedback) throw new ServiceUnavailable("User feedback unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
 				if (parts[2] === "receipt" && saved?.state === "pending") {
@@ -1223,7 +1141,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (operation?.kind === FEEDBACK_WORK) {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !feedbackWork) throw new ServiceUnavailable("Feedback triage unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await journal.lookup(operation);
 				if (parts[2] === "receipt" && saved?.state === "pending" && hasFeedbackReceiptLookup(operation)) {
@@ -1250,7 +1168,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (operation?.kind === "user-verification") {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !userVerifications) throw new ServiceUnavailable("User verification unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await userVerifications.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved);
@@ -1264,7 +1182,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			}
 			if (operation?.kind === PROJECT_ACTION) {
 				if (!nativeAuthority || !nativeProjects) throw new ServiceUnavailable("Native projects unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				if (parts[2] === "receipt") {
 					const saved = await journal.lookup(operation);
@@ -1290,7 +1208,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (operation?.kind === "native-chat-create") {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native chat creation unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await nativeChat.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1313,7 +1231,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			) {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native chat continue unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await nativeChat.lookupContinue(operation);
 				const send = (op: DurableOperation, firstEntry: boolean) =>
@@ -1338,7 +1256,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (operation?.kind === CHAT_DISMISS) {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native chat dismiss unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await nativeChat.lookupContinue(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1356,7 +1274,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (isIntakeOperation(operation?.kind)) {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !nativeIntake) throw new ServiceUnavailable("Native intake unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await nativeIntake.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1374,7 +1292,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (isThreadOperation(operation?.kind)) {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !missionThreads) throw new ServiceUnavailable("Native topics unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				const saved = await missionThreads.lookup(operation);
 				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
@@ -1392,7 +1310,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (isNativePlanningOperation(operation?.kind)) {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 				// Requalify reads, including terminal duplicates. No unauthenticated receipt escape.
 				const saved = await nativePlanning.lookup(operation);
@@ -1413,13 +1331,13 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				parts[2] === "receipt"
 			) {
 				if (!nativeAuthority) throw new ServiceUnavailable("Native transfer lookup unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			}
 			if (operation?.kind === "review-disposition") {
 				res.setHeader("cache-control", "no-store");
 				// Check and duplicate lookup must not expose inaccessible feedback through a journal receipt.
 				if (!nativeAuthority || !humanReviews) throw new ServiceUnavailable("Native feedback is unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				await humanReviews.lookup(operation);
 			}
 			if (
@@ -1433,7 +1351,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				parts[2] !== "receipt"
 			) {
 				if (!nativeAuthority) throw new ServiceUnavailable("Native repair confirmation is unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			}
 			if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 			if (parts[2] !== "receipt") {
@@ -1526,7 +1444,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			// Purpose-specific native actions reuse the existing Local app capability. Neither
 			// a body actor nor the ordinary mission REST API can impersonate a native user.
 			if (!nativeAuthority) throw new ServiceUnavailable("Native Review request actions unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const actor = { kind: "native-user" as const };
 			if (req.method === "GET" && parts.length === 5 && parts[3] === "operations")
 				return json(res, 200, (await reviewRequests.lookup(parts[4]!, actor)) ?? { state: "unknown" });
@@ -1547,7 +1465,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		if (parts[1] === "review-feedback") {
 			res.setHeader("cache-control", "no-store");
 			if (!humanReviews || !nativeAuthority) throw new ServiceUnavailable("Native feedback is unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			if (parts.length === 3 && parts[2] === "target" && req.method === "POST") {
 				const input = await readJson<{ projectId: string; sessionId: string; snapshotId: string }>(req, 1024);
 				if (!input || Object.keys(input).sort().join(",") !== "projectId,sessionId,snapshotId")
@@ -1659,7 +1577,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority) return json(res, 503, { error: "mcp_setup_unavailable" });
 			try {
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			} catch {
 				return json(res, 403, { error: "native_action_required" });
 			}
@@ -1738,7 +1656,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				if (!chatSettings?.automationsEnabled()) throw new ServiceUnavailable("Automations are disabled");
 				if (!nativeAuthority) throw new HttpError(403, "native_action_required");
 				try {
-					await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+					await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				} catch {
 					throw new HttpError(403, "native_action_required");
 				}
@@ -1773,7 +1691,11 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					if (projectId) projects.require(projectId);
 					const limit = url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : 20;
 					if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new HttpError(400, "limit must be 1..50");
-					return json(res, 200, await tracking.searchSlack(url.searchParams.get("query") ?? "", projectId, limit));
+					return json(
+						res,
+						200,
+						await tracking.slack.search(url.searchParams.get("query") ?? "", projectId, limit),
+					);
 				}
 				if (parts.length === 4 && parts[2] === "slack" && parts[3] === "messages" && req.method === "POST") {
 					const body = await readJson<import("@pilot/protocol").SlackMessageAddRequest | null>(req);
@@ -1787,7 +1709,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					projects.require(body.projectId);
 					if (!parseSlackMessageLink(body.url)) throw new HttpError(400, "Paste a link to a Slack message");
 					try {
-						return json(res, 200, await tracking.addSlackMessage(body.projectId, body.url));
+						return json(res, 200, await tracking.slack.add(body.projectId, body.url));
 					} catch (error) {
 						if (error instanceof SlackImportRefused) throw error;
 						throw new HttpError(500, "Couldn't confirm the saved message. It may already be saved.");
@@ -1797,14 +1719,14 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					const projectId = url.searchParams.get("projectId") ?? "";
 					projects.require(projectId);
 					if (parts.length === 4 && req.method === "GET")
-						return json(res, 200, await tracking.commonCases(projectId));
+						return json(res, 200, await tracking.slack.commonCases(projectId));
 					if (parts.length === 5 && req.method === "PATCH") {
 						await tracking.items.editCase(
 							projectId,
 							decodeURIComponent(parts[4]!),
 							await readJson<import("@pilot/protocol").SlackCaseEdit>(req),
 						);
-						return json(res, 200, await tracking.commonCases(projectId));
+						return json(res, 200, await tracking.slack.commonCases(projectId));
 					}
 				}
 				if (parts.length === 4 && (parts[2] === "slack" || parts[2] === "linear") && parts[3] === "guide") {
@@ -1835,12 +1757,12 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				if (parts.length === 4 && parts[2] === "linear" && parts[3] === "states" && req.method === "GET") {
 					const team = url.searchParams.get("team")?.trim();
 					if (!team || team.length > 200) throw new HttpError(400, "team is required (at most 200 characters)");
-					return json(res, 200, await tracking.linearStates(team));
+					return json(res, 200, await tracking.linear.states(team));
 				}
 				if (parts.length === 4 && parts[2] === "linear" && parts[3] === "teams" && req.method === "GET")
-					return json(res, 200, await tracking.linearTeams(query));
+					return json(res, 200, await tracking.linear.teams(query));
 				if (parts.length === 4 && parts[2] === "slack" && parts[3] === "channels" && req.method === "GET")
-					return json(res, 200, await tracking.slackChannelOptions(query));
+					return json(res, 200, await tracking.slack.channelOptions(query));
 				// Browser sign-in through pi's MCP OAuth flow. Progress arrives with the sources list.
 				if (parts.length === 4 && (parts[2] === "linear" || parts[2] === "slack") && parts[3] === "sign-in") {
 					if (req.method === "POST") {
@@ -1864,7 +1786,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 						throw new HttpError(400, "Expected an object");
 					if (body?.force !== undefined && typeof body.force !== "boolean")
 						throw new HttpError(400, "force must be a boolean");
-					return json(res, 200, await tracking.poll(decodeURIComponent(parts[2]!), body?.force === true));
+					return json(res, 200, await tracking.poll(decodeURIComponent(parts[2]!)));
 				}
 			} else {
 				if (parts.length === 2 && req.method === "GET") {
@@ -1900,11 +1822,11 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					);
 				}
 				if (parts.length === 4 && parts[3] === "prefill" && req.method === "GET")
-					return json(res, 200, await tracking.prefill(decodeURIComponent(parts[2]!)));
+					return json(res, 200, await tracking.linear.prefill(decodeURIComponent(parts[2]!)));
 				if (parts.length === 4 && parts[3] === "excerpt" && req.method === "GET")
-					return json(res, 200, await tracking.slackExcerpt(decodeURIComponent(parts[2]!)));
+					return json(res, 200, await tracking.slack.excerpt(decodeURIComponent(parts[2]!)));
 				if (parts.length === 4 && parts[3] === "thread" && req.method === "GET")
-					return json(res, 200, await tracking.slackThread(decodeURIComponent(parts[2]!)));
+					return json(res, 200, await tracking.slack.thread(decodeURIComponent(parts[2]!)));
 				if (parts.length === 3 && req.method === "GET") {
 					const item = await tracking.items.require(decodeURIComponent(parts[2]!));
 					projects.require(item.projectId);
@@ -1933,7 +1855,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		}
 		if (parts[1] === "native-projects" && parts.length === 3) {
 			if (!nativeAuthority || !nativeProjects) throw new ServiceUnavailable("Native projects unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			res.setHeader("cache-control", "no-store");
 			if (parts[2] === "setup" && req.method === "GET") return json(res, 200, await nativeProjects.read());
 			if (parts[2] === "preview" && req.method === "POST") {
@@ -1948,14 +1870,14 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Project inventory is read-only");
 			if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native projects unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			return json(res, 200, nativeChat.inventory());
 		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "chat-profile") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Chat selection is read-only");
 			if (!nativeAuthority || !nativeChat) throw new ServiceUnavailable("Native chat selection unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			return json(res, 200, await nativeChat.prepare(parts[2]!, url.searchParams.get("mode") ?? ""));
 		}
 		if (
@@ -1969,7 +1891,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Delivered artifact is read-only");
 			if (!nativeAuthority || !deliveredArtifacts) throw new ServiceUnavailable("Delivered artifact unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const fields = ["targetId", "deliveryId", "ownerSessionId", "sourceSessionId", "artifactId", "revision"];
 			if (
 				[...url.searchParams.keys()].length !== fields.length ||
@@ -1991,7 +1913,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 						artifactId: p.artifactId!,
 						revision: Number(p.revision),
 					},
-					[String(req.headers["x-pilot-github-capability"])],
+					[String(req.headers[PILOT_CAPABILITY_HEADER])],
 				),
 			);
 		}
@@ -1999,7 +1921,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Project artifact is read-only");
 			if (!nativeAuthority || !deliveredArtifacts) throw new ServiceUnavailable("Project artifact unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const revisions = url.searchParams.getAll("revision");
 			if ([...url.searchParams.keys()].some((k) => k !== "revision") || revisions.length !== 1)
 				throw new OperationRejected("Exact artifact revision required");
@@ -2014,7 +1936,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 						artifactId: parts[5]!,
 						revision: Number(revisions[0]),
 					},
-					[String(req.headers["x-pilot-github-capability"])],
+					[String(req.headers[PILOT_CAPABILITY_HEADER])],
 				),
 			);
 		}
@@ -2026,7 +1948,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority || !userVerifications || !missions)
 				throw new ServiceUnavailable("Private result review unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const subject: import("@pilot/protocol").VerificationSubject =
 				parts[3] === "missions"
 					? { kind: "task", projectId: parts[2]!, missionId: parts[4]!, taskId: parts[6]! }
@@ -2059,7 +1981,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Result search is read-only");
 			if (!nativeAuthority || !userVerifications) throw new ServiceUnavailable("Result search unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const query = url.searchParams.get("q")?.trim() ?? "";
 			if (!query || Array.from(query).length > 200 || [...url.searchParams.keys()].length !== 1)
 				throw new HttpError(400, "Result search requires one query, up to 200 characters");
@@ -2078,7 +2000,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Metadata search is read-only");
 			if (!nativeAuthority || !missions) throw new ServiceUnavailable("Metadata search unavailable");
-			const capability = req.headers["x-pilot-github-capability"];
+			const capability = req.headers[PILOT_CAPABILITY_HEADER];
 			await nativeAuthority.authenticate(capability);
 			const { metadataSearchId, searchProjectMetadata } = await import("./metadata-search.ts");
 			const projectId = parts[2]!;
@@ -2112,7 +2034,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Delivery discovery is read-only");
 			if (!nativeAuthority || !userVerifications) throw new ServiceUnavailable("User verification unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const cursor = url.searchParams.get("after");
 			if (
 				[...url.searchParams.keys()].some((k) => k !== "after") ||
@@ -2130,7 +2052,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Delivered work read is read-only");
 			if (!nativeAuthority || !userVerifications) throw new ServiceUnavailable("User verification unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			return json(
 				res,
 				200,
@@ -2145,7 +2067,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "POST") throw new HttpError(405, "Use the native Linear publisher");
 			if (!nativeAuthority || !linearPublisher) throw new ServiceUnavailable("Native Linear publisher unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const body = await readJson<unknown>(req);
 			const end = mutations.begin({ kind: "operation", id: randomUUID() });
 			try {
@@ -2158,7 +2080,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Intake read is read-only");
 			if (!nativeAuthority || !nativeIntake) throw new ServiceUnavailable("Native intake unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			return json(
 				res,
 				200,
@@ -2168,7 +2090,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "linear-management" && req.method === "POST") {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority || !nativeIntake) throw new ServiceUnavailable("Native intake unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const end = mutations.begin({ kind: "operation", id: `linear-management:${parts[2]}` });
 			try {
 				return json(res, 200, await nativeIntake.changeLinear(parts[2]!, await readJson<unknown>(req)));
@@ -2180,7 +2102,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Planning inventory is read-only");
 			if (!nativeAuthority || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			try {
 				return json(res, 200, await nativePlanning.inventory(parts[2]!));
 			} catch (error) {
@@ -2205,7 +2127,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Topics are read-only here");
 			if (!nativeAuthority || !missionThreads) throw new ServiceUnavailable("Native topics unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			if (parts.length === 6) return json(res, 200, await missionThreads.read(parts[2]!, parts[4]!));
 			if (parts.length === 8 && parts[7] === "history") {
 				const before = url.searchParams.get("before"),
@@ -2229,7 +2151,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Planning profile is read-only");
 			if (!nativeAuthority || !planningWorkers) throw new ServiceUnavailable("Trusted planning profile unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const funding = await (await sessions.activeFunding())?.read(parts[2]!);
 			return json(res, 200, {
 				...planningWorkers.profile(parts[2]!),
@@ -2240,7 +2162,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Planning preparation is read-only");
 			if (!nativeAuthority || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			return json(res, 200, await nativePlanning.read(parts[2]!, parts[4]!));
 		}
 		if (
@@ -2253,7 +2175,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "The planning chat is read-only");
 			if (!nativeAuthority || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const before = url.searchParams.get("before"),
 				limit = url.searchParams.get("limit");
 			return json(
@@ -2281,7 +2203,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				);
 			if (req.method === "POST" && parts.length === 4) {
 				if (!nativeAuthority) throw new ServiceUnavailable("Native mission controls unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				const write = parseMissionControl(await readJson(req, 4096), catalogHost);
 				return json(res, 200, await missions.service.controls.execute(parts[2]!, write));
 			}
@@ -2314,7 +2236,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
 			if (!nativeAuthority || !nativePlanning) throw new ServiceUnavailable("Mission re-planning unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			return json(res, 200, await nativePlanning.successorPreview(parts[2]!));
 		}
 		if (missions && parts[1] === "missions" && parts.length === 4 && parts[3] === "successor") {
@@ -2322,7 +2244,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
 			if (!nativeAuthority) throw new ServiceUnavailable("Mission re-planning unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const body = await readJson<{ action?: unknown; newMissionId?: unknown }>(req, 4096);
 			if (
 				!body ||
@@ -2432,7 +2354,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Publication audit is read-only");
 			if (!nativeAuthority) throw new ServiceUnavailable("Publication audit unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const expected = url.searchParams.getAll("expectedProjectId");
 			if (expected.length !== 1 || [...url.searchParams.keys()].some((k) => k !== "expectedProjectId"))
 				throw new HttpError(400, "Exact expectedProjectId required");
@@ -2634,7 +2556,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
 			if (!nativeAuthority || !userFeedback) throw new ServiceUnavailable("User feedback unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const resultKind = url.searchParams.get("resultKind");
 			return json(
 				res,
@@ -2656,7 +2578,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		if (parts[1] === "screen" && (parts[2] === "bindings" || parts[2] === "requests") && parts.length <= 4) {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority || !screen) throw new ServiceUnavailable("Screen agent unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const done = () => {
 				res.writeHead(204);
 				res.end();
@@ -2688,7 +2610,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (parts.length === 4 && req.method === "GET") return json(res, 200, await preferences.read(projectId));
 			if (parts.length === 4 && req.method === "PUT") {
 				if (!nativeAuthority) throw new ServiceUnavailable("Native preferences authority unavailable");
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				return json(res, 200, await preferences.write(projectId, await readJson(req, 16 * 1024)));
 			}
 			if (parts.length === 5 && parts[4] === "history" && req.method === "GET")
@@ -2864,7 +2786,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			(req.method === "GET" || req.method === "PUT")
 		) {
 			if (!nativeAuthority) throw new ServiceUnavailable("Native repair project setup is unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			res.setHeader("cache-control", "no-store");
 			return json(
 				res,
@@ -2882,7 +2804,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		}
 		if (parts[1] === "diagnostics" && parts[2] === "read" && parts.length === 3 && req.method === "POST") {
 			if (!nativeAuthority) throw new ServiceUnavailable("Protected native diagnostic reads are unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const controller = new AbortController();
 			const timer = setTimeout(() => controller.abort(), 10_000);
 			try {
@@ -2900,7 +2822,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		}
 		if (parts[1] === "diagnostics" && parts[2] === "feature-usage" && parts.length === 3 && req.method === "PUT") {
 			if (!telemetry || !nativeAuthority) throw new ServiceUnavailable("Native feature collection is unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			await telemetry.featureUsage.replace(await readJson(req, 96 * 1024));
 			return json(res, 200, { accepted: true });
 		}
@@ -2917,7 +2839,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				if (input && typeof input === "object" && Object.hasOwn(input, "automations")) {
 					if (!nativeAuthority) throw new ServiceUnavailable("Native settings authority unavailable");
 					try {
-						await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+						await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 					} catch {
 						return json(res, 403, { error: "native_action_required" });
 					}
@@ -2989,7 +2911,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				// The capability's historical filename/header is shared with GitHub setup/import.
 				if (!nativeAuthority) return json(res, 503, { error: "model_scope_unavailable" });
 				try {
-					await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+					await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				} catch {
 					return json(res, 403, { error: "native_action_required" });
 				}
@@ -3045,7 +2967,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (!chatSettings?.automationsEnabled()) return json(res, 404, { error: "automations_unavailable" });
 			if (!nativeAuthority) return json(res, 503, { error: "automations_unavailable" });
 			try {
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			} catch {
 				return json(res, 403, { error: "native_action_required" });
 			}
@@ -3067,7 +2989,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (!chatSettings?.automationsEnabled()) return json(res, 404, { error: "automations_unavailable" });
 			if (!nativeAuthority) return json(res, 503, { error: "automations_unavailable" });
 			try {
-				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			} catch {
 				return json(res, 403, { error: "native_action_required" });
 			}
@@ -3289,7 +3211,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Live changes are read-only");
 			if (!nativeAuthority) throw new ServiceUnavailable("Live changes unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			const projectIds = url.searchParams.getAll("expectedProjectId");
 			const paths = url.searchParams.getAll("expectedCwd");
 			const [projectId] = projectIds;
@@ -3366,7 +3288,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				baseBranch,
 				JSON.stringify([sessionId, projectId, fence, directory, randomUUID()]),
 			);
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			if ((await identity(projectPath)) !== directory || authorize().fence !== fence)
 				throw new Conflict("The working copy changed during the read");
 			return json(res, 200, { ...recordedBranch(value, branch), version: 1, sessionId, projectId, cwd });
@@ -3512,7 +3434,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "fix-handoff" && req.method === "GET") {
 			if (!nativeAuthority) throw new ServiceUnavailable("Native handoff unavailable");
-			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+			await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			return json(res, 200, await sessions.prepareFixHandoff(parts[2]!));
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && req.method === "POST") {
@@ -3521,7 +3443,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				if (!chatSettings?.automationsEnabled()) return json(res, 404, { error: "automations_unavailable" });
 				if (!nativeAuthority) return json(res, 503, { error: "automations_unavailable" });
 				try {
-					await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
+					await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 				} catch {
 					return json(res, 403, { error: "native_action_required" });
 				}

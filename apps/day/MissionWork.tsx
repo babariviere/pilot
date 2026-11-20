@@ -5,8 +5,10 @@
 // canonical task order and says each state in words. It never decides that a
 // task can run, that a chat is free or that a dependency is met. Opening a
 // chat or a task's details only reads.
+// Work that needs attention shows a task in full; Now then keeps only a short
+// reference to it. Blockers groups blocked tasks by the work they wait for.
 import { effect, type JSX, signal, untracked, View, type ViewRef } from "nsh";
-import type { Decision, MissionPage, TaskLine, TaskPrerequisite } from "pilot-day/native";
+import type { Decision, MissionPage, Problem, TaskLine, TaskPrerequisite } from "pilot-day/native";
 import { openChat } from "./chatView";
 import { type ContentAnchor, yieldAnchor } from "./contentAnchor";
 import { decisionMark } from "./DecisionCard";
@@ -208,13 +210,13 @@ function taskTone(state: WorkState): "needs" | "quiet" {
 	return state === "waitingForUser" ? "needs" : "quiet";
 }
 
-/** The host's reasons, one line each. */
-function Reasons(props: { task: TaskLine; quiet?: boolean }) {
+/** The host's reasons, one line each. `skip` holds lines shown elsewhere, word for word. */
+function Reasons(props: { task: TaskLine; quiet?: boolean; skip?: string[] }) {
 	const lines = () =>
 		(props.task.workReason ?? "")
 			.split("\n")
 			.map((l) => l.trim())
-			.filter((l) => l);
+			.filter((l) => l && !props.skip?.includes(l));
 	return (
 		<Each of={lines()} key="index">
 			{(line) => <Body tone={props.quiet ? "muted" : "default"}>{line()}</Body>}
@@ -222,24 +224,31 @@ function Reasons(props: { task: TaskLine; quiet?: boolean }) {
 	);
 }
 
-/**
- * The unfinished tasks this one waits for, as the read lists them. A
- * prerequisite the read cannot find keeps its own words and no number.
- */
+/** One prerequisite in words. A prerequisite the read cannot find keeps its own words and no number. */
+function prerequisiteLine(p: TaskPrerequisite): string {
+	return p.number > 0
+		? `#${p.number} ${p.title} · ${taskWord(p.status)}`
+		: `${p.title || "Prerequisite unavailable"} · ${taskWord(p.status)}`;
+}
+
+/** The unfinished tasks this one waits for, as the read lists them. */
 function Prerequisites(props: { task: TaskLine }) {
-	const line = (p: TaskPrerequisite) =>
-		p.number > 0
-			? `#${p.number} ${p.title} · ${taskWord(p.status)}`
-			: `${p.title || "Prerequisite unavailable"} · ${taskWord(p.status)}`;
 	return (
 		<If when={(props.task.prerequisites ?? []).length > 0}>
 			<View testID={`prerequisites-${props.task.id}`} class="gap-0.5">
 				<Caption>Waits for</Caption>
 				<Each of={props.task.prerequisites ?? []} key={(p) => p.id}>
-					{(p) => <Caption tone="default">{line(p())}</Caption>}
+					{(p) => <Caption tone="default">{prerequisiteLine(p())}</Caption>}
 				</Each>
 			</View>
 		</If>
+	);
+}
+
+/** The mission's attention row for a task: by its task, else by its chat when the row names no task. */
+function attentionOf(page: MissionPage, task: TaskLine): Problem | undefined {
+	return page.problems.find(
+		(p) => p.taskId === task.id || (!p.taskId && !!task.sessionId && p.sessionId === task.sessionId),
 	);
 }
 
@@ -319,28 +328,91 @@ function NowRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
 			trailing={<ChatLink day={props.day} page={props.page} task={t()} lane="now" />}
 			detail={
 				<RowDetail>
-					<View selectable class="gap-1">
-						<Reasons task={t()} />
-						<If when={t().report}>
-							<Body tone="muted">{t().report?.summary ?? ""}</Body>
-							<If when={t().report?.movement === "notMoving" && t().report?.nextStep}>
-								<Body tone="muted">
-									{t().report ? nextLine(t().report as NonNullable<TaskLine["report"]>) : ""}
-								</Body>
-							</If>
-							<Caption tone="faint">
-								{t().report
-									? `${provenance(t().report as NonNullable<TaskLine["report"]>)} · agent words, not verified`
-									: ""}
-							</Caption>
-						</If>
-						<If when={t().ownerTitle ?? ""}>
-							<Caption>{`Owner: ${t().ownerTitle ?? ""}`}</Caption>
-						</If>
-						<Prerequisites task={t()} />
-					</View>
+					<NowFacts task={t()} />
 					<TaskModel task={t()} lane="now" />
 					<Details task={t()} lane="now" target={target} />
+				</RowDetail>
+			}
+		/>
+	);
+}
+
+/**
+ * What Now says about a task with work on it: its reasons (less `skip`), its agent's report, its owner and what it
+ * waits for.
+ */
+function NowFacts(props: { task: TaskLine; skip?: string[] }) {
+	const t = () => props.task;
+	return (
+		<View selectable class="gap-1">
+			<Reasons task={t()} skip={props.skip} />
+			<If when={t().report}>
+				<Body tone="muted">{t().report?.summary ?? ""}</Body>
+				<If when={t().report?.movement === "notMoving" && t().report?.nextStep}>
+					<Body tone="muted">{t().report ? nextLine(t().report as NonNullable<TaskLine["report"]>) : ""}</Body>
+				</If>
+				<Caption tone="faint">
+					{t().report
+						? `${provenance(t().report as NonNullable<TaskLine["report"]>)} · agent words, not verified`
+						: ""}
+				</Caption>
+			</If>
+			<If when={t().ownerTitle ?? ""}>
+				<Caption>{`Owner: ${t().ownerTitle ?? ""}`}</Caption>
+			</If>
+			<Prerequisites task={t()} />
+		</View>
+	);
+}
+
+/**
+ * A task that Work that needs attention also shows, with its question and the way on. Now keeps its name and
+ * state, says where it is, and keeps the rest behind Details, less the lines the attention row already shows. Its
+ * chat link moves to the attention row only when that row names the same chat; otherwise it stays here.
+ */
+function NowReference(props: { day: Day; page: MissionPage; task: TaskLine; attention: Problem }) {
+	const t = () => props.task;
+	const target = laneFocus(props.task.id, "now");
+	const open = () => !!openWork()[t().id];
+	const linkedThere = () => !!t().sessionId && props.attention.sessionId === t().sessionId;
+	const shownThere = () =>
+		[props.attention.title, props.attention.cause ?? "", props.attention.says ?? ""]
+			.map((s) => s.trim())
+			.filter((s) => s);
+	return (
+		<Row
+			testID={`now-${t().id}`}
+			mark={taskMark(stateOf(t()))}
+			title={t().title}
+			meta={`#${t().number}`}
+			state={workWord(stateOf(t()))}
+			stateTone={taskTone(stateOf(t()))}
+			trailing={
+				<If when={!linkedThere()}>
+					<ChatLink day={props.day} page={props.page} task={t()} lane="now" />
+				</If>
+			}
+			detail={
+				<RowDetail>
+					<Caption testID={`now-attention-${t().id}`}>In Work that needs attention above.</Caption>
+					<Disclosure
+						label={open() ? "Hide details" : "Details"}
+						open={open()}
+						testID={`now-details-${t().id}`}
+						accessibilityLabel={`${open() ? "Hide" : "Show"} the details of #${t().number} ${t().title}.`}
+						anchor={target.anchor}
+						onFocus={target.onFocus}
+						onBlur={target.onBlur}
+						onToggle={() => toggleWork(t().id, target)}
+					>
+						<View class="gap-1.5">
+							<NowFacts task={t()} skip={shownThere()} />
+							<TaskModel task={t()} lane="now" />
+							<View selectable>
+								<Body tone="muted">{(t().body ?? "") || "No details are recorded for this task."}</Body>
+							</View>
+						</View>
+					</Disclosure>
 				</RowDetail>
 			}
 		/>
@@ -387,8 +459,11 @@ function NextRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
 	);
 }
 
-/** One blocked task in the narrow column: why it cannot move, and what it waits for. */
-function BlockedRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
+/**
+ * One blocked task in the narrow column: its state and why it cannot move. Its group says what it waits for, so
+ * `skip` holds the group's dependency lines; every other reason stays.
+ */
+function BlockedRow(props: { day: Day; page: MissionPage; task: TaskLine; skip: string[] }) {
 	const t = () => props.task;
 	const target = laneFocus(props.task.id, "blocked");
 	return (
@@ -402,14 +477,58 @@ function BlockedRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
 			detail={
 				<RowDetail>
 					<View selectable class="gap-1">
-						<Reasons task={t()} quiet />
-						<Prerequisites task={t()} />
+						<Reasons task={t()} quiet skip={props.skip} />
 					</View>
 					<Details task={t()} lane="blocked" target={target} />
 				</RowDetail>
 			}
 		/>
 	);
+}
+
+/** Blocked tasks that wait for the same set of tasks. `key` is that set's ids; empty for no prerequisite. */
+type Dependency = { key: string; prerequisites: TaskPrerequisite[]; tasks: TaskLine[] };
+
+/**
+ * The host's reason lines about one prerequisite, word for word as the native read writes them
+ * (native/src/mission_work.rs). `label` is true when the group's label already says it.
+ */
+function dependencyLines(p: TaskPrerequisite): { line: string; label: boolean }[] {
+	if (p.number === 0) return [{ line: `Prerequisite ${p.id} is unavailable; it is not known done.`, label: false }];
+	return [
+		{ line: `Waiting for #${p.number} ${p.title}.`, label: true },
+		{
+			line: `Prerequisite #${p.number} ${p.title} was dropped, not completed. The plan needs reconciliation.`,
+			label: false,
+		},
+	];
+}
+
+/** A group's dependency lines: all of them, to leave out of its rows, and those its tasks say that its label does not. */
+function groupLines(g: Dependency): { skip: string[]; notes: string[] } {
+	const all = g.prerequisites.flatMap(dependencyLines);
+	const said = new Set(g.tasks.flatMap((t) => (t.workReason ?? "").split("\n").map((l) => l.trim())));
+	return {
+		skip: all.map((d) => d.line),
+		notes: all.filter((d) => !d.label && said.has(d.line)).map((d) => d.line),
+	};
+}
+
+/** Blocked tasks grouped by the exact work they wait for, in task order. Tasks that wait for no task come last. */
+function byDependency(tasks: TaskLine[]): Dependency[] {
+	const groups = new Map<string, Dependency>();
+	for (const task of tasks) {
+		const prerequisites = task.prerequisites ?? [];
+		const key = prerequisites
+			.map((p) => p.id)
+			.sort()
+			.join("+");
+		const group = groups.get(key) ?? { key, prerequisites, tasks: [] };
+		group.tasks.push(task);
+		groups.set(key, group);
+	}
+	const all = [...groups.values()];
+	return [...all.filter((g) => g.key), ...all.filter((g) => !g.key)];
 }
 
 /** What the mission waits for from the user, and the one way to it: its card on Today. */
@@ -498,6 +617,8 @@ export function MissionNow(props: { day: Day; page: MissionPage; anchor?: Conten
 	// Chats the read shows working that no working task row stands for, including one whose task is done.
 	const others = () =>
 		props.page.chats.filter((c) => !now().some((t) => stateOf(t) === "working" && t.sessionId === c.id));
+	// A chat Work that needs attention shows keeps its chat link there.
+	const inAttention = (sessionId: string) => props.page.problems.some((p) => p.sessionId === sessionId);
 	return (
 		<View ref={work?.ref} onLayout={work?.onLayout}>
 			<Section testID="mission-now" title="Now" count={now().length}>
@@ -506,7 +627,19 @@ export function MissionNow(props: { day: Day; page: MissionPage; anchor?: Conten
 				</If>
 				<Rows>
 					<Each of={limited(`${id()}/now`, now(), NOW_SHOWN)} key={(t) => t.id}>
-						{(t) => <NowRow day={props.day} page={props.page} task={t()} />}
+						{(t) => (
+							<If
+								when={attentionOf(props.page, t())}
+								else={<NowRow day={props.day} page={props.page} task={t()} />}
+							>
+								<NowReference
+									day={props.day}
+									page={props.page}
+									task={t()}
+									attention={attentionOf(props.page, t()) as Problem}
+								/>
+							</If>
+						)}
 					</Each>
 				</Rows>
 				<MoreRows
@@ -527,10 +660,11 @@ export function MissionNow(props: { day: Day; page: MissionPage; anchor?: Conten
 									<Row
 										mark="working"
 										title={c().title}
+										meta={inAttention(c().id) ? "In Work that needs attention above." : undefined}
 										trailing={
 											<>
 												<Num>{`since ${c().since}`}</Num>
-												<If when={props.day.chat}>
+												<If when={props.day.chat && !inAttention(c().id)}>
 													<OpenChatAction
 														testID={`mission-chat-${c().id}`}
 														accessibilityLabel={`Open the chat “${c().title}”, read only. Opening it sends nothing.`}
@@ -585,6 +719,7 @@ export function MissionBlockers(props: { day: Day; page: MissionPage }) {
 	const id = () => props.page.row.id;
 	const now = () => of(props.page, "now");
 	const blocked = () => of(props.page, "blocked");
+	const groups = () => byDependency(limited(`${id()}/blocked`, blocked(), BLOCKED_SHOWN));
 	const decision = (): Decision | undefined =>
 		props.day.today().decisions.find((d) => d.id === props.page.row.decisionId);
 	const paused = () => props.page.row.state === "paused" || props.page.row.state === "pausing";
@@ -614,10 +749,34 @@ export function MissionBlockers(props: { day: Day; page: MissionPage }) {
 				<Each of={decision() ? [decision() as Decision] : []} key={(d) => d.id}>
 					{(d) => <Waiting decision={d()} />}
 				</Each>
-				<Each of={limited(`${id()}/blocked`, blocked(), BLOCKED_SHOWN)} key={(t) => t.id}>
-					{(t) => <BlockedRow day={props.day} page={props.page} task={t()} />}
-				</Each>
 			</Rows>
+			<Each of={groups()} key={(g) => g.key}>
+				{(g) => (
+					<View testID={`blocked-group-${g().key || "other"}`}>
+						<If when={g().key || groups().length > 1}>
+							<RowGroup
+								label={
+									g().key
+										? `Waits for ${g().prerequisites.map(prerequisiteLine).join(", ")}`
+										: "Other blockers"
+								}
+							/>
+						</If>
+						<If when={groupLines(g()).notes.length > 0}>
+							<Block testID={`blocked-notes-${g().key}`} selectable gap={1}>
+								<Each of={groupLines(g()).notes} key={(l) => l}>
+									{(l) => <Caption>{l()}</Caption>}
+								</Each>
+							</Block>
+						</If>
+						<Rows>
+							<Each of={g().tasks} key={(t) => t.id}>
+								{(t) => <BlockedRow day={props.day} page={props.page} task={t()} skip={groupLines(g()).skip} />}
+							</Each>
+						</Rows>
+					</View>
+				)}
+			</Each>
 			<MoreRows
 				listKey={`${id()}/blocked`}
 				total={blocked().length}

@@ -10,7 +10,8 @@ import type { KernelCommand, KernelPacket, KernelUsage } from "@pilot/kernel";
 import type { MissionPlan, SessionState, WorkProfile } from "@pilot/protocol";
 import { readModelDefaults, STARTER_PROFILES, writeWorkProfiles } from "./model-controls-store.ts";
 import { ProjectStore } from "./projects.ts";
-import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
+import { type SessionWorker } from "./kernel-worker.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 import {

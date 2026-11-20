@@ -7,6 +7,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const INSTALLED_HOST = fileURLToPath(new URL("../native/pilot-artifact-host", import.meta.url));
+/** The NSH release that apps/day/scripts/bundle_runtime.py bundles (NSH_RELEASE) and the host reports. */
+export const NSH_RUNTIME = "nsh 0.6.1";
 const MAX_RESPONSE = 4 * 1024 * 1024;
 /** Ends a helper that never finishes. Capture runs the preview once and presses its variant switches, which
  * artifact_check.rs ends within 9 s; 10 s leaves room for compiling on a busy machine. */
@@ -54,7 +56,7 @@ export async function readArtifactHostBinding(executable = INSTALLED_HOST): Prom
 		runtime.arch !== "arm64" ||
 		identity?.schema !== 1 ||
 		identity.kind !== "nsh-source-host" ||
-		identity.runtime !== "nsh 0.6.1" ||
+		identity.runtime !== NSH_RUNTIME ||
 		typeof identity.source !== "string" ||
 		!/^[a-f0-9]{40}$/.test(identity.source) ||
 		identity.source !== runtime.source ||

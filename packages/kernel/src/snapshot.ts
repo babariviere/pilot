@@ -24,7 +24,7 @@ import { activeConversation, lineage } from "./attempts.ts";
 import { AttentionDoc, normalizeCompletion } from "./attention.ts";
 import { chatEventEntries } from "./chat-events.ts";
 import { GitHubActionsDoc } from "./github-actions.ts";
-import { HeldInputsDoc } from "./held-inputs.ts";
+import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { InputOrigins } from "./input-origin.ts";
 import { readQuestionBoundary, readRecentEntries, readTranscriptPage } from "./paged-history.ts";
 import { readQuestionClarification } from "./question-clarifications.ts";

@@ -1,6 +1,15 @@
 /** When a research or prototype (explorer) chat's question stops needing the user. Reading changes nothing. */
 import type { MissionStore } from "./missions.ts";
 
+const prototypePrefix = (title: string) => `Prototype: ${title} (about $`;
+
+/** The title of the chat Pilot starts for a map question. Chats started before 2026-11-18 are matched by it. */
+export function explorerChatTitle(title: string, prototypeMaxCostUsd?: number): string {
+	return (
+		prototypeMaxCostUsd === undefined ? `Research: ${title}` : `${prototypePrefix(title)}${prototypeMaxCostUsd})`
+	).slice(0, 200);
+}
+
 /**
  * A chat Pilot started for a map question (a research or prototype explorer), or undefined for any other chat.
  * `settled`: its question is moot, because its plan is published, its map question is resolved, or a newer explorer
@@ -22,8 +31,8 @@ export function explorerQuestion(
 	// Chats started before Pilot kept earlier attempts: the title Pilot gave the chat names its question.
 	questionId ??= plan?.questions.find(
 		(q) =>
-			session.title === `Research: ${q.title}`.slice(0, 200) ||
-			session.title.startsWith(`Prototype: ${q.title} (about $`.slice(0, 200)),
+			session.title === explorerChatTitle(q.title) ||
+			session.title.startsWith(prototypePrefix(q.title).slice(0, 200)),
 	)?.id;
 	if (questionId === undefined) return undefined;
 	if (plan?.publication || plan?.questions.find((q) => q.id === questionId)?.resolution) return { settled: true };

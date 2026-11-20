@@ -8,6 +8,7 @@ import type {
 import { Conflict } from "./errors.ts";
 import type { InsightsOwnerAdmission } from "./insights-admission.ts";
 import { parseInsightsBacklog } from "./insights-backlog.ts";
+import { INSIGHTS_THINKING_LEVELS } from "./insights-defaults.ts";
 import { InsightsReviews } from "./insights-review.ts";
 import { validateInsightsSettings } from "./insights-settings.ts";
 import type {
@@ -166,7 +167,7 @@ export class InsightsOwnerStore {
 				!["active", "configuring"].includes(current.state) ||
 				!same(current.binding, binding) ||
 				current.settings.model !== model ||
-				!["off", "minimal", "low", "medium", "high", "xhigh"].includes(thinking)
+				!INSIGHTS_THINKING_LEVELS.includes(thinking)
 			)
 				throw new Conflict("owner_ready_thinking_unqualified");
 			const expected = current.effectiveThinking ?? current.thinking;

@@ -15,7 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { DiagnosticLogRequest } from "@pilot/kernel";
+import type { DiagnosticLogRequest } from "@pilot/protocol";
 import { dayAppBinding, dayAppLogLine } from "./day-app-log.ts";
 import { DiagnosticLogReader } from "./diagnostic-logs.ts";
 

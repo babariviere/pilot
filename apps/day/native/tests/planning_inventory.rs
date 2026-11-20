@@ -1,4 +1,7 @@
 //! Complete inventory mapping and the same-worker real-daemon path, no visible app.
+#[path = "support/bridge_calls.rs"]
+mod bridge_calls;
+use bridge_calls::Calls;
 use pilot_day_native::{
     bridge::{Bridge, METHODS, restrict},
     host::{Error, NativeHost, Source},
@@ -142,9 +145,10 @@ impl Fixture {
         self.info = self.output.recv_timeout(Duration::from_secs(25)).unwrap();
     }
     fn open(&self) -> NativeHost {
-        NativeHost::open(
+        NativeHost::open_with_options(
             serde_json::from_value::<Source>(self.info["source"].clone()).unwrap(),
             PathBuf::from(self.info["ledger"].as_str().unwrap()),
+            Default::default(),
         )
         .unwrap()
     }
@@ -294,31 +298,33 @@ fn wait(host: &NativeHost, count: usize) {
 fn real_inventory_survives_restart_revocation_is_unavailable_and_ws_only_invalidates() {
     let mut f = Fixture::new();
     let host = f.open();
-    let _ = reply(host.read_planning_inventory());
+    let mut calls = Calls::new(host.clone());
+    let _ = calls.call("day.plan.inventory", json!({}));
     wait(&host, 3);
     assert!(
         host.planning(f.info["mission"].as_str().unwrap()).is_none(),
         "no selected detail required"
     );
     let before = host.planning_inventory_snapshot().plans;
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
     f.cmd("restart", false);
     let host = f.open();
-    let _ = reply(host.read_planning_inventory());
+    let mut calls = Calls::new(host.clone());
+    let _ = calls.call("day.plan.inventory", json!({}));
     wait(&host, 3);
     assert_eq!(host.planning_inventory_snapshot().plans, before);
     f.cmd("create", false);
     wait(&host, 4);
     f.cmd("revoke", true);
-    assert!(reply(host.read_planning_inventory()).is_err());
+    assert!(calls.call("day.plan.inventory", json!({}))["error"].is_string());
     assert_eq!(
         host.planning_inventory_snapshot().availability,
         PlanAvailability::Unavailable
     );
     f.cmd("revoke", false);
-    reply(host.read_planning_inventory()).unwrap();
+    assert!(calls.call("day.plan.inventory", json!({}))["error"].is_null());
     wait(&host, 4);
     f.cmd("empty", false);
     wait(&host, 0);
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }

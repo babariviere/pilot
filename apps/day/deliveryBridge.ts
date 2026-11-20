@@ -1,6 +1,7 @@
 // The native host owns exact operations and receipt pairs across window lifetimes.
 // These methods never infer success from an agent report, a PR, or a passive read.
-import { call, type Refusal } from "./bridge";
+import { call } from "./bridge";
+import type { Refusal } from "./refusals";
 import type { DeliveredWork, DeliveryList, UserVerificationLookup, VerificationSubject } from "./deliveryContract";
 
 export type { DeliveredWork, VerificationSubject };

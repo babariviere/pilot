@@ -16,7 +16,8 @@ import {
 import { durableJSON } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
-import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
+import { type SessionWorker } from "./kernel-worker.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const source = "a".repeat(40),

@@ -4,10 +4,10 @@
 //! these check what the screen says about each native state, what it sends,
 //! and what a flush and a cold restore carry. No daemon, updater, service or
 //! visible window: the native updater's own rules are in `update_host.rs`.
-#[path = "support/day_library.rs"]
-mod day_library;
 #[path = "support/app_source.rs"]
 mod app_source;
+#[path = "support/day_library.rs"]
+mod day_library;
 use nsh_core::prelude::*;
 use nsh_engine::{EngineConfig, HostCall, HostChannel};
 use nsh_testing::{Headless, compile_tsx};
@@ -205,6 +205,7 @@ impl Root {
                     && n != "day.ritual.results"
                     && !n.ends_with(".inventory")
                     && n != "day.plan.prepare"
+                    && n != "day.projects.setup"
                     // Passive: Today's scope reads only.
                     && n != "day.today.scope"
                     // Passive: the delivered results list Today shows.
@@ -274,15 +275,13 @@ fn open_update(app: &mut Headless, label: &str) {
 }
 
 #[test]
-fn force_is_explicit_exact_and_check_only_after_a_lost_reply() {
+fn legacy_force_state_offers_no_loss_or_normal_confirmation() {
     let entry = entry();
     let root = Root::new(Scenario::Quiet);
     let mut offer = offering(UpdateKind::App);
     offer.force_available = Some(true);
-    root.service("day.update.read", &offer);
-    let mut pending = offer.clone();
-    pending.pending = Some(Confirmation {
-        id: "force-one".into(),
+    offer.pending = Some(Confirmation {
+        id: "legacy-force".into(),
         mode: Some(pilot_day_native::update::UpdateMode::Force),
         kind: UpdateKind::App,
         from: "1.0".into(),
@@ -291,58 +290,12 @@ fn force_is_explicit_exact_and_check_only_after_a_lost_reply() {
         keeps: None,
         restarts: true,
     });
-    root.service("day.update.prepare", &pending);
-    root.refuse("day.update.forceConfirm", "lost");
+    root.service("day.update.read", &offer);
     let mut app = open_on(&entry, root.channel.clone());
     open_update(&mut app, "Update ready");
-    app.press("id:update-force-prepare").unwrap();
-    wait(&mut app, "Force update from 1.0 to 2.0?");
-    assert!(app.shows("Unsaved UI state and unfinished agent work may be lost."));
-    assert!(!app.shows("Saves your drafts and where you are first."));
-    app.press("role:button[Force update and accept loss]")
-        .unwrap();
-    wait(&mut app, "Update not confirmed");
-    assert_eq!(
-        root.args("day.update.prepare"),
-        vec![json!({"kind":"app","revision":4,"mode":"force"})]
-    );
-    assert_eq!(
-        root.args("day.update.forceConfirm"),
-        vec![json!({"id":"force-one"})]
-    );
+    assert!(!has(&app, "id:update-force-prepare"));
+    assert!(!has(&app, "id:update-confirm"));
     assert_eq!(root.count("day.update.confirm"), 0);
-    assert_eq!(
-        root.count("day.flush.ack"),
-        0,
-        "loss is not a fabricated save receipt"
-    );
-    assert!(!has(&app, "id:update-force-prepare"));
-    let mut unknown = ran(
-        UpdateKind::App,
-        UpdatePhase::Unknown,
-        "Force loss is accepted. Installation is not confirmed.",
-    );
-    unknown.operation = "force-one".into();
-    root.service("day.update.check", &unknown);
-    app.press("id:update-check").unwrap();
-    wait(
-        &mut app,
-        "Force loss is accepted. Installation is not confirmed.",
-    );
-    assert_eq!(root.count("day.update.forceConfirm"), 1);
-    assert_eq!(root.count("day.update.prepare"), 1);
-    drop(app);
-    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
-}
-
-#[test]
-fn unqualified_native_roots_never_offer_force() {
-    let entry = entry();
-    let root = Root::new(Scenario::Quiet);
-    root.service("day.update.read", &offering(UpdateKind::App));
-    let mut app = open_on(&entry, root.channel.clone());
-    open_update(&mut app, "Update ready");
-    assert!(!has(&app, "id:update-force-prepare"));
     assert_eq!(root.count("day.update.forceConfirm"), 0);
     drop(app);
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
@@ -509,8 +462,10 @@ fn a_flush_saves_where_the_user_is_exactly_and_answers_only_the_newest_request()
     app.type_text("id:question", "Weekends?").unwrap();
     let question = "Weekends? 👩🏽‍💻";
     app.type_text("id:question", " 👩🏽‍💻").unwrap();
-    // The global New action is now outside the page's scroll owner.
-    app.scroll("id:question", Points(400.0)).unwrap();
+    // At the default test height the updated Today overview can fit without scrolling.
+    app.set_viewport(Size::new(Points(1100.0), Points(500.0)))
+        .unwrap();
+    app.scroll("id:today-page", Points(400.0)).unwrap();
 
     // Two requests in a row: the older one is replaced, never answered.
     root.flush(6);

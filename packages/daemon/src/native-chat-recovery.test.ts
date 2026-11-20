@@ -7,7 +7,7 @@ import type { DurableOperation } from "@pilot/protocol";
 import { Funding } from "./funding.ts";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
 import { payloadHash } from "./operation-journal.ts";
-import type { SessionWorker } from "./sessions.ts";
+import type { SessionWorker } from "./kernel-worker.ts";
 
 test("native recovery keeps the owning chat and exact corrected words; receipt lookup never resends", async (t) => {
 	const f = await nativeIntakeFixture();

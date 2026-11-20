@@ -7,7 +7,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { EnvironmentError, EnvironmentPlan, EnvironmentReadiness } from "@pilot/protocol";
 
-export interface ProjectEnvironmentState {
+interface ProjectEnvironmentState {
 	/** Last computed plan preview. Confirmation always recomputes; this is for display and offline summaries. */
 	plan?: EnvironmentPlan;
 	/** Host-level readiness of tools and services. */
@@ -44,7 +44,7 @@ function truncateBytes(text: string, max: number): string {
 }
 
 /** Bound one entry. Returns undefined when it cannot be kept. */
-export function boundEnvironmentState(value: unknown): ProjectEnvironmentState | undefined {
+function boundEnvironmentState(value: unknown): ProjectEnvironmentState | undefined {
 	if (!isRecord(value) || typeof value.updatedAt !== "number" || !Number.isFinite(value.updatedAt)) return undefined;
 	const state: ProjectEnvironmentState = { updatedAt: value.updatedAt };
 	if (

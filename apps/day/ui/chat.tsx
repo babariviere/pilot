@@ -37,7 +37,7 @@ export function Reply(props: { testID?: string; children?: JSX.Element }) {
 }
 
 /** One step of a turn. `running` marks the step that runs now. */
-export type ChatStep = { id: string; text: string; running?: boolean };
+export type ChatStep = { id: string; text: string; running?: boolean; failed?: boolean };
 
 /** A turn's steps, under its `Disclosure` line: one caption sentence each, on a hairline, the running one darker. */
 export function Steps(props: { steps: ChatStep[]; testID?: string }) {
@@ -45,9 +45,17 @@ export function Steps(props: { steps: ChatStep[]; testID?: string }) {
 		<View testID={props.testID} class="ml-1.5 gap-1 border-l border-input pl-3">
 			<Each of={props.steps} key={(s) => s.id}>
 				{(s) => (
-					<Text class={s().running ? "text-foreground" : "text-muted-foreground"} style={TYPE.caption}>
-						{s().text}
-					</Text>
+					<View class="flex-row items-center gap-1.5">
+						<If when={s().failed}>
+							<Mark kind="failed" />
+						</If>
+						<Text
+							class={s().failed ? "text-failed-ink" : s().running ? "text-foreground" : "text-muted-foreground"}
+							style={TYPE.caption}
+						>
+							{s().failed ? `${s().text} · Failed` : s().text}
+						</Text>
+					</View>
 				)}
 			</Each>
 		</View>

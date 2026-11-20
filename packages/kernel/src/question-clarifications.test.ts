@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession, InboxDoc, LiveDoc, MemoryStorage } from "@earendil-works/pi-durable";
-import { admitWithHeld, HeldInputsDoc, holdOnStop, publishQuestionWithHeld } from "./held-inputs.ts";
+import { admitWithHeld, holdOnStop, publishQuestionWithHeld } from "./held-inputs.ts";
+import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { QuestionClarifications } from "./question-clarifications.ts";
 
 async function fixture(t: TestContext) {

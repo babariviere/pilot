@@ -21,18 +21,16 @@ import {
 	UserEntry,
 } from "@earendil-works/pi-durable";
 import type { DeliveryMode } from "@pilot/protocol";
+import { ACTIVITY_ENTRY, QUESTION_ENTRY } from "./entry-kinds.ts";
 import { HeldInputsDoc, type HeldInput as Input, type SystemMessageStateEvent } from "./held-inputs-doc.ts";
 import { inputOrigin } from "./input-origin.ts";
 import { acceptInterviewReply, StandaloneInterviewDoc } from "./interview-state.ts";
-import { QUESTION_ENTRY } from "./question-entry.ts";
 
 /** A native reply's exact immutable question is no longer answerable. */
 export class QuestionReplyRefused extends Error {}
 export class InputGenerationRefused extends Error {}
 
 import { previewText, type WithdrawnMessage } from "./queue.ts";
-
-export { HeldInputsDoc, type SystemMessageStateEvent } from "./held-inputs-doc.ts";
 
 /** The same hold rule applies to Harness calls and dynamically constructed native calls. */
 export function pendingQuestionToolBlock(
@@ -182,7 +180,7 @@ export async function initializeQuestionHold(
 				}
 				if (
 					entry.kind !== "pi.compaction" &&
-					entry.kind !== "pilot.activity" &&
+					entry.kind !== ACTIVITY_ENTRY &&
 					entry.model?.some((m) => m.role === "user")
 				) {
 					held.questionPending = false;
@@ -214,7 +212,7 @@ async function holdQuestionInbox(
 		inbox.items = inbox.items.filter((item, index) => {
 			if (item.mode === "write") {
 				if (
-					item.entry.kind !== "pilot.activity" ||
+					item.entry.kind !== ACTIVITY_ENTRY ||
 					!Array.isArray(item.entry.model) ||
 					!item.entry.model.some(
 						(m) => typeof m === "object" && m !== null && !Array.isArray(m) && m.role === "user",

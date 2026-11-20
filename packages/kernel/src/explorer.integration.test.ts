@@ -16,6 +16,7 @@ import { Type } from "typebox";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { MissionContext } from "./policy.ts";
 import { KernelSession } from "./session.ts";
+import { fakeHostCall } from "./testing/host-calls.ts";
 
 test("explorer uses read-only tools, reports findings, cancels research and restores without replay", {
 	timeout: 30_000,
@@ -103,11 +104,13 @@ test("explorer uses read-only tools, reports findings, cancels research and rest
 	const reports: string[] = [];
 	const hooks = {
 		onWorking: () => {},
-		callMission: async (action: string) => {
-			if (action !== "log" && action !== "comment") throw new Error("Coordinator-owned planning");
-			reports.push(action);
-			return { accepted: true };
-		},
+		call: fakeHostCall({
+			mission: async ({ action }) => {
+				if (action !== "log" && action !== "comment") throw new Error("Coordinator-owned planning");
+				reports.push(action);
+				return { accepted: true };
+			},
+		}),
 	};
 	await assert.rejects(KernelSession.open({ ...spec, pilot: {} }, hooks), /requires the read-only Ask runtime/);
 	let session = await KernelSession.open(spec, hooks);

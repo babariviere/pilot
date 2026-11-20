@@ -4,6 +4,8 @@ import { join } from "node:path";
 import type { OperationHost } from "@pilot/protocol";
 import { SetupError } from "./setup-error.ts";
 
+export const PILOT_CAPABILITY_HEADER = "x-pilot-github-capability";
+
 /** Native host authority. The filename and header keep their historical GitHub naming. */
 export class NativeAppCapability {
 	private readonly token = randomBytes(32).toString("hex");

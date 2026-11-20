@@ -19,13 +19,24 @@ Docs to use when the task touches them:
 
 - [README.md](README.md) is a short product introduction and setup entry point. Keep it short.
   Update concise feature guides in [docs/README.md](docs/README.md) when user-facing behavior changes.
-  Put architecture, APIs, proposals and verification detail in [docs/technical](docs/technical/README.md).
+- Keep lasting contracts and runbooks beside the code they cover.
 - [DESIGN.md](DESIGN.md) holds the UI intent, state vocabulary and review checklist for UI changes.
-- `scripts/bench` holds reopen, workspace, memory and daemon-stall benchmarks for hot-path changes;
+- Benchmarks for hot-path changes live in `scripts/bench` (reopen, workspace, daemon stalls and more),
+  `packages/*/src/*.bench.ts` and `packages/kernel/scripts/bench-*`;
   [docs/technical/performance-check.md](docs/technical/performance-check.md) records a past CPU and memory audit and its method.
 - Agent-facing text (the Pilot prompt in `packages/kernel/src/policy.ts`, tool descriptions and the bundled
   `pilot-artifacts` skill) is loaded on every turn or tool listing. Keep it short, state boundaries plainly,
   and move detail into skill references or tool descriptions that load only when needed.
+
+## Agent skills
+
+### Issue tracker
+
+Track work in Pilot missions and tasks. See [issue-tracker.md](docs/agents/issue-tracker.md).
+
+### Domain docs
+
+Single context: consult the glossary and relevant ADRs before design or refactoring. See [domain.md](docs/agents/domain.md).
 
 ## Working conventions
 

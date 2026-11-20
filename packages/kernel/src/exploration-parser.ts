@@ -2,6 +2,11 @@
 import { parse } from "@babel/parser";
 
 export type SyntaxNode = Record<string, unknown> & { type: string; start: number; end: number };
+
+export const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"] as const;
+/** Repository scans never enter these. Saved call comparisons depend on this list: bump retained-call-scan's ENGINE when it changes. */
+export const EXCLUDED_DIRECTORIES = [".git", ".jj", "node_modules", "target", "dist", ".next", ".cache"] as const;
+
 type Node = SyntaxNode;
 export interface Declaration {
 	name: string;
@@ -113,5 +118,5 @@ export function parseDeclarations(text: string, path: string, ast = parseSource(
 }
 
 export function supportedSyntax(path: string): boolean {
-	return /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(path);
+	return SOURCE_EXTENSIONS.some((extension) => path.endsWith(extension));
 }

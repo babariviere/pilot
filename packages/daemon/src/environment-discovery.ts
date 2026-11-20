@@ -14,6 +14,7 @@ import type {
 	EnvironmentStepCandidate,
 	EnvironmentSubject,
 } from "@pilot/protocol";
+import { MISE_LOCAL_CONFIGS, MISE_PROJECT_CONFIGS } from "./workspace-environment.ts";
 
 export const DISCOVERY_LIMITS = {
 	files: 64,
@@ -26,14 +27,6 @@ export const DISCOVERY_LIMITS = {
 	hintsPerFile: 16,
 } as const;
 
-const MISE_FILES = ["mise.toml", ".mise.toml", "mise/config.toml", ".mise/config.toml", ".config/mise.toml"];
-/** Ignored local variants that workspace creation copies into new workspaces (workspaces.ts localConfigs). */
-export const MISE_LOCAL_FILES = [
-	"mise.local.toml",
-	".mise.local.toml",
-	"mise/config.local.toml",
-	".mise/config.local.toml",
-];
 const COMPOSE_FILES = ["compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"];
 const MAKE_FILES = ["Makefile", "GNUmakefile", "makefile"];
 const JUST_FILES = ["justfile", ".justfile", "Justfile"];
@@ -51,21 +44,21 @@ export const DISCOVERY_FILES = [
 	...Object.keys(VERSION_FILES),
 	"package.json",
 	".tool-versions",
-	...MISE_FILES,
-	...MISE_LOCAL_FILES,
+	...MISE_PROJECT_CONFIGS,
+	...MISE_LOCAL_CONFIGS,
 	...COMPOSE_FILES,
 	...MAKE_FILES,
 	...JUST_FILES,
 	...DOC_FILES,
 ];
 
-export interface DiscoveredFile {
+interface DiscoveredFile {
 	path: string;
 	text: string;
 	sha256: string;
 }
 
-export interface DiscoveryRead {
+interface DiscoveryRead {
 	files: DiscoveredFile[];
 	skipped: EnvironmentDiscovery["skipped"];
 	truncated: boolean;
@@ -73,7 +66,7 @@ export interface DiscoveryRead {
 	localFiles?: string[];
 }
 
-export const LOCAL_FILE_PATTERN = /^\.env(?:\.[A-Za-z0-9._-]+)?$/;
+const LOCAL_FILE_PATTERN = /^\.env(?:\.[A-Za-z0-9._-]+)?$/;
 
 /** Root .env files, by name. Only directory entries and lstat are read; at most 32, sorted. */
 function localFileCandidates(root: string): string[] {
@@ -216,7 +209,7 @@ const ALIASES: Record<string, string> = {
 };
 
 /** "aqua:golangci/golangci-lint" → "golangci-lint", "golang" → "go". */
-export function normalizeSubject(raw: string): string {
+function normalizeSubject(raw: string): string {
 	const name = raw
 		.trim()
 		.toLowerCase()
@@ -225,7 +218,7 @@ export function normalizeSubject(raw: string): string {
 	return ALIASES[last] ?? last;
 }
 
-export function normalizeVersion(raw: string): string {
+function normalizeVersion(raw: string): string {
 	return raw
 		.trim()
 		.replace(/^["']|["']$/g, "")
@@ -233,7 +226,7 @@ export function normalizeVersion(raw: string): string {
 }
 
 /** Exact needs at least major.minor.patch. Shorter numbers are prefixes, aliases are unknown. */
-export function classifyVersion(raw: string): { kind: EnvironmentFindingKind; value?: string; note?: string } {
+function classifyVersion(raw: string): { kind: EnvironmentFindingKind; value?: string; note?: string } {
 	const value = normalizeVersion(raw);
 	if (!value) return { kind: "unknown" };
 	if (/^\d+(?:\.\d+){2,}(?:[-+][0-9A-Za-z.-]+)?$/.test(value)) return { kind: "exact", value };
@@ -248,7 +241,7 @@ function parts(version: string): number[] | undefined {
 	return match ? [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)] : undefined;
 }
 
-export function compareVersions(a: string, b: string): number | undefined {
+function compareVersions(a: string, b: string): number | undefined {
 	const left = parts(a);
 	const right = parts(b);
 	if (!left || !right) return undefined;
@@ -637,7 +630,7 @@ export function parseDiscoveredFile(file: DiscoveredFile): Collector {
 	const c = new Collector(file);
 	const { path } = file;
 	if (path === ".tool-versions") parseToolVersions(c);
-	else if (MISE_FILES.includes(path) || MISE_LOCAL_FILES.includes(path)) parseMise(c);
+	else if (MISE_PROJECT_CONFIGS.includes(path) || MISE_LOCAL_CONFIGS.includes(path)) parseMise(c);
 	else if (path === "go.mod") parseGoMod(c);
 	else if (VERSION_FILES[path]) parseVersionFile(c, VERSION_FILES[path]);
 	else if (path === "package.json") parsePackageJson(c, file.text);
@@ -663,7 +656,7 @@ function describe(finding: EnvironmentFinding): string {
 	return `${where} mentions ${finding.value ?? "an unknown version"}`;
 }
 
-export function resolveSubject(subject: string, findings: EnvironmentFinding[]): EnvironmentSubject {
+function resolveSubject(subject: string, findings: EnvironmentFinding[]): EnvironmentSubject {
 	const category = SERVICES.has(subject) ? "service" : "tool";
 	const sorted = [...findings].sort(
 		(a, b) =>

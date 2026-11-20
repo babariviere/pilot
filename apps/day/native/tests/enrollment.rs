@@ -1,10 +1,10 @@
 //! Creation starts in the real Rust host, never from a pre-enrolled fixture.
-use nsh_core::prelude::*;
-use nsh_engine::{Clock, EngineConfig, Root};
-use nsh_testing::Headless;
+#[path = "support/bridge_calls.rs"]
+mod bridge_calls;
+use bridge_calls::Calls;
 use pilot_day_native::{
-    host::{Error, NativeHost, Source},
-    model::{FreshnessState, IntentOutcome, OutcomeStatus},
+    host::{NativeHost, Source},
+    model::FreshnessState,
     plan::{NewIntent, PlanStage, SubmitIntent},
     plan_host::{self, Local},
 };
@@ -69,14 +69,21 @@ impl Fixture {
         let source: Source = serde_json::from_value(self.info["source"].clone()).unwrap();
         let ledger = self.info["ledger"].as_str().unwrap().into();
         if planning {
-            NativeHost::open_planning(source, ledger, "faux/faux-1".into())
+            NativeHost::open_with_options(
+                source,
+                ledger,
+                pilot_day_native::host::Options {
+                    planning_model: Some("faux/faux-1".into()),
+                    ..Default::default()
+                },
+            )
         } else {
-            NativeHost::open(source, ledger)
+            NativeHost::open_with_options(source, ledger, Default::default())
         }
         .unwrap()
     }
-    fn close(&mut self, host: NativeHost) {
-        reply(host.close()).unwrap();
+    fn close(&mut self, calls: Calls) {
+        calls.close().unwrap();
         self.cmd("close", false);
         assert!(
             self.child.wait().unwrap().success(),
@@ -96,14 +103,6 @@ fn rt() -> tokio::runtime::Runtime {
         .build()
         .unwrap()
 }
-fn reply<T>(rx: async_channel::Receiver<Result<T, Error>>) -> Result<T, Error> {
-    rt().block_on(async {
-        tokio::time::timeout(Duration::from_secs(25), rx.recv())
-            .await
-            .unwrap()
-            .map_err(|_| Error::Unavailable)?
-    })
-}
 fn ready(host: &NativeHost) {
     let changes = host.changes();
     rt().block_on(async {
@@ -116,8 +115,9 @@ fn ready(host: &NativeHost) {
         .unwrap();
     });
 }
-fn intent(host: &NativeHost) -> NewIntent {
-    reply(host.prepare_planning()).unwrap();
+fn intent(host: &NativeHost, calls: &mut Calls) -> NewIntent {
+    let result = calls.call("day.plan.prepare", json!({}));
+    assert!(result["error"].is_null(), "{result}");
     NewIntent {
         create_another: false,
         allowance_micros: None,
@@ -134,74 +134,74 @@ fn mission(host: &NativeHost) -> String {
         .unwrap()
         .into()
 }
-fn read(host: &NativeHost, id: &str) -> Value {
+// Retry only a passive read raced by a fixture invalidation.
+fn read(calls: &mut Calls, id: &str) -> Value {
     for _ in 0..5 {
-        ready(host);
-        match reply(host.read_planning(id.into())) {
-            Ok(_) => return host.planning(id).unwrap(),
-            Err(Error::Stale) => continue, // Only passive GET, raced by an invalidation.
-            other => panic!("planning read: {other:?}"),
+        let result = calls.call("day.plan.read", json!({"missionId":id}));
+        match result["error"].as_str() {
+            None => return result["value"]["snapshot"].clone(),
+            Some("stale") => continue,
+            _ => panic!("planning read: {result}"),
         }
     }
-    panic!("planning GET did not settle after bounded invalidations");
-}
-#[track_caller]
-fn status(result: Result<IntentOutcome, Error>) -> OutcomeStatus {
-    result.unwrap().status
+    panic!("planning GET did not settle");
 }
 
-fn answer_all(host: &NativeHost, id: &str) {
-    let v = read(host, id);
-    let i = &v["view"]["interview"];
-    let answers: Vec<Value> = i["questions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|q| {
-            json!({
-        "questionId":q["id"],"questionDigest":v["questionDigests"][q["id"].as_str().unwrap()],
-        "selectedOption":q["options"][0],"text":""})
-        })
-        .collect();
-    assert_eq!(status(reply(host.write_interview(id.into(), v["contextDigest"].as_str().unwrap().into(), json!({
-        "purpose":"interview-save","expected":{"fence":i["fence"],"revision":i["revision"]},"answers":answers
-    })))), OutcomeStatus::Accepted);
+fn answer_all(calls: &mut Calls, id: &str) {
+    let page = read(calls, id);
+    let i = &page["interview"];
+    for q in i["questions"].as_array().unwrap() {
+        let result = calls.outcome(
+            "day.plan.save",
+            json!({"missionId":id,"intent":{
+                "interviewId":i["id"],"questionSet":i["questionSet"],"questionId":q["id"],
+                "digest":q["digest"],"choiceId":q["choices"][0]["id"],"text":""
+            }}),
+        );
+        assert_eq!(result["status"], "accepted", "{result}");
+    }
 }
 
-fn submit(host: &NativeHost, id: &str) -> Result<IntentOutcome, Error> {
-    let v = read(host, id);
-    let i = &v["view"]["interview"];
-    reply(host.write_interview(
-        id.into(),
-        v["contextDigest"].as_str().unwrap().into(),
-        json!({
-            "purpose":"interview-submit","expected":{"fence":i["fence"],"revision":i["revision"]}
-        }),
-    ))
+fn submit(calls: &mut Calls, id: &str, page: &Value) -> Value {
+    let i = &page["interview"];
+    calls.outcome(
+        "day.plan.submit",
+        json!({"missionId":id,"intent":{
+            "interviewId":i["id"],"revision":i["revision"],"proposal":i["proposal"]
+        }}),
+    )
 }
 
 #[test]
 fn discovery_requires_native_model_and_current_profile_without_admitting_anything() {
     let mut f = Fixture::new();
     let host = f.open(false);
+    let mut calls = Calls::new(host.clone());
     ready(&host);
-    assert_eq!(reply(host.prepare_planning()), Err(Error::Unavailable));
+    assert_eq!(
+        calls.call("day.plan.prepare", json!({}))["error"],
+        "unavailable"
+    );
     assert!(host.planning_setup().is_none());
     assert_eq!(
         host.snapshot().freshness.state,
         FreshnessState::Live,
         "unconfigured New does not disable Today"
     );
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
     let host = f.open(true);
+    let mut calls = Calls::new(host.clone());
     ready(&host);
     f.cmd("unavailable", true);
-    assert_eq!(reply(host.prepare_planning()), Err(Error::Unavailable));
+    assert_eq!(
+        calls.call("day.plan.prepare", json!({}))["error"],
+        "unavailable"
+    );
     assert!(host.planning_setup().is_none());
     f.cmd("unavailable", false);
-    let first = intent(&host);
+    let first = intent(&host, &mut calls);
     assert_eq!(host.planning_setup().unwrap().model, "faux/faux-1");
-    reply(host.prepare_planning()).unwrap();
+    assert!(calls.call("day.plan.prepare", json!({}))["error"].is_null());
     assert_eq!(
         host.planning_setup().unwrap().digest,
         first.setup,
@@ -209,21 +209,23 @@ fn discovery_requires_native_model_and_current_profile_without_admitting_anythin
     );
     assert_eq!(f.cmd("stats", false)["posts"], 0);
     assert_eq!(f.cmd("stats", false)["workers"], 0);
-    f.close(host);
+    f.close(calls);
 }
 
 #[test]
 fn exact_new_enrollment_preparing_then_full_round_and_duplicate_intent_never_builds() {
     let mut f = Fixture::new();
     let host = f.open(true);
+    let mut calls = Calls::new(host.clone());
     ready(&host);
-    let new = intent(&host);
+    let new = intent(&host, &mut calls);
     assert_eq!(
-        status(reply(host.enroll_planning(new.clone()))),
-        OutcomeStatus::Accepted
+        calls.outcome("day.plan.create", json!(new.clone()))["status"],
+        "accepted"
     );
     let id = mission(&host);
-    let v = read(&host, &id);
+    read(&mut calls, &id);
+    let v = host.planning(&id).unwrap();
     assert_eq!(v["status"], "preparing");
     assert_eq!(v["view"], Value::Null);
     let page = plan_host::page(&v, &[], &Local::default());
@@ -235,14 +237,17 @@ fn exact_new_enrollment_preparing_then_full_round_and_duplicate_intent_never_bui
         "one shown setup is consumed once"
     );
     assert_eq!(
-        status(reply(host.enroll_planning(new.clone()))),
-        OutcomeStatus::Accepted
+        calls.outcome("day.plan.create", json!(new.clone()))["status"],
+        "accepted"
     );
     let changed = NewIntent {
         goal: "different".into(),
         ..new.clone()
     };
-    assert_eq!(reply(host.enroll_planning(changed)), Err(Error::Stale));
+    assert_eq!(
+        calls.call("day.plan.create", json!(changed))["error"],
+        "stale"
+    );
     let stats = f.cmd("stats", false);
     assert_eq!(stats["posts"], 1);
     assert_eq!(stats["goal"], new.goal);
@@ -274,13 +279,13 @@ fn exact_new_enrollment_preparing_then_full_round_and_duplicate_intent_never_bui
     );
     assert_eq!(v["capabilities"]["answers"], 1);
     assert_eq!(f.cmd("stats", false)["tasks"], 0);
-    reply(host.prepare_planning()).unwrap();
+    assert!(calls.call("day.plan.prepare", json!({}))["error"].is_null());
     assert_ne!(
         host.planning_setup().unwrap().digest,
         new.setup,
         "a later New gets fresh identities"
     );
-    f.close(host);
+    f.close(calls);
 }
 
 #[test]
@@ -288,26 +293,32 @@ fn stop_and_pause_after_native_creation_never_admit_a_continuation_or_build() {
     for action in ["stop", "pause"] {
         let mut f = Fixture::new();
         let host = f.open(true);
+        let mut calls = Calls::new(host.clone());
         ready(&host);
         // Exercise actual Stop/Pause admission fences without relying on a WS
         // invalidation racing the write first. Every host probe still uses GET.
         f.cmd("quiet", true);
-        let new = intent(&host);
+        let new = intent(&host, &mut calls);
         assert_eq!(
-            status(reply(host.enroll_planning(new))),
-            OutcomeStatus::Accepted
+            calls.outcome("day.plan.create", json!(new))["status"],
+            "accepted"
         );
         let id = mission(&host);
         f.cmd("generate", true);
         f.cmd("held", false);
-        answer_all(&host, &id);
+        answer_all(&mut calls, &id);
         f.cmd(action, true);
-        assert_eq!(status(submit(&host, &id)), OutcomeStatus::Accepted);
+        let page = read(&mut calls, &id);
+        let submitted = submit(&mut calls, &id, &page);
+        assert_eq!(
+            submitted["status"], "accepted",
+            "{action}: {submitted}, {page}"
+        );
         f.cmd("drain", false);
         let stats = f.cmd("stats", false);
         assert_eq!(stats["requests"], 1, "{action} holds planning admission");
         assert_eq!(stats["tasks"], 0);
-        f.close(host);
+        f.close(calls);
     }
 }
 
@@ -315,81 +326,82 @@ fn stop_and_pause_after_native_creation_never_admit_a_continuation_or_build() {
 fn changed_owner_cannot_use_the_retained_read_to_answer() {
     let mut f = Fixture::new();
     let host = f.open(true);
+    let mut calls = Calls::new(host.clone());
     ready(&host);
-    let new = intent(&host);
+    let new = intent(&host, &mut calls);
     assert_eq!(
-        status(reply(host.enroll_planning(new))),
-        OutcomeStatus::Accepted
+        calls.outcome("day.plan.create", json!(new))["status"],
+        "accepted"
     );
     let id = mission(&host);
     f.cmd("generate", true);
     f.cmd("held", false);
-    let v = read(&host, &id);
+    answer_all(&mut calls, &id);
+    let page = read(&mut calls, &id);
+    let posts = f.cmd("stats", false)["posts"].clone();
     f.cmd("owner", true);
-    let i = &v["view"]["interview"];
-    assert!(reply(host.write_interview(id, v["contextDigest"].as_str().unwrap().into(), json!({
-        "purpose":"interview-submit","expected":{"fence":i["fence"],"revision":i["revision"]}
-    }))).is_err());
-    assert_eq!(f.cmd("stats", false)["posts"], 1);
-    f.close(host);
+    let result = submit(&mut calls, &id, &page);
+    assert!(result["error"].is_string(), "{result}");
+    assert_eq!(f.cmd("stats", false)["posts"], posts);
+    f.close(calls);
 }
 
 #[test]
 fn changed_configuration_project_and_post_journal_probe_refuse_before_enrollment() {
     let mut f = Fixture::new();
     let host = f.open(true);
+    let mut calls = Calls::new(host.clone());
     ready(&host);
-    let old = intent(&host);
+    let old = intent(&host, &mut calls);
     f.cmd("configuration", true);
-    assert!(matches!(
-        reply(host.enroll_planning(old)),
-        Err(Error::Stale)
-    ));
+    assert_eq!(calls.call("day.plan.create", json!(old))["error"], "stale");
     assert_eq!(f.cmd("stats", false)["posts"], 0);
-    let new = intent(&host);
+    let new = intent(&host, &mut calls);
     f.cmd("project", true);
-    assert_eq!(reply(host.enroll_planning(new)), Err(Error::Identity));
+    assert_eq!(
+        calls.call("day.plan.create", json!(new))["error"],
+        "identity"
+    );
     assert!(host.planning_setup().is_none());
     f.cmd("project", false);
-    let new = intent(&host);
+    let new = intent(&host, &mut calls);
     f.cmd("change-after-journal", true);
-    assert!(matches!(
-        reply(host.enroll_planning(new)),
-        Err(Error::Stale)
-    ));
+    assert_eq!(calls.call("day.plan.create", json!(new))["error"], "stale");
     assert_eq!(f.cmd("stats", false)["posts"], 0);
     assert_eq!(host.planning_enrollments()[0]["state"], "not-sent");
-    f.close(host);
+    f.close(calls);
 }
 
 #[test]
 fn lost_ack_restart_missing_and_wrong_result_only_lookup_the_exact_enrollment() {
     let mut f = Fixture::new();
     let host = f.open(true);
+    let mut calls = Calls::new(host.clone());
     ready(&host);
-    let new = intent(&host);
+    let new = intent(&host, &mut calls);
     f.cmd("lost", true);
     assert_eq!(
-        status(reply(host.enroll_planning(new.clone()))),
-        OutcomeStatus::Unknown
+        calls.outcome("day.plan.create", json!(new.clone()))["status"],
+        "unknown"
     );
     assert_eq!(
-        status(reply(host.enroll_planning(new.clone()))),
-        OutcomeStatus::Unknown
+        calls.outcome("day.plan.create", json!(new.clone()))["status"],
+        "unknown"
     );
     // The lost creation can be checked; it does not block a new setup.
-    let prepared = reply(host.prepare_planning());
-    assert!(prepared.is_ok(), "{prepared:?}");
+    let prepared = calls.call("day.plan.prepare", json!({}));
+    assert!(prepared["error"].is_null(), "{prepared:?}");
     assert!(host.planning_setup().unwrap().unconfirmed);
     let op = host.planning_enrollments()[0]["operationId"]
         .as_str()
         .unwrap()
         .to_owned();
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
     f.cmd("generate", true);
     f.cmd("held", false);
     f.cmd("restart", true);
     let host = f.open(true);
+    let mut calls = Calls::new(host.clone());
     ready(&host);
     assert_eq!(f.cmd("stats", false)["posts"], 1);
     assert_eq!(
@@ -398,78 +410,92 @@ fn lost_ack_restart_missing_and_wrong_result_only_lookup_the_exact_enrollment() 
         "cold open never starts a historical worker"
     );
     assert_eq!(
-        status(reply(host.enroll_planning(new))),
-        OutcomeStatus::Unknown
+        calls.outcome("day.plan.create", json!(new))["status"],
+        "unknown"
     );
     f.cmd("missing", true);
-    assert_eq!(reply(host.check_planning(op.clone())), Err(Error::Unknown));
+    assert_eq!(
+        calls.call("day.plan.checkNew", json!({"operationId":op.clone()}))["error"],
+        "unknown"
+    );
     f.cmd("missing", false);
     for detail in ["hash", "owner", "enrollment"] {
         f.command(json!({"action":"mismatch","value":true,"detail":detail}));
-        assert_eq!(reply(host.check_planning(op.clone())), Err(Error::Unknown));
+        assert_eq!(
+            calls.call("day.plan.checkNew", json!({"operationId":op.clone()}))["error"],
+            "unknown"
+        );
     }
     f.cmd("mismatch", false);
     assert_eq!(
-        status(reply(host.check_planning(op.clone()))),
-        OutcomeStatus::Accepted
+        calls.outcome("day.plan.checkNew", json!({"operationId":op.clone()}))["status"],
+        "accepted"
     );
     f.cmd("missing", true);
     assert_eq!(
-        status(reply(host.check_planning(op))),
-        OutcomeStatus::Accepted,
+        host.planning_enrollments()[0]["state"],
+        "accepted",
         "terminal ACK cannot be erased"
     );
     assert_eq!(f.cmd("stats", false)["posts"], 1);
-    f.close(host);
+    f.close(calls);
 }
 
 #[test]
 fn close_joins_entered_enrollment_and_preserves_its_receipt() {
     let mut f = Fixture::new();
     let host = f.open(true);
+    let mut calls = Calls::new(host.clone());
     ready(&host);
-    let new = intent(&host);
+    let new = intent(&host, &mut calls);
     f.cmd("block", true);
-    let sending = host.enroll_planning(new);
+    let sending = calls.start("day.plan.create", json!(new));
     assert_eq!(f.cmd("entered", false)["held"], true);
     let closing = host.close();
     assert!(closing.try_recv().is_err());
-    assert_eq!(reply(host.prepare_planning()), Err(Error::Closed));
+    assert_eq!(calls.call("day.plan.prepare", json!({}))["error"], "closed");
     f.cmd("release", true);
-    assert_eq!(status(reply(sending)), OutcomeStatus::Accepted);
-    reply(closing).unwrap();
+    let sent = calls.wait(sending);
+    assert_eq!(sent["value"]["outcome"]["status"], "accepted", "{sent}");
+    closing.recv_blocking().unwrap().unwrap();
     let host = f.open(true);
+    let calls = Calls::new(host.clone());
     ready(&host);
     assert_eq!(host.planning_enrollments()[0]["state"], "accepted");
     assert_eq!(f.cmd("stats", false)["posts"], 1);
-    f.close(host);
+    f.close(calls);
 }
 
 #[test]
 fn interrupted_before_daemon_entry_stays_unknown_after_restart_without_historical_send() {
     let mut f = Fixture::new();
     let host = f.open(true);
+    let mut calls = Calls::new(host.clone());
     ready(&host);
-    let new = intent(&host);
+    let new = intent(&host, &mut calls);
     f.cmd("drop-before", true);
     assert_eq!(
-        status(reply(host.enroll_planning(new.clone()))),
-        OutcomeStatus::Unknown
+        calls.outcome("day.plan.create", json!(new.clone()))["status"],
+        "unknown"
     );
     let operation = host.planning_enrollments()[0]["operationId"]
         .as_str()
         .unwrap()
         .to_owned();
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
     f.cmd("restart", true);
     let host = f.open(true);
+    let mut calls = Calls::new(host.clone());
     ready(&host);
-    assert_eq!(reply(host.check_planning(operation)), Err(Error::Unknown));
     assert_eq!(
-        status(reply(host.enroll_planning(new))),
-        OutcomeStatus::Unknown
+        calls.call("day.plan.checkNew", json!({"operationId":operation}))["error"],
+        "unknown"
     );
-    assert!(reply(host.prepare_planning()).is_ok());
+    assert_eq!(
+        calls.outcome("day.plan.create", json!(new))["status"],
+        "unknown"
+    );
+    assert!(calls.call("day.plan.prepare", json!({}))["error"].is_null());
     assert!(host.planning_setup().unwrap().unconfirmed);
     let stats = f.cmd("stats", false);
     assert_eq!(
@@ -478,109 +504,5 @@ fn interrupted_before_daemon_entry_stays_unknown_after_restart_without_historica
     );
     assert_eq!(stats["workers"], 0);
     assert_eq!(stats["requests"], 0);
-    f.close(host);
-}
-
-#[derive(Debug, Clone, PartialEq, Props)]
-struct FeedProbeProps {
-    source: Prop<String>,
-    ledger: Prop<String>,
-}
-
-#[component]
-fn FeedProbe(props: FeedProbeProps) -> impl IntoElement {
-    let source: Source = serde_json::from_str(&props.source.get()).unwrap();
-    let host =
-        NativeHost::open_planning(source, props.ledger.get().into(), "faux/faux-1".into()).unwrap();
-    let feed = Instance::new(pilot_day_native::PlanFeed::from_host(host.clone()));
-    let state = signal("waiting".to_owned());
-    spawn(async move {
-        let changes = host.changes();
-        while host.snapshot().freshness.state != FreshnessState::Live {
-            changes.recv().await.unwrap();
-        }
-        let prepared = pilot_day_native::PlanFeed::prepare_new(feed.clone()).await;
-        assert_eq!(prepared.status, OutcomeStatus::Accepted);
-        let shown = feed.with(|f| f.snapshot());
-        assert!(shown.can_create);
-        assert!(!shown.can_start);
-        assert!(!shown.start_reason.is_empty());
-        let new = NewIntent {
-            create_another: false,
-            allowance_micros: None,
-            goal: "Exact feed goal".into(),
-            setup: shown.setup.digest,
-            replaces: None,
-            request: None,
-            feedback: None,
-        };
-        assert_eq!(
-            pilot_day_native::PlanFeed::start(feed.clone(), new.clone())
-                .await
-                .status,
-            OutcomeStatus::Rejected
-        );
-        assert_eq!(
-            pilot_day_native::PlanFeed::plan(feed.clone(), new.clone())
-                .await
-                .status,
-            OutcomeStatus::Unknown
-        );
-        // A lost creation does not block the next setup; it says it can be checked.
-        // A refresh can make one setup read stale; read again, as New does.
-        let mut prepared = OutcomeStatus::Stale;
-        for _ in 0..5 {
-            prepared = pilot_day_native::PlanFeed::prepare_new(feed.clone())
-                .await
-                .status;
-            if prepared != OutcomeStatus::Stale {
-                break;
-            }
-        }
-        assert_eq!(prepared, OutcomeStatus::Accepted);
-        assert!(feed.with(|f| f.snapshot()).setup.unconfirmed);
-        let checked = pilot_day_native::PlanFeed::check_new(feed.clone()).await;
-        assert_eq!(checked.status, OutcomeStatus::Accepted);
-        let mission = checked.mission_id.unwrap();
-        // A receipt settles creation, not the asynchronously refreshed page.
-        while feed.with(|f| f.page(mission.clone())).is_none() {
-            changes.recv().await.unwrap();
-        }
-        let page = feed.with(|f| f.page(mission)).unwrap();
-        assert!(page.interview.is_none());
-        assert_eq!(page.stage, PlanStage::Planning);
-        assert_eq!(
-            pilot_day_native::PlanFeed::plan(feed.clone(), new)
-                .await
-                .status,
-            OutcomeStatus::Accepted
-        );
-        feed.dispose();
-        host.close().recv().await.unwrap().unwrap();
-        state.set("feed creation checked".into());
-    });
-    text(move || state.get())
-}
-
-#[test]
-fn root_owned_plan_feed_creates_only_missions_and_checks_unknown_without_resend() {
-    let mut f = Fixture::new();
-    f.cmd("lost", true);
-    let source = serde_json::to_string(&f.info["source"]).unwrap();
-    let ledger = f.info["ledger"].as_str().unwrap().to_owned();
-    let root = Root::new::<FeedProbe>(move || FeedProbeProps {
-        source: source.clone().into(),
-        ledger: ledger.clone().into(),
-    });
-    let mut app = Headless::start(EngineConfig {
-        clock: Clock::manual(std::time::UNIX_EPOCH),
-        ..EngineConfig::new(root)
-    })
-    .unwrap();
-    app.wait_for_within("feed creation checked", Duration::from_secs(30))
-        .unwrap();
-    assert_eq!(f.cmd("stats", false)["posts"], 1);
-    drop(app);
-    f.cmd("close", false);
-    assert!(f.child.wait().unwrap().success());
+    f.close(calls);
 }

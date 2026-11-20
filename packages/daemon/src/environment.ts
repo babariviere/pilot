@@ -35,7 +35,7 @@ interface Flight {
 }
 
 /** One idle-reclaimed worker thread for discovery, with a bounded queue. */
-export class DiscoveryWorker {
+class DiscoveryWorker {
 	private worker?: Worker;
 	private readonly pending = new Map<number, Flight>();
 	private nextId = 0;
@@ -103,7 +103,7 @@ export class DiscoveryWorker {
 	}
 }
 
-export interface EnvironmentServiceOptions {
+interface EnvironmentServiceOptions {
 	/** Pilot's data directory: holds the neutral probe directory and is never searched for tools. */
 	home: string;
 	host: EnvironmentHostRef;

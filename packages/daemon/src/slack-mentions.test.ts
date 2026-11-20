@@ -10,8 +10,9 @@ import { slackThreadFixture } from "./slack-fixtures.ts";
 import { SlackFormatChanged } from "./slack-format.ts";
 import { dominantSlackGroup, mentionsMe, parseSlackIdentity, parseSlackMentions } from "./slack-mentions.ts";
 import { createSlackPoller } from "./slack-source.ts";
+import type { SourcePollContext } from "./source-poll.ts";
 import { dedicatedSourceTool, SourceToolError, validSourceArguments } from "./source-tool-rules.ts";
-import { type SourcePollContext, SourceRegistry } from "./sources.ts";
+import { SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
 const now = Date.UTC(2026, 9, 13, 12);
@@ -87,7 +88,7 @@ async function fixture(t: TestContext) {
 	const poll = createSlackPoller(
 		store,
 		{
-			classifySlack: async (_path, text) => {
+			classifySlack: async (text) => {
 				texts.push(text);
 				return bug;
 			},
@@ -341,7 +342,7 @@ test("mention discovery and classification continue beyond the retired hourly ca
 		f.calls.map((call) => call.tool),
 		["profile", "history"],
 	);
-	await f.poll({ ...f.context, force: true });
+	await f.poll(f.context);
 	assert.equal(f.texts.length, 1);
 });
 
@@ -373,7 +374,7 @@ test("mention filtering preserves saved history; legacy close labels never dismi
 		createSlackPoller(
 			f.store,
 			{
-				classifySlack: async (_path, _text, _signal, context) => {
+				classifySlack: async (_text, _signal, context) => {
 					assert.deepEqual(context?.labels, labels);
 					return { ...bug, label: "Client" };
 				},

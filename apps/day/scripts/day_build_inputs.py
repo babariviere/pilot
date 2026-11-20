@@ -78,21 +78,29 @@ def tool(path):
     path = Path(path)
     if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
         raise ValueError("Use an absolute installed executable path")
-    return path.resolve(strict=True)
+    # Tool managers can dispatch on the executable name (cargo or rustc).
+    return path
+
+
+def build_tools(env):
+    def selected(name, override):
+        return tool(env.get(override) or shutil.which(name, path=env.get("PATH", os.defpath)) or "")
+
+    return {"nsh": tool(env["NSH_DAY_CLI"]),
+            "cargo": selected("cargo", "NSH_DAY_REAL_CARGO"),
+            "rustc": selected("rustc", "RUSTC")}
 
 
 def environment(work, tools, inherited, production):
-    """Pinned stock Cargo; no ambient trust, package hooks or Cargo tuning."""
+    """No ambient trust, package hooks or Cargo tuning."""
     env = {name: inherited[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "SDKROOT", "DEVELOPER_DIR") if name in inherited}
     env.update(NSH_DAY_CLI=str(tools["nsh"]), TMPDIR=str(work),
                NSH_DAY_REAL_CARGO=str(tools["cargo"]), RUSTC=str(tools["rustc"]),
-               RUSTDOC=str(tools["rustc"].with_name("rustdoc")),
-               RUSTUP_TOOLCHAIN="1.99.1", RUSTUP_AUTO_INSTALL="0",
+               RUSTUP_AUTO_INSTALL="0",
                CARGO_NET_OFFLINE="true",
                MACOSX_DEPLOYMENT_TARGET="15.0", npm_config_ignore_scripts="true",
                npm_config_manage_package_manager_versions="false",
                COREPACK_ENABLE_NETWORK="0", COREPACK_ENABLE_AUTO_PIN="0")
-    env["DYLD_LIBRARY_PATH"] = str(tools["rustc"].parent.parent / "lib")
     if production is not None:
         supplied = {"PILOT_UPDATER_" + key.upper(): production[key] for key in TRUST_FIELDS}
         supplied["PILOT_SIGNING_POLICY"] = "private-adhoc"
@@ -132,7 +140,7 @@ def build_artifact(checkout, manifest, name, features, env, profile, log):
         args += ["--features", features]
     if profile == "release":
         args += ["--release"]
-    raw = execute(args, cwd=checkout, env=env)
+    raw = execute(args, cwd=checkout / "apps/day", env=env)
     log.write_text(raw)
     paths = []
     for line in raw.splitlines():
@@ -263,12 +271,9 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     day = checkout / "apps/day"
     release_lock(day / "native/Cargo.lock")
     env = environment(work, tools, inherited, production)
-    compiler = execute([tools["rustc"], "-vV"], cwd=checkout, env=env)
-    if not compiler.startswith("rustc 1.99.1 ") or "host: " + TARGET not in compiler:
-        raise ValueError("Expected installed native Rust 1.99.1")
-    cargo_version = execute([tools["cargo"], "--version"], cwd=checkout, env=env).strip()
-    if not re.fullmatch(r"cargo 1\.99\.1 \([^)]+\)", cargo_version):
-        raise ValueError("Expected stock Cargo 1.99.1 from rustup which --toolchain 1.99.1 cargo")
+    compiler = execute([tools["rustc"], "-vV"], cwd=day, env=env)
+    if "host: " + TARGET not in compiler.splitlines():
+        raise ValueError("Expected an installed native arm64 macOS Rust compiler")
     if bundle.digest(tools["nsh"]) != CLI_SHA256:
         raise ValueError("Installed NSH release executable checksum mismatch")
     if execute([tools["nsh"], "--version"], cwd=checkout, env=env).strip() != CLI_VERSION:
@@ -336,8 +341,7 @@ def snapshot_day(expected, output, production=None, *, tools=None, inherited=Non
         raise ValueError("Day source must identify an immutable commit")
     inherited = os.environ if inherited is None else inherited
     if tools is None:
-        variables = [("nsh", "NSH_DAY_CLI"), ("cargo", "NSH_DAY_REAL_CARGO"), ("rustc", "RUSTC")]
-        tools = {name:tool(inherited[variable]) for name, variable in variables}
+        tools = build_tools(inherited)
     with tempfile.TemporaryDirectory(prefix="day-build-", dir="/tmp") as directory:
         work = Path(directory).resolve()
         checkout = work / "source"

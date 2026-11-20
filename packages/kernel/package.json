@@ -4,9 +4,11 @@
 	"private": true,
 	"type": "module",
 	"exports": {
+		"./feedback-paths": "./src/feedback-paths.ts",
 		"./interview-round": "./src/interview-round.ts",
 		"./retained-calls": "./src/retained-call-runner.ts",
 		"./subscription-refresh": "./src/subscription-refresh.ts",
+		"./subscription-provider": "./src/subscription-provider.ts",
 		"./mission-write": "./src/mission-write.ts",
 		"./review-boundary": "./src/review-boundary.ts",
 		"./review-history": "./src/review-history.ts",
@@ -15,8 +17,11 @@
 		"./credential-rpc": "./src/credential-rpc.ts",
 		"./credential-client": "./src/credential-client.ts",
 		"./credential-hooks": "./src/credential-hooks.ts",
+		"./funding": "./src/funding-runtime.ts",
+		"./subscription-limit": "./src/subscription-limit.ts",
+		"./testing": "./src/testing/index.ts",
+		"./testing/runtime": "./src/testing/runtime.ts",
 		".": "./src/index.ts",
-		"./worker": "./src/worker.ts",
 		"./runtime-environment": "./src/runtime-environment.ts"
 	},
 	"dependencies": {
@@ -33,7 +38,7 @@
 		"@pilot/protocol": "workspace:*",
 		"@pilot/telemetry": "workspace:*",
 		"jiti": "2.7.0",
-		"pi-posthorse": "0.10.35",
+		"pi-posthorse": "0.10.10",
 		"typebox": "1.4.7"
 	}
 }

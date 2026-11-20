@@ -8,6 +8,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
+import { BackgroundJobDiagnostics } from "./background-job-diagnostics.ts";
 import { BackgroundSubscription } from "./background-subscription.ts";
 import { BackgroundUsage } from "./background-usage.ts";
 import { ChatSettingsService } from "./chat-settings.ts";
@@ -26,12 +27,12 @@ import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
 import { linearPublishContext } from "./linear-publish-context.ts";
 import { createLinearSizePoller } from "./linear-size.ts";
-import { MissionLinearSource } from "./linear-source.ts";
 import { LiveUpdateService } from "./live-update.ts";
 import { daemonLogTail } from "./logging.ts";
 import { McpStatusService, workerProbe } from "./mcp-status.ts";
 import { MissionLinearPrChecks } from "./mission-linear-prs.ts";
 import { MissionLinearPublisher } from "./mission-linear-publisher.ts";
+import { MissionLinearSource } from "./mission-linear-source.ts";
 import { MissionLinearSyncService } from "./mission-linear-sync.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
@@ -51,6 +52,7 @@ import { ScheduleService } from "./schedules.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { SetupService } from "./setup.ts";
+import { slackClassifier } from "./slack-classifier.ts";
 import { createSlackAdder, createSlackPoller } from "./slack-source.ts";
 import { createSlackWaitingWatcher } from "./slack-waiting.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
@@ -84,18 +86,17 @@ await projects.load();
 const trackedItems = new TrackedItemStore(join(config.home, "tracked-items.sqlite"));
 await trackedItems.load(projects.list().map((project) => project.id));
 const sourceMcp = new PiSourceMcpClient(config.agentDir);
-const tracking = new SourceRegistry(projects, trackedItems, sourceMcp, undefined, { deferStart: true });
-tracking.setDiagnosticsEnabled(telemetry.settings().localDiagnostics);
+const jobDiagnostics = new BackgroundJobDiagnostics();
 
 const usageHistory = new UsageHistoryStore(config.home);
 const funding = new Funding(join(config.home, "funding.sqlite"));
 const backgroundUsage = new BackgroundUsage(config.home, usageHistory);
-tracking.triage = new TriageGroomer(
+const triage = new TriageGroomer(
 	projects,
 	trackedItems,
 	workerTriage(config.agentDir, backgroundUsage),
 	Date.now,
-	tracking.jobDiagnostics,
+	jobDiagnostics,
 	true,
 );
 // Shared MCP status for Settings and Needs you. Checks once now, then only when pi's MCP files change.
@@ -104,11 +105,9 @@ const mcpStatus = new McpStatusService({
 	login: (server, options) => sourceMcp.signInServer(server, options),
 	watchDir: config.agentDir ?? getAgentDir(),
 });
-tracking.register("linear", createLinearSizePoller(trackedItems, workerTriage(config.agentDir, backgroundUsage)));
 const models = new ModelCatalog(config.agentDir);
 models.setBackgroundUsage(backgroundUsage);
-tracking.register("slack", createSlackPoller(trackedItems, models));
-tracking.slackAdder = createSlackAdder(trackedItems, models);
+const slack = slackClassifier(models);
 const memory = new ProjectMemoryService(
 	config.home,
 	undefined, // Historical notes stay readable. New shared understanding belongs in Knowledge.
@@ -163,7 +162,6 @@ const sessions = new SessionManager(
 let appliedTelemetry = telemetry.settings();
 sessions.funding = funding;
 const backgroundSubscription = new BackgroundSubscription(config.home, () => sessions.subscriptionUsageSnapshot());
-sessions.backgroundSubscription = backgroundSubscription;
 backgroundUsage.funding = fundingBackground(
 	funding,
 	credentials.catalog,
@@ -230,14 +228,13 @@ const linearSync = new MissionLinearSyncService(
 	missionStore,
 	projects,
 	sourceMcp,
-	tracking.jobDiagnostics,
+	jobDiagnostics,
 	(id, operationId) => sessions.linearLinkedBuild(id, operationId),
 	(id) => sessions.linearReservationAbsent(id),
 );
 sessions.onChange((session) => {
 	if (session.archivedAt !== undefined || session.continuedTo) missionStore.retireLinearChatManagement(session.id);
 });
-tracking.managedLinearMissions = (projectId, issueIds) => missionStore.managedLinearMissions(projectId, issueIds);
 
 const missionService = new MissionService(missionStore, sessions, projects, undefined, undefined, {
 	hostId: "daemon",
@@ -259,10 +256,24 @@ const scheduleDetection = new ScheduleDetection({ power: systemEventsDetection }
 const connectivity = new ConnectivityService(join(config.home, "connectivity.json"), scheduleDetection, (online) =>
 	sessions.setConnectivity(online),
 );
-// A reply in a waiting Slack thread resumes the message's latest chat with it, once chats are loaded.
-tracking.slackWaiting = createSlackWaitingWatcher(trackedItems, (sessionId, message, requestId, guard) =>
-	sessions.resumeSlackReply(sessionId, message, requestId, guard),
-);
+const tracking = new SourceRegistry(projects, trackedItems, sourceMcp, {
+	deferStart: true,
+	jobDiagnostics,
+	triage,
+	pollers: {
+		linear: createLinearSizePoller(trackedItems, workerTriage(config.agentDir, backgroundUsage)),
+		slack: createSlackPoller(trackedItems, slack),
+	},
+	slack: {
+		adder: createSlackAdder(trackedItems, slack),
+		// A reply in a waiting Slack thread resumes the message's latest chat with it.
+		waiting: createSlackWaitingWatcher(trackedItems, (sessionId, message, requestId, guard) =>
+			sessions.resumeSlackReply(sessionId, message, requestId, guard),
+		),
+	},
+	linear: { managedMissions: (projectId, issueIds) => missionStore.managedLinearMissions(projectId, issueIds) },
+});
+tracking.setDiagnosticsEnabled(telemetry.settings().localDiagnostics);
 const terminals = new TerminalManager();
 const setup = new SetupService(credentials, { mcp: () => mcpStatus.status() });
 const githubSetup = new GitHubSetupService(config.home, {
@@ -359,7 +370,7 @@ async function resumeRuntime(): Promise<void> {
 	if (!backgroundInitialized) {
 		backgroundStarted = true;
 		mcpStatus.start();
-		tracking.triage?.start();
+		triage.start();
 		tracking.startPolling("linear");
 		tracking.startPolling("slack");
 		missionLinear.start();
@@ -425,6 +436,7 @@ const daemonServices = createDaemonServices({
 	githubSetup,
 	nativeAuthority: githubSetup.nativeAuthority,
 	linearPublisher,
+	backgroundSubscription,
 	githubImport,
 	environment,
 	bootstrap: runtimeOwner,
@@ -438,7 +450,7 @@ const daemonServices = createDaemonServices({
 			memory.runtime,
 			sourceMcp.runtime,
 			tracking.runtime,
-			tracking.triage.runtime,
+			triage.runtime,
 			subscriptions.runtime,
 			schedules.runtime,
 			missionService.notices.runtime,
@@ -494,7 +506,7 @@ async function stop(): Promise<void> {
 			await linearPrChecks.stop();
 			await linearSync.stop();
 			await tracking.stop();
-			await tracking.triage?.stop();
+			await triage.stop();
 			await tracking
 				.closeDiagnosticEvidence()
 				.catch(() => console.warn("pilotd: retained refresh evidence could not be drained"));

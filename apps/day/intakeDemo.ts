@@ -4,7 +4,7 @@
 // answer stays Unknown until Check reads it; Check never sends again.
 import { signal } from "nsh";
 import type { Request } from "pilot-day/native";
-import type { Refusal } from "./bridge";
+import { LOST, type Refusal } from "./refusals";
 import {
 	type IntakeOp,
 	type IntakeResult,
@@ -189,7 +189,7 @@ async function write(
 	return lost
 		? {
 				status: "unknown",
-				message: "Pilot sent this but heard nothing back. It will not send it again; Check only reads.",
+				message: LOST,
 				operationId,
 			}
 		: { status: "accepted", message: "", operationId };

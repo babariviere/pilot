@@ -1,7 +1,7 @@
-import type { SQLInputValue } from "node:sqlite";
 import type { DurableOperation, WorkflowConfirmationPayload } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { canonicalJSON } from "./operation-journal.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 /** Append-only authority history, in the existing missions.sqlite replica/durability lane. */
 export const WORKFLOW_CONFIRMATION_SCHEMA = `
@@ -24,17 +24,11 @@ export interface WorkflowConfirmationRecord {
 	confirmed: WorkflowConfirmationPayload;
 	createdAt: number;
 }
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(work: () => T): T;
-	durable(): Promise<void>;
-}
 const table = (consent: boolean) => (consent ? "reviewer_consents" : "workflow_approvals");
 
 export class WorkflowConfirmationStore {
-	private readonly port: Port;
-	constructor(port: Port) {
+	private readonly port: MissionDbPort;
+	constructor(port: MissionDbPort) {
 		this.port = port;
 	}
 	latest(missionId: string, consent: boolean): WorkflowConfirmationRecord | undefined {

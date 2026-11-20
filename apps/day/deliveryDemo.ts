@@ -4,7 +4,7 @@
 // it sends a command once for exactly the result and revision shown, keeps a
 // lost answer Unknown until Check reads it, and refuses another meanwhile.
 import { signal } from "nsh";
-import type { Refusal } from "./bridge";
+import type { Refusal } from "./refusals";
 import { artifactSelection } from "./deliveryArtifact";
 import type { AgentWork } from "./deliveryBridge";
 import {
@@ -25,11 +25,11 @@ import {
 	refusedAgentWork,
 	refusedInspect,
 	refusedOpen,
-	UNKNOWN,
 	type VerificationSubject,
 	webLink,
 } from "./deliveryFeed";
 import { deliveryTitles } from "./deliveryView";
+import { LOST } from "./refusals";
 
 /** The mock world's project. */
 const PROJECT = "mock-project";
@@ -527,7 +527,7 @@ export class ScriptedDelivery implements DeliverySource {
 		}
 		this.publish();
 		return lost
-			? { status: "unknown", message: UNKNOWN, operationId: o.operationId }
+			? { status: "unknown", message: LOST, operationId: o.operationId }
 			: { status: "accepted", message: "", operationId: o.operationId };
 	}
 

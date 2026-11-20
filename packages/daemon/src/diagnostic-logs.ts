@@ -3,17 +3,19 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { constants } from "node:fs";
 import { type FileHandle, lstat, open, opendir, realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type {
-	DiagnosticLogExcerpt,
-	DiagnosticLogPage,
-	DiagnosticLogRecord,
-	DiagnosticLogRequest,
-	DiagnosticLogResult,
-	DiagnosticLogSourceId,
-	DiagnosticLogSourceInventory,
-	NextAppLogOmissions,
-} from "@pilot/kernel";
-import type { OperationHost } from "@pilot/protocol";
+import {
+	type DiagnosticLogExcerpt,
+	type DiagnosticLogPage,
+	type DiagnosticLogRecord,
+	type DiagnosticLogRequest,
+	type DiagnosticLogResult,
+	type DiagnosticLogSourceId,
+	type DiagnosticLogSourceInventory,
+	type NextAppLogOmissions,
+	type OperationHost,
+	type TargetLogSourceId,
+} from "@pilot/protocol";
+import { DIAGNOSTIC_LOG_SOURCES, TARGET_LOG_SOURCES } from "@pilot/kernel";
 import { dayAppLogLine } from "./day-app-log.ts";
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { operations } from "./event-loop-watchdog.ts";
@@ -30,17 +32,7 @@ const MAX_RAW_RECORD_BYTES = 64 * 1024;
 const MAX_PENDING = 4;
 const MAX_REPORT_DIRECTORY_ENTRIES = 256;
 const MAX_REPORT_FILES = 32;
-const SOURCE_IDS = new Set<DiagnosticLogSourceId>([
-	"app",
-	"next_app",
-	"day_app",
-	"daemon",
-	"kernel_worker",
-	"native_report",
-	"lifecycle",
-	"request_timing",
-	"tool_activity",
-]);
+const SOURCE_IDS = new Set<DiagnosticLogSourceId>(DIAGNOSTIC_LOG_SOURCES);
 const REPORT_NAME = /^Pilot(?:_|-)[^/]{1,160}\.(?:ips|crash|hang|diag|spin)$/i;
 const CURSOR_PREFIX = "diagnostic-log-cursor:v1:";
 const REF_PREFIX = "diagnostic-log:v1:";
@@ -52,8 +44,7 @@ interface FileCandidate {
 	rotated: boolean;
 	fallbackAt?: string;
 	privateApp?: boolean;
-	nextApp?: boolean;
-	dayApp?: boolean;
+	guardedApp?: "next" | "day";
 }
 
 interface InspectedCandidate extends FileCandidate {
@@ -112,6 +103,7 @@ export interface DiagnosticLogReaderOptions {
 	now?: () => Date;
 }
 
+const guardedAppMaxBytes = { next: 64n * 1024n, day: 1024n * 1024n };
 const guardedSource = (source: unknown): boolean => source === "next_app" || source === "day_app";
 
 function opaque(prefix: string, value: object, secret: Buffer): string {
@@ -250,7 +242,7 @@ export class DiagnosticLogReader {
 		localDiagnostics: boolean,
 		request: DiagnosticLogRequest,
 		signal?: AbortSignal,
-		nextAppAllowed = false,
+		appHistoryAllowed = false,
 		allowedSources: ReadonlySet<DiagnosticLogSourceId> = SOURCE_IDS,
 	): Promise<DiagnosticLogResult> {
 		if (signal?.aborted) throw new Error("Diagnostic read cancelled");
@@ -269,7 +261,14 @@ export class DiagnosticLogReader {
 				action: parsed.action,
 			};
 			if (parsed.action === "inventory") {
-				const sources = await this.sources(host, target, localDiagnostics, allowedSources, signal, nextAppAllowed);
+				const sources = await this.sources(
+					host,
+					target,
+					localDiagnostics,
+					allowedSources,
+					signal,
+					appHistoryAllowed,
+				);
 				return { ...base, sources: [...sources.values()].map(inventory) };
 			}
 			if (parsed.action === "search") {
@@ -280,7 +279,7 @@ export class DiagnosticLogReader {
 					localDiagnostics,
 					new Set([parsed.source]),
 					signal,
-					nextAppAllowed,
+					appHistoryAllowed,
 				);
 				const descriptor = sources.get(parsed.source)!;
 				const control = guardedSource(parsed.source) ? this.options.nextAppControl?.() : undefined;
@@ -305,7 +304,7 @@ export class DiagnosticLogReader {
 				localDiagnostics,
 				new Set(ref && SOURCE_IDS.has(ref.s) ? [ref.s] : []),
 				signal,
-				nextAppAllowed,
+				appHistoryAllowed,
 			);
 			const control = guardedSource(ref?.s) ? this.options.nextAppControl?.() : undefined;
 			const excerpt = await this.excerpt(sources, parsed);
@@ -376,13 +375,70 @@ export class DiagnosticLogReader {
 		return Date.parse(value);
 	}
 
+	private async appLogSource(
+		host: OperationHost,
+		localDiagnostics: boolean,
+		appHistoryAllowed: boolean,
+		source: {
+			id: "next_app" | "day_app";
+			app: "next" | "day";
+			root?: string;
+			slots: number[];
+			fileName(n: number): string;
+			coverage: string;
+			parse(raw: string, host: OperationHost, now: number, epoch: number): ReturnType<typeof nextAppLogLine>;
+		},
+	): Promise<SourceDescriptor> {
+		// Day and installed Next share the persisted privacy control, not file layouts or parsers.
+		const control = this.options.nextAppControl?.();
+		const disabled = !localDiagnostics || control?.localDiagnostics === false;
+		const { root } = source;
+		const files =
+			root &&
+			appHistoryAllowed &&
+			(this.options.platform ?? process.platform) === "darwin" &&
+			localDiagnostics &&
+			control?.localDiagnostics === true
+				? await this.fixedFiles(
+						source.slots.map((n) => ({
+							token: `${source.app}-${n}`,
+							path: join(root, source.fileName(n)),
+							rotated: n > 0,
+							privateApp: true,
+							guardedApp: source.app,
+						})),
+					)
+				: { files: [], reason: "not_recorded" as const };
+		const omissions: NextAppLogOmissions = {};
+		return {
+			id: source.id,
+			scope: "host",
+			availability: disabled ? "disabled" : files.files.length ? "available" : "unavailable",
+			coverage: source.coverage,
+			retention: "bounded_local",
+			availableFiles: files.files.length,
+			rotatedFiles: files.files.filter((file) => file.rotated).length,
+			catalogTruncated: false,
+			reason: disabled ? "disabled" : files.reason,
+			files: files.files,
+			omissions,
+			line: (raw) => {
+				const current = this.options.nextAppControl?.();
+				if (!current?.localDiagnostics) return undefined;
+				const parsed = source.parse(raw, host, (this.options.now?.() ?? new Date()).getTime(), current.epoch);
+				if (parsed.omission) omissions[parsed.omission] = (omissions[parsed.omission] ?? 0) + 1;
+				return parsed.text;
+			},
+		};
+	}
+
 	private async sources(
 		host: OperationHost,
 		target: { sessionId: string; directory: string } | undefined,
 		localDiagnostics: boolean,
 		selected: ReadonlySet<DiagnosticLogSourceId> = SOURCE_IDS,
 		signal?: AbortSignal,
-		nextAppAllowed = false,
+		appHistoryAllowed = false,
 	): Promise<Map<DiagnosticLogSourceId, SourceDescriptor>> {
 		const result = new Map<DiagnosticLogSourceId, SourceDescriptor>();
 		if (selected.has("app")) {
@@ -411,98 +467,35 @@ export class DiagnosticLogReader {
 			});
 		}
 
-		if (selected.has("next_app")) {
-			const control = this.options.nextAppControl?.();
-			const enabled = localDiagnostics && control?.localDiagnostics === true;
-			const supported =
-				nextAppAllowed && (this.options.platform ?? process.platform) === "darwin" && !!this.options.nextAppRoot;
-			const files =
-				supported && enabled
-					? await this.fixedFiles(
-							[0, 1, 2].map((n) => ({
-								token: `next-${n}`,
-								path: join(this.options.nextAppRoot!, `events-${n}.jsonl`),
-								rotated: n > 0,
-								privateApp: true,
-								nextApp: true,
-							})),
-						)
-					: { files: [], reason: "not_recorded" as const };
-			const omissions: NextAppLogOmissions = {};
-			result.set("next_app", {
-				id: "next_app",
-				scope: "host",
-				availability:
-					!localDiagnostics || control?.localDiagnostics === false
-						? "disabled"
-						: files.files.length
-							? "available"
-							: "unavailable",
-				coverage:
-					"Next completed JSON transport observations only, not delivery acceptance, receipts, UI frames or current app liveness. v1/unbound/foreign/invalid/expired/future/cleared rows omitted. Loss counters are producing-process observations, not lifetime totals; cancellation/crash/rotation losses are unknown. Manual reviewed exports and Swift app logs are separate. Unknown controls prevent integrated reads.",
-				retention: "bounded_local",
-				availableFiles: files.files.length,
-				rotatedFiles: files.files.filter((f) => f.rotated).length,
-				catalogTruncated: false,
-				reason: !localDiagnostics || control?.localDiagnostics === false ? "disabled" : files.reason,
-				files: files.files,
-				omissions,
-				line: (raw) => {
-					const current = this.options.nextAppControl?.();
-					if (!current?.localDiagnostics) return undefined;
-					const parsed = nextAppLogLine(raw, host, (this.options.now?.() ?? new Date()).getTime(), current.epoch);
-					if (parsed.omission) omissions[parsed.omission] = (omissions[parsed.omission] ?? 0) + 1;
-					return parsed.text;
-				},
-			});
-		}
+		if (selected.has("next_app"))
+			result.set(
+				"next_app",
+				await this.appLogSource(host, localDiagnostics, appHistoryAllowed, {
+					id: "next_app",
+					app: "next",
+					root: this.options.nextAppRoot,
+					slots: [0, 1, 2],
+					fileName: (n) => `events-${n}.jsonl`,
+					coverage:
+						"Next completed JSON transport observations only, not delivery acceptance, receipts, UI frames or current app liveness. v1/unbound/foreign/invalid/expired/future/cleared rows omitted. Loss counters are producing-process observations, not lifetime totals; cancellation/crash/rotation losses are unknown. Manual reviewed exports and Swift app logs are separate. Unknown controls prevent integrated reads.",
+					parse: nextAppLogLine,
+				}),
+			);
 
-		if (selected.has("day_app")) {
-			const control = this.options.nextAppControl?.();
-			const enabled = localDiagnostics && control?.localDiagnostics === true;
-			const supported =
-				nextAppAllowed && (this.options.platform ?? process.platform) === "darwin" && !!this.options.dayAppRoot;
-			const files =
-				supported && enabled
-					? await this.fixedFiles(
-							[0, 1, 2, 3].map((n) => ({
-								token: `day-${n}`,
-								path: join(this.options.dayAppRoot!, n === 0 ? "day.log" : `day.log.${n}`),
-								rotated: n > 0,
-								privateApp: true,
-								nextApp: true,
-								dayApp: true,
-							})),
-						)
-					: { files: [], reason: "not_recorded" as const };
-			const omissions: NextAppLogOmissions = {};
-			result.set("day_app", {
-				id: "day_app",
-				scope: "host",
-				availability:
-					!localDiagnostics || control?.localDiagnostics === false
-						? "disabled"
-						: files.files.length
-							? "available"
-							: "unavailable",
-				coverage:
-					"Day closed operational event/error codes only, not message contents, delivery receipts, UI frames or current app liveness. Invalid, foreign, expired, future and cleared rows are excluded. Unknown controls prevent reads. Four private fixed slots, at most 1 MiB each; bounded scans may cover only part of retained history. Service stdout, OS logs, exports, GPUI logs and agent history are separate.",
-				retention: "bounded_local",
-				availableFiles: files.files.length,
-				rotatedFiles: files.files.filter((f) => f.rotated).length,
-				catalogTruncated: false,
-				reason: !localDiagnostics || control?.localDiagnostics === false ? "disabled" : files.reason,
-				files: files.files,
-				omissions,
-				line: (raw) => {
-					const current = this.options.nextAppControl?.();
-					if (!current?.localDiagnostics) return undefined;
-					const parsed = dayAppLogLine(raw, host, (this.options.now?.() ?? new Date()).getTime(), current.epoch);
-					if (parsed.omission) omissions[parsed.omission] = (omissions[parsed.omission] ?? 0) + 1;
-					return parsed.text;
-				},
-			});
-		}
+		if (selected.has("day_app"))
+			result.set(
+				"day_app",
+				await this.appLogSource(host, localDiagnostics, appHistoryAllowed, {
+					id: "day_app",
+					app: "day",
+					root: this.options.dayAppRoot,
+					slots: [0, 1, 2, 3],
+					fileName: (n) => (n === 0 ? "day.log" : `day.log.${n}`),
+					coverage:
+						"Day closed operational event/error codes only, not message contents, delivery receipts, UI frames or current app liveness. Invalid, foreign, expired, future and cleared rows are excluded. Unknown controls prevent reads. Four private fixed slots, at most 1 MiB each; bounded scans may cover only part of retained history. Service stdout, OS logs, exports, GPUI logs and agent history are separate.",
+					parse: dayAppLogLine,
+				}),
+			);
 
 		const needsDaemon = selected.has("daemon") || selected.has("kernel_worker");
 		const daemonFiles = needsDaemon
@@ -576,9 +569,7 @@ export class DiagnosticLogReader {
 			});
 
 		if (selected.has("native_report")) result.set("native_report", await this.nativeReports());
-		const needsTarget = ["lifecycle", "request_timing", "tool_activity"].some((id) =>
-			selected.has(id as DiagnosticLogSourceId),
-		);
+		const needsTarget = TARGET_LOG_SOURCES.some((id) => selected.has(id));
 		const sessionRoots =
 			needsTarget && localDiagnostics && target
 				? await this.sessionRoots(target.sessionId, target.directory)
@@ -587,7 +578,7 @@ export class DiagnosticLogReader {
 						durable: target ? ("missing" as const) : ("no_target" as const),
 					};
 		const targetSources: Array<{
-			id: "lifecycle" | "request_timing" | "tool_activity";
+			id: TargetLogSourceId;
 			file: string;
 			coverage: string;
 		}> = [
@@ -814,8 +805,8 @@ export class DiagnosticLogReader {
 				candidate.privateApp &&
 				(stat.uid !== BigInt(process.getuid?.() ?? -1) ||
 					(stat.mode & 0o077n) !== 0n ||
-					stat.size > (candidate.dayApp ? 1024n : candidate.nextApp ? 64n : 256n) * 1024n ||
-					(candidate.nextApp === true && stat.nlink !== 1n))
+					stat.size > (candidate.guardedApp ? guardedAppMaxBytes[candidate.guardedApp] : 256n * 1024n) ||
+					(candidate.guardedApp !== undefined && stat.nlink !== 1n))
 			)
 				return { reason: "unsafe_source" };
 			return {
@@ -851,7 +842,7 @@ export class DiagnosticLogReader {
 		}
 		let handle: FileHandle | undefined;
 		try {
-			if (candidate.nextApp) {
+			if (candidate.guardedApp) {
 				const parent = dirname(candidate.path!);
 				const stat = await lstat(parent);
 				if (
@@ -868,11 +859,11 @@ export class DiagnosticLogReader {
 				String(before.dev) !== candidate.dev ||
 				String(before.ino) !== candidate.ino ||
 				Number(before.size) < start + length ||
-				(candidate.nextApp === true &&
+				(candidate.guardedApp !== undefined &&
 					(before.uid !== BigInt(process.getuid?.() ?? -1) ||
 						(before.mode & 0o077n) !== 0n ||
 						before.nlink !== 1n ||
-						before.size > (candidate.dayApp ? 1048576n : 65536n)))
+						before.size > guardedAppMaxBytes[candidate.guardedApp]))
 			)
 				return { buffer: Buffer.alloc(0), changed: true };
 			const buffer = Buffer.alloc(length);
@@ -885,11 +876,11 @@ export class DiagnosticLogReader {
 					String(after.dev) !== candidate.dev ||
 					String(after.ino) !== candidate.ino ||
 					Number(after.size) < start + bytesRead ||
-					(candidate.nextApp === true &&
+					(candidate.guardedApp !== undefined &&
 						(after.uid !== before.uid ||
 							after.mode !== before.mode ||
 							after.nlink !== 1n ||
-							after.size > (candidate.dayApp ? 1048576n : 65536n))),
+							after.size > guardedAppMaxBytes[candidate.guardedApp])),
 			};
 		} catch {
 			return { buffer: Buffer.alloc(0), changed: true };
@@ -921,7 +912,7 @@ export class DiagnosticLogReader {
 				x: this.identity(file),
 				o: offset,
 				l: length,
-				...(file.nextApp && raw !== undefined ? { c: createHash("sha256").update(raw).digest("hex") } : {}),
+				...(file.guardedApp && raw !== undefined ? { c: createHash("sha256").update(raw).digest("hex") } : {}),
 			},
 			this.opaqueSecret,
 		);

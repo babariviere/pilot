@@ -5,7 +5,6 @@ set -euo pipefail
 cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 ROOT="${PILOT_BUILD_ROOT:-/tmp/day-build}"
 APP="$HOME/Applications/Pilot.app"
-RUST_TOOLCHAIN=1.99.1 # apps/day/README.md prerequisites
 
 next_build() {
 	local today n=0 v
@@ -24,9 +23,8 @@ git merge-base --is-ancestor 29102eb5f20f735c208300769f65cd9227279986 "$SOURCE"
 
 # Missing tools stop the build here, before any work.
 NSH_DAY_CLI=$(realpath "$(brew --prefix nsh)/libexec/bin/nsh")
-NSH_DAY_REAL_CARGO=$(rustup which --toolchain "$RUST_TOOLCHAIN" cargo)
-RUSTC=$(rustup which --toolchain "$RUST_TOOLCHAIN" rustc)
-export NSH_DAY_CLI NSH_DAY_REAL_CARGO RUSTC
+unset NSH_DAY_REAL_CARGO RUSTC
+export NSH_DAY_CLI
 export PILOT_SIGNING_POLICY=private-adhoc
 export PILOT_UPDATER_PUBLIC_KEY='MbGhgDgZuJPyC81SSCJ8IVEyLks66acK5s9NKIudSsE=' # docs/technical/day-package-inputs.md
 export PILOT_UPDATER_REPOSITORY=babariviere/pilot
@@ -48,11 +46,15 @@ built=0
 trap '[[ $built == 1 ]] || rm -rf "${work:?}"' EXIT
 trap 'exit 143' TERM INT
 mkdir -p "$work"
+echo 'STAGE runtime'
 [[ -d "$work/runtime" ]] || python3 apps/day/scripts/bundle_runtime.py runtime --source "$SOURCE" --output "$work/runtime"
+echo 'STAGE native helpers'
 [[ -d "$work/native" ]] || python3 apps/day/scripts/bundle_runtime.py native --gui day --source "$SOURCE" --output "$work/native"
 rm -rf "$work/inputs" "$work/app"
+echo 'STAGE desktop, updater, artifact host and NSH resources'
 python3 apps/day/scripts/day_build_inputs.py --production --source "$SOURCE" --output "$work/inputs"
 mkdir "$work/app"
+echo 'STAGE bundle assembly and verification'
 python3 apps/day/scripts/bundle_runtime.py bundle --production \
 	--source "$SOURCE" --bundle-build "$BUILD" \
 	--runtime "$work/runtime" --native "$work/native" --executables "$work/inputs" \

@@ -2,9 +2,11 @@
 import { randomUUID } from "node:crypto";
 import type { StartMissionTaskRequest } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
+import { MISSION_WORKER_CAP } from "@pilot/kernel/mission-write";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON } from "./operation-journal.ts";
 import { RuntimeBackground } from "./runtime-background.ts";
+import { OPAQUE_ID } from "./validate.ts";
 
 export interface MissionContinuation {
 	version: 1;
@@ -31,7 +33,7 @@ export interface AllowedContinuationPolicy {
 	/** No configured execution cap is not a missing grant. Diagnostics are not an execution cap. */
 	budget: { mode: "no-execution-cap" } | { authorityId: string; revision: number };
 }
-export type ContinuationPolicy =
+type ContinuationPolicy =
 	| AllowedContinuationPolicy
 	| {
 			version: 1;
@@ -140,7 +142,7 @@ export class MissionContinuations {
 		refs: string[],
 		request: StartMissionTaskRequest,
 	) {
-		if (!/^[A-Za-z0-9_-]{1,128}$/.test(operationId)) throw new Error("start requires a stable operationId");
+		if (!OPAQUE_ID.test(operationId)) throw new Error("start requires a stable operationId");
 		if (canonicalJSON(request).length > 16000) throw new Error("Start request is too large");
 		const mission = this.store.require(missionId);
 		if (mission.coordinatorSessionId !== coordinatorId || this.store.missionOf(coordinatorId) !== missionId)
@@ -259,20 +261,13 @@ export class MissionContinuations {
 			throw new ContinuationChanged(
 				"Start authority, owner, assignment or scope changed; reconcile before a new request",
 			);
-		const uncertain = this.store.controls
-			.continuations(record.missionId, true)
-			.filter(
-				(r) =>
-					r.operationId !== record.operationId &&
-					(r.state === "entered" || r.state === "unknown") &&
-					this.store.startChangesCode(r.missionId, r.request),
+		if (this.store.startChangesCode(record.missionId, record.request))
+			assertWorkerSlot(
+				this.store,
+				record.missionId,
+				record.operationId,
+				this.host.occupied(record.missionId, record.targetId),
 			);
-		// Only chats that can change code wait for a worker slot.
-		if (
-			this.store.startChangesCode(record.missionId, record.request) &&
-			this.host.occupied(record.missionId, record.targetId) + uncertain.length >= 2
-		)
-			throw new Conflict("Waiting for a worker slot (2 chats that can change code, reviewers included)");
 		// Canonical order is authoritative. Never choose a later queued slice around a blocked earlier slice.
 		const queued = this.store.controls
 			.continuations(record.missionId, true)
@@ -397,4 +392,28 @@ export class MissionContinuations {
 		}
 		await this.store.durable();
 	}
+}
+
+/**
+ * Refuses a start that can change code while the mission's worker slots are full. Starts other than `operationId`
+ * whose admission is entered or unknown count as taken.
+ */
+export function assertWorkerSlot(
+	store: MissionStore,
+	missionId: string,
+	operationId: string | undefined,
+	occupied: number,
+): void {
+	const uncertain = store.controls
+		.continuations(missionId, true)
+		.filter(
+			(r) =>
+				r.operationId !== operationId &&
+				(r.state === "entered" || r.state === "unknown") &&
+				store.startChangesCode(missionId, r.request),
+		).length;
+	if (occupied + uncertain >= MISSION_WORKER_CAP)
+		throw new Conflict(
+			`Waiting for a worker slot (${MISSION_WORKER_CAP} chats that can change code, reviewers included)`,
+		);
 }

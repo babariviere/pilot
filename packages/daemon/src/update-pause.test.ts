@@ -7,7 +7,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import { ServiceUnavailable } from "./errors.ts";
 import { ProjectStore } from "./projects.ts";
-import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
+import { type SessionWorker } from "./kernel-worker.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 async function until(check: () => boolean | Promise<boolean>) {

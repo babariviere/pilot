@@ -10,17 +10,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import {
-	fauxAssistantMessage,
-	fauxProvider,
-	InMemoryCredentialStore,
-	InMemoryModelsStore,
-} from "@earendil-works/pi-ai";
-import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createRegistry, Harness, UserEntry } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { watchEvents } from "../agent-events.ts";
+import { watchEvents } from "../src/agent-events.ts";
 import { NativeAdapter } from "../src/native-adapter.ts";
+import { offlineModels } from "../src/testing/offline-models.ts";
 
 globalThis.fetch = async () => {
 	throw new Error("Offline benchmark must not access the network");
@@ -43,20 +39,12 @@ for (const interval of [250, 100, 100, 250]) {
 	let adapter: NativeAdapter | undefined;
 	let harness: Harness | undefined;
 	try {
-		const models = await ModelRuntime.create({
-			credentials: new InMemoryCredentialStore(),
-			modelsPath: null,
-			modelsStore: new InMemoryModelsStore(),
-			allowModelNetwork: false,
-			refreshOnCreate: false,
-		});
-		const faux = fauxProvider({
+		const { models, faux } = await offlineModels({
 			provider: "offline-checkpoints",
 			models: [{ id: "fixture", contextWindow: 2_000_000 }],
 			tokensPerSecond,
 			tokenSize: { min: tokenSize, max: tokenSize },
 		});
-		models.registerNativeProvider(faux.provider);
 		const agentDir = join(home, "agent");
 		adapter = await NativeAdapter.open({
 			cwd: home,

@@ -1,6 +1,6 @@
 /** Destination naming policy, independent of execution host and authentication provider. */
 export const DEFAULT_PROJECT_DESTINATION_PATTERN = "~/src/{host}/{owner}/{repo}";
-export interface RepositoryDestinationComponents {
+interface RepositoryDestinationComponents {
 	host: string;
 	owner: string;
 	repo: string;

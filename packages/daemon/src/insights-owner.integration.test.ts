@@ -1,5 +1,6 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: Probe supervised IPC and persistence without a live provider.
 import assert from "node:assert/strict";
+import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, readFile } from "node:fs/promises";
@@ -18,12 +19,16 @@ import {
 import { createModels } from "@earendil-works/pi-ai/models";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
-import type { DurableOperation, ModelOption } from "@pilot/protocol";
-import { CredentialClient } from "../../kernel/src/credential-client.ts";
-import { type DayInsightsReservation, installDayInsightsRuntime } from "../../kernel/src/day-insights-runtime.ts";
-import { NativeAdapter } from "../../kernel/src/native-adapter.ts";
-import { KernelSession } from "../../kernel/src/session.ts";
-import { openSessionStorage } from "../../kernel/src/storage.ts";
+import { CredentialClient } from "@pilot/kernel/credential-client";
+import { dayInsightsFauxWorkerEntry, openSessionStorage } from "@pilot/kernel/testing";
+import {
+	type DayInsightsReservation,
+	installDayInsightsRuntime,
+	KernelSession,
+	NativeAdapter,
+} from "@pilot/kernel/testing/runtime";
+import type { DurableOperation, ModelOption, SessionCompletion } from "@pilot/protocol";
+import type { HostCall, HostCallPacket, HostCalls } from "@pilot/kernel";
 import { CredentialBroker } from "./credential-broker.ts";
 import { DayInsights } from "./day-insights.ts";
 import { DayInsightsExecution } from "./day-insights-execution.ts";
@@ -36,7 +41,8 @@ import type { ModelCatalog } from "./models.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import type { SessionFactories, SessionWorker } from "./sessions.ts";
+import { type SessionFactories } from "./sessions.ts";
+import { type SessionWorker, Worker } from "./kernel-worker.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { fixture as sessionFixture, until } from "./testing/session-workspace.ts";
@@ -88,7 +94,7 @@ async function fixture(
 		journal,
 		legacyGuard: () => {
 			f.sessions.assertNoLegacyInsights();
-			schedules.assertNoLegacyInsights(host);
+			schedules.insights.assertNoLegacyInsights(host);
 		},
 	});
 	const ownerService = new InsightsOwner({
@@ -209,8 +215,12 @@ async function seedSource(f: Awaited<ReturnType<typeof fixture>>, archivedAt?: s
 	return { sourceId, dir, sourceBytes };
 }
 
-async function dayRuntimeFixture(t: TestContext, seed?: (home: Awaited<ReturnType<typeof fixture>>) => Promise<void>) {
-	const f = await fixture(t);
+async function dayRuntimeFixture(
+	t: TestContext,
+	seed?: (home: Awaited<ReturnType<typeof fixture>>) => Promise<void>,
+	factories?: SessionFactories,
+) {
+	const f = await fixture(t, factories);
 	await seed?.(f);
 	const settings: import("@pilot/protocol").DayInsightsSettings = {
 		model: model.id,
@@ -448,6 +458,39 @@ test("Day denies metrics and other report engines while preserving passive histo
 	assert.ok((await f.stored(engine.sourceId)).role === "insights", "Passive old metadata is kept");
 	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
 	assert.equal(await f.day.supersededReceipt(run), null, "Committed Run reservation receipts are never superseded");
+});
+
+test("Day first turn completes through real worker IPC without workspace access", async (t) => {
+	let firstTurn: SessionCompletion | "workspace.prepare" | "worker exited" | undefined;
+	const f = await dayRuntimeFixture(t, undefined, {
+		worker(spec, onPacket, onExit) {
+			assert.ok(spec.dayInsightsRunId);
+			const home = join(spec.cwd, "..");
+			const child = fork(dayInsightsFauxWorkerEntry, {
+				execArgv: [],
+				env: { HOME: home, PATH: process.env.PATH, NODE_ENV: "test", PI_OFFLINE: "1" },
+				serialization: "advanced",
+			});
+			return new Worker(
+				spec,
+				(packet) => {
+					onPacket(packet);
+					if (packet.type === "workspace.prepare") firstTurn ??= packet.type;
+					if (packet.type === "working" && !packet.working) firstTurn ??= packet.completion;
+				},
+				(...args) => {
+					firstTurn ??= "worker exited";
+					onExit(...args);
+				},
+				undefined,
+				{ child },
+			);
+		},
+	});
+	assert.equal((await f.runDay(await f.intent("run"))).state, "accepted");
+	await until(() => firstTurn !== undefined);
+	assert.notEqual(firstTurn, "workspace.prepare", "The closed daemon drops workspace.prepare, stalling generation");
+	assert.equal(typeof firstTurn === "object" && firstTurn.outcome, "done", JSON.stringify(firstTurn));
 });
 
 test("Day idle without report settles both stores and permits only a distinct run", async (t) => {
@@ -879,14 +922,19 @@ test("cold model Apply keeps reported Default thinking, never the new model's sw
 					busy: false,
 					close: async () => {},
 					send: (command) => {
-						if (command.type === "model.configuration.result") guardError = command.error;
+						if (command.type === "host.result") guardError = command.error;
 					},
 					request: async (command) => {
 						assert.equal(command.type, "changeModelConfiguration");
 						if (command.type !== "changeModelConfiguration") throw new Error("No model turn permitted");
 						assert.equal(command.thinking, "high", "preserve the native ready ACK, not omitted switch thinking");
 						configurations++;
-						onPacket({ type: "model.configuration.guard", callId: randomUUID(), requestId: command.requestId });
+						onPacket({
+							type: "host.call",
+							method: "model.configuration.guard",
+							callId: randomUUID(),
+							args: { requestId: command.requestId },
+						});
 						if (guardError) throw new Error(guardError);
 						onPacket({
 							type: "modelChanged",
@@ -956,7 +1004,7 @@ test("Stop reaches a configuration-only owner worker and vetoes fresh activation
 				busy: false,
 				close: async () => {},
 				send: (command) => {
-					if (command.type === "model.configuration.result") guardError = command.error;
+					if (command.type === "host.result") guardError = command.error;
 				},
 				request: async (command) => {
 					if (command.type === "abort") {
@@ -967,7 +1015,12 @@ test("Stop reaches a configuration-only owner worker and vetoes fresh activation
 					if (command.type !== "changeModelConfiguration") throw new Error("No model input permitted");
 					assert.equal((await f.sessions.stop(spec.sessionId)).ok, true);
 					stops++;
-					onPacket({ type: "model.configuration.guard", callId: randomUUID(), requestId: command.requestId });
+					onPacket({
+						type: "host.call",
+						method: "model.configuration.guard",
+						callId: randomUUID(),
+						args: { requestId: command.requestId },
+					});
 					assert.ok(guardError, "Stop must revoke the model change's original guard");
 					throw new Error(guardError);
 				},
@@ -1078,9 +1131,9 @@ test("Stop after Apply rule ACK blocks activation and entered effects remain sta
 		await f.ownerService.previewApply(f.owner),
 		f.owner.workspaceId,
 	);
-	const original = f.schedules.rearmOwnerInsights.bind(f.schedules);
+	const original = f.schedules.insights.rearmOwnerInsights.bind(f.schedules.insights);
 	let calls = 0;
-	t.mock.method(f.schedules, "rearmOwnerInsights", async (...args: Parameters<typeof original>) => {
+	t.mock.method(f.schedules.insights, "rearmOwnerInsights", async (...args: Parameters<typeof original>) => {
 		calls++;
 		const row = await original(...args);
 		await f.sessions.stop(f.owner.reportSessionId);
@@ -1117,8 +1170,8 @@ test("cold recovery keeps owner receipts, grants and entered Apply effects witho
 		await f.ownerService.previewApply(f.owner),
 		f.owner.workspaceId,
 	);
-	const original = f.schedules.rearmOwnerInsights.bind(f.schedules);
-	t.mock.method(f.schedules, "rearmOwnerInsights", async (...args: Parameters<typeof original>) => {
+	const original = f.schedules.insights.rearmOwnerInsights.bind(f.schedules.insights);
+	t.mock.method(f.schedules.insights, "rearmOwnerInsights", async (...args: Parameters<typeof original>) => {
 		await original(...args);
 		throw new Error("Synthetic crash after rearm");
 	});
@@ -1390,8 +1443,8 @@ test("crash after entered report creation remains lookup-only and cannot mint a 
 
 test("Stop during rule creation prevents activation and retained effects never replay", async (t) => {
 	const f = await fixture(t),
-		original = f.schedules.createOwnerInsights.bind(f.schedules);
-	t.mock.method(f.schedules, "createOwnerInsights", async (...args: Parameters<typeof original>) => {
+		original = f.schedules.insights.createOwnerInsights.bind(f.schedules.insights);
+	t.mock.method(f.schedules.insights, "createOwnerInsights", async (...args: Parameters<typeof original>) => {
 		const rule = await original(...args);
 		await f.sessions.stop(f.owner.reportSessionId);
 		return rule;
@@ -1446,7 +1499,7 @@ test("unknown cancellation stays fenced and cannot repeat the cancellation or En
 	await f.run(f.enable);
 	const current = f.missions.insightsOwner.current(f.authority)!;
 	let cancels = 0;
-	t.mock.method(f.schedules, "cancelOwnerInsights", async () => {
+	t.mock.method(f.schedules.insights, "cancelOwnerInsights", async () => {
 		cancels++;
 		throw new Error("Synthetic unknown cancel");
 	});
@@ -1598,26 +1651,24 @@ for (const freshDay of [false, true])
 				launches++;
 				storagePaths.push(spec.storageDir);
 				let kernel!: KernelSession;
-				const guards = new Map<string, { resolve(): void; reject(error: Error): void }>();
-				const accounting = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
+				const pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
+				const toPilotd: HostCall = (method, args) =>
+					new Promise((resolve, reject) => {
+						const callId = randomUUID();
+						pending.set(callId, { resolve: (value) => resolve(value as never), reject });
+						onPacket({ type: "host.call", method, callId, args } as HostCallPacket);
+					});
 				const worker: SessionWorker = {
 					state: "idle",
 					busy: false,
 					modelConfiguration: 1,
 					ready: Promise.resolve(),
 					send: (command) => {
-						if (command.type === "usage-history.epoch.result" || command.type === "usage-history.result") {
-							const pending = accounting.get(command.callId);
-							accounting.delete(command.callId);
-							if (command.error) pending?.reject(new Error(command.error));
-							else pending?.resolve(command.result);
-							return;
-						}
-						if (command.type !== "model.configuration.result") return;
-						const pending = guards.get(command.callId);
-						guards.delete(command.callId);
-						if (command.error) pending?.reject(new Error(command.error));
-						else pending?.resolve();
+						if (command.type !== "host.result") return;
+						const call = pending.get(command.callId);
+						pending.delete(command.callId);
+						if (command.error) call?.reject(new Error(command.error));
+						else call?.resolve(command.result);
 					},
 					request: async (command) => {
 						await worker.ready;
@@ -1626,12 +1677,7 @@ for (const freshDay of [false, true])
 							await kernel.submit(command.requestId, command.content, command.mode, command.onlyIfIdle);
 						} else if (command.type === "changeModelConfiguration") {
 							const result = await kernel.changeModel(command.model, command.thinking, {
-								revalidate: () =>
-									new Promise<void>((resolve, reject) => {
-										const callId = randomUUID();
-										guards.set(callId, { resolve, reject });
-										onPacket({ type: "model.configuration.guard", callId, requestId: command.requestId });
-									}),
+								revalidate: () => toPilotd("model.configuration.guard", { requestId: command.requestId }),
 							});
 							onPacket({
 								type: "modelChanged",
@@ -1656,38 +1702,21 @@ for (const freshDay of [false, true])
 					},
 				};
 				const ready = KernelSession.open(spec, {
-					acquireUsageEpoch: () =>
-						new Promise<import("../../kernel/src/usage-capture.ts").UsageCaptureEpoch>((resolve, reject) => {
-							const callId = randomUUID();
-							accounting.set(callId, {
-								resolve: (v) => resolve(v as import("../../kernel/src/usage-capture.ts").UsageCaptureEpoch),
-								reject,
-							});
-							onPacket({ type: "usage-history.epoch", callId });
-						}),
-					reportUsageHistory: (row) =>
-						new Promise<import("@pilot/protocol").UsageHistoryWriteResult>((resolve, reject) => {
-							const callId = randomUUID();
-							accounting.set(callId, {
-								resolve: (v) => resolve(v as import("@pilot/protocol").UsageHistoryWriteResult),
-								reject,
-							});
-							onPacket({ type: "usage-history", callId, row });
-						}),
-					onWorking: (working) => {
-						worker.state = working ? "working" : "idle";
-						Object.assign(worker, { busy: working });
-						onPacket({ type: "working", working });
-					},
-					callInsightsBacklog: async (request) => {
+					call: async (method, args, signal) => {
+						if (method === "diagnostics.context")
+							throw new Error("Dispatched owner cannot request direct source history");
+						if (method !== "insights.backlog") return toPilotd(method, args, signal);
+						const { request } = args as HostCalls["insights.backlog"]["args"];
 						toolCalls++;
 						const result = await f.sessions.insightsOwnerBacklog(spec.sessionId, request, worker);
 						if ((request as { action?: string }).action === "review_context")
 							nextCursor = (result as { nextCursor: number | null }).nextCursor;
-						return result;
+						return result as never;
 					},
-					callDiagnosticContext: async () => {
-						throw new Error("Dispatched owner cannot request direct source history");
+					onWorking: (working) => {
+						worker.state = working ? "working" : "idle";
+						Object.assign(worker, { busy: working });
+						onPacket({ type: "working", working });
 					},
 				}).then((value) => {
 					kernel = value;

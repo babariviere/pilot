@@ -38,3 +38,8 @@ export interface ReviewRequestPage {
 	requests: (ReviewRequestRow | UnavailableReviewRequestRow)[];
 	next: number | null;
 }
+
+/** POST /api/reviews: the user has seen these chat results (up to 1000 marks). Marks only move forward. */
+export interface ReviewRequest {
+	marks: Array<{ sessionId: string; outcomeAt: number }>;
+}

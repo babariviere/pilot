@@ -76,8 +76,10 @@ separate requirements. ACK alone is never `paused`. Owned flow reviewer chats ar
 inventing ordinary mission membership. Unrelated work keeps running.
 
 Idle chats with no executor or pending work are held, not claimed by this Pause. A queued-input-only
-checkpoint records `admissionOnly`, not a fabricated kernel census. Cold running work, uncertain input,
-known cold children, interrupted shell effects, remaining jobs, failed inspection/exit, or a lost ACK keep
+checkpoint records `admissionOnly`, not a fabricated kernel census. An idle chat with subagent history
+can still be held after a daemon restart if parking saved proof of the final census, close ACK, and worker
+exit. Pilot clears that proof before opening a new worker. Cold running work, uncertain input,
+cold children without proof, interrupted shell effects, remaining jobs, failed inspection/exit, or a lost ACK keep
 the aggregate Pausing/Unknown. Known local workers still checkpoint if another participant is uncertain.
 The daemon refuses profiles with [legacy remote execution records](devboxes.md) before Mission Pause can run.
 

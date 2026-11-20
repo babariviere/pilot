@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type { Project, TrackingJson } from "@pilot/protocol";
-import { createMissionLinearPoller, MissionLinearSource } from "./linear-source.ts";
+import { createMissionLinearPoller, MissionLinearSource } from "./mission-linear-source.ts";
 import { MissionStore } from "./missions.ts";
-import type { SourcePollContext } from "./sources.ts";
+import type { SourcePollContext } from "./source-poll.ts";
 
 function fixture() {
 	const dir = mkdtempSync(join(tmpdir(), "pilot-delegation-"));

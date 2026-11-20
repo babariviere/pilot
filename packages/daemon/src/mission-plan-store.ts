@@ -1,7 +1,7 @@
-import type { SQLInputValue } from "node:sqlite";
 import type { DurableOperation, MissionPlan, MissionTask, PlanSlice } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 /**
  * The body of the task a published slice becomes. Publication writes it and Start compares against it, so both
@@ -66,15 +66,10 @@ CREATE TABLE IF NOT EXISTS mission_plan_refusals (
  * map (settled questions as one line each), so this size does not reach the model.
  */
 export const PLAN_STATE_LIMIT = 192 * 1024;
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(work: () => T): T;
-}
 /** Append-only native mission planning state. Shares the existing SQLite transaction and replica. */
 export class MissionPlanStore {
-	private readonly port: Port;
-	constructor(port: Port) {
+	private readonly port: MissionDbPort;
+	constructor(port: MissionDbPort) {
 		this.port = port;
 	}
 	/** Saves or clears the last refused planning save of a mission. */

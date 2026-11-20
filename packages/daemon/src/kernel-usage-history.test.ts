@@ -9,7 +9,8 @@ import { test } from "node:test";
 import type { KernelCommand } from "@pilot/kernel";
 import type { SessionState, UsageObservation } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
-import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
+import { type SessionWorker } from "./kernel-worker.ts";
 import { UsageHistoryStore } from "./usage-history.ts";
 
 class CaptureWorker implements SessionWorker {
@@ -71,7 +72,12 @@ test("kernel history ingestion is separate, epoch-fenced and restricted to the c
 	const ingest = (observation: UsageObservation) =>
 		new Promise<KernelCommand>((resolve) => {
 			worker.next = resolve;
-			manager["onPacket"](meta, worker, { type: "usage-history", callId: randomUUID(), row: observation });
+			manager["onPacket"](meta, worker, {
+				type: "host.call",
+				method: "usage-history",
+				callId: randomUUID(),
+				args: { row: observation },
+			});
 		});
 	assert.equal(((await ingest(row)) as { result?: string }).result, "stored");
 	assert.equal(((await ingest(row)) as { result?: string }).result, "duplicate");
@@ -91,7 +97,12 @@ test("kernel history ingestion is separate, epoch-fenced and restricted to the c
 		"stored",
 	);
 	const stale = new CaptureWorker();
-	manager["onPacket"](meta, stale, { type: "usage-history", callId: randomUUID(), row });
+	manager["onPacket"](meta, stale, {
+		type: "host.call",
+		method: "usage-history",
+		callId: randomUUID(),
+		args: { row },
+	});
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	assert.equal(stale.commands.length, 0);
 	assert.equal((await store.status()).retainedRows, 1);

@@ -5,7 +5,7 @@ const desktop = { platform: "macos", width: 1100, height: 1800 } as const;
 
 test("Today shows the cause, the next step and a way to the work", async () => {
 	const app = await open("./VisibilityFixture.tsx", desktop);
-	await app.waitFor("Some work needs a look.");
+	await app.waitUntil(() => app.texts().some((line) => line.startsWith("One stopped chat.")));
 	expect(app.shows("Unresolved work is shown above. Pilot retries nothing on its own.")).toBe(true);
 	expect(app.shows("What needs you is not current. Read again before acting.")).toBe(false);
 	expect(app.shows("Native checks failed. The coordinator needs your help.")).toBe(true);

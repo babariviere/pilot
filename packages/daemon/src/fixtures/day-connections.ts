@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import { serveCommands } from "./commands.ts";
 import { mock } from "node:test";
 import { McpSetupStore } from "../mcp-setup.ts";
 import { McpStatusService } from "../mcp-status.ts";
@@ -70,12 +70,9 @@ console.log(
 		ledger,
 	}),
 );
-for await (const line of createInterface({ input: process.stdin })) {
-	const c = JSON.parse(line);
-	if (c.action === "quit") break;
+await serveCommands(async (c) => {
 	if (c.action === "lost") lost = true;
-	console.log(JSON.stringify({ writes, probes, logins, config: JSON.parse(await readFile(config, "utf8")) }));
-}
-process.stdin.destroy();
+	return { writes, probes, logins, config: JSON.parse(await readFile(config, "utf8")) };
+});
 await mcp.close();
 await f.close();

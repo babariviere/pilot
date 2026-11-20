@@ -1,4 +1,4 @@
-import type { AIUsageCost, AIUsageTokens } from "./index.ts";
+import type { AIUsageCost, AIUsageTokens } from "./usage.ts";
 
 /** Local-only accounting. Never serialize these identities through telemetry/diagnostics. */
 export interface UsageObservation {

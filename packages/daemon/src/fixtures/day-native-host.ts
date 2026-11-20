@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { DaemonHello, SessionSummary } from "@pilot/protocol";
+import { PILOT_CAPABILITY_HEADER } from "../native-app-capability.ts";
 import { WebSocket, WebSocketServer } from "ws";
 import { GitHubSetupService } from "../github-setup.ts";
 import { daemonHello } from "../hello.ts";
@@ -21,6 +22,7 @@ import { ProjectStore } from "../projects.ts";
 import type { SessionManager } from "../sessions.ts";
 import type { TerminalManager } from "../terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "../testing/daemon-server.ts";
+import { pauseParticipants } from "../testing/pause-participants.ts";
 
 const home = await mkdtemp(join(tmpdir(), "day-native-host-"));
 await mkdir(join(home, "project"));
@@ -54,22 +56,25 @@ let holdResume = false,
 	resumeStop = false,
 	pauseGate: (() => void) | undefined;
 let entered: (() => void) | undefined;
-const controls = new MissionControls(store, {
-	checkpointMission: async (id) => {
-		pauses.push(id);
-		entered?.();
-		if (pauseGate)
-			await new Promise<void>((resolve) => {
-				pauseGate = resolve;
-			});
-		return id === members[2] ? "held" : "paused";
-	},
-	resumeMission: async (id) => {
-		resumes.push(id);
-		if (resumeStop) store.controls.stop(mission.id);
-		return holdResume || resumeStop ? "held" : "resumed";
-	},
-});
+const controls = new MissionControls(
+	store,
+	pauseParticipants({
+		checkpointMission: async (id) => {
+			pauses.push(id);
+			entered?.();
+			if (pauseGate)
+				await new Promise<void>((resolve) => {
+					pauseGate = resolve;
+				});
+			return id === members[2] ? "held" : "paused";
+		},
+		resumeMission: async (id) => {
+			resumes.push(id);
+			if (resumeStop) store.controls.stop(mission.id);
+			return holdResume || resumeStop ? "held" : "resumed";
+		},
+	}),
+);
 controls.setScheduleDrain(async () => {});
 const chats = members.map(
 	(id): SessionSummary => ({
@@ -172,7 +177,7 @@ const proxy = createServer(async (req, res) => {
 				method: "POST",
 				headers: {
 					"content-type": "application/json",
-					"x-pilot-github-capability": String(req.headers["x-pilot-github-capability"] ?? ""),
+					[PILOT_CAPABILITY_HEADER]: String(req.headers[PILOT_CAPABILITY_HEADER] ?? ""),
 				},
 				body: bytes,
 			});
@@ -193,7 +198,7 @@ const proxy = createServer(async (req, res) => {
 			}
 		}
 		const reply = await fetch(`http://127.0.0.1:${upstream}${path}`, {
-			headers: { "x-pilot-github-capability": String(req.headers["x-pilot-github-capability"] ?? "") },
+			headers: { [PILOT_CAPABILITY_HEADER]: String(req.headers[PILOT_CAPABILITY_HEADER] ?? "") },
 		});
 		const body = await reply.json();
 		if (path === "/api/hello") {

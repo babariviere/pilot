@@ -21,7 +21,7 @@ import {
 	validateCoordinatorWrites,
 } from "./linux-coordinator.ts";
 import { forkMainViewWorker } from "./main-view.ts";
-import { Worker } from "./sessions.ts";
+import { Worker } from "./kernel-worker.ts";
 
 test("private write roots reject symlink roots, protected overlaps, hardlinks, broad roots and special files", async (t) => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "pilot-isolation-paths-")));

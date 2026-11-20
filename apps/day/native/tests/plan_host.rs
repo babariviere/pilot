@@ -2,9 +2,12 @@
 //! isolated production daemon: backend digests, exact save and submit
 //! requests, topic binding, stale refusal, lost answers and honest
 //! unavailable steps. No worker, provider or live home is used.
+#[path = "support/bridge_calls.rs"]
+mod bridge_calls;
+use bridge_calls::Calls;
 use pilot_day_native::{
-    host::{Error, NativeHost, Source},
-    model::{FreshnessState, IntentOutcome},
+    host::{NativeHost, Source},
+    model::FreshnessState,
     plan::{
         AnswerIntent, OutcomeStatus, PlanStage, QuestionState, RoundKind, StepState, SubmitIntent,
         SubmitState,
@@ -77,7 +80,12 @@ impl Fixture {
     }
     fn open(&self) -> NativeHost {
         let source: Source = serde_json::from_value(self.info["source"].clone()).unwrap();
-        NativeHost::open(source, self.info["ledger"].as_str().unwrap().into()).unwrap()
+        NativeHost::open_with_options(
+            source,
+            self.info["ledger"].as_str().unwrap().into(),
+            Default::default(),
+        )
+        .unwrap()
     }
 }
 impl Drop for Fixture {
@@ -95,14 +103,6 @@ fn rt() -> tokio::runtime::Runtime {
         .build()
         .unwrap()
 }
-fn reply<T>(rx: async_channel::Receiver<Result<T, Error>>) -> Result<T, Error> {
-    rt().block_on(async {
-        tokio::time::timeout(Duration::from_secs(25), rx.recv())
-            .await
-            .unwrap()
-            .map_err(|_| Error::Unavailable)?
-    })
-}
 fn ready(host: &NativeHost) {
     let changes = host.changes();
     rt().block_on(async {
@@ -115,14 +115,11 @@ fn ready(host: &NativeHost) {
         .unwrap();
     });
 }
-fn read(host: &NativeHost, mission: &str) -> Value {
-    reply(host.read_planning(mission.into())).unwrap();
+fn read(calls: &mut Calls, host: &NativeHost, mission: &str) -> Value {
+    let result = calls.call("day.plan.read", json!({"missionId":mission}));
+    assert!(result["error"].is_null(), "{result}");
     host.planning(mission).unwrap()
 }
-fn send(host: &NativeHost, mission: &str, built: (String, Value)) -> Result<IntentOutcome, Error> {
-    reply(host.write_interview(mission.into(), built.0, built.1))
-}
-
 /// The answer the screen would send for the first question as shown.
 fn intent(read: &Value, choice: Option<&str>, text: &str) -> AnswerIntent {
     let page = plan_host::page(read, &[], &Local::default());
@@ -142,9 +139,10 @@ fn intent(read: &Value, choice: Option<&str>, text: &str) -> AnswerIntent {
 fn the_real_read_maps_with_backend_digests_and_honest_unavailable_steps() {
     let f = Fixture::new();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     ready(&host);
     let mission = f.mission();
-    let v = read(&host, &mission);
+    let v = read(&mut calls, &host, &mission);
     let page = plan_host::page(&v, &host.planning_operations(&mission), &Local::default());
     assert!(page.available && page.fresh);
     assert_eq!(page.stage, PlanStage::Questions);
@@ -162,7 +160,7 @@ fn the_real_read_maps_with_backend_digests_and_honest_unavailable_steps() {
         page.prototypes.available,
         "Pilot makes prototypes in read-only chats"
     );
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }
 
 #[test]
@@ -171,23 +169,24 @@ fn all_submitted_rounds_survive_real_daemon_and_native_host_reopen() {
     // Production refusal and lost-ACK behavior remain covered by other journeys.
     let mut f = Fixture::with_quiet_events(true);
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     ready(&host);
     let mission = f.mission();
     let mut history = json!([]);
     let mut first_submit = None;
     for n in 0..3 {
-        let v = read(&host, &mission);
+        let v = read(&mut calls, &host, &mission);
         assert_eq!(v["view"]["interviewHistory"], history);
         let page = plan_host::page(&v, &[], &Local::default());
         assert_eq!(page.rounds.len(), n);
         let choice = if n == 2 { "approve" } else { "fix" };
         let text = format!("  round {n}\n💬 exact  ");
-        let save = plan_host::save_request(&v, &intent(&v, Some(choice), &text)).unwrap();
+        let save = intent(&v, Some(choice), &text);
         assert_eq!(
-            send(&host, &mission, save).unwrap().status,
-            OutcomeStatus::Accepted
+            calls.outcome("day.plan.save", json!({"missionId":mission,"intent":save}))["status"],
+            "accepted"
         );
-        let v = read(&host, &mission);
+        let v = read(&mut calls, &host, &mission);
         assert_eq!(
             v["view"]["interviewHistory"], history,
             "active edits never rewrite submitted answers"
@@ -203,18 +202,20 @@ fn all_submitted_rounds_survive_real_daemon_and_native_host_reopen() {
         if n == 0 {
             first_submit = Some(submit.clone());
         }
-        let built = plan_host::submit_request(&v, &submit).unwrap();
         assert_eq!(
-            send(&host, &mission, built).unwrap().status,
-            OutcomeStatus::Accepted
+            calls.outcome(
+                "day.plan.submit",
+                json!({"missionId":mission,"intent":submit})
+            )["status"],
+            "accepted"
         );
-        let v = read(&host, &mission);
+        let v = read(&mut calls, &host, &mission);
         history = v["view"]["interviewHistory"].clone();
         assert_eq!(history.as_array().unwrap().len(), n + 1);
         assert_eq!(history[n]["interview"]["answers"][0]["text"], text);
         f.cmd("next-round", true);
     }
-    let v = read(&host, &mission);
+    let v = read(&mut calls, &host, &mission);
     let page = plan_host::page(&v, &[], &Local::default());
     assert_eq!(page.rounds.len(), 3);
     for (n, round) in page.rounds.iter().enumerate() {
@@ -246,11 +247,12 @@ fn all_submitted_rounds_survive_real_daemon_and_native_host_reopen() {
         StepState::Waiting
     );
     let posts = f.cmd("stats", true)["posts"].clone();
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
     f.cmd("restart", true);
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     ready(&host);
-    let v = read(&host, &mission);
+    let v = read(&mut calls, &host, &mission);
     assert_eq!(v["view"]["interviewHistory"], history);
     assert_eq!(
         plan_host::page(&v, &[], &Local::default()).rounds,
@@ -263,28 +265,29 @@ fn all_submitted_rounds_survive_real_daemon_and_native_host_reopen() {
     );
     f.cmd("missing-history", true);
     assert!(
-        reply(host.read_planning(mission.clone())).is_err(),
+        calls.call("day.plan.read", json!({"missionId":mission}))["error"].is_string(),
         "missing history is unavailable, not empty"
     );
     f.cmd("missing-history", false);
     f.cmd("owner", true);
     assert!(
-        reply(host.read_planning(mission)).is_err(),
+        calls.call("day.plan.read", json!({"missionId":mission}))["error"].is_string(),
         "revoked owners cannot read history"
     );
     assert_eq!(f.cmd("stats", true)["posts"], posts);
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }
 
 #[test]
 fn revisit_round_uses_saved_interview_without_publishing_agreement() {
     let mut f = Fixture::with_quiet_events(true);
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     ready(&host);
     let mission = f.mission();
     let before = f.cmd("stats", true)["brief"].clone();
     f.cmd("revisit-round", true);
-    let v = read(&host, &mission);
+    let v = read(&mut calls, &host, &mission);
     let iv = plan_host::page(&v, &[], &Local::default())
         .interview
         .unwrap();
@@ -301,29 +304,28 @@ fn revisit_round_uses_saved_interview_without_publishing_agreement() {
         .is_err(),
         "a recommendation is not an answer"
     );
-    let save = plan_host::save_request(&v, &intent(&v, Some("fix"), " exact gap\n💬 ")).unwrap();
+    let save = intent(&v, Some("fix"), " exact gap\n💬 ");
     assert_eq!(
-        send(&host, &mission, save).unwrap().status,
-        OutcomeStatus::Accepted
+        calls.outcome("day.plan.save", json!({"missionId":mission,"intent":save}))["status"],
+        "accepted"
     );
-    let v = read(&host, &mission);
+    let v = read(&mut calls, &host, &mission);
     let iv = plan_host::page(&v, &[], &Local::default())
         .interview
         .unwrap();
-    let submit = plan_host::submit_request(
-        &v,
-        &SubmitIntent {
-            interview_id: iv.id,
-            revision: iv.revision,
-            proposal: String::new(),
-        },
-    )
-    .unwrap();
+    let submit = SubmitIntent {
+        interview_id: iv.id,
+        revision: iv.revision,
+        proposal: String::new(),
+    };
     assert_eq!(
-        send(&host, &mission, submit).unwrap().status,
-        OutcomeStatus::Accepted
+        calls.outcome(
+            "day.plan.submit",
+            json!({"missionId":mission,"intent":submit})
+        )["status"],
+        "accepted"
     );
-    let v = read(&host, &mission);
+    let v = read(&mut calls, &host, &mission);
     assert_eq!(v["view"]["interview"]["submission"]["kind"], "revisit");
     assert_eq!(
         v["view"]["interviewHistory"][0]["interview"]["answers"][0]["text"],
@@ -331,10 +333,11 @@ fn revisit_round_uses_saved_interview_without_publishing_agreement() {
     );
     assert_eq!(f.cmd("stats", true)["brief"], before);
     let posts = f.cmd("stats", true)["posts"].clone();
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     ready(&host);
-    let reopened = read(&host, &mission);
+    let reopened = read(&mut calls, &host, &mission);
     assert_eq!(
         reopened["view"]["interviewHistory"],
         v["view"]["interviewHistory"]
@@ -344,16 +347,17 @@ fn revisit_round_uses_saved_interview_without_publishing_agreement() {
         posts,
         "opening and reading never replay submit"
     );
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }
 
 #[test]
 fn saves_and_one_submission_go_through_the_exact_host_requests() {
     let mut f = Fixture::new();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     ready(&host);
     let mission = f.mission();
-    let v = read(&host, &mission);
+    let v = read(&mut calls, &host, &mission);
     // A recommendation is not an answer: submitting now is refused before sending.
     let page = plan_host::page(&v, &[], &Local::default());
     let iv = page.interview.unwrap();
@@ -372,11 +376,12 @@ fn saves_and_one_submission_go_through_the_exact_host_requests() {
         save.1["answers"][0]["selectedOption"],
         json!({"id":"fix","meaning":"Fix the importer"})
     );
+    let save = intent(&v, Some("fix"), " exact\n💬 ");
     assert_eq!(
-        send(&host, &mission, save).unwrap().status,
-        OutcomeStatus::Accepted
+        calls.outcome("day.plan.save", json!({"missionId":mission,"intent":save}))["status"],
+        "accepted"
     );
-    let v = read(&host, &mission);
+    let v = read(&mut calls, &host, &mission);
     let page = plan_host::page(&v, &host.planning_operations(&mission), &Local::default());
     let iv = page.interview.unwrap();
     let q = &iv.questions[0];
@@ -386,12 +391,15 @@ fn saves_and_one_submission_go_through_the_exact_host_requests() {
     );
     assert_eq!(iv.answered, 1);
     // Switching to own words keeps the text, exactly.
-    let custom = plan_host::save_request(&v, &intent(&v, None, " exact\n💬 ")).unwrap();
+    let custom = intent(&v, None, " exact\n💬 ");
     assert_eq!(
-        send(&host, &mission, custom).unwrap().status,
-        OutcomeStatus::Accepted
+        calls.outcome(
+            "day.plan.save",
+            json!({"missionId":mission,"intent":custom})
+        )["status"],
+        "accepted"
     );
-    let v = read(&host, &mission);
+    let v = read(&mut calls, &host, &mission);
     let iv = plan_host::page(&v, &[], &Local::default())
         .interview
         .unwrap();
@@ -404,12 +412,14 @@ fn saves_and_one_submission_go_through_the_exact_host_requests() {
         revision: iv.revision,
         proposal: String::new(),
     };
-    let built = plan_host::submit_request(&v, &submit).unwrap();
     assert_eq!(
-        send(&host, &mission, built).unwrap().status,
-        OutcomeStatus::Accepted
+        calls.outcome(
+            "day.plan.submit",
+            json!({"missionId":mission,"intent":submit})
+        )["status"],
+        "accepted"
     );
-    let v = read(&host, &mission);
+    let v = read(&mut calls, &host, &mission);
     let page = plan_host::page(&v, &host.planning_operations(&mission), &Local::default());
     assert_eq!(
         page.interview.as_ref().unwrap().submit,
@@ -435,16 +445,17 @@ fn saves_and_one_submission_go_through_the_exact_host_requests() {
     assert!(plan_host::save_request(&v, &intent(&v, Some("fix"), "")).is_err());
     assert!(plan_host::submit_request(&v, &submit).is_err());
     assert_eq!(f.cmd("stats", true)["posts"], posts);
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }
 
 #[test]
 fn shown_fences_refuse_before_sending_and_bind_the_round() {
     let mut f = Fixture::new();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     ready(&host);
     let mission = f.mission();
-    let v = read(&host, &mission);
+    let v = read(&mut calls, &host, &mission);
     let mut stale = intent(&v, Some("fix"), "");
     stale.digest = "0".repeat(64);
     assert_eq!(
@@ -476,37 +487,41 @@ fn shown_fences_refuse_before_sending_and_bind_the_round() {
         OutcomeStatus::Rejected
     );
     assert_eq!(f.cmd("stats", true)["posts"], 0);
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }
 
 #[test]
 fn a_lost_answer_is_unconfirmed_and_only_checked() {
     let mut f = Fixture::new();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     ready(&host);
     let mission = f.mission();
-    let v = read(&host, &mission);
+    let v = read(&mut calls, &host, &mission);
     f.cmd("lost", true);
-    let save = plan_host::save_request(&v, &intent(&v, Some("fix"), "kept")).unwrap();
+    let save = intent(&v, Some("fix"), "kept");
     assert_eq!(
-        send(&host, &mission, save).unwrap().status,
-        OutcomeStatus::Unknown
+        calls.outcome("day.plan.save", json!({"missionId":mission,"intent":save}))["status"],
+        "unknown"
     );
     let ops = host.planning_operations(&mission);
     let page = plan_host::page(&v, &ops, &Local::default());
-    assert!(page.interview.unwrap().unconfirmed);
+    let interview = page.interview.unwrap();
+    assert!(interview.unconfirmed);
     assert_eq!(page.stage, PlanStage::Unknown);
-    let id = plan_host::unsettled_operation(&ops).unwrap();
     assert_eq!(
-        reply(host.check_planning(id)).unwrap().status,
-        OutcomeStatus::Accepted
+        calls.outcome(
+            "day.plan.check",
+            json!({"missionId":mission,"intent":{"interviewId":interview.id}})
+        )["status"],
+        "accepted"
     );
-    let v = read(&host, &mission);
+    let v = read(&mut calls, &host, &mission);
     let page = plan_host::page(&v, &host.planning_operations(&mission), &Local::default());
     assert!(!page.interview.as_ref().unwrap().unconfirmed);
     assert_eq!(page.interview.unwrap().questions[0].text, "kept");
     assert_eq!(f.cmd("stats", true)["posts"], 1, "checked, never resent");
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }
 
 #[test]

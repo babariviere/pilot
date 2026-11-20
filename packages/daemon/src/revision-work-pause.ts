@@ -29,15 +29,15 @@ function revisionPauseOwnership(
 	missionId: string,
 	sessionIds: string[],
 ) {
-	const owners = [...new Set(sessionIds.map((id) => participants.missionWorkOwner?.(id) ?? id))].sort();
+	const owners = [...new Set(sessionIds.map((id) => participants.missionWorkOwner(id)))].sort();
 	const identity = (id: string) => {
-		const session = participants.get?.(id);
+		const session = participants.get(id);
 		return { projectId: session?.projectId ?? null, createdAt: session?.createdAt ?? null };
 	};
 	return {
 		projectId: store.require(missionId).projectId,
 		members: sessionIds.map((sessionId) => {
-			const ownerId = participants.missionWorkOwner?.(sessionId) ?? sessionId;
+			const ownerId = participants.missionWorkOwner(sessionId);
 			return {
 				sessionId,
 				ownerId,
@@ -48,8 +48,9 @@ function revisionPauseOwnership(
 			};
 		}),
 		tasks: store.pauseTaskOwnership(missionId, owners),
-		flowSessions: (participants.missionWorkSessions?.(missionId) ?? [])
-			.filter((id) => owners.includes(participants.missionWorkOwner?.(id) ?? id))
+		flowSessions: participants
+			.missionWorkSessions(missionId)
+			.filter((id) => owners.includes(participants.missionWorkOwner(id)))
 			.sort(),
 	};
 }
@@ -109,9 +110,9 @@ export async function pauseRevisionWork(
 		[
 			...new Set([
 				...roots,
-				...(participants.missionWorkSessions?.(missionId) ?? []).filter((id) =>
-					roots.includes(participants.missionWorkOwner?.(id) ?? id),
-				),
+				...participants
+					.missionWorkSessions(missionId)
+					.filter((id) => roots.includes(participants.missionWorkOwner(id))),
 			]),
 		].sort();
 	const all = inventory();
@@ -206,7 +207,7 @@ export async function resumeRevisionWork(
 	record.resumeSource = input.source;
 	record.resumeOwners = record.members.map((m) => ({
 		sessionId: m.sessionId,
-		ownerId: participants.missionWorkOwner?.(m.sessionId) ?? m.sessionId,
+		ownerId: participants.missionWorkOwner(m.sessionId),
 	}));
 	record.state = "resuming";
 	await store.controls.writeRevisionPause(record);

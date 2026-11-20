@@ -1,5 +1,5 @@
 import type { MissionResource } from "@pilot/protocol";
-import { linearKey, parseResourceUrl } from "./missions.ts";
+import { linearKey, parseResourceUrl } from "./resource-url.ts";
 import type { SourceMcpClient } from "./source-mcp.ts";
 
 /** On-demand only, no description cache. The dedicated MCP client shares existing OAuth and slots. */

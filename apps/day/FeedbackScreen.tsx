@@ -191,14 +191,7 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 				setStepMessage(r.saved.id, `Saved, but its triage did not start. ${t.message}`);
 		}
 	};
-	const check = async (operationId: string) => {
-		const original = v().unsettled.find((o) => o.operationId === operationId);
-		// Capture before I/O: a rejected or lost Check must not strand these words,
-		// even if the user navigates or edits the active draft while it runs.
-		if (original)
-			keepFeedbackDraft({ text: original.text, origin: original.origin, attachments: original.attachments ?? [] });
-		feedbackMessage.set("");
-		const r = await props.mirror.source.check(operationId);
+	const reconcile = (r: Awaited<ReturnType<FeedbackMirror["source"]["check"]>>) => {
 		if (r.status === "accepted" && r.saved) forgetKeptFeedback(r.saved);
 		if (r.status === "accepted" && r.saved && feedbackDraftKey(feedbackDraft()) === feedbackDraftKey(r.saved)) {
 			glide();
@@ -208,6 +201,15 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 		feedbackMessage.set(r.status === "accepted" ? "Your feedback was saved." : r.message);
 		if (r.saved && r.investigation && r.investigation.status !== "accepted")
 			setStepMessage(r.saved.id, `Saved. Investigation: ${r.investigation.message}`);
+	};
+	const check = async (operationId: string) => {
+		const original = v().unsettled.find((o) => o.operationId === operationId);
+		// Capture before I/O: a rejected or lost Check must not strand these words,
+		// even if the user navigates or edits the active draft while it runs.
+		if (original)
+			keepFeedbackDraft({ text: original.text, origin: original.origin, attachments: original.attachments ?? [] });
+		feedbackMessage.set("");
+		reconcile(await props.mirror.source.check(operationId));
 		void props.mirror.source.read();
 	};
 	keymap.bind(

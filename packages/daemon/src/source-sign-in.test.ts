@@ -54,7 +54,7 @@ async function fixture(t: TestContext, timeoutMs?: number) {
 			},
 			signIn: login.signIn,
 		},
-		timeoutMs,
+		{ signInTimeoutMs: timeoutMs },
 	);
 	registry.register("linear", async (context) => {
 		await context.call("issues", {});

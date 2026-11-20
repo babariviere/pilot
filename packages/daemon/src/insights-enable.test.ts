@@ -23,14 +23,16 @@ import { Conflict } from "./errors.ts";
 import { InsightsApply } from "./insights-apply.ts";
 import { INSIGHTS_INITIAL_DEFAULTS } from "./insights-defaults.ts";
 import { InsightsEnable } from "./insights-enable.ts";
+import type { InsightsSchedule } from "./insights-schedule.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
-import { OperationExpired, OperationJournal, payloadHash } from "./operation-journal.ts";
+import { canonicalJSON, OperationExpired, OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
+import { type SessionWorker } from "./kernel-worker.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
@@ -91,15 +93,16 @@ async function fixture(t: TestContext, withConfigurationWorker = false) {
 						busy: false,
 						close: async () => {},
 						send: (command) => {
-							if (command.type === "model.configuration.result") guardError = command.error;
+							if (command.type === "host.result") guardError = command.error;
 						},
 						request: async (command) => {
 							if (command.type !== "changeModelConfiguration")
 								throw new Error(`No input or legacy fallback permitted: ${command.type}`);
 							onPacket({
-								type: "model.configuration.guard",
+								type: "host.call",
+								method: "model.configuration.guard",
 								callId: randomUUID(),
-								requestId: command.requestId,
+								args: { requestId: command.requestId },
 							});
 							if (guardError) throw new Error(guardError);
 							onPacket({
@@ -468,7 +471,7 @@ for (const field of [
 		assert.equal(preflight.targetId, id, "retain the exact unavailable identity, never derive a substitute");
 		assert.equal(preflight.payload, null);
 		const spawn = t.mock.method(f.sessions, "spawnInsightsDurable");
-		const schedule = t.mock.method(f.schedules, "createInsights");
+		const schedule = t.mock.method(f.schedules.insights, "createInsights");
 		const receipt = await f.run(op);
 		assert.equal(receipt.state, "rejected");
 		assert.equal(receipt.result, undefined, "no step entered for stale binding");
@@ -633,7 +636,7 @@ for (const phase of ["chat_pending", "chat_ready", "schedule_pending"] as const)
 		injected.mock.restore();
 		await f.reopen();
 		const spawn = t.mock.method(f.sessions, "spawnInsightsDurable");
-		const create = t.mock.method(f.schedules, "createInsights");
+		const create = t.mock.method(f.schedules.insights, "createInsights");
 		await f.journal.recover((intent) => f.enable.enable(intent, JSON.parse(intent.payload)));
 		assert.equal(spawn.mock.callCount(), 0, "entered chat creation is never replayed");
 		assert.equal(
@@ -668,7 +671,7 @@ for (const phase of ["chat_pending", "chat_ready", "schedule_pending"] as const)
 		const file = join(f.home, "operations", `${payloadHash(op.operationId)}.json`);
 		const saved = await readFile(file);
 		const spawn = t.mock.method(f.sessions, "spawnInsightsDurable");
-		const create = t.mock.method(f.schedules, "createInsights");
+		const create = t.mock.method(f.schedules.insights, "createInsights");
 		for (let i = 0; i < 3; i++) assert.equal((await f.enable.status(op)).receipt.state, "pending");
 		assert.deepEqual(await readFile(file), saved, "status cannot advance an entered step");
 		assert.equal(spawn.mock.callCount(), 0);
@@ -688,7 +691,7 @@ test("unknown lookup grants no authority; changed settings and retired commands 
 	assert.equal((await f.enable.status(op)).state, "not_found");
 	f.disable();
 	const spawn = t.mock.method(f.sessions, "spawnInsightsDurable");
-	const create = t.mock.method(f.schedules, "createInsights");
+	const create = t.mock.method(f.schedules.insights, "createInsights");
 	assert.equal((await f.run(op)).state, "rejected");
 	await f.journal.retire(op.origin, op.producerId, op.sequence);
 	await f.reopen();
@@ -742,11 +745,11 @@ for (const effect of ["chat", "schedule"] as const) {
 				},
 			);
 		} else {
-			const original = f.schedules.createInsights.bind(f.schedules);
+			const original = f.schedules.insights.createInsights.bind(f.schedules.insights);
 			t.mock.method(
-				f.schedules,
+				f.schedules.insights,
 				"createInsights",
-				async (...args: Parameters<ScheduleService["createInsights"]>) => {
+				async (...args: Parameters<InsightsSchedule["createInsights"]>) => {
 					await original(...args);
 					throw new Error("Synthetic lost schedule ACK");
 				},
@@ -781,11 +784,11 @@ for (const effect of ["chat", "schedule"] as const) {
 test("pending enabled status becomes blocked on revoke without changing the receipt or replaying", async (t) => {
 	const f = await fixture(t),
 		op = await f.intent();
-	const original = f.schedules.createInsights.bind(f.schedules);
+	const original = f.schedules.insights.createInsights.bind(f.schedules.insights);
 	const create = t.mock.method(
-		f.schedules,
+		f.schedules.insights,
 		"createInsights",
-		async (...args: Parameters<ScheduleService["createInsights"]>) => {
+		async (...args: Parameters<InsightsSchedule["createInsights"]>) => {
 			await original(...args);
 			throw new Error("Synthetic lost schedule ACK");
 		},
@@ -908,7 +911,7 @@ test("native HTTP contract gates only enable, passive reads/status never provisi
 	assert.equal((await (await post("insights/enable/status")).json()).state, "not_found");
 	assert.notEqual((await post("operations")).status, 200);
 	const spawn = t.mock.method(f.sessions, "spawnInsightsDurable");
-	const create = t.mock.method(f.schedules, "createInsights");
+	const create = t.mock.method(f.schedules.insights, "createInsights");
 	for (const field of ["daemonId", "lineageId"] as const) {
 		const mismatched = { ...op, destination: { ...op.destination, [field]: "different" } };
 		for (const path of ["operations", "insights/enable/status", "operations/receipt"]) {
@@ -1149,8 +1152,8 @@ for (const step of ["model", "cancel", "schedule"] as const)
 		if (step === "model") syntheticModelChange(t, f, true);
 		else {
 			const method = step === "cancel" ? "cancelInsights" : "createInsights";
-			const original = f.schedules[method].bind(f.schedules);
-			t.mock.method(f.schedules, method, async (...args: never[]) => {
+			const original = f.schedules.insights[method].bind(f.schedules.insights);
+			t.mock.method(f.schedules.insights, method, async (...args: never[]) => {
 				await (original as (...args: never[]) => Promise<unknown>)(...args);
 				throw new Error("Synthetic lost ACK");
 			});
@@ -1161,22 +1164,26 @@ for (const step of ["model", "cancel", "schedule"] as const)
 			(receipt.result as InsightsApplyProgress).phase,
 			`${step === "schedule" ? "schedule" : step === "cancel" ? "cancel" : "model"}_pending`,
 		);
-		const rows = f.schedules.list();
+		// SQLite stores JSON, which leaves out optional fields set to undefined in memory.
+		const rows = canonicalJSON(f.schedules.list());
 		await f.reopen();
 		const current = applyService(f);
 		const modelChange = t.mock.method(f.sessions, "configureInsightsModel", async () => {
 			throw new Error("Must not replay model");
 		});
-		const cancel = t.mock.method(f.schedules, "cancelInsights", async () => {
+		const cancel = t.mock.method(f.schedules.insights, "cancelInsights", async () => {
 			throw new Error("Must not replay cancel");
 		});
-		const create = t.mock.method(f.schedules, "createInsights", async () => {
+		const create = t.mock.method(f.schedules.insights, "createInsights", async () => {
 			throw new Error("Must not replay create");
 		});
 		assert.equal((await current.preflight(id)).state, "blocked");
-		assert.deepEqual(await f.journal.lookup(op), receipt);
-		assert.deepEqual(await f.journal.execute(op, (op) => current.apply(op, JSON.parse(op.payload))), receipt);
-		assert.deepEqual(f.schedules.list(), rows);
+		assert.equal(canonicalJSON(await f.journal.lookup(op)), canonicalJSON(receipt));
+		assert.equal(
+			canonicalJSON(await f.journal.execute(op, (op) => current.apply(op, JSON.parse(op.payload)))),
+			canonicalJSON(receipt),
+		);
+		assert.equal(canonicalJSON(f.schedules.list()), rows);
 		assert.equal(modelChange.mock.callCount() + cancel.mock.callCount() + create.mock.callCount(), 0);
 	});
 
@@ -1197,7 +1204,7 @@ for (const phase of [
 			if ((result as InsightsApplyProgress).phase === phase) throw new Error("Synthetic crash");
 		});
 		assert.equal((await run()).state, "pending");
-		const before = f.schedules.list();
+		const before = canonicalJSON(f.schedules.list());
 		await f.reopen();
 		const service = applyService(f);
 		const replayModel = t.mock.method(f.sessions, "configureInsightsModel", async () => {
@@ -1208,7 +1215,7 @@ for (const phase of [
 		assert.equal(modelChange.mock.callCount(), phase === "model_pending" ? 0 : 1);
 		if (phase.endsWith("pending")) {
 			assert.equal(result.state, "pending");
-			assert.deepEqual(f.schedules.list(), before);
+			assert.equal(canonicalJSON(f.schedules.list()), before);
 		} else assert.equal(result.state, "accepted", "only unentered steps or persisted exact completion may advance");
 	});
 
@@ -1386,8 +1393,8 @@ test("replacement refuses if the exact acknowledged cancellation row disappears"
 
 test("replacement acknowledgement mismatch stays pending without resource inference", async (t) => {
 	const { f, id, run } = await applyFixture(t);
-	const create = f.schedules.createInsights.bind(f.schedules);
-	t.mock.method(f.schedules, "createInsights", async (...args: Parameters<typeof create>) => ({
+	const create = f.schedules.insights.createInsights.bind(f.schedules.insights);
+	t.mock.method(f.schedules.insights, "createInsights", async (...args: Parameters<typeof create>) => ({
 		...(await create(...args)),
 		id: randomUUID(),
 	}));
@@ -1448,7 +1455,7 @@ test("native desired settings save persists choices without activating or mutati
 	assert.equal(restored.revision, 1);
 	assert.deepEqual(restored.cost, { pricing: "unknown", spendUsd: null });
 	assert.deepEqual(await f.journal.lookup(op), saved);
-	assert.deepEqual(f.schedules.list(), before.rules);
+	assert.equal(canonicalJSON(f.schedules.list()), canonicalJSON(before.rules));
 	assert.equal(f.workerStarts, 0);
 });
 

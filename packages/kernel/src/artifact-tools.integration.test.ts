@@ -24,6 +24,7 @@ import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { createArtifactTools } from "./artifact-tools.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
+import { fakeHostCall } from "./testing/host-calls.ts";
 
 // Previews keep a browser warm for a minute. Close it so the test process exits promptly.
 
@@ -91,11 +92,13 @@ for (const wake of ["ready", "error", "timeout"] as const) {
 			{ sessionId: "wake", projectId: "project", cwd: f.root, storageDir: join(f.root, "wake") },
 			{
 				onWorking: () => {},
-				callMemory: async () => {
-					if (wake === "error") throw new Error("memory unavailable");
-					if (wake === "timeout") return new Promise<JsonValue>(() => {});
-					return { count: 1, text: "#0 durable fact" };
-				},
+				call: fakeHostCall({
+					memory: async () => {
+						if (wake === "error") throw new Error("memory unavailable");
+						if (wake === "timeout") return new Promise<JsonValue>(() => {});
+						return { count: 1, text: "#0 durable fact" };
+					},
+				}),
 			},
 		);
 		f.cleanup.push(() => session.close());
@@ -374,10 +377,12 @@ for (const mode of ["on", "only", "off"] as const) {
 						onWorking: (working, completion) => {
 							if (!working && completion) settled();
 						},
-						callMemory: async (action, args): Promise<JsonValue> => {
-							calls.push([action, args]);
-							return action === "wake" ? { count: 1, text: "#0-1: durable project fact" } : { ok: true };
-						},
+						call: fakeHostCall({
+							memory: async ({ action, args }): Promise<JsonValue> => {
+								calls.push([action, args]);
+								return action === "wake" ? { count: 1, text: "#0-1: durable project fact" } : { ok: true };
+							},
+						}),
 					},
 				);
 				f.cleanup.push(() => session.close());
@@ -741,12 +746,14 @@ test("KernelSession codemode reads linked sources without publishing, copying or
 		{
 			onWorking: () => {},
 			onArtifactsChanged: () => publications++,
-			readArtifactReference: async (id, revision) => {
-				reads.push([id, revision]);
-				assert.equal(id, linked.id);
-				const { html: _html, ...source } = await foreign.get(id, revision ?? 1);
-				return source;
-			},
+			call: fakeHostCall({
+				"artifact.reference": async ({ id, revision }) => {
+					reads.push([id, revision]);
+					assert.equal(id, linked.id);
+					const { html: _html, ...source } = await foreign.get(id, revision ?? 1);
+					return source;
+				},
+			}),
 		},
 	);
 	f.cleanup.push(async () => {

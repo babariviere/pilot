@@ -12,7 +12,8 @@ import type { RewindResponse, SessionAttempt, SessionState, SessionSummary } fro
 import { Conflict } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { CommandRejected, SessionManager, type SessionWorker } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
+import { CommandRejected, type SessionWorker } from "./kernel-worker.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
@@ -273,13 +274,7 @@ test("Slack replies require the exact live idle worker and preserve Stop and inp
 	assert.ok(worker);
 	const baseline = worker.commands.length;
 	const meta = f.sessions["metas"].get(f.id)!;
-	for (const hold of [
-		"cancelled",
-		"recoveryStopped",
-		"inputsPaused",
-		"updatePaused",
-		"sleepPaused",
-	] as const) {
+	for (const hold of ["cancelled", "recoveryStopped", "inputsPaused", "updatePaused", "sleepPaused"] as const) {
 		meta[hold] = true;
 		assert.equal(await f.sessions.resumeSlackReply(f.id, "Reply", `slack-reply:item:${hold}`, () => {}), false, hold);
 		assert.equal(meta[hold], true, "automatic input does not clear a hold");

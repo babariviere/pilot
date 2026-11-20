@@ -1,4 +1,4 @@
-// Mock signature refusal, including Force's unchanged trust boundary.
+// Mock signature refusal.
 import { mount } from "nsh";
 import { MockDayScreen, openDay, openUpdate } from "./mockFeeds";
 import { showUpdate } from "./updateView";

@@ -47,7 +47,7 @@ function remote(n = 1, state = "todo", teamId = "child") {
 	};
 }
 
-async function fixture(t: TestContext, disk = false, planningVersion?: 1) {
+async function fixture(t: TestContext, disk = false, planningVersion?: 1, firstIssue = remote()) {
 	const dir = await mkdtemp(join(tmpdir(), "linear-sync-"));
 	const projects = new ProjectStore(dir, async () => "");
 	await projects.load();
@@ -63,11 +63,12 @@ async function fixture(t: TestContext, disk = false, planningVersion?: 1) {
 		title: "Delivery",
 		tasks: [{ title: "A" }, { title: "B" }, { title: "Reference" }],
 	});
-	const manager = store.addResource(mission.id, { url: url(1), linearRole: "managed" });
-	const a = store.addResource(mission.id, { url: url(1), taskId: "1", linearRole: "contribution" });
-	const b = store.addResource(mission.id, { url: url(1), taskId: "2", linearRole: "contribution" });
-	store.addResource(mission.id, { url: url(1), taskId: "3" });
-	const issues = [remote()];
+	const issueUrl = firstIssue.url;
+	const manager = store.addResource(mission.id, { url: issueUrl, linearRole: "managed" });
+	const a = store.addResource(mission.id, { url: issueUrl, taskId: "1", linearRole: "contribution" });
+	const b = store.addResource(mission.id, { url: issueUrl, taskId: "2", linearRole: "contribution" });
+	store.addResource(mission.id, { url: issueUrl, taskId: "3" });
+	const issues = [firstIssue];
 	const writes: Array<Record<string, unknown>> = [];
 	const reads: Array<Record<string, unknown>> = [];
 	let hook: ((tool: string, args: Record<string, unknown>) => void | Promise<void>) | undefined;
@@ -588,6 +589,16 @@ test("renamed identifiers keep their pinned UUID, workspace mismatches never bin
 	await g.poll();
 	assert.equal(g.writes.length, 0);
 	assert.match(g.status().error!, /workspace/);
+});
+
+test("sync accepts a numeric team prefix allowed by the saved Linear key", async (t) => {
+	const issue = { ...remote(), identifier: "2ENG-1", url: "https://linear.app/acme/issue/2ENG-1" };
+	const f = await fixture(t, false, undefined, issue);
+	assert.equal(f.manager.linearKey, "acme/2ENG-1");
+	f.set("1", "in_progress");
+	await f.poll();
+	assert.equal(f.writes.at(-1)?.id, issue.id);
+	assert.equal(issue.statusId, "active");
 });
 
 test("manual pauses do not hide inbound cancellation or change its task policy", async (t) => {

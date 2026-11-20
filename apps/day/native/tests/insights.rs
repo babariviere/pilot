@@ -217,9 +217,10 @@ fn confirm(f: &Fixture, bridge: &Bridge, token: &Value) -> Value {
 fn connected_insights_fresh_two_project_review_uses_exact_catalog_choice() {
     let mut f = insights_fixture("fresh");
     let bridge = Bridge::new(DayRoot::new(
-        NativeHost::open(
+        NativeHost::open_with_options(
             serde_json::from_value(f.info["source"].clone()).unwrap(),
             PathBuf::from(f.info["ledger"].as_str().unwrap()),
+            Default::default(),
         )
         .unwrap(),
     ));
@@ -319,9 +320,10 @@ fn connected_insights_fresh_two_project_review_uses_exact_catalog_choice() {
 fn connected_insights_pause_allows_one_safety_stop_during_an_uncertain_save() {
     let mut f = insights_fixture("tracking");
     let bridge = Bridge::new(DayRoot::new(
-        NativeHost::open(
+        NativeHost::open_with_options(
             serde_json::from_value(f.info["source"].clone()).unwrap(),
             PathBuf::from(f.info["ledger"].as_str().unwrap()),
+            Default::default(),
         )
         .unwrap(),
     ));
@@ -381,9 +383,10 @@ fn connected_insights_pause_allows_one_safety_stop_during_an_uncertain_save() {
 fn connected_insights_applies_exact_settings_without_resuming_and_verifies_only_after_shipping() {
     let mut f = insights_fixture("tracking");
     let bridge = Bridge::new(DayRoot::new(
-        NativeHost::open(
+        NativeHost::open_with_options(
             serde_json::from_value(f.info["source"].clone()).unwrap(),
             PathBuf::from(f.info["ledger"].as_str().unwrap()),
+            Default::default(),
         )
         .unwrap(),
     ));

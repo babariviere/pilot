@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { SQLInputValue } from "node:sqlite";
-import type { MissionRevisionDelta, MissionRevisionProposal } from "../../protocol/src/mission-revision.ts";
+import type { MissionRevisionDelta, MissionRevisionProposal } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { canonicalJSON } from "./operation-journal.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export const MISSION_REVISION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS mission_revision_proposals (
@@ -12,19 +12,13 @@ CREATE TABLE IF NOT EXISTS mission_revision_proposals (
 CREATE INDEX IF NOT EXISTS mission_revision_latest ON mission_revision_proposals(mission_id);
 `;
 
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];
-	run(sql: string, ...params: SQLInputValue[]): void;
+interface Port extends MissionDbPort {
 	/** Refuses a proposal for a thread that is not open with a handoff. */
 	assertTopic(id: string, topicId: string): void;
-	transaction<T>(work: () => T): T;
-	durable(): Promise<void>;
 	source(id: string): unknown;
 	assertPlanner(id: string, actor: { sessionId?: string }): void;
 	validate(id: string, delta: MissionRevisionDelta): void;
 	apply(id: string, proposal: MissionRevisionProposal, humanSource: string): void;
-	changed(id: string): void;
 }
 export const revisionDigest = (value: unknown): string =>
 	createHash("sha256").update(canonicalJSON(value)).digest("hex");
@@ -175,39 +169,42 @@ export class MissionRevisions {
 			...(repreviewOf ? { repreviewOf } : {}),
 		});
 		const digest = revisionDigest(request);
-		const result = this.port.transaction(() => {
-			const prior = this.port.one(
-				"SELECT record FROM mission_revision_proposals WHERE mission_id=? AND operation_id=?",
-				id,
-				input.operationId,
-			);
-			if (prior) {
-				const proposal = JSON.parse(String(prior.record)) as MissionRevisionProposal;
-				if (proposal.digest !== digest) throw new Conflict("Revision operationId has different bytes");
+		const result = this.port.transaction(
+			() => {
+				const prior = this.port.one(
+					"SELECT record FROM mission_revision_proposals WHERE mission_id=? AND operation_id=?",
+					id,
+					input.operationId,
+				);
+				if (prior) {
+					const proposal = JSON.parse(String(prior.record)) as MissionRevisionProposal;
+					if (proposal.digest !== digest) throw new Conflict("Revision operationId has different bytes");
+					return proposal;
+				}
+				if (repreviewOf && this.get(id, repreviewOf.id).confirmation)
+					throw new Conflict("Confirmed revision is history, not a new proposal");
+				if (input.source !== this.source(id)) throw new Conflict("Mission revision source changed");
+				if (request.topicId !== undefined && !repreviewOf) this.port.assertTopic(id, request.topicId);
+				this.port.validate(id, request.delta);
+				const proposal: MissionRevisionProposal = {
+					version: 1,
+					id: randomUUID(),
+					missionId: id,
+					...request,
+					digest,
+					createdAt: Date.now(),
+				};
+				this.port.run(
+					"INSERT INTO mission_revision_proposals VALUES(?,?,?,?)",
+					proposal.id,
+					id,
+					input.operationId,
+					canonicalJSON(proposal),
+				);
 				return proposal;
-			}
-			if (repreviewOf && this.get(id, repreviewOf.id).confirmation)
-				throw new Conflict("Confirmed revision is history, not a new proposal");
-			if (input.source !== this.source(id)) throw new Conflict("Mission revision source changed");
-			if (request.topicId !== undefined && !repreviewOf) this.port.assertTopic(id, request.topicId);
-			this.port.validate(id, request.delta);
-			const proposal: MissionRevisionProposal = {
-				version: 1,
-				id: randomUUID(),
-				missionId: id,
-				...request,
-				digest,
-				createdAt: Date.now(),
-			};
-			this.port.run(
-				"INSERT INTO mission_revision_proposals VALUES(?,?,?,?)",
-				proposal.id,
-				id,
-				input.operationId,
-				canonicalJSON(proposal),
-			);
-			return proposal;
-		});
+			},
+			{ reconcile: true },
+		);
 		await this.port.durable();
 		return result;
 	}
@@ -223,25 +220,29 @@ export class MissionRevisions {
 		)
 			throw new Error("Unknown confirmation field");
 		revisionText(input.humanSource, 1000);
-		const result = this.port.transaction(() => {
-			const proposal = this.get(id, proposalId);
-			if (input.digest !== proposal.digest) throw new Conflict("Reviewed revision digest changed");
-			if (proposal.confirmation) {
-				if (proposal.confirmation.humanSource !== input.humanSource)
-					throw new Conflict("Revision already confirmed differently");
-				return proposal; // Historical receipt, never renewed authority or replay.
-			}
-			if (!this.applies(id, proposal)) throw new Conflict("Mission revision source changed; review a new proposal");
-			this.port.validate(id, proposal.delta);
-			this.port.apply(id, proposal, input.humanSource);
-			proposal.confirmation = { by: "user", at: Date.now(), humanSource: input.humanSource };
-			this.port.run(
-				"UPDATE mission_revision_proposals SET record=? WHERE id=?",
-				canonicalJSON(proposal),
-				proposal.id,
-			);
-			return proposal;
-		});
+		const result = this.port.transaction(
+			() => {
+				const proposal = this.get(id, proposalId);
+				if (input.digest !== proposal.digest) throw new Conflict("Reviewed revision digest changed");
+				if (proposal.confirmation) {
+					if (proposal.confirmation.humanSource !== input.humanSource)
+						throw new Conflict("Revision already confirmed differently");
+					return proposal; // Historical receipt, never renewed authority or replay.
+				}
+				if (!this.applies(id, proposal))
+					throw new Conflict("Mission revision source changed; review a new proposal");
+				this.port.validate(id, proposal.delta);
+				this.port.apply(id, proposal, input.humanSource);
+				proposal.confirmation = { by: "user", at: Date.now(), humanSource: input.humanSource };
+				this.port.run(
+					"UPDATE mission_revision_proposals SET record=? WHERE id=?",
+					canonicalJSON(proposal),
+					proposal.id,
+				);
+				return proposal;
+			},
+			{ reconcile: true },
+		);
 		await this.port.durable();
 		this.port.changed(id);
 		return result;

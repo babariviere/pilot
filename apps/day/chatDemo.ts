@@ -6,7 +6,6 @@
 import { signal } from "nsh";
 import type { ChatChoice } from "pilot-day/native";
 import {
-	CHAT_UNKNOWN,
 	type ChatOp,
 	type ChatPick,
 	type ChatProject,
@@ -15,6 +14,7 @@ import {
 	type ChatView,
 	chatResult,
 } from "./chatFeed";
+import { LOST } from "./refusals";
 
 /** Demo projects. The first is the window's own. */
 export const DEMO_PROJECTS: ChatProject[] = [
@@ -204,14 +204,14 @@ export class ScriptedChats implements ChatSource {
 		this.#creating = false;
 		if (!lost) this.#mine.push(op.operationId);
 		this.publish();
-		return lost ? chatResult("unknown", CHAT_UNKNOWN, { operationId: op.operationId }) : this.#result(op);
+		return lost ? chatResult("unknown", LOST, { operationId: op.operationId }) : this.#result(op);
 	}
 
 	#result(op: ChatOp): ChatResult {
 		if (op.delivery === "accepted") return chatResult("accepted", "", { operationId: op.operationId });
 		if (op.delivery === "rejected")
 			return chatResult("rejected", "Pilot's service refused it.", { operationId: op.operationId });
-		return chatResult("unknown", CHAT_UNKNOWN, { operationId: op.operationId });
+		return chatResult("unknown", LOST, { operationId: op.operationId });
 	}
 
 	async check(operationId: string): Promise<ChatResult> {

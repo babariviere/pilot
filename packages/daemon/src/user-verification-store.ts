@@ -1,6 +1,6 @@
-import type { SQLInputValue } from "node:sqlite";
 import type { UserVerification, UserVerificationReceipt } from "@pilot/protocol";
 import { OperationRejected } from "./operation-journal.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export const USER_VERIFICATION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS user_verifications (
@@ -37,20 +37,14 @@ INSERT INTO delivery_sources(source_key,task_id)
 CREATE TABLE delivery_source_clock(id INTEGER PRIMARY KEY CHECK(id=1), sequence INTEGER NOT NULL);
 INSERT INTO delivery_source_clock SELECT 1,COALESCE(MAX(sequence),0) FROM delivery_sources;
 `;
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(work: () => T): T;
-}
 
 /** App-owned rows in canonical missions.sqlite. No task, approval or integration writes. */
 export class UserVerificationStore {
-	private readonly port: Port;
-	constructor(port: Port) {
+	private readonly port: MissionDbPort;
+	constructor(port: MissionDbPort) {
 		this.port = port;
 	}
-	reviewPage(key: string, before: number): import("../../protocol/src/result-review.ts").ResultReviewEntry[] {
+	reviewPage(key: string, before: number): import("@pilot/protocol").ResultReviewEntry[] {
 		return this.port
 			.all(
 				"SELECT record FROM result_review_entries WHERE subject_key=? AND revision<? ORDER BY revision DESC LIMIT 21",
@@ -59,7 +53,7 @@ export class UserVerificationStore {
 			)
 			.map((r) => JSON.parse(String(r.record)));
 	}
-	latestReview(key: string): import("../../protocol/src/result-review.ts").ResultReviewEntry | null {
+	latestReview(key: string): import("@pilot/protocol").ResultReviewEntry | null {
 		const row = this.port.one(
 			"SELECT record FROM result_review_entries WHERE subject_key=? ORDER BY revision DESC LIMIT 1",
 			key,
@@ -73,10 +67,7 @@ export class UserVerificationStore {
 		);
 		return row ? JSON.parse(String(row.record)).body : "";
 	}
-	originalReviewAnchor(
-		key: string,
-		snapshot: string,
-	): import("../../protocol/src/result-review.ts").ResultReviewEntry | null {
+	originalReviewAnchor(key: string, snapshot: string): import("@pilot/protocol").ResultReviewEntry | null {
 		const row = this.port.one(
 			"SELECT record FROM result_review_entries WHERE subject_key=? AND json_extract(record,'$.anchor.snapshotId')=? AND json_extract(record,'$.anchor.kind')='lines' ORDER BY revision LIMIT 1",
 			key,
@@ -84,7 +75,7 @@ export class UserVerificationStore {
 		);
 		return row ? JSON.parse(String(row.record)) : null;
 	}
-	reviewSelections(project: string): import("../../protocol/src/result-review.ts").ResultReviewEntry[] {
+	reviewSelections(project: string): import("@pilot/protocol").ResultReviewEntry[] {
 		return this.port
 			.all(
 				`SELECT record FROM result_review_entries e WHERE json_extract(record,'$.subject.projectId')=?
@@ -102,7 +93,7 @@ export class UserVerificationStore {
 		);
 		return r
 			? {
-					entry: JSON.parse(String(r.record)) as import("../../protocol/src/result-review.ts").ResultReviewEntry,
+					entry: JSON.parse(String(r.record)) as import("@pilot/protocol").ResultReviewEntry,
 					hash: String(r.request_hash),
 				}
 			: null;
@@ -124,9 +115,7 @@ export class UserVerificationStore {
 		);
 		return row
 			? {
-					entry: JSON.parse(
-						String(row.record),
-					) as import("../../protocol/src/result-review.ts").ResultReviewRejection,
+					entry: JSON.parse(String(row.record)) as import("@pilot/protocol").ResultReviewRejection,
 					hash: String(row.request_hash),
 				}
 			: null;
@@ -134,7 +123,7 @@ export class UserVerificationStore {
 	rejectReview(
 		key: string,
 		hash: string,
-		record: import("../../protocol/src/result-review.ts").ResultReviewRejection,
+		record: import("@pilot/protocol").ResultReviewRejection,
 		revalidate: () => void,
 	) {
 		this.port.transaction(() => {
@@ -148,12 +137,7 @@ export class UserVerificationStore {
 			);
 		});
 	}
-	saveReview(
-		key: string,
-		hash: string,
-		entry: import("../../protocol/src/result-review.ts").ResultReviewEntry,
-		revalidate: () => void,
-	) {
+	saveReview(key: string, hash: string, entry: import("@pilot/protocol").ResultReviewEntry, revalidate: () => void) {
 		this.port.transaction(() => {
 			revalidate();
 			if (Number(this.port.one("SELECT COUNT(*) n FROM result_review_entries")!.n) >= 16384)

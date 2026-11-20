@@ -13,7 +13,7 @@ import type {
 } from "@pilot/protocol";
 import { isCredentialField } from "./diagnostic-redaction.ts";
 
-export const ENVIRONMENT_LIMITS = {
+const ENVIRONMENT_LIMITS = {
 	tools: 64,
 	services: 8,
 	steps: 32,
@@ -125,7 +125,7 @@ function origin(value: unknown, name: string): EnvironmentValueOrigin {
 }
 
 /** Exact versions only: no ranges, aliases or "latest". "v1.2.3" and "go1.2.3" are normalized. */
-export function normalizeExactVersion(value: string): string {
+function normalizeExactVersion(value: string): string {
 	return value.replace(/^(?:go|v)(?=\d)/, "");
 }
 

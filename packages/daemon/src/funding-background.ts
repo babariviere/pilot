@@ -1,7 +1,7 @@
 /** Background completions share the same request ledger as chats, not a second usage sum. */
 import { randomUUID } from "node:crypto";
-import { fundingBound, fundingPayload, fundingUsage } from "../../kernel/src/funding-runtime.ts";
-import { subscriptionLimitReport } from "../../kernel/src/subscription-limit.ts";
+import { fundingBound, fundingPayload, fundingUsage } from "@pilot/kernel/funding";
+import { subscriptionLimitReport } from "@pilot/kernel/subscription-limit";
 import type { BackgroundAttribution, CompletionRuntime } from "./background-usage.ts";
 import type { Funding } from "./funding.ts";
 import { fundingRequests } from "./funding-requests.ts";

@@ -23,7 +23,11 @@ try {
 			const entry = await tx.appendEntry(root.id, {
 				kind: user ? "pi.user" : "pilot.activity",
 				...(user
-					? { model: [{ role: "user" as const, content: `Synthetic 日本 ${i} ${"body ".repeat(400)}` }] }
+					? {
+							model: [
+								{ role: "user" as const, content: `Synthetic 日本 ${i} ${"body ".repeat(400)}`, timestamp: i },
+							],
+						}
 					: { data: { text: `Synthetic activity ${i} ${"body ".repeat(400)}` } }),
 			});
 			if (user)
@@ -33,6 +37,7 @@ try {
 					type: "input",
 					status: "done",
 					entry: entry.id,
+					answer: entry.id,
 				});
 		}
 	}, context);

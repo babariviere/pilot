@@ -1,9 +1,9 @@
-import type { SQLInputValue } from "node:sqlite";
 import type { MissionControl, MissionControlOperation, MissionReport } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import type { MissionContinuation } from "./mission-continuation.ts";
 import { canonicalJSON } from "./operation-journal.ts";
 import type { RevisionWorkPause } from "./revision-work-pause.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export const MISSION_CONTROL_SCHEMA = `
 CREATE TABLE IF NOT EXISTS mission_controls (mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE, record TEXT NOT NULL);
@@ -29,13 +29,7 @@ WHERE e.kind='task' AND e.session_id IS NULL
 AND substr(e.text,1,length('Task #' || t.number || ' reordered: '))='Task #' || t.number || ' reordered: ';
 `;
 
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(work: () => T): T;
-	durable(): Promise<void>;
-	changed(id: string, report?: boolean): void;
+interface Port extends MissionDbPort {
 	reportSaved(report: MissionReport): void;
 }
 
@@ -58,7 +52,7 @@ export class MissionControlStore {
 				if (this.flushing.get(missionId) !== pending) return;
 				this.flushing.delete(missionId);
 				// Work held until the controls were on disk (fenceCurrent) can go on now: tell listeners.
-				this.port.changed(missionId);
+				this.port.changed(missionId, "readModel");
 			},
 			() => {
 				this.failed.add(missionId);
@@ -98,7 +92,7 @@ export class MissionControlStore {
 			canonicalJSON(record),
 		);
 		this.flush(record.missionId);
-		this.port.changed(record.missionId);
+		this.port.changed(record.missionId, "readModel");
 		// Await this exact write's fence, not a second replica waiter that may settle first.
 		return this.flushing.get(record.missionId) ?? this.port.durable();
 	}
@@ -127,7 +121,7 @@ export class MissionControlStore {
 			);
 		});
 		this.flush(record.missionId);
-		this.port.changed(record.missionId);
+		this.port.changed(record.missionId, "readModel");
 	}
 	/** Later Stop invalidates selective resume, including after restart. */
 	stop(missionId: string): void {
@@ -142,7 +136,7 @@ export class MissionControlStore {
 			);
 		});
 		this.flush(missionId);
-		this.port.changed(missionId);
+		this.port.changed(missionId, "readModel");
 	}
 	report(id: string): MissionReport | undefined {
 		const row = this.port.one("SELECT record FROM mission_reports WHERE report_id=?", id);
@@ -216,7 +210,7 @@ export class MissionControlStore {
 			);
 			this.port.reportSaved(report);
 		});
-		this.port.changed(report.missionId, true);
+		this.port.changed(report.missionId);
 	}
 	continuation(id: string): MissionContinuation | undefined {
 		const row = this.port.one("SELECT record FROM mission_continuations WHERE operation_id=?", id);

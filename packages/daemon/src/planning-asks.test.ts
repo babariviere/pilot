@@ -31,7 +31,7 @@ test("a question about a question gets a read-only chat's answer, and never reac
 		chats.has(id) ? ({ ...chats.get(id) } as SessionSummary) : get(id),
 	);
 	t.mock.method(f.sessions, "lastAssistantReply", async () => "It means the app you see today.");
-	f.workers.startResearch();
+	f.workers.startReconciling();
 
 	const stale = f.operation(
 		f.missionId,
@@ -45,7 +45,7 @@ test("a question about a question gets a read-only chat's answer, and never reac
 		interviewDigest(q),
 	);
 	assert.equal((await f.execute(op)).state, "accepted");
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.equal(spawned.length, 1);
 	assert.deepEqual([spawned[0]!.mode, spawned[0]!.role], ["ask", "explorer"]);
 	assert.match(spawned[0]!.message, /The user asks: What does native mean here\?/);
@@ -60,8 +60,8 @@ test("a question about a question gets a read-only chat's answer, and never reac
 	);
 
 	chats.set("ask-1", { id: "ask-1", state: "idle", working: false, outcome: "done" });
-	f.workers.scheduleResearch(f.missionId);
-	await f.workers.settleResearch();
+	f.workers.scheduleReconcile(f.missionId);
+	await f.workers.settleReconciling();
 	const read = (await f.native.read(f.project.id, f.missionId)).questionAsks as { state: string; answer: string }[];
 	assert.deepEqual(
 		read.map((a) => [a.state, a.answer]),

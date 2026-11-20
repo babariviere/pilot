@@ -17,6 +17,7 @@ import { Conflict } from "./errors.ts";
 import { workflowStates } from "./linear-workflow.ts";
 import type { MissionStore } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
+import { linearKey } from "./resource-url.ts";
 import { RuntimeBackground } from "./runtime-background.ts";
 import type { SourceMcpClient } from "./source-mcp.ts";
 import {
@@ -282,9 +283,7 @@ export class MissionLinearSyncService {
 			let key: string | undefined;
 			try {
 				const url = new URL(stringUrl(raw.url));
-				const match = url.pathname.match(/^\/([^/]+)\/issue\/([A-Za-z][A-Za-z0-9_]*-\d+)(?:\/|$)/);
-				if (url.protocol === "https:" && url.hostname === "linear.app" && match)
-					key = `${match[1]!.toLowerCase()}/${match[2]!.toUpperCase()}`;
+				if (url.protocol === "https:" && url.hostname === "linear.app") key = linearKey(url.href);
 			} catch {}
 			if ((identifier !== undefined && identifier !== link.resource.externalId) || key !== link.resource.linearKey)
 				throw new SyncProblem(

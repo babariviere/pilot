@@ -139,6 +139,8 @@ export function Row(props: {
 	aside?: JSX.Element;
 	/** The title may wrap instead of cutting off: for sentences, such as a result's words. */
 	wrap?: boolean;
+	/** Limit a wrapped title to two lines, for incoming requests. Meta stays on one line. */
+	titleLines?: 2;
 	/** The chosen row of a list. */
 	selected?: boolean;
 	testID?: string;
@@ -172,8 +174,8 @@ export function Row(props: {
 			<View class="min-w-0 flex-1" selectable={props.selectable}>
 				<Text
 					testID={props.titleTestID}
-					class={`text-foreground ${props.wrap ? "" : "truncate"}`}
-					style={TYPE.bodyStrong}
+					class={`text-foreground ${props.wrap || props.titleLines ? "" : "truncate"}`}
+					style={{ ...TYPE.bodyStrong, numberOfLines: props.titleLines }}
 				>
 					{props.title}
 				</Text>

@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { KernelCommand } from "@pilot/kernel";
 import { ProjectStore } from "./projects.ts";
-import { SessionManager, type SessionMissionBridge, type SessionWorker, WAIT_NUDGE_TEXT } from "./sessions.ts";
+import { SessionManager, type SessionMissionBridge, WAIT_NUDGE_TEXT } from "./sessions.ts";
+import { type SessionWorker } from "./kernel-worker.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 type Meta = Parameters<SessionManager["save"]>[0];

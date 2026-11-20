@@ -126,7 +126,9 @@ You do not confirm the prototype first; you answer once, when you choose.
 When a builder ends its turn with its task open, no new result and no question, Pilot reminds it once per
 message you send: ask with its question tool, deliver, or go on. If it still stops that way, it may be asking you
 something in prose. **Needs a look** on Today and the task's result page show its last message: **Reply** sends
-your words once; **Continue** sends none. Chats of archived missions leave Needs you.
+your words once; **Continue without reply** asks the chat to go on without your words. On the
+mission page, open the agent chat from the attention row. Now keeps a short reference to the task.
+Blockers groups tasks waiting on the same prerequisites. Chats of archived missions leave Needs you.
 When Pilot's planning agent has stopped while the plan is still open, **Continue planning** under its
 status asks it to pick up where it stopped. It answers, approves and starts nothing.
 When it ended its turn with no question, it may be waiting for you: its planning page and Today's planning

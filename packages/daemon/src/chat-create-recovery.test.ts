@@ -9,14 +9,16 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession } from "@earendil-works/pi-durable";
+import { openSessionStorage } from "@pilot/kernel/testing";
 import type { DaemonHello, DurableOperation, OperationReceipt } from "@pilot/protocol";
-import { openSessionStorage } from "../../kernel/src/storage.ts";
 import { ModelCatalog } from "./models.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
-import { CommandRejected, SessionManager, type SessionMissionBridge } from "./sessions.ts";
+import { SessionManager, type SessionMissionBridge } from "./sessions.ts";
+import { CommandRejected } from "./kernel-worker.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const host = { hostId: "daemon", daemonId: "mac", lineageId: "mac-lineage" };
 const barrier = () => {
@@ -258,7 +260,8 @@ for (const firstCase of ["upper", "lower"] as const) {
 		const original = intent(home);
 		const id = firstCase === "upper" ? original.targetId : original.targetId.toLowerCase();
 		const alias = firstCase === "upper" ? id.toLowerCase() : id.toUpperCase();
-		const sessions = new SessionManager(home, new ProjectStore(home));
+		const options = offlineSessionOptions();
+		const sessions = new SessionManager(home, new ProjectStore(home), undefined, {}, {}, options);
 		t.mock.method(sessions as unknown as { start(): Promise<Map<string, Error>> }, "start", async () => new Map());
 		const gate = barrier();
 		const entered = barrier();
@@ -291,7 +294,7 @@ for (const firstCase of ["upper", "lower"] as const) {
 		}
 		const metadataPath = join(home, "sessions", id, "meta.json");
 		const before = await readFile(metadataPath, "utf8");
-		const restarted = new SessionManager(home, new ProjectStore(home));
+		const restarted = new SessionManager(home, new ProjectStore(home), undefined, {}, {}, options);
 		t.mock.method(restarted as unknown as { start(): Promise<Map<string, Error>> }, "start", async () => new Map());
 		await restarted.load();
 		t.after(() => shutdownAndRemoveHome(home, () => restarted.shutdown()));

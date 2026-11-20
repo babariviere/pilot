@@ -14,7 +14,7 @@ export type McpProbeResult =
 	| { error: string };
 /** Connects to every server in the global mcp.json (or only `only`) and reports what it found. */
 export type McpProbe = (options: { only?: string; signal: AbortSignal }) => Promise<McpProbeResult>;
-export type McpLogin = (server: string, options: { again: boolean; signal: AbortSignal }) => Promise<void>;
+type McpLogin = (server: string, options: { again: boolean; signal: AbortSignal }) => Promise<void>;
 
 /** Servers needing the user first, then the rest by name. */
 const RANK: Record<McpServerState, number> = {
@@ -54,7 +54,7 @@ export function workerProbe(agentDir?: string, timeoutMs?: number): McpProbe {
 		});
 }
 
-export interface McpStatusOptions {
+interface McpStatusOptions {
 	probe: McpProbe;
 	login?: McpLogin;
 	/** Directory holding mcp.json and mcp-auth.json, watched for changes. Omit to skip watching. */

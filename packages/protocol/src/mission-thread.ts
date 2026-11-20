@@ -1,4 +1,5 @@
-import type { OperationHost, SessionHistoryPage } from "./index.ts";
+import type { SessionHistoryPage } from "./chat-stream.ts";
+import type { OperationHost } from "./operations.ts";
 
 /** References to original records, not a second transcript or task/decision store. */
 export type MissionThreadReference =

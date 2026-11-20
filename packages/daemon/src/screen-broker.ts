@@ -16,7 +16,7 @@ import type {
 import { Conflict, NotFound } from "./errors.ts";
 
 /** How long a window may take to answer, by operation. An act waits for the screen to settle. */
-export const SCREEN_DEADLINES: Record<ScreenOperation["op"], number> = {
+const SCREEN_DEADLINES: Readonly<Record<ScreenOperation["op"], number>> = {
 	snapshot: 5000,
 	query: 5000,
 	screenshot: 5000,
@@ -45,12 +45,14 @@ interface Dependencies {
 
 export class ScreenBroker {
 	private readonly deps: Dependencies;
+	private readonly deadlines: Readonly<Record<ScreenOperation["op"], number>>;
 	/** sessionId → windowId. One window per chat. */
 	private readonly bindings = new Map<string, string>();
 	private readonly waiting = new Map<string, Waiting>();
 	private readonly listeners = new Set<(windowId: string) => void>();
-	constructor(deps: Dependencies) {
+	constructor(deps: Dependencies, deadlines?: Partial<Record<ScreenOperation["op"], number>>) {
 		this.deps = deps;
+		this.deadlines = deadlines ? { ...SCREEN_DEADLINES, ...deadlines } : SCREEN_DEADLINES;
 	}
 
 	/** Called with the window's ID each time a request starts waiting for it. A notice only. */
@@ -114,7 +116,7 @@ export class ScreenBroker {
 		const windowId = this.bindings.get(sessionId);
 		if (!windowId) throw new Error(NO_WINDOW);
 		signal?.throwIfAborted();
-		const limit = SCREEN_DEADLINES[operation.op];
+		const limit = this.deadlines[operation.op];
 		const request: ScreenRequest = {
 			id: randomUUID(),
 			sessionId,

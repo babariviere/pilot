@@ -14,7 +14,7 @@ import type {
 } from "@pilot/protocol";
 import { interviewDigest as digest } from "./mission-interview-contract.ts";
 
-export interface PlanMapInput {
+interface PlanMapInput {
 	plan: MissionPlan | null;
 	destination: string;
 	/** Active decisions of this read. Replaced or withdrawn ones are absent. */

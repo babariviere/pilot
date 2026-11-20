@@ -12,8 +12,8 @@ import {
 	type CredentialRequest,
 	type CredentialStatus,
 } from "@pilot/kernel/credential-rpc";
+import type { FundingOwner } from "@pilot/protocol";
 import lockfile from "proper-lockfile";
-import type { FundingOwner } from "../../protocol/src/funding.ts";
 import { SharedCatalogService } from "./shared-model-catalog.ts";
 
 type ObjectValue = Record<string, unknown>;

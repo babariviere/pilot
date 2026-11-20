@@ -5,13 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { DurableOperation, OperationHost } from "@pilot/protocol";
-import {
-	OperationConflict,
-	OperationExpired,
-	OperationJournal,
-	OperationRejected,
-	payloadHash,
-} from "./operation-journal.ts";
+import { payloadHash } from "./canonical.ts";
+import { OperationConflict, OperationExpired, OperationJournal, OperationRejected } from "./operation-journal.ts";
 
 const origin: OperationHost = { hostId: "local", daemonId: "origin", lineageId: "original" };
 const destination: OperationHost = { hostId: "devbox", daemonId: "target", lineageId: "history" };

@@ -17,7 +17,9 @@ export interface RuntimeBuild {
 	node: string;
 }
 export const OWNER_FILE = ".daemon-owner.sqlite";
-const RECORD = ".daemon-owner.json";
+export const RUNTIME_OWNER_RECORD = ".daemon-owner.json";
+export const RUNTIME_UPDATE_ROUTE = "/__pilot_runtime_update/v1";
+export const RUNTIME_UPDATE_PROOF_HEADER = "x-pilot-update-proof";
 const ROUTE = "/__pilot_runtime/v1?challenge=";
 const CAP = 16_384;
 export class RuntimeFailure extends Error {
@@ -33,6 +35,39 @@ function fail(reason: string): never {
 const homeHash = (home: string) => createHash("sha256").update(home).digest("hex");
 const mac = (secret: string, body: string) =>
 	createHmac("sha256", Buffer.from(secret, "hex")).update(body).digest("hex");
+/** Proof of a runtime-update request or reply body, keyed by the owner record's secret. */
+export const runtimeUpdateProof = (secret: string, body: string) => mac(secret, `update/v1\n${body}`);
+/** The reply body when its proof matches, else undefined. */
+export function verifiedRuntimeUpdateReply(secret: string, envelope: unknown): string | undefined {
+	const { body, mac: proof } = (envelope ?? {}) as { body?: unknown; mac?: unknown };
+	return typeof body === "string" &&
+		typeof proof === "string" &&
+		/^[a-f0-9]{64}$/.test(proof) &&
+		timingSafeEqual(Buffer.from(runtimeUpdateProof(secret, body), "hex"), Buffer.from(proof, "hex"))
+		? body
+		: undefined;
+}
+
+export interface RuntimeOwnerRecord {
+	schema: number;
+	boot: string;
+	secret: string;
+	home: string;
+	port: number;
+	pid: number;
+	build: RuntimeBuild | null;
+	runtimeRoot?: string;
+}
+/** The record is well formed and names this profile and port. Callers check its build and runtime root. */
+export function ownerRecordNames(record: RuntimeOwnerRecord, home: string, port: number): boolean {
+	return (
+		record.schema === 1 &&
+		/^[a-f0-9]{64}$/.test(record.boot) &&
+		/^[a-f0-9]{64}$/.test(record.secret) &&
+		record.home === homeHash(home) &&
+		record.port === port
+	);
+}
 
 function privateFile(path: string, cap: number): number {
 	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -170,7 +205,7 @@ export async function ownRuntime(
 	let handler: RequestListener | undefined;
 	let updateHandler: Parameters<RuntimeOwner["updates"]>[0] | undefined;
 	const server = createServer({ requestTimeout: 2000, headersTimeout: 2000 }, (req, res) => {
-		if (req.url === "/__pilot_runtime_update/v1") {
+		if (req.url === RUNTIME_UPDATE_ROUTE) {
 			if (req.method !== "POST" || req.headers.origin || !hello || !runtimeRoot || !updateHandler) {
 				res.writeHead(403).end();
 				return;
@@ -184,8 +219,8 @@ export async function ownRuntime(
 			req.on("end", () => {
 				void (async () => {
 					try {
-						const expected = mac(secret, `update/v1\n${raw}`);
-						const provided = req.headers["x-pilot-update-proof"];
+						const expected = runtimeUpdateProof(secret, raw);
+						const provided = req.headers[RUNTIME_UPDATE_PROOF_HEADER];
 						if (
 							typeof provided !== "string" ||
 							!/^[a-f0-9]{64}$/.test(provided) ||
@@ -211,7 +246,7 @@ export async function ownRuntime(
 							receipt,
 						});
 						res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-						res.end(JSON.stringify({ body, mac: mac(secret, `update/v1\n${body}`) }));
+						res.end(JSON.stringify({ body, mac: runtimeUpdateProof(secret, body) }));
 					} catch {
 						res.writeHead(409).end();
 					}
@@ -254,9 +289,9 @@ export async function ownRuntime(
 				ok();
 			});
 		});
-		const temp = join(home, `${RECORD}.${boot}.tmp`);
+		const temp = join(home, `${RUNTIME_OWNER_RECORD}.${boot}.tmp`);
 		await writeFile(temp, JSON.stringify(record), { mode: 0o600, flag: "wx" });
-		await rename(temp, join(home, RECORD));
+		await rename(temp, join(home, RUNTIME_OWNER_RECORD));
 	} catch {
 		server.close();
 		db.close();
@@ -318,27 +353,14 @@ export async function inspectRuntime(
 	} finally {
 		db.close();
 	}
-	let record: {
-		schema: number;
-		boot: string;
-		secret: string;
-		home: string;
-		port: number;
-		pid: number;
-		build: RuntimeBuild;
-		runtimeRoot?: string;
-	};
+	let record: RuntimeOwnerRecord;
 	try {
-		record = JSON.parse(readPrivate(join(home, RECORD), CAP));
+		record = JSON.parse(readPrivate(join(home, RUNTIME_OWNER_RECORD), CAP));
 	} catch {
 		return fail("runtime_owner_unconfirmed");
 	}
 	if (
-		record.schema !== 1 ||
-		!/^[a-f0-9]{64}$/.test(record.boot) ||
-		!/^[a-f0-9]{64}$/.test(record.secret) ||
-		record.home !== homeHash(home) ||
-		record.port !== port ||
+		!ownerRecordNames(record, home, port) ||
 		!Number.isSafeInteger(record.pid) ||
 		record.pid <= 0 ||
 		JSON.stringify(record.build) !== JSON.stringify(build) ||
@@ -402,7 +424,8 @@ export async function inspectRuntime(
 			value.hello?.lineageId !== readPrivate(join(home, "storage-lineage"), 128).trim()
 		)
 			fail("runtime_identity_changed");
-		if (JSON.parse(readPrivate(join(home, RECORD), CAP)).boot !== record.boot) fail("runtime_owner_changed");
+		if (JSON.parse(readPrivate(join(home, RUNTIME_OWNER_RECORD), CAP)).boot !== record.boot)
+			fail("runtime_owner_changed");
 		const fence = openLease(home);
 		try {
 			try {

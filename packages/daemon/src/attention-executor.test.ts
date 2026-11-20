@@ -8,6 +8,7 @@ import type { AssistanceRecord, AssistanceRequest, AttentionResult } from "@pilo
 import { ReadOnlyAttentionExecutor, type AttentionExecutionConfiguration } from "./attention-executor.ts";
 import { nativeAttentionFixture } from "./native-attention.fixture.ts";
 import { MissionControls } from "./mission-controls.ts";
+import { pauseParticipants } from "./testing/pause-participants.ts";
 
 function deferred<T = void>() {
 	let resolve!: (value: T) => void;
@@ -283,15 +284,18 @@ test("mission Stop/Pause notifications cancel help; pause drain waits for actual
 		let pause: Promise<unknown> | undefined;
 		if (action === "stop") x.f.store.controls.stop(x.f.mission.id);
 		else {
-			const controls = new MissionControls(x.f.store, {
-				checkpointMission: async () => {
-					await Promise.allSettled([x.executor.stop(req.requestId)]);
-					return "paused";
-				},
-				resumeMission: async () => {
-					throw new Error("Resume forbidden");
-				},
-			});
+			const controls = new MissionControls(
+				x.f.store,
+				pauseParticipants({
+					checkpointMission: async () => {
+						await Promise.allSettled([x.executor.stop(req.requestId)]);
+						return "paused";
+					},
+					resumeMission: async () => {
+						throw new Error("Resume forbidden");
+					},
+				}),
+			);
 			controls.setScheduleDrain(async () => {});
 			pause = controls.execute(x.f.mission.id, {
 				version: 1,

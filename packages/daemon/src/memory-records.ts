@@ -1,12 +1,20 @@
 import { createHash } from "node:crypto";
 import type { MemoryEntry } from "@pilot/protocol";
 
+/** Case-, whitespace- and Unicode-form-insensitive identity used by the duplicate guard. */
 export function memoryFingerprint(text: string): string {
 	return createHash("sha256").update(text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim()).digest("hex");
 }
+/** Most UTF-8 bytes in one memory note or summary. Saved notes were checked against it, so lowering it refuses them. */
+export const MEMORY_LINE_BYTES = 280;
 export function memoryLine(value: unknown): string {
-	if (typeof value !== "string" || !value.trim() || /[\r\n\x00]/.test(value) || Buffer.byteLength(value.trim()) > 280)
-		throw new Error("Memory must be one nonempty line, at most 280 UTF-8 bytes");
+	if (
+		typeof value !== "string" ||
+		!value.trim() ||
+		/[\r\n\x00]/.test(value) ||
+		Buffer.byteLength(value.trim()) > MEMORY_LINE_BYTES
+	)
+		throw new Error(`Memory must be one nonempty line, at most ${MEMORY_LINE_BYTES} UTF-8 bytes`);
 	return value.trim();
 }
 export function memoryId(value: unknown): asserts value is string {

@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type { SessionPullRequest } from "@pilot/protocol";
-import { MissionStore, parseResourceUrl } from "./missions.ts";
+import { MissionStore } from "./missions.ts";
+import { parseResourceUrl } from "./resource-url.ts";
 
 test("sender-bearing and legacy system-message receipts retain the original mission after a chat moves", (t) => {
 	const store = new MissionStore(":memory:");
@@ -85,7 +86,7 @@ test("owned PR resource projection uses its partial index and excludes reference
 	missions.addResource(id, { url: "https://github.com/octo/repo/pull/43" });
 	missions.addResource(id, { url: "https://example.com/reference", taskId: "1" });
 	assert.deepEqual(missions.ownedPullRequestResources(id), [{ url: owned.url }]);
-	const plan = missions["db"]
+	const plan = missions["database"]
 		.prepare(`EXPLAIN QUERY PLAN SELECT url, pull_request FROM resources
 			WHERE mission_id = ? AND kind = 'github.pr' AND relationship = 'ownership' ORDER BY created_at, id`)
 		.all(id);
@@ -839,7 +840,7 @@ test("binding rollback includes both sides' links, activity and durable replay m
 		};
 		const before = [missions.detail(source.id), missions.detail(target.id)];
 		// The store runs in memory and saves to the file in the background, so inject the failure in memory.
-		const db = (missions as unknown as { db: DatabaseSync }).db;
+		const db = (missions as unknown as { database: import("./mission-database.ts").MissionDatabase }).database;
 		{
 			db.exec(`CREATE TRIGGER fail_binding BEFORE INSERT ON events
 				WHEN NEW.text LIKE 'Pull request bound to%' BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);

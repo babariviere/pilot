@@ -14,8 +14,6 @@ import {
 	credentialRequest,
 } from "./credential-rpc.ts";
 
-export type { CredentialEndpoint } from "./credential-rpc.ts";
-
 type Transaction = { namespace: CredentialNamespace; key: string; value: unknown; changed: boolean };
 export class CredentialClient {
 	private readonly active = new AsyncLocalStorage<Transaction>();

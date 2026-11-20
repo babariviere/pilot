@@ -14,10 +14,10 @@ import {
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
-import { HeldInputsDoc } from "./held-inputs.ts";
+import { QUESTION_ENTRY } from "./entry-kinds.ts";
+import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { MissionContext } from "./policy.ts";
-import { QUESTION_ENTRY } from "./question-entry.ts";
 import { KernelSession } from "./session.ts";
 
 function gate() {

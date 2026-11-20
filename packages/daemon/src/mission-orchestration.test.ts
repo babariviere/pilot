@@ -6,7 +6,8 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type { SessionSummary } from "@pilot/protocol";
 import { MissionNotices } from "./mission-notices.ts";
-import { MissionStore, NOTICE_DEBOUNCE_MS } from "./missions.ts";
+import { MissionStore } from "./missions.ts";
+import { NOTICE_DEBOUNCE_MS } from "./notice-dispatcher.ts";
 import { noticeDeadline } from "./notice-dispatcher.ts";
 import type { SessionManager } from "./sessions.ts";
 
@@ -112,9 +113,13 @@ test("unaccepted non-code delivery survives reopen and exact retries without com
 
 test("coordinator closes tasks without commits durably, without worker delivery or retirement", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-coordinator-closure-"));
-	t.after(() => rm(home, { recursive: true, force: true }));
 	const path = join(home, "missions.sqlite");
 	const { store, id } = setup(new MissionStore(path));
+	let openStore: MissionStore | undefined = store;
+	t.after(async () => {
+		openStore?.close();
+		await rm(home, { recursive: true, force: true });
+	});
 	const done = store.updateTask(id, "1", { status: "done" }, { sessionId: "lead" });
 	const dropped = store.updateTask(id, "2", { status: "dropped" }, { sessionId: "lead" });
 	assert.ok(done.completedAt);
@@ -124,8 +129,9 @@ test("coordinator closes tasks without commits durably, without worker delivery 
 	assert.equal(store.retiredMember("member"), false);
 	await store.durable();
 	store.close();
+	openStore = undefined;
 	const reopened = new MissionStore(path);
-	t.after(() => reopened.close());
+	openStore = reopened;
 	assert.deepEqual(reopened.task(id, done.id), done);
 	assert.deepEqual(reopened.task(id, dropped.id), dropped);
 	for (const task of [done, dropped]) assert.equal(reopened.completion(id, task.id), undefined);

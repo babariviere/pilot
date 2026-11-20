@@ -1,8 +1,7 @@
 /** Missions: daemon-owned state shared by the chats of one goal. pilotd is the sole writer. */
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { DatabaseSync, type Session, type SQLInputValue } from "node:sqlite";
+import type { SQLInputValue } from "node:sqlite";
+import { MISSION_DELIVERY_LIMITS, MISSION_STORE_LIMITS, MISSION_TASK_STATUSES } from "@pilot/kernel/mission-write";
 import type {
 	ArtifactKind,
 	GitHubAction,
@@ -29,6 +28,8 @@ import type {
 	MissionResourceKind,
 	MissionResourceUpdate,
 	MissionResourceWrite,
+	MissionRevisionDelta,
+	MissionRevisionProposal,
 	MissionRole,
 	MissionStatus,
 	MissionSuccessorLink,
@@ -40,21 +41,20 @@ import type {
 	SessionSummary,
 	UpdateMissionRequest,
 } from "@pilot/protocol";
-import type { MissionRevisionDelta, MissionRevisionProposal } from "../../protocol/src/mission-revision.ts";
-import { ATTENTION_SCHEMA, AttentionStore } from "./attention-store.ts";
-import { CHANGE_LANDING_SCHEMA, ChangeLandingStore } from "./change-landing-store.ts";
-import { DAY_INSIGHTS_ALLOWANCE_SCHEMA, DayInsightsAllowance } from "./day-insights-allowance.ts";
-import { DAY_INSIGHTS_SCHEMA, DayInsightsStore } from "./day-insights-store.ts";
+import { AttentionStore } from "./attention-store.ts";
+import { ChangeLandingStore } from "./change-landing-store.ts";
+import { DayInsightsAllowance } from "./day-insights-allowance.ts";
+import { DayInsightsStore } from "./day-insights-store.ts";
 import { Conflict, NotFound } from "./errors.ts";
-import { operations } from "./event-loop-watchdog.ts";
 import { linkedPullRequest } from "./github-url.ts";
-import { HUMAN_REVIEW_SCHEMA, HumanReviewStore } from "./human-review-store.ts";
-import { INSIGHTS_SCHEMA, InsightsBacklog } from "./insights-backlog.ts";
+import { HumanReviewStore } from "./human-review-store.ts";
+import { InsightsBacklog } from "./insights-backlog.ts";
 import { InsightsLegacyRecords } from "./insights-legacy.ts";
-import { INSIGHTS_OWNER_SCHEMA, InsightsOwnerStore } from "./insights-owner-store.ts";
-import { INSIGHTS_TRANSITION_SCHEMA, InsightsTransitionStore } from "./insights-transition-store.ts";
-import { INSIGHTS_WORKSPACE_SCHEMA, InsightsWorkspaceStore } from "./insights-workspace-store.ts";
-import { LINEAR_PUBLISHER_SCHEMA, LinearPublisherStore } from "./linear-publisher-store.ts";
+import { missionNoticeRequestId } from "./input-requests.ts";
+import { InsightsOwnerStore } from "./insights-owner-store.ts";
+import { InsightsTransitionStore } from "./insights-transition-store.ts";
+import { InsightsWorkspaceStore } from "./insights-workspace-store.ts";
+import { LinearPublisherStore } from "./linear-publisher-store.ts";
 import {
 	type AllocationContextFence,
 	type AllocationWrite,
@@ -62,7 +62,14 @@ import {
 	assertAllocationSubmission,
 	type ContributionAllocation,
 } from "./mission-contribution-allocation.ts";
-import { MISSION_CONTROL_SCHEMA, MissionControlStore } from "./mission-control-store.ts";
+import { MissionControlStore } from "./mission-control-store.ts";
+import {
+	type ChangeKind,
+	MissionDatabase,
+	type MissionDbPort,
+	type Row,
+	type TransactionOptions,
+} from "./mission-database.ts";
 import {
 	assertDeliveryAssignment,
 	type DeliveryObservation,
@@ -75,7 +82,7 @@ import {
 	latestJudgement,
 	latestSubmission,
 } from "./mission-delivery-evidence.ts";
-import { MISSION_INTERVIEW_SCHEMA, MissionInterviewStore } from "./mission-interview-store.ts";
+import { MissionInterviewStore } from "./mission-interview-store.ts";
 import {
 	type LinearContributor,
 	type LinearSyncRecord,
@@ -92,10 +99,8 @@ import {
 	nonCodePolicyWrite,
 } from "./mission-non-code-acceptance.ts";
 import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
-import { MISSION_PLAN_SCHEMA, MissionPlanStore, publishedDefinition } from "./mission-plan-store.ts";
+import { MissionPlanStore, publishedDefinition } from "./mission-plan-store.ts";
 import { assignmentWrite, strictPlanningFields, TASK_WRITE_FIELDS } from "./mission-planning.ts";
-import { MissionReplica } from "./mission-replica.ts";
-import { assertLocalMissionDb, dropEmptyRemoteTables } from "./profile-cutover.ts";
 import {
 	assertReviewOutput,
 	type MissionReviewProfile,
@@ -109,20 +114,24 @@ import {
 	reviewReferences,
 	reviewResultWrite,
 } from "./mission-review-contract.ts";
-import { MISSION_REVISION_SCHEMA, MissionRevisions, revisionDigest, revisionText } from "./mission-revisions.ts";
-import { MISSION_THREAD_SCHEMA, MissionThreadStore } from "./mission-thread-store.ts";
+import { MissionRevisions, revisionDigest, revisionText } from "./mission-revisions.ts";
+import { isActiveDecision, isOpenTask } from "./mission-rules.ts";
+import { MissionThreadStore } from "./mission-thread-store.ts";
+import { migrateMissionDb } from "./missions-schema.ts";
 import { nativeReviewProfile, nativeReviewRecord } from "./native-review-records.ts";
 import { reasonLine } from "./needs-you-reason.ts";
 import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
-import { PLANNING_WORKER_SCHEMA, PlanningWorkerStore } from "./planning-worker-store.ts";
-import { KNOWLEDGE_SCHEMA, ProjectKnowledgeStore } from "./project-knowledge-store.ts";
-import { PROJECT_PREFERENCES_SCHEMA, ProjectPreferencesStore } from "./project-preferences-store.ts";
-import { RETAINED_PROJECTION_SCHEMA, RetainedReviewProjections } from "./retained-review-projections.ts";
-import { REVIEW_REQUEST_SCHEMA, ReviewRequestStore } from "./review-request-store.ts";
+import { PlanningWorkerStore } from "./planning-worker-store.ts";
+import { type MissionSource, type MissionSourceChange, ProjectKnowledgeStore } from "./project-knowledge-store.ts";
+import { ProjectPreferencesStore } from "./project-preferences-store.ts";
+import { linearKey, normalizeResourceWrite } from "./resource-url.ts";
+import { RetainedReviewProjections } from "./retained-review-projections.ts";
+import { ReviewRequestStore } from "./review-request-store.ts";
 import type { PullRequestBinding } from "./sessions.ts";
-import { USER_FEEDBACK_SCHEMA, UserFeedbackStore } from "./user-feedback-store.ts";
-import { DELIVERY_SOURCE_SCHEMA, USER_VERIFICATION_SCHEMA, UserVerificationStore } from "./user-verification-store.ts";
-import { WORKFLOW_CONFIRMATION_SCHEMA, WorkflowConfirmationStore } from "./workflow-confirmation-store.ts";
+import { UserFeedbackStore } from "./user-feedback-store.ts";
+import { UserVerificationStore } from "./user-verification-store.ts";
+import { text } from "./validate.ts";
+import { WorkflowConfirmationStore } from "./workflow-confirmation-store.ts";
 
 /** Who changed mission state. Omitted sessionId means the user (or pilotd itself). */
 export interface MissionActor {
@@ -143,339 +152,11 @@ export interface MissionActivityQuery {
 
 const USER: MissionActor = {};
 const STATUSES: MissionStatus[] = ["active", "done", "archived"];
-const TASK_STATUSES: MissionTaskStatus[] = [
-	"todo",
-	"in_progress",
-	"blocked",
-	"in_review",
-	"delegated",
-	"done",
-	"dropped",
-];
+const TASK_STATUSES: readonly MissionTaskStatus[] = MISSION_TASK_STATUSES;
 const HEALTH: MissionHealth[] = ["on_track", "at_risk", "off_track"];
-const MAX_TITLE = 200;
-const MAX_TEXT = 8_000;
-const MAX_GOAL = 4_000;
-const MAX_BRIEF = 256 * 1024;
-const MAX_URL = 2_048;
-const MAX_LINEAR_KEY = 256;
+const { title: MAX_TITLE, text: MAX_TEXT, goal: MAX_GOAL, brief: MAX_BRIEF } = MISSION_STORE_LIMITS;
 const DETAIL_EVENTS = 50;
 const DETAIL_RESOLVED_COMMENTS = 20;
-
-/** Re-planning links: an old mission (no planningVersion) and the new mission that re-plans it. */
-const MISSION_SUCCESSOR_SCHEMA = `
-CREATE TABLE IF NOT EXISTS mission_successors (
-	old_mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE,
-	new_mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	operation_id TEXT NOT NULL,
-	state TEXT NOT NULL CHECK (state IN ('planning', 'finished', 'abandoned')),
-	created_at INTEGER NOT NULL,
-	updated_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS mission_successors_by_new ON mission_successors(new_mission_id);
-CREATE TABLE IF NOT EXISTS mission_successor_finishes (operation_id TEXT PRIMARY KEY, record TEXT NOT NULL);
-`;
-
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS missions (
-	id TEXT PRIMARY KEY,
-	project_id TEXT NOT NULL,
-	title TEXT NOT NULL,
-	goal TEXT NOT NULL,
-	status TEXT NOT NULL,
-	coordinator_session_id TEXT,
-	autopilot INTEGER NOT NULL DEFAULT 0,
-	brief_revision INTEGER NOT NULL DEFAULT 0,
-	created_at INTEGER NOT NULL,
-	updated_at INTEGER NOT NULL,
-	completed_at INTEGER,
-	archived_at INTEGER
-);
-CREATE TABLE IF NOT EXISTS brief_revisions (
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	revision INTEGER NOT NULL,
-	markdown TEXT NOT NULL,
-	author_session_id TEXT,
-	created_at INTEGER NOT NULL,
-	PRIMARY KEY (mission_id, revision)
-);
-CREATE TABLE IF NOT EXISTS decisions (
-	id TEXT PRIMARY KEY,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	text TEXT NOT NULL,
-	author_session_id TEXT,
-	created_at INTEGER NOT NULL,
-	updated_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS decision_proposals (
-	id TEXT PRIMARY KEY,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	decision_id TEXT NOT NULL,
-	kind TEXT NOT NULL,
-	text TEXT,
-	reason TEXT NOT NULL,
-	author_session_id TEXT NOT NULL,
-	status TEXT NOT NULL,
-	created_at INTEGER NOT NULL,
-	resolved_at INTEGER
-);
-CREATE UNIQUE INDEX IF NOT EXISTS pending_proposal_per_decision
-	ON decision_proposals(mission_id, decision_id) WHERE status = 'pending';
-CREATE INDEX IF NOT EXISTS proposals_by_mission ON decision_proposals(mission_id, status, resolved_at);
-CREATE INDEX IF NOT EXISTS proposals_attention_order ON decision_proposals(mission_id, created_at, id) WHERE status = 'pending';
-CREATE TABLE IF NOT EXISTS comments (
-	id TEXT PRIMARY KEY,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	text TEXT NOT NULL,
-	anchor TEXT,
-	revision INTEGER,
-	author_session_id TEXT,
-	target_session_id TEXT,
-	created_at INTEGER NOT NULL,
-	resolved_at INTEGER,
-	resolved_by_session_id TEXT
-);
-CREATE TABLE IF NOT EXISTS tasks (
-	id TEXT PRIMARY KEY,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	number INTEGER NOT NULL,
-	title TEXT NOT NULL,
-	body TEXT,
-	status TEXT NOT NULL,
-	sort REAL NOT NULL,
-	milestone TEXT,
-	depends_on TEXT,
-	session_id TEXT,
-	created_at INTEGER NOT NULL,
-	updated_at INTEGER NOT NULL,
-	completed_at INTEGER,
-	UNIQUE (mission_id, number)
-);
-CREATE TABLE IF NOT EXISTS artifact_links (
-	id INTEGER PRIMARY KEY,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	artifact_id TEXT NOT NULL,
-	session_id TEXT NOT NULL,
-	title TEXT NOT NULL,
-	kind TEXT NOT NULL,
-	revision INTEGER,
-	linked_by_session_id TEXT,
-	linked_at INTEGER NOT NULL,
-	task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS resources (
-	id TEXT PRIMARY KEY,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	url TEXT NOT NULL,
-	title TEXT,
-	kind TEXT NOT NULL,
-	external_id TEXT,
-	added_by_session_id TEXT,
-	created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS events (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	kind TEXT NOT NULL,
-	text TEXT NOT NULL,
-	session_id TEXT,
-	task_id TEXT,
-	health TEXT,
-	at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS events_by_mission ON events (mission_id, id);
-CREATE INDEX IF NOT EXISTS events_by_mission_kind ON events (mission_id, kind, id);
-CREATE INDEX IF NOT EXISTS events_by_mission_task ON events (mission_id, task_id, id);
-CREATE TABLE IF NOT EXISTS github_action_events (
-	session_id TEXT NOT NULL,
-	action_id TEXT NOT NULL,
-	event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-	PRIMARY KEY (session_id, action_id)
-);
-CREATE TABLE IF NOT EXISTS github_action_retention (
-	mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE,
-	pruned_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS members (
-	session_id TEXT PRIMARY KEY,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	joined_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS members_by_mission ON members (mission_id);
--- Lifetime admission history deliberately survives task deletion and mission changes.
-CREATE TABLE IF NOT EXISTS member_task_claims (
-	session_id TEXT NOT NULL,
-	task_id TEXT NOT NULL,
-	additional INTEGER NOT NULL,
-	PRIMARY KEY (session_id, task_id)
-);
-CREATE TABLE IF NOT EXISTS session_continuations (
-	from_session_id TEXT PRIMARY KEY,
-	to_session_id TEXT NOT NULL
-);
--- A first automatic observation is consumed even when task attribution is ambiguous.
--- Keep it after unlinking so creation/discovery replay cannot recreate deleted links.
-CREATE TABLE IF NOT EXISTS automatic_pull_request_observations (
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	url TEXT NOT NULL COLLATE NOCASE,
-	PRIMARY KEY (mission_id, url)
-);
-CREATE TABLE IF NOT EXISTS pull_request_binding_operations (
-	id TEXT PRIMARY KEY,
-	applied_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS pull_request_bindings (
-	session_id TEXT NOT NULL,
-	url TEXT NOT NULL COLLATE NOCASE,
-	bound INTEGER NOT NULL,
-	mission_id TEXT,
-	task_id TEXT,
-	PRIMARY KEY (session_id, url)
-);
-CREATE TABLE IF NOT EXISTS watch_activity (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	task_id TEXT,
-	task_number INTEGER,
-	title TEXT NOT NULL,
-	at INTEGER NOT NULL,
-	origin_session_id TEXT,
-	annotated INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS watch_activity_unannotated ON watch_activity(mission_id) WHERE annotated=0;
-CREATE TRIGGER IF NOT EXISTS watch_task_done AFTER UPDATE OF status ON tasks
-WHEN NEW.status='done' AND OLD.status<>'done' BEGIN
-	INSERT INTO watch_activity(mission_id,task_id,task_number,title,at)
-	VALUES(NEW.mission_id,NEW.id,NEW.number,NEW.title,NEW.updated_at);
-END;
-CREATE TRIGGER IF NOT EXISTS watch_mission_done AFTER UPDATE OF status ON missions
-WHEN NEW.status='done' AND OLD.status<>'done' BEGIN
-	INSERT INTO watch_activity(mission_id,title,at) VALUES(NEW.id,NEW.title,NEW.updated_at);
-END;
-CREATE TABLE IF NOT EXISTS pending_notices (
-	event_id INTEGER PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	at INTEGER NOT NULL,
-	text TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS pending_notices_by_mission ON pending_notices (mission_id, event_id);
-CREATE TABLE IF NOT EXISTS task_completions (
-	task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
-	record TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS task_non_code_deliveries (
-	task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
-	record TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS task_delivery_evidence (
-	sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-	operation_id TEXT NOT NULL,
-	record_id TEXT NOT NULL UNIQUE,
-	record_type TEXT NOT NULL,
-	record TEXT NOT NULL,
-	UNIQUE (mission_id, operation_id)
-);
-CREATE INDEX IF NOT EXISTS delivery_evidence_by_task ON task_delivery_evidence(task_id, sequence);
-CREATE INDEX IF NOT EXISTS delivery_evidence_current ON task_delivery_evidence(task_id, record_type, sequence);
-CREATE TABLE IF NOT EXISTS mission_review_records (
-	sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
-	profile_id TEXT NOT NULL,
-	record_type TEXT NOT NULL,
-	operation_id TEXT NOT NULL,
-	record_id TEXT NOT NULL UNIQUE,
-	record TEXT NOT NULL,
-	UNIQUE(mission_id, operation_id)
-);
-CREATE INDEX IF NOT EXISTS mission_review_stream ON mission_review_records(mission_id, record_type, profile_id, task_id, sequence);
-CREATE TABLE IF NOT EXISTS task_contribution_allocations (
-	sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-	operation_id TEXT NOT NULL,
-	record_id TEXT NOT NULL UNIQUE,
-	record TEXT NOT NULL,
-	UNIQUE(mission_id, operation_id)
-);
-CREATE INDEX IF NOT EXISTS contribution_allocation_task ON task_contribution_allocations(mission_id, task_id, sequence);
-CREATE TABLE IF NOT EXISTS task_non_code_acceptance_policies (
-	sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-	operation_id TEXT NOT NULL,
-	record_id TEXT NOT NULL UNIQUE,
-	record TEXT NOT NULL,
-	UNIQUE(mission_id, operation_id)
-);
-CREATE INDEX IF NOT EXISTS non_code_policy_task ON task_non_code_acceptance_policies(mission_id, task_id, sequence);
-CREATE TABLE IF NOT EXISTS retired_members (
-	session_id TEXT PRIMARY KEY,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	retired_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS urgent_notices (
-	event_id INTEGER PRIMARY KEY REFERENCES pending_notices(event_id) ON DELETE CASCADE,
-	immediate INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS pending_notice_summaries (
-	event_id INTEGER NOT NULL REFERENCES pending_notices(event_id) ON DELETE CASCADE,
-	group_key TEXT NOT NULL,
-	text TEXT NOT NULL,
-	state TEXT,
-	PRIMARY KEY (event_id, group_key)
-);
-CREATE INDEX IF NOT EXISTS pending_summary_groups ON pending_notice_summaries (group_key, event_id);
-CREATE TABLE IF NOT EXISTS notice_activity (
-	mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE,
-	busy INTEGER NOT NULL,
-	idle_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS notices (
-	request_id TEXT PRIMARY KEY,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	last_event_id INTEGER NOT NULL,
-	session_id TEXT NOT NULL,
-	content TEXT NOT NULL,
-	created_at INTEGER NOT NULL,
-	delivered_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS notices_by_mission ON notices (mission_id, created_at);
-CREATE UNIQUE INDEX IF NOT EXISTS one_pending_notice ON notices (mission_id) WHERE delivered_at IS NULL;
-CREATE INDEX IF NOT EXISTS notices_by_delivery ON notices (mission_id, delivered_at);
-CREATE TABLE IF NOT EXISTS member_completions (
-	session_id TEXT PRIMARY KEY,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	outcome_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS blocked_tasks_by_mission ON tasks (mission_id) WHERE status = 'blocked';
-CREATE INDEX IF NOT EXISTS blocked_tasks_attention_order ON tasks (mission_id, sort, number) WHERE status = 'blocked';
-CREATE INDEX IF NOT EXISTS tasks_by_member ON tasks (mission_id, session_id, status);
-CREATE INDEX IF NOT EXISTS tasks_by_session ON tasks (session_id) WHERE session_id IS NOT NULL;
-CREATE TABLE IF NOT EXISTS member_runs (
-	session_id TEXT PRIMARY KEY,
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	done_tasks TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS pull_request_transitions (
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	url TEXT NOT NULL COLLATE NOCASE,
-	state TEXT NOT NULL,
-	PRIMARY KEY (mission_id, url, state)
-);
-CREATE TABLE IF NOT EXISTS member_pull_requests (
-	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-	url TEXT NOT NULL COLLATE NOCASE,
-	pull_request TEXT NOT NULL,
-	PRIMARY KEY (mission_id, url)
-);
-CREATE INDEX IF NOT EXISTS needs_you_comments_by_mission ON comments (mission_id)
-	WHERE resolved_at IS NULL AND target_session_id IS NULL AND author_session_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS needs_you_comments_attention_order ON comments (mission_id, created_at, id)
-	WHERE resolved_at IS NULL AND target_session_id IS NULL AND author_session_id IS NOT NULL;
-`;
 
 /** Task counts of one mission by status, dropped tasks excluded. To do and delegated are the rest of `total`. */
 export interface MissionTaskProgress {
@@ -486,7 +167,7 @@ export interface MissionTaskProgress {
 	total: number;
 }
 
-export interface MissionNotice {
+interface MissionNotice {
 	requestId: string;
 	missionId: string;
 	lastEventId: number;
@@ -494,8 +175,6 @@ export interface MissionNotice {
 	content: string;
 	event: import("@pilot/protocol").ChatEventSummary;
 }
-
-export { NOTICE_DEBOUNCE_MS, NOTICE_HOURLY_CAP, NOTICE_MAX_DELAY_MS, NOTICE_WINDOW_MS } from "./notice-dispatcher.ts";
 
 /** Summary-only attention and progress counts plus one bounded reason, without loading full task/comment bodies. */
 const MISSION_SELECT = `SELECT missions.*,
@@ -534,8 +213,6 @@ const MISSION_SELECT = `SELECT missions.*,
 	) AS needs_you_reason
 	FROM missions`;
 
-type Row = Record<string, SQLInputValue>;
-
 function noticeFrom(row: Row): MissionNotice {
 	return {
 		requestId: String(row.request_id),
@@ -548,21 +225,6 @@ function noticeFrom(row: Row): MissionNotice {
 				? JSON.parse(row.chat_event)
 				: { kind: "mission_updated", text: "Mission updated" },
 	};
-}
-
-function text(
-	value: unknown,
-	name: string,
-	max: number,
-	options: { optional?: boolean; empty?: boolean; codePoints?: boolean } = {},
-) {
-	if (value === undefined && options.optional) return undefined;
-	if (typeof value !== "string") throw new Error(`${name} must be a string`);
-	const trimmed = value.trim();
-	if (!trimmed && !options.empty) throw new Error(`${name} is required`);
-	if ((options.codePoints ? Array.from(value).length : value.length) > max)
-		throw new Error(`${name} is too long (max ${max} characters)`);
-	return trimmed;
 }
 
 function optional<T>(value: SQLInputValue | undefined, map: (value: SQLInputValue) => T): T | undefined {
@@ -584,154 +246,51 @@ function preference(write: MissionTaskWrite): { model?: string | null; thinking?
 
 const str = (value: SQLInputValue) => String(value);
 const num = (value: SQLInputValue) => Number(value);
-
-/** Shared validation for saved resources and start references, before any side effects. */
-export function normalizeResourceWrite(write: MissionResourceWrite) {
-	if (!write || typeof write !== "object") throw new Error("Expected a resource object");
-	const parsed = parseResourceUrl(text(write.url, "url", MAX_URL)!);
-	if (write.linearRole !== undefined) {
-		if (!["reference", "managed", "contribution"].includes(write.linearRole)) throw new Error("Invalid Linear role");
-		if (parsed.kind !== "linear.issue") throw new Error("Linear roles require a Linear issue");
-	}
-	const title = text(write.title, "title", MAX_TITLE, { optional: true, empty: true }) || undefined;
-	return { ...parsed, ...(title ? { title } : {}) };
-}
-
-/** Workspace-scoped identifiers avoid collisions between Linear organizations. */
-export function linearKey(url: string): string | undefined {
-	const parts = new URL(url).pathname.split("/").filter(Boolean);
-	if (
-		!/^[a-z0-9][a-z0-9-]*$/i.test(parts[0] ?? "") ||
-		parts[1] !== "issue" ||
-		!/^[a-z0-9]+-[1-9]\d*$/i.test(parts[2] ?? "")
-	)
-		return undefined;
-	const key = `${parts[0]!.toLowerCase()}/${parts[2]!.toUpperCase()}`;
-	return key.length <= MAX_LINEAR_KEY ? key : undefined;
-}
-
-/** Recognize tracker links so later automation can act on them without a migration. */
-export function parseResourceUrl(raw: string): { url: string; kind: MissionResourceKind; externalId?: string } {
-	let url: URL;
-	try {
-		url = new URL(raw.trim());
-	} catch {
-		throw new Error("url must be an absolute http(s) URL");
-	}
-	if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("url must be an absolute http(s) URL");
-	const parts = url.pathname.split("/").filter(Boolean);
-	const href = url.toString();
-	if (url.hostname === "linear.app") {
-		if (parts[1] === "issue" && parts[2])
-			return { url: href, kind: "linear.issue", externalId: parts[2].toUpperCase() };
-		if (parts[1] === "project" && parts[2]) return { url: href, kind: "linear.project", externalId: parts[2] };
-	}
-	if (url.hostname === "github.com" && parts.length >= 4 && /^\d+$/.test(parts[3]!)) {
-		const id = `${parts[0]}/${parts[1]}#${parts[3]}`;
-		if (parts[2] === "pull")
-			return {
-				url: `https://github.com/${parts[0]}/${parts[1]}/pull/${Number(parts[3])}`,
-				kind: "github.pr",
-				externalId: id,
-			};
-		if (parts[2] === "issues") return { url: href, kind: "github.issue", externalId: id };
-	}
-	if (url.hostname.endsWith(".slack.com") && parts[0] === "archives" && parts[1] && /^p\d{16}$/.test(parts[2] ?? "")) {
-		const ts = parts[2]!.slice(1);
-		return { url: href, kind: "slack.thread", externalId: `${parts[1]}/${ts.slice(0, 10)}.${ts.slice(10)}` };
-	}
-	return { url: href, kind: "url" };
-}
-
 export class MissionStore {
-	/** Replica projections are reused across unrelated mission/memory invalidations. At most one per binding. */
 	/**
 	 * The project's own GitHub repository ("host/owner/name"): the member chat's workspace upstream, else the project
 	 * folder's git remote read earlier. The mission service sets it; undefined means not known.
 	 */
 	projectRepository: (projectId: string, sessionId: string) => string | undefined = () => undefined;
-	private db: DatabaseSync;
-	private readonly listeners = new Set<
-		(missionId: string, passive?: boolean, preferenceOnly?: boolean, readModelOnly?: boolean) => void
-	>();
+	private readonly database: MissionDatabase;
+	/** Shared with the stores below. Their transactions skip the mission reconcilers unless they ask. */
+	private readonly port: MissionDbPort = {
+		all: (sql, ...params) => this.all(sql, ...params),
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work, options) => this.transaction(work, { reconcile: options?.reconcile ?? false }),
+		durable: () => this.durable(),
+		changed: (missionId, kind) => this.changed(missionId, [], kind),
+	};
+	private readonly listeners = new Set<(missionId: string, kind: ChangeKind) => void>();
 	private readonly linearSyncListeners = new Set<() => void>();
 	private readonly linearSyncChanged = new Set<string>();
 	private readonly completionListeners = new Set<(projectId: string, missionId: string, at: number) => void>();
 	private readonly memberListeners = new Set<(sessionId: string) => void>();
-	private writing = false;
 	private referenceBatch?: string;
 	private batchedChanges?: Map<string, Set<string>>;
-	/** Saves each commit to missions.sqlite off the event loop. Absent for ":memory:" stores. */
-	private replica?: MissionReplica;
-	/** Records the changes of the current commit, for the replica. */
-	private session?: Session;
 	private readonly phaseReconciliations = new Set<string>();
+	/** Startup migrations commit without the reconcilers: their tables and columns may not exist yet. */
 	private initializing = true;
-	/** Project-owned knowledge in this same database, replica and transaction model. Missions only link entries. */
-	readonly knowledge = new ProjectKnowledgeStore({
-		all: (sql, ...params) => this.all(sql, ...params),
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work),
-		changed: (missionId) => this.changed(missionId, [], true),
-	});
-	/** Small explicit project choices, separate from mission agreement and sourced Knowledge. */
-	readonly preferences = new ProjectPreferencesStore({
-		all: (sql, ...params) => this.all(sql, ...params),
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-	});
+	private readonly sourceListeners = new Set<(change: MissionSourceChange) => void>();
+	/** Project-owned knowledge. Missions only link entries. */
+	readonly knowledge = new ProjectKnowledgeStore(this.port, this);
+	readonly preferences = new ProjectPreferencesStore(this.port);
 	/** The user's own feedback about Pilot, separate from agent Insights and findings. */
-	readonly feedback = new UserFeedbackStore({
-		all: (sql, ...params) => this.all(sql, ...params),
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-	});
-	/** Scoped tracking records share canonical tasks, transactions and disk durability. */
+	readonly feedback = new UserFeedbackStore(this.port);
+	/** Insights findings are tracked as tasks of their mission. */
 	readonly insights = new InsightsBacklog({
-		all: (sql, ...params) => this.all(sql, ...params),
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work),
-		changed: (id) => this.changed(id, [], true),
-		durable: () => this.durable(),
+		...this.port,
 		validateMission: (id, projectId) => {
 			const mission = this.require(id);
 			if (mission.projectId !== projectId || mission.status !== "active")
 				throw new Conflict("Insights backlog binding changed");
 		},
 		createTask: (id, draft, sessionId) => this.insertTask(id, { title: draft.title }, { sessionId }).id,
-		projectTask: (id, taskId, draft, lifecycle) => {
-			const status =
-				lifecycle === "shipped" || lifecycle === "verified"
-					? "done"
-					: lifecycle === "dismissed"
-						? "dropped"
-						: lifecycle === "in_progress"
-							? "in_progress"
-							: "todo";
-			const body = [
-				`Finding: ${lifecycle}. Priority: ${draft.priority}.`,
-				`Affects: ${draft.targets.length ? draft.targets.map((target) => `${target.label} (${target.projectId})`).join(", ") : "unspecified"}`,
-				...(draft.cost
-					? [
-							`Cost estimate (not measured): ${draft.cost.estimate}`,
-							`Baseline: ${draft.cost.baseline}`,
-							`Assumptions: ${draft.cost.assumptions}`,
-							`Quality risks: ${draft.cost.qualityRisks}`,
-							`Later measured result: ${draft.cost.laterResult || "not yet measured"}`,
-						]
-					: []),
-				"Tracking only. Implementation requires separate approval and work.",
-				draft.observation,
-				`Proposal: ${draft.proposedChange}`,
-				`Benefit: ${draft.expectedBenefit}`,
-			].join("\n\n");
+		updateTask: (id, taskId, { title, body, status }) => {
 			this.run(
 				"UPDATE tasks SET title=?,body=?,status=?,updated_at=?,completed_at=? WHERE id=? AND mission_id=?",
-				draft.title,
+				title,
 				body,
 				status,
 				Date.now(),
@@ -741,67 +300,21 @@ export class MissionStore {
 			);
 		},
 	});
-
 	/** App-owned Insights records never project to ordinary missions or tasks. */
-	readonly dayInsights = new DayInsightsStore({
-		all: (sql, ...params) => this.all(sql, ...params),
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
-	});
-	readonly dayInsightsAllowance = new DayInsightsAllowance({
-		all: (sql, ...params) => this.all(sql, ...params),
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
-	});
-	readonly insightsWorkspace = new InsightsWorkspaceStore({
-		all: (sql, ...params) => this.all(sql, ...params),
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
-	});
-	readonly insightsOwner = new InsightsOwnerStore({
-		all: (sql, ...params) => this.all(sql, ...params),
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
-	});
-	readonly insightsLegacy = new InsightsLegacyRecords({
-		all: (sql, ...params) => this.all(sql, ...params),
-		one: (sql, ...params) => this.one(sql, ...params),
-		durable: () => this.durable(),
-	});
-	readonly insightsTransition = new InsightsTransitionStore({
-		all: (sql, ...params) => this.all(sql, ...params),
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
-	});
-
-	readonly threads = new MissionThreadStore({
-		one: (sql, ...params) => this.one(sql, ...params),
-		all: (sql, ...params) => this.all(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		changed: (id) => this.changed(id),
-	});
+	readonly dayInsights = new DayInsightsStore(this.port);
+	readonly dayInsightsAllowance = new DayInsightsAllowance(this.port);
+	readonly insightsWorkspace = new InsightsWorkspaceStore(this.port);
+	readonly insightsOwner = new InsightsOwnerStore(this.port);
+	readonly insightsLegacy = new InsightsLegacyRecords(this.port);
+	readonly insightsTransition = new InsightsTransitionStore(this.port);
+	readonly threads = new MissionThreadStore(this.port);
 	readonly revisions = new MissionRevisions({
-		one: (sql, ...params) => this.one(sql, ...params),
-		all: (sql, ...params) => this.all(sql, ...params),
+		...this.port,
 		assertTopic: (id, topicId) => {
 			const topic = this.threads.get(id, topicId);
 			if (topic.disposition !== "open" || !topic.handoff)
 				throw new Conflict("A revision for a thread needs that thread open, with a handoff from its chat");
 		},
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work),
-		durable: () => this.durable(),
 		source: (id) => ({
 			mission: this.require(id),
 			tasks: [...this.reportSourceTasks(id)],
@@ -830,12 +343,7 @@ export class MissionStore {
 
 	/** Pause controls and reported assessments share canonical storage, not task or approval rows. */
 	readonly controls = new MissionControlStore({
-		one: (sql, ...params) => this.one(sql, ...params),
-		all: (sql, ...params) => this.all(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
-		changed: (id, report) => this.changed(id, [], !report, false, !report),
+		...this.port,
 		reportSaved: (report) => {
 			const task = this.task(report.missionId, report.write.taskId);
 			// No coordinator can complete this task, so the worker's delivery report is the result the user checks.
@@ -867,44 +375,13 @@ export class MissionStore {
 	});
 
 	/** Help and human actions share the replica, never approval/ask rows. */
-	readonly attention = new AttentionStore({
-		one: (sql, ...params) => this.one(sql, ...params),
-		all: (sql, ...params) => this.all(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
-	});
-	readonly userVerifications = new UserVerificationStore({
-		one: (sql, ...params) => this.one(sql, ...params),
-		all: (sql, ...params) => this.all(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-	});
-	/** Native planning snapshots share the replica; no host/UI enrollment is installed. */
-	readonly plans = new MissionPlanStore({
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-	});
-	readonly linearPublisher = new LinearPublisherStore({
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
-	});
-	/** Internal creation-only Day seam. No REST enrollment or legacy adoption. */
-	readonly planningWorkers = new PlanningWorkerStore({
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		changed: (id) => this.changed(id, [], true, false, true),
-	});
+	readonly attention = new AttentionStore(this.port);
+	readonly userVerifications = new UserVerificationStore(this.port);
+	readonly plans = new MissionPlanStore(this.port);
+	readonly linearPublisher = new LinearPublisherStore(this.port);
+	readonly planningWorkers = new PlanningWorkerStore(this.port);
 	readonly interviews = new MissionInterviewStore({
-		one: (sql, ...params) => this.one(sql, ...params),
-		all: (sql, ...params) => this.all(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
+		...this.port,
 		create: (input, ownerSessionId) => {
 			if (this.membership(ownerSessionId)) throw new Conflict("Interview owner already belongs to a mission");
 			const mission = this.create({
@@ -932,42 +409,13 @@ export class MissionStore {
 				: undefined;
 		},
 	});
-	readonly workflowConfirmations = new WorkflowConfirmationStore({
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
-	});
+	readonly workflowConfirmations = new WorkflowConfirmationStore(this.port);
 	/** Global native human feedback shares this database, not a synthetic mission. */
-	readonly humanReviews = new HumanReviewStore({
-		one: (sql, ...params) => this.one(sql, ...params),
-		all: (sql, ...params) => this.all(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
-	});
-	readonly changeLandings = new ChangeLandingStore({
-		one: (sql, ...params) => this.one(sql, ...params),
-		all: (sql, ...params) => this.all(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
-	});
-	readonly retainedReviewProjections = new RetainedReviewProjections({
-		one: (sql, ...params) => this.one(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
-	});
-
+	readonly humanReviews = new HumanReviewStore(this.port);
+	readonly changeLandings = new ChangeLandingStore(this.port);
+	readonly retainedReviewProjections = new RetainedReviewProjections(this.port);
 	/** Optional global review requests, never a synthetic mission or approval store. */
-	readonly reviewRequests = new ReviewRequestStore({
-		one: (sql, ...params) => this.one(sql, ...params),
-		all: (sql, ...params) => this.all(sql, ...params),
-		run: (sql, ...params) => this.run(sql, ...params),
-		transaction: (work) => this.transaction(work, true),
-		durable: () => this.durable(),
-	});
+	readonly reviewRequests = new ReviewRequestStore(this.port);
 
 	/** Owner-only membership fence. Other members must not strand a saved interview. */
 	interviewOwnerFence(id: string, ownerSessionId: string) {
@@ -991,7 +439,7 @@ export class MissionStore {
 			throw new Conflict("An approval needs a saved brief of at most 32 KiB");
 		const rows = this.all("SELECT * FROM decisions WHERE mission_id=? ORDER BY number LIMIT 129", id);
 		if (rows.length > 128) throw new Conflict("Approval decision limit exceeded");
-		const decisions = rows.map(decisionFrom).filter((d) => !d.replacement && !d.withdrawn);
+		const decisions = rows.map(decisionFrom).filter(isActiveDecision);
 		if (Buffer.byteLength(JSON.stringify(decisions)) > 16 * 1024)
 			throw new Conflict("Approval decisions exceed 16 KiB");
 		return {
@@ -1003,364 +451,23 @@ export class MissionStore {
 		};
 	}
 
-	/** ":memory:" keeps state in memory, for tests. */
 	constructor(file: string) {
-		if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-		this.db = new DatabaseSync(file);
-		try {
-			assertLocalMissionDb(this.db);
-			this.migrate();
-		} catch (error) {
-			this.db.close();
-			throw error;
-		}
-		if (file !== ":memory:") {
-			// SQLite is synchronous and pilotd has one event loop, so a disk-backed connection made every read and
-			// commit wait for a busy disk. The store now runs in memory; a worker thread saves each commit to disk,
-			// and callers acknowledge writes to clients and chats only after durable().
-			this.db.close();
-			this.db = loadInMemory(file);
-			this.replica = new MissionReplica(file, (error) => console.warn(`pilotd: ${error.message}`));
-		}
-		// Search needs an indexed pin lookup across all missions. Build it only in memory; the
-		// durable schema and replication stay unchanged.
-		this.db.exec(
-			"CREATE INDEX artifact_search_owner ON artifact_links(session_id, artifact_id, id) WHERE revision IS NOT NULL",
-		);
-		if (this.replica) this.session = this.db.createSession();
-	}
-
-	/** Schema creation and upgrades, on the disk file at startup. */
-	private migrate(): void {
-		// The previous store's replica thread may still be closing its connection.
-		this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
-		this.retireRemoteSchema();
-		const migratePrTransitions = !this.one("SELECT 1 FROM sqlite_master WHERE name = 'pull_request_transitions'");
-		this.db.exec(SCHEMA);
-		this.db.exec(KNOWLEDGE_SCHEMA);
-		this.db.exec(PROJECT_PREFERENCES_SCHEMA);
-		this.db.exec(USER_FEEDBACK_SCHEMA);
-		this.db.exec(INSIGHTS_SCHEMA);
-		this.db.exec(INSIGHTS_WORKSPACE_SCHEMA);
-		this.db.exec(INSIGHTS_OWNER_SCHEMA);
-		this.db.exec(DAY_INSIGHTS_SCHEMA);
-		this.db.exec(DAY_INSIGHTS_ALLOWANCE_SCHEMA);
-		this.db.exec(INSIGHTS_TRANSITION_SCHEMA);
-		this.db.exec(WORKFLOW_CONFIRMATION_SCHEMA);
-		this.db.exec(MISSION_INTERVIEW_SCHEMA);
-		this.db.exec(PLANNING_WORKER_SCHEMA);
-		this.db.exec(MISSION_PLAN_SCHEMA);
-		this.db.exec(LINEAR_PUBLISHER_SCHEMA);
-		this.db.exec(ATTENTION_SCHEMA);
-		this.db.exec(USER_VERIFICATION_SCHEMA);
-		if (!this.one("SELECT 1 FROM sqlite_master WHERE name='delivery_sources'")) {
-			this.db.exec(`BEGIN; ${DELIVERY_SOURCE_SCHEMA} COMMIT;`);
-		}
-		this.db.exec(MISSION_CONTROL_SCHEMA);
-		this.db.exec(MISSION_REVISION_SCHEMA);
-		this.db.exec(MISSION_THREAD_SCHEMA);
-		this.db.exec(HUMAN_REVIEW_SCHEMA);
-		this.db.exec(CHANGE_LANDING_SCHEMA);
-		this.db.exec(RETAINED_PROJECTION_SCHEMA);
-		this.db.exec(REVIEW_REQUEST_SCHEMA);
-		this.db.exec(MISSION_SUCCESSOR_SCHEMA);
-		// Startup only, on disk before the in-memory replica opens. Never replay a saved placement.
-		this.insights.reviews.recover();
-		this.insightsOwner.reviews.recover();
-		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "created_by_session_id"))
-			this.db.exec("ALTER TABLE tasks ADD COLUMN created_by_session_id TEXT");
-		// Existing assignments are grandfathered, not retroactively charged.
-		this.db.exec(`INSERT OR IGNORE INTO member_task_claims (session_id, task_id, additional)
-			SELECT session_id, id, 0 FROM tasks WHERE session_id IS NOT NULL`);
-		this.db.exec(`CREATE TABLE IF NOT EXISTS linear_pr_safety_reports (
-			resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
-			mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-			comment_id TEXT REFERENCES comments(id) ON DELETE SET NULL,
-			text TEXT NOT NULL
-		);`);
-		this.db.exec(`CREATE TABLE IF NOT EXISTS phases (
-			id TEXT PRIMARY KEY, mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-			name TEXT NOT NULL, goal TEXT, sort REAL NOT NULL, completed_at INTEGER,
-			UNIQUE(mission_id, name)
-		);
-		CREATE INDEX IF NOT EXISTS phases_by_mission ON phases(mission_id, sort, id);`);
-		this.transaction(() => {
-			if (!this.all("PRAGMA table_info(missions)").some((row) => row.name === "phase_gating"))
-				this.db.exec("ALTER TABLE missions ADD COLUMN phase_gating INTEGER NOT NULL DEFAULT 0");
-			if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "phase_id")) {
-				this.db.exec("ALTER TABLE tasks ADD COLUMN phase_id TEXT REFERENCES phases(id) ON DELETE SET NULL");
-				// Display order defines first appearance. Names are scoped to their mission.
-				for (const row of this.all(
-					"SELECT * FROM tasks WHERE milestone IS NOT NULL AND trim(milestone) <> '' ORDER BY mission_id, sort, number",
-				)) {
-					const missionId = str(row.mission_id!);
-					const name = str(row.milestone!).trim();
-					let phase = this.one("SELECT id FROM phases WHERE mission_id = ? AND name = ?", missionId, name);
-					if (!phase) {
-						const phaseId = randomUUID();
-						this.run(
-							"INSERT INTO phases (id, mission_id, name, sort) VALUES (?, ?, ?, (SELECT COUNT(*) FROM phases WHERE mission_id = ?))",
-							phaseId,
-							missionId,
-							name,
-							missionId,
-						);
-						phase = { id: phaseId };
-					}
-					this.run("UPDATE tasks SET phase_id = ?, milestone = ? WHERE id = ?", phase.id!, name, row.id!);
-					this.phaseReconciliations.add(missionId);
-				}
-			}
-			this.db.exec("CREATE INDEX IF NOT EXISTS tasks_by_phase ON tasks(phase_id, status)");
-			this.db.exec(
-				"CREATE INDEX IF NOT EXISTS unfinished_tasks_by_phase ON tasks(phase_id) WHERE status NOT IN ('done', 'dropped')",
-			);
-		});
-		this.db.exec(
-			"CREATE TABLE IF NOT EXISTS system_message_events (session_id TEXT NOT NULL, event_id TEXT NOT NULL, mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE, PRIMARY KEY (session_id, event_id))",
-		);
-		if (!this.all("PRAGMA table_info(decisions)").some((row) => row.name === "audience"))
-			this.db.exec("ALTER TABLE decisions ADD COLUMN audience TEXT NOT NULL DEFAULT 'reference'");
-		if (!this.all("PRAGMA table_info(decisions)").some((row) => row.name === "replacement"))
-			this.db.exec("ALTER TABLE decisions ADD COLUMN replacement TEXT");
-		if (!this.all("PRAGMA table_info(decisions)").some((row) => row.name === "withdrawn"))
-			this.db.exec("ALTER TABLE decisions ADD COLUMN withdrawn TEXT");
-		if (!this.all("PRAGMA table_info(decision_proposals)").some((row) => row.name === "operation_id"))
-			this.db.exec("ALTER TABLE decision_proposals ADD COLUMN operation_id TEXT");
-		this.db.exec(
-			"CREATE UNIQUE INDEX IF NOT EXISTS decision_proposal_operations ON decision_proposals(mission_id, operation_id) WHERE operation_id IS NOT NULL",
-		);
-		this.transaction(() => {
-			const migrateNumbers = !this.all("PRAGMA table_info(decisions)").some((row) => row.name === "number");
-			const migrateSequence = !this.all("PRAGMA table_info(missions)").some(
-				(row) => row.name === "decision_sequence",
-			);
-			if (migrateNumbers) {
-				this.db.exec("ALTER TABLE decisions ADD COLUMN number INTEGER NOT NULL DEFAULT 0");
-				this.db.exec(`UPDATE decisions SET number = (SELECT n FROM
-					(SELECT id, ROW_NUMBER() OVER (PARTITION BY mission_id ORDER BY created_at, id) n FROM decisions) ranked
-					WHERE ranked.id = decisions.id)`);
-			}
-			if (migrateSequence)
-				this.db.exec("ALTER TABLE missions ADD COLUMN decision_sequence INTEGER NOT NULL DEFAULT 0");
-			if (migrateNumbers || migrateSequence)
-				this.db.exec(`UPDATE missions SET decision_sequence = MAX(decision_sequence,
-					COALESCE((SELECT MAX(number) FROM decisions WHERE mission_id = missions.id), 0))`);
-			this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS decision_numbers ON decisions(mission_id, number)");
-		});
-		if (!this.all("PRAGMA table_info(missions)").some((row) => row.name === "planning_version"))
-			this.db.exec("ALTER TABLE missions ADD COLUMN planning_version INTEGER");
-		if (!this.all("PRAGMA table_info(members)").some((row) => row.name === "role"))
-			this.db.exec("ALTER TABLE members ADD COLUMN role TEXT");
-		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "assignment"))
-			this.db.exec("ALTER TABLE tasks ADD COLUMN assignment TEXT");
-		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "decision_ids"))
-			this.db.exec("ALTER TABLE tasks ADD COLUMN decision_ids TEXT");
-		for (const column of ["delegated_to", "delegated_from_status", "delegated_resource_id"])
-			if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === column))
-				this.db.exec(`ALTER TABLE tasks ADD COLUMN ${column} TEXT`);
-		for (const column of ["preferred_model", "preferred_thinking", "preferred_model_by"])
-			if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === column))
-				this.db.exec(`ALTER TABLE tasks ADD COLUMN ${column} TEXT`);
-		this.db.exec(`CREATE TABLE IF NOT EXISTS linear_task_assignees (
-			resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
-			assignee_id TEXT,
-			held INTEGER NOT NULL DEFAULT 0
-		)`);
-		if (!this.all("PRAGMA table_info(linear_task_assignees)").some((row) => row.name === "held")) {
-			this.db.exec(`ALTER TABLE linear_task_assignees ADD COLUMN held INTEGER NOT NULL DEFAULT 0;
-				UPDATE linear_task_assignees SET held=1 WHERE resource_id IN
-				(SELECT delegated_resource_id FROM tasks WHERE delegated_from_status IS NOT NULL);`);
-		}
-		this.db.exec(`CREATE TABLE IF NOT EXISTS linear_chat_links (
-			id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE, project_id TEXT NOT NULL,
-			url TEXT NOT NULL, external_id TEXT NOT NULL, linear_key TEXT NOT NULL,
-			linear_sync TEXT NOT NULL, created_at INTEGER NOT NULL, enabled INTEGER NOT NULL,
-			operation_id TEXT
-		);
-		CREATE UNIQUE INDEX IF NOT EXISTS linear_chat_manager ON linear_chat_links(linear_key) WHERE enabled=1;
-		CREATE INDEX IF NOT EXISTS linear_chat_poll ON linear_chat_links(id) WHERE enabled=1;`);
-		// Upgrade already queued events without losing their stable event IDs.
-		this.db.exec(`INSERT OR IGNORE INTO pending_notice_summaries (event_id, group_key, text, state)
-			SELECT p.event_id, COALESCE('task:' || e.task_id, 'task:' || t.id,
-				CASE WHEN p.text LIKE '%: chat %' THEN 'chat:' || e.session_id ELSE 'note:' || COALESCE(e.session_id, 'user') END), p.text,
-				CASE WHEN p.text LIKE '%chat failed%' THEN 'failed'
-					WHEN p.text LIKE '%chat finished%' THEN 'done' END
-			FROM pending_notices p JOIN events e ON e.id = p.event_id
-			LEFT JOIN tasks t ON t.mission_id = p.mission_id AND t.session_id = e.session_id
-				AND e.kind = 'update' AND p.text LIKE '%: chat %'
-			WHERE NOT EXISTS (SELECT 1 FROM pending_notice_summaries s WHERE s.event_id = p.event_id)`);
-		if (!this.all("PRAGMA table_info(member_completions)").some((row) => row.name === "signature"))
-			this.db.exec("ALTER TABLE member_completions ADD COLUMN signature TEXT");
-		if (migratePrTransitions)
-			this.db.exec(`INSERT OR IGNORE INTO pull_request_transitions (mission_id, url, state)
-				SELECT c.mission_id, json_extract(p.value, '$[0]'), json_extract(p.value, '$[1]')
-				FROM member_completions c, json_each(c.signature, '$[3]') p
-				WHERE json_extract(p.value, '$[1]') IN ('merged', 'closed')`);
-		if (!this.all("PRAGMA table_info(artifact_links)").some((row) => row.name === "task_id")) {
-			this.db.exec(`BEGIN;
-				ALTER TABLE artifact_links RENAME TO artifact_links_legacy;
-				CREATE TABLE artifact_links (
-					mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-					artifact_id TEXT NOT NULL, session_id TEXT NOT NULL, title TEXT NOT NULL,
-					kind TEXT NOT NULL, revision INTEGER, linked_by_session_id TEXT, linked_at INTEGER NOT NULL,
-					task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE
-				);
-				INSERT INTO artifact_links (mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at)
-					SELECT mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at FROM artifact_links_legacy;
-				DROP TABLE artifact_links_legacy;
-				COMMIT;`);
-		}
-		// Replication records changes by primary key, so the old rowid-only table gains an explicit one.
-		if (!this.all("PRAGMA table_info(artifact_links)").some((row) => row.name === "id")) {
-			const columns =
-				"mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at, task_id";
-			this.db.exec(`BEGIN;
-				ALTER TABLE artifact_links RENAME TO artifact_links_rowid;
-				CREATE TABLE artifact_links (
-					id INTEGER PRIMARY KEY,
-					mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-					artifact_id TEXT NOT NULL, session_id TEXT NOT NULL, title TEXT NOT NULL,
-					kind TEXT NOT NULL, revision INTEGER, linked_by_session_id TEXT, linked_at INTEGER NOT NULL,
-					task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE
-				);
-				INSERT INTO artifact_links (id, ${columns}) SELECT rowid, ${columns} FROM artifact_links_rowid;
-				DROP TABLE artifact_links_rowid;
-				COMMIT;`);
-		}
-		if (!this.all("PRAGMA table_info(notices)").some((row) => row.name === "chat_event"))
-			this.db.exec("ALTER TABLE notices ADD COLUMN chat_event TEXT");
-		this.db.exec(
-			"CREATE UNIQUE INDEX IF NOT EXISTS artifact_link_scope ON artifact_links(mission_id, artifact_id, COALESCE(task_id, ''))",
-		);
-		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "task_id"))
-			this.db.exec("ALTER TABLE resources ADD COLUMN task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL");
-		this.db.exec(
-			"CREATE INDEX IF NOT EXISTS resources_by_linear_task ON resources(mission_id, task_id) WHERE kind = 'linear.issue'",
-		);
-		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "pull_request"))
-			this.db.exec("ALTER TABLE resources ADD COLUMN pull_request TEXT");
-		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "relationship"))
-			this.transaction(() => {
-				this.db.exec("ALTER TABLE resources ADD COLUMN relationship TEXT NOT NULL DEFAULT 'reference'");
-				this.db.exec(
-					"UPDATE resources SET relationship = 'ownership' WHERE kind = 'github.pr' AND task_id IS NOT NULL",
-				);
+		this.database = new MissionDatabase(file);
+		this.database.load(() => {
+			migrateMissionDb(this.database, {
+				recoverInsightsReviews: () => {
+					this.insights.reviews.recover();
+					this.insightsOwner.reviews.recover();
+				},
+				phaseChanged: (missionId) => this.phaseReconciliations.add(missionId),
+				reconcileLinearSync: () => this.reconcileLinearSync(),
 			});
-		this.transaction(() => {
-			if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "linear_role")) {
-				this.db.exec(
-					"ALTER TABLE resources ADD COLUMN linear_role TEXT; ALTER TABLE resources ADD COLUMN linear_key TEXT",
-				);
-				// No existing link acquires lifecycle authority. Delegated task state is deliberately untouched.
-				for (const row of this.all("SELECT id, url FROM resources WHERE kind = 'linear.issue'"))
-					this.run(
-						"UPDATE resources SET linear_role = 'reference', linear_key = ? WHERE id = ?",
-						linearKey(str(row.url!)) ?? null,
-						row.id!,
-					);
-			}
-			this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS linear_ticket_manager ON resources(linear_key)
-				WHERE linear_role = 'managed';
-				CREATE UNIQUE INDEX IF NOT EXISTS linear_task_contribution ON resources(mission_id, task_id, linear_key)
-				WHERE linear_role = 'contribution';`);
-			this.db.exec(
-				"CREATE INDEX IF NOT EXISTS resources_by_linear_key ON resources(mission_id, linear_key, task_id)",
-			);
-		});
-		if (!this.all("PRAGMA table_info(missions)").some((row) => row.name === "passive_lifecycle"))
-			this.db.exec("ALTER TABLE missions ADD COLUMN passive_lifecycle INTEGER NOT NULL DEFAULT 0");
-		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "pr_sync_disabled"))
-			this.db.exec("ALTER TABLE tasks ADD COLUMN pr_sync_disabled INTEGER NOT NULL DEFAULT 0");
-		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "linear_sync"))
-			this.db.exec("ALTER TABLE resources ADD COLUMN linear_sync TEXT");
-		this.db.exec(`CREATE TABLE IF NOT EXISTS linear_sync_dirty (
-			resource_id TEXT PRIMARY KEY, structural INTEGER NOT NULL DEFAULT 0, reopened INTEGER NOT NULL DEFAULT 0);
-			CREATE INDEX IF NOT EXISTS resources_by_managed_linear ON resources(id) WHERE linear_role = 'managed';
-			CREATE INDEX IF NOT EXISTS managed_linear_by_mission ON resources(mission_id,created_at,id) WHERE linear_role='managed';
-			CREATE UNIQUE INDEX IF NOT EXISTS resources_by_linear_uuid ON resources(json_extract(linear_sync,'$.status.issueId')) WHERE linear_role='managed';
-			CREATE INDEX IF NOT EXISTS resources_by_contributing_task ON resources(task_id,linear_key,mission_id) WHERE linear_role='contribution';
-			CREATE INDEX IF NOT EXISTS linear_sync_attention_order ON resources(mission_id,created_at,id)
-				WHERE linear_role='managed' AND json_extract(linear_sync, '$.status.state') IN ('paused', 'error');
-			CREATE TRIGGER IF NOT EXISTS linear_sync_task AFTER UPDATE OF status ON tasks
-			WHEN OLD.status <> NEW.status BEGIN
-				INSERT OR IGNORE INTO linear_sync_dirty(resource_id) SELECT m.id FROM resources c JOIN resources m
-				ON m.mission_id=c.mission_id AND m.linear_key=c.linear_key AND m.linear_role='managed'
-				WHERE c.task_id=NEW.id AND c.linear_role='contribution';
-				UPDATE linear_sync_dirty SET reopened=1 WHERE OLD.status IN ('done','dropped')
-				AND NEW.status NOT IN ('done','dropped') AND resource_id IN (SELECT m.id FROM resources c JOIN resources m
-				ON m.mission_id=c.mission_id AND m.linear_key=c.linear_key AND m.linear_role='managed'
-				WHERE c.task_id=NEW.id AND c.linear_role='contribution'); END;
-			CREATE TRIGGER IF NOT EXISTS linear_sync_task_delete BEFORE DELETE ON tasks BEGIN
-				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) SELECT m.id,1 FROM resources c JOIN resources m
-				ON m.mission_id=c.mission_id AND m.linear_key=c.linear_key AND m.linear_role='managed'
-				WHERE c.task_id=OLD.id AND c.linear_role='contribution'; END;
-			CREATE TRIGGER IF NOT EXISTS linear_sync_insert AFTER INSERT ON resources
-			WHEN NEW.linear_role IN ('managed','contribution') BEGIN
-				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) SELECT id,1 FROM resources
-				WHERE mission_id=NEW.mission_id AND linear_key=NEW.linear_key AND linear_role='managed'; END;
-			CREATE TRIGGER IF NOT EXISTS linear_sync_delete AFTER DELETE ON resources
-			WHEN OLD.linear_role IN ('managed','contribution') BEGIN
-				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) SELECT id,1 FROM resources
-				WHERE mission_id=OLD.mission_id AND linear_key=OLD.linear_key AND linear_role='managed'; END;
-			CREATE TRIGGER IF NOT EXISTS linear_sync_role AFTER UPDATE OF linear_role,task_id,linear_key ON resources BEGIN
-				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) VALUES(NEW.id,1);
-				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) SELECT id,1 FROM resources WHERE mission_id=NEW.mission_id
-				AND linear_key IN (OLD.linear_key,NEW.linear_key) AND linear_role='managed'; END;`);
-		// Existing managed links start with a baseline, never an inferred completion.
-		this.transaction(() => {
-			this.run(
-				"INSERT OR IGNORE INTO linear_sync_dirty(resource_id) SELECT id FROM resources WHERE linear_role='managed' AND linear_sync IS NULL",
-			);
-			this.reconcileLinearSync();
-		});
-		this.db.exec(`CREATE INDEX IF NOT EXISTS resources_by_owned_pr ON resources(mission_id, created_at, id)
-			WHERE kind = 'github.pr' AND relationship = 'ownership'`);
-		if (!this.all("PRAGMA table_info(events)").some((row) => row.name === "is_user_note"))
+			this.initializing = false;
 			this.transaction(() => {
-				this.db.exec("ALTER TABLE events ADD COLUMN is_user_note INTEGER NOT NULL DEFAULT 0");
-				// Legacy updates mix authored notes with automatic goal/title edits. Exclude that known
-				// automatic text; new writes use the marker so even identically worded notes are distinct.
-				this.db.exec(`UPDATE events SET is_user_note = 1 WHERE session_id IS NULL AND
-					(kind = 'handoff' OR (kind = 'update' AND (text <> 'Mission title or goal changed' OR health IS NOT NULL)))`);
+				for (const row of this.all("SELECT DISTINCT mission_id FROM phases"))
+					this.phaseReconciliations.add(str(row.mission_id!));
 			});
-		this.db.exec(`CREATE INDEX IF NOT EXISTS user_notes_by_mission ON events (mission_id, id)
-			WHERE is_user_note = 1`);
-		this.initializing = false;
-		this.installTaskDefinitionRevisions();
-		this.transaction(() => {
-			for (const row of this.all("SELECT DISTINCT mission_id FROM phases"))
-				this.phaseReconciliations.add(str(row.mission_id!));
 		});
-	}
-
-	/** Safe after the profile preflight: the legacy tables must have no records. */
-	private retireRemoteSchema(): void {
-		this.db.exec("BEGIN IMMEDIATE");
-		try {
-			assertLocalMissionDb(this.db);
-			for (const row of this.all("SELECT name FROM sqlite_master WHERE type='trigger' AND name GLOB 'shared_*'"))
-				this.db.exec(`DROP TRIGGER ${identifier(str(row.name!))}`);
-			dropEmptyRemoteTables(this.db);
-			if (this.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name='shared_task_definitions'"))
-				this.db.exec("ALTER TABLE shared_task_definitions RENAME TO task_definition_revisions");
-			this.db.exec("COMMIT");
-		} catch (error) {
-			this.db.exec("ROLLBACK");
-			throw error;
-		}
-	}
-
-	private installTaskDefinitionRevisions(): void {
-		this.db.exec(`CREATE TABLE IF NOT EXISTS task_definition_revisions (id TEXT PRIMARY KEY, revision INTEGER NOT NULL);
-			INSERT OR IGNORE INTO task_definition_revisions SELECT id,1 FROM tasks;
-			CREATE TRIGGER IF NOT EXISTS task_definition_insert BEFORE INSERT ON tasks BEGIN
-				INSERT INTO task_definition_revisions VALUES(NEW.id,1); END;
-			CREATE TRIGGER IF NOT EXISTS task_definition_update BEFORE UPDATE OF title,body,depends_on,decision_ids,preferred_model,preferred_thinking,status,phase_id,session_id,milestone,assignment ON tasks
-			WHEN (OLD.title IS NOT NEW.title OR OLD.body IS NOT NEW.body OR OLD.depends_on IS NOT NEW.depends_on
-			OR OLD.decision_ids IS NOT NEW.decision_ids OR OLD.preferred_model IS NOT NEW.preferred_model OR OLD.preferred_thinking IS NOT NEW.preferred_thinking
-			OR OLD.status IS NOT NEW.status OR OLD.phase_id IS NOT NEW.phase_id OR OLD.session_id IS NOT NEW.session_id OR OLD.milestone IS NOT NEW.milestone OR OLD.assignment IS NOT NEW.assignment)
-			BEGIN UPDATE task_definition_revisions SET revision=revision+1 WHERE id=NEW.id; END;`);
 	}
 
 	/** Commit related recovery writes together, then notify each affected mission/member once. */
@@ -1427,31 +534,111 @@ export class MissionStore {
 		);
 	}
 	durable(): Promise<void> {
-		return this.replica?.durable() ?? Promise.resolve();
+		return this.database.durable();
 	}
 
 	/** Like durable(), but undefined when nothing is waiting for the disk, so callers can stay synchronous. */
 	whenDurable(): Promise<void> | undefined {
-		return this.replica?.pending ? this.replica.durable() : undefined;
+		return this.database.whenDurable();
 	}
 
-	/** Waits (bounded) for unsaved commits; pilotd only closes the store at shutdown. */
 	close(): void {
-		this.session?.close();
-		this.session = undefined;
-		this.replica?.close();
-		this.replica = undefined;
-		this.db.close();
+		this.database.close();
 	}
 
-	/** Ships the changes committed since the last call to the replica. */
-	private replicate(): void {
-		if (!this.session || !this.replica) return;
-		const changes = this.session.changeset();
-		if (!changes.length) return;
-		this.session.close();
-		this.session = this.db.createSession();
-		this.replica.push(changes);
+	/**
+	 * Called inside the transaction of each change to a mission record that Knowledge can cite (see sourceRecords).
+	 * A listener that throws rolls the change back.
+	 */
+	onSourceChange(listener: (change: MissionSourceChange) => void): () => void {
+		this.sourceListeners.add(listener);
+		return () => this.sourceListeners.delete(listener);
+	}
+	private sourceChanged(change: MissionSourceChange): void {
+		for (const listener of this.sourceListeners) listener(change);
+	}
+
+	missionProject(missionId: string): string | undefined {
+		const row = this.one("SELECT project_id FROM missions WHERE id = ?", missionId);
+		return row ? String(row.project_id) : undefined;
+	}
+
+	/** The first cited mission record that does not exist, by exact ID. */
+	missingCitation(source: MissionSource): string | undefined {
+		const exists = (sql: string, value: SQLInputValue) => !!this.one(sql, source.missionId, value);
+		if (
+			source.decisionId !== undefined &&
+			!exists("SELECT 1 FROM decisions WHERE mission_id = ? AND id = ?", source.decisionId)
+		)
+			return "decision";
+		if (source.taskId !== undefined && !exists("SELECT 1 FROM tasks WHERE mission_id = ? AND id = ?", source.taskId))
+			return "task";
+		if (
+			source.eventId !== undefined &&
+			!exists("SELECT 1 FROM events WHERE mission_id = ? AND id = ?", source.eventId)
+		)
+			return "event";
+		if (
+			source.briefRevision !== undefined &&
+			!exists("SELECT 1 FROM brief_revisions WHERE mission_id = ? AND revision = ?", source.briefRevision)
+		)
+			return "brief revision";
+		return undefined;
+	}
+
+	/**
+	 * The current records a mission source cites, undefined for each one that is gone. Knowledge hashes them into
+	 * stored observation tokens, so each record keeps exactly these fields in this order.
+	 */
+	sourceRecords(source: MissionSource): unknown[] {
+		const records: unknown[] = [];
+		if (source.decisionId) {
+			const decision = this.one(
+				"SELECT id, text, audience, replacement, withdrawn FROM decisions WHERE mission_id = ? AND id = ?",
+				source.missionId,
+				source.decisionId,
+			);
+			// Tokens observed before decisions had these columns must stay valid while the decision is unchanged.
+			if (decision && !decision.replacement) delete decision.replacement;
+			if (decision && !decision.withdrawn) delete decision.withdrawn;
+			records.push(decision);
+		}
+		if (source.taskId)
+			records.push(
+				this.one(
+					`SELECT t.id, t.title, t.body, t.status, t.updated_at, c.record FROM tasks t
+			LEFT JOIN task_completions c ON c.task_id=t.id WHERE t.mission_id = ? AND t.id = ?`,
+					source.missionId,
+					source.taskId,
+				),
+			);
+		if (source.eventId)
+			records.push(
+				this.one(
+					"SELECT id, mission_id, kind, text, session_id, task_id, health, at, is_user_note FROM events WHERE mission_id = ? AND id = ?",
+					source.missionId,
+					source.eventId,
+				),
+			);
+		if (source.briefRevision !== undefined)
+			records.push(this.one("SELECT brief_revision FROM missions WHERE id = ?", source.missionId));
+		if (!records.length)
+			records.push(this.one("SELECT brief_revision, status FROM missions WHERE id = ?", source.missionId));
+		return records;
+	}
+
+	isOpenTask(taskId: string): boolean {
+		return !!this.one("SELECT 1 FROM tasks WHERE id = ? AND status NOT IN ('done', 'dropped')", taskId);
+	}
+
+	/** A locator to human-authored evidence, not a permission/consent projection from decision authorship. */
+	userNote(missionId: string, eventId: number): string | undefined {
+		const row = this.one(
+			"SELECT text FROM events WHERE mission_id=? AND id=? AND is_user_note=1 AND session_id IS NULL",
+			missionId,
+			eventId,
+		);
+		return row ? String(row.text) : undefined;
 	}
 
 	/** Meaningful knowledge hints only, not streaming, task chatter or pending/check projections. */
@@ -1467,9 +654,7 @@ export class MissionStore {
 	}
 
 	/** Called after every committed change of a mission, including membership and deletion. */
-	onChange(
-		listener: (missionId: string, passive?: boolean, preferenceOnly?: boolean, readModelOnly?: boolean) => void,
-	): () => void {
+	onChange(listener: (missionId: string, kind: ChangeKind) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
@@ -1490,13 +675,8 @@ export class MissionStore {
 		return () => this.memberListeners.delete(listener);
 	}
 
-	private changed(
-		missionId: string,
-		sessions: string[] = [],
-		passive = false,
-		preferenceOnly = false,
-		readModelOnly = false,
-	): void {
+	/** Mission notices: who listens decides what each ChangeKind means for it. */
+	private changed(missionId: string, sessions: string[] = [], kind: ChangeKind = "full"): void {
 		if (this.batchedChanges) {
 			const pending = this.batchedChanges.get(missionId) ?? new Set<string>();
 			for (const session of sessions) pending.add(session);
@@ -1505,61 +685,39 @@ export class MissionStore {
 		}
 		if (this.referenceBatch === missionId) return;
 		if (this.linearSyncChanged.delete(missionId)) for (const listener of this.linearSyncListeners) listener();
-		for (const listener of this.listeners) {
-			if (readModelOnly) listener(missionId, passive, preferenceOnly, true);
-			else listener(missionId, passive, preferenceOnly);
-		}
+		for (const listener of this.listeners) listener(missionId, kind);
 		for (const sessionId of sessions) for (const listener of this.memberListeners) listener(sessionId);
 	}
 
-	/**
-	 * SQLite runs synchronously on pilotd's event loop (in memory for disk-backed stores). Attribute slow statements
-	 * outside transactions, and whole transactions, in event-loop stall reports.
-	 */
-	private timed<T>(sql: string, work: () => T): T {
-		if (this.writing) return work();
-		const result = operations.time(() => `missions.sqlite ${sql.replace(/\s+/g, " ").trim().slice(0, 48)}`, work);
-		// An autocommit write. A no-op produces an empty changeset, which is not shipped.
-		if (this.session && !/^\s*(SELECT|PRAGMA)\b/i.test(sql)) this.replicate();
-		return result;
-	}
-
 	private all(sql: string, ...params: SQLInputValue[]): Row[] {
-		return this.timed(sql, () => this.db.prepare(sql).all(...params) as Row[]);
+		return this.database.all(sql, ...params);
 	}
 
 	private one(sql: string, ...params: SQLInputValue[]): Row | undefined {
-		return this.timed(sql, () => this.db.prepare(sql).get(...params) as Row | undefined);
+		return this.database.one(sql, ...params);
 	}
 
 	private run(sql: string, ...params: SQLInputValue[]): void {
-		this.timed(sql, () => this.db.prepare(sql).run(...params));
+		this.database.run(sql, ...params);
 	}
 
-	private transaction<T>(work: () => T, preferenceOnly = false): T {
+	/** Mission writes reconcile task phases and managed Linear sync before commit unless they opt out. */
+	private transaction<T>(work: () => T, { reconcile = true }: TransactionOptions = {}): T {
 		// Reference batches reuse the ordinary validators/writers inside one outer transaction.
-		if (this.writing) return work();
-		return operations.time("missions.sqlite transaction", () => {
-			this.db.exec("BEGIN IMMEDIATE");
-			this.writing = true;
-			try {
+		if (this.database.writing) return work();
+		try {
+			return this.database.transaction(() => {
 				const result = work();
-				if (!this.initializing && !preferenceOnly)
+				if (reconcile && !this.initializing) {
 					for (const id of this.phaseReconciliations) this.reconcilePhases(id);
-				if (!this.initializing && !preferenceOnly) this.reconcileLinearSync();
+					this.reconcileLinearSync();
+				}
 				this.run("UPDATE watch_activity SET annotated=1 WHERE annotated=0");
-				this.db.exec("COMMIT");
 				return result;
-			} catch (error) {
-				this.db.exec("ROLLBACK");
-				throw error;
-			} finally {
-				this.phaseReconciliations.clear();
-				this.writing = false;
-				// After a rollback the changeset is empty, or a no-op for rows the session saw change back.
-				this.replicate();
-			}
-		});
+			});
+		} finally {
+			this.phaseReconciliations.clear();
+		}
 	}
 
 	private event(
@@ -1581,7 +739,7 @@ export class MissionStore {
 	): MissionEvent {
 		const at = extra.at ?? Date.now();
 		if (kind === "task" || kind === "claim") this.phaseReconciliations.add(missionId);
-		const result = this.db
+		const result = this.database
 			.prepare(
 				"INSERT INTO events (mission_id, kind, text, session_id, task_id, health, at, is_user_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 			)
@@ -1685,7 +843,6 @@ export class MissionStore {
 		return [];
 	}
 
-	// Missions
 	/** Ownership links are independent of PR references and of the chat's outcome snapshot. */
 	pullRequestMembers(url: string): string[] {
 		return this.all(
@@ -1778,7 +935,7 @@ export class MissionStore {
 				const kept: string[] = [];
 				if (pr.state === "merged" && this.plannedWithoutCoordinator(id))
 					for (const [i, task] of tasks.entries()) {
-						if (task.status === "done" || task.status === "dropped") continue;
+						if (!isOpenTask(task)) continue;
 						const reason = this.mergeKeepsTask(id, task, session.id, pr.url);
 						if (reason)
 							kept.push(
@@ -2124,7 +1281,7 @@ export class MissionStore {
 			const lastEventId = num(
 				this.one("SELECT MAX(event_id) AS id FROM pending_notices WHERE mission_id = ?", id)!.id!,
 			);
-			const requestId = `mission-notice:${lastEventId}`;
+			const requestId = missionNoticeRequestId(lastEventId);
 			const first = events[0]!;
 			const single = num(first.total!) === 1;
 			const kind =
@@ -2349,16 +1506,13 @@ export class MissionStore {
 				);
 			return { missionId: newMissionId, state: "abandoned" as const };
 		});
-		this.changed(oldMissionId, [], true);
-		this.changed(newMissionId, [], true);
+		this.changed(oldMissionId, [], "passive");
+		this.changed(newMissionId, [], "passive");
 		return link;
 	}
 
 	/** Read-only exact migration comparison. The ticket stays with the old mission unless separately transferred. */
-	successorPreview(
-		oldMissionId: string,
-		keptChats: import("../../protocol/src/mission-migration.ts").MissionMigrationChat[] = [],
-	) {
+	successorPreview(oldMissionId: string, keptChats: import("@pilot/protocol").MissionMigrationChat[] = []) {
 		const old = this.require(oldMissionId),
 			link = this.successor(oldMissionId);
 		if (!link || link.state !== "planning") throw new Conflict("No open re-planning link");
@@ -2423,7 +1577,7 @@ export class MissionStore {
 			newSource: string;
 			transferLinear: false;
 		},
-		keptChats: () => import("../../protocol/src/mission-migration.ts").MissionMigrationChat[] = () => [],
+		keptChats: () => import("@pilot/protocol").MissionMigrationChat[] = () => [],
 	) {
 		const prior = this.successorFinishLookup(input.operationId);
 		if (prior) {
@@ -2432,50 +1586,51 @@ export class MissionStore {
 			await this.durable();
 			return prior;
 		}
-		const result = this.transaction(() => {
-			const preview = this.successorPreview(oldMissionId, keptChats());
-			if (
-				input.transferLinear !== false ||
-				input.newMissionId !== preview.newMissionId ||
-				input.projectId !== preview.projectId ||
-				input.oldSource !== preview.oldSource ||
-				input.newSource !== preview.newSource
-			)
-				throw new Conflict("Migration preview changed; review exact old and published new sources");
-			const ownedOpen = this.tasks(oldMissionId).filter(
-				(t) => t.status !== "done" && t.status !== "dropped" && t.sessionId,
-			);
-			if (this.members(oldMissionId).length || ownedOpen.length) {
+		const result = this.transaction(
+			() => {
+				const preview = this.successorPreview(oldMissionId, keptChats());
 				if (
-					!this.safelyPaused(oldMissionId, [
-						...new Set([
-							...this.members(oldMissionId),
-							...ownedOpen.flatMap((t) => (t.sessionId ? [t.sessionId] : [])),
-						]),
-					])
+					input.transferLinear !== false ||
+					input.newMissionId !== preview.newMissionId ||
+					input.projectId !== preview.projectId ||
+					input.oldSource !== preview.oldSource ||
+					input.newSource !== preview.newSource
 				)
-					throw new Conflict("Old work requires an exact acknowledged safe Pause before migration");
-			}
-			const now = Date.now();
-			this.run(
-				"UPDATE missions SET status='archived',passive_lifecycle=1,updated_at=?,archived_at=? WHERE id=?",
-				now,
-				now,
-				oldMissionId,
-			);
-			this.run(
-				"UPDATE mission_successors SET state='finished',updated_at=? WHERE old_mission_id=?",
-				now,
-				oldMissionId,
-			);
-			this.event(oldMissionId, "status", "Mission migration finished; history and chats kept", USER, { at: now });
-			const receipt = { version: 1 as const, oldMissionId, input: structuredClone(input), finishedAt: now };
-			this.run("INSERT INTO mission_successor_finishes VALUES(?,?)", input.operationId, JSON.stringify(receipt));
-			return receipt;
-		}, true);
+					throw new Conflict("Migration preview changed; review exact old and published new sources");
+				const ownedOpen = this.tasks(oldMissionId).filter((t) => isOpenTask(t) && t.sessionId);
+				if (this.members(oldMissionId).length || ownedOpen.length) {
+					if (
+						!this.safelyPaused(oldMissionId, [
+							...new Set([
+								...this.members(oldMissionId),
+								...ownedOpen.flatMap((t) => (t.sessionId ? [t.sessionId] : [])),
+							]),
+						])
+					)
+						throw new Conflict("Old work requires an exact acknowledged safe Pause before migration");
+				}
+				const now = Date.now();
+				this.run(
+					"UPDATE missions SET status='archived',passive_lifecycle=1,updated_at=?,archived_at=? WHERE id=?",
+					now,
+					now,
+					oldMissionId,
+				);
+				this.run(
+					"UPDATE mission_successors SET state='finished',updated_at=? WHERE old_mission_id=?",
+					now,
+					oldMissionId,
+				);
+				this.event(oldMissionId, "status", "Mission migration finished; history and chats kept", USER, { at: now });
+				const receipt = { version: 1 as const, oldMissionId, input: structuredClone(input), finishedAt: now };
+				this.run("INSERT INTO mission_successor_finishes VALUES(?,?)", input.operationId, JSON.stringify(receipt));
+				return receipt;
+			},
+			{ reconcile: false },
+		);
 		await this.durable();
-		this.changed(oldMissionId, [], true);
-		this.changed(input.newMissionId, [], true);
+		this.changed(oldMissionId, [], "passive");
+		this.changed(input.newMissionId, [], "passive");
 		return result;
 	}
 	successorFinishLookup(operationId: string):
@@ -2772,56 +1927,53 @@ export class MissionStore {
 		if (this.batchedChanges) throw new Conflict("Lifecycle changes cannot be batched");
 		const status = action === "complete" ? "done" : action === "archive" ? "archived" : "active";
 		const now = Date.now();
-		this.transaction(() => {
-			const mission = this.require(id);
-			if (mission.projectId !== projectId || mission.status !== expected)
-				throw new Conflict("The confirmed mission has changed; review it again");
-			if (
-				!["archive", "reopen", "complete"].includes(action) ||
-				(action === "complete"
-					? expected !== "active"
-					: action === "archive"
-						? expected === "archived"
-						: expected === "active")
-			)
-				throw new Conflict("That lifecycle transition is unavailable");
-			// BEGIN IMMEDIATE holds task eligibility through the status write, including external writers.
-			if (action === "complete") {
-				const counts = this.one(
-					"SELECT SUM(status='done') AS done, SUM(status NOT IN ('done','dropped')) AS unfinished FROM tasks WHERE mission_id=?",
+		this.transaction(
+			() => {
+				const mission = this.require(id);
+				if (mission.projectId !== projectId || mission.status !== expected)
+					throw new Conflict("The confirmed mission has changed; review it again");
+				if (
+					!["archive", "reopen", "complete"].includes(action) ||
+					(action === "complete"
+						? expected !== "active"
+						: action === "archive"
+							? expected === "archived"
+							: expected === "active")
+				)
+					throw new Conflict("That lifecycle transition is unavailable");
+				// BEGIN IMMEDIATE holds task eligibility through the status write, including external writers.
+				if (action === "complete") {
+					const counts = this.one(
+						"SELECT SUM(status='done') AS done, SUM(status NOT IN ('done','dropped')) AS unfinished FROM tasks WHERE mission_id=?",
+						id,
+					)!;
+					if (!counts.done || counts.unfinished)
+						throw new Conflict(
+							"Mission completion requires every remaining task to be done and at least one done task",
+						);
+				}
+				this.run(
+					"UPDATE missions SET status=?,passive_lifecycle=1,updated_at=?,completed_at=?,archived_at=? WHERE id=?",
+					status,
+					now,
+					status === "done" ? now : null,
+					status === "archived" ? now : null,
 					id,
-				)!;
-				if (!counts.done || counts.unfinished)
-					throw new Conflict(
-						"Mission completion requires every remaining task to be done and at least one done task",
-					);
-			}
-			this.run(
-				"UPDATE missions SET status=?,passive_lifecycle=1,updated_at=?,completed_at=?,archived_at=? WHERE id=?",
-				status,
-				now,
-				status === "done" ? now : null,
-				status === "archived" ? now : null,
-				id,
-			);
-			this.event(id, "status", `Mission marked ${status}`, USER, { at: now });
-		}, true);
-		this.changed(id, [], true);
+				);
+				this.event(id, "status", `Mission marked ${status}`, USER, { at: now });
+			},
+			{ reconcile: false },
+		);
+		this.changed(id, [], "passive");
 		return this.require(id);
 	}
 
-	/** Durable guard: passive lifecycle never re-enables automatic coordinator notices. */
 	/**
 	 * A mission planned in Pilot Day whose coordinator is still its planning chat. That chat never takes notices or
 	 * completes tasks, so workers' delivery reports go to the user's To check instead.
 	 */
 	plannedWithoutCoordinator(missionId: string): boolean {
-		// One indexed read, no record parse: this runs on every mission event and context read.
-		return !!this.one(
-			`SELECT 1 FROM missions m JOIN planning_workers p ON p.mission_id = m.id
-			WHERE m.id = ? AND m.coordinator_session_id = json_extract(p.record, '$.binding.ownerSessionId')`,
-			missionId,
-		);
+		return this.planningWorkers.coordinatedByPlanner(missionId);
 	}
 
 	/**
@@ -2837,6 +1989,7 @@ export class MissionStore {
 		).map((r) => ({ id: String(r.id), text: String(r.text), at: Number(r.created_at) }));
 	}
 
+	/** Durable guard: passive lifecycle never re-enables automatic coordinator notices. */
 	passiveLifecycle(id: string): boolean {
 		return this.one("SELECT passive_lifecycle FROM missions WHERE id=?", id)?.passive_lifecycle === 1;
 	}
@@ -2890,8 +2043,6 @@ export class MissionStore {
 			current ? this.sharedDefinitionRevision(current.id) : 0,
 		);
 	}
-
-	// Brief
 
 	brief(id: string, revision?: number): MissionBrief | undefined {
 		const mission = this.require(id);
@@ -2975,7 +2126,7 @@ export class MissionStore {
 			now,
 		);
 		this.run("UPDATE missions SET brief_revision = ? WHERE id = ?", revision, id);
-		this.knowledge.invalidateMission(id, "briefRevision", revision);
+		this.sourceChanged({ missionId: id, kind: "brief", revision });
 		this.event(id, "brief", `Brief revision ${revision}`, actor, { at: now });
 		return { missionId: id, revision, markdown, ...optionalAuthor(actor.sessionId), createdAt: now };
 	}
@@ -2992,8 +2143,7 @@ export class MissionStore {
 		for (const edit of delta.tasks ?? []) {
 			strictPlanningFields(edit, ["id", "title", "body", "drop", "assignment", "dependsOn", "decisionIds"]);
 			const task = this.resolveTask(id, revisionText(edit.id, 128));
-			if (task.status === "done" || task.status === "dropped")
-				throw new Conflict("Completed or dropped tasks remain historical");
+			if (!isOpenTask(task)) throw new Conflict("Completed or dropped tasks remain historical");
 			if (seen.has(task.id)) throw new Error("Duplicate revision task");
 			seen.add(task.id);
 			if (edit.title !== undefined) revisionText(edit.title, MAX_TITLE);
@@ -3006,7 +2156,7 @@ export class MissionStore {
 		for (const edit of delta.decisions ?? []) {
 			strictPlanningFields(edit, ["id", "reason", "action", "text", "audience"]);
 			const decision = this.decision(id, revisionText(edit.id, 128));
-			if (decision.replacement || decision.withdrawn) throw new Conflict("Only active decisions can be revised");
+			if (!isActiveDecision(decision)) throw new Conflict("Only active decisions can be revised");
 			if (
 				this.one(
 					"SELECT 1 FROM decision_proposals WHERE mission_id=? AND decision_id=? AND status='pending'",
@@ -3077,7 +2227,7 @@ export class MissionStore {
 		const tasks = new Map(this.tasks(id).map((task) => [task.id, task]));
 		const open = (taskId: string) => {
 			const task = tasks.get(taskId);
-			return task && task.status !== "done" && task.status !== "dropped" ? task : undefined;
+			return task && isOpenTask(task) ? task : undefined;
 		};
 		const brief = this.brief(id);
 		const submission = this.interviews.latest(id)?.submission;
@@ -3104,7 +2254,7 @@ export class MissionStore {
 	revisionAffectedTasks(id: string, delta: MissionRevisionDelta): string[] {
 		if (delta.goal !== undefined || delta.markdown !== undefined || delta.decisions?.length)
 			return this.tasks(id)
-				.filter((t) => t.status !== "done" && t.status !== "dropped")
+				.filter((t) => isOpenTask(t))
 				.map((t) => t.id)
 				.sort();
 		const affected = new Set((delta.tasks ?? []).map((edit) => this.resolveTask(id, edit.id).id));
@@ -3125,7 +2275,7 @@ export class MissionStore {
 		return [
 			...new Set(
 				this.tasks(id)
-					.filter((t) => affected.has(t.id) && t.status !== "done" && t.status !== "dropped")
+					.filter((t) => affected.has(t.id) && isOpenTask(t))
 					.flatMap((t) => (t.sessionId ? [t.sessionId] : []))
 					.concat(
 						delta.goal !== undefined || delta.markdown !== undefined || delta.decisions?.length
@@ -3261,8 +2411,6 @@ export class MissionStore {
 		}
 	}
 
-	// Tasks
-
 	private readonly linearHoldListeners = new Set<(sessionId: string) => void>();
 	onLinearHoldChange(listener: (sessionId: string) => void): () => void {
 		this.linearHoldListeners.add(listener);
@@ -3298,7 +2446,7 @@ export class MissionStore {
 		).map((row) => ({
 			issue: str(row.external_id!),
 			taskIds: (JSON.parse(str(row.linear_sync!)) as LinearSyncRecord).contributors
-				.filter((t) => !["done", "dropped"].includes(t.status))
+				.filter((t) => isOpenTask(t))
 				.map((t) => t.taskId),
 		}));
 	}
@@ -4115,7 +3263,7 @@ export class MissionStore {
 	taskModel(id: string, projectId: string, taskId: string, write: MissionTaskWrite): MissionTask {
 		this.insights.assertOrdinaryTask(this.resolveTask(id, taskId).id);
 		this.assertPlanner(id, USER);
-		if (this.writing || this.batchedChanges || this.referenceBatch)
+		if (this.database.writing || this.batchedChanges || this.referenceBatch)
 			throw new Conflict("Preference changes cannot be batched");
 		if (this.require(id).projectId !== projectId) throw new Conflict("The confirmed project changed");
 		if (!taskId || /^\d+$/.test(taskId)) throw new Error("An exact task ID is required");
@@ -4125,8 +3273,8 @@ export class MissionStore {
 		const fields = preference(write);
 		if (!fields || fields.model === undefined || fields.thinking === undefined)
 			throw new Error("Both preference fields are required");
-		this.transaction(() => this.writePreference(id, task, fields, USER, Date.now(), true), true);
-		this.changed(id, [], true, true);
+		this.transaction(() => this.writePreference(id, task, fields, USER, Date.now(), true), { reconcile: false });
+		this.changed(id, [], "preference");
 		return this.task(id, taskId);
 	}
 
@@ -4141,8 +3289,8 @@ export class MissionStore {
 			throw new Error("completion requires commit, checks and issues only");
 		const record = {
 			commit: text(input.commit, "commit", 40)!,
-			checks: text(input.checks, "checks", 2000)!,
-			issues: text(input.issues, "issues", 1000, { empty: true })!,
+			checks: text(input.checks, "checks", MISSION_DELIVERY_LIMITS.checks)!,
+			issues: text(input.issues, "issues", MISSION_DELIVERY_LIMITS.issues, { empty: true })!,
 		};
 		if (!/^[a-f0-9]{40}$/.test(record.commit)) throw new Error("commit must be a 40-character lowercase hex hash");
 		const encoded = JSON.stringify(record);
@@ -4154,8 +3302,13 @@ export class MissionStore {
 		this.batchChanges(() => {
 			this.run("INSERT INTO task_completions VALUES (?, ?)", task.id, encoded);
 			this.userVerifications.recordSource(`completion:${task.id}`, task.id);
-			this.knowledge.invalidateMission(id, "taskId", task.id);
-			this.knowledge.invalidateDelivery(this.require(id).projectId, id, task.id, record.commit);
+			this.sourceChanged({
+				missionId: id,
+				kind: "delivery",
+				projectId: this.require(id).projectId,
+				taskId: task.id,
+				commit: record.commit,
+			});
 			this.updateTask(id, task.id, { status: "done" }, { sessionId });
 			if (task.status === "done")
 				this.event(
@@ -4179,9 +3332,7 @@ export class MissionStore {
 			if (
 				task.sessionId &&
 				task.sessionId !== sessionId &&
-				!this.tasks(id).some(
-					(item) => item.sessionId === task.sessionId && item.status !== "done" && item.status !== "dropped",
-				)
+				!this.tasks(id).some((item) => item.sessionId === task.sessionId && isOpenTask(item))
 			)
 				this.run("INSERT OR IGNORE INTO retired_members VALUES (?, ?, ?)", task.sessionId, id, Date.now());
 			this.changed(id, task.sessionId ? [task.sessionId] : []);
@@ -4259,10 +3410,13 @@ export class MissionStore {
 					throw new Conflict("Artifact reference must be pinned to this task and revision");
 			}
 		}
-		this.transaction(() => {
-			this.run("INSERT INTO task_non_code_deliveries VALUES (?, ?)", task.id, encoded);
-			this.userVerifications.recordSource(`non-code:${task.id}`, task.id);
-		}, true);
+		this.transaction(
+			() => {
+				this.run("INSERT INTO task_non_code_deliveries VALUES (?, ?)", task.id, encoded);
+				this.userVerifications.recordSource(`non-code:${task.id}`, task.id);
+			},
+			{ reconcile: false },
+		);
 		return record;
 	}
 
@@ -4382,7 +3536,7 @@ export class MissionStore {
 			const task = this.task(id, taskId);
 			if (!task.sessionId || (task.sessionId !== sessionId && this.require(id).coordinatorSessionId !== sessionId))
 				throw new Conflict("Only the task owner or coordinator may submit delivery");
-			if (task.status === "done" || task.status === "dropped") throw new Conflict("Delivery task is closed");
+			if (!isOpenTask(task)) throw new Conflict("Delivery task is closed");
 			assertDeliveryAssignment(task, request.assignment);
 			if (this.sharedDefinitionRevision(taskId) !== request.definitionRevision)
 				throw new Conflict("Delivery task definition revision is stale");
@@ -4403,27 +3557,30 @@ export class MissionStore {
 				throw new Conflict("Resolved delivery evidence identity mismatch");
 			observations.push(observation);
 		}
-		const saved = this.transaction(() => {
-			const concurrentRetry = this.deliveryRetry(id, taskId, sessionId, "submission", request);
-			if (concurrentRetry) return concurrentRetry as DeliverySubmission;
-			if (admit() !== ownerSessionId) throw new Conflict("Delivery owner changed while resolving evidence");
-			// Recheck persisted pins/current brief after asynchronous host reads.
-			this.assertDeliveryEvidencePins(id, taskId, observations);
-			const record: DeliverySubmission = {
-				version: 1,
-				type: "submission",
-				id: randomUUID(),
-				missionId: id,
-				taskId,
-				actorSessionId: sessionId,
-				ownerSessionId,
-				createdAt: Date.now(),
-				request,
-				observations,
-			};
-			this.insertDelivery(record);
-			return record;
-		}, true);
+		const saved = this.transaction(
+			() => {
+				const concurrentRetry = this.deliveryRetry(id, taskId, sessionId, "submission", request);
+				if (concurrentRetry) return concurrentRetry as DeliverySubmission;
+				if (admit() !== ownerSessionId) throw new Conflict("Delivery owner changed while resolving evidence");
+				// Recheck persisted pins/current brief after asynchronous host reads.
+				this.assertDeliveryEvidencePins(id, taskId, observations);
+				const record: DeliverySubmission = {
+					version: 1,
+					type: "submission",
+					id: randomUUID(),
+					missionId: id,
+					taskId,
+					actorSessionId: sessionId,
+					ownerSessionId,
+					createdAt: Date.now(),
+					request,
+					observations,
+				};
+				this.insertDelivery(record);
+				return record;
+			},
+			{ reconcile: false },
+		);
 		await this.durable();
 		return saved;
 	}
@@ -4433,35 +3590,38 @@ export class MissionStore {
 		this.insights.assertOrdinaryTask(this.resolveTask(id, ref).id);
 		const request = deliveryJudgementWrite(value);
 		const taskId = this.resolveTask(id, ref).id;
-		const saved = this.transaction(() => {
-			const retry = this.deliveryRetry(id, taskId, sessionId, "judgement", request);
-			if (retry) return retry;
-			if (this.require(id).coordinatorSessionId !== sessionId)
-				throw new Conflict("Only the coordinator may record delivery judgement");
-			const task = this.task(id, taskId),
-				records = this.currentDeliveryEvidence(id, taskId);
-			const submission = latestSubmission(records);
-			if (!submission || submission.id !== request.submissionId)
-				throw new Conflict("Delivery judgement targets a stale submission");
-			assertDeliveryAssignment(task, submission.request.assignment);
-			if (this.sharedDefinitionRevision(taskId) !== submission.request.definitionRevision)
-				throw new Conflict("Delivery task definition revision is stale");
-			if (task.sessionId !== submission.ownerSessionId) throw new Conflict("Delivery owner is stale");
-			if ((latestJudgement(records)?.id ?? null) !== request.expectedJudgementId)
-				throw new Conflict("Delivery judgement revision conflict");
-			const record: DeliveryRecord = {
-				version: 1,
-				type: "judgement",
-				id: randomUUID(),
-				missionId: id,
-				taskId,
-				actorSessionId: sessionId,
-				createdAt: Date.now(),
-				request,
-			};
-			this.insertDelivery(record);
-			return record;
-		}, true);
+		const saved = this.transaction(
+			() => {
+				const retry = this.deliveryRetry(id, taskId, sessionId, "judgement", request);
+				if (retry) return retry;
+				if (this.require(id).coordinatorSessionId !== sessionId)
+					throw new Conflict("Only the coordinator may record delivery judgement");
+				const task = this.task(id, taskId),
+					records = this.currentDeliveryEvidence(id, taskId);
+				const submission = latestSubmission(records);
+				if (!submission || submission.id !== request.submissionId)
+					throw new Conflict("Delivery judgement targets a stale submission");
+				assertDeliveryAssignment(task, submission.request.assignment);
+				if (this.sharedDefinitionRevision(taskId) !== submission.request.definitionRevision)
+					throw new Conflict("Delivery task definition revision is stale");
+				if (task.sessionId !== submission.ownerSessionId) throw new Conflict("Delivery owner is stale");
+				if ((latestJudgement(records)?.id ?? null) !== request.expectedJudgementId)
+					throw new Conflict("Delivery judgement revision conflict");
+				const record: DeliveryRecord = {
+					version: 1,
+					type: "judgement",
+					id: randomUUID(),
+					missionId: id,
+					taskId,
+					actorSessionId: sessionId,
+					createdAt: Date.now(),
+					request,
+				};
+				this.insertDelivery(record);
+				return record;
+			},
+			{ reconcile: false },
+		);
 		await this.durable();
 		return saved;
 	}
@@ -4590,8 +3750,7 @@ export class MissionStore {
 				return;
 			}
 			const task = this.task(id, taskId);
-			if (!task.sessionId || task.status === "done" || task.status === "dropped")
-				throw new Conflict("Allocation task is unowned or closed");
+			if (!task.sessionId || !isOpenTask(task)) throw new Conflict("Allocation task is unowned or closed");
 			if (
 				task.sessionId !== request.ownerSessionId ||
 				this.sharedDefinitionRevision(taskId) !== request.definitionRevision
@@ -4612,36 +3771,39 @@ export class MissionStore {
 				observations.push(structuredClone(observed));
 			}
 		}
-		const saved = this.transaction(() => {
-			this.assertAllocationActor(id, sessionId, host.authorize);
-			const concurrent = this.allocationRetry(id, taskId, sessionId, request);
-			if (concurrent) return concurrent;
-			admit(); // Recheck all task, source-pin, membership and context fences after asynchronous reads.
-			if (request.action === "allocate") host.validateSources(observations);
-			this.assertDeliveryEvidencePins(id, taskId, observations);
-			const record: ContributionAllocation = {
-				version: 1,
-				id: randomUUID(),
-				missionId: id,
-				taskId,
-				recorderSessionId: sessionId,
-				createdAt: Date.now(),
-				request,
-				historicalTaskAttribution: "unknown",
-				scopeCoverage: "selected-only",
-			};
-			const encoded = JSON.stringify(record);
-			if (Buffer.byteLength(encoded) > 256 * 1024) throw new Error("Allocation record exceeds 256 KiB");
-			this.run(
-				"INSERT INTO task_contribution_allocations(mission_id,task_id,operation_id,record_id,record) VALUES(?,?,?,?,?)",
-				id,
-				taskId,
-				request.operationId,
-				record.id,
-				encoded,
-			);
-			return record;
-		}, true);
+		const saved = this.transaction(
+			() => {
+				this.assertAllocationActor(id, sessionId, host.authorize);
+				const concurrent = this.allocationRetry(id, taskId, sessionId, request);
+				if (concurrent) return concurrent;
+				admit(); // Recheck all task, source-pin, membership and context fences after asynchronous reads.
+				if (request.action === "allocate") host.validateSources(observations);
+				this.assertDeliveryEvidencePins(id, taskId, observations);
+				const record: ContributionAllocation = {
+					version: 1,
+					id: randomUUID(),
+					missionId: id,
+					taskId,
+					recorderSessionId: sessionId,
+					createdAt: Date.now(),
+					request,
+					historicalTaskAttribution: "unknown",
+					scopeCoverage: "selected-only",
+				};
+				const encoded = JSON.stringify(record);
+				if (Buffer.byteLength(encoded) > 256 * 1024) throw new Error("Allocation record exceeds 256 KiB");
+				this.run(
+					"INSERT INTO task_contribution_allocations(mission_id,task_id,operation_id,record_id,record) VALUES(?,?,?,?,?)",
+					id,
+					taskId,
+					request.operationId,
+					record.id,
+					encoded,
+				);
+				return record;
+			},
+			{ reconcile: false },
+		);
 		await this.durable();
 		this.assertAllocationActor(id, sessionId, host.authorize);
 		return saved;
@@ -4767,7 +3929,7 @@ export class MissionStore {
 			const task = this.task(id, taskId);
 			if (
 				!task.sessionId ||
-				["done", "dropped"].includes(task.status) ||
+				!isOpenTask(task) ||
 				task.sessionId !== request.ownerSessionId ||
 				this.sharedDefinitionRevision(taskId) !== request.definitionRevision
 			)
@@ -4807,38 +3969,41 @@ export class MissionStore {
 				throw new Conflict("Non-code policy retained identity unavailable or mismatched");
 			observations.push(structuredClone(observed));
 		}
-		const saved = this.transaction(() => {
-			this.assertNonCodePolicyActor(id, actor, host.authorize);
-			const concurrent = this.nonCodePolicyRetry(id, taskId, actor, request);
-			if (concurrent) return concurrent;
-			if (deliveryDigest(admit()) !== deliveryDigest(profileIds))
-				throw new Conflict("Non-code policy profile changed during reads");
-			host.validateSources(observations);
-			for (const o of observations) if (o.sourceOwnerSessionId) this.assertMember(id, o.sourceOwnerSessionId);
-			this.assertDeliveryEvidencePins(id, taskId, observations);
-			const record: NonCodeAcceptancePolicy = {
-				version: 1,
-				id: randomUUID(),
-				missionId: id,
-				taskId,
-				recorderSessionId: actor,
-				createdAt: Date.now(),
-				request,
-				destinations: observations,
-				authority: this.nonCodePolicyAuthority(id, request.authorityClaim),
-			};
-			const encoded = JSON.stringify(record);
-			if (Buffer.byteLength(encoded) > 256 * 1024) throw new Error("Non-code policy record exceeds 256 KiB");
-			this.run(
-				"INSERT INTO task_non_code_acceptance_policies(mission_id,task_id,operation_id,record_id,record) VALUES(?,?,?,?,?)",
-				id,
-				taskId,
-				request.operationId,
-				record.id,
-				encoded,
-			);
-			return record;
-		}, true);
+		const saved = this.transaction(
+			() => {
+				this.assertNonCodePolicyActor(id, actor, host.authorize);
+				const concurrent = this.nonCodePolicyRetry(id, taskId, actor, request);
+				if (concurrent) return concurrent;
+				if (deliveryDigest(admit()) !== deliveryDigest(profileIds))
+					throw new Conflict("Non-code policy profile changed during reads");
+				host.validateSources(observations);
+				for (const o of observations) if (o.sourceOwnerSessionId) this.assertMember(id, o.sourceOwnerSessionId);
+				this.assertDeliveryEvidencePins(id, taskId, observations);
+				const record: NonCodeAcceptancePolicy = {
+					version: 1,
+					id: randomUUID(),
+					missionId: id,
+					taskId,
+					recorderSessionId: actor,
+					createdAt: Date.now(),
+					request,
+					destinations: observations,
+					authority: this.nonCodePolicyAuthority(id, request.authorityClaim),
+				};
+				const encoded = JSON.stringify(record);
+				if (Buffer.byteLength(encoded) > 256 * 1024) throw new Error("Non-code policy record exceeds 256 KiB");
+				this.run(
+					"INSERT INTO task_non_code_acceptance_policies(mission_id,task_id,operation_id,record_id,record) VALUES(?,?,?,?,?)",
+					id,
+					taskId,
+					request.operationId,
+					record.id,
+					encoded,
+				);
+				return record;
+			},
+			{ reconcile: false },
+		);
 		await this.durable();
 		this.assertNonCodePolicyActor(id, actor, host.authorize);
 		return saved;
@@ -5219,25 +4384,28 @@ export class MissionStore {
 	): Promise<MissionReviewProfile> {
 		this.assertReviewActor(id, sessionId, authorize);
 		const request = reviewProfileWrite(value);
-		const saved = this.transaction(() => {
-			this.assertReviewActor(id, sessionId, authorize);
-			const retry = this.reviewRetry(id, sessionId, "profile", null, request);
-			if (retry) return retry as MissionReviewProfile;
-			if ((this.reviewProfile(id, request.profileId)?.revision ?? 0) !== request.expectedRevision)
-				throw new Conflict("Review profile revision conflict");
-			const record: MissionReviewProfile = {
-				version: 1,
-				type: "profile",
-				id: randomUUID(),
-				missionId: id,
-				recorderSessionId: sessionId,
-				createdAt: Date.now(),
-				revision: request.expectedRevision + 1,
-				request,
-			};
-			this.insertReview(record);
-			return record;
-		}, true);
+		const saved = this.transaction(
+			() => {
+				this.assertReviewActor(id, sessionId, authorize);
+				const retry = this.reviewRetry(id, sessionId, "profile", null, request);
+				if (retry) return retry as MissionReviewProfile;
+				if ((this.reviewProfile(id, request.profileId)?.revision ?? 0) !== request.expectedRevision)
+					throw new Conflict("Review profile revision conflict");
+				const record: MissionReviewProfile = {
+					version: 1,
+					type: "profile",
+					id: randomUUID(),
+					missionId: id,
+					recorderSessionId: sessionId,
+					createdAt: Date.now(),
+					revision: request.expectedRevision + 1,
+					request,
+				};
+				this.insertReview(record);
+				return record;
+			},
+			{ reconcile: false },
+		);
 		await this.durable();
 		return saved;
 	}
@@ -5267,8 +4435,7 @@ export class MissionStore {
 			this.assertReviewActor(id, sessionId, host.authorize, taskId);
 			const task = this.task(id, taskId),
 				profile = this.reviewProfile(id, request.profileId);
-			if (!task.sessionId || task.status === "done" || task.status === "dropped")
-				throw new Conflict("Review task is unowned or closed");
+			if (!task.sessionId || !isOpenTask(task)) throw new Conflict("Review task is unowned or closed");
 			assertDeliveryAssignment(task, request.assignment);
 			if (this.sharedDefinitionRevision(taskId) !== request.definitionRevision)
 				throw new Conflict("Review task definition is stale");
@@ -5306,32 +4473,38 @@ export class MissionStore {
 		}
 		await host.validateCitations(request);
 		const producer = reviewProducer(await host.observeProducer(request));
-		const saved = this.transaction(() => {
-			this.assertReviewActor(id, sessionId, host.authorize, taskId);
-			const concurrent = this.reviewRetry(id, sessionId, "result", taskId, request);
-			if (concurrent) return concurrent as MissionReviewResult;
-			if (admit() !== ownerSessionId || deliveryDigest(contextFence) !== deliveryDigest(this.reviewContextFence(id)))
-				throw new Conflict("Review source/context or ownership changed during admission");
-			this.assertDeliveryEvidencePins(id, taskId, observations);
-			const record: MissionReviewResult = {
-				version: 1,
-				type: "result",
-				id: randomUUID(),
-				missionId: id,
-				taskId,
-				recorderSessionId: sessionId,
-				createdAt: Date.now(),
-				ownerSessionId,
-				request,
-				observations,
-				contextFence,
-				producer,
-				independence: "unavailable",
-				humanAuthorship: "unavailable",
-			};
-			this.insertReview(record);
-			return record;
-		}, true);
+		const saved = this.transaction(
+			() => {
+				this.assertReviewActor(id, sessionId, host.authorize, taskId);
+				const concurrent = this.reviewRetry(id, sessionId, "result", taskId, request);
+				if (concurrent) return concurrent as MissionReviewResult;
+				if (
+					admit() !== ownerSessionId ||
+					deliveryDigest(contextFence) !== deliveryDigest(this.reviewContextFence(id))
+				)
+					throw new Conflict("Review source/context or ownership changed during admission");
+				this.assertDeliveryEvidencePins(id, taskId, observations);
+				const record: MissionReviewResult = {
+					version: 1,
+					type: "result",
+					id: randomUUID(),
+					missionId: id,
+					taskId,
+					recorderSessionId: sessionId,
+					createdAt: Date.now(),
+					ownerSessionId,
+					request,
+					observations,
+					contextFence,
+					producer,
+					independence: "unavailable",
+					humanAuthorship: "unavailable",
+				};
+				this.insertReview(record);
+				return record;
+			},
+			{ reconcile: false },
+		);
 		await this.durable();
 		return saved;
 	}
@@ -5494,7 +4667,9 @@ export class MissionStore {
 		const now = Date.now();
 		this.transaction(() => {
 			const phase = this.taskPhase(id, { milestone: group }, actor);
-			const update = this.db.prepare("UPDATE tasks SET milestone = ?, phase_id = ?, updated_at = ? WHERE id = ?");
+			const update = this.database.prepare(
+				"UPDATE tasks SET milestone = ?, phase_id = ?, updated_at = ? WHERE id = ?",
+			);
 			for (const task of changed) update.run(group || null, phase?.id ?? null, now, task.id);
 			this.event(id, "task", `${changed.length} task milestones ${group ? `set to ${group}` : "cleared"}`, actor, {
 				at: now,
@@ -5564,8 +4739,7 @@ export class MissionStore {
 				reasons.push(`Task #${task.number} is already starting in another chat`);
 			this.assertPhaseAdmission(task, overridePhaseGating);
 			if (task.sessionId) reasons.push(`Task #${task.number} is already claimed by a chat`);
-			if (task.status === "done" || task.status === "dropped" || task.status === "delegated")
-				reasons.push(`Task #${task.number} is ${task.status}`);
+			if (!isOpenTask(task) || task.status === "delegated") reasons.push(`Task #${task.number} is ${task.status}`);
 			for (const depId of task.dependsOn ?? []) {
 				if (selected.has(depId)) continue;
 				const dep = this.resolveTask(id, depId);
@@ -5656,7 +4830,7 @@ export class MissionStore {
 			);
 			return this.task(id, before.id);
 		});
-		if (!this.writing && before.sessionId) this.changed(id, [before.sessionId]);
+		if (!this.database.writing && before.sessionId) this.changed(id, [before.sessionId]);
 		return task;
 	}
 
@@ -5892,7 +5066,7 @@ export class MissionStore {
 				at,
 				before.id,
 			);
-			this.knowledge.invalidateMission(id, "decisionId", before.id);
+			this.sourceChanged({ missionId: id, kind: "decision", decisionId: before.id });
 			this.event(id, "decision", `Decision D${before.number} replaced by D${replacement.number}`, actor, {
 				at,
 			});
@@ -5926,7 +5100,7 @@ export class MissionStore {
 			);
 			this.dropProposal(id, before.id);
 			if (before.text !== decisionText || before.audience !== scope)
-				this.knowledge.invalidateMission(id, "decisionId", before.id);
+				this.sourceChanged({ missionId: id, kind: "decision", decisionId: before.id });
 			this.event(
 				id,
 				"decision",
@@ -5955,7 +5129,7 @@ export class MissionStore {
 			}
 			this.dropProposal(id, before.id);
 			this.run("DELETE FROM decisions WHERE id = ?", before.id);
-			this.knowledge.invalidateMission(id, "decisionId", before.id);
+			this.sourceChanged({ missionId: id, kind: "decision", decisionId: before.id });
 			this.event(
 				id,
 				"decision",
@@ -5988,7 +5162,7 @@ export class MissionStore {
 						id,
 					)
 				: undefined;
-		if ((!decision && !proposal) || decision?.replacement || decision?.withdrawn)
+		if ((!decision && !proposal) || (decision && !isActiveDecision(decision)))
 			throw new Conflict("Assistance source is no longer current");
 		return {
 			projectId: mission.projectId,
@@ -6114,7 +5288,7 @@ export class MissionStore {
 				throw new Conflict("Withdrawal operationId already has a different request");
 			return proposal;
 		}
-		if (decision.replacement || decision.withdrawn) throw new Conflict("Only active decisions can be withdrawn");
+		if (!isActiveDecision(decision)) throw new Conflict("Only active decisions can be withdrawn");
 		if (
 			this.one(
 				"SELECT 1 FROM decision_proposals WHERE mission_id = ? AND decision_id = ? AND status = 'pending'",
@@ -6158,14 +5332,14 @@ export class MissionStore {
 		withdrawal: NonNullable<MissionDecision["withdrawn"]>,
 		actor: MissionActor,
 	): void {
-		if (decision.replacement || decision.withdrawn) throw new Conflict("Only active decisions can be withdrawn");
+		if (!isActiveDecision(decision)) throw new Conflict("Only active decisions can be withdrawn");
 		this.run(
 			"UPDATE decisions SET withdrawn=?,updated_at=? WHERE id=?",
 			JSON.stringify(withdrawal),
 			withdrawal.at,
 			decision.id,
 		);
-		this.knowledge.invalidateMission(id, "decisionId", decision.id);
+		this.sourceChanged({ missionId: id, kind: "decision", decisionId: decision.id });
 		this.event(
 			id,
 			"decision",
@@ -6196,7 +5370,7 @@ export class MissionStore {
 			return proposal;
 		}
 		const decision = this.decision(id, proposal.decisionId);
-		if (accept && proposal.kind === "withdraw" && (decision.replacement || decision.withdrawn))
+		if (accept && proposal.kind === "withdraw" && !isActiveDecision(decision))
 			throw new Conflict("Only active decisions can be withdrawn");
 		if (proposal.kind === "remove" && replacement !== undefined) throw new Error("Removal has no replacement text");
 		// Reuse user-only writers, suppressing their broadcasts until the whole transaction commits.
@@ -6407,7 +5581,7 @@ export class MissionStore {
 				for (const url of urls) {
 					const parsed = normalizeResourceWrite({ url });
 					if (parsed.kind !== "github.pr") continue;
-					const observed = this.db
+					const observed = this.database
 						.prepare("INSERT OR IGNORE INTO automatic_pull_request_observations (mission_id, url) VALUES (?, ?)")
 						.run(id, parsed.url);
 					if (!observed.changes) continue;
@@ -6678,8 +5852,7 @@ export class MissionStore {
 		}
 		if (taskId !== undefined) {
 			const task = this.resolveTask(missionId, taskId);
-			if (task.status === "done" || task.status === "dropped")
-				throw new Conflict(`Task #${task.number} is already ${task.status}`);
+			if (!isOpenTask(task)) throw new Conflict(`Task #${task.number} is already ${task.status}`);
 			return { missionId, taskId: task.id };
 		}
 		const tasks = this.all(
@@ -7461,43 +6634,6 @@ function taskFrom(row: Row): MissionTask {
 		updatedAt: num(row.updated_at!),
 		...(optional(row.completed_at, num) !== undefined ? { completedAt: num(row.completed_at!) } : {}),
 	};
-}
-
-/** Quotes an SQLite identifier read from sqlite_master. */
-function identifier(name: string): string {
-	return `"${name.replaceAll('"', '""')}"`;
-}
-
-/**
- * Copies a migrated missions.sqlite into an in-memory database with the same schema, rows and AUTOINCREMENT
- * counters. Indexes are created after the rows. Foreign keys are enforced from then on.
- */
-function loadInMemory(file: string): DatabaseSync {
-	const db = new DatabaseSync(":memory:");
-	db.exec("PRAGMA foreign_keys = OFF");
-	db.prepare("ATTACH DATABASE ? AS disk").run(file);
-	try {
-		const objects = db
-			.prepare(
-				`SELECT type, name, sql FROM disk.sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
-				ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, rowid`,
-			)
-			.all() as { type: string; name: string; sql: string }[];
-		db.exec("BEGIN");
-		for (const object of objects) {
-			db.exec(object.sql);
-			if (object.type === "table")
-				db.exec(`INSERT INTO main.${identifier(object.name)} SELECT * FROM disk.${identifier(object.name)}`);
-		}
-		const sequence = "SELECT 1 FROM %s.sqlite_master WHERE name = 'sqlite_sequence'";
-		if (db.prepare(sequence.replace("%s", "disk")).get() && db.prepare(sequence.replace("%s", "main")).get())
-			db.exec("INSERT INTO main.sqlite_sequence SELECT * FROM disk.sqlite_sequence");
-		db.exec("COMMIT");
-	} finally {
-		db.exec("DETACH DATABASE disk");
-	}
-	db.exec("PRAGMA foreign_keys = ON");
-	return db;
 }
 
 function artifactFrom(row: Row): MissionArtifactLink {

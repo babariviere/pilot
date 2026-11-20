@@ -157,12 +157,15 @@ impl Joined {
     fn reopen(&mut self) {
         self.close().unwrap();
         let clock = self.clock.clone();
-        let host = NativeHost::open_day(
+        let host = NativeHost::open_with_options(
             self.source.clone(),
             self.path.join("journal"),
-            DaySource {
-                user_id: me(),
-                clock: Arc::new(move || clock.lock().unwrap().clone()),
+            pilot_day_native::host::Options {
+                day: Some(DaySource {
+                    user_id: me(),
+                    clock: Arc::new(move || clock.lock().unwrap().clone()),
+                }),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -183,7 +186,6 @@ impl Joined {
                 .expect("synthetic WS handshake and authoritative refresh joined");
             });
         assert_eq!(host.snapshot().freshness.state, FreshnessState::Live);
-        host.refresh().recv_blocking().unwrap().unwrap();
         self.bridge = Some(Bridge::new(DayRoot::new(host.clone())));
         self.host = Some(host);
     }

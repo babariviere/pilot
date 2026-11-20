@@ -28,7 +28,7 @@ fn a_global_offline_window_settles_instead_of_refreshing_its_own_failures() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
-    let host = NativeHost::open(
+    let host = NativeHost::open_with_options(
         Source {
             profile: dir.clone(),
             port,
@@ -39,6 +39,7 @@ fn a_global_offline_window_settles_instead_of_refreshing_its_own_failures() {
             project: None,
         },
         dir.join("journal"),
+        Default::default(),
     )
     .unwrap();
     let bridge = Bridge::new(DayRoot::new(host.clone()));

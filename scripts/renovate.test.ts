@@ -52,7 +52,7 @@ test("the compatible bundled pin matches the lockfile's specifier and resolution
 	assert.match(value, /^git\+https:\/\/github\.com\/babariviere\/pi-extensions\.git#[a-f0-9]{40}$/);
 	const digest = value.split("#")[1];
 	const lock = readFileSync(new URL("../pnpm-lock.yaml", import.meta.url), "utf8");
-	const importer = lock.split("  packages/kernel:\n")[1]!.split("\n  packages/protocol:")[0]!;
+	const importer = /^ {2}packages\/kernel:\n((?: {4}.*\n|\n)*)/m.exec(lock)![1]!;
 	assert.ok(importer.includes(`specifier: ${value}\n`));
 	assert.ok(importer.includes(`version: https://codeload.github.com/babariviere/pi-extensions/tar.gz/${digest}(`));
 });

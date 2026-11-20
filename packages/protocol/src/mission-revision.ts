@@ -1,4 +1,4 @@
-import type { MissionAssignmentWrite, MissionDecisionAudience } from "./index.ts";
+import type { MissionAssignmentWrite, MissionDecisionAudience } from "./missions.ts";
 
 /** Reviewed planning changes only. Instructions and permissions are separate, unapplied proposals. */
 export interface MissionRevisionDelta {

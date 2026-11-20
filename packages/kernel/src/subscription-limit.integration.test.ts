@@ -15,6 +15,7 @@ import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
+import { fakeHostCall } from "./testing/host-calls.ts";
 
 function deferred() {
 	let resolve!: () => void;
@@ -104,17 +105,19 @@ async function fixture(t: TestContext) {
 				onWorking: (working, completion) => {
 					if (!working && completion) completed.resolve();
 				},
-				reportSubscriptionLimit: async (limit) => {
-					assert.equal(limit.provider, physical.provider);
-					const entries = (await session!.conversation.context(BACKGROUND_CONTEXT)).entries;
-					assert.equal(
-						entries.filter((entry) => entry.kind === "pi.tool-result").length,
-						1,
-						"the tool result is committed before the usage pause",
-					);
-					await save(true);
-					reported.resolve();
-				},
+				call: fakeHostCall({
+					"subscription.limit": async ({ limit }) => {
+						assert.equal(limit.provider, physical.provider);
+						const entries = (await session!.conversation.context(BACKGROUND_CONTEXT)).entries;
+						assert.equal(
+							entries.filter((entry) => entry.kind === "pi.tool-result").length,
+							1,
+							"the tool result is committed before the usage pause",
+						);
+						await save(true);
+						reported.resolve();
+					},
+				}),
 			},
 		));
 	t.after(async () => {

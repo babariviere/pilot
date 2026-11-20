@@ -1,6 +1,7 @@
 /** Standalone saved rounds. Publication, submission and their execution hold share one transaction. */
-import { defineDoc, type ConversationId, type EntryId, type Tx } from "@earendil-works/pi-durable";
+import { type ConversationId, defineDoc, type EntryId, type Tx } from "@earendil-works/pi-durable";
 import type { AgentQuestion, InterviewQuestion, StandaloneInterviewReply } from "@pilot/protocol";
+import { INTERVIEW_SUBMISSION_ENTRY, QUESTION_ENTRY } from "./entry-kinds.ts";
 import {
 	completeAnswers,
 	interviewDigest,
@@ -57,13 +58,13 @@ export async function acceptInterviewReply(
 	if (!round || round.entryId !== entryId || round.roundId !== reply.roundId || round.submission)
 		throw new Error("That interview round is no longer pending");
 	const entry = await tx.entry(entryId as EntryId);
-	if (entry?.conversationId !== conversationId || entry.kind !== "pilot.question")
+	if (entry?.conversationId !== conversationId || entry.kind !== QUESTION_ENTRY)
 		throw new Error("Interview belongs to another conversation");
 	validateInterviewReply(round.questions, reply);
 	const answers = structuredClone(reply.answers);
 	const submission = { operationId, answers, digest: interviewDigest({ questions: round.questions, answers }) };
 	await tx.appendEntry(conversationId, {
-		kind: "pilot.interview-submission",
+		kind: INTERVIEW_SUBMISSION_ENTRY,
 		data: { entryId, roundId: round.roundId, questions: round.questions, ...submission },
 		model: [],
 	});

@@ -1,38 +1,45 @@
 /** Native model settings reuse Pi's catalogue and the credential broker, never a chat. */
 import { createHash } from "node:crypto";
 import type { DurableOperation, SetupStartRequest, WorkProfile } from "@pilot/protocol";
+import type { BackgroundSubscription } from "./background-subscription.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { FundingRefused } from "./funding-errors.ts";
 import { type ModelDefaults, ModelDefaultsRefused, workProfilesProblem } from "./model-controls-store.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
 import type { ModelCatalog } from "./models.ts";
-import { type OperationJournal, OperationRejected, sameHost } from "./operation-journal.ts";
+import { parseIntent, SerialAdmissions } from "./native-intent.ts";
+import { type OperationJournal, OperationRejected } from "./operation-journal.ts";
+import type { ControlOperation } from "./operations.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { SetupService } from "./setup.ts";
 import { SetupError } from "./setup-error.ts";
 
 export const MODEL_CONTROLS = "model-controls";
+const OUTCOME_UNKNOWN = "Model settings outcome unknown; lookup only";
 type ProviderSetup = Pick<SetupService, "readiness" | "list" | "start" | "cancel" | "logout">;
 export class ModelControls {
-	private pending: Promise<unknown> = Promise.resolve();
+	private readonly admissions = new SerialAdmissions(OUTCOME_UNKNOWN);
 	private readonly models: ModelCatalog;
 	private readonly projects: ProjectStore;
 	private readonly setup?: ProviderSetup;
 	private readonly sessions?: SessionManager;
 	private readonly readOnly: boolean;
+	private readonly backgroundSubscription?: BackgroundSubscription;
 	constructor(
 		models: ModelCatalog,
 		projects: ProjectStore,
 		setup?: ProviderSetup,
 		sessions?: SessionManager,
 		readOnly = false,
+		backgroundSubscription?: BackgroundSubscription,
 	) {
 		this.models = models;
 		this.projects = projects;
 		this.setup = setup;
 		this.sessions = sessions;
 		this.readOnly = readOnly;
+		this.backgroundSubscription = backgroundSubscription;
 	}
 	async recovery(projectId: string, sessionId: string) {
 		const s = this.sessions?.get(sessionId);
@@ -63,7 +70,7 @@ export class ModelControls {
 			? (this.sessions?.list({ projectId }).filter((s) => s.failedModelSource && !s.archivedAt) ?? [])
 			: [];
 		const funding = await this.sessions?.funding?.read(projectId);
-		const backgroundSubscription = await this.sessions?.backgroundSubscription?.read();
+		const backgroundSubscription = await this.backgroundSubscription?.read();
 		const fundedWork =
 			projectId && this.sessions?.funding
 				? this.sessions
@@ -128,31 +135,21 @@ export class ModelControls {
 	}
 	/** No replay of an entered write, login, cancel or logout after an uncertain receipt. */
 	admit(op: DurableOperation, journal: OperationJournal, firstEntry: boolean): Promise<unknown> {
-		if (!firstEntry) return Promise.reject(new Error("Model settings outcome unknown; lookup only"));
-		const work = this.pending.then(() => this.apply(op, journal));
-		this.pending = work.catch(() => undefined);
-		return work;
+		return this.admissions.admit(firstEntry, () => this.apply(op, journal));
 	}
 	private async apply(op: DurableOperation, journal: OperationJournal) {
-		let p: Record<string, unknown>;
-		try {
-			p = JSON.parse(op.payload);
-			if (
-				!p ||
-				typeof p !== "object" ||
-				Array.isArray(p) ||
-				Object.keys(p).sort().join() !== "action,binding,projectId,purpose,value" ||
-				p.purpose !== MODEL_CONTROLS ||
-				op.kind !== MODEL_CONTROLS ||
-				!sameHost(op.origin, journal.destination) ||
-				(p.projectId !== null &&
-					(typeof p.projectId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(p.projectId))) ||
-				op.targetId !== (p.projectId ?? "global-models")
-			)
-				throw new Error();
-		} catch {
+		const p = parseIntent(
+			op,
+			journal.destination,
+			MODEL_CONTROLS,
+			["action", "binding", "projectId", "purpose", "value"],
+			"Invalid native model settings intent",
+		);
+		if (
+			(p.projectId !== null && (typeof p.projectId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(p.projectId))) ||
+			op.targetId !== (p.projectId ?? "global-models")
+		)
 			throw new OperationRejected("Invalid native model settings intent");
-		}
 		let read: Awaited<ReturnType<ModelControls["read"]>>;
 		try {
 			read = await this.read((p.projectId as string | undefined) ?? undefined);
@@ -164,9 +161,9 @@ export class ModelControls {
 		try {
 			switch (p.action) {
 				case "background-continue": {
-					if (!this.sessions?.backgroundSubscription || !["anthropic", "openai"].includes(p.value as string))
+					if (!this.backgroundSubscription || !["anthropic", "openai"].includes(p.value as string))
 						throw new OperationRejected("Invalid background subscription hold");
-					await this.sessions.backgroundSubscription.continueAnyway(
+					await this.backgroundSubscription.continueAnyway(
 						p.value as "anthropic" | "openai",
 						read.backgroundSubscription!,
 					);
@@ -330,3 +327,10 @@ export class ModelControls {
 		return { action: p.action, saved: true };
 	}
 }
+
+export const modelOperations = (controls: ModelControls, journal: OperationJournal | undefined): ControlOperation => ({
+	kind: MODEL_CONTROLS,
+	unavailable: "Native model settings unavailable",
+	outcomeUnknown: OUTCOME_UNKNOWN,
+	admit: journal && ((op, firstEntry) => controls.admit(op, journal, firstEntry)),
+});

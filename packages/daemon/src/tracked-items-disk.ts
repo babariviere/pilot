@@ -4,7 +4,6 @@ import { DatabaseSync } from "node:sqlite";
 import type {
 	InboxHiddenLabel,
 	LinearSourceSummary,
-	SessionPullRequest,
 	SessionTrackedSource,
 	SlackCorrection,
 	SlackOverrides,
@@ -16,16 +15,12 @@ import type {
 	TrackingJson,
 } from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
-import { LinearSizeDisk } from "./linear-size.ts";
+import { LinearSizeDisk } from "./linear-size-disk.ts";
 import { SlackCaseDisk } from "./slack-cases.ts";
 import { parseSlackClassification, type SlackClassification } from "./slack-classifier.ts";
 import { SLACK_SEARCH_CHARS } from "./slack-format.ts";
-import {
-	SLACK_REACTION_BATCH,
-	SLACK_REACTION_RECHECK_MS,
-	SLACK_WAITING_BATCH,
-	SLACK_WAITING_INTERVAL_MS,
-} from "./slack-poll-policy.ts";
+import { SLACK_WAITING_BATCH, SLACK_WAITING_INTERVAL_MS } from "./slack-poll-policy.ts";
+import { sourceId } from "./source-kinds.ts";
 import { validatePatch } from "./tracked-item-patch.ts";
 import { TriageGuideDisk } from "./triage-guide-disk.ts";
 
@@ -43,16 +38,8 @@ export interface TrackedSessionSource {
 }
 /** Linked chats read per project refresh. Chats beyond it show no source rather than slowing the refresh. */
 const SESSION_SOURCE_LIMIT = 5_000;
-export interface SlackReactionRead {
-	item: TrackedItem;
-	version: number;
-}
-export interface SlackReactionBatch {
-	reads: SlackReactionRead[];
-	budget: boolean;
-}
 /** A waiting message to read, with the start of its wait (the fence for its result) and replies already seen. */
-export interface SlackWaitingRead {
+interface SlackWaitingRead {
 	item: TrackedItem;
 	since: number;
 	/** Slack ts after which replies are new. */
@@ -60,7 +47,6 @@ export interface SlackWaitingRead {
 }
 export interface SlackWaitingBatch {
 	reads: SlackWaitingRead[];
-	budget: boolean;
 }
 /** What a slack_status call changed. */
 export interface SlackAgentStatusResult {
@@ -72,6 +58,8 @@ type SlackWaiting = { since: number; reason?: string; afterTs?: string; checkedA
 /** What a chat's agent may set with slack_status. */
 export type SlackAgentStatus = "waiting" | "in_progress" | "done";
 const SLACK_AGENT_STATUSES: readonly string[] = ["waiting", "in_progress"];
+/** Stored on a Slack Start that failed or was interrupted, and shown to the user. */
+const SLACK_START_ERROR = "Couldn't add eyes reaction in Slack.";
 
 export type TrackedInput = Pick<TrackedItem, "externalId" | "title" | "url" | "status" | "metadata" | "updatedAt"> & {
 	/** Slack only: the thread's text, kept locally for search and never returned to clients. */
@@ -92,13 +80,6 @@ export interface SlackSearchQuery {
 	/** Exact threads, from a pasted Slack link. */
 	externalIds?: string[];
 	limit: number;
-}
-export interface SlackPullRequestObservation {
-	projectId: string;
-	sessionId: string;
-	prs: SessionPullRequest[];
-	/** Unknown explicitly bound heads must not count as merged. */
-	pending: boolean;
 }
 export interface SourceCheckpoint {
 	configKey: string;
@@ -130,9 +111,6 @@ type Row = {
 	closed_by_label: string | null;
 	slack_completion: string;
 	slack_done: string | null;
-	slack_reaction_seen: number;
-	slack_reaction_checked: number;
-	slack_status_version: number;
 	slack_waiting: string | null;
 	linear_size_override: import("@pilot/protocol").LinearSize | null;
 	slack_case_id: string | null;
@@ -204,96 +182,59 @@ export class TrackedItemDisk {
 			 channel TEXT NOT NULL, thread_ts TEXT NOT NULL, state TEXT NOT NULL, result TEXT,
 			 PRIMARY KEY(channel, thread_ts)
 			);
-			-- Keep the legacy column name; hourly ISO keys do not reuse old daily counters.
-			CREATE TABLE IF NOT EXISTS slack_budget (day TEXT PRIMARY KEY, used INTEGER NOT NULL);
 			CREATE TABLE IF NOT EXISTS slack_groups (handle TEXT PRIMARY KEY, id TEXT, checked_at INTEGER NOT NULL);
 		`);
+		const columns = new Set(
+			this.db
+				.prepare("PRAGMA table_info(tracked_items)")
+				.all()
+				.map((column) => String(column.name)),
+		);
+		// Older files may also hold slack_reaction_seen, slack_reaction_checked and slack_status_version from retired
+		// Slack reaction reads. Nothing reads them; they stay as they are.
 		for (const [name, definition] of [
 			["intake_revision", "INTEGER NOT NULL DEFAULT 1"],
 			["intake_state", "TEXT NOT NULL DEFAULT 'new'"],
 			["intake_start", "TEXT"],
-		]) {
-			if (
-				!this.db
-					.prepare("PRAGMA table_info(tracked_items)")
-					.all()
-					.some((c) => c.name === name)
-			)
-				this.db.exec(`ALTER TABLE tracked_items ADD COLUMN ${name} ${definition}`);
-		}
+			["active", "INTEGER NOT NULL DEFAULT 1"],
+			["links", "TEXT"],
+			["linear_start", "TEXT"],
+			["slack_start", "TEXT"],
+			["slack_overrides", "TEXT NOT NULL DEFAULT '{}'"],
+			["slack_status", "TEXT NOT NULL DEFAULT 'open'"],
+			// The close label that dismissed a Slack message, while no status of the user's replaced it.
+			["closed_by_label", "TEXT"],
+			["slack_completion", "TEXT NOT NULL DEFAULT '{}'"],
+			// Old done-reaction outcomes. Pilot no longer writes them; they stay readable.
+			["slack_done", "TEXT"],
+			// While a Slack message waits: { since, reason?, afterTs?, checkedAt? }. Stale once the status changes.
+			["slack_waiting", "TEXT"],
+			["slack_case_id", "TEXT"],
+			["linear_size_override", "TEXT"],
+			// Slack title, channel and thread text in searchForm, for search. Rows stored earlier match by title.
+			["search_text", "TEXT"],
+		])
+			if (!columns.has(name)) this.db.exec(`ALTER TABLE tracked_items ADD COLUMN ${name} ${definition}`);
 		// All writers, including source sync and legacy PATCH, invalidate native CAS.
 		this.db.exec(`CREATE TRIGGER IF NOT EXISTS tracked_intake_revision AFTER UPDATE ON tracked_items
 			WHEN NEW.intake_revision = OLD.intake_revision BEGIN
 			UPDATE tracked_items SET intake_revision=OLD.intake_revision+1 WHERE id=NEW.id; END;`);
-		if (
-			!this.db
-				.prepare("PRAGMA table_info(tracked_items)")
-				.all()
-				.some((column) => column.name === "active")
-		)
-			this.db.exec("ALTER TABLE tracked_items ADD COLUMN active INTEGER NOT NULL DEFAULT 1");
-		if (
-			!this.db
-				.prepare("PRAGMA table_info(tracked_items)")
-				.all()
-				.some((column) => column.name === "links")
-		)
-			this.db.exec("ALTER TABLE tracked_items ADD COLUMN links TEXT");
-		if (
-			!this.db
-				.prepare("PRAGMA table_info(tracked_items)")
-				.all()
-				.some((column) => column.name === "linear_start")
-		)
-			this.db.exec("ALTER TABLE tracked_items ADD COLUMN linear_start TEXT");
-		if (
-			!this.db
-				.prepare("PRAGMA table_info(tracked_items)")
-				.all()
-				.some((column) => column.name === "slack_start")
-		)
-			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_start TEXT");
 		// A prior process may have exited after admission but before the remote result was durable.
 		this.db
 			.prepare(`UPDATE tracked_items SET slack_start=json_set(slack_start, '$.outcome', 'error',
 			'$.error', ?) WHERE slack_start IS NOT NULL AND json_extract(slack_start, '$.outcome') IS NULL`)
-			.run("Couldn't add eyes reaction in Slack.");
-		const columns = this.db.prepare("PRAGMA table_info(tracked_items)").all();
-		if (!columns.some((column) => column.name === "slack_overrides"))
-			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_overrides TEXT NOT NULL DEFAULT '{}'");
-		if (!columns.some((column) => column.name === "slack_status")) {
-			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_status TEXT NOT NULL DEFAULT 'open'");
+			.run(SLACK_START_ERROR);
+		if (!columns.has("slack_status"))
 			this.db.exec(
 				"UPDATE tracked_items SET slack_status=CASE WHEN dismissed=1 THEN 'dismissed' WHEN session_id IS NOT NULL OR mission_id IS NOT NULL THEN 'in_progress' ELSE 'open' END WHERE kind='slack'",
 			);
-		}
-		// The close label that dismissed a Slack message, while no status of the user's replaced it.
-		if (!columns.some((column) => column.name === "closed_by_label"))
-			this.db.exec("ALTER TABLE tracked_items ADD COLUMN closed_by_label TEXT");
-		if (!columns.some((column) => column.name === "slack_completion"))
-			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_completion TEXT NOT NULL DEFAULT '{}'");
-		if (!columns.some((column) => column.name === "slack_done"))
-			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_done TEXT");
-		for (const column of ["slack_reaction_seen", "slack_reaction_checked", "slack_status_version"])
-			if (!columns.some((entry) => entry.name === column))
-				this.db.exec(`ALTER TABLE tracked_items ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
-		// While a Slack message waits: { since, reason?, afterTs?, checkedAt? }. Stale once the status changes.
-		if (!columns.some((column) => column.name === "slack_waiting"))
-			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_waiting TEXT");
-		// Waiting messages joined the reaction reads; the older index no longer covers their query.
-		// Pilot no longer adds a done reaction, so its pending index is dropped. Old slack_done values stay readable.
+		// Indexes of retired Slack reaction reads and done reactions. Tables slack_budget and slack_pr_observations
+		// in older files are no longer read or written.
 		this.db.exec(`DROP INDEX IF EXISTS slack_reaction_reads;
 			DROP INDEX IF EXISTS slack_done_pending;
-			CREATE INDEX IF NOT EXISTS slack_reaction_reads_unfinished ON tracked_items(project_id, slack_reaction_checked, id)
-			WHERE kind='slack' AND active=1 AND dismissed=0 AND slack_status IN ('open','in_progress','waiting');
+			DROP INDEX IF EXISTS slack_reaction_reads_unfinished;
 			CREATE INDEX IF NOT EXISTS slack_waiting_reads ON tracked_items(project_id, id)
 			WHERE kind='slack' AND active=1 AND slack_status='waiting';`);
-		this.db.exec(`
-			CREATE TABLE IF NOT EXISTS slack_pr_observations (
-			 session_id TEXT NOT NULL, url TEXT NOT NULL, state TEXT NOT NULL, checked_at INTEGER NOT NULL,
-			 merge_seen INTEGER NOT NULL, PRIMARY KEY(session_id, url)
-			);
-		`);
 		if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='tracked_item_links'").get()) {
 			this.db.exec(`
 				CREATE TABLE tracked_item_links (item_id TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL,
@@ -322,14 +263,7 @@ export class TrackedItemDisk {
 		`);
 		this.triage = new TriageGuideDisk(this.db);
 		this.sizes = new LinearSizeDisk(this.db);
-		if (!columns.some((column) => column.name === "slack_case_id"))
-			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_case_id TEXT");
 		this.cases = new SlackCaseDisk(this.db, this.triage);
-		if (!columns.some((column) => column.name === "linear_size_override"))
-			this.db.exec("ALTER TABLE tracked_items ADD COLUMN linear_size_override TEXT");
-		// Slack title, channel and thread text in searchForm, for search. Rows stored earlier match by title.
-		if (!columns.some((column) => column.name === "search_text"))
-			this.db.exec("ALTER TABLE tracked_items ADD COLUMN search_text TEXT");
 		if (Number(this.db.prepare("PRAGMA user_version").get()!.user_version) < 1)
 			this.db.exec(`
 			UPDATE slack_classifications SET result=json_object(
@@ -425,7 +359,7 @@ export class TrackedItemDisk {
 			.run(handle, id, now);
 	}
 	/** Accept legacy label settings without rewriting stored status or closure evidence. */
-	slackLabelEffects(projectId: string, close: string[]): boolean {
+	slackLabelEffects(projectId: string, close: string[]): void {
 		if (
 			typeof projectId !== "string" ||
 			!projectId ||
@@ -434,7 +368,6 @@ export class TrackedItemDisk {
 			close.some((label) => typeof label !== "string" || !label || label.length > 80)
 		)
 			throw new Error("Invalid Slack label effects");
-		return false;
 	}
 
 	onChange(listener: (projectId: string) => void): () => void {
@@ -749,7 +682,7 @@ export class TrackedItemDisk {
 					.prepare(
 						"INSERT INTO source_checkpoints VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value=excluded.value",
 					)
-					.run(`${projectId}:${kind}`, JSON.stringify(checkpoint));
+					.run(sourceId(projectId, kind), JSON.stringify(checkpoint));
 			this.db.exec("COMMIT");
 		} catch (error) {
 			this.db.exec("ROLLBACK");
@@ -798,49 +731,10 @@ export class TrackedItemDisk {
 		const result = {
 			outcome,
 			attemptedAt: prior.attemptedAt,
-			...(outcome === "error" ? { error: "Couldn't add eyes reaction in Slack." } : {}),
+			...(outcome === "error" ? { error: SLACK_START_ERROR } : {}),
 		};
 		this.db.prepare("UPDATE tracked_items SET slack_start=? WHERE id=?").run(JSON.stringify(result), id);
 		this.emit(item.projectId);
-	}
-
-	/** Fair, capped reads are reserved durably before any network call. Items checked
-	 * within recheckMs wait their turn. */
-	reserveSlackReactions(
-		projectId: string,
-		now: number,
-		recheckMs = SLACK_REACTION_RECHECK_MS,
-		_force = false,
-	): SlackReactionBatch {
-		this.db.exec("BEGIN IMMEDIATE");
-		try {
-			const rows = this.db
-				.prepare(`SELECT * FROM tracked_items WHERE project_id=? AND kind='slack'
-				AND active=1 AND dismissed=0 AND slack_status IN ('open','in_progress','waiting')
-				AND slack_reaction_checked <= ? ORDER BY slack_reaction_checked, id LIMIT ?`)
-				.all(projectId, now - recheckMs, SLACK_REACTION_BATCH) as Row[];
-			const picked = rows;
-			if (picked.length) {
-				for (const row of picked)
-					this.db.prepare("UPDATE tracked_items SET slack_reaction_checked=? WHERE id=?").run(now, row.id);
-			}
-			this.db.exec("COMMIT");
-			return {
-				reads: picked.map((row) => ({ item: decode(row), version: row.slack_status_version })),
-				budget: false,
-			};
-		} catch (error) {
-			this.db.exec("ROLLBACK");
-			throw error;
-		}
-	}
-
-	/** Keep legacy reaction evidence readable without treating emoji as user intent. */
-	recordSlackReaction(id: string, present: boolean, version: number): void {
-		this.db
-			.prepare(`UPDATE tracked_items SET slack_reaction_seen=? WHERE id=? AND kind='slack'
-			AND (slack_status_version=? OR ?=1)`)
-			.run(present ? 1 : 0, id, version, present ? 1 : 0);
 	}
 
 	/** Agents may wait or continue. Only the user marks a report tackled. */
@@ -911,10 +805,6 @@ export class TrackedItemDisk {
 			.map((row) => String(row.session_id));
 	}
 
-	/**
-	 * The triage item behind each of a project's linked chats: the item whose latest chat it is first, then the most
-	 * recently updated. Reads only chat links, never thread text.
-	 */
 	/** Chats a Slack or Linear Start (or a schedule run for that item) created. Pilot marks them as job chats. */
 	startedChats(): Array<{ sessionId: string; kind: "slack" | "linear" }> {
 		return this.db
@@ -924,6 +814,10 @@ export class TrackedItemDisk {
 			.all() as Array<{ sessionId: string; kind: "slack" | "linear" }>;
 	}
 
+	/**
+	 * The triage item behind each of a project's linked chats: the item whose latest chat it is first, then the most
+	 * recently updated. Reads only chat links, never thread text.
+	 */
 	sessionSources(projectId: string): TrackedSessionSource[] {
 		if (typeof projectId !== "string" || !projectId || projectId.length > 200) throw new Error("Invalid project");
 		// CROSS JOIN keeps the small chat-link set outermost instead of scanning the project's items.
@@ -959,7 +853,7 @@ export class TrackedItemDisk {
 	}
 
 	/** Waiting messages due for a reply check, least recently checked first, reserved durably. */
-	reserveSlackWaiting(projectId: string, now: number, _force = false): SlackWaitingBatch {
+	reserveSlackWaiting(projectId: string, now: number): SlackWaitingBatch {
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
 			const due = (
@@ -975,21 +869,17 @@ export class TrackedItemDisk {
 				.filter(({ waiting }) => now - (waiting.checkedAt ?? 0) >= SLACK_WAITING_INTERVAL_MS)
 				.sort((a, b) => (a.waiting.checkedAt ?? 0) - (b.waiting.checkedAt ?? 0))
 				.slice(0, SLACK_WAITING_BATCH);
-			const picked = due;
-			if (picked.length) {
-				for (const { row, waiting } of picked)
-					this.db
-						.prepare("UPDATE tracked_items SET slack_waiting=? WHERE id=?")
-						.run(JSON.stringify({ ...waiting, checkedAt: now } satisfies SlackWaiting), row.id);
-			}
+			for (const { row, waiting } of due)
+				this.db
+					.prepare("UPDATE tracked_items SET slack_waiting=? WHERE id=?")
+					.run(JSON.stringify({ ...waiting, checkedAt: now } satisfies SlackWaiting), row.id);
 			this.db.exec("COMMIT");
 			return {
-				reads: picked.map(({ row, waiting }) => ({
+				reads: due.map(({ row, waiting }) => ({
 					item: decode(row),
 					since: waiting.since,
 					afterTs: waiting.afterTs ?? `${Math.floor(waiting.since / 1000)}.000000`,
 				})),
-				budget: false,
 			};
 		} catch (error) {
 			this.db.exec("ROLLBACK");
@@ -1021,42 +911,6 @@ export class TrackedItemDisk {
 				.run(JSON.stringify({ ...waiting, afterTs: result.afterTs } satisfies SlackWaiting), id);
 		if (result.status) this.emit(row.project_id);
 		return true;
-	}
-
-	/** Keep PR observations as evidence without changing report status. */
-	observeSlackPullRequests(observation: SlackPullRequestObservation): void {
-		const { sessionId, prs } = observation;
-		this.db.exec("BEGIN IMMEDIATE");
-		try {
-			for (const pr of prs) {
-				const url = pr.url.toLowerCase();
-				const previous = this.db
-					.prepare("SELECT * FROM slack_pr_observations WHERE session_id=? AND url=?")
-					.get(sessionId, url);
-				if (
-					previous &&
-					(Number(previous.checked_at) > pr.checkedAt || (previous.merge_seen === 1 && pr.state !== "merged"))
-				) {
-					continue;
-				}
-				const merged = pr.state === "merged";
-				if (!previous || previous.state !== pr.state || Number(previous.checked_at) < pr.checkedAt)
-					this.db
-						.prepare(`INSERT INTO slack_pr_observations VALUES (?, ?, ?, ?, ?)
-						ON CONFLICT(session_id,url) DO UPDATE SET state=excluded.state, checked_at=excluded.checked_at,
-						merge_seen=max(merge_seen,excluded.merge_seen)`)
-						.run(sessionId, url, pr.state, pr.checkedAt, merged ? 1 : 0);
-			}
-
-			this.db.exec("COMMIT");
-		} catch (error) {
-			this.db.exec("ROLLBACK");
-			throw error;
-		}
-	}
-
-	completeSlackMission(_projectId: string, _missionId: string, _completedAt: number): void {
-		// Mission completion is evidence, not the user's tackled decision.
 	}
 
 	patch(id: string, patch: TrackedItemPatch, intakeOperationId?: string): TrackedItem {
@@ -1140,11 +994,6 @@ export class TrackedItemDisk {
 			return item;
 		this.db.exec("BEGIN");
 		try {
-			if (userStatus)
-				this.db
-					.prepare(`UPDATE tracked_items SET slack_status_version=slack_status_version+1,
-					slack_reaction_seen=CASE WHEN ? IN ('open','in_progress','waiting') THEN 1 ELSE slack_reaction_seen END WHERE id=?`)
-					.run(patch.dismissed !== undefined || patch.slack?.status !== undefined ? status : "", id);
 			// A wait the user starts has no reason; replies after it resume work like an agent's wait.
 			if (
 				status === "waiting" &&

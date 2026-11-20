@@ -6,12 +6,12 @@ import type { ReadOnlyAttentionExecutor } from "./attention-executor.ts";
 import { RepositoryChanges } from "./changes.ts";
 import type { ChatSettingsService } from "./chat-settings.ts";
 import type { DaemonConfig } from "./config.ts";
-import { CONNECTION_CONTROLS, ConnectionControls } from "./connection-controls.ts";
+import { ConnectionControls, connectionOperations } from "./connection-controls.ts";
 import { DayInsights } from "./day-insights.ts";
 import { DayInsightsExecution } from "./day-insights-execution.ts";
 import { DeliveredArtifacts } from "./delivered-artifact.ts";
 import { diagnosticContextResponse } from "./diagnostic-context.ts";
-import { DIAGNOSTICS_CONTROLS, DiagnosticsControls } from "./diagnostics-controls.ts";
+import { DiagnosticsControls, diagnosticsOperations } from "./diagnostics-controls.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import type { GitHubImportService } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
@@ -33,7 +33,7 @@ import type { MissionCatalogSources } from "./mission-catalog.ts";
 import type { MissionService } from "./mission-service.ts";
 import { isThreadOperation, MissionThreads } from "./mission-threads.ts";
 import type { MissionStore } from "./missions.ts";
-import { MODEL_CONTROLS, ModelControls } from "./model-controls.ts";
+import { ModelControls, modelOperations } from "./model-controls.ts";
 import type { ModelCatalog } from "./models.ts";
 import { NativeAttention } from "./native-attention.ts";
 import { CHAT_CONTINUE, CHAT_DISMISS, CHAT_REPLY, NativeChat } from "./native-chat.ts";
@@ -61,12 +61,13 @@ import { optionalReviewRequests, retainedFeedbackReader } from "./review-request
 import { ReviewStore } from "./reviews.ts";
 import type { RuntimeContributor } from "./runtime-admission.ts";
 import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
-import { SCHEDULE_CONTROLS, ScheduleControls } from "./schedule-controls.ts";
+import { ScheduleControls, scheduleOperations } from "./schedule-controls.ts";
 import type { ScheduleService } from "./schedules.ts";
 import { ScreenBroker } from "./screen-broker.ts";
-import { CommandRejected, type SessionManager } from "./sessions.ts";
+import { type SessionManager } from "./sessions.ts";
+import { CommandRejected } from "./kernel-worker.ts";
 import type { SetupService } from "./setup.ts";
-import { SLACK_CONTROLS, SlackControls } from "./slack-controls.ts";
+import { SlackControls, slackOperations } from "./slack-controls.ts";
 import type { SourceRegistry } from "./sources.ts";
 import type { TelemetrySettingsService } from "./telemetry-settings.ts";
 import type { TerminalManager } from "./terminals.ts";
@@ -115,6 +116,7 @@ export interface DaemonServiceDependencies {
 	attentionExecutor?: ReadOnlyAttentionExecutor;
 	nativeAuthority?: Pick<import("./native-app-capability.ts").NativeAppCapability, "authenticate">;
 	linearPublisher?: import("./mission-linear-publisher.ts").MissionLinearPublisher;
+	backgroundSubscription?: import("./background-subscription.ts").BackgroundSubscription;
 }
 
 /** Explicit boot composition. Installs execution bridges before session restoration and HTTP admission. */
@@ -534,7 +536,7 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 				})
 			: undefined;
 	// Ready research questions start read-only research chats (D28), within existing limits.
-	planningWorkers?.startResearch();
+	planningWorkers?.startReconciling();
 	// Builders whose turn ended with no result and no question before this start get their one reminder.
 	missions?.service.nudgeWaitingBuilders?.();
 	const missionThreads =
@@ -630,7 +632,7 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 					journal,
 					legacyGuard: () => {
 						sessions.assertNoLegacyInsights();
-						schedules.assertNoLegacyInsights(journal.destination);
+						schedules.insights.assertNoLegacyInsights(journal.destination);
 					},
 				})
 			: undefined;
@@ -728,9 +730,16 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 	const connectionControls = new ConnectionControls(mcpSetup, mcp, _config.mcpSetupReadOnly);
 	const scheduleControls =
 		schedules && journal ? new ScheduleControls(schedules, sessions, projects, journal.destination) : undefined;
-	if (schedules) missions?.service.setSchedules?.(schedules);
+	if (schedules) missions?.service.setSchedules(schedules);
 	const slackControls = tracking ? new SlackControls(projects, tracking) : undefined;
-	const modelControls = new ModelControls(models, projects, setup, sessions, _config.modelScopeReadOnly);
+	const modelControls = new ModelControls(
+		models,
+		projects,
+		setup,
+		sessions,
+		_config.modelScopeReadOnly,
+		options.backgroundSubscription,
+	);
 	const diagnosticsControls =
 		telemetry && journal
 			? new DiagnosticsControls(
@@ -747,6 +756,16 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 					},
 				)
 			: undefined;
+	// Keep unavailable kinds registered so the HTTP route still refuses them rather than falling through.
+	const controlOperations = new Map(
+		[
+			connectionOperations(connectionControls, journal),
+			slackOperations(slackControls, journal),
+			scheduleOperations(scheduleControls, journal?.destination),
+			diagnosticsOperations(diagnosticsControls, journal?.destination),
+			modelOperations(modelControls, journal),
+		].map((handler) => [handler.kind, handler]),
+	);
 	// A chat draft is bound to this daemon and storage lineage, even during retry.
 	const chatOperationIsLocal = (op: Readonly<DurableOperation>): boolean =>
 		typeof op?.kind !== "string" ||
@@ -762,13 +781,10 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		}
 	};
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
-		if (op.kind === CONNECTION_CONTROLS) throw new Error("Connection outcome unknown; lookup only");
-		if (op.kind === SLACK_CONTROLS) throw new Error("Slack outcome unknown; lookup only");
+		const control = controlOperations.get(op.kind);
+		if (control) throw new Error(control.outcomeUnknown);
 		// The database feature is removed. Its saved operations stay lookup only.
 		if (op.kind === "database-controls") throw new Error("Database outcome unknown; lookup only");
-		if (op.kind === DIAGNOSTICS_CONTROLS) throw new Error("Diagnostics outcome unknown; lookup only");
-		if (op.kind === SCHEDULE_CONTROLS) throw new Error("Schedule outcome unknown; lookup only");
-		if (op.kind === MODEL_CONTROLS) throw new Error("Model settings outcome unknown; lookup only");
 		if (isThreadOperation(op.kind)) {
 			if (!missionThreads) throw new Error("Topic lookup unavailable");
 			return missionThreads.admit(op, false);
@@ -949,6 +965,7 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		dependencies: options,
 		admitOperation,
 		chatOperationIsLocal,
+		controlOperations,
 		recoverOperations,
 		machine,
 		reviews,

@@ -1,13 +1,13 @@
 /** Event-driven helper detection, with a bounded kernel/display fallback when unavailable. */
 import { type ConnectivityState, probeReachability } from "@pilot/kernel";
-import type { ScheduleClock, ScheduleTriggerEvent, ScheduleTriggerSource } from "./schedules.ts";
+import { type ScheduleClock, type ScheduleTriggerEvent, type ScheduleTriggerSource, systemClock } from "./schedules.ts";
 import { execFileOffThread, SubprocessPool } from "./subprocess.ts";
 import type { SystemPowerSource, SystemPowerState } from "./system-power.ts";
 
 export { probeReachability } from "@pilot/kernel";
 
 export const WAKE_SAMPLE_MS = 30_000;
-export const ONLINE_SAMPLE_MS = 30_000;
+const ONLINE_SAMPLE_MS = 30_000;
 export const OFFLINE_BACKOFF_MS = [5_000, 10_000, 20_000, 40_000, 60_000] as const;
 const SLEEP_DRIFT_MS = 5_000;
 const WAKE_DEBOUNCE_MS = 5_000;
@@ -73,7 +73,7 @@ export async function sampleSystemWake(signal: AbortSignal, pool?: SubprocessPoo
 	return sample;
 }
 
-export interface ScheduleDetectionOptions {
+interface ScheduleDetectionOptions {
 	power?: SystemPowerSource;
 	clock?: ScheduleClock;
 	sampleWake?: (signal: AbortSignal) => Promise<WakeSample>;
@@ -81,14 +81,6 @@ export interface ScheduleDetectionOptions {
 	probe?: (signal: AbortSignal, origins: readonly string[]) => Promise<boolean>;
 	warn?: (message: string) => void;
 }
-const clock: ScheduleClock = {
-	now: Date.now,
-	setTimeout(callback, ms) {
-		const timer = setTimeout(callback, ms);
-		timer.unref();
-		return () => clearTimeout(timer);
-	},
-};
 
 /** At most one wake sample and one probe in flight. All work is cancelled when the store is idle. */
 export class ScheduleDetection implements ScheduleTriggerSource {
@@ -127,7 +119,7 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 	private readonly warn: (message: string) => void;
 
 	constructor(options: ScheduleDetectionOptions = {}) {
-		this.time = options.clock ?? clock;
+		this.time = options.clock ?? systemClock;
 		this.power = options.power;
 		this.sampleWake = options.sampleWake ?? ((signal) => sampleSystemWake(signal, this.wakeProcesses));
 		this.probe = options.probe ?? ((signal, origins) => probeReachability(signal, undefined, origins));

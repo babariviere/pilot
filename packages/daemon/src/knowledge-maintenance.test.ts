@@ -540,3 +540,71 @@ test("shutdown joins admitted writer observations and refuses new ones", async (
 	await stopping;
 	assert.ok(f.service.detail("p1", id).observation);
 });
+
+test("mission source versions keep the bytes of stored observation tokens", (t) => {
+	const now = 1_790_000_000_000;
+	t.mock.timers.enable({ apis: ["Date"], now });
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const mission = store.create({ projectId: "p1", title: "Test", tasks: [{ title: "Docs" }] });
+	store.join("lead", mission.id);
+	store.join("worker", mission.id);
+	store.update(mission.id, { coordinatorSessionId: "lead" });
+	const kept = store.addDecision(mission.id, "Rule");
+	const replaced = store.addDecision(mission.id, "Old rule");
+	const replacement = store.addDecision(mission.id, "New rule");
+	store.supersedeDecision(mission.id, replaced.id, replacement.id);
+	const task = store.tasks(mission.id)[0]!;
+	store.claimTask(mission.id, task.id, "worker");
+	const completion = { commit: "a".repeat(40), checks: "checked", issues: "" };
+	store.completeTask(mission.id, task.id, "lead", completion);
+	store.writeBrief(mission.id, "# Brief", 0);
+	const version = (source: Omit<Extract<KnowledgeSource, { type: "mission" }>, "type" | "missionId">) =>
+		JSON.stringify(store.knowledge.missionSourceVersion({ type: "mission", missionId: mission.id, ...source }, "p1"));
+	assert.equal(
+		version({ decisionId: kept.id }),
+		JSON.stringify([{ id: kept.id, text: "Rule", audience: "reference" }]),
+	);
+	assert.equal(
+		version({ decisionId: replaced.id }),
+		JSON.stringify([
+			{
+				id: replaced.id,
+				text: "Old rule",
+				audience: "reference",
+				replacement: JSON.stringify({ id: replacement.id, number: replacement.number, at: now }),
+			},
+		]),
+	);
+	assert.equal(
+		version({ taskId: task.id }),
+		JSON.stringify([
+			{
+				id: task.id,
+				title: "Docs",
+				body: null,
+				status: "done",
+				updated_at: now,
+				record: JSON.stringify(completion),
+			},
+		]),
+	);
+	assert.equal(
+		version({ eventId: 1 }),
+		JSON.stringify([
+			{
+				id: 1,
+				mission_id: mission.id,
+				kind: "created",
+				text: "Mission created: Test",
+				session_id: null,
+				task_id: null,
+				health: null,
+				at: now,
+				is_user_note: 0,
+			},
+		]),
+	);
+	assert.equal(version({ briefRevision: 1 }), JSON.stringify([{ brief_revision: 1 }]));
+	assert.equal(version({}), JSON.stringify([{ brief_revision: 1, status: "active" }]));
+});

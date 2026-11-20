@@ -114,13 +114,17 @@ pub(crate) fn merge(state: &mut Pages, page: &Value, older: bool) {
 
 /// A row's place: its entry, then its step number within the entry (a
 /// message comes before its steps).
-fn order(row: &Value) -> (u64, i64) {
-    let step = row["key"]
-        .as_str()
-        .and_then(|k| k.split_once('.'))
-        .and_then(|(_, n)| n.parse::<i64>().ok())
-        .unwrap_or(-1);
-    (row["entryId"].as_u64().unwrap_or(0), step)
+fn order(row: &Value) -> (u64, i64, i64) {
+    let mut key = row["key"].as_str().unwrap_or_default().split('.');
+    key.next();
+    let step = key.next().and_then(|n| n.parse().ok()).unwrap_or(-1);
+    let nested = match key.next() {
+        Some("more") => i64::MAX - 1,
+        Some("script") => i64::MAX,
+        Some(n) => n.parse().unwrap_or_default(),
+        None => 0,
+    };
+    (row["entryId"].as_u64().unwrap_or(0), step, nested)
 }
 
 /// Reads the newest page, or the page before what shows, of `mission`'s chat.

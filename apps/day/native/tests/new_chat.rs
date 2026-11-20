@@ -275,7 +275,12 @@ fn saved_window_read_is_exact_source_passive_and_refuses_changed_scope() {
             "home" => other.home.lineage_id = "different-lineage".into(),
             _ => other.project.as_mut().unwrap().project_path = "/different/path".into(),
         }
-        let host = NativeHost::open(other, f.info["ledger"].as_str().unwrap().into()).unwrap();
+        let host = NativeHost::open_with_options(
+            other,
+            f.info["ledger"].as_str().unwrap().into(),
+            Default::default(),
+        )
+        .unwrap();
         let b = Bridge::new(DayRoot::new(host));
         assert!(
             f.call(&b, "day.window.read", json!({}))["value"]["snapshot"].is_null(),

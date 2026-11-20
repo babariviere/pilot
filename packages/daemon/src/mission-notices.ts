@@ -37,8 +37,8 @@ export class MissionNotices {
 		this.store = store;
 		this.sessions = sessions;
 		this.unsubscribe = [
-			store.onChange((_, __, preferenceOnly) => {
-				if (!preferenceOnly) this.schedule();
+			store.onChange((_, kind) => {
+				if (kind !== "preference") this.schedule();
 			}),
 			sessions.onChange((session) => this.observe(session)),
 		];
@@ -84,7 +84,7 @@ export class MissionNotices {
 			return;
 		}
 		if (recovering) {
-			const prs = this.sessions.ownedPullRequests?.(session.id) ?? [];
+			const prs = this.sessions.ownedPullRequests(session.id);
 			// Open heads first so a later merge cannot finish a task while another head is unknown.
 			for (const pr of prs.toSorted((a, b) => Number(a.state === "merged") - Number(b.state === "merged")))
 				this.store.updatePullRequest(this.store.memberPullRequest(session.missionId, pr), [session], (id) =>
@@ -122,7 +122,7 @@ export class MissionNotices {
 	}
 
 	private ownedPrs(missionId: string) {
-		return this.store.members(missionId).flatMap((id) => this.sessions.ownedPullRequests?.(id) ?? []);
+		return this.store.members(missionId).flatMap((id) => this.sessions.ownedPullRequests(id));
 	}
 
 	private refreshActivity(missionId: string): void {

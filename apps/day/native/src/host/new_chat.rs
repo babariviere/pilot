@@ -78,6 +78,29 @@ fn publish_recovery(t: &Transport, journal: &Journal, shared: &Shared, session: 
 fn is_dismiss(r: &planning::PlanningRecord) -> bool {
     r.operation["kind"] == DISMISS
 }
+pub(super) fn pending_reply(t: &Transport, journal: &Journal, session: &str) -> Option<Value> {
+    journal
+        .planning
+        .values()
+        .find(|r| {
+            same_home(&r.source, &t.source) && is_reply(r) && r.pending() && r.mission() == session
+        })
+        .map(summary)
+}
+fn publish_reply(shared: &Shared, record: &planning::PlanningRecord) {
+    if !is_reply(record) {
+        return;
+    }
+    if let Some(chat) = shared
+        .session_chat
+        .lock()
+        .expect("native session chat poisoned")
+        .as_mut()
+        .filter(|c| c.session == record.mission())
+    {
+        chat.reply = Some(summary(record));
+    }
+}
 fn is_reply(r: &planning::PlanningRecord) -> bool {
     r.operation["kind"] == REPLY
 }
@@ -382,6 +405,7 @@ pub(super) async fn handle(
             if is_continue(&record) {
                 publish_recovery(t, journal, shared, record.mission());
             }
+            publish_reply(shared, &record);
             Ok(
                 json!({"snapshot":null,"operations":operations(t,journal),"outcome":summary(&record)}),
             )
@@ -427,6 +451,7 @@ pub(super) async fn handle(
                     && r.pending()
                     && r.mission() == session.as_str()
             }) {
+                publish_reply(shared, prior);
                 return Ok(json!({"snapshot":null,"outcome":summary(prior)}));
             }
             check()?;
@@ -454,9 +479,11 @@ pub(super) async fn handle(
                 planning::record(&t.source, session.clone(), CONTINUE_BINDING.into(), payload)?;
             journal.save_planning(record.clone())?;
             publish_recovery(t, journal, shared, session);
+            publish_reply(shared, &record);
             if let Err(e) = t.local().and_then(|_| check()) {
                 record.not_sent = true;
-                journal.save_planning(record)?;
+                journal.save_planning(record.clone())?;
+                publish_reply(shared, &record);
                 return Err(e);
             }
             if let Ok(receipt) = t.planning_operation(&record.operation, false).await {
@@ -466,6 +493,7 @@ pub(super) async fn handle(
                 }
             }
             publish_recovery(t, journal, shared, session);
+            publish_reply(shared, &record);
             Ok(json!({"snapshot":null,"outcome":summary(&record)}))
         }
         _ => Err(Error::Invalid),
@@ -484,7 +512,7 @@ fn summary(r: &planning::PlanningRecord) -> Value {
         serde_json::from_str(r.operation["payload"].as_str().unwrap_or("")).unwrap_or(Value::Null);
     json!({"operationId":r.id(),"kind":r.operation["kind"],"draftId":r.mission(),"state":if r.not_sent {"not-sent"} else {
         r.receipt.as_ref().and_then(|r| r["state"].as_str()).unwrap_or("unknown")},"receipt":r.receipt,
-        "submittedText":if r.operation["kind"] == RECOVER || r.operation["kind"] == HANDOFF {payload["message"].as_str()} else {None},
+        "submittedText":if r.operation["kind"] == RECOVER || r.operation["kind"] == HANDOFF || is_reply(r) {payload["message"].as_str()} else {None},
         "sessionId":r.receipt.as_ref().and_then(|r| r["result"]["sessionId"].as_str())})
 }
 

@@ -14,7 +14,7 @@ import { keepRead, staleLine } from "./freshness";
 import { IntakeWorkControls, openMissions } from "./Incoming";
 import { keepScroll } from "./kept";
 import type { LinearMirror } from "./linearFeed";
-import type { LinearCycleSummary, SavedLinearRead, TrackedItem } from "./linearRead";
+import type { LinearCycleSummary, SavedLinearRead, TrackedItem } from "../../packages/protocol/src/tracking.ts";
 import {
 	closeLinear,
 	countLine,

@@ -7,6 +7,9 @@ import type {
 } from "@pilot/protocol";
 import type { ModelCatalog } from "./models.ts";
 
+/** Insights has never accepted the "max" thinking level. Kept as is (decision of 2026-11-20). */
+export const INSIGHTS_THINKING_LEVELS: readonly string[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
 /** Suggestions only. Import/status reads never create authority, work or schedules. */
 export const INSIGHTS_INITIAL_DEFAULTS = Object.freeze({
 	recurrence: Object.freeze({ every: "week", weekday: 5, time: "18:00", timeZone: "Europe/Paris" }),

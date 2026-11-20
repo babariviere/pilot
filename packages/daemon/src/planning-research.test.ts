@@ -45,8 +45,8 @@ test("ready research starts limited read-only chats and reports all findings tog
 	);
 	t.mock.method(f.sessions, "lastAssistantReply", async () => "## Findings\nObserved: the importer reads tar files.");
 
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.deepEqual(spawned, [
 		{ title: "Research: Research a", mode: "ask", role: "explorer" },
 		{ title: "Research: Research b", mode: "ask", role: "explorer" },
@@ -57,8 +57,8 @@ test("ready research starts limited read-only chats and reports all findings tog
 
 	const finish = (id: string) => chats.set(id, { id, state: "idle", working: false, outcome: "done" });
 	const settle = async () => {
-		f.workers.scheduleResearch(f.missionId);
-		await f.workers.settleResearch();
+		f.workers.scheduleReconcile(f.missionId);
+		await f.workers.settleReconciling();
 	};
 	finish("research-1");
 	await settle();
@@ -170,8 +170,8 @@ test("a research chat that asks the user closes when a newer chat or the plan se
 		return chats.get(id) as SessionSummary;
 	});
 	const settle = async () => {
-		f.workers.scheduleResearch(f.missionId);
-		await f.workers.settleResearch();
+		f.workers.scheduleReconcile(f.missionId);
+		await f.workers.settleReconciling();
 	};
 	const ask = (id: string) =>
 		chats.set(id, {
@@ -181,8 +181,8 @@ test("a research chat that asks the user closes when a newer chat or the plan se
 			outcome: "question",
 			outcomeReason: "Can you restore access?",
 		});
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.equal(spawned, 2);
 
 	// research-1 asks the user. Its question goes to the planner, which rewrites the map question after new access.
@@ -259,15 +259,15 @@ test("many split research questions reach the planner in limited batches, not al
 	);
 	t.mock.method(f.sessions, "lastAssistantReply", async () => "Findings");
 	const settle = async () => {
-		f.workers.scheduleResearch(f.missionId);
-		await f.workers.settleResearch();
+		f.workers.scheduleReconcile(f.missionId);
+		await f.workers.settleReconciling();
 	};
 	const finish = async (n: number) => {
 		chats.set(`research-${n}`, { id: `research-${n}`, state: "idle", working: false, outcome: "done" });
 		await settle();
 	};
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.equal(spawned, 2);
 	await finish(1);
 	await finish(2);
@@ -308,11 +308,11 @@ test("Pilot saves findings word for word as linked Knowledge; the planner gets i
 	const report =
 		"## Question\nImporter?\n\n## Findings\nObserved: the importer reads tar files, with spaces kept exactly.\n\n## Limitations\nNone.";
 	t.mock.method(f.sessions, "lastAssistantReply", async () => report);
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	chats.set("research-1", { id: "research-1", state: "idle", working: false, outcome: "done" });
-	f.workers.scheduleResearch(f.missionId);
-	await f.workers.settleResearch();
+	f.workers.scheduleReconcile(f.missionId);
+	await f.workers.settleReconciling();
 	const saved = f.store.planningWorkers.get(f.missionId)!.research!.a!.knowledge!;
 	const entry = f.store.knowledge.detail(f.project.id, saved.id);
 	assert.ok(entry?.revision.body.includes(report), "the report is kept word for word");
@@ -343,15 +343,15 @@ test("research waits while the planner works and never starts for a published pl
 		const meta = get(id);
 		return meta && id === f.owner ? { ...meta, working, state: working ? "working" : meta.state } : meta;
 	});
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.equal(spawn.mock.callCount(), 0);
 
 	const published = await fixture(t);
 	const spawnPublished = t.mock.method(published.sessions, "spawn", async () => {
 		throw new Error("unexpected");
 	});
-	published.workers.startResearch();
-	await published.workers.settleResearch();
+	published.workers.startReconciling();
+	await published.workers.settleReconciling();
 	assert.equal(spawnPublished.mock.callCount(), 0);
 });

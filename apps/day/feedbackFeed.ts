@@ -9,8 +9,9 @@
 // sent once; a lost one stays Unknown until Check reads its receipt.
 // An answer is the user's reply to a triage's pending question, sent to that
 // triage chat once. It clarifies the feedback; it starts and approves nothing.
-import { type Signal, signal } from "nsh";
-import { call, type Refusal, type Reply } from "./bridge";
+import type { Signal } from "nsh";
+import { call, type Reply } from "./bridge";
+import { LOST, type Refusal, readReason, writeRefusal } from "./refusals";
 import { queueOf } from "./codingQueue";
 import type {
 	UserFeedback,
@@ -20,7 +21,7 @@ import type {
 	UserFeedbackQuestion,
 	UserFeedbackWorkView,
 } from "./feedbackContract";
-import { glide } from "./ui";
+import { CallOrder, Feed, mirror } from "./source";
 
 export type {
 	UserFeedback,
@@ -40,10 +41,10 @@ export const MAX_ANSWER_LENGTH = 8000;
 /** One saved piece of feedback, its place in the list and the user's steps on it, oldest first. */
 export type FeedbackItem = UserFeedback & { sequence: number; work: UserFeedbackWorkView[] };
 
-/** One Send whose result Pilot does not know. Only Check settles it. */
+/** One Send whose result Pilot does not know. Pilot looks it up by itself; Check is the fallback. */
 export type FeedbackOp = SendIntent & { operationId: string; state: "unknown" | "checking" };
 
-/** One step whose result Pilot does not know, on one saved item. Only Check settles it. */
+/** One step whose result Pilot does not know, on one saved item. Pilot looks it up by itself; Check is the fallback. */
 export type FeedbackStepOp = {
 	operationId: string;
 	state: "unknown" | "checking";
@@ -172,56 +173,28 @@ export function utf8Bytes(text: string): number {
 
 /** Why saved feedback could not be read, in one calm sentence. */
 export function feedbackReason(refusal: Refusal): string {
-	switch (refusal) {
-		case "offline":
-			return "Pilot could not reach its service.";
-		case "identity":
-			return "The Pilot service changed. Open Pilot again to see your feedback.";
-		case "closed":
-		case "busy":
-			return "Pilot is closing.";
-		case "denied":
-		case "unavailable":
-			return "This Pilot service cannot keep feedback yet.";
-		case "invalid":
-			return "Pilot's service answered in a way this app does not understand.";
-		default:
-			return "Pilot could not read your feedback.";
-	}
+	const unavailable = "This Pilot service cannot keep feedback yet.";
+	return readReason(refusal, { denied: unavailable, unavailable, other: "Pilot could not read your feedback." });
 }
-
-export const UNKNOWN_SEND =
-	"Pilot sent your feedback but heard nothing back. It will not send it again; Check only reads.";
 
 /** What a refused or lost Send means. Only a lost or uncertain one may have been saved. */
 export function refusedSend(refusal: Refusal): SendResult {
-	const r = (status: SendResult["status"], message: string): SendResult => ({
-		status,
-		message,
-		operationId: null,
-		saved: null,
-	});
-	switch (refusal) {
-		case "lost":
-		case "unknown":
-			return r("unknown", UNKNOWN_SEND);
-		case "busy":
-			return r("rejected", "Pilot is busy. Nothing was sent; your text stays.");
-		case "closed":
-			return r("rejected", "Pilot is closing. Nothing was sent; your text stays.");
-		case "offline":
-			return r("rejected", "Pilot could not reach its service. Nothing was sent; your text stays.");
-		case "identity":
-			return r("rejected", "The Pilot service changed. Open Pilot again. Nothing was sent.");
-		case "capacity":
-		case "invalid":
-			return r("rejected", "Pilot cannot send this feedback. Keep it shorter. Nothing was sent.");
-		case "denied":
-		case "unavailable":
-			return r("rejected", "This Pilot service cannot keep feedback yet. Nothing was sent; your text stays.");
-		default:
-			return r("rejected", "Pilot could not send this. Nothing was sent; your text stays.");
-	}
+	const tooLong = "Pilot cannot send this feedback. Keep it shorter. Nothing was sent.";
+	const unavailable = "This Pilot service cannot keep feedback yet. Nothing was sent; your text stays.";
+	const message = writeRefusal(
+		refusal,
+		{
+			unknown: LOST,
+			capacity: tooLong,
+			invalid: tooLong,
+			denied: unavailable,
+			unavailable,
+			other: "Pilot could not send this. Nothing was sent; your text stays.",
+		},
+		"Nothing was sent; your text stays.",
+	);
+	const status = refusal === "lost" || refusal === "unknown" ? "unknown" : "rejected";
+	return { status, message, operationId: null, saved: null };
 }
 
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -415,31 +388,17 @@ function summariesOf(x: unknown): Summary[] | null {
 	return out;
 }
 
-export const UNKNOWN_STEP = "Pilot sent this but heard nothing back. It will not send it again; Check only reads.";
-
 /** What a refused or lost step means. Only a lost or uncertain one may have happened. */
 export function refusedStep(refusal: Refusal): StepResult {
-	switch (refusal) {
-		case "lost":
-			return { status: "unknown", message: UNKNOWN_STEP };
-		case "unknown":
-			return { status: "rejected", message: "An earlier step is not confirmed. Check it first; nothing was sent." };
-		case "stale":
-			return {
-				status: "stale",
-				message: "This project changed since Pilot read it. Choose it again. Nothing was sent.",
-			};
-		case "busy":
-		case "closed":
-			return { status: "rejected", message: "Pilot is closing. Nothing was sent." };
-		case "offline":
-			return { status: "rejected", message: "Pilot could not reach its service. Nothing was sent." };
-		case "denied":
-		case "unavailable":
-			return { status: "rejected", message: "This Pilot service cannot triage feedback yet. Nothing was sent." };
-		default:
-			return { status: "rejected", message: "Pilot could not send this. Nothing was sent." };
-	}
+	const unavailable = "This Pilot service cannot triage feedback yet. Nothing was sent.";
+	const message = writeRefusal(refusal, {
+		unknown: "An earlier step is not confirmed. Check it first; nothing was sent.",
+		stale: "This project changed since Pilot read it. Choose it again. Nothing was sent.",
+		denied: unavailable,
+		unavailable,
+		other: "Pilot could not send this. Nothing was sent.",
+	});
+	return { status: refusal === "lost" ? "unknown" : refusal === "stale" ? "stale" : "rejected", message };
 }
 
 function stepOutcomeOf(x: unknown): StepResult {
@@ -452,7 +411,7 @@ function stepOutcomeOf(x: unknown): StepResult {
 			message: reason ? `Pilot's service refused it: ${reason}.` : "Pilot did not do it.",
 		};
 	}
-	return { status: "unknown", message: UNKNOWN_STEP };
+	return { status: "unknown", message: LOST };
 }
 
 function withInvestigation(result: SendResult, outcome: unknown): SendResult {
@@ -491,7 +450,7 @@ function outcomeOf(x: unknown, operationId: string | null): SendResult {
 			saved: null,
 		};
 	}
-	return { status: "unknown", message: UNKNOWN_SEND, operationId, saved: null };
+	return { status: "unknown", message: LOST, operationId, saved: null };
 }
 
 /** The connected window's feedback, through its native root. */
@@ -503,18 +462,20 @@ export class ConnectedFeedback implements FeedbackSource {
 	#refusal: Refusal | null = null;
 	#ops: Summary[] = [];
 	#checking = new Set<string>();
-	#reading: Promise<void> | null = null;
-	#again = false;
 	#freshRequested = false;
 	#asked = false;
 	#sending = false;
 	#stepping: string | null = null;
 	#projects: FeedbackProject[] | null = null;
-	#sent = 0;
-	#applied = 0;
-	#listeners = new Map<number, (view: FeedbackView) => void>();
-	#next = 0;
-	#closed = false;
+	#order = new CallOrder();
+	#operationOrder = new CallOrder();
+	#feed = new Feed(() => this.view());
+	#reads = this.#feed.coalesce(async () => {
+		const fresh = this.#freshRequested;
+		this.#freshRequested = false;
+		await this.#call("day.feedback.read", fresh ? {} : { cached: true });
+		this.#feed.publish();
+	});
 
 	constructor(window: string) {
 		this.#window = window;
@@ -548,35 +509,25 @@ export class ConnectedFeedback implements FeedbackSource {
 					replyKey: o.replyKey,
 				})),
 			projects: this.#projects,
-			reading: this.#reading !== null,
+			reading: this.#reads.busy(),
 			sending: this.#sending,
 			stepping: this.#stepping,
 		};
 	}
 
 	onChange(listener: (view: FeedbackView) => void): () => void {
-		const id = this.#next++;
-		this.#listeners.set(id, listener);
-		return () => {
-			this.#listeners.delete(id);
-		};
-	}
-
-	#publish() {
-		if (this.#closed) return;
-		const view = this.view();
-		for (const listener of this.#listeners.values()) listener(view);
+		return this.#feed.onChange(listener);
 	}
 
 	/** One exact call. Only the newest call's first page replaces what is shown. */
 	async #call(name: string, args: unknown): Promise<Reply<unknown>> {
-		const order = ++this.#sent;
+		const order = this.#order.next();
+		const operationsOrder = this.#operationOrder.next();
 		const r = await call<unknown>(this.#window, name, args);
-		if (this.#closed) return r;
+		if (this.#feed.closed) return r;
 		const reading = name === "day.feedback.read";
 		if (r.ok) {
-			const ops = summariesOf(r.value.operations);
-			if (ops) this.#ops = ops;
+			this.#takeOps(r.value.operations, operationsOrder);
 			const page = pageOf(r.snapshot);
 			if (page?.older) {
 				// An older page continues the list it was asked for, never another one.
@@ -585,51 +536,38 @@ export class ConnectedFeedback implements FeedbackSource {
 					this.#more = page.more;
 					this.#before = page.before;
 				}
-			} else if (page && order > this.#applied) {
+			} else if (page && this.#order.apply(order)) {
 				this.#items = page.items;
 				this.#more = page.more;
 				this.#before = page.before;
 				this.#refusal = null;
-				this.#applied = order;
-			} else if (!page && reading && order > this.#applied) {
+			} else if (!page && reading && this.#order.apply(order)) {
 				this.#refusal = "invalid";
-				this.#applied = order;
 			}
-		} else if (reading && order > this.#applied) {
+		} else if (reading && this.#order.apply(order)) {
 			this.#refusal = r.refusal;
-			this.#applied = order;
 		}
 		return r;
 	}
 
+	#takeOps(operations: unknown, order: number) {
+		const ops = summariesOf(operations);
+		if (ops && this.#operationOrder.apply(order)) this.#ops = ops;
+	}
+
 	read(cached = false): Promise<void> {
 		if (!cached) this.#freshRequested = true;
-		if (this.#reading) {
-			this.#again = true;
-			return this.#reading;
-		}
 		this.#asked = true;
-		this.#reading = (async () => {
-			do {
-				this.#again = false;
-				const fresh = this.#freshRequested;
-				this.#freshRequested = false;
-				await this.#call("day.feedback.read", fresh ? {} : { cached: true });
-				this.#publish();
-			} while (this.#again && !this.#closed);
-		})().finally(() => {
-			this.#reading = null;
-			this.#publish();
-		});
-		this.#publish();
-		return this.#reading;
+		const reading = this.#reads().finally(() => this.#feed.publish());
+		this.#feed.publish();
+		return reading;
 	}
 
 	async more(): Promise<void> {
 		if (!this.#more || this.#before === null) return;
 		const r = await this.#call("day.feedback.read", { before: this.#before });
 		if (!r.ok) this.#refusal = r.refusal;
-		this.#publish();
+		this.#feed.publish();
 	}
 
 	async send(intent: SendIntent): Promise<SendResult> {
@@ -643,7 +581,7 @@ export class ConnectedFeedback implements FeedbackSource {
 			};
 		}
 		this.#sending = true;
-		this.#publish();
+		this.#feed.publish();
 		let r: Reply<unknown>;
 		try {
 			r = await this.#call("day.feedback.send", intent);
@@ -653,27 +591,28 @@ export class ConnectedFeedback implements FeedbackSource {
 		if (!r.ok) {
 			// A lost answer may hide a saved Send: the read lists it as Unknown.
 			void this.read();
-			this.#publish();
+			this.#feed.publish();
 			return refusedSend(r.refusal);
 		}
 		const outcome = r.value.outcome as { operationId?: unknown } | null;
 		const id = typeof outcome?.operationId === "string" ? outcome.operationId : null;
 		if (!pageOf(r.snapshot)) void this.read();
-		this.#publish();
+		this.#feed.publish();
 		return withInvestigation(outcomeOf(outcome, id), r.value.investigationOutcome);
 	}
 
+	// Native Check can enter an investigation the user requested. Refresh must not call it.
 	async check(operationId: string): Promise<SendResult> {
 		if (this.#checking.has(operationId)) return refusedSend("busy");
 		this.#checking.add(operationId);
-		this.#publish();
+		this.#feed.publish();
 		let r: Reply<unknown>;
 		try {
 			r = await this.#call("day.feedback.check", { operationId });
 		} finally {
 			this.#checking.delete(operationId);
 		}
-		this.#publish();
+		this.#feed.publish();
 		if (!r.ok) {
 			return {
 				status: "unknown",
@@ -691,21 +630,19 @@ export class ConnectedFeedback implements FeedbackSource {
 
 	async readProjects(): Promise<void> {
 		const r = await call<unknown>(this.#window, "day.projects.read", {});
-		if (this.#closed) return;
+		if (this.#feed.closed) return;
 		// A failed read keeps the projects Pilot read before; none is chosen for the user.
 		const projects = r.ok ? projectsOf(r.snapshot) : null;
 		if (projects) this.#projects = projects;
-		this.#publish();
+		this.#feed.publish();
 	}
 
 	async readResult(result: FeedbackResultScope, before?: number): Promise<Page | null> {
+		const operationsOrder = this.#operationOrder.next();
 		const r = await call<unknown>(this.#window, "day.feedback.read", { result, before });
-		if (!r.ok || this.#closed) return null;
-		const ops = summariesOf(r.value.operations);
-		if (ops) {
-			this.#ops = ops;
-			this.#publish();
-		}
+		if (!r.ok || this.#feed.closed) return null;
+		this.#takeOps(r.value.operations, operationsOrder);
+		this.#feed.publish();
 		return pageOf(r.snapshot);
 	}
 
@@ -713,7 +650,7 @@ export class ConnectedFeedback implements FeedbackSource {
 		if (this.#stepping) return refusedStep("busy");
 		if (this.#ops.some((o) => o.step !== null && o.feedbackId === intent.feedbackId)) return refusedStep("unknown");
 		this.#stepping = intent.feedbackId;
-		this.#publish();
+		this.#feed.publish();
 		let r: Reply<unknown>;
 		try {
 			r = await this.#call("day.feedback.step", intent);
@@ -723,25 +660,25 @@ export class ConnectedFeedback implements FeedbackSource {
 		if (!r.ok) {
 			// A lost answer may hide a sent step: the read lists it as Unknown.
 			void this.read();
-			this.#publish();
+			this.#feed.publish();
 			return refusedStep(r.refusal);
 		}
 		if (!pageOf(r.snapshot)) void this.read();
-		this.#publish();
+		this.#feed.publish();
 		return stepOutcomeOf(r.value.outcome);
 	}
 
 	async checkStep(operationId: string): Promise<StepResult> {
 		if (this.#checking.has(operationId)) return refusedStep("busy");
 		this.#checking.add(operationId);
-		this.#publish();
+		this.#feed.publish();
 		let r: Reply<unknown>;
 		try {
 			r = await this.#call("day.feedback.check", { operationId });
 		} finally {
 			this.#checking.delete(operationId);
 		}
-		this.#publish();
+		this.#feed.publish();
 		if (!r.ok) return { status: "unknown", message: "Pilot could not check it now. Nothing was sent again." };
 		if (!pageOf(r.snapshot)) void this.read();
 		const result = stepOutcomeOf(r.value.outcome);
@@ -751,8 +688,7 @@ export class ConnectedFeedback implements FeedbackSource {
 	}
 
 	dispose(): void {
-		this.#closed = true;
-		this.#listeners.clear();
+		this.#feed.close();
 	}
 }
 
@@ -765,18 +701,6 @@ export type FeedbackMirror = {
 
 /** Mirrors `source`'s view. Rows that arrive glide to their places. */
 export function mirrorFeedback(source: FeedbackSource): FeedbackMirror {
-	const view = signal(source.view());
 	const shape = (v: FeedbackView) => v.items.map((i) => i.id).join(",");
-	const stop = source.onChange((next) => {
-		if (shape(next) !== shape(view())) glide();
-		view.set(next);
-	});
-	return {
-		source,
-		view,
-		close: () => {
-			stop();
-			source.dispose();
-		},
-	};
+	return { source, ...mirror(source, source.view(), shape) };
 }

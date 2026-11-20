@@ -27,11 +27,15 @@ import { workerScope } from "./jj-ownership-contract.ts";
 import { mergedPullRequestHead } from "./pr-auto-rebase.ts";
 import { workspaceBookmarks, workspaceChangeIds } from "./pull-requests.ts";
 import { sourceRemote } from "./source-copy.ts";
-import { authenticationHint, gitPromptlessEnvironment, toolTrustEnvironment } from "./workspace-environment.ts";
+import {
+	authenticationHint,
+	daemonGitEnvironment,
+	MISE_LOCAL_CONFIGS,
+	NO_GIT_MAINTENANCE,
+} from "./workspace-environment.ts";
 import {
 	copyLocalConfigs,
 	dissociateWorkspace,
-	localConfigs,
 	type Runner,
 	run,
 	trustWorkspaceMise,
@@ -66,8 +70,8 @@ interface Binding {
 
 const queues = new Map<string, Promise<unknown>>();
 const hash = (input: string | Buffer) => createHash("sha256").update(input).digest("hex");
-const recoverableInput = (path: string) => localConfigs.includes(path);
-const recoveryInputDirectory = (path: string) => localConfigs.some((config) => config.startsWith(`${path}/`));
+const recoverableInput = (path: string) => MISE_LOCAL_CONFIGS.includes(path);
+const recoveryInputDirectory = (path: string) => MISE_LOCAL_CONFIGS.some((config) => config.startsWith(`${path}/`));
 const fullCommit = /^[0-9a-f]{40}$/;
 /** Where a child's gitdir file is hidden while jj updates or snapshots it without importing Git refs. */
 const PARKED_GIT = ".jj/pilot-refresh-git";
@@ -76,32 +80,14 @@ const changeFingerprint = (raw: string) => {
 	const lines = raw.split("\n").filter((line) => line.startsWith(":"));
 	return lines.length ? hash(lines.join("\n")) : undefined;
 };
-const maintenance = ["-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "fetch.writeCommitGraph=false"];
 const DAY_MS = 86_400_000;
 /** `jj util gc` runs `git gc`, which can take minutes on a large repository. */
 const GC_TIMEOUT_MS = 10 * 60_000;
 const baseRefs = "refs/pilot/origin/";
 const baseRemote = "pilot-base";
-const networkEnvironment = new Set([
-	"GIT_SSH",
-	"GIT_SSH_COMMAND",
-	"GIT_SSH_VARIANT",
-	"GIT_SSL_CAINFO",
-	"GIT_SSL_CAPATH",
-	"GIT_SSL_NO_VERIFY",
-	"GIT_PROXY_COMMAND",
-	"GIT_HTTP_USER_AGENT",
-]);
-
 function workspaceEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 	return {
-		...gitPromptlessEnvironment(
-			toolTrustEnvironment(
-				Object.fromEntries(
-					Object.entries(env).filter(([key]) => !key.startsWith("GIT_") || networkEnvironment.has(key)),
-				),
-			),
-		),
+		...daemonGitEnvironment(env),
 		// jj may invoke Git too. This is command-scoped, never a change to the source's config.
 		GIT_CONFIG_COUNT: "2",
 		GIT_CONFIG_KEY_0: "core.hooksPath",
@@ -604,7 +590,7 @@ export class SharedWorkspaceStore {
 		await runner(
 			"git",
 			[
-				...maintenance,
+				...NO_GIT_MAINTENANCE,
 				"fetch",
 				"--quiet",
 				"--no-tags",
@@ -667,7 +653,7 @@ export class SharedWorkspaceStore {
 				await runner(
 					"git",
 					[
-						...maintenance,
+						...NO_GIT_MAINTENANCE,
 						"fetch",
 						"--quiet",
 						"--no-tags",
@@ -689,7 +675,7 @@ export class SharedWorkspaceStore {
 				await runner(
 					"git",
 					[
-						...maintenance,
+						...NO_GIT_MAINTENANCE,
 						"fetch",
 						"--quiet",
 						"--no-tags",
@@ -705,7 +691,7 @@ export class SharedWorkspaceStore {
 					(await this.optional(
 						"git",
 						[
-							...maintenance,
+							...NO_GIT_MAINTENANCE,
 							"fetch",
 							"--quiet",
 							"--no-tags",
@@ -778,7 +764,16 @@ export class SharedWorkspaceStore {
 		if (branch === undefined)
 			await runner(
 				"git",
-				[...maintenance, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--refmap=", source, commitId],
+				[
+					...NO_GIT_MAINTENANCE,
+					"fetch",
+					"--quiet",
+					"--no-tags",
+					"--no-write-fetch-head",
+					"--refmap=",
+					source,
+					commitId,
+				],
 				repository,
 			);
 		if (!fullCommit.test(commitId)) throw new Error("Invalid shared base commit");

@@ -22,7 +22,7 @@ export type MemorySummarizer = (
 	observe: MemoryCompactionObserver,
 	projectId?: string,
 ) => Promise<string>;
-export function emptyMemorySummary(): ProjectMemorySummary {
+function emptyMemorySummary(): ProjectMemorySummary {
 	return { count: 0, recent: [], compaction: { state: "idle", pending: 0 } };
 }
 

@@ -1,3 +1,5 @@
+import type { DiagnosticContextRequest } from "./diagnostic-context.ts";
+import type { OperationHost } from "./operations.ts";
 import type { ScheduleRecurrence } from "./schedules.ts";
 
 /** Fixed initial suggestions, never a grant, approved spend or enabled schedule. */
@@ -415,3 +417,23 @@ export interface InsightsReviewRun {
 	/** Persistence and placement only. Never proof of comprehensive review or benefit. */
 	detail: string;
 }
+
+/** Trusted host-owned authority. Never accepted from chat text, spawn payloads or schedules. */
+export interface InsightsBinding {
+	schemaVersion: 1;
+	grantId: string;
+	revision: number;
+	enabled: boolean;
+	reportSessionId: string;
+	projectId: string;
+	missionId: string;
+	host: OperationHost;
+}
+
+/** Closed local-only discovery/history subset. Returned evidence remains untrusted. */
+export type InsightsHistoryRequest = Pick<
+	DiagnosticContextRequest,
+	"sessionId" | "query" | "after" | "before" | "limit"
+> & {
+	action: "chats" | "history" | "search" | "projects";
+};

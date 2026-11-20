@@ -7,12 +7,15 @@ import type {
 	OperationHost,
 } from "@pilot/protocol";
 import { validateOtlpEndpoint } from "@pilot/telemetry";
+import { canonicalJSON } from "./canonical.ts";
 import type { ModelCatalog } from "./models.ts";
-import { canonicalJSON, OperationRejected, sameHost } from "./operation-journal.ts";
+import { OperationRejected, sameHost } from "./operation-journal.ts";
+import type { ControlOperation } from "./operations.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { TelemetrySettingsService } from "./telemetry-settings.ts";
 
 export const DIAGNOSTICS_CONTROLS = "diagnostics-controls";
+const OUTCOME_UNKNOWN = "Diagnostics outcome unknown; lookup only";
 export const DIAGNOSTICS_RETAINED = [
 	"Service stdout and stderr are kept independently.",
 	"OS logs are kept independently.",
@@ -212,7 +215,7 @@ export class DiagnosticsControls {
 		};
 	}
 	admit(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
-		if (!firstEntry) return Promise.reject(new Error("Diagnostics outcome unknown; lookup only"));
+		if (!firstEntry) return Promise.reject(new Error(OUTCOME_UNKNOWN));
 		if (isDiagnosticsRevocation(op)) {
 			validateDiagnosticsIntent(op, this.host);
 			// Independent from catalogue/start waits. update increments its revision before
@@ -282,3 +285,23 @@ export class DiagnosticsControls {
 		return { action: p.action, saved: true, retained: DIAGNOSTICS_RETAINED };
 	}
 }
+
+export const diagnosticsOperations = (
+	controls: DiagnosticsControls | undefined,
+	host: OperationHost | undefined,
+): ControlOperation => ({
+	kind: DIAGNOSTICS_CONTROLS,
+	unavailable: "Native diagnostics unavailable",
+	outcomeUnknown: OUTCOME_UNKNOWN,
+	validate: host
+		? (op) => {
+				try {
+					validateDiagnosticsIntent(op, host);
+				} catch {
+					throw new Error("Invalid native diagnostics intent");
+				}
+			}
+		: undefined,
+	admit: controls && ((op, firstEntry) => controls.admit(op, firstEntry)),
+	safetyReduction: isDiagnosticsRevocation,
+});

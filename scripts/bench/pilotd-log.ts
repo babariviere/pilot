@@ -17,8 +17,11 @@ interface Stall {
 	at: string;
 	ms: number;
 	cpuMs?: number;
+	/** The watchdog's own class. Logs written before it measured CPU have none. */
+	kind?: "busy" | "sleep" | "waiting";
 	context: string[];
 }
+const KINDS = { "synchronous work": "busy", "likely system sleep": "sleep" } as const;
 
 const stalls: Stall[] = [];
 const restarts: string[] = [];
@@ -28,26 +31,26 @@ for (const line of (await readFile(file, "utf8")).split("\n")) {
 	if (line.includes("pilotd listening")) restarts.push(at);
 	const match = line.match(/event loop delayed for (\d+)ms \(([^)]*)\)(.*)$/);
 	if (!match) continue;
-	const cpu = match[2]!.match(/cpu (\d+)ms/);
+	const cpu = match[2]!.match(/cpu (\d+)ms: (.*)$/);
 	stalls.push({
 		at,
 		ms: Number(match[1]),
-		...(cpu ? { cpuMs: Number(cpu[1]) } : {}),
+		...(cpu ? { cpuMs: Number(cpu[1]), kind: KINDS[cpu[2] as keyof typeof KINDS] ?? "waiting" } : {}),
 		context: match[3]!.split("; ").filter(Boolean),
 	});
 }
 
 const SLEEP_MS = 60_000;
+const sleeping = (stall: Stall) => (stall.kind ? stall.kind === "sleep" : stall.ms >= SLEEP_MS);
 const buckets = new Map([
 	["1-2s", 0],
 	["2-5s", 0],
 	["5-15s", 0],
 	["15-60s", 0],
-	["60s+ (likely sleep)", 0],
+	["60s+", 0],
 ]);
 for (const { ms } of stalls) {
-	const key =
-		ms < 2e3 ? "1-2s" : ms < 5e3 ? "2-5s" : ms < 15e3 ? "5-15s" : ms < SLEEP_MS ? "15-60s" : "60s+ (likely sleep)";
+	const key = ms < 2e3 ? "1-2s" : ms < 5e3 ? "2-5s" : ms < 15e3 ? "5-15s" : ms < SLEEP_MS ? "15-60s" : "60s+";
 	buckets.set(key, buckets.get(key)! + 1);
 }
 console.log(`${stalls.length} stalls, ${restarts.length} daemon starts${since ? ` since ${since}` : ""}`);
@@ -55,7 +58,7 @@ console.log(`size: ${[...buckets].map(([key, count]) => `${key} ${count}`).join(
 
 const days = new Map<string, { count: number; ms: number }>();
 for (const stall of stalls) {
-	if (stall.ms >= SLEEP_MS) continue;
+	if (sleeping(stall)) continue;
 	const day = days.get(stall.at.slice(0, 10)) ?? { count: 0, ms: 0 };
 	day.count++;
 	day.ms += stall.ms;
@@ -64,9 +67,9 @@ for (const stall of stalls) {
 console.log("stalled time per day, excluding likely sleep:");
 for (const [day, { count, ms }] of days) console.log(`  ${day}  ${count} stalls, ${Math.round(ms / 1000)}s`);
 
-const measured = stalls.filter((stall) => stall.cpuMs !== undefined && stall.ms < SLEEP_MS);
+const measured = stalls.filter((stall) => stall.kind !== undefined && stall.kind !== "sleep");
 if (measured.length) {
-	const busy = measured.filter((stall) => stall.cpuMs! >= stall.ms / 2);
+	const busy = measured.filter((stall) => stall.kind === "busy");
 	console.log(
 		`main-thread CPU: ${busy.length} computing, ${measured.length - busy.length} waiting (disk, CPU or sleep) of ${measured.length}`,
 	);
@@ -87,9 +90,9 @@ for (const [label, { count, ms }] of [...labels].sort((a, b) => b[1].count - a[1
 	ms.sort((a, b) => a - b);
 	console.log(`  ${String(count).padStart(5)}  ${label}  ${ms[ms.length >> 1] ?? "-"}/${ms.at(-1) ?? "-"}`);
 }
-console.log("longest stalls under a minute:");
+console.log("longest stalls, excluding likely sleep:");
 for (const stall of stalls
-	.filter((stall) => stall.ms < SLEEP_MS)
+	.filter((stall) => !sleeping(stall))
 	.sort((a, b) => b.ms - a.ms)
 	.slice(0, 8))
 	console.log(

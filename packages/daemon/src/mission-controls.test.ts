@@ -7,6 +7,7 @@ import { type TestContext, test } from "node:test";
 import type { MissionControlCommand } from "@pilot/protocol";
 import { MissionControls, type MissionPauseParticipants, parseMissionControl } from "./mission-controls.ts";
 import { MissionStore } from "./missions.ts";
+import { pauseParticipants } from "./testing/pause-participants.ts";
 
 const home = { daemonId: "daemon", lineageId: "lineage" };
 function deferred() {
@@ -24,17 +25,20 @@ function fixture(t: TestContext, port: Partial<MissionPauseParticipants> = {}) {
 	for (const id of ids) store.join(id, mission.id);
 	const pauses: string[] = [],
 		resumes: string[] = [];
-	const controls = new MissionControls(store, {
-		checkpointMission: async (id) => {
-			pauses.push(id);
-			return "paused";
-		},
-		resumeMission: async (id) => {
-			resumes.push(id);
-			return "resumed";
-		},
-		...port,
-	});
+	const controls = new MissionControls(
+		store,
+		pauseParticipants({
+			checkpointMission: async (id) => {
+				pauses.push(id);
+				return "paused";
+			},
+			resumeMission: async (id) => {
+				resumes.push(id);
+				return "resumed";
+			},
+			...port,
+		}),
+	);
 	controls.setScheduleDrain(async () => {});
 	const command = (action: "pause" | "resume" = "pause", pauseOperationId?: string): MissionControlCommand => ({
 		version: 1,
@@ -199,22 +203,29 @@ test("coordinator ABA during participant I/O keeps the operation uncertain", asy
 
 test("recovery after entered effect is lookup-only and keeps the admission fence", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pilot-mission-controls-"));
-	t.after(() => rm(dir, { recursive: true, force: true }));
-	const file = join(dir, "missions.sqlite"),
-		store = new MissionStore(file);
+	const file = join(dir, "missions.sqlite");
+	const store = new MissionStore(file);
+	let openStore: MissionStore | undefined = store;
+	t.after(async () => {
+		openStore?.close();
+		await rm(dir, { recursive: true, force: true });
+	});
 	const mission = store.create({ projectId: "p", title: "Synthetic" });
 	store.join(randomUUID(), mission.id);
 	let calls = 0;
-	const controls = new MissionControls(store, {
-		checkpointMission: async () => {
-			calls++;
-			return "paused";
-		},
-		resumeMission: async () => {
-			calls++;
-			return "resumed";
-		},
-	});
+	const controls = new MissionControls(
+		store,
+		pauseParticipants({
+			checkpointMission: async () => {
+				calls++;
+				return "paused";
+			},
+			resumeMission: async () => {
+				calls++;
+				return "resumed";
+			},
+		}),
+	);
 	controls.setScheduleDrain(async () => {});
 	const command: MissionControlCommand = {
 		version: 1,
@@ -238,16 +249,20 @@ test("recovery after entered effect is lookup-only and keeps the admission fence
 	assert.equal(calls, 0);
 	await durable();
 	store.close();
+	openStore = undefined;
 	const reopened = new MissionStore(file);
-	t.after(() => reopened.close());
-	const recovered = new MissionControls(reopened, {
-		checkpointMission: async () => {
-			throw new Error("must not replay");
-		},
-		resumeMission: async () => {
-			throw new Error("must not replay");
-		},
-	});
+	openStore = reopened;
+	const recovered = new MissionControls(
+		reopened,
+		pauseParticipants({
+			checkpointMission: async () => {
+				throw new Error("must not replay");
+			},
+			resumeMission: async () => {
+				throw new Error("must not replay");
+			},
+		}),
+	);
 	assert.equal((await recovered.lookup(mission.id, command.operationId))!.state, "unknown");
 	assert.equal(reopened.controls.current(mission.id).held, true);
 	assert.equal((await recovered.execute(mission.id, command)).state, "unknown");

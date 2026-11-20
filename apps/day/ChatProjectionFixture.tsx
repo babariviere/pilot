@@ -1,8 +1,6 @@
 // Test-only native-channel projection. The test supplies all host replies.
 import { mount, signal } from "nsh";
 import { ConnectedSessionChat, mirrorSessionChat, type SessionChat } from "./sessionChat";
-// Parts come file by file, not from "./ui": this fixture loads as its own app (fixtures/recovery/Projection.tsx),
-// and the library's index imports font and icon files that sit outside that app's folder.
 import { Button } from "./ui/button";
 import { WindowCanvas } from "./ui/canvas";
 import { Block } from "./ui/section";
