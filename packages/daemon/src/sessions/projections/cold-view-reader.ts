@@ -32,7 +32,7 @@ type Job = {
 	/** Read a page of entries hidden by compaction instead of the active view. */
 	earlier?: { before: number; limit: number; view?: TranscriptContext };
 	/** Read a bounded page from one explicitly authorized diagnostics target. */
-	diagnosticHistory?: { target: DiagnosticTargetReference; before?: number; limit: number };
+	diagnosticHistory?: { target: DiagnosticTargetReference; before?: number; limit: number; retrospective?: boolean };
 	todoCount?: boolean;
 	inputReceipt?: string;
 	clarification?: string;
@@ -219,6 +219,7 @@ export class ColdViewReader {
 		target: DiagnosticTargetReference,
 		before: number | undefined,
 		limit: number,
+		retrospective = false,
 	): Promise<DiagnosticHistoryPage> {
 		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
 		if (this.waiting.length >= MAX_QUEUED_READS)
@@ -228,7 +229,7 @@ export class ColdViewReader {
 				directory,
 				cwd: directory,
 				includeTodos: false,
-				diagnosticHistory: { target, ...(before === undefined ? {} : { before }), limit },
+				diagnosticHistory: { target, ...(before === undefined ? {} : { before }), limit, retrospective },
 				resolve,
 				reject,
 			});

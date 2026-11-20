@@ -37,6 +37,7 @@ const {
 		target: import("@pilot/protocol").DiagnosticTargetReference;
 		before?: number;
 		limit: number;
+		retrospective?: boolean;
 	};
 	todoCount?: boolean;
 	inputReceipt?: string;
@@ -65,6 +66,7 @@ try {
 									diagnosticHistory.target,
 									diagnosticHistory.before,
 									diagnosticHistory.limit,
+									diagnosticHistory.retrospective,
 								)
 							: earlier !== undefined
 								? await readEarlierEntries(directory, earlier.before, earlier.limit, earlier.view)

@@ -115,6 +115,12 @@ The closed reader's source positions and pattern identities stay in owner tables
 Chat discovery returns only chat and project IDs after source eligibility checks.
 Mission context does not count against the inventory page limit. History remains
 separately limited and rechecks source eligibility.
+Day history pages favor user turns and explicit errors, with a nearby reply
+when space permits. They continue under the existing scan and byte limits.
+The packet can include a sampled chat's kept direct and child catalog
+estimates as separate values; unknown is null. They are partial lifetime
+estimates, not bills, per-turn prices or report-window spend. They follow
+the same source eligibility recheck as the excerpts.
 
 Model-facing `list/get/history/evidence/receipt` reads do not replay prior tracking
 contents. They return explicit unavailable state. This conservative boundary

@@ -38,6 +38,7 @@ import { InsightsWorkspace } from "./insights-workspace.ts";
 import { MissionService } from "../../missions/mission-service.ts";
 import { MissionStore } from "../../missions/missions.ts";
 import type { ModelCatalog } from "../../models/models.ts";
+import { AIUsageLedger } from "../../models/usage/ai-usage.ts";
 import { OperationJournal, payloadHash } from "../../transport/operations/operation-journal.ts";
 import { ScheduleStore } from "../../schedules/schedule-store.ts";
 import { ScheduleService } from "../../schedules/schedules.ts";
@@ -176,16 +177,22 @@ async function fixture(
 	};
 }
 
-async function seedSource(f: Awaited<ReturnType<typeof fixture>>, archivedAt?: string, marker = "", role?: "insights") {
+async function seedSource(
+	f: Awaited<ReturnType<typeof fixture>>,
+	archivedAt?: string,
+	marker = "",
+	role?: "insights",
+	project = f.project,
+) {
 	const sourceId = randomUUID(),
 		dir = join(f.home, "sessions", sourceId);
 	await mkdir(dir, { recursive: true });
 	const source = {
 		id: sourceId,
-		projectId: f.project.id,
+		projectId: project.id,
 		mode: "ask" as const,
 		title: "Synthetic source",
-		cwd: f.project.path,
+		cwd: project.path,
 		createdAt: 1,
 		updatedAt: 1,
 		...(archivedAt === undefined ? {} : { archivedAt }),
@@ -567,6 +574,120 @@ test("Day proposes from current evidence without prior reads and refuses duplica
 		assert.ok(!error.message.includes(proposal.key));
 		return true;
 	});
+	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
+});
+
+test("Day exposes partial cost for sampled chats and accepts proposals for a selected non-report project", async (t) => {
+	const f = await dayRuntimeFixture(t);
+	const path = join(f.home, "second-project");
+	await mkdir(path);
+	const project = await f.projects.create({ path });
+	const { sourceId } = await seedSource(f, undefined, "REPEATED_CORRECTION_SECOND_PROJECT", undefined, project);
+	const { sourceId: reportProjectSource } = await seedSource(f, undefined, "REPEATED_CORRECTION_REPORT_PROJECT");
+	const usage = new AIUsageLedger(f.home);
+	const scope = (kind: "model_requests" | "child_operations", estimate?: number) => ({
+		tokens: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, reasoningStatus: "unavailable" as const },
+		cost: {
+			estimateStatus: estimate === undefined ? ("unavailable" as const) : ("catalog_estimate" as const),
+			...(estimate === undefined ? {} : { estimatedUsdMicros: estimate, pricingRevision: "pi-ai@1.3.0" }),
+			billedStatus: "unavailable" as const,
+			subscriptionCoverage: "unknown" as const,
+		},
+		activity: {
+			kind,
+			count: 1,
+			success: 1,
+			failure: 0,
+			cancelled: 0,
+			usageReports: 1,
+			providerAttemptsObserved: 1,
+			requestRetriesObserved: 0,
+			elapsedMsObserved: 0,
+			activeMsObserved: 0,
+			outcomeCoverage: "partial" as const,
+			timingCoverage: "partial" as const,
+		},
+	});
+	usage.observeUsage(sourceId, {
+		conversationId: "0",
+		activityEpoch: "initial",
+		epochKind: "initial",
+		observedAt: 1000,
+		timingBoot: randomUUID(),
+		direct: scope("model_requests", 12_345),
+		child: scope("child_operations"),
+	});
+	await usage.close();
+	await f.sessions.load();
+	const settings = { ...f.settings, source: { ...f.settings.source, projects: [f.project.id, project.id] } };
+	assert.equal((await f.runDay(await f.intent("apply", settings))).state, "accepted");
+	assert.equal((await f.runDay(await f.intent("run"))).state, "accepted");
+
+	const backlog = (request: unknown) => f.sessions.insightsOwnerBacklog(f.owner.reportSessionId, request);
+	type Sample = {
+		sessionId: string;
+		receipt: { collectedAt: string; data: { entries: { ref: string; excerpt: string }[]; sessionCost: unknown } };
+	};
+	const samples = new Map<string, Sample>();
+	let cursor: number | null = 0;
+	while (cursor !== null) {
+		const page = (await backlog({ action: "review_context", cursor })) as {
+			evidence: Sample | null;
+			nextCursor: number | null;
+		};
+		if (page.evidence) samples.set(page.evidence.sessionId, page.evidence);
+		assert.notEqual(cursor, page.nextCursor);
+		cursor = page.nextCursor;
+	}
+	assert.equal(samples.size, 2, "The same report can compare evidence across selected projects");
+	const secondSample = samples.get(sourceId)!;
+	assert.match(secondSample.receipt.data.entries[0]!.excerpt, /REPEATED_CORRECTION_SECOND_PROJECT/);
+	assert.match(
+		samples.get(reportProjectSource)!.receipt.data.entries[0]!.excerpt,
+		/REPEATED_CORRECTION_REPORT_PROJECT/,
+	);
+	assert.deepEqual(secondSample.receipt.data.sessionCost, {
+		coverage: "retained_session_usage_partial",
+		observedAt: 1000,
+		direct: { status: "catalog_estimate", estimatedUsdMicros: 12_345 },
+		child: { status: "unavailable", estimatedUsdMicros: null },
+	});
+	const proposal = {
+		action: "propose",
+		key: randomUUID(),
+		operationId: randomUUID(),
+		expectedRevision: 0,
+		patternKey: `${project.id} synthetic correction check`,
+		draft: {
+			title: "Catch the repeated correction",
+			priority: "low",
+			observation: "Two sampled chats record the same correction",
+			uncertainty: "Other projects may have different checks",
+			proposedChange: "Add a regression check in the source project",
+			expectedBenefit: "Catch this failure before review",
+			targets: [{ projectId: project.id, label: "Source project" }],
+			implementationLinks: [],
+		},
+		evidence: Array.from(samples.values(), (sample) => ({
+			key: randomUUID(),
+			sessionId: sample.sessionId,
+			ref: sample.receipt.data.entries[0]!.ref,
+			observedAt: sample.receipt.collectedAt,
+			classification: "observed",
+			summary: "A correction entered the chat.",
+		})),
+	};
+	await assert.rejects(
+		backlog({
+			...proposal,
+			draft: { ...proposal.draft, targets: [{ projectId: randomUUID(), label: "Not selected" }] },
+		}),
+		/finding_target_outside_selected_projects/,
+	);
+	const receipt = (await backlog(proposal)) as { key: string; revision: number };
+	assert.equal(receipt.key, proposal.key);
+	assert.equal(receipt.revision, 1);
+	assert.equal(f.workers.length, 1, "A report never starts implementation or wakes a source chat");
 	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
 });
 

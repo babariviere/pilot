@@ -2107,7 +2107,8 @@ export class SessionManager {
 		id: string,
 		request: import("@pilot/protocol").InsightsReviewDispatch,
 	) {
-		if (this.isDayInsightsReport(id)) await this.dayInsights!.prepareRun(id, request);
+		const retrospective = this.isDayInsightsReport(id);
+		if (retrospective) await this.dayInsights!.prepareRun(id, request);
 		const admission = this.insightsOwnerAdmission(id);
 		const reviews = this.insightsOwnerStore!.reviews;
 		const execution = this.insightsOwnerStore!.current(this.require(id).insightsOwner!.authority)!;
@@ -2117,7 +2118,7 @@ export class SessionManager {
 			if (sourceId === retiredReport) return false;
 			const source = this.metas.get(sourceId);
 			if (!source || sourceId === id) return false;
-			if (this.isDayInsightsReport(id) && source.role === "insights") return false;
+			if (retrospective && source.role === "insights") return false;
 			if (source.projectId && !this.projects.get(source.projectId)) return false;
 			if (this.dayInsights?.owns(id) && !this.dayInsights.sourceAllowed(source, Date.now())) return false;
 			return insightsSourceAllowed(execution.settings.settings, source);
@@ -2134,6 +2135,7 @@ export class SessionManager {
 						{ ...selector, host: admission.binding.host },
 						this.shutdownSignal.signal,
 						allowed,
+						retrospective,
 					);
 					admission.revalidate();
 					return result;
@@ -5398,9 +5400,12 @@ ${run.excerpt}`,
 		input: unknown,
 		signal?: AbortSignal,
 		sourceAllowed?: (id: string) => boolean,
+		retrospective = false,
 	): Promise<DiagnosticContextResponse> {
 		const request = parseDiagnosticContext(input);
 		if (request.action === "scoped_metrics") throw new Conflict("Scoped metrics requires supervised caller identity");
+		if (retrospective && (!sourceAllowed || !["chats", "history"].includes(request.action)))
+			throw new Conflict("Retrospective reads require admitted sources");
 		const host = request.host ?? this.diagnosticHost;
 		if (
 			!host ||
@@ -5515,22 +5520,42 @@ ${run.excerpt}`,
 			if (!id) return diagnosticContextResponse(host, { matches: [] });
 		}
 		if (!id) throw new Conflict("A chat reference is required");
-		const page = await this.readDiagnosticHistory(id, request.before, limit, host);
+		const page = await this.readDiagnosticHistory(id, request.before, limit, host, retrospective);
 		if (sourceAllowed && !sourceAllowed(id)) throw new Conflict("Insights source scope changed during read");
 		if (signal?.aborted) throw new Conflict("Diagnostic read cancelled");
 		const entries = request.query
 			? page.entries.filter((v) => v.excerpt.toLowerCase().includes(request.query!.toLowerCase()))
 			: page.entries;
 		const anotherChat = request.action === "search" && !request.sessionId;
+		const usage = retrospective ? this.aiUsage.summary(id) : undefined;
+		const estimate = (cost?: import("@pilot/protocol").AIUsageCost) => ({
+			status: cost?.estimateStatus ?? "unavailable",
+			estimatedUsdMicros: cost?.estimatedUsdMicros ?? null,
+		});
 		return diagnosticContextResponse(
 			host,
-			{ ...page, entries },
+			{
+				...page,
+				entries,
+				...(retrospective
+					? {
+							sampling: "user_turns_and_failures",
+							sessionCost: {
+								coverage: "retained_session_usage_partial",
+								observedAt: usage?.observedAt ?? null,
+								direct: estimate(usage?.direct.cost),
+								child: estimate(usage?.child.cost),
+							},
+						}
+					: {}),
+			},
 			{
 				scanned: page.pagination.scannedEntries,
 				more: page.pagination.more || anotherChat,
 				...(page.pagination.nextBefore === undefined ? {} : { before: page.pagination.nextBefore }),
 				...(anotherChat ? { after: page.pagination.more ? request.after : id } : {}),
-				truncated: page.pagination.truncatedEntries > 0,
+				// Day exposes entry-level clipping in the page. Envelope truncation still invalidates the receipt.
+				truncated: !retrospective && page.pagination.truncatedEntries > 0,
 			},
 		);
 	}
@@ -12335,6 +12360,7 @@ ${run.excerpt}`,
 		before: number | undefined,
 		requestedLimit: number | undefined,
 		host: OperationHost,
+		retrospective = false,
 	): Promise<DiagnosticHistoryPage> {
 		const target = this.require(sessionId);
 		const reference = { host, sessionId: target.id, chatUrl: `pilot://chat/${target.id}` };
@@ -12346,7 +12372,7 @@ ${run.excerpt}`,
 		const directory = join(this.dir(target.id), "durable");
 		const result = this.factories.diagnosticHistoryRead
 			? await this.factories.diagnosticHistoryRead(directory, reference, before, limit)
-			: await this.coldReader.readDiagnosticHistory(directory, reference, before, limit);
+			: await this.coldReader.readDiagnosticHistory(directory, reference, before, limit, retrospective);
 		if (
 			result.target.sessionId !== reference.sessionId ||
 			result.target.chatUrl !== reference.chatUrl ||

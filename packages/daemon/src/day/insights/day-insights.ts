@@ -177,6 +177,14 @@ export class DayInsights {
 		if ((request.action === "save_report" || request.action === "save_checkpoint") && request.key !== run)
 			throw new Conflict("day_insights_exact_run_key_required");
 		const s = this.deps.store.current(this.deps.home, this.guard)!;
+		if ("draft" in request) {
+			const source = s.effective!.source;
+			for (const { projectId } of request.draft.targets) {
+				if (!source.projects.includes(projectId) || source.excludeProjects.includes(projectId))
+					throw new Conflict("day_insights_finding_target_outside_selected_projects");
+				this.deps.projects.require(projectId);
+			}
+		}
 		const lease = this.deps.sessions!.insightsOwnerLease(this.authority(s.owner!.projectId));
 		const result = await this.deps.owners!.backlog(this.deps.workspace, lease, admission, request, true);
 		this.delivery(id, run);

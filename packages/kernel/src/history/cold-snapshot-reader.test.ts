@@ -581,6 +581,70 @@ test("diagnostic history cold-reads active and compacted entries with explicit b
 	}
 });
 
+test("retrospective history finds user turns and failures behind successful tool output", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-retro-history-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const target = {
+		host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+		sessionId: "01234567-89ab-4cde-8fab-0123456789ab",
+		chatUrl: "pilot://chat/01234567-89ab-4cde-8fab-0123456789ab",
+	};
+	const owned = await openSessionStorage(dir);
+	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
+	try {
+		const root = await harness.root(context);
+		await root.commit(async (tx) => {
+			await tx.appendEntry(root.id, {
+				kind: "pi.user",
+				model: [{ role: "user", content: "User correction", timestamp: 1 }],
+			});
+			await tx.appendEntry(root.id, {
+				kind: "pi.assistant",
+				model: [fauxAssistantMessage("Tried again after the correction")],
+			});
+			await tx.appendEntry(root.id, {
+				kind: "pi.tool-result",
+				model: [
+					{
+						role: "toolResult",
+						toolCallId: "failed",
+						toolName: "build",
+						content: [{ type: "text", text: "Validation failed" }],
+						isError: true,
+						timestamp: 2,
+					},
+				],
+			});
+			for (let i = 0; i < 48; i++)
+				await tx.appendEntry(root.id, {
+					kind: "pi.tool-result",
+					model: [
+						{
+							role: "toolResult",
+							toolCallId: `ok-${i}`,
+							toolName: "read",
+							content: [],
+							isError: false,
+							timestamp: 3,
+						},
+					],
+				});
+		}, context);
+		const regular = await readDiagnosticHistoryPage(dir, target, undefined, 4);
+		assert.ok(regular.entries.every((entry) => entry.kind === "pi.tool-result"));
+		const focused = await readDiagnosticHistoryPage(dir, target, undefined, 4, true);
+		assert.deepEqual(
+			focused.entries.map((entry) => entry.kind),
+			["pi.user", "pi.assistant", "pi.tool-result"],
+		);
+		assert.match(focused.entries[2]!.excerpt, /Validation failed/);
+		assert.ok(focused.pagination.scannedEntries <= focused.pagination.maxScannedEntries);
+	} finally {
+		await harness.close(context);
+		owned.release();
+	}
+});
+
 test("diagnostic history scan bounds internal records and continues even when a page returns no transcript entries", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pilot-diagnostic-history-scan-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));

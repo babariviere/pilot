@@ -12,7 +12,9 @@ settings while paused does not resume reports.
 chosen projects are eligible unless excluded. Archived chats qualify for 24
 hours after archive; earlier messages in an eligible chat may still be read.
 Day uses a bundled version of `/retro` to look for changes that could help
-future agents. It uses only the report's sampled chat excerpts.
+future agents. It samples user turns, failures and nearby replies. The selected
+provider also receives partial catalog cost estimates for each sampled chat,
+when available, separate from the report budget. These estimates are not bills.
 The selected model provider processes sanitized excerpts, which can still
 contain private project text. The two limits use catalog estimates, not bills:
 each request must fit both the report budget and the shared UTC calendar-month
@@ -21,7 +23,8 @@ budget. Insights does not use the small background-work allowance.
 **Findings** shows separate proposals based on the evidence from a report.
 Pilot rejects an exact duplicate pattern key without showing the earlier
 finding to the report model. A finding opens a fix or mission draft with
-source references.
+source references. A report can propose a PR for any selected source project.
+Each PR proposal identifies one project so you can open its own fix draft.
 Only an explicit Start or Plan begins that work. Shipping is not benefit
 verification; mark the benefit verified only after checking it yourself.
 Earlier history is read-only and does not transfer source access or schedules.

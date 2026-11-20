@@ -407,6 +407,31 @@ function serializedDiagnosticEntry(entry: EntryRecord): string {
 	});
 }
 
+function retrospectiveSignal(entry: EntryRecord): boolean {
+	return (
+		entry.kind === "pi.user" ||
+		((entry.kind === "pi.assistant" || entry.kind === "pi.tool-result") &&
+			(entry.model ?? []).some(
+				(message) =>
+					(message.role === "toolResult" && message.isError === true) ||
+					(message.role === "assistant" && message.stopReason === "error"),
+			))
+	);
+}
+
+function diagnosticExcerpt(entry: EntryRecord, target: DiagnosticTargetReference): DiagnosticHistoryEntry {
+	const serialized = serializedDiagnosticEntry(entry);
+	const originalBytes = Buffer.byteLength(serialized);
+	return {
+		ref: `diagnostic-history:v1:${target.sessionId}:${entry.id}`,
+		entryId: Number(entry.id),
+		kind: entry.kind as DiagnosticHistoryEntry["kind"],
+		excerpt: utf8Prefix(serialized, DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES),
+		originalBytes,
+		truncated: originalBytes > DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES,
+	};
+}
+
 function diagnosticHistoryUnavailable(
 	target: DiagnosticTargetReference,
 	limit: number,
@@ -445,6 +470,7 @@ export async function readDiagnosticHistoryPage(
 	target: DiagnosticTargetReference,
 	before: number | undefined,
 	limit: number,
+	retrospective = false,
 ): Promise<DiagnosticHistoryPage> {
 	if (before !== undefined && (!Number.isSafeInteger(before) || before < 0))
 		throw new Error(`Invalid diagnostic history cursor: ${before}`);
@@ -466,6 +492,8 @@ export async function readDiagnosticHistoryPage(
 		let more = false;
 		let nextBefore: number | undefined;
 		let cursor: Cursor | undefined;
+		let nearbyAssistant: EntryRecord | undefined;
+		let includedNearbyReply = false;
 		if ((before ?? Number.MAX_SAFE_INTEGER) > 1) {
 			for (;;) {
 				const page = await storage.scanEntries(
@@ -481,36 +509,47 @@ export async function readDiagnosticHistoryPage(
 				if (!entry) break;
 				scannedEntries++;
 				cursor = page.next;
-				if (!isDiagnosticHistoryKind(entry.kind)) {
-					if (cursor === undefined) break;
+				more = cursor !== undefined;
+				if (!isDiagnosticHistoryKind(entry.kind) || (retrospective && !retrospectiveSignal(entry))) {
+					if (
+						retrospective &&
+						entry.kind === "pi.assistant" &&
+						entry.model?.some(
+							(message) =>
+								message.role === "assistant" &&
+								message.content.some((part) => part.type === "text" && part.text.trim()),
+						)
+					)
+						nearbyAssistant = entry;
+					if (!more) break;
 					if (scannedEntries >= DIAGNOSTIC_HISTORY_MAX_SCANNED_ENTRIES) {
-						more = true;
 						nextBefore = Number(entry.id);
 						break;
 					}
 					continue;
 				}
-				const serialized = serializedDiagnosticEntry(entry);
-				const originalBytes = Buffer.byteLength(serialized);
-				const truncated = originalBytes > DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES;
-				const result: DiagnosticHistoryEntry = {
-					ref: `diagnostic-history:v1:${target.sessionId}:${entry.id}`,
-					entryId: Number(entry.id),
-					kind: entry.kind,
-					excerpt: utf8Prefix(serialized, DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES),
-					originalBytes,
-					truncated,
-				};
+				const result = diagnosticExcerpt(entry, target);
 				const resultBytes = Buffer.byteLength(JSON.stringify(result));
 				if (entries.length && encodedBytes + resultBytes > DIAGNOSTIC_HISTORY_MAX_BYTES) {
 					more = true;
 					nextBefore = entries.at(-1)!.entryId;
 					break;
 				}
+				// Keep at most one nearby reply per page. Reserve room for a signal first.
+				if (entry.kind === "pi.user" && nearbyAssistant && !includedNearbyReply && entries.length + 1 < limit) {
+					const adjacent = diagnosticExcerpt(nearbyAssistant, target);
+					const bytes = Buffer.byteLength(JSON.stringify(adjacent));
+					if (encodedBytes + bytes + resultBytes <= DIAGNOSTIC_HISTORY_MAX_BYTES) {
+						entries.push(adjacent);
+						includedNearbyReply = true;
+						encodedBytes += bytes;
+						if (adjacent.truncated) truncatedEntries++;
+					}
+				}
+				nearbyAssistant = undefined;
 				entries.push(result);
 				encodedBytes += resultBytes;
-				if (truncated) truncatedEntries++;
-				more = cursor !== undefined;
+				if (result.truncated) truncatedEntries++;
 				if (entries.length >= limit) {
 					if (more) nextBefore = result.entryId;
 					break;
