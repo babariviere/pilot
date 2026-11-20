@@ -2,8 +2,6 @@
 """Compile immutable Day package inputs. No signing, packaging, install or launch."""
 import argparse
 import base64
-from contextlib import contextmanager
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -80,21 +78,29 @@ def tool(path):
     path = Path(path)
     if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
         raise ValueError("Use an absolute installed executable path")
-    return path.resolve(strict=True)
+    # Tool managers can dispatch on the executable name (cargo or rustc).
+    return path
+
+
+def build_tools(env):
+    def selected(name, override):
+        return tool(env.get(override) or shutil.which(name, path=env.get("PATH", os.defpath)) or "")
+
+    return {"nsh": tool(env["NSH_DAY_CLI"]),
+            "cargo": selected("cargo", "NSH_DAY_REAL_CARGO"),
+            "rustc": selected("rustc", "RUSTC")}
 
 
 def environment(work, tools, inherited, production):
-    """Pinned stock Cargo; no ambient trust, package hooks or Cargo tuning."""
+    """No ambient trust, package hooks or Cargo tuning."""
     env = {name: inherited[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "SDKROOT", "DEVELOPER_DIR") if name in inherited}
     env.update(NSH_DAY_CLI=str(tools["nsh"]), TMPDIR=str(work),
                NSH_DAY_REAL_CARGO=str(tools["cargo"]), RUSTC=str(tools["rustc"]),
-               RUSTDOC=str(tools["rustc"].with_name("rustdoc")),
-               RUSTUP_TOOLCHAIN="1.99.1", RUSTUP_AUTO_INSTALL="0",
+               RUSTUP_AUTO_INSTALL="0",
                CARGO_NET_OFFLINE="true",
                MACOSX_DEPLOYMENT_TARGET="15.0", npm_config_ignore_scripts="true",
                npm_config_manage_package_manager_versions="false",
                COREPACK_ENABLE_NETWORK="0", COREPACK_ENABLE_AUTO_PIN="0")
-    env["DYLD_LIBRARY_PATH"] = str(tools["rustc"].parent.parent / "lib")
     if production is not None:
         supplied = {"PILOT_UPDATER_" + key.upper(): production[key] for key in TRUST_FIELDS}
         supplied["PILOT_SIGNING_POLICY"] = "private-adhoc"
@@ -134,7 +140,7 @@ def build_artifact(checkout, manifest, name, features, env, profile, log):
         args += ["--features", features]
     if profile == "release":
         args += ["--release"]
-    raw = execute(args, cwd=checkout, env=env)
+    raw = execute(args, cwd=checkout / "apps/day", env=env)
     log.write_text(raw)
     paths = []
     for line in raw.splitlines():
@@ -258,23 +264,16 @@ def source_tools(checkout):
             raise ValueError("Build tools must match the immutable source: " + path.name)
 
 
-def compile_snapshot(checkout, work, output, expected, tools, inherited, production=None, *,
-                     connected_only=False, target_dir=None):
+def compile_snapshot(checkout, work, output, expected, tools, inherited, production=None, *, connected_only=False):
     """Only called on a fresh git-archive checkout, never a developer's tree."""
     if connected_only and production is None:
         raise ValueError("Connected candidate requires configured release inputs")
     day = checkout / "apps/day"
     release_lock(day / "native/Cargo.lock")
     env = environment(work, tools, inherited, production)
-    # One stock Cargo target for the app, helpers and NSH describe runner.
-    # Cargo only reuses units with matching fingerprints.
-    env["CARGO_TARGET_DIR"] = str(target_dir if target_dir is not None else work / "cargo-target")
-    compiler = execute([tools["rustc"], "-vV"], cwd=checkout, env=env)
-    if not compiler.startswith("rustc 1.99.1 ") or "host: " + TARGET not in compiler:
-        raise ValueError("Expected installed native Rust 1.99.1")
-    cargo_version = execute([tools["cargo"], "--version"], cwd=checkout, env=env).strip()
-    if not re.fullmatch(r"cargo 1\.99\.1 \([^)]+\)", cargo_version):
-        raise ValueError("Expected stock Cargo 1.99.1 from rustup which --toolchain 1.99.1 cargo")
+    compiler = execute([tools["rustc"], "-vV"], cwd=day, env=env)
+    if "host: " + TARGET not in compiler.splitlines():
+        raise ValueError("Expected an installed native arm64 macOS Rust compiler")
     if bundle.digest(tools["nsh"]) != CLI_SHA256:
         raise ValueError("Installed NSH release executable checksum mismatch")
     if execute([tools["nsh"], "--version"], cwd=checkout, env=env).strip() != CLI_VERSION:
@@ -332,24 +331,7 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     inputs.rename(output)
 
 
-@contextmanager
-def cargo_target(work, cache):
-    if cache is None:
-        yield work / "cargo-target"
-        return
-    cache.mkdir(mode=0o700, exist_ok=True)
-    info = cache.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-        raise ValueError("Cargo cache must be a private directory owned by the build user")
-    # Cargo locks its own build, but not our reads, checks and copies of its
-    # outputs. Hold this lock until the source-matched inputs are published.
-    with (cache / "day-build.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        yield cache.resolve() / "target"
-
-
-def snapshot_day(expected, output, production=None, *, tools=None, inherited=None, connected_only=False,
-                 cargo_cache=None):
+def snapshot_day(expected, output, production=None, *, tools=None, inherited=None, connected_only=False):
     bundle.source(expected)
     if os.sys.platform != "darwin" or bundle.run("/usr/bin/uname", "-m") != "arm64":
         raise ValueError("Day input lane supports native macOS arm64 only")
@@ -359,8 +341,7 @@ def snapshot_day(expected, output, production=None, *, tools=None, inherited=Non
         raise ValueError("Day source must identify an immutable commit")
     inherited = os.environ if inherited is None else inherited
     if tools is None:
-        variables = [("nsh", "NSH_DAY_CLI"), ("cargo", "NSH_DAY_REAL_CARGO"), ("rustc", "RUSTC")]
-        tools = {name:tool(inherited[variable]) for name, variable in variables}
+        tools = build_tools(inherited)
     with tempfile.TemporaryDirectory(prefix="day-build-", dir="/tmp") as directory:
         work = Path(directory).resolve()
         checkout = work / "source"
@@ -372,9 +353,7 @@ def snapshot_day(expected, output, production=None, *, tools=None, inherited=Non
         with tarfile.open(archive) as stream:
             stream.extractall(checkout, filter="data")
         source_tools(checkout)
-        with cargo_target(work, cargo_cache) as target:
-            compile_snapshot(checkout, work, output, expected, tools, inherited, production,
-                             connected_only=connected_only, target_dir=target)
+        compile_snapshot(checkout, work, output, expected, tools, inherited, production, connected_only=connected_only)
 
 
 def main():
@@ -382,12 +361,11 @@ def main():
     parser.add_argument("--source", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--production", action="store_true", help="Explicit public trust configuration; still unsigned inputs only")
-    parser.add_argument("--cargo-cache", type=Path, help="Reuse Cargo artifacts in this private local directory")
     args = parser.parse_args()
     config = None
     if args.production:
         config = configuration(os.environ)
-    snapshot_day(args.source, args.output.absolute(), config, cargo_cache=args.cargo_cache)
+    snapshot_day(args.source, args.output.absolute(), config)
 
 
 if __name__ == "__main__":

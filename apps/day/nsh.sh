@@ -82,21 +82,6 @@ fi
 cd "$here"
 case "$command" in
 	check|build|test|dev|run|package|publish)
-		cargo_version="$("$NSH_DAY_REAL_CARGO" --version)"
-		if [[ "$cargo_version" == *'(huacnlee/cargo '* ]]; then
-			if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
-				echo 'nsh.sh: use stock Cargo via NSH_DAY_REAL_CARGO to set CARGO_TARGET_DIR.' >&2
-				exit 2
-			fi
-			# NSH 0.6.1 tries CARGO_TARGET_DIR first, then Cargo metadata and
-			# the generated workspace's target. Make the first lookup miss so
-			# an old app/target never takes precedence over the fork's output.
-			export CARGO_TARGET_DIR="$here/.nsh/cargo-fork-target"
-			if [[ -e "$CARGO_TARGET_DIR" || -L "$CARGO_TARGET_DIR" ]]; then
-				echo "nsh.sh: reserved lookup path must not exist: $CARGO_TARGET_DIR" >&2
-				exit 2
-			fi
-		fi
 		# Keep the release's locked transitive selections in fresh generated
 		# workspaces. Never overwrite a workspace Cargo already resolved.
 		for app in "$here" "$here/fixtures/rust-today"; do

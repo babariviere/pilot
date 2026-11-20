@@ -500,7 +500,7 @@ def snapshot_build(expected_source, output, native=False):
             builder = checkout / "apps/day/scripts/build-native-helpers.sh"
             if not builder.is_file():
                 builder = checkout / "apps/desktop/scripts/build-native-helpers.sh"
-            # Older Day source commits need --day to select stock Cargo.
+            # Older Day source commits still require --day.
             command = ["/bin/bash", str(builder), str(bin_path), "--day"]
             subprocess.run(command, env=subprocess_env(), check=True, timeout=1200)
             bin_path = bin_path.resolve(strict=True)

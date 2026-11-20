@@ -4,8 +4,4 @@ set -euo pipefail
 # shellcheck source=apps/day/scripts/build-env.sh
 source "$(dirname "$0")/build-env.sh"
 export CARGO="$NSH_DAY_REAL_CARGO"
-# This path is for NSH's lookup only. Do not ask the fork to write to it.
-if [[ "${CARGO_TARGET_DIR:-}" == "$day/.nsh/cargo-fork-target" ]]; then
-	unset CARGO_TARGET_DIR
-fi
 exec "$NSH_DAY_REAL_CARGO" "$@"

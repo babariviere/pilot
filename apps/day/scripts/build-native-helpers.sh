@@ -9,15 +9,20 @@ fi
 if [[ $# -lt 1 || $# -gt 2 || -e "$1" || -L "$1" || ( $# == 2 && "$2" != --day ) ]]; then
   echo 'Expected one fresh native-helper output directory.' >&2; exit 1
 fi
-target="$root/crates/power/target"
 export CARGO_NET_OFFLINE=true RUSTUP_AUTO_INSTALL=0 MACOSX_DEPLOYMENT_TARGET=15.0
-# The snapshot requires a fixed output path, which the PATH fork ignores.
-NSH_DAY_REAL_CARGO="$(rustup which --toolchain 1.99.1 cargo)"
-RUSTC="$(rustup which --toolchain 1.99.1 rustc)"
-export NSH_DAY_REAL_CARGO RUSTC
-"$root/apps/day/scripts/cargo" build --locked --release --target-dir "$target" --manifest-path "$root/crates/power/Cargo.toml"
+power=$(cd "$root/apps/day" && ./scripts/cargo build --locked --release --bin PilotPower \
+  --manifest-path "$root/crates/power/Cargo.toml" --message-format=json-render-diagnostics | node --input-type=module -e '
+import { readFileSync } from "node:fs";
+const paths = readFileSync(0, "utf8").split("\n").flatMap((line) => {
+  if (!line.startsWith("{")) return [];
+  const m = JSON.parse(line);
+  return m.reason === "compiler-artifact" && m.target.name === "PilotPower" && m.executable ? [m.executable] : [];
+});
+if (paths.length !== 1) throw new Error("Expected one Cargo executable artifact for PilotPower");
+console.log(paths[0]);
+')
 mkdir -p "$1"
-cp "$target/release/PilotPower" "$1/PilotPower"
+cp "$power" "$1/PilotPower"
 # Retained authenticated system-event accessory, not the Swift GUI.
 /usr/bin/xcrun swiftc -O -warnings-as-errors -target arm64-apple-macosx15.0 \
   -framework AppKit -framework Network -framework IOKit -framework CoreGraphics \

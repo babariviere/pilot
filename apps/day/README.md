@@ -39,11 +39,8 @@ Prerequisites: macOS arm64, Command Line Tools, Rust 1.99.1, Cargo on `PATH`,
 and installed NSH 0.6.1 (`2f51d86`). `NSH_DAY_CLI` can
 select a local official distribution without changing a global installation. Prepare the
 workspace dependencies before running checks. Cargo may download locked crates.
-Local commands use the Cargo on `PATH`, including [huacnlee/cargo](https://github.com/huacnlee/cargo)
-if installed. The fork ignores target directory overrides. NSH finds the fork's outputs in each generated
-workspace's `.nsh/rust/target` instead of the app's `target`.
-For an explicit target directory, set `NSH_DAY_REAL_CARGO="$(rustup which --toolchain 1.99.1 cargo)"`
-to select stock Cargo, as CI and the package input build do.
+Local commands use Cargo on `PATH`. The wrapper accepts an explicit
+`NSH_DAY_REAL_CARGO` for CI. Cargo and NSH choose their own target paths.
 
 From the repository root:
 
